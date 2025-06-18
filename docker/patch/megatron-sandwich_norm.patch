@@ -1,0 +1,136 @@
+diff --git a/megatron/core/models/gpt/gpt_layer_specs.py b/megatron/core/models/gpt/gpt_layer_specs.py
+index 07fbd64f..cc8b8ec7 100755
+--- a/megatron/core/models/gpt/gpt_layer_specs.py
++++ b/megatron/core/models/gpt/gpt_layer_specs.py
+@@ -74,6 +74,8 @@ def get_gpt_layer_with_transformer_engine_spec(
+     qk_l2_norm: Optional[bool] = False,
+     use_te_op_fuser: Optional[bool] = False,
+     use_kitchen: bool = False,
++    post_self_attn_layernorm: bool = False,
++    post_mlp_layernorm: bool = False,
+ ) -> ModuleSpec:
+     """Use this spec to use lower-level Transformer Engine modules (required for fp8 training).
+ 
+@@ -173,9 +175,11 @@ def get_gpt_layer_with_transformer_engine_spec(
+                     ),
+                 ),
+                 self_attn_bda=get_bias_dropout_add,
++                post_self_attn_layernorm=TENorm if post_self_attn_layernorm else IdentityOp,
+                 pre_mlp_layernorm=backend.layer_norm() if num_experts else IdentityOp,
+                 mlp=mlp,
+                 mlp_bda=get_bias_dropout_add,
++                post_mlp_layernorm=TENorm if post_mlp_layernorm else IdentityOp,
+                 sharded_state_dict_keys_map={
+                     'mlp.0.weight': 'mlp.linear_fc1.layer_norm_weight',
+                     'mlp.0.bias': 'mlp.linear_fc1.layer_norm_bias',
+diff --git a/megatron/core/transformer/transformer_config.py b/megatron/core/transformer/transformer_config.py
+index a256d70f..0d436eb0 100644
+--- a/megatron/core/transformer/transformer_config.py
++++ b/megatron/core/transformer/transformer_config.py
+@@ -167,6 +167,9 @@ class TransformerConfig(ModelParallelConfig):
+     qk_layernorm: bool = False
+     """Whether to apply `normalization` type of normalization to the query and key embeddings."""
+ 
++    post_self_attn_layernorm: bool = False
++    post_mlp_layernorm: bool = False
++
+     test_mode: bool = False
+     """Whether to run real-time tests."""
+ 
+diff --git a/megatron/core/transformer/transformer_layer.py b/megatron/core/transformer/transformer_layer.py
+index 51c90f5a..05c34955 100644
+--- a/megatron/core/transformer/transformer_layer.py
++++ b/megatron/core/transformer/transformer_layer.py
+@@ -228,6 +228,7 @@ class TransformerLayerSubmodules:
+     input_layernorm: Union[ModuleSpec, type] = IdentityOp
+     self_attention: Union[ModuleSpec, type] = IdentityOp
+     self_attn_bda: Union[ModuleSpec, type] = IdentityFuncOp
++    post_self_attn_layernorm: Union[ModuleSpec, type] = IdentityOp
+ 
+     pre_cross_attn_layernorm: Union[ModuleSpec, type] = IdentityOp
+     cross_attention: Union[ModuleSpec, type] = IdentityOp
+@@ -236,6 +237,7 @@ class TransformerLayerSubmodules:
+     pre_mlp_layernorm: Union[ModuleSpec, type] = IdentityOp
+     mlp: Union[ModuleSpec, type] = IdentityOp
+     mlp_bda: Union[ModuleSpec, type] = IdentityFuncOp
++    post_mlp_layernorm: Union[ModuleSpec, type] = IdentityOp
+ 
+     # Mapping for sharded tensor keys to be applied in `sharded_state_dict` method
+     sharded_state_dict_keys_map: Dict[str, str] = field(default_factory=dict)
+@@ -338,6 +340,14 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+         # [Module 3: BiasDropoutFusion]
+         self.self_attn_bda = build_module(submodules.self_attn_bda)
+ 
++        self.post_self_attn_layernorm = build_module(
++            submodules.post_self_attn_layernorm,
++            config=self.config,
++            hidden_size=self.config.hidden_size,
++            eps=self.config.layernorm_epsilon,
++        )
++
++
+         # [Module 4: Post SelfAttention] Optional Layernorm after self-attn
+         self.pre_cross_attn_layernorm = build_module(
+             submodules.pre_cross_attn_layernorm,
+@@ -395,6 +405,13 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+         # [Module 9: BiasDropoutFusion]
+         self.mlp_bda = build_module(submodules.mlp_bda)
+ 
++        self.post_mlp_layernorm = build_module(
++            submodules.post_mlp_layernorm,
++            config=self.config,
++            hidden_size=self.config.hidden_size,
++            eps=self.config.layernorm_epsilon
++        )
++
+         self.recompute_input_layernorm = False
+         self.recompute_pre_mlp_layernorm = False
+         self.recompute_mlp = False
+@@ -518,6 +535,11 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+                 attention_output_with_bias[0]
+             )
+ 
++        attention_output, attention_output_bias = attention_output_with_bias
++        attention_output = self.post_self_attn_layernorm(attention_output)
++        attention_output_with_bias = (attention_output, attention_output_bias)
++
++
+         # TODO: could we move `bias_dropout_add_exec_handler` itself
+         # inside the module provided in the `bias_dropout_add_spec` module?
+         nvtx_range_push(suffix="self_attn_bda")
+@@ -618,6 +640,10 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+         else:
+             mlp_output_with_bias = self.mlp(pre_mlp_layernorm_output)
+ 
++        mlp_output, mlp_output_bias = mlp_output_with_bias
++        mlp_output = self.post_mlp_layernorm(mlp_output)
++        mlp_output_with_bias = (mlp_output, mlp_output_bias)
++
+         if self.recompute_pre_mlp_layernorm:
+             # discard the output of the pre-mlp layernorm and register the recompute
+             # as a gradient hook of mlp_output_with_bias[0]
+diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
+index 7b1b35b1..c0c510e9 100644
+--- a/megatron/training/arguments.py
++++ b/megatron/training/arguments.py
+@@ -1158,6 +1158,9 @@ def core_transformer_config_from_args(args, config_class=None):
+     if args.is_hybrid_model:
+         kw_args['is_hybrid_model'] = args.is_hybrid_model
+ 
++    kw_args['post_self_attn_layernorm'] = args.post_self_attn_layernorm
++    kw_args['post_mlp_layernorm'] = args.post_mlp_layernorm
++
+     # handle quantization config
+     # NOTE: Kitchen arguments are only added to the namespace when
+     # Kitchen library is available.
+@@ -1439,6 +1442,10 @@ def _add_network_size_args(parser):
+                        action='store_true',
+                        help='If set, use original BERT residula connection '
+                        'ordering.')
++    group.add_argument('--post-self-attn-layernorm', action='store_true',
++                       help='If set, use post self attention layernorm.')
++    group.add_argument('--post-mlp-layernorm', action='store_true',
++                       help='If set, use post MLP layernorm.')
+     group.add_argument('--openai-gelu', action='store_true',
+                        help='Use OpenAIs GeLU implementation. This option'
+                        'should not be used unless for backward compatibility'

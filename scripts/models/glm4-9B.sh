@@ -1,0 +1,23 @@
+MODEL_ARGS=(
+   --spec "slime_plugins.models.glm4" "get_glm_spec"
+   --swiglu
+   --num-layers 40
+   --hidden-size 4096
+   --ffn-hidden-size 13696
+   --num-attention-heads 32
+   --group-query-attention
+   --num-query-groups 2
+   --use-rotary-position-embeddings
+   --disable-bias-linear
+   --add-qkv-bias
+   --normalization "RMSNorm"
+   --norm-epsilon 1e-5
+   --rotary-base 10000
+   --vocab-size 151552
+   --post-self-attn-layernorm
+   --post-mlp-layernorm
+   --rotary-interleaved
+   --rotary-percent 0.5
+   --no-rope-fusion
+   --untie-embeddings-and-output-weights
+)

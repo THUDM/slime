@@ -1,0 +1,66 @@
+import json
+import random
+from slime.utils.types import Sample
+
+
+__all__ = ["JsonlDataset"]
+
+
+class JsonlDataset:
+    def __init__(
+        self,
+        path,
+        tokenizer,
+        max_length,
+        *,
+        prompt_key="text",
+        label_key=None,
+        tool_key=None,
+        metadata_key="metadata",
+        seed=42,
+        apply_chat_template=False
+    ):
+        self.origin_samples = []
+        with open(path) as f:
+            for line in f:
+                data = json.loads(line)
+                prompt = data[prompt_key]
+                if apply_chat_template:
+                    if tool_key is not None:
+                        tools = data[tool_key]
+                    else:
+                        tools = None
+                    prompt = tokenizer.apply_chat_template(prompt, tools, tokenize=False, add_generation_prompt=True)
+
+                # TODO: this is slow.
+                if max_length is not None:
+                    if len(tokenizer(prompt)["input_ids"]) > max_length:
+                        continue
+
+                self.origin_samples.append(
+                    Sample(
+                        prompt=prompt,
+                        label=data[label_key] if label_key is not None else None,
+                        metadata=data.get(metadata_key, None),
+                    )
+                )
+
+        self.epoch_id = -1
+        self.seed = seed
+        self.samples = self.origin_samples
+
+    def shuffle(self, new_epoch_id):
+        if self.epoch_id == new_epoch_id:
+            return
+
+        random.seed(self.seed + new_epoch_id)
+        permutation = list(range(len(self.samples)))
+        random.shuffle(permutation)
+        self.samples = [self.origin_samples[i] for i in permutation]
+        self.epoch_id = new_epoch_id
+
+    def __getitem__(self, idx):
+        return self.samples[idx]
+
+    def __len__(self):
+        return len(self.samples)
