@@ -56,7 +56,7 @@ pip install -e .
 
 ### Checkpoint 格式转换
 
-由于 slime 使用 megatron，而 megatron 不支持不支持加载 huggingface checkpoint，我们需要将模型转换至 megatron 可以支持的 torch_dist 格式。
+由于 slime 使用 megatron，而 megatron 不支持加载 huggingface checkpoint，我们需要将模型转换至 megatron 可以支持的 torch_dist 格式。
 
 #### HF → Megatron torch_dist ckpt
 
