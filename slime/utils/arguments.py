@@ -187,20 +187,26 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
             # over sampling
             parser.add_argument(
-                "--over-sampling-batch-size",
+                "--sampling-batch-size",
                 type=int,
                 default=None,
                 help=(
-                    "The batch size for over sampling. "
-                    "There are 2 cases for over sampling: "
-                    "1. If `over_sampling_batch_size` is set, and `dynamic_sampling_filter_path` is set, "
-                    "we will do dynamic sampling as in DAPO, in which, we will first sample `over_sampling_batch_size` of prompts, "
-                    "use the function in `dynamic_sampling_filter_path` to check if the responses of the prompt is valid, "
-                    "e.g. not all correct or all wrong. And if there are not enough remaining prompts, "
-                    "we will take another `over_sampling_batch_size` of prompts. When there are enough valid prompts, we will abort the ongoing sampling."
-                    "2. If `over_sampling_batch_size` is set, and `over_sampling_filter_path` is set, "
-                    "the first `rollout_batch_size` of `over_sampling_batch_size` will be selected as the result of the prompt. "
-                    "The `over_sampling_filter_path` should be able to sort prompts by its responses and rewards."
+                    "This defines the granularity of the sampling batch in the rollout function. "
+                    "When the number of available samples falls below the target, a sampling "
+                    "operation of size sampling_batch_size will be triggered."
+                    "Regardless of whether partial rollout is used or filters are applied, "
+                    "the sampling granularity is always determined by this value. "
+                    "If this value is None, rollout_batch_size will be used as the default sampling_batch_size."
+                ),
+            )
+            parser.add_argument(
+                "--over-sampling-filter-input-size",
+                type=int,
+                default=None,
+                help=(
+                    "This is the input size for the over sampling filter."
+                    "This value will replace the rollout_batch_size as target batch size "
+                    "(number of complete, valid samples to be generated) when the over sampling filter is applied."
                 ),
             )
             parser.add_argument(
@@ -208,24 +214,21 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 help=(
-                    "Path to the over-sampling filter function. "
-                    "It should be able to sort prompts by its responses and rewards"
-                    "When --over-sampling-filter-path is set, the first `rollout_batch_size` of "
-                    "`over_sampling_batch_size` will be selected as the result of the prompt. "
-                    "You could use `slime.rollout.filter_hub.oversampling_sampling_filters.sort_by_reward_std` as an example."
+                    "This parameter is used with the over_sampling_filter_input_size. "
+                    "The over sampling filter is applied only after enough data has been generated."
+                    "You could use `slime.rollout.filter_hub.over_sampling_filters.sort_by_reward_std` as an example."
                 ),
             )
-            # dynamic sampling
+            # diversity sampling
             parser.add_argument(
-                "--dynamic-sampling-filter-path",
+                "--diversity-sampling-filter-path",
                 type=str,
                 default=None,
                 help=(
-                    "Path to the dynamic sampling filter function. "
-                    "It should be able to judge whether the result of a prompt should be selected or not. "
-                    "When --dynamic-sampling-filter-path is set, the first `rollout_batch_size` that satisfy the filter "
-                    "will be selected as the result of the prompt and --over-sampling-filter-path will be ignored. "
-                    "You could use `slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std` as an example."
+                    "This is the filter function for diversity sampling. "
+                    "It should be able to judge whether the result of a prompt should be selected or not."
+                    "We will do diversity filter for sampling as in DAPO. e.g. not all correct or all wrong samples."
+                    "You could use `slime.rollout.filter_hub.diversity_sampling_filters.check_reward_nonzero_std` as an example."
                 ),
             )
             parser.add_argument(
@@ -236,6 +239,43 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Whether to use partial rollout. "
                     "If set, the unfinished samples during dynamic sampling will be recycled back to data buffer. "
                     "This is useful for long responses."
+                ),
+            )
+            parser.add_argument(
+                "--partial-rollout-filter-path",
+                type=str,
+                default="slime.rollout.filter_hub.partial_rollout_filters.valid_partial_sample",
+                help=(
+                    "This is the filter function for partial rollout. "
+                    "It should be able to select the samples in the buffer that are valid for partial rollout recycling."
+                ),
+            )
+            parser.add_argument(
+                "--partial-rollout-min-response-length",
+                type=int,
+                default=10,
+                help=(
+                    "Minimum response length (in characters) for a sample to be considered for partial rollout recycling. "
+                    "Shorter responses will be discarded."
+                ),
+            )
+            
+            parser.add_argument(
+                "--partial-rollout-min-tokens",
+                type=int,
+                default=5,
+                help=(
+                    "Minimum number of tokens in the response for a sample to be considered for partial rollout recycling."
+                ),
+            )
+            
+            parser.add_argument(
+                "--partial-rollout-mix-ratio",
+                type=float,
+                default=0.3,
+                help=(
+                    "Maximum ratio of partial rollout samples to use in each batch. "
+                    "Value between 0.0 and 1.0. Default 0.3 means up to 30% partial samples."
                 ),
             )
 
@@ -749,14 +789,6 @@ def parse_args(add_custom_arguments=None):
 
     if args.eps_clip_high is None:
         args.eps_clip_high = args.eps_clip
-
-    if args.over_sampling_batch_size is not None:
-        assert (
-            args.over_sampling_batch_size >= args.rollout_batch_size
-        ), "over_sampling_batch_size must be greater than rollout_batch_size"
-        assert (
-            args.dynamic_sampling_filter_path is not None or args.over_sampling_filter_path is not None
-        ), "over_sampling_batch_size must be used with dynamic_sampling_filter_path or over_sampling_filter_path"
 
     if args.eval_reward_key is None:
         args.eval_reward_key = args.reward_key
