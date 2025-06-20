@@ -19,14 +19,13 @@ export PYTHONBUFFERED=16
 # export WANDB_KEY="abcdefg"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/models/qwen3-4B.sh"
+source "${SCRIPT_DIR}/models/qwen2.5-1.5B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-4B
-   #--hf-checkpoint /root/Qwen3-4B-FP8
-   --ref-load /root/Qwen3-4B_torch_dist
-   --load /root/Qwen3-4B_slime/
-   --save /root/Qwen3-4B_slime/
+   --hf-checkpoint /root/DeepSeek-R1-Distill-Qwen-1.5B
+   --ref-load /root/DeepSeek-R1-Distill-Qwen-1.5B_torch_dist
+   # --load /root/DeepSeek-R1-Distill-Qwen-1.5B_slime/
+   # --save /root/DeepSeek-R1-Distill-Qwen-1.5B_slime/
    --save-interval 20
 )
 
@@ -38,21 +37,21 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 3000
-   --rollout-batch-size 32
+   --rollout-batch-size 128
    --n-samples-per-prompt 8
    --rollout-max-response-len 8192
    --rollout-temperature 0.8
 
-   --global-batch-size 256
+   --global-batch-size 1024
    --balance-data
-   --sampling-batch-size 32
-   
+   --sampling-batch-size 128
+
    # --partial-rollout
    # --partial-rollout-min-response-length 20
    # --partial-rollout-min-tokens 8
    # --partial-rollout-mix-ratio 0.75 
    # --over-sampling-filter-path slime.rollout.filter_hub.over_sampling_filters.sort_by_reward_std
-   # --over-sampling-filter-input-size 48
+   # --over-sampling-filter-input-size 192
    --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
 )
 
@@ -102,14 +101,14 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   #--use-wandb
+    #--use-wandb
    # --wandb-project slime-dev
-   # --wandb-group qwen3-4B-test
+   # --wandb-group qwen2.5-1.5B-test
    # --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 2
+   --rollout-num-gpus-per-engine 1
    --sglang-mem-fraction-static 0.7
 )
 

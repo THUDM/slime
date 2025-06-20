@@ -219,16 +219,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "You could use `slime.rollout.filter_hub.over_sampling_filters.sort_by_reward_std` as an example."
                 ),
             )
-            # diversity sampling
+            # dynamic sampling
             parser.add_argument(
-                "--diversity-sampling-filter-path",
+                "--dynamic-sampling-filter-path",
                 type=str,
                 default=None,
                 help=(
-                    "This is the filter function for diversity sampling. "
+                    "This is the filter function for dynamic sampling. "
                     "It should be able to judge whether the result of a prompt should be selected or not."
-                    "We will do diversity filter for sampling as in DAPO. e.g. not all correct or all wrong samples."
-                    "You could use `slime.rollout.filter_hub.diversity_sampling_filters.check_reward_nonzero_std` as an example."
+                    "We will do dynamic filter for sampling as in DAPO. e.g. not all correct or all wrong samples."
+                    "You could use `slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std` as an example."
                 ),
             )
             parser.add_argument(

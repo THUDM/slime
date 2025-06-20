@@ -165,15 +165,16 @@ class Buffer:
             return []
         
         if self.args.partial_rollout:
+            # TODO(jiajun): Current buffer filter is too naive, and will cause performance degradation in sample selection
             partial_ids = [i for i, s in enumerate(self.buffer) if s.status != Sample.Status.PENDING]
             new_ids = [i for i, s in enumerate(self.buffer) if s.status == Sample.Status.PENDING]
             
-            # Use configurable ratio of partial samples for diversity
+            # Use configurable ratio of partial samples for dynamic
             max_partial_samples = min(len(partial_ids), int(num_samples * self.args.partial_rollout_mix_ratio / self.args.n_samples_per_prompt) * self.args.n_samples_per_prompt)
             selected_partial_ids = partial_ids[:max_partial_samples]
             selected_partial_samples = [self.buffer[i] for i in selected_partial_ids]
             
-            # Get remaining samples using regular filter
+            # Get remaining samples using regular filters
             needed_new_samples_num = min(len(new_ids), num_samples - len(selected_partial_samples))
             if needed_new_samples_num > 0:
                 selected_new_ids = new_ids[:needed_new_samples_num]

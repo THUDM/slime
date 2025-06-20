@@ -32,10 +32,10 @@ class GenerateState:
     cached_aborted_samples: int = 0
     cached_completed_samples: int = 0
     cached_truncated_samples: int = 0
-    diversity_filter_excluded_samples: int = 0
+    dynamic_filter_excluded_samples: int = 0
     over_sampling_filter_excluded_samples: int = 0
     def stats_to_string(self):
-        return f"Input pending samples: {self.input_pending_samples}, Input aborted samples: {self.input_aborted_samples}, Input completed samples: {self.input_completed_samples}, Input truncated samples: {self.input_truncated_samples}, Output aborted samples: {self.output_aborted_samples}, Output completed samples: {self.output_completed_samples}, Output truncated samples: {self.output_truncated_samples}, Cached pending samples: {self.cached_pending_samples}, Cached aborted samples: {self.cached_aborted_samples}, Cached completed samples: {self.cached_completed_samples}, Cached truncated samples: {self.cached_truncated_samples}, Diversity filter excluded samples: {self.diversity_filter_excluded_samples}, Over sampling filter excluded samples: {self.over_sampling_filter_excluded_samples}"
+        return f"Input pending samples: {self.input_pending_samples}, Input aborted samples: {self.input_aborted_samples}, Input completed samples: {self.input_completed_samples}, Input truncated samples: {self.input_truncated_samples}, Output aborted samples: {self.output_aborted_samples}, Output completed samples: {self.output_completed_samples}, Output truncated samples: {self.output_truncated_samples}, Cached pending samples: {self.cached_pending_samples}, Cached aborted samples: {self.cached_aborted_samples}, Cached completed samples: {self.cached_completed_samples}, Cached truncated samples: {self.cached_truncated_samples}, dynamic filter excluded samples: {self.dynamic_filter_excluded_samples}, Over sampling filter excluded samples: {self.over_sampling_filter_excluded_samples}"
 
 TOKENIZER = None
 SEMAPHORE = None
@@ -74,10 +74,7 @@ async def generate(args, rollout_id: int, sample: Sample, sampling_params) -> Sa
         try:
             async with SEMAPHORE:
                 output = await post(url, payload, use_http2=args.use_http2)
-                # print(f"Prompt: {input_text[:100]}...", flush=True)
-                # print(f"Output: {output['text'][:200]}...", flush=True)
         except Exception as e:
-            # TODO(jiajun): what will happen if the worker has been aborted?
             retry_count += 1
             print(f"Error: {e}, retrying... (attempt {retry_count}/{max_retries})")
             if retry_count >= max_retries:
@@ -170,26 +167,24 @@ async def generate_rollout_async(args, rollout_id, data_buffer) -> list[Sample]:
 
     # sampling_batch_size refers to the number of samples to get at a time.
     # if the number of valid samples obtained is insufficient to support rollout, start the next round of sampling.
+    # redundant samples: aborted samples and excess completed and truncated samples.
+    # for non-partial rollout with dynamic filter, on-policy is required and all redundant samples are dropped, so the sampling_batch_size should not be too large.
+    # for partial rollout, redundant samples are stored in the buffer and will be used in the next round of sampling.
+
     if args.sampling_batch_size is not None:
         sampling_batch_size = args.sampling_batch_size
     else:
         sampling_batch_size = args.rollout_batch_size
-    # Redundant samples: Excess valid samples and unfinished samples.
-    # For non-partial rollout without diversity filter, sampling only happens once.
-    # For non-partial rollout with diversity filter, sampling may happens multiple times. 
-    # On-policy is required and all redundant samples are dropped, so the sampling_batch_size should not be too large.
-    # For partial rollout, the sampling_batch_size should be larger than the rollout_batch_size for over sampling.
-    # Redundant samples are stored in the buffer and will be used in the next round of sampling.
 
     state = GenerateState(
         remaining_batch_size=0,
         pendings=set(),
     )
     
-    diversity_filter = None
-    if args.diversity_sampling_filter_path is not None:
-        # diversity filter is used to filter out samples that is not suitable for training
-        diversity_filter = load_function(args.diversity_sampling_filter_path)
+    dynamic_filter = None
+    if args.dynamic_sampling_filter_path is not None:
+        # dynamic filter is used to filter out samples that is not suitable for training
+        dynamic_filter = load_function(args.dynamic_sampling_filter_path)
     over_sampling_filter = None
     if args.over_sampling_filter_path is not None:
         assert args.over_sampling_filter_input_size is not None
@@ -312,11 +307,11 @@ async def generate_rollout_async(args, rollout_id, data_buffer) -> list[Sample]:
                     else:
                         sample.reward = rewards[i]
                     
-            if diversity_filter is not None and not diversity_filter(args, data_group[group_index]):
+            if dynamic_filter is not None and not dynamic_filter(args, data_group[group_index]):
                 # Delete the invalid samples, don't use them in partial rollout.
                 del data_group[group_index]
                 state.remaining_batch_size -= 1
-                state.diversity_filter_excluded_samples += args.n_samples_per_prompt
+                state.dynamic_filter_excluded_samples += args.n_samples_per_prompt
                 continue
             
             # add the samples to the data
