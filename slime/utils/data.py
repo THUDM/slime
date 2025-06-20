@@ -41,7 +41,7 @@ class JsonlDataset:
                     Sample(
                         prompt=prompt,
                         label=data[label_key] if label_key is not None else None,
-                        metadata=data.get(metadata_key, None),
+                        metadata=data.get(metadata_key) or {},
                     )
                 )
 
