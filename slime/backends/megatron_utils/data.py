@@ -298,6 +298,7 @@ def process_rollout_data(rollout_id, args, data_buffer):
         "total_lengths",
         "response_lengths",
         "rewards",
+        "raw_reward",
         "truncated",
         "loss_masks",
     ]:

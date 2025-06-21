@@ -26,7 +26,7 @@ def convert_samples_to_train_data(samples: list[Sample]):
         "tokens": [sample.tokens for sample in samples],
         "response_lengths": [sample.response_length for sample in samples],
         "rewards": [sample.reward for sample in samples],
-        "truncated": [1 if sample.truncated else 0 for sample in samples],
+        "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],
     }
     if samples[0].loss_mask:
         train_data["loss_masks"] = []
@@ -126,11 +126,12 @@ class Buffer:
 
         samples = await self._get_samples_from_buffer(num_samples)
         num_samples -= len(samples)
+        if num_samples == 0:
+            return samples
+        
         assert num_samples % self.args.n_samples_per_prompt == 0
         num_prompts = num_samples // self.args.n_samples_per_prompt
 
-        if num_samples == 0:
-            return samples
 
         if self.dataset is not None:
             if self.sample_offset + num_prompts <= len(self.dataset):
@@ -157,20 +158,66 @@ class Buffer:
                 )
                 self.sample_index += 1
                 samples.append(sample)
-
-        assert len(samples) == num_samples
         return samples
 
     async def _get_samples_from_buffer(self, num_samples) -> list[Sample]:
         if len(self.buffer) == 0 or num_samples == 0:
             return []
-        samples = self.buffer_filter(self.buffer, num_samples)
+        
+        if self.args.partial_rollout:
+            # TODO(jiajun): Current buffer filter is too naive, and will cause performance degradation in sample selection
+            partial_ids = [i for i, s in enumerate(self.buffer) if s.status != Sample.Status.PENDING]
+            new_ids = [i for i, s in enumerate(self.buffer) if s.status == Sample.Status.PENDING]
+            
+            # Use configurable ratio of partial samples for dynamic
+            max_partial_samples = min(len(partial_ids), int(num_samples * self.args.partial_rollout_mix_ratio / self.args.n_samples_per_prompt) * self.args.n_samples_per_prompt)
+            selected_partial_ids = partial_ids[:max_partial_samples]
+            selected_partial_samples = [self.buffer[i] for i in selected_partial_ids]
+            
+            # Get remaining samples using regular filters
+            needed_new_samples_num = min(len(new_ids), num_samples - len(selected_partial_samples))
+            if needed_new_samples_num > 0:
+                selected_new_ids = new_ids[:needed_new_samples_num]
+                selected_new_samples = [self.buffer[i] for i in selected_new_ids]
+            else:
+                selected_new_ids = []
+                selected_new_samples = []
+            
+            samples = selected_partial_samples + selected_new_samples
+            # Manually remove samples from buffer
+            to_remove = set(selected_partial_ids + selected_new_ids)
+            self.buffer = [s for idx, s in enumerate(self.buffer) if idx not in to_remove]
+        else:
+            # Original behavior for non-partial rollout
+            samples = self.buffer_filter(self.buffer, num_samples)
         return samples
 
     async def add_samples(self, samples: list[Sample]):
-        # TODO: we can save some partial rollout data here.
-        assert len(samples) % self.args.n_samples_per_prompt == 0
-        self.buffer.extend(samples)
+        if not samples:
+            return
+            
+        partial_samples = []
+        new_samples = []
+        
+        assert self.sample_index % self.args.n_samples_per_prompt == 0, f"Samples in a group should be continuous and divisible by n_samples_per_prompt {self.args.n_samples_per_prompt}"
+        for sample in samples:
+            sample.index = self.sample_index
+            self.sample_index += 1
+            if (sample.status != Sample.Status.PENDING):
+                partial_samples.append(sample)
+            else:
+                new_samples.append(sample)
+        
+        if partial_samples:
+            # Add partial samples to front of buffer for priority processing
+            self.buffer[:0] = partial_samples
+            
+        if new_samples:
+            # Add new samples to end of buffer
+            self.buffer.extend(new_samples)
+
+        assert (len(new_samples) + len(partial_samples)) % self.args.n_samples_per_prompt == 0
+        print(f"Buffer size after adding samples: {len(self.buffer)} (adding {len(partial_samples)} partial samples and {len(new_samples)} new samples)", flush=True)
 
     def generate(self, rollout_id, evaluation=False):
         if self.args.load_debug_rollout_data:
