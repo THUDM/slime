@@ -108,6 +108,18 @@ class TrainRayActor(RayActor):
         self.rollout_engines = None
         self.rollout_engine_lock = None
         self.data_buffer = None
+        if self.args.keep_old_actor:
+            old_args = args.load, args.no_load_optim, args.no_load_rng
+            args.load = args.ref_load
+            args.no_load_optim = True
+            args.no_load_rng = True
+            self.old_actor, _, _, _ = megatron_utils.initialize_model_and_optimizer(args, with_optimizer=False)
+            args.load, args.no_load_optim, args.no_load_rng = old_args
+            if self.args.offload_rollout:
+                for model_module in self.old_actor:
+                    model_module.to(device="cpu", non_blocking=True)
+        else:
+            self.old_actor = None
 
         self.rollout_data_postprocess = None
         if self.args.rollout_data_postprocess_path is not None:
@@ -263,7 +275,7 @@ class TrainRayActor(RayActor):
             # For debug rollout, we just log the data and return.
             if with_data_fetching:
                 self.get_rollout_data(rollout_id)
-            megatron_utils.log_rollout_data(rollout_id, self.args, self.data_buffer)
+            megatron_utils.log_rollout_data(rollout_id, self.args)
             megatron_utils.log_perf_data(rollout_id, self.args)
             Timer().start("train_wait")
             return
@@ -284,27 +296,28 @@ class TrainRayActor(RayActor):
 
             print_memory("begin train")
 
-            if self.ref is not None:
-                if self.args.offload_ref:
-                    for model_module in self.ref:
-                        model_module.to(device=torch.cuda.current_device(), non_blocking=True)
-                    print_memory("after load ref model")
+            with timer("ref_log_probs"):
+                if self.ref is not None:
+                    if self.args.offload_ref:
+                        for model_module in self.ref:
+                            model_module.to(device=torch.cuda.current_device(), non_blocking=True)
+                        print_memory("after load ref model")
 
-                with timer("ref_log_probs"):
-                    megatron_utils.forward_only(
-                        self.args,
-                        self.ref,
-                        log_probs_data_iterator,
-                        log_probs_num_microbatches,
-                        store_prefix="ref_",
-                    )
+                    with timer("ref_log_probs_forward"):
+                        megatron_utils.forward_only(
+                            self.args,
+                            self.ref,
+                            log_probs_data_iterator,
+                            log_probs_num_microbatches,
+                            store_prefix="ref_",
+                        )
 
-                # TODO: we should offload ref model here. But some how CuMemAllocator will raise error.
-                if self.args.offload_ref:
-                    for model_module in self.ref:
-                        model_module.to(device="cpu", non_blocking=True)
-                    clear_memory()
-                    print_memory("after offload ref model")
+                    # TODO: we should offload ref model here. But some how CuMemAllocator will raise error.
+                    if self.args.offload_ref:
+                        for model_module in self.ref:
+                            model_module.to(device="cpu", non_blocking=True)
+                        clear_memory()
+                        print_memory("after offload ref model")
 
             # reset data iterator
             for data_iterator in log_probs_data_iterator:
@@ -312,24 +325,49 @@ class TrainRayActor(RayActor):
 
             # Calculate logprob, the results will be stored on last pp stage.
             with timer("log_probs"):
-                if self.args.offload:
-                    self.wake_up("model")
+                if self.old_actor is not None:
+                    if self.args.offload_rollout:
+                        for model_module in self.old_actor:
+                            model_module.to(device=torch.cuda.current_device(), non_blocking=True)
+                        print_memory("after load rollout model")
+                    with timer("rollout_log_probs_forward"):
+                        megatron_utils.forward_only(
+                            self.args,
+                            self.old_actor,
+                            log_probs_data_iterator,
+                            log_probs_num_microbatches,
+                        )
 
-                megatron_utils.forward_only(
-                    self.args,
-                    self.model,
-                    log_probs_data_iterator,
-                    log_probs_num_microbatches,
-                )
+                    if self.args.offload_rollout:
+                        for model_module in self.old_actor:
+                            model_module.to(device="cpu", non_blocking=True)
+                        torch.cuda.empty_cache()
+                        print_memory("after offload rollout model")
+
+                    if self.args.offload:
+                        self.wake_up("model")
+                else:
+                    if self.args.offload:
+                        self.wake_up("model")
+
+                    megatron_utils.forward_only(
+                        self.args,
+                        self.model,
+                        log_probs_data_iterator,
+                        log_probs_num_microbatches,
+                    )
 
             # Calculate adv and returns. Need to performed before training (instead of on the fly),
             # because we may need normalize the whole rollout.
-            megatron_utils.compute_advantages_and_returns(self.args)
+            with timer("compute_advantages_and_returns"):
+                megatron_utils.compute_advantages_and_returns(self.args)
 
             if self.rollout_data_postprocess is not None:
-                self.rollout_data_postprocess(self.args)
+                with timer("rollout_data_postprocess"):
+                    self.rollout_data_postprocess(self.args)
 
-            megatron_utils.log_rollout_data(rollout_id, self.args)
+            with timer("log_rollout_data"):
+                megatron_utils.log_rollout_data(rollout_id, self.args)
 
             # Train
             with timer("actor_train"):
@@ -342,7 +380,8 @@ class TrainRayActor(RayActor):
                     train_num_microbatches,
                 )
 
-        megatron_utils.log_perf_data(rollout_id, self.args)
+        with timer("log_perf_data"):
+            megatron_utils.log_perf_data(rollout_id, self.args)
         Timer().start("train_wait")
         megatron_utils.data.clear_local_storage()
 
@@ -539,6 +578,17 @@ class TrainRayActor(RayActor):
         dist.barrier()
         clear_memory()
         print_memory("after update_weights")
+
+        if getattr(self.args, "keep_old_actor", False):
+            print("update rollout model on cpu using actor model")
+            for cpu_module, src_module in zip(self.old_actor, self.model):
+                cpu_module.load_state_dict(src_module.state_dict(), strict=True)
+
+    def get_old_actor_state_dict(self):
+        if self.old_actor is not None:
+            return self.old_actor.state_dict()
+        else:
+            return None
 
 
 class RayTrainGroup:

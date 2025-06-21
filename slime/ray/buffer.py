@@ -5,9 +5,9 @@ from typing import Any, Union
 
 import ray
 import torch
-import wandb
 from transformers import AutoTokenizer
 
+import wandb
 from slime.utils.data import JsonlDataset
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
@@ -37,6 +37,8 @@ def convert_samples_to_train_data(samples: list[Sample]):
             train_data["loss_masks"].append(sample.loss_mask)
     if samples[0].metadata and "raw_reward" in samples[0].metadata:
         train_data["raw_reward"] = [sample.metadata["raw_reward"] for sample in samples]
+    if samples[0].metadata and "round_number" in samples[0].metadata:
+        train_data["round_number"] = [sample.metadata["round_number"] for sample in samples]
     return train_data
 
 

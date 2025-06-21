@@ -1,14 +1,16 @@
+import math
 from typing import Any, Optional
 
+import numpy as np
 import ray
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-import wandb
 from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.utils import get_model_config
 
+import wandb
 from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.memory_utils import clear_memory
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
@@ -300,6 +302,7 @@ def process_rollout_data(rollout_id, args, data_buffer):
         "rewards",
         "truncated",
         "loss_masks",
+        "round_number",
     ]:
         if key not in data:
             continue
@@ -362,6 +365,133 @@ def log_rollout_data(rollout_id, args):
                     if not args.wandb_always_use_train_step
                     else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
                 )
+                wandb.log(reduced_log_dict)
+        else:
+            dist.gather_object(
+                log_dict,
+                None,
+                dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
+                group=mpu.get_data_parallel_group(with_context_parallel=True),
+            )
+
+    if args.log_multi_turn:
+        log_multi_turn_data(rollout_id, args)
+    if args.log_passrate:
+        log_passrate(rollout_id, args)
+
+
+def log_multi_turn_data(rollout_id, args):
+    if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
+        cp_size = mpu.get_context_parallel_world_size()
+        log_dict = {}
+        response_lengths = get_local_storage("response_lengths")
+        for key, val in get_local_storage().items():
+            if key == "loss_masks":
+                if val:  # Check if val is not empty
+                    device = val[0].device  # Get device from first tensor
+
+                    # Vectorized length calculation using torch
+                    raw_response_lengths = torch.tensor([v.shape[0] for v in val], dtype=torch.float32, device=device)
+                    log_dict["raw_response_length/response_length_mean"] = raw_response_lengths.mean().item()
+                    log_dict["raw_response_length/response_length_max"] = raw_response_lengths.max().item()
+                    log_dict["raw_response_length/response_length_min"] = raw_response_lengths.min().item()
+                    log_dict["raw_response_length/response_length_clip_ratio"] = (
+                        (raw_response_lengths > args.rollout_max_response_len).float().mean().item()
+                    )
+
+                    # Vectorized sum calculation using torch - stay on GPU
+                    wo_obs_response_lengths = torch.tensor(
+                        [v.sum().item() for v in val], dtype=torch.float32, device=device
+                    )
+                    log_dict["wo_obs_response_length/response_length_mean"] = wo_obs_response_lengths.mean().item()
+                    log_dict["wo_obs_response_length/response_length_max"] = wo_obs_response_lengths.max().item()
+                    log_dict["wo_obs_response_length/response_length_min"] = wo_obs_response_lengths.min().item()
+            if key == "round_number":
+                # Use numpy for vectorized round number statistics
+                round_number_array = np.array(val)
+                log_dict["multi_turn_metric/round_number_mean"] = np.mean(round_number_array)
+                log_dict["multi_turn_metric/round_number_max"] = np.max(round_number_array)
+                log_dict["multi_turn_metric/round_number_min"] = np.min(round_number_array)
+        if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
+            gathered_log_dict = [None] * mpu.get_data_parallel_world_size(with_context_parallel=True)
+            # Not sure if this will be a performance bottleneck.
+            dist.gather_object(
+                log_dict,
+                gathered_log_dict,
+                dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
+                group=mpu.get_data_parallel_group(with_context_parallel=True),
+            )
+            dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
+            reduced_log_dict = {
+                f"multi_turn/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
+            }
+            print(f"multi_turn {rollout_id}: {reduced_log_dict}")
+            if args.use_wandb:
+                wandb.log(reduced_log_dict)
+        else:
+            dist.gather_object(
+                log_dict,
+                None,
+                dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
+                group=mpu.get_data_parallel_group(with_context_parallel=True),
+            )
+
+
+def log_passrate(rollout_id, args):
+    if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
+        cp_size = mpu.get_context_parallel_world_size()
+        log_dict = {}
+        response_lengths = get_local_storage("response_lengths")
+        for key, val in get_local_storage().items():
+            if key != "raw_reward":
+                continue
+
+            group_size = args.n_samples_per_prompt
+            group_number = args.rollout_batch_size
+            assert len(val) == group_number * group_size
+            pass_rate_name_list = [2**i for i in range(int(math.log2(group_size)) + 1)]
+
+            val = np.array(val).reshape(group_number, group_size)
+
+            def estimate_pass_at_k(num_samples, num_correct, k):
+                """
+                Estimates pass@k of each problem and returns them in an array.
+                """
+
+                def estimator(n, c, k):
+                    """
+                    Calculates 1 - comb(n - c, k) / comb(n, k).
+                    """
+                    if n - c < k:
+                        return 1.0
+                    return 1.0 - np.prod(1.0 - k / np.arange(n - c + 1, n + 1))
+
+                return np.array([estimator(int(n), int(c), k) for n, c in zip(num_samples, num_correct)])
+
+            for k in pass_rate_name_list:
+                num_correct = np.sum(val == 1, axis=1)
+                num_samples = np.full(group_number, group_size)
+
+                pass_k_estimates = estimate_pass_at_k(num_samples, num_correct, k)
+
+                pass_k = np.mean(pass_k_estimates)
+                log_dict[f"pass@{k}"] = pass_k
+
+        if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
+            gathered_log_dict = [None] * mpu.get_data_parallel_world_size(with_context_parallel=True)
+            # Not sure if this will be a performance bottleneck.
+            dist.gather_object(
+                log_dict,
+                gathered_log_dict,
+                dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
+                group=mpu.get_data_parallel_group(with_context_parallel=True),
+            )
+            dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
+            reduced_log_dict = {
+                f"passrate/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
+            }
+            print(f"passrate {rollout_id}: {reduced_log_dict}")
+            if args.use_wandb:
                 wandb.log(reduced_log_dict)
         else:
             dist.gather_object(

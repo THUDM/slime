@@ -645,6 +645,55 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             return parser
 
+        def add_agent_rollout_arguments(parser):
+            parser.add_argument(
+                "--agent-rollout-buffer-url",
+                type=str,
+                default=None,
+                help="URL for the agent rollout buffer",
+            )
+            parser.add_argument(
+                "--update-rollout-weights-interval",
+                type=int,
+                default=1,
+                help="Interval for updating the weights of the agent",
+            )
+            parser.add_argument(
+                "--fetch-trajectory-retry-times",
+                type=int,
+                default=-1,
+                help="Number of times to retry fetching trajectory, -1 means unlimited retry",
+            )
+            parser.add_argument(
+                "--keep-old-actor",
+                action="store_true",
+                help="Whether to keep the rollout model on training process",
+            )
+            parser.add_argument(
+                "--offload-rollout",
+                action="store_true",
+                help="Whether to update the rollout model on cpu",
+            )
+            parser.add_argument(
+                "--min-batch-collection-ratio",
+                type=float,
+                default=1,
+                help="Minimum batch collection ratio",
+            )
+            parser.add_argument(
+                "--rollout-task-type",
+                type=str,
+                default="math",
+            )
+            parser.add_argument(
+                "--loss-mask-type",
+                type=str,
+                default="qwen",
+                choices=["qwen", "distill_qwen"],
+                help="Loss mask type",
+            )
+            return parser
+
         def add_custom_megatron_plugins_arguments(parser):
             """
             Add custom Megatron plugins arguments.
@@ -682,6 +731,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_sglang_arguments(parser)
         parser = add_network_arguments(parser)
         parser = add_reward_model_arguments(parser)
+        parser = add_agent_rollout_arguments(parser)
         parser = add_custom_megatron_plugins_arguments(parser)
         # For megatron
         parser.add_argument("--padded-vocab-size", type=int, default=None)

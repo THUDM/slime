@@ -177,3 +177,5 @@ wandb/
 outputs/
 tests/
 local/
+**/rollout_data/
+**/buffer_stats/

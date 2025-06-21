@@ -4,10 +4,11 @@ from datetime import timedelta
 import numpy as np
 import torch
 import torch.distributed as dist
-import wandb
 from megatron.core import mpu, tensor_parallel
 from megatron.core.num_microbatches_calculator import init_num_microbatches_calculator
 from megatron.training.global_vars import _build_tokenizer, set_args
+
+import wandb
 
 
 def _set_random_seed(
@@ -128,6 +129,8 @@ def init(args):
         wandb.define_metric("train/*", step_metric="train/step")
         wandb.define_metric("rollout/step")
         wandb.define_metric("rollout/*", step_metric="rollout/step")
+        wandb.define_metric("multi_turn/*", step_metric="rollout/step")
+        wandb.define_metric("passrate/*", step_metric="rollout/step")
         wandb.define_metric("eval/step")
         wandb.define_metric("eval/*", step_metric="eval/step")
         wandb.define_metric("perf/step")
