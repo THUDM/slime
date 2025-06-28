@@ -32,7 +32,7 @@ Convert the Hugging Face checkpoint into a format that Megatron can load:
 ```bash
 # mcore checkpoint
 cd /root/slime
-PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
+PYTHONPATH=/root/Megatron-LM:/root/slime python tools/convert_hf_to_torch_dist.py \
     --hf-checkpoint /root/Qwen3-4B \
     --save /root/Qwen3-4B_torch_dist
 ```
