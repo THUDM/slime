@@ -315,6 +315,13 @@ def process_rollout_data(rollout_id, args, data_buffer):
 
         # save the data to local storage
         set_local_storage(key, val)
+    
+    if "rollout_time" in data:
+        set_local_storage("rollout_time", data["rollout_time"])
+    
+    # Handle completion tokens statistics from this round
+    if "completion_tokens_stats" in data:
+        set_local_storage("completion_tokens_stats", data["completion_tokens_stats"])
 
 
 def log_rollout_data(rollout_id, args):
@@ -323,7 +330,7 @@ def log_rollout_data(rollout_id, args):
         log_dict = {}
         response_lengths = get_local_storage("response_lengths")
         for key, val in get_local_storage().items():
-            if key == "tokens" or key == "loss_masks":
+            if key == "tokens" or key == "loss_masks" or key == "rollout_time" or key == "completion_tokens_stats":
                 continue
             # Upload per sample mean for each rollout value
             # There are the following assumptions:
@@ -344,6 +351,33 @@ def log_rollout_data(rollout_id, args):
             else:
                 raise ValueError(f"Unsupported type: {type(val)}")
             log_dict[key] = val.item() if isinstance(val, torch.Tensor) else val
+
+        completion_tokens_stats = get_local_storage("completion_tokens_stats")
+        if completion_tokens_stats:
+            log_dict["tokens_mean"] = completion_tokens_stats.get("completion_tokens_mean", 0)
+            log_dict["tokens_std"] = completion_tokens_stats.get("completion_tokens_std", 0)
+            log_dict["total_tokens"] = completion_tokens_stats.get("total_completion_tokens", 0)
+        
+        # Get response length statistics for completed samples
+        if response_lengths:
+            # Metrics for completed response length
+            response_lengths_array = np.array(response_lengths)
+            log_dict["response_length_mean"] = np.mean(response_lengths_array)
+            log_dict["response_length_max"] = np.max(response_lengths_array)
+            log_dict["response_length_min"] = np.min(response_lengths_array)
+            log_dict["response_length_std"] = np.std(response_lengths_array)
+            log_dict["response_length_p50"] = np.percentile(response_lengths_array, 50)
+            log_dict["response_length_p75"] = np.percentile(response_lengths_array, 75)
+            log_dict["response_length_p90"] = np.percentile(response_lengths_array, 90)
+            log_dict["response_length_p99"] = np.percentile(response_lengths_array, 99)
+
+        rollout_time = get_local_storage("rollout_time")
+        if rollout_time and rollout_time > 0 and completion_tokens_stats:
+            total_completion_tokens = completion_tokens_stats.get("total_completion_tokens", 0)
+            if total_completion_tokens > 0:
+                throughput = total_completion_tokens / rollout_time
+                log_dict["rollout_time"] = rollout_time
+                log_dict["tokens_throughput"] = throughput
 
         if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
             gathered_log_dict = [None] * mpu.get_data_parallel_world_size(with_context_parallel=True)
