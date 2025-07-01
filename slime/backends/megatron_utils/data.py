@@ -279,6 +279,14 @@ def process_rollout_data(rollout_id, args, data_buffer):
             rewards = rewards / (std + 1e-6)
         rewards = rewards.flatten().tolist()
         data["rewards"] = rewards
+    elif args.advantage_estimator == "reinforce_plus_plus_baseline" and args.rewards_normalization:
+        # group baseline subtraction for RF++-baseline
+        rewards = torch.tensor([r for r in rewards], dtype=torch.float)
+        rewards = rewards.reshape(-1, args.n_samples_per_prompt)
+        mean = rewards.mean(dim=-1, keepdim=True)
+        rewards = rewards - mean
+        rewards = rewards.flatten().tolist()
+        data["rewards"] = rewards
 
     total_lengths = [len(t) for t in data["tokens"]]
     data["total_lengths"] = total_lengths
