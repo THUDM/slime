@@ -279,6 +279,7 @@ def process_rollout_data(rollout_id, args, data_buffer):
             rewards = rewards / (std + 1e-6)
         rewards = rewards.flatten().tolist()
         data["rewards"] = rewards
+
     elif args.advantage_estimator == "reinforce_plus_plus_baseline" and args.rewards_normalization:
         # group baseline subtraction for RF++-baseline
         rewards = torch.tensor([r for r in rewards], dtype=torch.float)

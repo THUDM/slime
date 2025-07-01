@@ -198,6 +198,66 @@ def get_grpo_returns(
     return returns
 
 
+def get_reinforce_plus_plus_advantages(
+    rewards: torch.Tensor,
+    kl: List[torch.Tensor],
+    loss_masks: Optional[List[torch.Tensor]],
+    response_lengths: List[int],
+    kl_coef: float,
+    gamma: float,
+) -> (List[torch.Tensor], List[torch.Tensor]):
+    """
+    Calculates discounted returns and whitened advantages for REINFORCE++ (https://arxiv.org/pdf/2501.03262).
+
+    Args:
+        rewards (Tensor): A tensor of scalar rewards for each sequence. Shape: (batch_size,).
+        kl (List[Tensor]): A list of per-token KL divergence tensors.
+        loss_masks (Optional[List[Tensor]]): Loss masks for whitening and identifying the last token.
+        response_lengths (List[int]): Sequence lengths for splitting.
+        kl_coef (float): Coefficient for the KL penalty.
+        gamma (float): The discount factor.
+
+    Returns:
+        A tuple of (advantages, returns):
+        - advantages (List[Tensor]): The final, whitened advantages.
+        - returns (List[Tensor]): The original, unwhitened discounted returns.
+    """
+    if loss_masks is None:
+        # Assume the entire response is used for loss calculation.
+        loss_masks = [torch.ones(length, device=kl[0].device, dtype=torch.long) for length in response_lengths]
+
+    # token-level rewards (final_task_reward + per_token_kl_penalty).
+    token_level_rewards = []
+    for i in range(len(rewards)):
+        r = -kl_coef * kl[i]
+        assert loss_masks[i].sum() > 0, f"Sequence at index {i} is fully masked..."
+
+        # Find the index of the last valid token to add the final task reward.
+        last_response_idx = loss_masks[i].nonzero(as_tuple=True)[0][-1]
+        r[last_response_idx] += rewards[i]
+        token_level_rewards.append(r)
+
+    # Calculate discounted returns per sequence
+    returns = []
+    for r_i in token_level_rewards:
+        seq_len = len(r_i)
+        returns_i = torch.zeros_like(r_i)
+        running_return = 0.0
+        for t in reversed(range(seq_len)):
+            # G_t = r_t + gamma * G_{t+1}
+            running_return = r_i[t] + gamma * running_return
+            returns_i[t] = running_return
+        returns.append(returns_i)
+
+    all_returns = torch.cat(returns)
+    all_masks = torch.cat(loss_masks)
+
+    whitened_advs_flat = distributed_masked_whiten(all_returns, all_masks, shift_mean=True)
+    advantages = list(torch.split(whitened_advs_flat, response_lengths))
+
+    return advantages, returns
+
+
 # def get_reinforce_plus_plus_baseline_advantages(
 #     rewards: torch.Tensor,
 #     kl: list[torch.Tensor],
