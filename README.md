@@ -74,6 +74,8 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     --save /root/GLM-Z1-9B-0414_torch_dist
 ```
 
+When encountering a model that is not temporarily supported by mbridge, you can consider using [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch) for conversion.
+
 ⚠️ If you encounter an issue where slime cannot be found, please run `pip install -e .` in the slime directory.
 
 #### Megatron torch\_dist → HF ckpt
@@ -169,6 +171,10 @@ For complete usage instructions, please refer to the [Usage Documentation](docs/
     ```
 
   - For debugging tips, please refer to the [Debugging Guide](docs/en/debug.md)
+
+## Hardware Support
+- Nvidia: refer to this repo README
+- AMD: refer to the [toturial](docs/en/amd_toturial.md)
 
 ## FAQ & Acknowledgements
 

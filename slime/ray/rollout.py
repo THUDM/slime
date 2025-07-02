@@ -12,6 +12,7 @@ from slime.utils.http_utils import find_available_port, get_host_info, run_route
 from .utils import Lock
 
 
+
 @ray.remote
 class RolloutRayActor(RayActor):
     def __init__(self, args, rank: int):

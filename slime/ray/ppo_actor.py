@@ -7,7 +7,13 @@ from typing import Dict
 import ray
 import torch
 import torch.distributed as dist
-from cumem_allocator import CuMemAllocator
+
+
+if torch.version.hip:
+    from vllm.device_allocator.cumem import CuMemAllocator
+else:
+    from cumem_allocator import CuMemAllocator
+
 
 # somehow we need to import this, otherwise the update weight will stuck
 from megatron.core import mpu
@@ -159,7 +165,6 @@ class TrainRayActor(RayActor):
 
         clear_memory()
         print_memory(f"before offload model")
-
         self.update_cpu_params_dict()
 
         allocator = CuMemAllocator.get_instance()

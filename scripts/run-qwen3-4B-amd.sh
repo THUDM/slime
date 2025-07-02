@@ -1,6 +1,10 @@
 #!/bin/bash
 
-# for rerun the task
+
+# bash scripts/run-qwen3-4B-amd.sh
+
+
+####clear before training
 pkill -9 sglang
 sleep 3
 ray stop --force
@@ -10,30 +14,71 @@ sleep 3
 pkill -9 ray
 pkill -9 python
 
-set -ex
+
+set -euxo pipefail
+
+
+### AMD Support ###
+SLIME_DIR="/home/yushensu/projects/slime" # Need to change to your own path
+export SLIME_DIR=$SLIME_DIR
+
+MODEL_DIR="/home/yushensu/projects/model" # Need to change to your own path
+export MODEL_DIR=$MODEL_DIR
+
+DATA_DIR="/home/yushensu/projects/data"  # Need to change to your own path
+export DATA_DIR=$DATA_DIR
+
+# For AMD GPU
+export RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=${RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES:-"1"} # Must set to 1
+export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"} #You can choose which gpus to use
+####################
+
+
+# ### AMD Support ### (If you do not istall, please install them)
+# # # Clone and install Megatron-LMi-amd_version
+# export MAX_JOBS=512
+# cd $SLIME_DIR
+# pip uninstall megatron-core -y
+# if [ ! -d "Megatron-LM-amd_version" ]; then
+#     git clone git@github.com:yushengsu-thu/Megatron-LM-amd_version.git
+# else
+#     echo "Megatron-LM-amd_version directory already exists, skipping clone"
+# fi
+# cd Megatron-LM-amd_version
+# pip install -vvv -e . 
+# cd $SLIME_DIR
+
+# # Install slime
+# pip install -e .
+# ####################
+
+
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
+
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/qwen3-4B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-4B
+   --hf-checkpoint ${MODEL_DIR}/Qwen3-4B
    #--hf-checkpoint /root/Qwen3-4B-FP8
-   --ref-load /root/Qwen3-4B_torch_dist
-   --load /root/Qwen3-4B_slime/
-   --save /root/Qwen3-4B_slime/
+   --ref-load ${MODEL_DIR}/Qwen3-4B_torch
+   --load ${MODEL_DIR}/Qwen3-4B_slime/
+   --save ${MODEL_DIR}/Qwen3-4B_slime/
    --save-interval 20
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
+   --prompt-data ${DATA_DIR}/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
    --apply-chat-template
    --rollout-shuffle
+
    --rm-type deepscaler
+
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
@@ -46,7 +91,7 @@ ROLLOUT_ARGS=(
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
+   --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 16
    --eval-max-response-len 16384
    --eval-top-p 0.7
@@ -96,10 +141,18 @@ WANDB_ARGS=(
    # --wandb-key ${WANDB_KEY}
 )
 
+### AMD Support ###
+# Need to fix some issue with torch_memory_saver in rocm to support larger  --sglang-mem-fraction-static 
+# SGLANG_ARGS=(
+#    --rollout-num-gpus-per-engine 2
+#    --sglang-mem-fraction-static 0.7
+# )
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
-   --sglang-mem-fraction-static 0.7
+   --sglang-mem-fraction-static 0.4
 )
+####################
+
 
 MISC_ARGS=(
    # default dropout in megatron is 0.1
@@ -110,17 +163,27 @@ MISC_ARGS=(
    --attention-softmax-in-fp32
    # need to comment this when using model with MLA
    --attention-backend flash
+   ### AMD Support ###
+   # disable gradient accumulation fusion: Need to add apex to enable this
+   --no-gradient-accumulation-fusion
+   ###################
 )
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 export MASTER_PORT=${MASTER_PORT:-"12345"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats
+
+NUM_GPUS=$(echo ${HIP_VISIBLE_DEVICES} | tr ',' '\n' | wc -l)
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats
+
+
+# "PYTHONPATH": "/workspace/Megatron-LM-amd_version/",
+MEGATRON_LM_PATH=$(pip list | grep megatron-core | awk '{print $NF}')
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
      "env_vars": {
-        "PYTHONPATH": "/root/Megatron-LM/",
+        "PYTHONPATH": "/workspace/Megatron-LM-amd_version/",
         "CUDA_DEVICE_MAX_CONNECTIONS": "1"
      }
    }' \
@@ -139,3 +202,26 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
    ${MISC_ARGS[@]}
+
+
+
+####clear after training
+
+pkill -9 sglang
+sleep 3
+ray stop --force
+pkill -9 ray
+pkill -9 python
+sleep 3
+pkill -9 ray
+pkill -9 python
+
+
+
+
+
+
+
+
+
+
