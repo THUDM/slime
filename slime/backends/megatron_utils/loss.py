@@ -165,6 +165,7 @@ def compute_advantages_and_returns(args):
             kl=kl,
             loss_masks=loss_masks,
             response_lengths=response_lengths,
+            kl_coef=args.kl_coef,
         )
         returns = advantages
 
