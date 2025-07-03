@@ -12,7 +12,7 @@ from .data import (
     set_metadata,
 )
 from .initialize import init
-from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, policy_loss_func
+from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, loss_function
 from .model import forward_only, initialize_model_and_optimizer, save, train
 
 __all__ = [
@@ -32,7 +32,7 @@ __all__ = [
     "log_eval_data",
     "log_perf_data",
     "compute_advantages_and_returns",
-    "policy_loss_func",
+    "loss_function",
     "forward_only",
     "train",
     "save",

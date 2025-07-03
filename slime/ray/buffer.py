@@ -212,13 +212,18 @@ class Buffer:
             "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],
         }
 
-        if samples[0].loss_mask:
-            train_data["loss_masks"] = []
-            for sample in samples:
-                assert (
-                    len(sample.loss_mask) == sample.response_length
-                ), f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
-                train_data["loss_masks"].append(sample.loss_mask)
+        # loss mask
+        # TODO: compress the loss mask
+        loss_masks = []
+        for sample in samples:
+            # always instantiate loss_mask if not provided
+            if sample.loss_mask is None:
+                sample.loss_mask = [1] * sample.response_length
+            assert (
+                len(sample.loss_mask) == sample.response_length
+            ), f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
+            loss_masks.append(sample.loss_mask)
+        train_data["loss_masks"] = loss_masks
 
         # overwriting the raw reward
         if samples[0].metadata and "raw_reward" in samples[0].metadata:

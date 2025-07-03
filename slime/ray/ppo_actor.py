@@ -132,7 +132,7 @@ class TrainRayActor(RayActor):
             args.no_load_rng = True
             self.old_actor, _, _, _ = megatron_utils.initialize_model_and_optimizer(args, with_optimizer=False)
             args.load, args.no_load_optim, args.no_load_rng = old_args
-            if self.args.offload_rollout:
+            if self.args.offload_old_actor:
                 for model_module in self.old_actor:
                     model_module.to(device="cpu", non_blocking=True)
         else:
@@ -267,6 +267,38 @@ class TrainRayActor(RayActor):
         # Both first pp stage and the last pp stage will recieve the data.
         megatron_utils.process_rollout_data(rollout_id, self.args, self.data_buffer)
 
+    def compute_log_prob(
+        self,
+        model,
+        log_probs_data_iterator,
+        log_probs_num_microbatches,
+        store_prefix="",
+        offload=False,
+    ):
+        # reset data iterator
+        for data_iterator in log_probs_data_iterator:
+            data_iterator.reset()
+
+        with timer(f"{store_prefix}log_probs"):
+            if offload:
+                for model_module in model:
+                    model_module.to(device=torch.cuda.current_device(), non_blocking=True)
+                print_memory(f"after load model for {store_prefix}log_probs")
+
+            megatron_utils.forward_only(
+                self.args,
+                model,
+                log_probs_data_iterator,
+                log_probs_num_microbatches,
+                store_prefix=store_prefix,
+            )
+
+            if offload:
+                for model_module in model:
+                    model_module.to(device="cpu", non_blocking=True)
+                clear_memory()
+                print_memory(f"after offload model for {store_prefix}log_probs")
+
     def train(self, rollout_id, with_data_fetching=True):
         Timer().end("train_wait")
 
@@ -295,69 +327,40 @@ class TrainRayActor(RayActor):
 
             print_memory("begin train")
 
-            if self.ref is not None:
-                if self.args.offload_ref:
-                    for model_module in self.ref:
-                        model_module.to(device=torch.cuda.current_device(), non_blocking=True)
-                    print_memory("after load ref model")
+            if self.args.compute_advantages_and_returns:
+                with timer("compute_advantages_and_returns"):
+                    if self.ref:
+                        self.compute_log_prob(
+                            self.ref,
+                            log_probs_data_iterator,
+                            log_probs_num_microbatches,
+                            store_prefix="ref_",
+                            offload=self.args.offload_ref,
+                        )
 
-                with timer("ref_log_probs"):
-                    megatron_utils.forward_only(
-                        self.args,
-                        self.ref,
-                        log_probs_data_iterator,
-                        log_probs_num_microbatches,
-                        store_prefix="ref_",
-                    )
+                    if self.old_actor:
+                        # when there is old actor, use old actor to compute log prob.
+                        self.compute_log_prob(
+                            self.old_actor,
+                            log_probs_data_iterator,
+                            log_probs_num_microbatches,
+                            offload=self.args.offload_old_actor,
+                        )
 
-                # TODO: we should offload ref model here. But some how CuMemAllocator will raise error.
-                if self.args.offload_ref:
-                    for model_module in self.ref:
-                        model_module.to(device="cpu", non_blocking=True)
-                    clear_memory()
-                    print_memory("after offload ref model")
+                    if self.args.offload:
+                        self.wake_up("model")
 
-            # reset data iterator
-            for data_iterator in log_probs_data_iterator:
-                data_iterator.reset()
+                    if not self.old_actor:
+                        # If there is no old actor, we use the current model to compute log prob.
+                        self.compute_log_prob(
+                            self.model,
+                            log_probs_data_iterator,
+                            log_probs_num_microbatches,
+                        )
 
-            # Calculate logprob, the results will be stored on last pp stage.
-            if self.old_actor is not None:
-                if self.args.offload_rollout:
-                    for model_module in self.old_actor:
-                        model_module.to(device=torch.cuda.current_device(), non_blocking=True)
-                    print_memory("after load rollout model")
-                with timer("rollout_log_probs"):
-                    megatron_utils.forward_only(
-                        self.args,
-                        self.old_actor,
-                        log_probs_data_iterator,
-                        log_probs_num_microbatches,
-                    )
-
-                if self.args.offload_rollout:
-                    for model_module in self.old_actor:
-                        model_module.to(device="cpu", non_blocking=True)
-                    torch.cuda.empty_cache()
-                    print_memory("after offload rollout model")
-
-                if self.args.offload:
-                    self.wake_up("model")
-            else:
-                if self.args.offload:
-                    self.wake_up("model")
-
-                with timer("log_probs"):
-                    megatron_utils.forward_only(
-                        self.args,
-                        self.model,
-                        log_probs_data_iterator,
-                        log_probs_num_microbatches,
-                    )
-
-            # Calculate adv and returns. Need to performed before training (instead of on the fly),
-            # because we may need normalize the whole rollout.
-            megatron_utils.compute_advantages_and_returns(self.args)
+                    # Calculate adv and returns. Need to performed before training (instead of on the fly),
+                    # because we may need normalize the whole rollout.
+                    megatron_utils.compute_advantages_and_returns(self.args)
 
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args)

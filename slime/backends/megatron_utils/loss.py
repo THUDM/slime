@@ -3,6 +3,7 @@ from typing import Union
 import torch
 from megatron.core import mpu
 
+from slime.utils.misc import load_function
 from slime.utils.ppo_utils import (
     compute_approx_kl,
     compute_entropy_from_logits,
@@ -180,15 +181,12 @@ def compute_advantages_and_returns(args):
     set_local_storage("returns", returns)
 
 
-def policy_loss_func(args, batch, num_microbatches, logits):
+def policy_loss_function(args, batch, logits, sum_of_sample_mean):
     advantages = torch.cat(batch["advantages"], dim=0)
     old_log_probs = torch.cat(batch["log_probs"], dim=0)
 
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
-    loss_masks = batch.get("loss_masks", None)
-    num_tokens = sum(response_lengths)
-    num_samples = len(response_lengths)
 
     log_probs_and_entropy = get_log_probs_and_entropy(
         logits,
@@ -201,14 +199,6 @@ def policy_loss_func(args, batch, num_microbatches, logits):
 
     log_probs = log_probs_and_entropy["log_probs"]
     entropy = log_probs_and_entropy["entropy"]
-
-    sum_of_sample_mean = get_sum_of_sample_mean(
-        log_probs,
-        total_lengths,
-        response_lengths,
-        loss_masks,
-        args.calculate_per_token_loss,
-    )
 
     log_probs = torch.cat(log_probs, dim=0)
     entropy = torch.cat(entropy, dim=0)
@@ -238,19 +228,80 @@ def policy_loss_func(args, batch, num_microbatches, logits):
     else:
         kl_loss = torch.tensor(0.0, device=log_probs.device)
 
-    # average over dp for log
-    reported_loss = torch.tensor(
-        [
-            num_samples if not args.calculate_per_token_loss else num_tokens,
-            loss.clone().detach(),
-            pg_loss.clone().detach(),
-            entropy_loss.clone().detach(),
-            pg_clipfrac.clone().detach(),
-            ppo_kl.clone().detach(),
-            kl_loss.clone().detach(),
-        ],
-        device=log_probs.device,
+    # make sure the gradient could backprop correctly.
+    if log_probs.numel() == 0:
+        loss += 0 * logits.sum()
+
+    return (
+        loss,
+        {
+            "loss": loss.clone().detach(),
+            "pg_loss": pg_loss.clone().detach(),
+            "entropy_loss": entropy_loss.clone().detach(),
+            "pg_clipfrac": pg_clipfrac.clone().detach(),
+            "ppo_kl": ppo_kl.clone().detach(),
+            "kl_loss": kl_loss.clone().detach(),
+        },
     )
+
+
+def sft_loss_function(args, batch, logits, sum_of_sample_mean):
+    response_lengths = batch["response_lengths"]
+    total_lengths = batch["total_lengths"]
+
+    log_probs_and_entropy = get_log_probs_and_entropy(
+        logits,
+        args=args,
+        unconcat_tokens=batch["unconcat_tokens"],
+        total_lengths=total_lengths,
+        response_lengths=response_lengths,
+        with_entropy=False,
+    )
+
+    log_probs = log_probs_and_entropy["log_probs"]
+    log_probs = torch.cat(log_probs, dim=0)
+    loss = -sum_of_sample_mean(log_probs)
+
+    # make sure the gradient could backprop correctly.
+    if log_probs.numel() == 0:
+        loss += 0 * logits.sum()
+
+    return (
+        loss,
+        {
+            "loss": loss.clone().detach(),
+        },
+    )
+
+
+def loss_function(args, batch, num_microbatches, logits):
+    num_tokens = sum(batch["response_lengths"])
+    num_samples = len(batch["response_lengths"])
+
+    sum_of_sample_mean = get_sum_of_sample_mean(
+        batch["total_lengths"],
+        batch["response_lengths"],
+        batch["loss_masks"],
+        args.calculate_per_token_loss,
+    )
+
+    loss_function_kwargs = {
+        "args": args,
+        "batch": batch,
+        "logits": logits,
+        "sum_of_sample_mean": sum_of_sample_mean,
+    }
+
+    match args.loss_type:
+        case "policy_loss":
+            loss, log = policy_loss_function(**loss_function_kwargs)
+        case "sft_loss":
+            loss, log = sft_loss_function(**loss_function_kwargs)
+        case "custom_loss":
+            custom_loss_function = load_function(args.custom_loss_function_path)
+            loss, log = custom_loss_function(**loss_function_kwargs)
+        case _:
+            raise ValueError(f"Unknown loss type: {args.loss_type}")
 
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
     if args.use_dynamic_batch_size:
@@ -264,16 +315,17 @@ def policy_loss_func(args, batch, num_microbatches, logits):
     else:
         loss = loss / mpu.get_context_parallel_world_size()
 
-    # make sure the gradient could backprop correctly.
-    if log_probs.numel() == 0:
-        print(f"no log_probs on rank: {torch.distributed.get_rank()}")
-        loss += 0 * logits.sum()
-
     return (
         loss,
         num_tokens if args.calculate_per_token_loss else 1,
         {
-            "keys": ["loss", "pg_loss", "entropy_loss", "pg_clipfrac", "ppo_kl", "kl_loss"],
-            "values": reported_loss,
+            "keys": list(log.keys()),
+            "values": torch.tensor(
+                [
+                    num_samples if not args.calculate_per_token_loss else num_tokens,
+                ]
+                + list(log.values()),
+                device=logits.device,
+            ),
         },
     )

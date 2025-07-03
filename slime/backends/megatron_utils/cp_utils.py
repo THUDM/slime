@@ -41,7 +41,6 @@ def get_logits_and_tokens_offset_with_cp(
 
 
 def get_sum_of_sample_mean(
-    xs: list[torch.Tensor],
     total_lengths,
     response_lengths,
     loss_masks,
@@ -54,75 +53,47 @@ def get_sum_of_sample_mean(
     if cp_size == 1:
 
         def sum_of_sample_mean(x: torch.Tensor):
-            if loss_masks is not None:
-                res = sum(
-                    [
-                        (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)
-                        for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks)
-                    ]
-                )
-            else:
-                res = sum([torch.mean(x_i, dim=0) for x_i in x.split(response_lengths, dim=0)])
-            return res
+            return sum(
+                [
+                    (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)
+                    for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks)
+                ]
+            )
 
         def sum_of_token(x: torch.Tensor):
-            if loss_masks is not None:
-                res = sum(
-                    [
-                        (x_i * loss_mask_i).sum()
-                        for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks)
-                    ]
-                )
-            else:
-                res = sum([x_i.sum() for x_i in x.split(response_lengths, dim=0)])
-            return res
+            return sum(
+                [(x_i * loss_mask_i).sum() for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks)]
+            )
 
     else:
-        cp_chunk_lengths = [len(l) for l in xs]
+        cp_chunk_lengths = []
         chunked_loss_masks = []
-        if loss_masks is not None:
-            for i, (total_length, response_length, loss_mask) in enumerate(
-                zip(total_lengths, response_lengths, loss_masks)
-            ):
-                prompt_length = total_length - response_length
-                _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(total_length, response_length)
-                loss_mask_0 = loss_mask[tokens_offset[0][0] - prompt_length : tokens_offset[0][1] - prompt_length]
-                loss_mask_1 = loss_mask[tokens_offset[1][0] - prompt_length : tokens_offset[1][1] - prompt_length]
-                chunked_loss_masks.append(torch.cat([loss_mask_0, loss_mask_1], dim=0))
-                assert (
-                    chunked_loss_masks[i].size(0) == cp_chunk_lengths[i]
-                ), f"{chunked_loss_masks[i].size(0)} vs {cp_chunk_lengths[i]}"
+        for i, (total_length, response_length, loss_mask) in enumerate(
+            zip(total_lengths, response_lengths, loss_masks)
+        ):
+            prompt_length = total_length - response_length
+            _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(total_length, response_length)
+            loss_mask_0 = loss_mask[tokens_offset[0][0] - prompt_length : tokens_offset[0][1] - prompt_length]
+            loss_mask_1 = loss_mask[tokens_offset[1][0] - prompt_length : tokens_offset[1][1] - prompt_length]
+            chunked_loss_masks.append(torch.cat([loss_mask_0, loss_mask_1], dim=0))
+            cp_chunk_lengths.append(chunked_loss_masks[i].size(0))
 
         def sum_of_sample_mean(x):
-            if loss_masks is not None:
-                x = sum(
-                    [
-                        (x_i * chunked_loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
-                        for x_i, chunked_loss_mask, loss_mask in zip(
-                            x.split(cp_chunk_lengths, dim=0), chunked_loss_masks, loss_masks
-                        )
-                    ]
-                )
-            else:
-                x = sum(
-                    [
-                        torch.sum(x_i, dim=0) / l_i
-                        for x_i, l_i in zip(x.split(cp_chunk_lengths, dim=0), response_lengths)
-                        if l_i > 0
-                    ]
-                )
-            return x
+            return sum(
+                [
+                    (x_i * chunked_loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+                    for x_i, chunked_loss_mask, loss_mask in zip(
+                        x.split(cp_chunk_lengths, dim=0), chunked_loss_masks, loss_masks
+                    )
+                ]
+            )
 
         def sum_of_token(x: torch.Tensor):
-            if loss_masks is not None:
-                x = sum(
-                    [
-                        (x_i * chunked_loss_mask).sum()
-                        for x_i, chunked_loss_mask in zip(x.split(cp_chunk_lengths, dim=0), chunked_loss_masks)
-                    ]
-                )
-            else:
-                x = sum([torch.sum(x_i, dim=0) for x_i in x.split(cp_chunk_lengths, dim=0)])
-            return x
+            return sum(
+                [
+                    (x_i * chunked_loss_mask).sum()
+                    for x_i, chunked_loss_mask in zip(x.split(cp_chunk_lengths, dim=0), chunked_loss_masks)
+                ]
+            )
 
     return sum_of_sample_mean if not calculate_per_token_loss else sum_of_token

@@ -20,7 +20,7 @@ from megatron.training.training import get_model
 
 from .checkpoint import load_checkpoint, save_checkpoint
 from .data import get_batch, set_local_storage
-from .loss import get_log_probs_and_entropy, policy_loss_func
+from .loss import get_log_probs_and_entropy, loss_function
 from .models import get_model_provider_and_type
 
 
@@ -265,7 +265,7 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
             packed_seq_params=batch["packed_seq_params"],
         )
 
-        return output_tensor, partial(policy_loss_func, args, batch, num_microbatches)
+        return output_tensor, partial(loss_function, args, batch, num_microbatches)
 
     # Forward pass.
     forward_backward_func = get_forward_backward_func()

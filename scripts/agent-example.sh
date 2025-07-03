@@ -141,7 +141,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --keep-old-actor \
    --update-rollout-weights-interval 1 \
    --disable-rewards-normalization \
-   --offload-rollout \
+   --offload-old-actor \
    --offload-ref \
    --rollout-input-file ${PROMPT_DATA} \
    --rollout-num-process 1024 \
