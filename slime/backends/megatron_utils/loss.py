@@ -9,6 +9,8 @@ from slime.utils.ppo_utils import (
     compute_log_probs,
     compute_policy_loss,
     get_grpo_returns,
+    get_reinforce_plus_plus_advantages,
+    get_reinforce_plus_plus_baseline_advantages,
 )
 
 from .cp_utils import get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
@@ -146,6 +148,27 @@ def compute_advantages_and_returns(args):
         returns = get_grpo_returns(rewards, kl)
         # TODO: is the copy necessary?
         advantages = [r for r in returns]
+
+    elif args.advantage_estimator == "reinforce_plus_plus":
+        advantages, returns = get_reinforce_plus_plus_advantages(
+            rewards=rewards,
+            kl=kl,
+            loss_masks=loss_masks,
+            response_lengths=response_lengths,
+            kl_coef=args.kl_coef,
+            gamma=args.gamma,
+        )
+
+    elif args.advantage_estimator == "reinforce_plus_plus_baseline":
+        advantages = get_reinforce_plus_plus_baseline_advantages(
+            rewards=rewards,
+            kl=kl,
+            loss_masks=loss_masks,
+            response_lengths=response_lengths,
+            kl_coef=args.kl_coef,
+        )
+        returns = advantages
+
     else:
         raise NotImplementedError(f"advantage_estimator {args.advantage_estimator} is not supported. ")
 
