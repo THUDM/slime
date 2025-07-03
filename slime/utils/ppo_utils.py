@@ -8,81 +8,6 @@ import torch.distributed as dist
 from slime.utils.distributed_utils import distributed_masked_whiten
 
 
-# def masked_mean(values: torch.Tensor, mask: torch.Tensor, axis=None, epsilon: float = 1e-8) -> torch.Tensor:
-#     """
-#     Calculates the mean of tensor elements specified by a mask.
-
-#     Args:
-#         values (Tensor): The source tensor containing values.
-#         mask (Tensor): A mask tensor, typically of booleans or floats,
-#                        that specifies which elements to include in the mean.
-#         axis (int or tuple of int, optional): The dimension(s) to reduce. 
-#                                               Defaults to reducing all dimensions.
-#         epsilon (float): A small value to avoid division by zero.
-
-#     Returns:
-#         Tensor: A tensor containing the masked mean.
-#     """
-#     return (values * mask).sum(axis=axis) / (mask.sum(axis=axis) + epsilon)
-
-
-# def masked_var(values: torch.Tensor, mask: torch.Tensor, unbiased: bool = True) -> torch.Tensor:
-#     """
-#     Compute variance of tensor with masked values.
-
-#     Args:
-#         values (Tensor): The tensor of values for which to compute variance.
-#         mask (Tensor): A mask that selects the elements to consider.
-#         unbiased (bool): If True, applies Bessel's correction to compute the
-#                          unbiased sample variance. Defaults to True.
-
-#     Returns:
-#         Tensor: A tensor containing the masked variance.
-    
-#     Raises:
-#         ValueError: If the mask is empty (`mask.sum() == 0`), or if `unbiased`
-#                     is True and the mask contains fewer than two elements.
-#     """
-#     mean = masked_mean(values, mask)
-#     centered_values = values - mean
-    
-#     mask_sum = mask.sum()
-#     if mask_sum == 0:
-#         raise ValueError("Cannot compute variance over an empty mask (mask sum is zero).")
-
-#     variance = masked_mean(centered_values**2, mask)
-#     if unbiased:
-#         # Apply Bessel's correction for unbiased variance
-#         if mask_sum < 2:
-#             raise ValueError(
-#                 f"Cannot compute unbiased variance with mask sum less than 2. Got mask_sum={mask_sum.item()}"
-#             )
-#         bessel_correction = mask_sum / (mask_sum - 1)
-#         variance = variance * bessel_correction
-
-#     return variance
-
-
-# def masked_whiten(values: torch.Tensor, mask: torch.Tensor, shift_mean: bool = True, epsilon: float = 1e-8) -> torch.Tensor:
-#     """
-#     Normalizes a tensor using its masked mean and standard deviation (whitening).
-    
-#     Args:
-#         values (Tensor): The input tensor to be whitened.
-#         mask (Tensor): Boolean tensor of same shape, selects elements for stats.
-#         shift_mean (bool): If True (default), output is zero-mean;
-#                            if False, the original mean is re-added after scaling.
-
-#     Returns:
-#         Tensor: The whitened tensor, having the same shape as `values`.
-#     """
-#     mean, var = masked_mean(values, mask), masked_var(values, mask)
-#     whitened = (values - mean) * torch.rsqrt(var + epsilon)
-#     if not shift_mean:
-#         whitened += mean
-#     return whitened
-
-
 @torch.compile(dynamic=True)
 def compute_approx_kl(
     log_probs: torch.Tensor,
@@ -256,54 +181,6 @@ def get_reinforce_plus_plus_advantages(
     advantages = list(torch.split(whitened_advs_flat, response_lengths))
 
     return advantages, returns
-
-
-# def get_reinforce_plus_plus_baseline_advantages(
-#     rewards: torch.Tensor,
-#     kl: list[torch.Tensor],
-#     loss_masks: list[torch.Tensor],
-#     response_lengths: list[int],
-# ) -> list[torch.Tensor]:
-#     """
-#     Calculates the final advantages for the REINFORCE++-baseline algorithm.
-
-#     This process involves two main steps:
-#     1. Broadcasting the scalar (reward - group_baseline) to each token.
-#     2. Applying a global whitening (normalization) across all advantages in the batch.
-
-#     Args:
-#         rewards (torch.Tensor): A tensor of scalar rewards, where the group-wise
-#                                 baseline has already been subtracted.
-#         kl (list[torch.Tensor]): A list of per-token KL divergence tensors. Used to
-#                                  get the shape for broadcasting.
-#         loss_masks (list[torch.Tensor]): A list of per-token loss masks, required for
-#                                          whitening.
-#         response_lengths (list[int]): A list of sequence lengths, required for
-#                                       splitting the whitened tensor back.
-
-#     Returns:
-#         list[torch.Tensor]: A list of tensors containing the final, whitened advantages.
-#     """
-#     # Broadcast to get unwhitened advantages
-#     unwhitened_advantages = []
-#     for i in range(len(rewards)):
-#         # reward here is already R - baseline
-#         unwhitened_advantages.append(torch.ones_like(kl[i]) * rewards[i])
-#     print(f"{rewards.size()=} | {rewards.device=}")
-#     # Concatenate tensors for a global operation
-#     if loss_masks is None:
-#         loss_masks = [
-#             torch.ones_like(adv) for adv in unwhitened_advantages
-#         ]
-
-#     all_advs = torch.cat(unwhitened_advantages)
-#     all_masks = torch.cat(loss_masks)
-    
-#     whitened_advs_flat = masked_whiten(all_advs, all_masks, shift_mean=True)
-#     advantages = list(torch.split(whitened_advs_flat, response_lengths))
-    
-#     return advantages
-
 
 def get_reinforce_plus_plus_baseline_advantages(
     rewards: torch.Tensor,
