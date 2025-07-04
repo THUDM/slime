@@ -239,7 +239,7 @@ async def generate_agent_rollout(
         print(
             f"❕buffer length: {data_buffer.get_buffer_length()}, buffer has enough data, return {args.rollout_batch_size} prompts"
         )
-        return await data_buffer.get_samples(args.rollout_batch_size)
+        return data_buffer.get_samples(args.rollout_batch_size)
     assert (
         data_number_to_fetch % args.n_samples_per_prompt == 0
     ), "data_number_to_fetch must be a multiple of n_samples_per_prompt"
@@ -305,8 +305,8 @@ async def generate_agent_rollout(
         )
     final_return_results = []
 
-    await data_buffer.add_samples(sample_results)
-    final_return_results = await data_buffer.get_samples(args.rollout_batch_size)
+    data_buffer.add_samples(sample_results)
+    final_return_results = data_buffer.get_samples(args.rollout_batch_size)
 
     return final_return_results
 

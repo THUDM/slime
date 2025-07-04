@@ -253,6 +253,24 @@ def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
 
 When we have received 32 \* 8 data points, we will immediately stop the current sampling round and will not wait for the remaining data to be sampled. If more than 32 prompts' worth of data is discarded (leaving fewer than 32 prompts' worth), we will then sample another 64 prompts.
 
+### Partial Rollout
+
+During the process of dynamic sampling, a large number of requests are aborted prematurely. We can configure the `--partial-rollout` parameter to save these partially generated requests to a data buffer. In the next rollout, these requests can be retrieved to continue data generation, thereby further optimizing performance.
+
+You can customize how data is retrieved from the buffer by configuring the `--buffer-filter-path`. The default function is:
+
+```python
+def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
+    num_to_pop = min(len(buffer), num_samples)
+    samples = buffer[:num_to_pop]
+    del buffer[:num_to_pop]
+    return samples
+```
+
+This means that each time, the data corresponding to the first `num_samples` prompts is retrieved, totaling `num_samples * n_samples_per_prompt` items.
+
+⚠️ The `sample.metadata` of each partial rollout sample stores the rollout ID from its initial generation, which can be used for data filtering.
+
 ### BF16 Training with FP8 Inference
 
 slime also supports BF16 training with FP8 inference. For the Qwen3-4B model, you just need to download the following model:

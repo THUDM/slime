@@ -11,7 +11,7 @@ class Sample:
 
     index: Optional[int] = None
     # prompt
-    prompt: str = ""
+    prompt: Union[str, list[dict[str, str]]] = ""
     tokens: list[int] = field(default_factory=list)
     # response
     response: str = ""

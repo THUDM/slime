@@ -254,3 +254,21 @@ def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
 ```
 
 当我们收到了 32 * 8 条数据时，我们会立刻停止采样，而不会等剩余的数据采样完成。如果删除的数据超过了 32 条 prompt（剩余的小于 32 条 prompt），那么我们会再采样 64 条 prompt。
+
+### partial rollout
+
+在进行 dynamic sampling 的过程中，会提前终止（abort）大量请求，我们可以通过配置 `--partial-rollout` 参数来将生成到一半的请求保存至 data buffer，在下一个 rollout 中取出来继续进行数据生成，从而进一步优化性能。
+
+可以通过配置 `--buffer-filter-path` 来自定义如何从 buffer 中取出数据，默认的函数为：
+
+```python
+def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
+    num_to_pop = min(len(buffer), num_samples)
+    samples = buffer[:num_to_pop]
+    del buffer[:num_to_pop]
+    return samples
+```
+
+即每次取出前 `num_samples` 个 prompt 对应的 `num_samples * n_samples_per_prompt` 条数据。
+
+⚠️  每条 partial rollout sample 的 `sample.metadata` 中存储了第一次进行生成的 rollout id，可以用于数据过滤。

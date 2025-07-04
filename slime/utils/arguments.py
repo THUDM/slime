@@ -101,20 +101,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "You should use this model to create your own custom rollout function, "
                     "and then set this to the path of your custom rollout function. "
                     "The signature of the function should be "
-                    "`def generate_rollout(args, rollout_id, *, evaluation=False) -> list[Sample]`"
+                    "`def generate_rollout(args, rollout_id, *, evaluation=False) -> list[list[Sample]]`"
                     "and within the output sample, you should at least set `tokens`, `response_length`, `reward` "
                     "and `truncated`."
-                ),
-            )
-            parser.add_argument(
-                "--disable-rollout-global-dataset",
-                action="store_false",
-                dest="rollout_global_dataset",
-                help=(
-                    "Whether to use a global dataset for rollout. "
-                    "If set, the rollout will use the `--prompt-data` as the prompt dataset, "
-                    "and the prompts for rollout will be sampled from the dataset. "
-                    "If not set, you need to manage the data by your self."
                 ),
             )
             parser.add_argument(
@@ -268,7 +257,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Path to the buffer filter function. "
                     "It should be able to select the samples in the buffer. "
-                    "The function should take list[list[Sample]] and return list[Sample]."
+                    "The function should take list[list[Sample]] and return list[list[Sample]]."
                 ),
             )
             # update weight
@@ -300,8 +289,30 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--num-rollout",
                 type=int,
-                required=True,
+                default=None,
                 help="Number of rollout steps. Currently, we don't support passing num_epoch and calculate num_rollout from data size.",
+            )
+            parser.add_argument(
+                "--num-epoch",
+                type=int,
+                default=None,
+                help=(
+                    "Number of epochs for the training. "
+                    "This is used to calculate the number of rollout steps from the dataset size. "
+                    "If set, we will calculate the number of rollout steps as `num_rollout = num_epoch * dataset_size // rollout_batch_size`."
+                ),
+            )
+
+            parser.add_argument(
+                "--disable-rollout-global-dataset",
+                action="store_false",
+                dest="rollout_global_dataset",
+                help=(
+                    "Whether to use a global dataset for rollout. "
+                    "If set, the rollout will use the `--prompt-data` as the prompt dataset, "
+                    "and the prompts for rollout will be sampled from the dataset. "
+                    "If not set, you need to manage the data by your self."
+                ),
             )
 
             parser.add_argument(
@@ -473,7 +484,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--ref-load",
                 type=str,
-                required=True,
+                default=None,
                 help=(
                     "The checkpoint for reference model. "
                     "When --load is not set, this will be used as the initial checkpoint for training. "
@@ -487,7 +498,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help="lower bound of the value for Dual-clip PPO from https://arxiv.org/pdf/1912.09729",
             )
-            parser.add_argument("--kl-coef", type=float, default=0.01, help="KL penalty in PPO")
+            parser.add_argument("--kl-coef", type=float, default=0.00, help="KL penalty in PPO")
             parser.add_argument(
                 "--loss-type",
                 type=str,
@@ -804,14 +815,15 @@ def parse_args(add_custom_arguments=None):
     if args.ref_micro_batch_size is None:
         args.ref_micro_batch_size = args.micro_batch_size
 
-    if not os.path.exists(args.ref_load):
-        raise FileNotFoundError(f"ref_load {args.ref_load} does not exist, please check the path.")
+    if args.kl_coef != 0 or args.use_kl_loss:
+        if not os.path.exists(args.ref_load):
+            raise FileNotFoundError(f"ref_load {args.ref_load} does not exist, please check the path.")
 
-    if not os.path.exists(os.path.join(args.ref_load, "latest_checkpointed_iteration.txt")):
-        print(
-            f"ref_load {args.ref_load} does not have latest_checkpointed_iteration.txt, "
-            "please make sure it is a valid megatron checkpoint directory."
-        )
+        if not os.path.exists(os.path.join(args.ref_load, "latest_checkpointed_iteration.txt")):
+            print(
+                f"ref_load {args.ref_load} does not have latest_checkpointed_iteration.txt, "
+                "please make sure it is a valid megatron checkpoint directory."
+            )
 
     # TODO: During loading, we need to set the start_rollout_id here.
     if (
@@ -872,6 +884,7 @@ def parse_args(add_custom_arguments=None):
 
     if args.offload:
         args.offload_ref = True
+        args.offload_old_actor = True
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path
@@ -891,6 +904,10 @@ def parse_args(add_custom_arguments=None):
         f"is not a multiple of global_batch_size {args.global_batch_size}"
     )
 
+    if args.n_samples_per_prompt == 1:
+        args.grpo_std_normalization = False
+        print("n_samples_per_prompt is set to 1, grpo_std_normalization will be set to False.")
+
     if args.vocab_size and not args.padded_vocab_size:
         args.padded_vocab_size = _vocab_size_with_padding(args.vocab_size, args)
 
@@ -901,6 +918,20 @@ def parse_args(add_custom_arguments=None):
         f"over_sampling_batch_size {args.over_sampling_batch_size} should be greater than or equal to "
         f"rollout_batch_size {args.rollout_batch_size}"
     )
+
+    if args.num_epoch is not None:
+        if args.num_rollout is not None:
+            print("Both num_epoch and num_rollout are set, num_epoch will be ignored.")
+        else:
+            assert args.rollout_global_dataset, (
+                "num_epoch is set, but rollout_global_dataset is not set, "
+                "please remove --disable-rollout-global-dataset to use num_epoch"
+            )
+    else:
+        # if num_epoch is not set, we should set num_rollout
+        assert args.num_rollout is not None, (
+            "num_epoch is not set, but num_rollout is not set, " "please set --num-rollout or --num-epoch"
+        )
 
     # placeholders
     args.seq_length = 4096

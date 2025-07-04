@@ -67,6 +67,10 @@ class Buffer:
         print(f"import {self.args.rollout_function_path} as generate_rollout function.")
         print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
+    def get_num_rollout_per_epoch(self):
+        assert self.args.rollout_global_dataset
+        return len(self.dataset) // self.args.rollout_batch_size
+
     def update_wandb_run_id(self, run_id):
         """Update wandb run_id and initialize wandb"""
         self.args.wandb_run_id = run_id
@@ -109,12 +113,12 @@ class Buffer:
 
         wandb.init(**wandb_config, settings=wandb.Settings(mode="shared"))
 
-    async def get_samples(self, num_samples: int) -> list[list[Sample]]:
+    def get_samples(self, num_samples: int) -> list[list[Sample]]:
         """
         Return num_samples samples
         """
 
-        samples = await self._get_samples_from_buffer(num_samples)
+        samples = self._get_samples_from_buffer(num_samples)
         num_samples -= len(samples)
 
         if num_samples == 0:
@@ -152,14 +156,14 @@ class Buffer:
                 samples.append(group)
         return samples
 
-    async def _get_samples_from_buffer(self, num_samples: int) -> list[list[Sample]]:
+    def _get_samples_from_buffer(self, num_samples: int) -> list[list[Sample]]:
         if len(self.buffer) == 0 or num_samples == 0:
             return []
 
         samples = self.buffer_filter(self.args, self.rollout_id, self.buffer, num_samples)
         return samples
 
-    async def add_samples(self, samples: list[list[Sample]]):
+    def add_samples(self, samples: list[list[Sample]]):
         """
         Add a sample group to buffer.
         """
@@ -181,6 +185,9 @@ class Buffer:
         else:
             generate_rollout = self.eval_generate_rollout if evaluation else self.generate_rollout
             data = generate_rollout(self.args, rollout_id, self, evaluation=evaluation)
+            # flatten the data if it is a list of lists
+            if isinstance(data[0], list):
+                data = sum(data, [])
 
         self._set_data(data, evaluation=evaluation)
 
@@ -195,11 +202,6 @@ class Buffer:
         """
         Convert inference generated samples to training data.
         """
-        if isinstance(samples[0], list):
-            samples = [sample for group in samples for sample in group]
-        else:
-            samples = sorted(samples, key=lambda x: x.index)
-        
         train_data = {
             "tokens": [sample.tokens for sample in samples],
             "response_lengths": [sample.response_length for sample in samples],

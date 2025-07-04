@@ -98,12 +98,13 @@ class TrainRayActor(RayActor):
             self.sleep(("model"))
 
         if with_ref:
-            old_args = args.load, args.no_load_optim, args.no_load_rng
+            old_args = args.load, args.no_load_optim, args.no_load_rng, args.finetune
             args.load = args.ref_load
             args.no_load_optim = True
             args.no_load_rng = True
+            args.finetune = True
             self.ref, _, _, _ = megatron_utils.initialize_model_and_optimizer(args, with_optimizer=False)
-            args.load, args.no_load_optim, args.no_load_rng = old_args
+            args.load, args.no_load_optim, args.no_load_rng, args.finetune = old_args
 
             if self.args.offload_ref:
                 for model_module in self.ref:
@@ -126,12 +127,13 @@ class TrainRayActor(RayActor):
         self.rollout_engine_lock = None
         self.data_buffer = None
         if self.args.keep_old_actor:
-            old_args = args.load, args.no_load_optim, args.no_load_rng
+            old_args = args.load, args.no_load_optim, args.no_load_rng, args.finetune
             args.load = args.ref_load
             args.no_load_optim = True
             args.no_load_rng = True
+            args.finetune = True
             self.old_actor, _, _, _ = megatron_utils.initialize_model_and_optimizer(args, with_optimizer=False)
-            args.load, args.no_load_optim, args.no_load_rng = old_args
+            args.load, args.no_load_optim, args.no_load_rng, args.finetune = old_args
             if self.args.offload_old_actor:
                 for model_module in self.old_actor:
                     model_module.to(device="cpu", non_blocking=True)

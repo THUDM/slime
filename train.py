@@ -13,6 +13,13 @@ def train(args):
     # create the rollout generator, with sglang engines inside.
     rollout_generator = create_rollout_group(args, pgs["rollout"])
 
+    # calculate num_rollout from num_epoch
+    num_rollout_per_epoch = None
+    if args.num_rollout is None:
+        num_rollout_per_epoch = ray.get(rollout_generator.data_buffer.get_num_rollout_per_epoch.remote())
+        args.num_rollout = num_rollout_per_epoch * args.num_epoch
+    assert args.num_rollout > 0
+
     # sync the initialization (model initalization, load checkpoint, etc.)
     start_rollout_ids = ray.get(
         actor_model.async_init(args, role="actor", with_ref=args.kl_coef != 0 or args.use_kl_loss)
@@ -47,7 +54,10 @@ def train(args):
 
         ray.get(actor_model.async_train(rollout_id))
 
-        if args.save_interval is not None and (rollout_id + 1) % args.save_interval == 0:
+        if args.save_interval is not None and (
+            (rollout_id + 1) % args.save_interval == 0
+            or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
+        ):
             ray.get(actor_model.async_save_model(rollout_id))
             if args.rollout_global_dataset:
                 ray.get(rollout_generator.data_buffer.save.remote(rollout_id))
@@ -58,7 +68,10 @@ def train(args):
 
         ray.get(actor_model.async_update_weights())
 
-        if args.eval_interval is not None and (rollout_id + 1) % args.eval_interval == 0:
+        if args.eval_interval is not None and (
+            (rollout_id + 1) % args.eval_interval == 0
+            or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
+        ):
             ray.get(rollout_generator.async_generate(rollout_id, evaluation=True))
             ray.get(actor_model.async_eval(rollout_id))
 
