@@ -1,9 +1,11 @@
 # Adapt from https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/models/utils.py
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
-from typing import Optional
+from typing import Optional, List
 
 import torch
 import torch.distributed as dist
+
+from slime.utils.distributed_utils import distributed_masked_whiten
 
 
 @torch.compile(dynamic=True)
@@ -119,3 +121,111 @@ def get_grpo_returns(
     for i in range(len(rewards)):
         returns.append(torch.ones_like(kl[i]) * rewards[i])
     return returns
+
+
+def get_reinforce_plus_plus_advantages(
+    rewards: torch.Tensor,
+    kl: List[torch.Tensor],
+    loss_masks: Optional[List[torch.Tensor]],
+    response_lengths: List[int],
+    kl_coef: float,
+    gamma: float,
+) -> (List[torch.Tensor], List[torch.Tensor]):
+    """
+    Calculates discounted returns and whitened advantages for REINFORCE++ (https://arxiv.org/pdf/2501.03262).
+
+    Args:
+        rewards (Tensor): A tensor of scalar rewards for each sequence. Shape: (batch_size,).
+        kl (List[Tensor]): A list of per-token KL divergence tensors.
+        loss_masks (Optional[List[Tensor]]): Loss masks for whitening and identifying the last token.
+        response_lengths (List[int]): Sequence lengths for splitting.
+        kl_coef (float): Coefficient for the KL penalty.
+        gamma (float): The discount factor.
+
+    Returns:
+        A tuple of (advantages, returns):
+        - advantages (List[Tensor]): The final, whitened advantages.
+        - returns (List[Tensor]): The original, unwhitened discounted returns.
+    """
+    if loss_masks is None:
+        # Assume the entire response is used for loss calculation.
+        loss_masks = [torch.ones(length, device=kl[0].device, dtype=torch.long) for length in response_lengths]
+
+    # token-level rewards (final_task_reward + per_token_kl_penalty).
+    token_level_rewards = []
+    for i in range(len(rewards)):
+        r = -kl_coef * kl[i]
+        assert loss_masks[i].sum() > 0, f"Sequence at index {i} is fully masked..."
+
+        # Find the index of the last valid token to add the final task reward.
+        last_response_idx = loss_masks[i].nonzero(as_tuple=True)[0][-1]
+        r[last_response_idx] += rewards[i]
+        token_level_rewards.append(r)
+
+    # Calculate discounted returns per sequence
+    returns = []
+    for r_i in token_level_rewards:
+        seq_len = len(r_i)
+        returns_i = torch.zeros_like(r_i)
+        running_return = 0.0
+        for t in reversed(range(seq_len)):
+            # G_t = r_t + gamma * G_{t+1}
+            running_return = r_i[t] + gamma * running_return
+            returns_i[t] = running_return
+        returns.append(returns_i)
+
+    all_returns = torch.cat(returns)
+    all_masks = torch.cat(loss_masks)
+
+    whitened_advs_flat = distributed_masked_whiten(all_returns, all_masks, shift_mean=True)
+    advantages = list(torch.split(whitened_advs_flat, response_lengths))
+
+    return advantages, returns
+
+def get_reinforce_plus_plus_baseline_advantages(
+    rewards: torch.Tensor,
+    kl: List[torch.Tensor],
+    loss_masks: Optional[List[torch.Tensor]],
+    response_lengths: List[int],
+    kl_coef: float,
+) -> List[torch.Tensor]:
+    """
+    Calculates the final advantages for the REINFORCE++-baseline algorithm.
+
+    This process involves two main steps:
+    1. Broadcasting the scalar (reward - group_baseline) to each token.
+    2. Applying a *distributed* global whitening (normalization) across all 
+       advantages in the data-parallel group.
+
+    Args:
+        rewards (Tensor): A tensor of scalar rewards, where the group-wise
+                                baseline has already been subtracted.
+        kl (list[Tensor]): A list of per-token KL divergence tensors. Used to
+                                 get the shape for broadcasting.
+        loss_masks (list[Tensor] | None): A list of per-token loss masks. If None,
+                                          it's assumed all tokens are active.
+        response_lengths (list[int]): A list of sequence lengths, required for
+                                      splitting the whitened tensor back.
+
+    Returns:
+        list[Tensor]: A list of tensors containing the final, whitened advantages.
+    """
+    # Broadcast to get unwhitened advantages
+    unwhitened_advantages = [
+        torch.ones_like(kl_tensor) * reward_val - kl_coef * kl_tensor
+        for kl_tensor, reward_val in zip(kl, rewards)
+    ]
+    # Concatenate tensors for a global operation
+    if loss_masks is None:
+        loss_masks = [
+            torch.ones_like(adv) for adv in unwhitened_advantages
+        ]
+
+    all_advs = torch.cat(unwhitened_advantages)
+    all_masks = torch.cat(loss_masks)
+    
+    whitened_advs_flat = distributed_masked_whiten(all_advs, all_masks, shift_mean=True)
+    
+    advantages = list(torch.split(whitened_advs_flat, response_lengths))
+    
+    return advantages

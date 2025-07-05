@@ -2,7 +2,7 @@ from datetime import timedelta
 from typing import Any, Optional, Union
 
 import torch
-import torch.distributed
+import torch.distributed as dist
 from torch.distributed.distributed_c10d import (
     Backend,
     PrefixStore,
@@ -12,6 +12,7 @@ from torch.distributed.distributed_c10d import (
     default_pg_timeout,
     rendezvous,
 )
+from megatron.core import mpu
 
 
 # Copy from pytorch to allow creating multiple main groups.
@@ -70,3 +71,60 @@ def init_process_group(
     _world.pg_group_ranks[pg] = {i: i for i in range(world_size)}
 
     return pg
+
+
+def distributed_masked_whiten(values: torch.Tensor, mask: torch.Tensor, shift_mean: bool = True, epsilon: float = 1e-8):
+    """
+    Performs whitening on a tensor within a Megatron data-parallel group.
+
+    It calculates the global mean and variance across all data-parallel ranks 
+    and uses these global statistics to normalize the local data on each rank.
+
+    Args:
+        values (torch.Tensor): The local tensor of values to whiten.
+        mask (torch.Tensor): The local mask corresponding to the values.
+        shift_mean (bool): If True, the output is zero-mean. Defaults to True.
+        epsilon (float): A small value for numerical stability.
+
+    Returns:
+        torch.Tensor: The locally whitened tensor using global statistics.
+    """
+    # Get the correct data parallel process group
+    dp_group = mpu.get_data_parallel_group()
+
+    # Calculate local intermediate statistics
+    local_sum = (values * mask).sum()
+    local_sum_sq = ((values**2) * mask).sum()
+    local_mask_sum = mask.sum()
+
+    stats_tensor = torch.tensor(
+        [local_sum, local_sum_sq, local_mask_sum],
+        device=values.device,
+        dtype=torch.float32,
+    )
+
+    # Aggregate via all_reduce within the DP group
+    dist.all_reduce(stats_tensor, group=dp_group)
+
+    # Calculate global stats from aggregated results
+    global_sum, global_sum_sq, global_mask_sum = stats_tensor
+
+    if global_mask_sum == 0:
+        raise ValueError("The global mask sum across the data parallel group is zero.")
+
+    global_mean = global_sum / global_mask_sum
+    global_mean_sq = global_sum_sq / global_mask_sum
+    global_var = global_mean_sq - global_mean**2
+    
+    # Bessel's correction for unbiased estimate
+    if global_mask_sum >= 2:
+        bessel_correction = global_mask_sum / (global_mask_sum - 1)
+        global_var = global_var * bessel_correction
+    
+    # Whiten local data using global stats
+    whitened_values = (values - global_mean) * torch.rsqrt(global_var + epsilon)
+
+    if not shift_mean:
+        whitened_values += global_mean
+    
+    return whitened_values

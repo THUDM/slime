@@ -528,7 +528,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--advantage-estimator",
                 type=str,
-                choices=["grpo"],
+                choices=["grpo", "reinforce_plus_plus", "reinforce_plus_plus_baseline"],
                 default="grpo",
             )
             parser.add_argument(
@@ -546,6 +546,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             parser.add_argument("--kl-loss-coef", type=float, default=0.0, help="KL penalty in PPO")
             parser.add_argument("--entropy-coef", type=float, default=0.0, help="Entropy loss coef")
+            parser.add_argument("--gamma", type=float, default=1.0, help="Discount factor for rewards in REINFORCE++.")
             parser.add_argument("--normalize-advantages", action="store_true", default=False)
             parser.add_argument(
                 "--disable-grpo-std-normalization",
