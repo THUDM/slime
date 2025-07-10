@@ -522,9 +522,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--kl-loss-type",
                 type=str,
-                choices=["kl", "low_var_kl"],
+                choices=["kl", "k2", "k3", "low_var_kl"],
                 default="kl",
-                help="Choose KL loss type: kl, low_var_kl",
+                help="Choose KL loss type: kl, k2, k3 low_var_kl",
             )
             parser.add_argument(
                 "--advantage-estimator",
