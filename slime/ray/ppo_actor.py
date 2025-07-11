@@ -568,6 +568,10 @@ class TrainRayActor(RayActor):
         self.update_cpu_params_dict(self.weights[model_tag])
 
 
+class TrainRayCritic(RayActor):
+    pass
+
+
 class RayTrainGroup:
     """
     A group of ray actors
@@ -590,7 +594,9 @@ class RayTrainGroup:
         num_gpus_per_actor=1,
         resources: Dict[str, float] = None,
         num_resources_per_node: int = None,
+        role: str = None
     ) -> None:
+        self.role = role
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
 
@@ -601,7 +607,15 @@ class RayTrainGroup:
         # Allocate the GPUs for actors w/o instantiating them
         self._allocate_gpus_for_actor(pg, num_gpus_per_actor)
 
+
     def _allocate_gpus_for_actor(self, pg, num_gpus_per_actor):
+        if self.role == "actor":
+            ActorClass = TrainRayActor
+        elif self.role == "critic":
+            ActorClass = TrainRayCritic
+        else:
+            raise ValueError(f"Unknown role: {self.role}")
+        
         world_size = self._num_nodes * self._num_gpus_per_node
 
         # Use placement group to lock resources for models of same type
@@ -611,7 +625,7 @@ class RayTrainGroup:
         self._actor_handlers = []
         master_addr, master_port = None, None
         for rank in range(world_size):
-            actor = TrainRayActor.options(
+            actor = ActorClass.options(
                 num_cpus=num_gpus_per_actor,
                 num_gpus=num_gpus_per_actor,
                 resources=self._resources,

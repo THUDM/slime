@@ -30,6 +30,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--actor-num-gpus-per-node", type=int, default=8, help="Number of gpus per node for training actor"
             )
 
+            parser.add_argument("--critic-num-nodes", type=int, default=1, help="Number of nodes for training critic")
+            parser.add_argument(
+                "--critic-num-gpus-per-node", type=int, default=8, help="Number of gpus per node for training critic"
+            )
+
             parser.add_argument(
                 "--rollout-num-gpus",
                 type=int,
@@ -891,12 +896,14 @@ def parse_args(add_custom_arguments=None):
     # always true on offload for colocate at the moment.
     if args.colocate:
         args.offload = True
-        if args.rollout_num_gpus != args.actor_num_gpus_per_node * args.actor_num_nodes:
-            print(
-                f"rollout_num_gpus {args.rollout_num_gpus} != actor_num_gpus_per_node {args.actor_num_gpus_per_node} "
-                f"* actor_num_nodes {args.actor_num_nodes}, overriding rollout_num_gpus to match actor_num_gpus_per_node * actor_num_nodes."
-            )
-            args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
+        assert args.rollout_num_gpus != args.actor_num_gpus_per_node * args.actor_num_nodes, (
+            f"rollout_num_gpus {args.rollout_num_gpus} != actor_num_gpus_per_node {args.actor_num_gpus_per_node} "
+            f"* actor_num_nodes {args.actor_num_nodes}, overriding rollout_num_gpus to match actor_num_gpus_per_node * actor_num_nodes."
+        )
+        assert args.rollout_num_gpus != args.critic_num_gpus_per_node * args.critic_num_nodes, (
+            f"rollout_num_gpus {args.critic_num_gpus} != critic_num_gpus_per_node {args.critic_num_gpus_per_node} "
+            f"* critic_num_nodes {args.critic_num_nodes}, overriding rollout_num_gpus to match critic_num_gpus_per_node * critic_num_nodes."
+        )
 
     if args.offload:
         args.offload_ref = True

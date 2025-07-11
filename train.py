@@ -1,6 +1,6 @@
 import ray
 
-from slime.ray.placement_group import create_actor_group, create_placement_groups, create_rollout_group
+from slime.ray.placement_group import create_actor_group, create_placement_groups, create_rollout_group, create_critic_group
 from slime.utils.arguments import parse_args
 
 
@@ -9,6 +9,9 @@ def train(args):
     pgs = create_placement_groups(args)
 
     actor_model = create_actor_group(args, pgs["actor"])
+
+    if args.advantage_estimator == "ppo":
+        critic_model = create_critic_group(args, pgs["actor"])
 
     # create the rollout generator, with sglang engines inside.
     rollout_generator = create_rollout_group(args, pgs["rollout"])
