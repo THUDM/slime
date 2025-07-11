@@ -142,10 +142,10 @@ def create_rollout_engines(args, pg):
             assert key in addr_and_ports[i], f"Engine {i} {key} is not set."
         print(f"Ports for engine {i}: {addr_and_ports[i]}")
 
-    # don't ray.get here to overlap train actor init with rollout engine init.
+    # TODO: don't ray.get here to overlap train actor init with rollout engine init.
+    # somehow if we don't sync here, the --debug-rollout-only mode will crash.
     init_handles = [engine.init.remote(**ports) for engine, ports in zip(rollout_engines, addr_and_ports)]
-    if args.offload:
-        ray.get(init_handles)
+    ray.get(init_handles)
 
     return rollout_engines
 

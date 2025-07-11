@@ -96,13 +96,12 @@ def create_placement_groups(args):
     }
 
 
-def allocate_train_group(num_nodes, num_gpus_per_node, pg, debug_rollout_only):
+def allocate_train_group(num_nodes, num_gpus_per_node, pg):
     return RayTrainGroup(
         num_nodes=num_nodes,
         num_gpus_per_node=num_gpus_per_node,
         pg=pg,
         num_gpus_per_actor=0.8,
-        debug_rollout_only=debug_rollout_only,
     )
 
 
@@ -111,7 +110,6 @@ def create_actor_group(args, pg):
         num_nodes=args.actor_num_nodes,
         num_gpus_per_node=args.actor_num_gpus_per_node,
         pg=pg,
-        debug_rollout_only=args.debug_rollout_only,
     )
     return actor_model
 

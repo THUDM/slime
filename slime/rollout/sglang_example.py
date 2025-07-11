@@ -237,7 +237,7 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer) -> list[lis
 
             if do_print:
                 print(
-                    f"First rollout sample: {[group[0].prompt + group[0].response]}, reward: {group[0].reward}",
+                    f"First rollout sample: {[group[0].prompt + group[0].response]}, label: {group[0].label}, reward: {group[0].reward}",
                     flush=True,
                 )
                 do_print = False
@@ -254,7 +254,10 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer) -> list[lis
                 pbar.update(args.n_samples_per_prompt)
 
     pbar.close()
-    print(f"Finish rollout: {[data[-1][0].prompt + data[-1][0].response]}, reward: {data[-1][0].reward}", flush=True)
+    print(
+        f"Finish rollout: {[data[-1][0].prompt + data[-1][0].response]}, label: {data[-1][0].label}, reward: {data[-1][0].reward}",
+        flush=True,
+    )
 
     # there are still some unfinished requests, abort them
     await abort(args, rollout_id, data_buffer)

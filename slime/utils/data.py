@@ -6,6 +6,19 @@ from slime.utils.types import Sample
 __all__ = ["JsonlDataset"]
 
 
+def read_file(path):
+    if path.endswith(".jsonl"):
+        with open(path, "r") as f:
+            for line in f:
+                yield json.loads(line)
+    elif path.endswith(".parquet"):
+        import pandas as pd
+
+        df = pd.read_parquet(path)
+        for _, row in df.iterrows():
+            yield row.to_dict()
+
+
 class JsonlDataset:
     def __init__(
         self,
@@ -21,29 +34,27 @@ class JsonlDataset:
         apply_chat_template=False
     ):
         self.origin_samples = []
-        with open(path) as f:
-            for line in f:
-                data = json.loads(line)
-                prompt = data[prompt_key]
-                if apply_chat_template:
-                    if tool_key is not None:
-                        tools = data[tool_key]
-                    else:
-                        tools = None
-                    prompt = tokenizer.apply_chat_template(prompt, tools, tokenize=False, add_generation_prompt=True)
+        for data in read_file(path):
+            prompt = data[prompt_key]
+            if apply_chat_template:
+                if tool_key is not None:
+                    tools = data[tool_key]
+                else:
+                    tools = None
+                prompt = tokenizer.apply_chat_template(prompt, tools, tokenize=False, add_generation_prompt=True)
 
-                # TODO: this is slow.
-                if max_length is not None:
-                    if len(tokenizer(prompt)["input_ids"]) > max_length:
-                        continue
+            # TODO: this is slow.
+            if max_length is not None:
+                if len(tokenizer(prompt)["input_ids"]) > max_length:
+                    continue
 
-                self.origin_samples.append(
-                    Sample(
-                        prompt=prompt,
-                        label=data[label_key] if label_key is not None else None,
-                        metadata=data.get(metadata_key) or {},
-                    )
+            self.origin_samples.append(
+                Sample(
+                    prompt=prompt,
+                    label=data[label_key] if label_key is not None else None,
+                    metadata=data.get(metadata_key) or {},
                 )
+            )
 
         self.epoch_id = -1
         self.seed = seed
