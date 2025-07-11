@@ -339,6 +339,73 @@ def process_rollout_data(rollout_id, args, data_buffer):
         # save the data to local storage
         set_local_storage(key, val)
 
+    if "rollout_time" in data:
+        set_local_storage("rollout_time", data["rollout_time"])
+    
+    # Handle completion tokens statistics from this round
+    if "completion_tokens_stats" in data:
+        set_local_storage("completion_tokens_stats", data["completion_tokens_stats"])
+
+
+def log_rollout_length(rollout_id, args):
+    if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
+        log_dict = {}
+        
+        completion_tokens_stats = get_local_storage("completion_tokens_stats")
+        if completion_tokens_stats:
+            log_dict["tokens_mean"] = completion_tokens_stats.get("completion_tokens_mean", 0)
+            log_dict["tokens_std"] = completion_tokens_stats.get("completion_tokens_std", 0)
+            log_dict["total_tokens"] = completion_tokens_stats.get("total_completion_tokens", 0)
+
+        response_lengths = get_local_storage("response_lengths")
+        
+        if response_lengths:
+            response_lengths_array = np.array(response_lengths)
+            group_size = args.n_samples_per_prompt
+            num_groups = len(response_lengths_array) // group_size
+
+            log_dict["response_length_mean"] = np.mean(response_lengths_array)
+            log_dict["response_length_max"] = np.max(response_lengths_array)
+            log_dict["response_length_min"] = np.min(response_lengths_array)
+            log_dict["response_length_std"] = np.std(response_lengths_array)
+            log_dict["response_length_p50"] = np.percentile(response_lengths_array, 50)
+            grouped_response_lengths = response_lengths_array.reshape(num_groups, group_size)
+            # To verify the response lengthes within a group is more close to each other
+            group_stds = np.std(grouped_response_lengths, axis=1)
+            log_dict["response_length_std_in_group"] = np.mean(group_stds)
+            
+        rollout_time = get_local_storage("rollout_time")
+        if rollout_time and rollout_time > 0 and completion_tokens_stats:
+            total_completion_tokens = completion_tokens_stats.get("total_completion_tokens", 0)
+            if total_completion_tokens > 0:
+                throughput = total_completion_tokens / rollout_time
+                log_dict["rollout_time"] = rollout_time
+                log_dict["tokens_throughput"] = throughput
+
+        if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
+            gathered_log_dict = [None] * mpu.get_data_parallel_world_size(with_context_parallel=True)
+            # Not sure if this will be a performance bottleneck.
+            dist.gather_object(
+                log_dict,
+                gathered_log_dict,
+                dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
+                group=mpu.get_data_parallel_group(with_context_parallel=True),
+            )
+            dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
+            reduced_log_dict = {
+                f"rollout_length/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
+            }
+            print(f"rollout_length {rollout_id}: {reduced_log_dict}")
+            if args.use_wandb:
+                wandb.log(reduced_log_dict)
+        else:
+            dist.gather_object(
+                log_dict,
+                None,
+                dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
+                group=mpu.get_data_parallel_group(with_context_parallel=True),
+            )
+
 
 def log_rollout_data(rollout_id, args):
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
@@ -346,7 +413,7 @@ def log_rollout_data(rollout_id, args):
         log_dict = {}
         response_lengths = get_local_storage("response_lengths")
         for key, val in get_local_storage().items():
-            if key == "tokens" or key == "loss_masks":
+            if key == "tokens" or key == "loss_masks" or key == "rollout_time" or key == "completion_tokens_stats":
                 continue
             # Upload per sample mean for each rollout value
             # There are the following assumptions:
@@ -397,6 +464,7 @@ def log_rollout_data(rollout_id, args):
                 group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
             )
 
+    log_rollout_length(rollout_id, args)
     if args.log_multi_turn:
         log_multi_turn_data(rollout_id, args)
     if args.log_passrate:
