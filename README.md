@@ -12,7 +12,10 @@
   - [Architecture Overview](#architecture-overview)
   - [Quick Start](#quick-start)
       - [Environment Setup](#environment-setup)
-      - [Example: GLM4-9B and Qwen3-4B](#example-glm4-9b-and-qwen3-4b)
+      - [Examples](#examples)
+        - [Dense Model Examples: GLM-4-9B and Qwen3-4B](#Dense-Model-Examples-GLM-4-9B-and-Qwen3-4B)
+        - [MoE Model Example: Qwen3-30B-A3B](#MoE-Model-Example-Qwen3-30B-A3B)
+        - [Multi-Turn + Tool Calling Example: Search-R1 lite](#Multi-Turn--Tool-Calling-Example-Search-R1-lite)
   - [Checkpoint Format Conversion](#checkpoint-format-conversion)
   - [Starting the Training Process](#starting-the-training-process)
   - [Argument Descriptions](#argument-descriptions)
@@ -48,16 +51,26 @@ pip install -e .
 - If you prefer not to use Docker, or if it's inconvenient, please refer to [Setting up the Environment from Scratch](./docs/en/build.md).
 - For AMD support, please refer to [AMD Tutorial](./docs/en/amd_tutorial.md).
 
-### Example: GLM4-9B and Qwen3-4B
+### Examples
+
+#### Dense Model Examples: GLM-4-9B and Qwen3-4B
 
 We provide examples to use [GLM-4-9B](https://huggingface.co/THUDM/GLM-Z1-9B-0414) and [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B), please refer to:
 
 - [Example: GLM-4-9B Model](docs/en/models/glm4-9B.md).
 - [Example: Qwen3-4B Model](docs/en/models/qwen3-4B.md).
 
+#### MoE Model Example: Qwen3-30B-A3B
+
 For MoE example, please refer to:
 
 - [Example: Qwen3-30B-A3B Model](docs/en/models/qwen3-30B-A3B.md).
+
+#### Multi-Turn + Tool Calling Example: Search-R1 lite
+
+For multi-turn and tool calling, we also provides an minimal reimplenmentation of Search-R1, please refer to:
+
+- [Example: Search-R1 lite](examples/search-r1/README.md)
 
 ### Checkpoint Format Conversion
 

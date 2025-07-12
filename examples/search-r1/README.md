@@ -1,4 +1,4 @@
-# Search-R1 lite
+# Example: Search-R1 lite
 
 [中文版](./README_zh.md)
 

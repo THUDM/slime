@@ -5,7 +5,7 @@ from tqdm import tqdm
 from transformers import AutoTokenizer
 
 from slime.utils.async_utils import run
-from slime.utils.data import JsonlDataset
+from slime.utils.data import Dataset
 from slime.utils.http_utils import get, post
 from slime.utils.misc import SingletonMeta, load_function
 from slime.utils.types import Sample
@@ -300,7 +300,7 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
 
     if name not in EVAL_PROMPT_DATASET:
         tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
-        EVAL_PROMPT_DATASET[name] = JsonlDataset(
+        EVAL_PROMPT_DATASET[name] = Dataset(
             path,
             tokenizer=tokenizer,
             max_length=args.rollout_max_prompt_len,

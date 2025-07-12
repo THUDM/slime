@@ -3,9 +3,10 @@ import random
 from slime.utils.types import Sample
 
 
-__all__ = ["JsonlDataset"]
+__all__ = ["Dataset"]
 
 
+# TODO: don't read the whole file into memory.
 def read_file(path):
     if path.endswith(".jsonl"):
         with open(path, "r") as f:
@@ -19,7 +20,7 @@ def read_file(path):
             yield row.to_dict()
 
 
-class JsonlDataset:
+class Dataset:
     def __init__(
         self,
         path,

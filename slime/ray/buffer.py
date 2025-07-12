@@ -9,7 +9,7 @@ import torch
 from transformers import AutoTokenizer
 
 import wandb
-from slime.utils.data import JsonlDataset
+from slime.utils.data import Dataset
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
 
@@ -46,7 +46,7 @@ class Buffer:
 
         if args.rollout_global_dataset:
             tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
-            self.dataset = JsonlDataset(
+            self.dataset = Dataset(
                 args.prompt_data,
                 tokenizer=tokenizer,
                 max_length=args.rollout_max_prompt_len,

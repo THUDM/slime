@@ -197,34 +197,6 @@ SGLANG_ARGS=(
 
 ⚠️ slime uses `sgl-router` to schedule multiple sglang servers. `dp_size` is not supported when DP attention is disabled.
 
-### Decoupled Training and Inference
-
-In the original script, the resource configuration is as follows:
-
-```bash
-ray job submit ... \
-   -- python3 train.py \
-   --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 8 \
-   --colocate \
-   ...
-```
-
-This enables co-located training and inference, where the training part uses 1 machine with 8 GPUs, and inference shares these 8 GPUs with training.
-
-If you want to use the decoupled training and inference feature, you need to remove `--colocate` and configure `--rollout-num-gpus`. For example:
-
-```bash
-ray job submit ... \
-   -- python3 train.py \
-   --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 2 \
-   --rollout-num-gpus 6 \
-   ...
-```
-
-In this case, 2 GPUs will be allocated for training, and 6 GPUs will be allocated for inference.
-
 ### Dynamic Sampling
 
 slime supports more complex sampling schemes, such as the dynamic sampling in [DAPO](https://dapo-sia.github.io/). To enable dynamic sampling, you need to configure:
@@ -289,3 +261,51 @@ And replace `--hf-checkpoint` with:
 This will trigger FP8 inference. Currently, we directly cast the BF16 weights to FP8. In the future, we will gradually add more sophisticated quantization schemes that have less impact on precision.
 
 ⚠️ The Megatron checkpoint for training still needs to be the one that was originally converted from the BF16 Hugging Face model.
+
+### Decoupled Training and Inference
+
+In the original script, the resource configuration is as follows:
+
+```bash
+ray job submit ... \
+   -- python3 train.py \
+   --actor-num-nodes 1 \
+   --actor-num-gpus-per-node 8 \
+   --colocate \
+   ...
+```
+
+This enables co-located training and inference, where the training part uses 1 machine with 8 GPUs, and inference shares these 8 GPUs with training.
+
+If you want to use the decoupled training and inference feature, you need to remove `--colocate` and configure `--rollout-num-gpus`. For example:
+
+```bash
+ray job submit ... \
+   -- python3 train.py \
+   --actor-num-nodes 1 \
+   --actor-num-gpus-per-node 2 \
+   --rollout-num-gpus 6 \
+   ...
+```
+
+In this case, 2 GPUs will be allocated for training, and 6 GPUs will be allocated for inference.
+
+⚠️  If the concurrency on each sglang server is too high, it may exceed sglang's default CUDA graph concurrency limit (the default maximum is 160), which will affect inference speed. You can adjust this in the following two ways:
+
+1.  Use `--sglang-server-concurrency` to limit the maximum number of concurrent requests sent to a single sglang server. For example:
+
+    ```bash
+    --sglang-server-concurrency 160
+    ```
+
+2.  Use `--sglang-cuda-graph-bs` (which corresponds to sglang's native `--cuda-graph-bs` argument) to increase the number of CUDA graphs initialized by sglang. For example:
+
+    ```bash
+    --sglang-cuda-graph-bs 1 24 8 $(seq 16 8 256)
+    ```
+
+### Asynchronous Training
+
+When you separate training and inference, you may notice that the training and inference GPUs are always waiting for each other. To prevent these resources from being idle, we can enable asynchronous training. This can be done by changing `train.py` to `train_async.py` in the startup script. By doing this, slime will generate data for the next rollout while training on the current one.
+
+The only difference between `train.py` and `train_async.py` lies in the synchronization logic of the training loop. We achieve this by using Ray's asynchronous features (`.remote`, `ray.get`).
