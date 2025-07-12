@@ -82,26 +82,37 @@ def create_placement_groups(args):
         num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
         rollout_offset = 0
     else:
-        num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node + args.rollout_num_gpus
-        rollout_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
+        if args.advantage_estimator == "grpo":
+            num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node + args.rollout_num_gpus
+            rollout_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
+        elif args.advantage_estimator == "ppo":
+            num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node + args.critic_num_nodes * args.critic_num_gpus_per_node + args.rollout_num_gpus
+            critic_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
+            rollout_offset = args.actor_num_nodes * args.actor_num_gpus_per_node + args.critic_num_nodes * args.critic_num_gpus_per_node
+        
 
     print(f"Creating placement group with {num_gpus} GPUs...")
     pg, actor_pg_reordered_bundle_indices = _create_placement_group(num_gpus)
 
+    critic_pg_reordered_bundle_indices = None
+    if args.advantage_estimator == "ppo":
+        critic_pg_reordered_bundle_indices = actor_pg_reordered_bundle_indices[critic_offset:rollout_offset]
     rollout_pg_reordered_bundle_indices = actor_pg_reordered_bundle_indices[rollout_offset:]
 
     return {
         "actor": (pg, actor_pg_reordered_bundle_indices),
+        "critic": (pg, critic_pg_reordered_bundle_indices),
         "rollout": (pg, rollout_pg_reordered_bundle_indices),
     }
 
 
-def allocate_train_group(num_nodes, num_gpus_per_node, pg):
+def allocate_train_group(num_nodes, num_gpus_per_node, pg, role):
     return RayTrainGroup(
         num_nodes=num_nodes,
         num_gpus_per_node=num_gpus_per_node,
         pg=pg,
         num_gpus_per_actor=0.8,
+        role=role
     )
 
 
@@ -110,8 +121,19 @@ def create_actor_group(args, pg):
         num_nodes=args.actor_num_nodes,
         num_gpus_per_node=args.actor_num_gpus_per_node,
         pg=pg,
+        role="actor"
     )
     return actor_model
+
+
+def create_critic_group(args, pg):
+    critic_model = allocate_train_group(
+        num_nodes=args.critic_num_nodes,
+        num_gpus_per_node=args.critic_num_gpus_per_node,
+        pg=pg,
+        role="critic"
+    )
+    return critic_model
 
 
 def create_rollout_group(args, pg):
