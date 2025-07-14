@@ -171,7 +171,6 @@ MISC_ARGS=(
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-export MASTER_PORT=${MASTER_PORT:-"12345"}
 
 NUM_GPUS=$(echo ${HIP_VISIBLE_DEVICES} | tr ',' '\n' | wc -l)
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats

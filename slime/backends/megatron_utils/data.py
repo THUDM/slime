@@ -570,10 +570,6 @@ def log_perf_data(rollout_id, args):
                 # Only calculate log_probs_tflops if the timing exists
                 if "perf/log_probs_time" in log_dict and log_dict["perf/log_probs_time"] > 0:
                     log_dict["perf/log_probs_tflops"] = total_fwd_flops / log_dict["perf/log_probs_time"]
-                else:
-                    print(
-                        f"Warning: 'perf/log_probs_time' not found or is zero, skipping log_probs_tflops calculation"
-                    )
 
                 # Only calculate ref_log_probs_tflops if the timing exists
                 if "perf/ref_log_probs_time" in log_dict and log_dict["perf/ref_log_probs_time"] > 0:

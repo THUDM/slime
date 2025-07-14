@@ -6,6 +6,7 @@ __all__ = ["generate_rollout"]
 
 
 TOKENIZER = None
+MASK_GENERATOR = None
 
 
 def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
@@ -23,21 +24,24 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
     assert not evaluation
     assert args.rollout_global_dataset
 
-    global TOKENIZER
+    global TOKENIZER, MASK_GENERATOR
     if TOKENIZER is None:
         TOKENIZER = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+
+    if MASK_GENERATOR is None:
+        MASK_GENERATOR = MultiTurnLossMaskGenerator(TOKENIZER, tokenizer_type=args.loss_mask_type)
 
     samples = data_buffer.get_samples(args.rollout_batch_size)
 
     for sample in samples:
         (sample,) = sample
         messages = sample.prompt
-        mask_generator = MultiTurnLossMaskGenerator(TOKENIZER, tokenizer_type=args.loss_mask_type)
-        token_ids, loss_mask = mask_generator.get_loss_mask(messages)
-        response_length = mask_generator.get_response_lengths([loss_mask])[0]
+        token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages)
+        response_length = MASK_GENERATOR.get_response_lengths([loss_mask])[0]
 
         sample.tokens = token_ids
         sample.response_length = response_length
         sample.reward = 0
+        sample.loss_mask = loss_mask[-response_length:]
 
     return samples

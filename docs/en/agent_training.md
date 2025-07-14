@@ -255,7 +255,7 @@ def log_raw_info(args, all_meta_info: List[Dict], rollout_id: int) -> None
 
 ### 1. Prepare Input Data Format
 
-Your input file (`--rollout-input-file`) should contain task-related data, for example:
+Your input file (`--prompt-data`) should contain task-related data, for example:
 
 ```jsonl
 {"instance_id": "math_001", "prompt": [{"role":"user","content":"Solve the equation x^2 + 5x + 6 = 0"}]}
@@ -307,14 +307,9 @@ In Rollout Buffer, you need to implement the key function `run_rollout()` for yo
   ```
   For specific deployment methods, please check Rollout Buffer documentation
 
-- **`--rollout-input-file`**: Input data file path, containing task data to be processed
+- **`--prompt-data`**: Input data file path, containing task data to be processed
   ```bash
-  --rollout-input-file ./deepscaler_rl_buffer_instance_id.jsonl
-  ```
-
-- **`--rollout-num-process`**: Number of parallel processes
-  ```bash
-  --rollout-num-process 1024
+  --prompt-data ./deepscaler_rl_buffer_instance_id.jsonl
   ```
 
 - **`--loss-mask-type`**: Loss Mask type, used for Token masking in multi-turn conversations, supports customization, custom path is in `slime/utils/mask_utils.py`

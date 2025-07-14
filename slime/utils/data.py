@@ -1,25 +1,26 @@
-import json
 import random
+
+import pandas as pd
+
 from slime.utils.types import Sample
 
+__all__ = ["Dataset"]
 
-__all__ = ["JsonlDataset"]
 
-
+# TODO: don't read the whole file into memory.
 def read_file(path):
     if path.endswith(".jsonl"):
-        with open(path, "r") as f:
-            for line in f:
-                yield json.loads(line)
+        df = pd.read_json(path, lines=True)
     elif path.endswith(".parquet"):
-        import pandas as pd
-
         df = pd.read_parquet(path)
-        for _, row in df.iterrows():
-            yield row.to_dict()
+    else:
+        raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
+
+    for _, row in df.iterrows():
+        yield row.to_dict()
 
 
-class JsonlDataset:
+class Dataset:
     def __init__(
         self,
         path,
@@ -31,7 +32,7 @@ class JsonlDataset:
         tool_key=None,
         metadata_key="metadata",
         seed=42,
-        apply_chat_template=False
+        apply_chat_template=False,
     ):
         self.origin_samples = []
         for data in read_file(path):

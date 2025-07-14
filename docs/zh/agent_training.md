@@ -255,7 +255,7 @@ def log_raw_info(args, all_meta_info: List[Dict], rollout_id: int) -> None
 
 #### 1. 准备输入数据格式
 
-您的输入文件（`--rollout-input-file`）应包含任务相关的数据，例如：
+您的输入文件（`--prompt-data`）应包含任务相关的数据，例如：
 
 ```jsonl
 {"instance_id": "math_001", "prompt": [{"role":"user","content":"求解方程 x^2 + 5x + 6 = 0"}]}
@@ -308,14 +308,9 @@ class CustomTaskLossMaskGenerator(MultiTurnLossMaskGenerator):
   ```
   具体部署方式请查看 Rollout Buffer 文档
 
-- **`--rollout-input-file`**：输入数据文件路径，包含待处理的任务数据
+- **`--prompt-data`**：输入数据文件路径，包含待处理的任务数据
   ```bash
-  --rollout-input-file ./deepscaler_rl_buffer_instance_id.jsonl
-  ```
-
-- **`--rollout-num-process`**：并行处理的进程数
-  ```bash
-  --rollout-num-process 1024
+  --prompt-data ./deepscaler_rl_buffer_instance_id.jsonl
   ```
 
 - **`--loss-mask-type`**：Loss Mask 类型，用于多轮对话的 Token 掩码，支持自定义，自定义路径在 `slime/utils/mask_utils.py`

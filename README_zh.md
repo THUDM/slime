@@ -12,7 +12,11 @@
 - [架构总览](#架构总览)
 - [快速开始](#快速开始)
   - [环境准备](#环境准备)
-  - [示例：GLM-4-9B 与 Qwen3-4B](#示例glm-4-9b-与-qwen3-4b)
+  - [示例](#示例)
+    - [Dense 模型示例：GLM-4-9B 与 Qwen3-4B](#Dense-模型示例GLM-4-9B-与-Qwen3-4B)
+    - [MoE 模型示例：Qwen3-30B-A3B](#MoE-模型示例Qwen3-30B-A3B)
+    - [多轮对话 + 工具调用示例：Search-R1 lite](#多轮对话--工具调用示例Search-R1-lite)
+    - [SFT 示例：Qwen3-4B-Base + OpenHermes-2.5](#SFT-示例Qwen3-4B-Base--OpenHermes-25)
 - [Checkpoint 格式转换](#checkpoint-格式转换)
 - [启动训练流程](#启动训练流程)
 - [参数说明](#参数说明)
@@ -48,16 +52,34 @@ pip install -e .
 - 对于不方便使用 docker 的场景，请参考 [从零搭建环境](./docs/zh/build.md)；
 - 对于 AMD 支持，请参考 [AMD 使用教程](./docs/en/amd_tutorial.md)。
 
-### 示例：GLM-4-9B 与 Qwen3-4B
+### 示例
 
-我们提供了 [GLM-4-9B](https://huggingface.co/THUDM/GLM-Z1-9B-0414) 和 [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B) 的使用样例，请查看：
+#### Dense 模型示例：GLM-4-9B 与 Qwen3-4B
 
-- [示例：GLM-4-9B 模型](docs/zh/models/glm4-9B.md).
-- [示例：Qwen3-4B 模型](docs/zh/models/qwen3-4B.md).
+我们提供了 [GLM-4-9B](https://huggingface.co/THUDM/GLM-Z1-9B-0414) 和 [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B) 的使用示例，可以通过他们对 slime 的使用方法有个基本的了解：
 
-我们也提供了 MoE 模型的样例，请查看：
+- [示例：GLM-4-9B 模型](docs/zh/models/glm4-9B.md)
+- [示例：Qwen3-4B 模型](docs/zh/models/qwen3-4B.md)
 
-- [示例：Qwen3-30B-A3B 模型](docs/zh/models/qwen3-30B-A3B.md).
+#### MoE 模型示例：Qwen3-30B-A3B
+
+我们也提供了 MoE 模型的示例，请查看：
+
+- [示例：Qwen3-30B-A3B 模型](docs/zh/models/qwen3-30B-A3B.md)
+
+#### 多轮对话 + 工具调用示例：Search-R1 lite
+
+针对多轮对话和工具调用场景，我们提供了一个简化版的 Search-R1 复现，请查看：
+
+- [示例：Search-R1 lite](examples/search-r1/README_zh.md)
+
+#### SFT 示例：Qwen3-4B-Base + OpenHermes-2.5
+
+slime is not just a RL framework, we support a diverse set of post-training setups. For an SFT example, please refer to:
+
+slime 不仅仅是一个 RL 框架，我们还支持了各种后训练流程。如果想使用 SFT，请参看：
+
+- [示例: Qwen3-4B-Base + OpenHermes-2.5](docs/zh/sft.md).
 
 ### Checkpoint 格式转换
 

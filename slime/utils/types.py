@@ -29,6 +29,16 @@ class Sample:
     status: Status = Status.PENDING
     metadata: dict = field(default_factory=dict)
 
+    def to_dict(self):
+        value = self.__dict__.copy()
+        value["status"] = self.status.value
+        return value
+
+    @staticmethod
+    def from_dict(data: dict):
+        data["status"] = Sample.Status(data["status"])
+        return Sample(**data)
+
 
 @dataclass
 class ParamInfo:

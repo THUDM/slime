@@ -287,8 +287,6 @@ class TrainRayActor(RayActor):
             Timer().start("train_wait")
             return
 
-        print_memory("begin train")
-
         if self.args.offload:
             self.wake_up(("model"))
 

@@ -112,7 +112,6 @@ WANDB_ARGS=(
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-export MASTER_PORT=${MASTER_PORT:-"12345"}
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats
 
 ray job submit --address="http://127.0.0.1:8265" \
@@ -123,7 +122,7 @@ ray job submit --address="http://127.0.0.1:8265" \
         "NCCL_CUMEM_ENABLE": "0"
      }
    }' \
-   -- python3 train_agent_async.py \
+   -- python3 train_async.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 4 \
    --rollout-num-gpus 4 \
@@ -139,12 +138,9 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${PERF_ARGS[@]} \
    --agent-rollout-buffer-url http://${MASTER_ADDR}:8889 \
    --keep-old-actor \
-   --update-rollout-weights-interval 1 \
    --disable-rewards-normalization \
    --offload-old-actor \
    --offload-ref \
-   --rollout-input-file ${PROMPT_DATA} \
-   --rollout-num-process 1024 \
    --loss-mask-type distill_qwen \
    --sglang-log-level error \
    --input-key prompt \

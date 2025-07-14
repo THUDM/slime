@@ -713,7 +713,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="URL for the agent rollout buffer",
             )
             parser.add_argument(
-                "--update-rollout-weights-interval",
+                "--update-weights-interval",
                 type=int,
                 default=1,
                 help="Interval for updating the weights of the agent",
