@@ -128,6 +128,9 @@ def init(args):
         and mpu.get_tensor_model_parallel_rank() == 0
         and mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1
     ):
+        if args.wandb_offline:
+            os.environ["WANDB_MODE"] = "offline"
+            os.environ["WANDB_API_KEY"] = args.wandb_key
         if args.wandb_key is not None:
             wandb.login(key=args.wandb_key, host=args.wandb_host)
         # add random 6 length string with characters
