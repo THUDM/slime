@@ -70,7 +70,7 @@ def create_rollout_engines(args, pg):
 
     rollout_engines = []
     for i in range(num_engines):
-        num_gpus = 0.2
+        num_gpus = 0.2 if args.colocate else 1.0
         num_cpus = num_gpus
 
         scheduling_strategy = PlacementGroupSchedulingStrategy(

@@ -575,6 +575,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         def add_wandb_arguments(parser):
             # wandb parameters
             parser.add_argument("--use-wandb", action="store_true", default=False)
+            parser.add_argument("--wandb-offline", action="store_true", default=False)
             parser.add_argument("--wandb-key", type=str, default=None)
             parser.add_argument("--wandb-host", type=str, default=None)
             parser.add_argument("--wandb-team", type=str, default=None)
