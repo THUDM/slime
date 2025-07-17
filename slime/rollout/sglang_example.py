@@ -1,6 +1,7 @@
 import asyncio
 import copy
-
+import time
+import numpy as np
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
@@ -27,6 +28,9 @@ class GenerateState(metaclass=SingletonMeta):
         self.semaphore = asyncio.Semaphore(
             args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
         )
+        self.rollout_start_time: float = None
+        self.completion_tokens_list: list = []
+        
         self.sampling_params = dict(
             temperature=args.rollout_temperature,
             top_p=args.rollout_top_p,
@@ -44,6 +48,7 @@ class GenerateState(metaclass=SingletonMeta):
         self.remaining_batch_size = 0
         self.pendings = set()
         self.aborted = False
+        self.completion_tokens_list = []
 
     def submit_generate_tasks(self, samples: list[list[Sample]]):
         for group in samples:
@@ -61,7 +66,7 @@ class GenerateState(metaclass=SingletonMeta):
         self.remaining_batch_size += len(samples)
 
 
-async def generate(args, sample: Sample, sampling_params) -> Sample:
+async def generate(args, sample: Sample, sampling_params, evaluation=False) -> Sample:
     state = GenerateState(args)
 
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
@@ -90,6 +95,9 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
     output = await post(url, payload, use_http2=args.use_http2)
     sample.response += output["text"]
+    sample.completion_tokens = output["meta_info"]["completion_tokens"]
+    if not evaluation:
+        state.completion_tokens_list.append(sample.completion_tokens)
 
     if output["meta_info"]["finish_reason"]["type"] == "abort":
         sample.status = Sample.Status.ABORTED
@@ -99,6 +107,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     response_token_ids = state.tokenizer(sample.response, add_special_tokens=False)["input_ids"]
     sample.tokens = prompt_tokens_ids + response_token_ids
     sample.response_length = len(response_token_ids)
+    
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":
             sample.status = Sample.Status.TRUNCATED
@@ -130,7 +139,7 @@ async def generate_and_rm(args, sample: Sample, sampling_params: dict, evaluatio
             custom_generate_func = load_function(args.custom_generate_function_path)
             sample = await custom_generate_func(args, sample, sampling_params)
         else:
-            sample = await generate(args, sample, sampling_params)
+            sample = await generate(args, sample, sampling_params, evaluation=evaluation)
 
     if sample.status == Sample.Status.ABORTED:
         return sample
@@ -226,6 +235,7 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer) -> list[lis
     data = []
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
+    state.rollout_start_time = time.time()
     while len(data) < target_data_size:
         while state.remaining_batch_size < target_data_size:
             # get samples from the buffer and submit the generation requests.
@@ -270,6 +280,25 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer) -> list[lis
     assert len(data) == args.rollout_batch_size, f"Got {len(data)} samples, expected {args.rollout_batch_size}"
     data = sorted(data, key=lambda group: group[0].index)
 
+    rollout_time = time.time() - state.rollout_start_time
+    
+    completion_tokens_stats = {}
+    if state.completion_tokens_list:
+        completion_tokens_array = np.array(state.completion_tokens_list)
+        completion_tokens_stats = {
+            'total_completion_tokens': np.sum(completion_tokens_array).item(),
+            'completion_tokens_mean': np.mean(completion_tokens_array).item(),
+            'completion_tokens_std': np.std(completion_tokens_array).item(),
+            'completion_tokens_count': len(completion_tokens_array),
+        }
+    
+    if len(data) > 0:
+        data[0][0].metadata.update({
+            'rollout_time': rollout_time,
+            'completion_tokens_stats': completion_tokens_stats,
+        })
+    if completion_tokens_stats:
+        print(f"[DEBUG] Rollout {rollout_id}: Completion tokens stats: {completion_tokens_stats}", flush=True)
     # reset the global state to prevent effects on the next rollout or eval.
     state.reset()
     return data
