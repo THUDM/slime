@@ -60,18 +60,9 @@ async def batched_async_rm(
     **kwargs,
 ) -> list[Union[int, float]]:
     if args.custom_rm_path is not None:
+        # Ensure the custom reward function is implemented in batch mode
         rm_function = load_function(args.custom_rm_path)
         return await rm_function(args, samples, **kwargs)
-
-    rm_type = args.rm_type
-    prompts = [sample.prompt for sample in samples]
-    responses = [sample.response for sample in samples]
-    labels = [sample.label for sample in samples]
-    if labels is None:
-        labels = [None] * len(prompts)
-    tasks = [
-        async_rm(rm_type, prompt, response, label, **kwargs)
-        for prompt, response, label in zip(prompts, responses, labels)
-    ]
+    tasks = [async_rm(args, sample, **kwargs) for sample in samples]
     rewards = await asyncio.gather(*tasks)
     return rewards

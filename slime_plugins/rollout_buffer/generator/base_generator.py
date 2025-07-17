@@ -55,7 +55,8 @@ def query_single_turn(client, messages, sampling_params, tools=None):
             response = client.chat.completions.create(**current_payload)
 
             if len(response.choices) > 0:
-                if response.choices[0].finish_reason == "abort":
+                finish_reason = response.choices[0].finish_reason
+                if finish_reason == "abort":
                     print(
                         f"query failed, reason: {response.choices[0].finish_reason}, currently generated: {response.usage.completion_tokens}"
                     )
@@ -86,7 +87,7 @@ def query_single_turn(client, messages, sampling_params, tools=None):
         messages = messages[:-1]
     messages.append({"role": "assistant", "content": text})
 
-    return messages
+    return messages, finish_reason
 
 
 def worker_process(task_queue, done_queue, rollout_func, reward_func, client, sampling_params):
@@ -98,7 +99,7 @@ def worker_process(task_queue, done_queue, rollout_func, reward_func, client, sa
             item = line
 
         # try:
-        messages = rollout_func(client, item["prompt"], sampling_params)
+        messages, finish_reason = rollout_func(client, item["prompt"], sampling_params)
 
         item["uid"] = str(uuid.uuid4())
         item["messages"] = messages
@@ -109,6 +110,7 @@ def worker_process(task_queue, done_queue, rollout_func, reward_func, client, sa
         item.update(sampling_params)
         item["timestamp"] = str(time.time())
         item["round_number"] = len([_ for _ in item["messages"] if _["role"] == "assistant"])
+        item["finish_reason"] = finish_reason
 
         output_item = {
             "uid": item.pop("uid"),

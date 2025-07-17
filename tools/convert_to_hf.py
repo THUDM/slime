@@ -37,7 +37,7 @@ def main(args):
     # Setup the model and optimizer
     args.no_load_optim = True
     args.no_load_rng = True
-    model, _, _, _ = megatron_utils.initialize_model_and_optimizer(args, with_optimizer=False)
+    model, _, _, _ = megatron_utils.initialize_model_and_optimizer(args)
 
     hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
     model_name = type(hf_config).__name__.lower()

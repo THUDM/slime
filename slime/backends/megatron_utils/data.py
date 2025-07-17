@@ -6,11 +6,11 @@ import ray
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+import wandb
 from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.utils import get_model_config
 
-import wandb
 from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.memory_utils import clear_memory
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
@@ -268,15 +268,17 @@ def process_rollout_data(rollout_id, args, data_buffer):
         raw_rewards = rewards
     set_local_storage("raw_reward", raw_rewards)
 
-    if args.advantage_estimator == "grpo" and args.rewards_normalization:
+    if args.advantage_estimator in ["grpo", "reinforce_plus_plus_baseline"] and args.rewards_normalization:
         # group norm
         rewards = torch.tensor([r for r in rewards], dtype=torch.float)
         rewards = rewards.reshape(-1, args.n_samples_per_prompt)
         mean = rewards.mean(dim=-1, keepdim=True)
         rewards = rewards - mean
-        if args.grpo_std_normalization:
+
+        if args.advantage_estimator == "grpo" and args.grpo_std_normalization:
             std = rewards.std(dim=-1, keepdim=True)
             rewards = rewards / (std + 1e-6)
+
         rewards = rewards.flatten().tolist()
         data["rewards"] = rewards
 
@@ -629,27 +631,19 @@ def log_perf_data(rollout_id, args):
     ):
         log_dict = {f"perf/{key}_time": val for key, val in timer_instance.log_dict().items()}
 
-        # Calculate TFlops metrics with proper error handling
         if "perf/actor_train_time" in log_dict:
-            try:
-                world_size = dist.get_world_size()
-                total_fwd_flops = calculate_fwd_flops(seqlens=timer_instance.seq_lens, args=args) / world_size / 1e12
+            world_size = dist.get_world_size()
+            total_fwd_flops = calculate_fwd_flops(seqlens=timer_instance.seq_lens, args=args) / world_size / 1e12
 
-                # Only calculate log_probs_tflops if the timing exists
-                if "perf/log_probs_time" in log_dict and log_dict["perf/log_probs_time"] > 0:
-                    log_dict["perf/log_probs_tflops"] = total_fwd_flops / log_dict["perf/log_probs_time"]
+            if "perf/log_probs_time" in log_dict:
+                log_dict["perf/log_probs_tflops"] = total_fwd_flops / log_dict["perf/log_probs_time"]
 
-                # Only calculate ref_log_probs_tflops if the timing exists
-                if "perf/ref_log_probs_time" in log_dict and log_dict["perf/ref_log_probs_time"] > 0:
-                    log_dict["perf/ref_log_probs_tflops"] = total_fwd_flops / log_dict["perf/ref_log_probs_time"]
+            if "perf/ref_log_probs_time" in log_dict:
+                log_dict["perf/ref_log_probs_tflops"] = total_fwd_flops / log_dict["perf/ref_log_probs_time"]
 
-                # Calculate actor_train_tflops with safety check
-                if log_dict["perf/actor_train_time"] > 0:
-                    log_dict["perf/actor_train_tflops"] = 3 * total_fwd_flops / log_dict["perf/actor_train_time"]
-            except Exception as e:
-                print(f"Warning: Error calculating TFlops metrics: {e}")
+            if log_dict["perf/actor_train_time"] > 0:
+                log_dict["perf/actor_train_tflops"] = 3 * total_fwd_flops / log_dict["perf/actor_train_time"]
 
-        # Calculate wait time ratio with proper checks
         if "perf/train_wait_time" in log_dict and "perf/train_time" in log_dict:
             total_time = log_dict["perf/train_wait_time"] + log_dict["perf/train_time"]
             if total_time > 0:

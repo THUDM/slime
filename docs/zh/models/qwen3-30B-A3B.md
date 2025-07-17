@@ -61,3 +61,28 @@ bash scripts/run-qwen3-30B-A3B.sh
       --sglang-enable-dp-attention
       --sglang-dp-size 8
    ```
+
+### 多机支持
+
+对于多机环境，需要进行如下的几点修改：
+- 将训练模型，数据放在所有机器都可以访问到的路径上；
+- 设置各台机器都可以访问到的 `MASTER_ADDR` 之外；
+- 去掉 CPU adam 相关的配置，因为使用了 distributed optimizer，所以多机环境下 optimizer 的显存占比会明显下降。
+
+除此之外，还可以进行如下的修改：
+
+- 当总卡数并不能被 expert 总数乘除时，可以使用 `--sglang-ep-num-redundant-experts` 来增加冗余的 expert，例如对于 24 卡的场景，可以配置：
+
+   ```bash
+   SGLANG_ARGS=(
+      --rollout-num-gpus-per-engine 24
+      --sglang-mem-fraction-static 0.5
+      --sglang-enable-ep-moe
+      --sglang-enable-dp-attention
+      --sglang-dp-size 3
+
+      --sglang-moe-dense-tp-size 1
+      --sglang-enable-dp-lm-head
+      --sglang-ep-num-redundant-experts 16   
+   )
+   ```

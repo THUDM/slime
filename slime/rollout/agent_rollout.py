@@ -4,9 +4,9 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 import requests
+import wandb
 from transformers import AutoTokenizer
 
-import wandb
 from slime.ray.buffer import Buffer
 from slime.utils.async_utils import run
 from slime.utils.mask_utils import MultiTurnLossMaskGenerator
@@ -280,6 +280,7 @@ async def generate_agent_rollout(
 
     print("finally get rollout data with length: ", len(results))
     sample_results = []
+
     for i, record in enumerate(results):
         oai_messages = record["messages"]
 
@@ -296,7 +297,11 @@ async def generate_agent_rollout(
                 tokens=token_ids,
                 response_length=response_length,
                 reward=record["reward"],
-                status=Sample.Status.COMPLETED,
+                status=(
+                    Sample.Status.COMPLETED
+                    if "finish_reason" not in record["extra_info"] or record["extra_info"]["finish_reason"] != "length"
+                    else Sample.Status.TRUNCATED
+                ),
                 loss_mask=loss_mask,
                 metadata={**record["extra_info"], "raw_reward": record["raw_reward"]},
             )

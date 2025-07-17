@@ -5,11 +5,10 @@ from datetime import timedelta
 import numpy as np
 import torch
 import torch.distributed as dist
+import wandb
 from megatron.core import mpu, tensor_parallel
 from megatron.core.num_microbatches_calculator import init_num_microbatches_calculator
 from megatron.training.global_vars import _build_tokenizer, set_args
-
-import wandb
 
 GLOO_GROUP = None
 

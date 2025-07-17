@@ -194,7 +194,7 @@ For complete usage instructions, please refer to the [Usage Documentation](docs/
 
 ## Hardware Support
 - Nvidia: refer to this repo README
-- AMD: refer to the [toturial](docs/en/amd_toturial.md)
+- AMD: refer to the [tutorial](docs/en/amd_tutorial.md)
 
 ## FAQ & Acknowledgements
 

@@ -61,3 +61,29 @@ Here, we will briefly introduce the MoE-related parts in the [run-qwen3-30B-A3B.
        --sglang-enable-dp-attention
        --sglang-dp-size 8
     ```
+
+### Multi-Node Support
+
+For a multi-node environment, the following modifications are necessary:
+
+  - Place the training model and data on a path accessible by all nodes.
+  - Set the `MASTER_ADDR` to an address that is accessible by all nodes.
+  - Remove configurations related to CPU Adam. This is because a distributed optimizer is used, which significantly reduces the optimizer's video memory (VRAM) usage in a multi-node setup.
+
+In addition, you can make the following changes:
+
+  - When the total number of GPUs is not a multiple or divisor of the total number of experts, you can use `--sglang-ep-num-redundant-experts` to add redundant experts. For example, in a 24-GPU scenario, you can configure it as follows:
+
+   ```bash
+   SGLANG_ARGS=(
+      --rollout-num-gpus-per-engine 24
+      --sglang-mem-fraction-static 0.5
+      --sglang-enable-ep-moe
+      --sglang-enable-dp-attention
+      --sglang-dp-size 3
+
+      --sglang-moe-dense-tp-size 1
+      --sglang-enable-dp-lm-head
+      --sglang-ep-num-redundant-experts 16   
+   )
+   ```
