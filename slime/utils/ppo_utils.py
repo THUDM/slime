@@ -1,13 +1,13 @@
 # Adapt from https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/models/utils.py
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
-from typing import Optional, List, Tuple
+from typing import List, Optional
 
 import torch
 import torch.distributed as dist
-
 from megatron.core import mpu
-from slime.utils.distributed_utils import distributed_masked_whiten
+
 from slime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
+
 
 @torch.compile(dynamic=True)
 def compute_approx_kl(
@@ -162,70 +162,90 @@ def get_reinforce_plus_plus_returns(
                             local sequence chunks owned by the current GPU rank.
     """
     cp_size = mpu.get_context_parallel_world_size()
+    cp_rank = mpu.get_context_parallel_rank()
 
-    # Step 1: Reconstruct full sequences and calculate full returns.
-    batch_returns = []
-    batch_offsets = [] if cp_size > 1 else None
-
+    final_returns_chunks = []
     for i in range(len(rewards)):
-        if cp_size == 1:
-            full_kl_response = kl[i]
-        else:
-            my_kl_chunk = kl[i]
-            total_len, response_len, prompt_len = total_lengths[i], response_lengths[i], total_lengths[i] - response_lengths[i]
-            device, dtype = my_kl_chunk.device, my_kl_chunk.dtype
+        local_kl_chunk = kl[i]
+        device, dtype = local_kl_chunk.device, local_kl_chunk.dtype
+        total_len, response_len = total_lengths[i], response_lengths[i]
+        prompt_len = total_len - response_len
 
-            _, _, _, my_offsets = get_logits_and_tokens_offset_with_cp(total_len, response_len)
-            batch_offsets.append(my_offsets)
+        if cp_size > 1:
+            # Step 1: Gather all KL chunks and token_offsets from all ranks
+            _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(total_len, response_len)
 
-            # Gather all chunks and their layout information from all ranks in the CP group.
-            object_to_gather = {"kl_chunk": my_kl_chunk.cpu(), "offsets": my_offsets}
+            object_to_gather = {"kl_chunk": local_kl_chunk.cpu(), "offsets": token_offsets}
             gathered_objects = [None] * cp_size
             dist.all_gather_object(gathered_objects, object_to_gather, group=mpu.get_context_parallel_group())
-            
+
+            # Step 2: Reconstruct the full response tensor by splitting and placing each part.
             full_kl_response = torch.zeros(response_len, device=device, dtype=dtype)
             for obj in gathered_objects:
-                kl_chunk, global_offsets = obj['kl_chunk'], obj['offsets']
-                s_start, e_start = global_offsets[0][0] - prompt_len, global_offsets[0][1] - prompt_len
-                s_end, e_end = global_offsets[1][0] - prompt_len, global_offsets[1][1] - prompt_len
-                kl_chunk_start, kl_chunk_end = torch.split(kl_chunk.to(device), [e_start - s_start, e_end - s_end])
+                kl_chunk = obj["kl_chunk"].to(device)
+                global_offsets = obj["offsets"]
 
-                if kl_chunk_start.numel() > 0:
-                    full_kl_response[s_start:e_start] = kl_chunk_start
-                if kl_chunk_end.numel() > 0:
-                    full_kl_response[s_end:e_end] = kl_chunk_end
+                # Calculate the lengths of part_0 and part_1 for this specific chunk.
+                s0, e0 = global_offsets[0]
+                s1, e1 = global_offsets[1]
+                res_s0, res_e0 = max(0, s0 - prompt_len), max(0, e0 - prompt_len)
+                res_s1, res_e1 = max(0, s1 - prompt_len), max(0, e1 - prompt_len)
+                len0 = res_e0 - res_s0
+                len1 = res_e1 - res_s1
 
+                if kl_chunk.numel() > 0:
+                    # Split the received contiguous chunk back into its zigzag parts.
+                    kl_part_0, kl_part_1 = torch.split(kl_chunk, [len0, len1])
+
+                    # Place each part in its own correct location.
+                    if kl_part_0.numel() > 0:
+                        full_kl_response[res_s0:res_e0] = kl_part_0
+                    if kl_part_1.numel() > 0:
+                        full_kl_response[res_s1:res_e1] = kl_part_1
+
+        else:
+            full_kl_response = local_kl_chunk
+
+        # Step 3: Compute returns on full response kl tensor.
         token_level_rewards = -kl_coef * full_kl_response
         full_mask = loss_masks[i]
         assert full_mask.sum().item() > 0, f"Sequence at index {i} is fully masked."
         last_idx = full_mask.nonzero(as_tuple=True)[0][-1]
         token_level_rewards[last_idx] += rewards[i]
-        
+
         returns_for_seq = torch.zeros_like(token_level_rewards)
         running_return = 0.0
         for t in reversed(range(token_level_rewards.size(0))):
             # G_t = r_t + gamma * G_{t+1}
             running_return = token_level_rewards[t] + gamma * running_return
             returns_for_seq[t] = running_return
-        
-        batch_returns.append(returns_for_seq)
 
-    # Step 2: Extract the final, local chunks from the full returns.
-    final_returns_chunks = []
-    for i in range(len(rewards)):
-        full_returns = batch_returns[i]
-        if cp_size == 1:
-            returns_chunk = full_returns
+        # Step 4: Pick up the results corresponding to our local chunk's parts.
+        if cp_size > 1:
+            local_returns_chunk_parts = []
+            local_s0, local_e0 = token_offsets[0]
+            local_s1, local_e1 = token_offsets[1]
+            local_res_s0, local_res_e0 = max(0, local_s0 - prompt_len), max(0, local_e0 - prompt_len)
+            local_res_s1, local_res_e1 = max(0, local_s1 - prompt_len), max(0, local_e1 - prompt_len)
+
+            if local_res_e0 > local_res_s0:
+                local_returns_chunk_parts.append(returns_for_seq[local_res_s0:local_res_e0])
+            if local_res_e1 > local_res_s1:
+                local_returns_chunk_parts.append(returns_for_seq[local_res_s1:local_res_e1])
+
+            local_returns_chunk = (
+                torch.cat(local_returns_chunk_parts)
+                if local_returns_chunk_parts
+                else torch.tensor([], device=device, dtype=dtype)
+            )
+
         else:
-            my_offsets = batch_offsets[i]
-            prompt_len = total_lengths[i] - response_lengths[i]
-            s_start, e_start = my_offsets[0][0] - prompt_len, my_offsets[0][1] - prompt_len
-            s_end, e_end = my_offsets[1][0] - prompt_len, my_offsets[1][1] - prompt_len
-            returns_chunk = torch.cat([full_returns[s_start:e_start], full_returns[s_end:e_end]])
-        
-        final_returns_chunks.append(returns_chunk)
-        
+            local_returns_chunk = returns_for_seq
+
+        final_returns_chunks.append(local_returns_chunk)
+
     return final_returns_chunks
+
 
 def get_reinforce_plus_plus_baseline_advantages(
     rewards: torch.Tensor,
@@ -250,8 +270,7 @@ def get_reinforce_plus_plus_baseline_advantages(
     """
     # Broadcast to get unwhitened advantages
     unwhitened_advantages = [
-        torch.ones_like(kl_tensor) * reward_val - kl_coef * kl_tensor
-        for kl_tensor, reward_val in zip(kl, rewards)
+        torch.ones_like(kl_tensor) * reward_val - kl_coef * kl_tensor for kl_tensor, reward_val in zip(kl, rewards)
     ]
-    
+
     return unwhitened_advantages
