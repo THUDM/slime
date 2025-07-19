@@ -6,9 +6,9 @@ from typing import Any, Union
 
 import ray
 import torch
-import wandb
 from transformers import AutoTokenizer
 
+import wandb
 from slime.utils.data import Dataset
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
