@@ -24,8 +24,6 @@ from generator.utils.default_func import (
 )
 from pydantic import BaseModel
 
-from tools.visualizer import BufferStatsVisualizer
-
 app = FastAPI(title="Rollout Buffer Server", debug=True)
 
 MAX_SIZE = 1000_000_000
@@ -327,17 +325,6 @@ class RolloutBuffer:
         self.total_read = 0
         self.task_type = task_type
 
-        # Initialize the visualizer
-        self.visualizer = BufferStatsVisualizer(time_window=60)  # 60 second window
-        # Set args for filename generation
-        self.visualizer.set_args(
-            {
-                "task_type": task_type,
-                "group_size": group_size,
-                "num_repeat_per_sample": group_size,
-            }
-        )
-
         print(
             f"set group_size = {group_size}, timeout = {group_timeout_seconds}s, min_timeout_ratio = {min_timeout_group_size_ratio}"
         )
@@ -350,9 +337,6 @@ class RolloutBuffer:
 
             self.buffer.append(data)
             self.total_written += 1
-
-            # Update visualization stats - just increment the counter for current window
-            self.visualizer.add_data_point(1)
 
             self.not_empty.notify_all()
             return data
@@ -395,9 +379,7 @@ class RolloutBuffer:
             return len(self.buffer)
 
     def close(self):
-        """Close the buffer and clean up"""
-        if hasattr(self, "visualizer"):
-            self.visualizer.close()
+        pass
 
 
 buffer = RolloutBuffer()
@@ -547,18 +529,9 @@ def run_rollout(data: dict):
         group_timeout_seconds=group_timeout_seconds,
     )
 
-    try:
-        # Call the run_rollout function from the appropriate generator module
-        generator_info["run_rollout"](data)
-        print(f"Rollout completed successfully for task_type: {task_type}")
-    except Exception as e:
-        print(f"Error running rollout for task_type '{task_type}': {str(e)}")
-        import traceback
-
-        traceback.print_exc()
-    finally:
-        # Save the visualization when rollout is complete
-        buffer.close()
+    # Call the run_rollout function from the appropriate generator module
+    generator_info["run_rollout"](data)
+    print(f"Rollout completed successfully for task_type: {task_type}")
 
 
 @app.post("/start_rollout")

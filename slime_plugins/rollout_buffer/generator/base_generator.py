@@ -9,15 +9,30 @@ from time import sleep
 from typing import List, Optional
 
 import requests
-from generator.reward_utils.math_utils import get_rule_based_math_reward
 from openai import OpenAI
 from tqdm import tqdm
+from slime.rollout.rm_hub import get_deepscaler_rule_based_reward
 
 TASK_TYPE = "math"
 
 SAMPLING_PARAMS = {
     "top_p": 1,
 }
+
+
+def get_rule_based_math_reward(item):
+    messages = item["messages"]
+    label = item["label"]
+    assert messages[-1]["role"] == "assistant", "last message must be assistant, but got {}".format(
+        messages[-1]["role"]
+    )
+
+    response = messages[-1]["content"]
+    if response is None or len(response) == 0:
+        return 0
+
+    reward = get_deepscaler_rule_based_reward(response, label)
+    return reward
 
 
 def query_single_turn(client, messages, sampling_params, tools=None):
@@ -184,10 +199,12 @@ class BaseGenerator:
             cnt = 0
             items = []
             skipped_count = 0
-            with open(input_file, "r") as r:
+            with open(input_file, "r") as f:
                 print("read files")
-                for line in r:
+                for i, line in enumerate(f):
                     item = json.loads(line)
+                    if "instance_id" not in item:
+                        item["instance_id"] = i
                     items.append(item)
             print("read files done: ", len(items))
             random.shuffle(items)
@@ -195,10 +212,8 @@ class BaseGenerator:
             for _ in range(self.num_repeats):
 
                 for item in items:
-                    for internal_idx in range(self.num_repeat_per_sample):
+                    for _ in range(self.num_repeat_per_sample):
                         item_repeat = copy.deepcopy(item)
-                        if "instance_id" not in item_repeat:
-                            raise ValueError(f"instance_id not in item: {item}, the input data must have instance_id")
 
                         if "uid" not in item_repeat:
                             item_repeat["uid"] = str(uuid.uuid4())

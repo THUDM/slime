@@ -5,10 +5,10 @@
 
 ## Introduction
 
-If you are running Slime on AMD's Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified AMD dependencies, and provide an example for running the experiments. The current rocm docker only support AMD's MI300.
+If you are running slime on AMD's Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified AMD dependencies, and provide an example for running the experiments. The current rocm docker only support AMD's MI300.
 
 
-<!-- First, you need to configure the Slime runtime environment according to the [Readme](../../README.md) documentation and cd to the Slime project directory. -->
+<!-- First, you need to configure the slime runtime environment according to the [Readme](../../README.md) documentation and cd to the slime project directory. -->
 
 ## Docker
 
@@ -50,7 +50,7 @@ docker run --rm -it \
   /bin/bash
 ```
 
-Then, download and install Slime.
+Then, download and install slime.
 ```bash
 git clone https://github.com/THUDM/slime.git
 cd slime

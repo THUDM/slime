@@ -12,7 +12,7 @@ from slime.utils.async_utils import run
 from slime.utils.mask_utils import MultiTurnLossMaskGenerator
 from slime.utils.types import Sample
 
-__all__ = ["generate_agent_rollout"]
+__all__ = ["generate_rollout"]
 
 
 # Global variables for evaluation
@@ -191,7 +191,7 @@ def start_rollout(api_base_url: str, args, metadata):
         "num_process": str(getattr(args, "rollout_num_process", 100)),
         "num_epoch": str(args.num_epoch or 3),
         "remote_engine_url": f"http://{args.sglang_router_ip}:{args.sglang_router_port}",
-        "remote_buffer_url": args.agent_rollout_buffer_url,
+        "remote_buffer_url": args.rollout_buffer_url,
         "task_type": args.rollout_task_type,
         "input_file": args.prompt_data,
         "num_repeat_per_sample": str(args.n_samples_per_prompt),
@@ -217,7 +217,7 @@ def start_rollout(api_base_url: str, args, metadata):
             print(f"[start_rollout] Failed to send rollout config: {e}")
 
 
-async def generate_agent_rollout(
+async def generate_rollout_async(
     args, rollout_id: int, data_buffer: Buffer, evaluation: bool = False
 ) -> Dict[str, Any]:
 
@@ -227,7 +227,7 @@ async def generate_agent_rollout(
 
     if START_ROLLOUT:
         metadata = data_buffer.get_metadata()
-        start_inform = start_rollout(args.agent_rollout_buffer_url, args, metadata)
+        start_inform = start_rollout(args.rollout_buffer_url, args, metadata)
         print(f"start rollout with payload: {start_inform}")
         print(f"start rollout id: {rollout_id}")
         START_ROLLOUT = False
@@ -242,7 +242,7 @@ async def generate_agent_rollout(
         data_number_to_fetch % args.n_samples_per_prompt == 0
     ), "data_number_to_fetch must be a multiple of n_samples_per_prompt"
     print(f"INFO: buffer length: {data_buffer.get_buffer_length()}, data_number_to_fetch: {data_number_to_fetch}")
-    base_url = args.agent_rollout_buffer_url
+    base_url = args.rollout_buffer_url
     tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
     retry_times = 0
     results = []
@@ -316,4 +316,4 @@ async def generate_agent_rollout(
 
 def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
     """Generate rollout for both training and evaluation."""
-    return run(generate_agent_rollout(args, rollout_id, data_buffer, evaluation))
+    return run(generate_rollout_async(args, rollout_id, data_buffer, evaluation))

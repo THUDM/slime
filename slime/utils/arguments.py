@@ -59,11 +59,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=False,
                 help=(
                     "Whether to offload the rollout generator and training actor to CPU during training. "
-                    "This will always be true when --colocate is set. "
-                    "If this is turned on, we will also set --offload-ref to true."
+                    "This will always be true when --colocate is set."
                 ),
             )
-            parser.add_argument("--offload-ref", action="store_true", default=False)
 
             return parser
 
@@ -268,6 +266,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "buffer size for update weight, in bytes. "
                     "This is used for updating weights by chunk and should be useful for MoE models."
                 ),
+            )
+            parser.add_argument(
+                "--update-weights-interval",
+                type=int,
+                default=1,
+                help="Interval for updating the weights",
+            )
+            parser.add_argument(
+                "--keep-old-actor",
+                action="store_true",
+                help="Whether to keep the rollout model on training process",
             )
 
             parser.add_argument(
@@ -703,34 +712,19 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             return parser
 
-        def add_agent_rollout_arguments(parser):
+        def add_rollout_buffer_arguments(parser):
             parser.add_argument(
-                "--agent-rollout-buffer-url",
+                "--rollout-buffer-url",
                 type=str,
                 default=None,
-                help="URL for the agent rollout buffer",
+                help="URL for the rollout buffer",
             )
-            parser.add_argument(
-                "--update-weights-interval",
-                type=int,
-                default=1,
-                help="Interval for updating the weights of the agent",
-            )
+
             parser.add_argument(
                 "--fetch-trajectory-retry-times",
                 type=int,
                 default=-1,
                 help="Number of times to retry fetching trajectory, -1 means unlimited retry",
-            )
-            parser.add_argument(
-                "--keep-old-actor",
-                action="store_true",
-                help="Whether to keep the rollout model on training process",
-            )
-            parser.add_argument(
-                "--offload-old-actor",
-                action="store_true",
-                help="Whether to update the rollout model on cpu",
             )
             parser.add_argument(
                 "--min-batch-collection-ratio",
@@ -789,7 +783,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_sglang_arguments(parser)
         parser = add_network_arguments(parser)
         parser = add_reward_model_arguments(parser)
-        parser = add_agent_rollout_arguments(parser)
+        parser = add_rollout_buffer_arguments(parser)
         parser = add_custom_megatron_plugins_arguments(parser)
         # For megatron
         parser.add_argument("--padded-vocab-size", type=int, default=None)
@@ -906,10 +900,6 @@ def parse_args(add_custom_arguments=None):
                 f"* actor_num_nodes {args.actor_num_nodes}, overriding rollout_num_gpus to match actor_num_gpus_per_node * actor_num_nodes."
             )
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
-
-    if args.offload:
-        args.offload_ref = True
-        args.offload_old_actor = True
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path
