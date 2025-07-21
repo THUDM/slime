@@ -23,13 +23,6 @@ repos:
       - id: autoflake
         args: [--remove-all-unused-imports, --in-place]
 
-  - repo: https://github.com/PyCQA/isort
-    rev: 5.13.2
-    hooks:
-      - id: isort
-        name: Format imports
-        exclude: docs/
-
   - repo: https://github.com/psf/black
     rev: 24.3.0
     hooks:
