@@ -113,14 +113,14 @@ def get_log_probs_and_entropy(
     return res
 
 
-def compute_advantages_and_returns(args, local_storage):
-    log_probs: list[torch.Tensor] = local_storage.get("log_probs", None)
-    ref_log_probs: list[torch.Tensor] = local_storage.get("ref_log_probs", None)
-    rewards: list[float] = local_storage.get("rewards", None)
-    values: Union[None, list[torch.Tensor]] = local_storage.get("values", None)
-    response_lengths: list[int] = local_storage.get("response_lengths", None)
-    loss_masks: list[torch.Tensor] = local_storage.get("loss_masks", None)
-    total_lengths: list[int] = local_storage.get("total_lengths", None)
+def compute_advantages_and_returns(args, rollout_data):
+    log_probs: list[torch.Tensor] = rollout_data.get("log_probs", None)
+    ref_log_probs: list[torch.Tensor] = rollout_data.get("ref_log_probs", None)
+    rewards: list[float] = rollout_data.get("rewards", None)
+    values: Union[None, list[torch.Tensor]] = rollout_data.get("values", None)
+    response_lengths: list[int] = rollout_data.get("response_lengths", None)
+    loss_masks: list[torch.Tensor] = rollout_data.get("loss_masks", None)
+    total_lengths: list[int] = rollout_data.get("total_lengths", None)
 
     if log_probs is None:
         return
@@ -208,8 +208,8 @@ def compute_advantages_and_returns(args, local_storage):
         chunk_lengths = [chunk.size(0) for chunk in advantages]
         advantages = list(torch.split(whitened_advs_flat, chunk_lengths))
 
-    local_storage["advantages"] = advantages
-    local_storage["returns"] = returns
+    rollout_data["advantages"] = advantages
+    rollout_data["returns"] = returns
 
 
 def policy_loss_function(args, batch, logits, sum_of_sample_mean):

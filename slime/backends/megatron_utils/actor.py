@@ -212,7 +212,7 @@ class MegatronTrainRayActor(TrainRayActor):
             print(f"Updating buffer's wandb run_id to: {self.args.wandb_run_id}")
             ray.get(self.data_buffer.update_wandb_run_id.remote(self.args.wandb_run_id))
 
-    def get_rollout_data(self, rollout_id, local_storage):
+    def get_rollout_data(self, rollout_id, rollout_data):
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
         # Both first pp stage and the last pp stage will recieve the data.
         process_rollout_data(
@@ -221,7 +221,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.data_buffer,
             mpu.get_data_parallel_rank(with_context_parallel=False),
             mpu.get_data_parallel_world_size(with_context_parallel=False),
-            local_storage=local_storage,
+            rollout_data=rollout_data,
         )
 
     def compute_log_prob(
@@ -230,7 +230,7 @@ class MegatronTrainRayActor(TrainRayActor):
         log_probs_data_iterator,
         log_probs_num_microbatches,
         store_prefix="",
-        local_storage=None,
+        rollout_data=None,
     ):
         # reset data iterator
         for data_iterator in log_probs_data_iterator:
@@ -245,19 +245,19 @@ class MegatronTrainRayActor(TrainRayActor):
                 log_probs_data_iterator,
                 log_probs_num_microbatches,
                 store_prefix=store_prefix,
-                local_storage=local_storage,
+                rollout_data=rollout_data,
             )
 
     def train(self, rollout_id, with_data_fetching=True):
         Timer().end("train_wait")
 
-        local_storage = {}
+        rollout_data = {}
 
         if self.args.debug_rollout_only:
             # For debug rollout, we just log the data and return.
             if with_data_fetching:
-                self.get_rollout_data(rollout_id, local_storage)
-            log_rollout_data(rollout_id, self.args, local_storage)
+                self.get_rollout_data(rollout_id, rollout_data)
+            log_rollout_data(rollout_id, self.args, rollout_data)
             log_perf_data(rollout_id, self.args)
             Timer().start("train_wait")
             return
@@ -269,7 +269,7 @@ class MegatronTrainRayActor(TrainRayActor):
             with timer("data_preprocess"):
                 # For async train, we need to separate the data fetching and training.
                 if with_data_fetching:
-                    self.get_rollout_data(rollout_id, local_storage)
+                    self.get_rollout_data(rollout_id, rollout_data)
 
                 # Create data iterator for log_probs and train.
                 (
@@ -277,7 +277,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     log_probs_num_microbatches,
                     train_data_iterator,
                     train_num_microbatches,
-                ) = get_data_iterator(self.args, self.model, local_storage)
+                ) = get_data_iterator(self.args, self.model, rollout_data)
 
             if self.args.compute_advantages_and_returns:
                 if "ref" in self.weights:
@@ -287,7 +287,7 @@ class MegatronTrainRayActor(TrainRayActor):
                         log_probs_data_iterator,
                         log_probs_num_microbatches,
                         store_prefix="ref_",
-                        local_storage=local_storage,
+                        rollout_data=rollout_data,
                     )
 
                 self.compute_log_prob(
@@ -295,7 +295,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     log_probs_data_iterator,
                     log_probs_num_microbatches,
                     store_prefix="",
-                    local_storage=local_storage,
+                    rollout_data=rollout_data,
                 )
                 # when there is old actor, we need to update the model params to actor manually
                 if "old_actor" in self.weights:
@@ -303,12 +303,12 @@ class MegatronTrainRayActor(TrainRayActor):
 
                 # Calculate adv and returns. Need to performed before training (instead of on the fly),
                 # because we may need normalize the whole rollout.
-                compute_advantages_and_returns(self.args, local_storage)
+                compute_advantages_and_returns(self.args, rollout_data)
 
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args)
 
-            log_rollout_data(rollout_id, self.args, local_storage)
+            log_rollout_data(rollout_id, self.args, rollout_data)
 
             # Train
             with timer("actor_train"):

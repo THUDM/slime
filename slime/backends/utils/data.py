@@ -11,11 +11,11 @@ from slime.utils.timer import Timer
 class DataIterator:
     def __init__(
         self,
-        local_storage,
+        rollout_data,
         micro_batch_size: Optional[int] = None,
         micro_batch_indices: Optional[list[list[int]]] = None,
     ):
-        self.local_storage = local_storage
+        self.rollout_data = rollout_data
         self.micro_batch_size = micro_batch_size
         self.micro_batch_indices = micro_batch_indices
         assert micro_batch_size is None or micro_batch_indices is None
@@ -24,7 +24,7 @@ class DataIterator:
     def get_next(self, keys):
         batch = {}
         for key in keys:
-            vals = self.local_storage.get(key, None)
+            vals = self.rollout_data.get(key, None)
             if vals is None:
                 batch[key] = None
             else:
@@ -67,7 +67,7 @@ def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu, cp_size)
     return len(batches)
 
 
-def process_rollout_data(rollout_id, args, data_buffer, dp_rank, dp_size, local_storage):
+def process_rollout_data(rollout_id, args, data_buffer, dp_rank, dp_size, rollout_data):
     rank = dist.get_rank()
 
     if rank == 0:
@@ -84,7 +84,7 @@ def process_rollout_data(rollout_id, args, data_buffer, dp_rank, dp_size, local_
         raw_rewards = data["raw_reward"]
     else:
         raw_rewards = rewards
-    local_storage["raw_reward"] = raw_rewards
+    rollout_data["raw_reward"] = raw_rewards
 
     if args.advantage_estimator in ["grpo", "reinforce_plus_plus_baseline"] and args.rewards_normalization:
         # group norm
@@ -157,4 +157,4 @@ def process_rollout_data(rollout_id, args, data_buffer, dp_rank, dp_size, local_
             val = [torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in val]
 
         # save the data to local storage
-        local_storage[key] = val
+        rollout_data[key] = val
