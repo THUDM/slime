@@ -172,6 +172,8 @@ def log_rollout_data(rollout_id, args):
         cp_size = mpu.get_context_parallel_world_size()
         log_dict = {}
         response_lengths = get_local_storage("response_lengths")
+        loss_masks = get_local_storage("loss_masks")
+
         for key, val in get_local_storage().items():
             if key == "tokens" or key == "loss_masks":
                 continue
@@ -180,13 +182,56 @@ def log_rollout_data(rollout_id, args):
             # - Each dp rank has the same number of samples
             if isinstance(val, list):
                 if isinstance(val[0], torch.Tensor):
-                    if cp_size == 1:
-                        val = sum([v.mean() for v in val]) / len(val)
+                    # Special handling for log_probs and ref_log_probs to apply loss_mask
+                    if key in ["log_probs", "ref_log_probs", "returns", "advantages"] and loss_masks is not None:
+                        if cp_size == 1:
+                            # Apply loss_mask to get only valid tokens
+                            val = sum(
+                                [
+                                    (v * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+                                    for v, loss_mask in zip(val, loss_masks)
+                                ]
+                            ) / len(val)
+                        else:
+                            # For cp_size > 1, we need to handle loss_mask differently
+                            # The logic should be consistent with get_sum_of_sample_mean
+                            total_lengths = get_local_storage("total_lengths")
+                            cp_chunk_lengths = []
+                            chunked_loss_masks = []
+
+                            for i, (total_length, response_length, loss_mask) in enumerate(
+                                zip(total_lengths, response_lengths, loss_masks)
+                            ):
+                                prompt_length = total_length - response_length
+                                from .cp_utils import get_logits_and_tokens_offset_with_cp
+
+                                _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(
+                                    total_length, response_length
+                                )
+                                loss_mask_0 = loss_mask[
+                                    tokens_offset[0][0] - prompt_length : tokens_offset[0][1] - prompt_length
+                                ]
+                                loss_mask_1 = loss_mask[
+                                    tokens_offset[1][0] - prompt_length : tokens_offset[1][1] - prompt_length
+                                ]
+                                chunked_loss_masks.append(torch.cat([loss_mask_0, loss_mask_1], dim=0))
+                                cp_chunk_lengths.append(chunked_loss_masks[i].size(0))
+
+                            val = sum(
+                                [
+                                    cp_size * (v * chunked_loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+                                    for v, chunked_loss_mask, loss_mask in zip(val, chunked_loss_masks, loss_masks)
+                                ]
+                            ) / len(val)
                     else:
-                        # When cp_size > 1, the denominator should be the length of the response lengths. Also, to make
-                        # sure these values can be divided by `mpu.get_data_parallel_world_size(with_context_parallel=True)`
-                        # multiply by the cp_size.
-                        val = sum([cp_size * v.sum() / l for v, l in zip(val, response_lengths)]) / len(val)
+                        # Original logic for other tensor values
+                        if cp_size == 1:
+                            val = sum([v.mean() for v in val]) / len(val)
+                        else:
+                            # When cp_size > 1, the denominator should be the length of the response lengths. Also, to make
+                            # sure these values can be divided by `mpu.get_data_parallel_world_size(with_context_parallel=True)`
+                            # multiply by the cp_size.
+                            val = sum([cp_size * v.sum() / l for v, l in zip(val, response_lengths)]) / len(val)
                 else:
                     val = sum(val) / len(val)
             elif isinstance(val, torch.Tensor):
