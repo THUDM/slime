@@ -15,7 +15,6 @@ from slime.utils.ppo_utils import (
     get_reinforce_plus_plus_returns,
 )
 
-from ..utils.data import get_local_storage, set_local_storage
 from .cp_utils import get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
 
 
@@ -114,14 +113,14 @@ def get_log_probs_and_entropy(
     return res
 
 
-def compute_advantages_and_returns(args):
-    log_probs: list[torch.Tensor] = get_local_storage("log_probs")
-    ref_log_probs: list[torch.Tensor] = get_local_storage("ref_log_probs")
-    rewards: list[float] = get_local_storage("rewards")
-    values: Union[None, list[torch.Tensor]] = get_local_storage("values")
-    response_lengths: list[int] = get_local_storage("response_lengths")
-    loss_masks: list[torch.Tensor] = get_local_storage("loss_masks")
-    total_lengths: list[int] = get_local_storage("total_lengths")
+def compute_advantages_and_returns(args, local_storage):
+    log_probs: list[torch.Tensor] = local_storage.get("log_probs", None)
+    ref_log_probs: list[torch.Tensor] = local_storage.get("ref_log_probs", None)
+    rewards: list[float] = local_storage.get("rewards", None)
+    values: Union[None, list[torch.Tensor]] = local_storage.get("values", None)
+    response_lengths: list[int] = local_storage.get("response_lengths", None)
+    loss_masks: list[torch.Tensor] = local_storage.get("loss_masks", None)
+    total_lengths: list[int] = local_storage.get("total_lengths", None)
 
     if log_probs is None:
         return
@@ -209,8 +208,8 @@ def compute_advantages_and_returns(args):
         chunk_lengths = [chunk.size(0) for chunk in advantages]
         advantages = list(torch.split(whitened_advs_flat, chunk_lengths))
 
-    set_local_storage("advantages", advantages)
-    set_local_storage("returns", returns)
+    local_storage["advantages"] = advantages
+    local_storage["returns"] = returns
 
 
 def policy_loss_function(args, batch, logits, sum_of_sample_mean):

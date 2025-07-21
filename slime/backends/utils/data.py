@@ -1,47 +1,21 @@
-from typing import Any, Optional
+from typing import Optional
 
 import ray
 import torch
 import torch.distributed as dist
 
-from slime.utils.memory_utils import clear_memory
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.timer import Timer
-
-
-LOCAL_STORAGE = {}
-LOCAL_METADATA = {}
-
-
-def set_local_storage(key: str, value: Any):
-    LOCAL_STORAGE[key] = value
-
-
-def get_local_storage(key: Optional[str] = None):
-    if key is None:
-        return LOCAL_STORAGE
-    return LOCAL_STORAGE.get(key, None)
-
-
-def clear_local_storage():
-    LOCAL_STORAGE.clear()
-    clear_memory()
-
-
-def set_metadata(key: str, value: Any):
-    LOCAL_METADATA[key] = value
-
-
-def get_metadata(key: Optional[str] = None):
-    return LOCAL_METADATA.get(key, None)
 
 
 class DataIterator:
     def __init__(
         self,
+        local_storage,
         micro_batch_size: Optional[int] = None,
         micro_batch_indices: Optional[list[list[int]]] = None,
     ):
+        self.local_storage = local_storage
         self.micro_batch_size = micro_batch_size
         self.micro_batch_indices = micro_batch_indices
         assert micro_batch_size is None or micro_batch_indices is None
@@ -50,7 +24,7 @@ class DataIterator:
     def get_next(self, keys):
         batch = {}
         for key in keys:
-            vals = get_local_storage(key)
+            vals = self.local_storage.get(key, None)
             if vals is None:
                 batch[key] = None
             else:
@@ -93,7 +67,7 @@ def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu, cp_size)
     return len(batches)
 
 
-def process_rollout_data(rollout_id, args, data_buffer, dp_rank, dp_size):
+def process_rollout_data(rollout_id, args, data_buffer, dp_rank, dp_size, local_storage):
     rank = dist.get_rank()
 
     if rank == 0:
@@ -110,7 +84,7 @@ def process_rollout_data(rollout_id, args, data_buffer, dp_rank, dp_size):
         raw_rewards = data["raw_reward"]
     else:
         raw_rewards = rewards
-    set_local_storage("raw_reward", raw_rewards)
+    local_storage["raw_reward"] = raw_rewards
 
     if args.advantage_estimator in ["grpo", "reinforce_plus_plus_baseline"] and args.rewards_normalization:
         # group norm
@@ -183,4 +157,4 @@ def process_rollout_data(rollout_id, args, data_buffer, dp_rank, dp_size):
             val = [torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in val]
 
         # save the data to local storage
-        set_local_storage(key, val)
+        local_storage[key] = val

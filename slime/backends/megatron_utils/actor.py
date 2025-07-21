@@ -20,7 +20,7 @@ from slime.utils.distributed_utils import init_process_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.timer import Timer, timer
 
-from ..utils.data import clear_local_storage, process_rollout_data, set_metadata
+from ..utils.data import process_rollout_data
 from .checkpoint import load_checkpoint
 from .data import get_data_iterator, log_eval_data, log_perf_data, log_rollout_data
 from .initialize import get_gloo_group, init
@@ -55,7 +55,6 @@ class MegatronTrainRayActor(TrainRayActor):
             self.model_name = self.args.model_name
         self.quantization_config = getattr(self.hf_config, "quantization_config", None)
         self.vocab_size = self.tokenizer.vocab_size if self.args.vocab_size is None else self.args.vocab_size
-        set_metadata("pad_token_id", self.tokenizer.pad_token_id)
 
         if self.args.debug_rollout_only:
             Timer().start("train_wait")
@@ -213,7 +212,7 @@ class MegatronTrainRayActor(TrainRayActor):
             print(f"Updating buffer's wandb run_id to: {self.args.wandb_run_id}")
             ray.get(self.data_buffer.update_wandb_run_id.remote(self.args.wandb_run_id))
 
-    def get_rollout_data(self, rollout_id):
+    def get_rollout_data(self, rollout_id, local_storage):
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
         # Both first pp stage and the last pp stage will recieve the data.
         process_rollout_data(
@@ -222,6 +221,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.data_buffer,
             mpu.get_data_parallel_rank(with_context_parallel=False),
             mpu.get_data_parallel_world_size(with_context_parallel=False),
+            local_storage=local_storage,
         )
 
     def compute_log_prob(
@@ -230,6 +230,7 @@ class MegatronTrainRayActor(TrainRayActor):
         log_probs_data_iterator,
         log_probs_num_microbatches,
         store_prefix="",
+        local_storage=None,
     ):
         # reset data iterator
         for data_iterator in log_probs_data_iterator:
@@ -244,16 +245,19 @@ class MegatronTrainRayActor(TrainRayActor):
                 log_probs_data_iterator,
                 log_probs_num_microbatches,
                 store_prefix=store_prefix,
+                local_storage=local_storage,
             )
 
     def train(self, rollout_id, with_data_fetching=True):
         Timer().end("train_wait")
 
+        local_storage = {}
+
         if self.args.debug_rollout_only:
             # For debug rollout, we just log the data and return.
             if with_data_fetching:
-                self.get_rollout_data(rollout_id)
-            log_rollout_data(rollout_id, self.args)
+                self.get_rollout_data(rollout_id, local_storage)
+            log_rollout_data(rollout_id, self.args, local_storage)
             log_perf_data(rollout_id, self.args)
             Timer().start("train_wait")
             return
@@ -265,7 +269,7 @@ class MegatronTrainRayActor(TrainRayActor):
             with timer("data_preprocess"):
                 # For async train, we need to separate the data fetching and training.
                 if with_data_fetching:
-                    self.get_rollout_data(rollout_id)
+                    self.get_rollout_data(rollout_id, local_storage)
 
                 # Create data iterator for log_probs and train.
                 (
@@ -273,7 +277,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     log_probs_num_microbatches,
                     train_data_iterator,
                     train_num_microbatches,
-                ) = get_data_iterator(self.args, self.model)
+                ) = get_data_iterator(self.args, self.model, local_storage)
 
             if self.args.compute_advantages_and_returns:
                 if "ref" in self.weights:
@@ -283,12 +287,15 @@ class MegatronTrainRayActor(TrainRayActor):
                         log_probs_data_iterator,
                         log_probs_num_microbatches,
                         store_prefix="ref_",
+                        local_storage=local_storage,
                     )
 
                 self.compute_log_prob(
                     "old_actor" if self.args.keep_old_actor else "actor",
                     log_probs_data_iterator,
                     log_probs_num_microbatches,
+                    store_prefix="",
+                    local_storage=local_storage,
                 )
                 # when there is old actor, we need to update the model params to actor manually
                 if "old_actor" in self.weights:
@@ -296,12 +303,12 @@ class MegatronTrainRayActor(TrainRayActor):
 
                 # Calculate adv and returns. Need to performed before training (instead of on the fly),
                 # because we may need normalize the whole rollout.
-                compute_advantages_and_returns(self.args)
+                compute_advantages_and_returns(self.args, local_storage)
 
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args)
 
-            log_rollout_data(rollout_id, self.args)
+            log_rollout_data(rollout_id, self.args, local_storage)
 
             # Train
             with timer("actor_train"):
@@ -315,7 +322,6 @@ class MegatronTrainRayActor(TrainRayActor):
                 )
 
         log_perf_data(rollout_id, self.args)
-        clear_local_storage()
         Timer().start("train_wait")
 
     def eval(self, rollout_id):

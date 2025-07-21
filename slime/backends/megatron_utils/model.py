@@ -19,7 +19,6 @@ from megatron.training.training import get_model
 import wandb
 from slime.utils.memory_utils import clear_memory
 
-from ..utils.data import set_local_storage
 from .checkpoint import load_checkpoint, save_checkpoint
 from .data import get_batch
 from .loss import get_log_probs_and_entropy, loss_function
@@ -163,7 +162,7 @@ def disable_forward_pre_hook(model_chunks, param_sync=True):
 
 
 @torch.no_grad()
-def forward_only(args, model, data_iterator, num_microbatches, store_prefix=""):
+def forward_only(args, model, data_iterator, num_microbatches, store_prefix="", local_storage=None):
     """Only do the forward pass and calculate the logprob."""
 
     config = get_model_config(model[0])
@@ -250,7 +249,7 @@ def forward_only(args, model, data_iterator, num_microbatches, store_prefix=""):
                 for value, origin_index in zip(values, origin_indices):
                     origin_values[origin_index] = value
                 values = origin_values
-            set_local_storage(f"{store_prefix}{key}", values)
+            local_storage[f"{store_prefix}{key}"] = values
 
 
 def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, opt_param_scheduler, num_microbatches):
