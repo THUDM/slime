@@ -5,7 +5,6 @@ from contextlib import nullcontext
 from functools import partial
 
 import torch
-import wandb
 from megatron.core import mpu
 from megatron.core.distributed import DistributedDataParallel as DDP
 from megatron.core.distributed import DistributedDataParallelConfig, finalize_model_grads
@@ -17,10 +16,12 @@ from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
+import wandb
 from slime.utils.memory_utils import clear_memory
 
+from ..utils.data import set_local_storage
 from .checkpoint import load_checkpoint, save_checkpoint
-from .data import get_batch, set_local_storage
+from .data import get_batch
 from .loss import get_log_probs_and_entropy, loss_function
 from .models import get_model_provider_and_type
 

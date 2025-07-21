@@ -3,7 +3,7 @@ import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from .ppo_actor import RayTrainGroup
+from .actor_group import RayTrainGroup
 from .rollout import RolloutGroup
 
 

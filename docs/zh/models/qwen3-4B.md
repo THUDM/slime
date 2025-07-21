@@ -301,7 +301,7 @@ ray job submit ... \
 2. 使用 `--sglang-cuda-graph-bs`，即 sglang 原生的 `--cuda-graph-bs`, 增大 sglang 初始化的 cuda graph 数量，例如：
 
    ```bash
-   --sglang-cuda-graph-bs 1 24 8 $(seq 16 8 256)
+   --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
    ```
 
 ### 异步训练

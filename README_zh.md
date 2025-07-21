@@ -87,7 +87,7 @@ slime 不仅仅是一个 RL 框架，我们还支持了各种后训练流程。�
 
 #### HF → Megatron torch_dist ckpt
 
-使用 [mbridge](https://github.com/ISEEKYAN/mbridge.git) 转换：
+我们推荐使用 [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch) 进行转换。如果你目前在使用的模型不被 Pai-Megatron-Patch 支持，可以使用 [mbridge](https://github.com/ISEEKYAN/mbridge.git) 转换：
 
 ```bash
 cd slime/
@@ -95,8 +95,6 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     --hf-checkpoint /root/GLM-Z1-9B-0414 \
     --save /root/GLM-Z1-9B-0414_torch_dist
 ```
-
-在遇到 mbridge 暂时不支持的模型的时候，可以考虑使用 [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch) 进行转换。
 
 ⚠️  如果出现找不到 slime 的问题，请在 slime 目录下 `pip install -e .`。
 

@@ -1,5 +1,4 @@
 import math
-from typing import Any, Optional
 
 import numpy as np
 import ray
@@ -12,35 +11,10 @@ from megatron.core.utils import get_model_config
 
 import wandb
 from slime.utils.flops_utils import calculate_fwd_flops
-from slime.utils.memory_utils import clear_memory
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.timer import Timer
 
-LOCAL_STORAGE = {}
-LOCAL_METADATA = {}
-
-
-def set_local_storage(key: str, value: Any):
-    LOCAL_STORAGE[key] = value
-
-
-def get_local_storage(key: Optional[str] = None):
-    if key is None:
-        return LOCAL_STORAGE
-    return LOCAL_STORAGE.get(key, None)
-
-
-def clear_local_storage():
-    LOCAL_STORAGE.clear()
-    clear_memory()
-
-
-def set_metadata(key: str, value: Any):
-    LOCAL_METADATA[key] = value
-
-
-def get_metadata(key: Optional[str] = None):
-    return LOCAL_METADATA.get(key, None)
+from ..utils.data import LOCAL_STORAGE, DataIterator, get_local_storage, get_metadata, get_minimum_num_micro_batch_size
 
 
 def get_batch(data_iterator, keys):
@@ -103,63 +77,6 @@ def get_batch(data_iterator, keys):
     return batch
 
 
-class DataIterator:
-    def __init__(
-        self,
-        micro_batch_size: Optional[int] = None,
-        micro_batch_indices: Optional[list[list[int]]] = None,
-    ):
-        self.micro_batch_size = micro_batch_size
-        self.micro_batch_indices = micro_batch_indices
-        assert micro_batch_size is None or micro_batch_indices is None
-        self.offset = 0
-
-    def get_next(self, keys):
-        batch = {}
-        for key in keys:
-            vals = get_local_storage(key)
-            if vals is None:
-                batch[key] = None
-            else:
-                if self.micro_batch_indices is not None:
-                    indices = self.micro_batch_indices[self.offset]
-                    batch[key] = [vals[i] for i in indices]
-                else:
-                    assert self.offset + self.micro_batch_size <= len(
-                        vals
-                    ), f"offset: {self.offset}, micro_batch_size: {self.micro_batch_size}, len(vals): {len(vals)}"
-                    batch[key] = vals[self.offset : self.offset + self.micro_batch_size]
-
-        if self.micro_batch_indices is not None:
-            self.offset += 1
-        else:
-            self.offset += self.micro_batch_size
-        return batch
-
-    def reset(self):
-        self.offset = 0
-        return self
-
-
-def ceildiv(a, b):
-    return -(-a // b)
-
-
-def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu):
-    # use first fit to get the number of micro batches
-    max_tokens_per_gpu *= mpu.get_context_parallel_world_size()
-    batches = []
-    for l in total_lengths:
-        for i in range(len(batches)):
-            if batches[i] + l <= max_tokens_per_gpu:
-                batches[i] += l
-                break
-        else:
-            batches.append(l)
-
-    return len(batches)
-
-
 def get_data_iterator(args, model):
     num_local_samples = (
         args.rollout_batch_size
@@ -187,14 +104,17 @@ def get_data_iterator(args, model):
     else:
         assert args.max_tokens_per_gpu is not None
         # calculate the number of mirobatches for each step
+        cp_size = mpu.get_context_parallel_world_size()
         samples = LOCAL_STORAGE["total_lengths"]
         assert len(samples) == num_local_samples
         num_microbatches = []
         for i in range(num_steps_per_rollout):
             start, end = i * num_local_gbs, (i + 1) * num_local_gbs
-            num_microbatches.append(get_minimum_num_micro_batch_size(samples[start:end], args.max_tokens_per_gpu))
+            num_microbatches.append(
+                get_minimum_num_micro_batch_size(samples[start:end], args.max_tokens_per_gpu, cp_size)
+            )
 
-        num_microbatches.append(get_minimum_num_micro_batch_size(samples, args.max_tokens_per_gpu))
+        num_microbatches.append(get_minimum_num_micro_batch_size(samples, args.max_tokens_per_gpu, cp_size))
 
         num_microbatches = torch.tensor(num_microbatches, dtype=torch.int, device=torch.cuda.current_device())
         dist.all_reduce(num_microbatches, op=dist.ReduceOp.MAX, group=mpu.get_data_parallel_group())
@@ -245,101 +165,6 @@ def get_data_iterator(args, model):
         train_data_iterator,
         train_num_microbatches,
     )
-
-
-def process_rollout_data(rollout_id, args, data_buffer):
-    rank = dist.get_rank()
-    dp_rank = mpu.get_data_parallel_rank(with_context_parallel=False)
-    dp_size = mpu.get_data_parallel_world_size(with_context_parallel=False)
-
-    if rank == 0:
-        data = ray.get(data_buffer.get_data.remote(rollout_id))
-        dist.broadcast_object_list([data], src=0)
-    else:
-        data = [None]
-        dist.broadcast_object_list(data, src=0)
-        data = data[0]
-
-    # save the unprocessed reward for logging
-    rewards = data["rewards"]
-    if "raw_reward" in data:
-        raw_rewards = data["raw_reward"]
-    else:
-        raw_rewards = rewards
-    set_local_storage("raw_reward", raw_rewards)
-        
-    if args.advantage_estimator in ["grpo", "reinforce_plus_plus_baseline"] and args.rewards_normalization:
-        # group norm
-        rewards = torch.tensor([r for r in rewards], dtype=torch.float)
-        rewards = rewards.reshape(-1, args.n_samples_per_prompt)
-        mean = rewards.mean(dim=-1, keepdim=True)
-        rewards = rewards - mean
-        
-        if args.advantage_estimator == "grpo" and args.grpo_std_normalization:
-            std = rewards.std(dim=-1, keepdim=True)
-            rewards = rewards / (std + 1e-6)
-        
-        rewards = rewards.flatten().tolist()
-        data["rewards"] = rewards
-
-    total_lengths = [len(t) for t in data["tokens"]]
-    data["total_lengths"] = total_lengths
-
-    # save the seqlen of the whole rollout batch
-    Timer().seq_lens = total_lengths
-
-    if args.balance_data:
-        # Group-aware partitioning to keep each group together
-        n_samples_per_prompt = getattr(args, "n_samples_per_prompt", 1)
-        # Calculate group-level lengths (sum of lengths for each group)
-        num_groups = len(total_lengths) // n_samples_per_prompt
-        group_lengths = []
-        for i in range(num_groups):
-            start_idx = i * n_samples_per_prompt
-            end_idx = start_idx + n_samples_per_prompt
-            group_total_length = sum(total_lengths[start_idx:end_idx])
-            group_lengths.append(group_total_length)
-
-        # Get partitions at group level
-        group_partitions = get_seqlen_balanced_partitions(group_lengths, dp_size, equal_size=True)
-
-        # Expand group partitions to trajectory level
-        parititions = []
-        for dp_rank_groups in group_partitions:
-            trajectory_indices = []
-            for group_idx in dp_rank_groups:
-                # Add all trajectories in this group
-                start_idx = group_idx * n_samples_per_prompt
-                end_idx = start_idx + n_samples_per_prompt
-                trajectory_indices.extend(range(start_idx, end_idx))
-            parititions.append(trajectory_indices)
-
-    def get_partition(val):
-        if args.balance_data:
-            return [val[i] for i in parititions[dp_rank]]
-        else:
-            return val[dp_rank::dp_size]
-
-    for key in [
-        "tokens",
-        "total_lengths",
-        "response_lengths",
-        "rewards",
-        "truncated",
-        "loss_masks",
-        "round_number",
-    ]:
-        if key not in data:
-            continue
-        val = get_partition(data[key])
-        # move tokens to GPU in advance
-        if key == "tokens":
-            val = [torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device()) for t in val]
-        elif key == "loss_masks":
-            val = [torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in val]
-
-        # save the data to local storage
-        set_local_storage(key, val)
 
 
 def log_rollout_data(rollout_id, args):
@@ -563,27 +388,19 @@ def log_perf_data(rollout_id, args):
     ):
         log_dict = {f"perf/{key}_time": val for key, val in timer_instance.log_dict().items()}
 
-        # Calculate TFlops metrics with proper error handling
         if "perf/actor_train_time" in log_dict:
-            try:
-                world_size = dist.get_world_size()
-                total_fwd_flops = calculate_fwd_flops(seqlens=timer_instance.seq_lens, args=args) / world_size / 1e12
+            world_size = dist.get_world_size()
+            total_fwd_flops = calculate_fwd_flops(seqlens=timer_instance.seq_lens, args=args) / world_size / 1e12
 
-                # Only calculate log_probs_tflops if the timing exists
-                if "perf/log_probs_time" in log_dict and log_dict["perf/log_probs_time"] > 0:
-                    log_dict["perf/log_probs_tflops"] = total_fwd_flops / log_dict["perf/log_probs_time"]
+            if "perf/log_probs_time" in log_dict:
+                log_dict["perf/log_probs_tflops"] = total_fwd_flops / log_dict["perf/log_probs_time"]
 
-                # Only calculate ref_log_probs_tflops if the timing exists
-                if "perf/ref_log_probs_time" in log_dict and log_dict["perf/ref_log_probs_time"] > 0:
-                    log_dict["perf/ref_log_probs_tflops"] = total_fwd_flops / log_dict["perf/ref_log_probs_time"]
+            if "perf/ref_log_probs_time" in log_dict:
+                log_dict["perf/ref_log_probs_tflops"] = total_fwd_flops / log_dict["perf/ref_log_probs_time"]
 
-                # Calculate actor_train_tflops with safety check
-                if log_dict["perf/actor_train_time"] > 0:
-                    log_dict["perf/actor_train_tflops"] = 3 * total_fwd_flops / log_dict["perf/actor_train_time"]
-            except Exception as e:
-                print(f"Warning: Error calculating TFlops metrics: {e}")
+            if log_dict["perf/actor_train_time"] > 0:
+                log_dict["perf/actor_train_tflops"] = 3 * total_fwd_flops / log_dict["perf/actor_train_time"]
 
-        # Calculate wait time ratio with proper checks
         if "perf/train_wait_time" in log_dict and "perf/train_time" in log_dict:
             total_time = log_dict["perf/train_wait_time"] + log_dict["perf/train_time"]
             if total_time > 0:

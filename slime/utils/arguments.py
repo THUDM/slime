@@ -1,9 +1,7 @@
 import os
+
 from transformers import AutoConfig
 
-from slime.backends.megatron_utils import _vocab_size_with_padding
-from slime.backends.megatron_utils import parse_args as megatron_parse_args
-from slime.backends.megatron_utils import validate_args as megatron_validate_args
 from slime.backends.sglang_utils.arguments import add_sglang_arguments
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 
@@ -802,6 +800,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
 
 def parse_args(add_custom_arguments=None):
+    from slime.backends.megatron_utils import _vocab_size_with_padding
+    from slime.backends.megatron_utils import parse_args as megatron_parse_args
+    from slime.backends.megatron_utils import validate_args as megatron_validate_args
+
     add_slime_arguments = get_slime_extra_args_provider(add_custom_arguments)
     args = megatron_parse_args(extra_args_provider=add_slime_arguments)
 

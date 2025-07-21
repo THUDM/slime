@@ -85,7 +85,9 @@ Since slime uses Megatron, and Megatron does not support loading Hugging Face ch
 
 #### HF → Megatron torch\_dist ckpt
 
-Use [mbridge](https://github.com/ISEEKYAN/mbridge.git) for conversion:
+We recommend using [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch) for mcore checkpoint conversion.
+
+If the mode you are using are not supported by Pai-Megatron-Patch, you could use [mbridge](https://github.com/ISEEKYAN/mbridge.git) for conversion:
 
 ```bash
 cd slime/
@@ -93,8 +95,6 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     --hf-checkpoint /root/GLM-Z1-9B-0414 \
     --save /root/GLM-Z1-9B-0414_torch_dist
 ```
-
-When encountering a model that is not temporarily supported by mbridge, you can consider using [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch) for conversion.
 
 ⚠️ If you encounter an issue where slime cannot be found, please run `pip install -e .` in the slime directory.
 
@@ -194,7 +194,7 @@ For complete usage instructions, please refer to the [Usage Documentation](docs/
 
 ## Hardware Support
 - Nvidia: refer to this repo README
-- AMD: refer to the [toturial](docs/en/amd_toturial.md)
+- AMD: refer to the [tutorial](docs/en/amd_tutorial.md)
 
 ## FAQ & Acknowledgements
 

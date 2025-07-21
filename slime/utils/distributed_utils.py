@@ -12,7 +12,6 @@ from torch.distributed.distributed_c10d import (
     default_pg_timeout,
     rendezvous,
 )
-from megatron.core import mpu
 
 
 # Copy from pytorch to allow creating multiple main groups.
@@ -73,7 +72,9 @@ def init_process_group(
     return pg
 
 
-def distributed_masked_whiten(values: torch.Tensor, mask: torch.Tensor, shift_mean: bool = True, epsilon: float = 1e-8):
+def distributed_masked_whiten(
+    values: torch.Tensor, mask: torch.Tensor, shift_mean: bool = True, epsilon: float = 1e-8
+):
     """
     Performs whitening on a tensor using global statistics from all participating GPUs.
 
@@ -113,16 +114,16 @@ def distributed_masked_whiten(values: torch.Tensor, mask: torch.Tensor, shift_me
     global_mean = global_sum / global_mask_sum
     global_mean_sq = global_sum_sq / global_mask_sum
     global_var = global_mean_sq - global_mean**2
-    
+
     # Bessel's correction for unbiased estimate
     if global_mask_sum.item() >= 2:
         bessel_correction = global_mask_sum / (global_mask_sum - 1)
         global_var = global_var * bessel_correction
-    
+
     # Whiten local data using global stats
     whitened_values = (values - global_mean) * torch.rsqrt(global_var + epsilon)
 
     if not shift_mean:
         whitened_values += global_mean
-    
+
     return whitened_values

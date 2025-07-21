@@ -4,6 +4,7 @@ import torch
 from megatron.core import mpu
 import torch.distributed as dist
 
+from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
 from slime.utils.ppo_utils import (
     compute_approx_kl,
@@ -11,13 +12,12 @@ from slime.utils.ppo_utils import (
     compute_log_probs,
     compute_policy_loss,
     get_grpo_returns,
-    get_reinforce_plus_plus_returns,
     get_reinforce_plus_plus_baseline_advantages,
+    get_reinforce_plus_plus_returns,
 )
-from slime.utils.distributed_utils import distributed_masked_whiten
 
+from ..utils.data import get_local_storage, set_local_storage
 from .cp_utils import get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
-from .data import get_local_storage, set_local_storage
 
 
 def calculate_log_probs_and_entropy(logits, tokens, with_entropy: bool = False):

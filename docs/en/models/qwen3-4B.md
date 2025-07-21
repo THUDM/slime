@@ -301,7 +301,7 @@ In this case, 2 GPUs will be allocated for training, and 6 GPUs will be allocate
 2.  Use `--sglang-cuda-graph-bs` (which corresponds to sglang's native `--cuda-graph-bs` argument) to increase the number of CUDA graphs initialized by sglang. For example:
 
     ```bash
-    --sglang-cuda-graph-bs 1 24 8 $(seq 16 8 256)
+    --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
     ```
 
 ### Asynchronous Training

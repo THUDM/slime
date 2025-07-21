@@ -113,7 +113,9 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 async def generate_and_rm(args, sample: Sample, sampling_params: dict, evaluation=False) -> Sample:
     # For samples with existing response, check if they're complete
     if sample.status == Sample.Status.COMPLETED or sample.status == Sample.Status.TRUNCATED:
-        assert sample.response and sample.reward is not None
+        assert sample.response is not None
+        if not args.group_rm:
+            assert sample.reward is not None
         return sample
 
     state = GenerateState(args)

@@ -1,17 +1,15 @@
 import os
 import shutil
-import inspect
 
 import torch
-import mbridge
 from mbridge import AutoBridge
-
-import slime_plugins.mbridge
 from megatron.core import parallel_state as mpu
 from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
 from megatron.training.arguments import parse_args
 from megatron.training.checkpointing import get_checkpoint_name, get_checkpoint_tracker_filename, save_checkpoint
 from megatron.training.global_vars import set_args
+
+import slime_plugins.mbridge  # noqa: F401
 
 
 def init_distributed():
@@ -41,7 +39,6 @@ def main():
     args = parse_args(add_convertion_args)
     args.use_dist_ckpt = args.ckpt_format != "torch"
     set_args(args)
-
 
     # Initialize distributed environment
     init_distributed()
