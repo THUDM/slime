@@ -1,6 +1,6 @@
 import asyncio
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 import aiohttp
 import requests
@@ -130,57 +130,39 @@ def log_raw_info(args, all_meta_info, rollout_id):
                 print(f"no filter rollout log {rollout_id}: {final_meta_info}")
 
 
-async def get_rollout_data(
-    api_base_url: str, num: Optional[int] = None, timeout: float = 100.0
-) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+async def get_rollout_data(api_base_url: str) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+    start_time = time.time()
+    async with aiohttp.ClientSession() as session:
+        while True:
+            async with session.post(
+                f"{api_base_url}/get_rollout_data", json={}, timeout=aiohttp.ClientTimeout(total=120)
+            ) as response:
+                response.raise_for_status()
+                resp_json = await response.json()
+                if resp_json["success"]:
+                    break
+            await asyncio.sleep(3)
+            if time.time() - start_time > 30:
+                print("rollout data is not ready, have been waiting for 30 seconds")
+                # Reset start_time to continue waiting or handle timeout differently
+                start_time = time.time()  # Or raise an exception, or return empty list
 
-    url = f"{api_base_url}/get_rollout_data"
-    payload = {}
+        data = resp_json["data"]
+        meta_info = {}
+        if isinstance(data, list):
+            if "data" in data[0]:
+                data = [item["data"] for item in data]
+        elif isinstance(data, dict):
+            if "data" in data:
+                meta_info = data["meta_info"]
+                data = data["data"]
+        print(f"Meta info: {meta_info}")
+        required_keys = {"uid", "instance_id", "messages", "reward", "extra_info"}
+        for item in data:
+            if not required_keys.issubset(item.keys()):
+                raise ValueError(f"Missing required keys in response item: {item}")
 
-    if num is not None:
-        payload["batch_size"] = num
-    print(url)
-    try:
-        start_time = time.time()
-        async with aiohttp.ClientSession() as session:
-            while True:
-                async with session.post(url, json=payload, timeout=aiohttp.ClientTimeout(total=timeout)) as response:
-                    response.raise_for_status()
-                    resp_json = await response.json()
-                    if resp_json["success"]:
-                        break
-                await asyncio.sleep(3)
-                if time.time() - start_time > 30:
-                    print("rollout data is not ready, have been waiting for 30 seconds")
-                    # Reset start_time to continue waiting or handle timeout differently
-                    start_time = time.time()  # Or raise an exception, or return empty list
-
-            data = resp_json["data"]
-            meta_info = {}
-            if type(data) is list:
-                if "data" in data:
-                    data = [item["data"] for item in data]
-            elif type(data) is dict:
-                if "data" in data:
-                    meta_info = data["meta_info"]
-                    data = data["data"]
-            print(f"Meta info: {meta_info}")
-            required_keys = {"uid", "instance_id", "messages", "reward", "extra_info"}
-            for item in data:
-                if not required_keys.issubset(item.keys()):
-                    raise ValueError(f"Missing required keys in response item: {item}")
-
-            return data, meta_info
-
-    except aiohttp.ClientError as e:
-        print(f"[ERROR] Request failed: {e}")
-        raise
-    except ValueError as ve:
-        # print(f"[ERROR] Invalid data format: {ve}")
-        raise
-    except asyncio.TimeoutError:
-        print(f"[ERROR] Request timed out after {timeout} seconds")
-        raise
+        return data, meta_info
 
 
 def start_rollout(api_base_url: str, args, metadata):

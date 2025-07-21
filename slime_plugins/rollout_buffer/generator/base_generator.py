@@ -175,10 +175,7 @@ class BaseGenerator:
             self.client = OpenAI(api_key="test", base_url=remote_engine_url)
 
     def send_data_to_buffer(self, data):
-        if "/buffer/write" not in self.remote_buffer_url:
-            remote_buffer_url = self.remote_buffer_url.rstrip("/") + "/buffer/write"
-        else:
-            remote_buffer_url = self.remote_buffer_url
+        remote_buffer_url = self.remote_buffer_url.rstrip("/") + "/buffer/write"
 
         for _ in range(2):
             try:
@@ -200,13 +197,11 @@ class BaseGenerator:
             items = []
             skipped_count = 0
             with open(input_file, "r") as f:
-                print("read files")
                 for i, line in enumerate(f):
                     item = json.loads(line)
                     if "instance_id" not in item:
                         item["instance_id"] = i
                     items.append(item)
-            print("read files done: ", len(items))
             random.shuffle(items)
 
             for _ in range(self.num_repeats):
@@ -254,15 +249,12 @@ class BaseGenerator:
         process.start()
 
         progress_bar = tqdm()
-        print("----- GOGOGOGOGOGOGO !!!!!")
-
         num_finished = 0
         while num_finished < self.num_process:
             item = done_queue.get()
             if item == "COMPLETE":
                 num_finished += 1
             else:
-                # print(f'save {num_save} examples to {output_file}', end='\r')
                 assert "reward" in item, f"reward not in item: {item}"
                 assert "instance_id" in item, f"instance_id not in item: {item}"
                 self.send_data_to_buffer(item)
