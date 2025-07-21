@@ -12,6 +12,7 @@ import requests
 from openai import OpenAI
 from tqdm import tqdm
 from slime.rollout.rm_hub import get_deepscaler_rule_based_reward
+from slime.rollout.rm_hub import get_deepscaler_rule_based_reward
 
 TASK_TYPE = "math"
 
