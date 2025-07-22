@@ -78,6 +78,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         sampling_params["max_new_tokens"] >= 0
     ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
     if sampling_params["max_new_tokens"] == 0:
+        sample.status = Sample.Status.TRUNCATED
         return sample
 
     # Handle partial rollout samples: continue generation from existing response
@@ -90,15 +91,11 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
     output = await post(url, payload, use_http2=args.use_http2)
     sample.response += output["text"]
-
-    if output["meta_info"]["finish_reason"]["type"] == "abort":
-        sample.status = Sample.Status.ABORTED
-        return sample
-
     prompt_tokens_ids = state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
     response_token_ids = state.tokenizer(sample.response, add_special_tokens=False)["input_ids"]
     sample.tokens = prompt_tokens_ids + response_token_ids
     sample.response_length = len(response_token_ids)
+
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":
             sample.status = Sample.Status.TRUNCATED
