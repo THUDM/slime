@@ -39,6 +39,7 @@ MODEL_ARGS=(
     --mscale 1.0
     --mscale-all-dim 1.0
     --attention-softmax-in-fp32
+    --no-rope-fusion
 
     # moe
     --num-experts 256

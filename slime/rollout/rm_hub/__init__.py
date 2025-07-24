@@ -35,7 +35,7 @@ async def async_rm(args, sample: Sample, **kwargs):
     response = sample.response
     label = sample.label
     if rm_type.startswith("boxed_"):
-        response = extract_boxed_answer(response)
+        response = extract_boxed_answer(response) or ""
         rm_type = rm_type[len("boxed_") :]
 
     # This function is intended for remote or time-consuming reward model evaluation.

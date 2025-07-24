@@ -1,10 +1,16 @@
 import re
 import torch
+import torch.nn.functional as F
+
 from .deepseekv3 import convert_deepseekv3_to_hf
 from .glm4 import convert_glm4_to_hf
 from .llama import convert_llama_to_hf
 from .qwen2 import convert_qwen2_to_hf
 from .qwen3moe import convert_qwen3moe_to_hf
+
+
+def ceildiv(a, b):
+    return -(-a // b)
 
 
 def quantize_param(name, weight, weight_block_size):
@@ -15,15 +21,30 @@ def quantize_param(name, weight, weight_block_size):
         # per block quant
         block_n, block_k = weight_block_size[0], weight_block_size[1]
 
-        n_tiles = weight.shape[0] // block_n
-        k_tiles = weight.shape[1] // block_k
+        shape_0, shape_1 = weight.shape
 
-        qweight = weight.reshape(n_tiles, block_n, k_tiles, block_k)
+        n_tiles = ceildiv(shape_0, block_n)
+        k_tiles = ceildiv(shape_1, block_k)
+
+        q_weight = F.pad(
+            weight,
+            (0, k_tiles * block_k - shape_1, 0, n_tiles * block_n - shape_0),
+            mode="constant",
+            value=0.0,
+        )
+
+        qweight = q_weight.reshape(n_tiles, block_n, k_tiles, block_k)
         block_max = torch.max(torch.abs(qweight), dim=1, keepdim=True)[0]
         block_max = torch.max(block_max, dim=3, keepdim=True)[0]
 
         scale = block_max.to(torch.float32) / FP8_MIN
-        qweight = (qweight / scale).clamp(min=FP8_MIN, max=FP8_MAX).reshape(weight.shape).to(torch.float8_e4m3fn)
+        qweight = (
+            (qweight / scale)
+            .clamp(min=FP8_MIN, max=FP8_MAX)
+            .reshape((n_tiles * block_n, k_tiles * block_k))
+            .to(torch.float8_e4m3fn)
+        )
+        qweight = qweight[:shape_0, :shape_1]
         scale = scale.squeeze()
         scale_name = name.replace(".weight", ".weight_scale_inv")
     else:
@@ -89,6 +110,12 @@ def quantize_params(args, megatron_name, converted_named_params, quantization_co
         "self_attention.linear_qkv.weight",
         "mlp.linear_fc1.weight",
         "mlp.linear_fc2.weight",
+        # mla
+        "self_attention.linear_q_proj.weight",
+        "self_attention.linear_q_down_proj.weight",
+        "self_attention.linear_q_up_proj.weight",
+        "self_attention.linear_kv_down_proj.weight",
+        "self_attention.linear_kv_up_proj.weight",
     ]:
         quantize_named_params = []
         for converted_name, param in converted_named_params:
@@ -100,6 +127,9 @@ def quantize_params(args, megatron_name, converted_named_params, quantization_co
     return converted_named_params
 
 
+cached_tensors = {}
+
+
 def convert_to_hf(args, model_name, name, param, quantization_config=None):
     if "glm4" in model_name:
         converted_named_tensors = convert_glm4_to_hf(args, name, param)
@@ -109,6 +139,34 @@ def convert_to_hf(args, model_name, name, param, quantization_config=None):
         converted_named_tensors = convert_qwen2_to_hf(args, name, param)
     elif "deepseekv3" in model_name:
         converted_named_tensors = convert_deepseekv3_to_hf(args, name, param)
+        # to compatible with sglang implementation
+        if args.q_lora_rank is not None:
+            old_converted_named_tensors = converted_named_tensors
+            converted_named_tensors = []
+            for converted_name, converted_param in old_converted_named_tensors:
+                if "q_a_proj" in converted_name:
+                    pair_name = converted_name.replace("q_a_proj", "kv_a_proj_with_mqa")
+                    if pair_name in cached_tensors:
+                        converted_named_tensors += [
+                            (converted_name, converted_param),
+                            (pair_name, cached_tensors[pair_name]),
+                        ]
+                        del cached_tensors[pair_name]
+                    else:
+                        cached_tensors[converted_name] = converted_param
+                elif "kv_a_proj_with_mqa" in converted_name:
+                    pair_name = converted_name.replace("kv_a_proj_with_mqa", "q_a_proj")
+                    if pair_name in cached_tensors:
+                        converted_named_tensors += [
+                            (converted_name, converted_param),
+                            (pair_name, cached_tensors[pair_name]),
+                        ]
+                        del cached_tensors[pair_name]
+                    else:
+                        cached_tensors[converted_name] = converted_param
+                else:
+                    converted_named_tensors.append((converted_name, converted_param))
+
     elif "llama" in model_name:
         converted_named_tensors = convert_llama_to_hf(args, name, param)
     else:

@@ -72,6 +72,12 @@ def convert_deepseekv3_to_hf(args, name, param):
             return [(f"model.layers.{layer_idx}.self_attn.o_proj.weight", param)]
         elif rest == "self_attention.linear_q_proj.weight":
             return [(f"model.layers.{layer_idx}.self_attn.q_proj.weight", param)]
+        elif rest == "self_attention.linear_q_down_proj.weight":
+            return [(f"model.layers.{layer_idx}.self_attn.q_a_proj.weight", param)]
+        elif rest == "self_attention.linear_q_up_proj.layer_norm_weight":
+            return [(f"model.layers.{layer_idx}.self_attn.q_a_layernorm.weight", param)]
+        elif rest == "self_attention.linear_q_up_proj.weight":
+            return [(f"model.layers.{layer_idx}.self_attn.q_b_proj.weight", param)]
         elif rest == "self_attention.linear_qkv.bias":
             param = param.view(args.num_query_groups, -1)
             q_bias, k_bias, v_bias = torch.split(

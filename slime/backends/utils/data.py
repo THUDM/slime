@@ -48,10 +48,6 @@ class DataIterator:
         return self
 
 
-def ceildiv(a, b):
-    return -(-a // b)
-
-
 def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu, cp_size):
     # use first fit to get the number of micro batches
     max_tokens_per_gpu *= cp_size
