@@ -24,10 +24,7 @@ from .data import get_batch
 from .loss import get_log_probs_and_entropy, loss_function
 from .models import get_model_provider_and_type
 
-if torch.version.hip:
-    from vllm.device_allocator.cumem import CuMemAllocator
-else:
-    from cumem_allocator import CuMemAllocator
+from torch_memory_saver import torch_memory_saver
 
 
 def get_optimizer_param_scheduler(args, optimizer):
@@ -81,8 +78,7 @@ def setup_model_and_optimizer(
 
     model = get_model(model_provider_func, model_type, wrap_with_ddp=False)
 
-    allocator = CuMemAllocator.get_instance() if args.colocate else None
-    with allocator.use_memory_pool(tag="model") if args.colocate else nullcontext():
+    with torch_memory_saver.region(tag="model", enable_cpu_backup=True) if args.offload else nullcontext():
         config = get_model_config(model[0])
 
         kwargs = {}
