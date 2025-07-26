@@ -43,7 +43,7 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 
 ```bash
 cd /root/slime
-bash script/run-qwen3-4B.sh
+bash scripts/run-qwen3-4B.sh
 ```
 
 ### 参数简介

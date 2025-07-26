@@ -13,7 +13,7 @@ The environment setup, model download, data, and checkpoint conversion are the s
 ```bash
 git clone --recurse-submodules https://github.com/alibaba/Pai-Megatron-Patch.git
 cd Pai-Megatron-Patch/toolkits/distributed_checkpoints_convertor
-bash scripts/qwen3/run_8xH20.sh A3B /root/Qwen3-30B-A3B /root/Qwen3-30B-A3B_torch_dist_2 false true bf16
+bash scripts/qwen3/run_8xH20.sh A3B /root/Qwen3-30B-A3B /root/Qwen3-30B-A3B_torch_dist false true bf16
 ```
 
 [Full instructions](https://github.com/alibaba/Pai-Megatron-Patch/blob/main/examples/qwen3/README.md)
