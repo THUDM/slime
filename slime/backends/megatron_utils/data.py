@@ -106,7 +106,7 @@ def get_data_iterator(args, model, rollout_data):
     if vpp_size is None:
         vpp_size = 1
 
-    def _generate_data_iterator(micro_batch_size, micro_batch_indices=None):
+    def _generate_data_iterator(rollout_data, micro_batch_size, micro_batch_indices=None):
         data_iterator = []
         for _ in range(vpp_size):
             data_iterator.append(DataIterator(rollout_data, micro_batch_size, micro_batch_indices))
@@ -116,8 +116,8 @@ def get_data_iterator(args, model, rollout_data):
         log_probs_num_microbatches = num_local_samples // args.ref_micro_batch_size
         train_num_microbatches = [num_local_gbs // args.micro_batch_size for _ in range(num_steps_per_rollout)]
 
-        log_probs_data_iterator = _generate_data_iterator(args.ref_micro_batch_size)
-        train_data_iterator = _generate_data_iterator(args.micro_batch_size)
+        log_probs_data_iterator = _generate_data_iterator(rollout_data, args.ref_micro_batch_size)
+        train_data_iterator = _generate_data_iterator(rollout_data, args.micro_batch_size)
     else:
         assert args.max_tokens_per_gpu is not None
         # calculate the number of mirobatches for each step
@@ -155,7 +155,7 @@ def get_data_iterator(args, model, rollout_data):
         # get log_probs data iterator
         partitions = get_seqlen_balanced_partitions(samples, log_probs_num_microbatches, equal_size=False)
 
-        log_probs_data_iterator = _generate_data_iterator(None, partitions)
+        log_probs_data_iterator = _generate_data_iterator(rollout_data, None, partitions)
 
         # balance the number of mirobatches across steps
         micro_batch_indices = []
@@ -170,7 +170,7 @@ def get_data_iterator(args, model, rollout_data):
 
         assert len(set(sum(micro_batch_indices, []))) == num_local_samples
 
-        train_data_iterator = _generate_data_iterator(None, micro_batch_indices)
+        train_data_iterator = _generate_data_iterator(rollout_data, None, micro_batch_indices)
 
     return (
         log_probs_data_iterator,
