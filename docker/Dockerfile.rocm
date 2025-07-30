@@ -226,6 +226,7 @@ RUN pip uninstall -y megatron-core && \
 
 
 
+
 #########################################
 ###Add torch_memory_saver################
 #########################################
@@ -235,7 +236,8 @@ ENV CFLAGS="-D__HIP_PLATFORM_AMD__"
 ENV CXXFLAGS="-D__HIP_PLATFORM_AMD__"
 # Install torch_memory_saver
 # RUN pip install git+https://github.com/YangWang92/torch_memory_saver_numa.git --no-deps
-RUN pip install "git+https://github.com/YangWang92/torch_memory_saver_numa.git@numa"
+# RUN pip install "git+https://github.com/YangWang92/torch_memory_saver_numa.git@numa"
+RUN pip install "git+https://github.com/yushengsu-thu/torch_memory_saver.git"
 # pip install git+https://github.com/fzyzcjy/torch_memory_saver.git --no-deps
 #########################################
 #########################################
@@ -246,13 +248,47 @@ RUN pip install "git+https://github.com/YangWang92/torch_memory_saver_numa.git@n
 ########################################
 ######Install ray#######################
 ########################################
-# need to add this patch: https://github.com/ray-project/ray/pull/53531/files
+# need to add this patch manually: https://github.com/ray-project/ray/pull/53531/files
 RUN pip uninstall ray -y
-RUN pip install "ray[data,train,tune,serve]>=2.47.0" 
+# RUN pip install "ray[data,train,tune,serve]>=2.47.0" 
+RUN pip install "ray[data,train,tune,serve]==2.47.1" 
 ########################################
 ########################################
 ########################################
 
+
+### Need to verify whether numerical/convergence issue
+#######################################
+################apex###################
+#######################################
+WORKDIR /workspace/
+RUN pip uninstall -y apex && \
+    git clone https://github.com/ROCm/apex.git && \
+    cd apex && \
+    python setup.py install && \
+    cd /workspace/ 
+#######################################
+#######################################
+#######################################
+
+
+########################################
+############ mbridge####################
+########################################
+RUN pip install git+https://github.com/ISEEKYAN/mbridge.git --no-deps
+########################################
+########################################
+########################################
+
+########################################
+########slime agent framewrok need######
+########################################
+RUN pip install pydra_config==0.0.15
+RUN pip install together
+RUN pip install google-generativeai
+########################################
+########################################
+########################################
 
 
 WORKDIR /workspace/
