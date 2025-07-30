@@ -3,61 +3,116 @@ import shutil
 
 import torch
 from mbridge import AutoBridge
-from megatron.core import parallel_state as mpu
-from megatron.core.tensor_parallel.random import model_parallel_cuda_manual_seed
 from megatron.training.arguments import parse_args
 from megatron.training.checkpointing import get_checkpoint_name, get_checkpoint_tracker_filename, save_checkpoint
-from megatron.training.global_vars import set_args
+import torch.distributed as dist
+from slime.backends.megatron_utils.model_provider import get_model_provider_func
+from megatron.core.enums import ModelType
+from megatron.training.arguments import parse_args, validate_args
+from megatron.training.tokenizer.tokenizer import _vocab_size_with_padding
+from slime.backends.megatron_utils.initialize import init
+from megatron.training.checkpointing import save_checkpoint
+from megatron.training.training import get_model
 
 import slime_plugins.mbridge  # noqa: F401
-
-
-def init_distributed():
-    """Initialize distributed environment"""
-    os.environ["RANK"] = "0"
-    os.environ["WORLD_SIZE"] = "1"
-    os.environ["MASTER_ADDR"] = "localhost"
-    os.environ["MASTER_PORT"] = "12355"
-    torch.distributed.init_process_group("nccl")
-    mpu.initialize_model_parallel(
-        tensor_model_parallel_size=1,
-        virtual_pipeline_model_parallel_size=None,
-        context_parallel_size=1,
-        expert_model_parallel_size=1,
-    )
-    model_parallel_cuda_manual_seed(0)
 
 
 def add_convertion_args(parser):
     """Add conversion arguments to the parser"""
     parser.add_argument("--hf-checkpoint", type=str, required=True, help="HuggingFace model path")
+    parser.add_argument("--padded-vocab-size", type=int, default=None)
     return parser
 
 
-def main():
-    # Parse command line arguments
+def get_args():
     args = parse_args(add_convertion_args)
-    args.use_dist_ckpt = args.ckpt_format != "torch"
-    set_args(args)
+    # always use zero optimizer
+    args.use_distributed_optimizer = True
+    # TODO: maybe change this after megatron has good fp8 support
+    args.bf16 = True
+    # placeholders
+    args.seq_length = 4096
+    args.max_position_embeddings = args.seq_length
 
-    # Initialize distributed environment
-    init_distributed()
+    if args.vocab_size and not args.padded_vocab_size:
+        args.padded_vocab_size = _vocab_size_with_padding(args.vocab_size, args)
+
+    if not args.tokenizer_model and not args.tokenizer_type:
+        print(f"--tokenizer-model not set, use --hf-checkpoint as tokenizer model.")
+        args.tokenizer_model = args.hf_checkpoint
+        args.tokenizer_type = "HuggingFaceTokenizer"
+
+    args.save_interval = 1
+    args.micro_batch_size = 1
+    world_size = int(os.environ.get("WORLD_SIZE", "1"))
+    args.global_batch_size = int(os.environ.get("WORLD_SIZE", "1"))
+
+    assert world_size <= args.num_layers, (
+        f"World size {world_size} must be less than or equal to number of layers {args.num_layers}. "
+        "You are using to much GPUs for this conversion."
+    )
+
+    ceildiv = lambda a, b: -(a // -b)  # Ceiling division
+
+    if args.pipeline_model_parallel_size == 1 and world_size > 1:
+        pp_size = world_size
+        while True:
+            args.pipeline_model_parallel_size = pp_size
+            args.decoder_last_pipeline_num_layers = args.num_layers - ceildiv(
+                args.num_layers, args.pipeline_model_parallel_size
+            ) * (args.pipeline_model_parallel_size - 1)
+
+            if args.decoder_last_pipeline_num_layers > 0:
+                break
+
+            if pp_size % 2 == 0:
+                pp_size //= 2
+            else:
+                raise ValueError(
+                    f"Cannot find a valid pipeline model parallel size for {args.num_layers} layers and {world_size} GPUs."
+                )
+    print(
+        f"Using pipeline model parallel size: {args.pipeline_model_parallel_size}, decoder last pipeline num layers: {args.decoder_last_pipeline_num_layers}"
+    )
+
+    validate_args(args)
+    return args
+
+
+def main():
+    """Initialize distributed environment"""
+    if "WORLD_SIZE" not in os.environ:
+        os.environ["WORLD_SIZE"] = "1"
+    if "RANK" not in os.environ:
+        os.environ["RANK"] = "0"
+    if "MASTER_ADDR" not in os.environ:
+        os.environ["MASTER_ADDR"] = "localhost"
+    if "MASTER_PORT" not in os.environ:
+        os.environ["MASTER_PORT"] = "12355"
+    dist.init_process_group(backend="nccl")
+    torch.cuda.set_device(dist.get_rank() % torch.cuda.device_count())
+    args = get_args()
+    init(args)
+    model = get_model(get_model_provider_func(args), ModelType.encoder_or_decoder, wrap_with_ddp=False)
 
     # Load model
     hf_model_path = args.hf_checkpoint
     bridge = AutoBridge.from_pretrained(hf_model_path)
-    model = bridge.get_model()
     bridge.load_weights(model, hf_model_path)
     print(f"Model loaded: {hf_model_path}")
 
     save_checkpoint(1, model, None, None, 0)
-    # change to release ckpt
-    tracker_filename = get_checkpoint_tracker_filename(args.save)
-    with open(tracker_filename, "w") as f:
-        f.write("release")
-    source_dir = get_checkpoint_name(args.save, 1, False, return_base_dir=True)
-    target_dir = get_checkpoint_name(args.save, -1, True, return_base_dir=True)
-    shutil.move(source_dir, target_dir)
+
+    if dist.get_rank() == 0:
+        # change to release ckpt
+        tracker_filename = get_checkpoint_tracker_filename(args.save)
+        with open(tracker_filename, "w") as f:
+            f.write("release")
+        source_dir = get_checkpoint_name(args.save, 1, False, return_base_dir=True)
+        target_dir = get_checkpoint_name(args.save, -1, True, return_base_dir=True)
+        shutil.move(source_dir, target_dir)
+    dist.barrier()
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":

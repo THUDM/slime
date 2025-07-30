@@ -97,7 +97,7 @@ def init(args):
         args.decrease_batch_size_if_needed,
     )
 
-    if args.custom_megatron_init_path:
+    if getattr(args, "custom_megatron_init_path", None):
         from slime.utils.misc import load_function
 
         custom_init = load_function(args.custom_megatron_init_path)

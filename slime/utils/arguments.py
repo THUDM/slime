@@ -828,10 +828,14 @@ def parse_args(add_custom_arguments=None):
 
     # always use zero optimizer
     args.use_distributed_optimizer = True
-    # never train from scratch
-    args.no_initialization = True
     # TODO: maybe change this after megatron has good fp8 support
     args.bf16 = True
+    # placeholders
+    args.seq_length = 4096
+    args.max_position_embeddings = args.seq_length
+
+    if args.vocab_size and not args.padded_vocab_size:
+        args.padded_vocab_size = _vocab_size_with_padding(args.vocab_size, args)
 
     if not args.tokenizer_model and not args.tokenizer_type:
         print(f"--tokenizer-model not set, use --hf-checkpoint as tokenizer model.")
@@ -945,9 +949,6 @@ def parse_args(add_custom_arguments=None):
         args.grpo_std_normalization = False
         print("n_samples_per_prompt is set to 1, grpo_std_normalization will be set to False.")
 
-    if args.vocab_size and not args.padded_vocab_size:
-        args.padded_vocab_size = _vocab_size_with_padding(args.vocab_size, args)
-
     if args.over_sampling_batch_size is None:
         args.over_sampling_batch_size = args.rollout_batch_size
 
@@ -969,10 +970,6 @@ def parse_args(add_custom_arguments=None):
         assert args.num_rollout is not None, (
             "num_epoch is not set, but num_rollout is not set, " "please set --num-rollout or --num-epoch"
         )
-
-    # placeholders
-    args.seq_length = 4096
-    args.max_position_embeddings = args.seq_length
 
     megatron_validate_args(args)
 
