@@ -5,31 +5,31 @@
 
 ## Introduction
 
-If you are running Slime on AMD's Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified AMD dependencies, and provide an example for running the experiments. The current rocm docker only support AMD's MI300.
+If you are running Slime on AMD's Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified ROCm dependencies, and provide an example for running the experiments. The current rocm docker only support AMD's MI300 and MI325 GPUs.
 
 
 <!-- First, you need to configure the Slime runtime environment according to the [Readme](../../README.md) documentation and cd to the Slime project directory. -->
 
 ## Docker
 
-You can download the prebuilt image from DockerHub: [AMD Docker](https://hub.docker.com/r/yushengsuthu/slime-amd/tags). 
+You can download the prebuilt image from DockerHub: [rlsys/slime](https://hub.docker.com/r/rlsys/slime/tags). 
 ```bash
-docker pull yushengsuthu/slime-amd:slime_ubuntu22.04_rocm6.3.4-patch-numa_vllm0.8.5-patch_sglang0.4.7_megatron-core-patch_ray0.47-patch
+docker pull rlsys/slime:slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-core-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch
 ```
 Or you can use the [Dockerfile.rocm](docker/Dockerfile.rocm) to build it on your side.
 ```bash
 cd docker
-docker build -f Dockerfile.rocm -t slime_ubuntu22.04_rocm6.3.4-patch-numa_vllm0.8.5-patch_sglang0.4.7_megatron-core-patch_ray0.47-patch
+docker build -f Dockerfile.rocm -t slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-core-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch
 ```
 
-Acknowledgement: Thanks to (Yang Wang)[https://www.microsoft.com/en-us/research/people/yangwang5/] for working on the patch for this ROCm base Docker image to support virtual memory management on MI300X.
+Acknowledgement: Thanks to [Yang Wang](https://www.microsoft.com/en-us/research/people/yangwang5/) for working on the patch for this ROCm base Docker image to support virtual memory management on MI300X.
 
 
 ## Quick Start
 
 ### Environment Setup
 
-Based on the [AMD Docker](https://hub.docker.com/r/yushengsuthu/slime-amd/tags) image (pre-installed with SGLang 0.4.7 and Megatron):
+Based on the [rlsys/slime](https://hub.docker.com/r/rlsys/slime/tags) image (pre-installed with SGLang 0.4.9 and Megatron-LM):
 ```bash
 docker run --rm -it \
   --device /dev/dri \
@@ -46,7 +46,7 @@ docker run --rm -it \
   --ulimit memlock=-1 \
   --ulimit stack=67108864 \
   -w $PWD \
-  yushengsuthu/slime-amd:slime_ubuntu22.04_rocm6.3.4-patch-numa_vllm0.8.5-patch_sglang0.4.7_megatron-core-patch_ray0.47-patch \
+  rlsys/slime:slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-core-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch \
   /bin/bash
 ```
 
@@ -83,11 +83,11 @@ PYTHONPATH=${MEGATRON_LM_PATH} python tools/convert_hf_to_torch_dist.py \
 We provide examples to use [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B), please refer to:
 - [Example: Qwen3-4B Model](scripts/run-qwen3-4B-amd.sh): Just run `scripts/run-qwen3-4B-amd.sh` 
 
-⚠️ TODO: The [AMD-version torch_memory_saver](https://github.com/YangWang92/torch_memory_saver_numa/tree/numa) does not seem to clear memory properly; thus, we set `--sglang-mem-fraction-static` as `0.4` currently. We will continue investigating and focus on ROCm's virtual memory management for further modifications.
+⚠️ TODO: The [ROCm-version torch_memory_saver](https://github.com/yushengsu-thu/torch_memory_saver.git) does not seem to clear memory properly; thus, we set `--sglang-mem-fraction-static` as `0.4` currently. We will continue investigating and focus on ROCm's virtual memory management for further modifications.
 
 ⚠️ TODO: ROCM seems to not support `apex` yet. Thus, we need to disable `--no-gradient-accumulation-fusion` currently. We will continue investigating how to enable this. 
 
-⚠️ Note: The main difference between AMD's training script and NVIDIA's script is that you need to set `RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES` and `HIP_VISIBLE_DEVICES` for ray to function properly on AMD GPUs.
+⚠️ Note: The main difference between ROCm's training script and NVIDIA's script is that you need to set `RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES` and `HIP_VISIBLE_DEVICES` for ray to function properly on AMD GPUs.
 
 - We show the training script below: 
 
@@ -106,7 +106,7 @@ pkill -9 python
 
 set -euxo pipefail
 
-### AMD Support ###
+### ROCm Support ###
 SLIME_DIR="/home/yushensu/projects/slime" # Need to change to your own path
 export SLIME_DIR=$SLIME_DIR
 
@@ -121,7 +121,7 @@ export RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=${RAY_EXPERIMENTAL_NOSET_HIP_V
 export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"} #You can choose which gpus to use
 ####################
 
-# ### AMD Support ### (If you do not istall, please install them)
+# ### ROCm Support ### (If you do not istall, please install them)
 # # # Clone and install Megatron-LMi-amd_version
 # export MAX_JOBS=512
 # cd $SLIME_DIR
