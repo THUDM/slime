@@ -1,10 +1,22 @@
-# Example: Qwen3-30B-A3B Model
+# Example: Qwen3-30B-A3B
 
 [中文版](../../zh/models/qwen3-30B-A3B.md)
 
 ## Environment Preparation
 
 The environment setup, model download, data, and checkpoint conversion are the same as for the Qwen3-4B model. You can refer to [Example: Qwen3-4B Model](./qwen3-4B.md), replacing mentions of Qwen3-4B with Qwen3-30B-A3B.
+
+### Checkpoint Conversion
+
+⚠️ **Use [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch) for MoE models** (as mbridge may has bugs)
+
+```bash
+git clone --recurse-submodules https://github.com/alibaba/Pai-Megatron-Patch.git
+cd Pai-Megatron-Patch/toolkits/distributed_checkpoints_convertor
+bash scripts/qwen3/run_8xH20.sh A3B /root/Qwen3-30B-A3B /root/Qwen3-30B-A3B_torch_dist false true bf16
+```
+
+[Full instructions](https://github.com/alibaba/Pai-Megatron-Patch/blob/main/examples/qwen3/README.md)
 
 ## Run Training
 
@@ -61,3 +73,29 @@ Here, we will briefly introduce the MoE-related parts in the [run-qwen3-30B-A3B.
        --sglang-enable-dp-attention
        --sglang-dp-size 8
     ```
+
+### Multi-Node Support
+
+For a multi-node environment, the following modifications are necessary:
+
+  - Place the training model and data on a path accessible by all nodes.
+  - Set the `MASTER_ADDR` to an address that is accessible by all nodes.
+  - Remove configurations related to CPU Adam. This is because a distributed optimizer is used, which significantly reduces the optimizer's video memory (VRAM) usage in a multi-node setup.
+
+In addition, you can make the following changes:
+
+  - When the total number of GPUs is not a multiple or divisor of the total number of experts, you can use `--sglang-ep-num-redundant-experts` to add redundant experts. For example, in a 24-GPU scenario, you can configure it as follows:
+
+   ```bash
+   SGLANG_ARGS=(
+      --rollout-num-gpus-per-engine 24
+      --sglang-mem-fraction-static 0.5
+      --sglang-enable-ep-moe
+      --sglang-enable-dp-attention
+      --sglang-dp-size 3
+
+      --sglang-moe-dense-tp-size 1
+      --sglang-enable-dp-lm-head
+      --sglang-ep-num-redundant-experts 16   
+   )
+   ```

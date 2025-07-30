@@ -2,7 +2,7 @@
 
 [中文版](./README_zh.md)
 
-**slime** is an LLM post-training framework aiming at RL scaling, providing two core capabilities:
+**slime** is an LLM post-training framework for RL scaling, providing two core capabilities:
 
 1.  **High-Performance Training**: Supports efficient training in various modes by connecting Megatron with SGLang;
 2.  **Flexible Data Generation**: Enables arbitrary training data generation workflows through custom data generation interfaces and server-based engines.
@@ -12,7 +12,11 @@
   - [Architecture Overview](#architecture-overview)
   - [Quick Start](#quick-start)
       - [Environment Setup](#environment-setup)
-      - [Example: GLM4-9B and Qwen3-4B](#example-glm4-9b-and-qwen3-4b)
+      - [Examples](#examples)
+        - [Dense Model Examples: GLM-4-9B and Qwen3-4B](#Dense-Model-Examples-GLM-4-9B-and-Qwen3-4B)
+        - [MoE Model Example: Qwen3-30B-A3B and DeepSeek-R1](#MoE-Model-Example-Qwen3-30B-A3B-and-DeepSeek-R1)
+        - [Multi-Turn + Tool Calling Example: Search-R1 lite](#Multi-Turn--Tool-Calling-Example-Search-R1-lite)
+        - [SFT Example: Qwen3-4B-Base with OpenHermes-2.5](#SFT-Example-Qwen3-4B-Base-with-OpenHermes-25)
   - [Checkpoint Format Conversion](#checkpoint-format-conversion)
   - [Starting the Training Process](#starting-the-training-process)
   - [Argument Descriptions](#argument-descriptions)
@@ -45,19 +49,36 @@ cd slime
 pip install -e .
 ```
 
-- We are collaborating with the SGLang community to merge the updates in [sglang.patch](docker/patch/sglang.patch) into the main branch.
 - If you prefer not to use Docker, or if it's inconvenient, please refer to [Setting up the Environment from Scratch](./docs/en/build.md).
+- For AMD support, please refer to [AMD Tutorial](./docs/en/amd_tutorial.md).
 
-### Example: GLM4-9B and Qwen3-4B
+### Examples
+
+#### Dense Model Examples: GLM-4-9B and Qwen3-4B
 
 We provide examples to use [GLM-4-9B](https://huggingface.co/THUDM/GLM-Z1-9B-0414) and [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B), please refer to:
 
-- [Example: GLM-4-9B Model](docs/en/models/glm4-9B.md).
-- [Example: Qwen3-4B Model](docs/en/models/qwen3-4B.md).
+- [Example: GLM-4-9B](docs/en/models/glm4-9B.md).
+- [Example: Qwen3-4B](docs/en/models/qwen3-4B.md).
+
+#### MoE Model Example: Qwen3-30B-A3B and DeepSeek-R1
 
 For MoE example, please refer to:
 
-- [Example: Qwen3-30B-A3B Model](docs/en/models/qwen3-30B-A3B.md).
+- [Example: Qwen3-30B-A3B](docs/en/models/qwen3-30B-A3B.md).
+- [Example: Training DeepSeek R1 with 128xH100](docs/en/models/deepseek-r1.md)
+
+#### Multi-Turn + Tool Calling Example: Search-R1 lite
+
+For multi-turn and tool calling, we also provides an minimal reimplenmentation of Search-R1, please refer to:
+
+- [Example: Search-R1 lite](examples/search-r1/README.md).
+
+#### SFT Example: Qwen3-4B-Base with OpenHermes-2.5
+
+slime is not just a RL framework, we support a diverse set of post-training setups. For an SFT example, please refer to:
+
+- [Example: Qwen3-4B-Base with OpenHermes-2.5](docs/en/sft.md).
 
 ### Checkpoint Format Conversion
 
@@ -65,7 +86,9 @@ Since slime uses Megatron, and Megatron does not support loading Hugging Face ch
 
 #### HF → Megatron torch\_dist ckpt
 
-Use [mbridge](https://github.com/ISEEKYAN/mbridge.git) for conversion:
+We recommend using [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch) for mcore checkpoint conversion.
+
+If the mode you are using are not supported by Pai-Megatron-Patch, you could use [mbridge](https://github.com/ISEEKYAN/mbridge.git) for conversion:
 
 ```bash
 cd slime/
@@ -172,7 +195,7 @@ For complete usage instructions, please refer to the [Usage Documentation](docs/
 
 ## Hardware Support
 - Nvidia: refer to this repo README
-- AMD: refer to the [toturial](docs/en/amd_toturial.md)
+- AMD: refer to the [tutorial](docs/en/amd_tutorial.md)
 
 ## FAQ & Acknowledgements
 

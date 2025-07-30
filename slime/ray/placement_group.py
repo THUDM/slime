@@ -3,8 +3,8 @@ import ray
 from ray.util.placement_group import placement_group
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from .ppo_actor import RayTrainGroup
-from .rollout import RolloutGroup
+from .actor_group import RayTrainGroup
+from .rollout import RolloutManager
 
 
 @ray.remote(num_gpus=1)
@@ -96,25 +96,25 @@ def create_placement_groups(args):
     }
 
 
-def allocate_train_group(num_nodes, num_gpus_per_node, pg, debug_rollout_only):
+def allocate_train_group(num_nodes, num_gpus_per_node, pg, wandb_run_id):
     return RayTrainGroup(
         num_nodes=num_nodes,
         num_gpus_per_node=num_gpus_per_node,
         pg=pg,
+        wandb_run_id=wandb_run_id,
         num_gpus_per_actor=0.8,
-        debug_rollout_only=debug_rollout_only,
     )
 
 
-def create_actor_group(args, pg):
+def create_actor_group(args, pg, wandb_run_id):
     actor_model = allocate_train_group(
         num_nodes=args.actor_num_nodes,
         num_gpus_per_node=args.actor_num_gpus_per_node,
         pg=pg,
-        debug_rollout_only=args.debug_rollout_only,
+        wandb_run_id=wandb_run_id,
     )
     return actor_model
 
 
-def create_rollout_group(args, pg):
-    return RolloutGroup(args, pg)
+def create_rollout_manager(args, pg, wandb_run_id):
+    return RolloutManager(args, pg, wandb_run_id=wandb_run_id)

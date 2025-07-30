@@ -1,10 +1,18 @@
 import re
+import socket
+import time
+from tqdm import tqdm
+from sglang.srt.utils import MultiprocessingSerializer
 
+import ray
 import torch
 import torch.distributed as dist
 from megatron.core import mpu
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
 from slime.utils.types import ParamInfo
+from .initialize import get_gloo_group
+from .megatron_to_hf import convert_to_hf  # noqa: F401
+from slime.utils.distributed_utils import init_process_group
 
 
 def all_gather_param(name, param):
@@ -164,6 +172,7 @@ def get_param_infos(args, model) -> list[ParamInfo]:
     dist.all_gather_object(
         obj=param_infos,
         object_list=all_param_info_list,
+        group=get_gloo_group(),
     )
     for i, param_info in enumerate(param_infos):
         for infos in all_param_info_list:
@@ -197,492 +206,293 @@ def get_param_info_buckets(args, model) -> list[list[ParamInfo]]:
     return param_info_buckets
 
 
-def quantize_param(name, weight, weight_block_size):
-    assert name.endswith(".weight"), f"Expected weight parameter, got {name}"
-    FP8_MIN = torch.finfo(torch.float8_e4m3fn).min
-    FP8_MAX = torch.finfo(torch.float8_e4m3fn).max
-    if weight_block_size is not None:
-        # per block quant
-        block_n, block_k = weight_block_size[0], weight_block_size[1]
+class UpdateWeightFromTensor:
+    def __init__(self, args, model, weights, *, model_name, quantization_config, vocab_size):
+        self.args = args
+        self.model = model
+        self.weights = weights
+        self.model_name = model_name
+        self.vocab_size = vocab_size
+        self.quantization_config = quantization_config
+        self.param_info_buckets = get_param_info_buckets(self.args, self.model)
 
-        n_tiles = weight.shape[0] // block_n
-        k_tiles = weight.shape[1] // block_k
+    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
+        self.rollout_engines = rollout_engines
 
-        qweight = weight.reshape(n_tiles, block_n, k_tiles, block_k)
-        block_max = torch.max(torch.abs(qweight), dim=1, keepdim=True)[0]
-        block_max = torch.max(block_max, dim=3, keepdim=True)[0]
-
-        scale = block_max.to(torch.float32) / FP8_MIN
-        qweight = (qweight / scale).clamp(min=FP8_MIN, max=FP8_MAX).reshape(weight.shape).to(torch.float8_e4m3fn)
-        scale = scale.squeeze()
-        scale_name = name.replace(".weight", ".weight_scale_inv")
-    else:
-        # per tensor quant
-        scale = weight.abs().max().clamp(min=1e-12).to(torch.float32) / FP8_MAX
-        qweight = (weight / scale).clamp(min=FP8_MIN, max=FP8_MAX).to(torch.float8_e4m3fn)
-        scale = scale.view(1)
-        scale_name = name.replace(".weight", ".weight_scale")
-    return [(name, qweight), (scale_name, scale)]
-
-
-def quantize_params(args, megatron_name, converted_named_params, quantization_config):
-    if quantization_config is None:
-        return converted_named_params
-    assert quantization_config["quant_method"] == "fp8"
-    assert quantization_config["fmt"] == "e4m3"
-    assert quantization_config["activation_scheme"] == "dynamic"
-    weight_block_size = quantization_config.get("weight_block_size", None)
-
-    decoder_layers_pattern = r"module\.module\.decoder\.layers\.(\d+)\.(.+)"
-    match = re.match(decoder_layers_pattern, megatron_name)
-
-    if not match:
-        return converted_named_params
-
-    layer_idx, rest = match.groups()
-    # experts
-    expert_pattern = r"mlp.experts\.(.+)\.weight(\d+)"
-    match = re.match(expert_pattern, rest)
-    if match:
-        rest, expert_idx = match.groups()
-        if rest in [
-            "linear_fc1",
-            "linear_fc2",
-        ]:
-            quantize_named_params = []
-            for converted_name, param in converted_named_params:
-                # skip bf16 weight_scale and input_scale
-                # TODO: find a clearer way.
-                if converted_name.endswith("_scale"):
-                    continue
-                quantize_named_params.extend(quantize_param(converted_name, param, weight_block_size))
-
-            return quantize_named_params
-
-    # shared expert
-    shared_expert_pattern = r"mlp.shared_experts\.(.+)"
-    match = re.match(shared_expert_pattern, rest)
-    if match:
-        rest = match.groups()[0]
-        if rest in [
-            "linear_fc1.weight",
-            "linear_fc2.weight",
-        ]:
-            quantize_named_params = []
-            for converted_name, param in converted_named_params:
-                quantize_named_params.extend(quantize_param(converted_name, param, weight_block_size))
-
-            return quantize_named_params
-
-    if rest in [
-        "self_attention.linear_proj.weight",
-        "self_attention.linear_qkv.weight",
-        "mlp.linear_fc1.weight",
-        "mlp.linear_fc2.weight",
-    ]:
-        quantize_named_params = []
-        for converted_name, param in converted_named_params:
-            quantize_named_params.extend(quantize_param(converted_name, param, weight_block_size))
-
-        return quantize_named_params
-
-    # for other parameters, we just return the original converted_named_params
-    return converted_named_params
-
-
-def convert_to_hf(args, model_name, name, param, quantization_config=None):
-    if "glm4" in model_name:
-        converted_named_tensors = convert_glm4_to_hf(args, name, param)
-    elif "qwen3moe" in model_name:
-        converted_named_tensors = convert_qwen3moe_to_hf(args, name, param)
-    elif "qwen2" in model_name or "qwen3" in model_name:
-        converted_named_tensors = convert_qwen2_to_hf(args, name, param)
-    elif "deepseekv3" in model_name:
-        converted_named_tensors = convert_deepseekv3_to_hf(args, name, param)
-    else:
-        raise ValueError(f"Unsupported model: {model_name}")
-
-    if not quantization_config:
-        return converted_named_tensors
-
-    return quantize_params(args, name, converted_named_tensors, quantization_config)
-
-
-def convert_glm4_to_hf(args, name, param):
-    if name == "module.module.embedding.word_embeddings.weight":
-        return [("model.embed_tokens.weight", param)]
-    if name == "module.module.output_layer.weight":
-        return [("lm_head.weight", param)]
-    if name == "module.module.decoder.final_layernorm.weight":
-        return [("model.norm.weight", param)]
-
-    try:
-        head_dim = args.kv_channels if args.kv_channels is not None else args.hidden_size // args.num_attention_heads
-    except:
-        head_dim = args.hidden_size // args.num_attention_heads
-    value_num_per_group = args.num_attention_heads // args.num_query_groups
-
-    decoder_layers_pattern = r"module\.module\.decoder\.layers\.(\d+)\.(.+)"
-    match = re.match(decoder_layers_pattern, name)
-    if match:
-        layer_idx, rest = match.groups()
-        if rest == "self_attention.linear_proj.weight":
-            return [(f"model.layers.{layer_idx}.self_attn.o_proj.weight", param)]
-        elif rest == "self_attention.linear_qkv.weight":
-
-            param = param.view(args.num_query_groups, -1, head_dim, args.hidden_size)
-            q_param, k_param, v_param = torch.split(param, split_size_or_sections=[value_num_per_group, 1, 1], dim=1)
-            q_param = q_param.reshape(-1, args.hidden_size)
-            k_param = k_param.reshape(-1, args.hidden_size)
-            v_param = v_param.reshape(-1, args.hidden_size)
-            return [
-                (f"model.layers.{layer_idx}.self_attn.q_proj.weight", q_param),
-                (f"model.layers.{layer_idx}.self_attn.k_proj.weight", k_param),
-                (f"model.layers.{layer_idx}.self_attn.v_proj.weight", v_param),
-            ]
-        elif rest == "self_attention.linear_qkv.bias":
-            param = param.view(args.num_query_groups, -1)
-            q_bias, k_bias, v_bias = torch.split(
-                param,
-                split_size_or_sections=[value_num_per_group * head_dim, head_dim, head_dim],
-                dim=1,
+        # Here we assume the gpu id of rollout engines and train actors are the same.
+        for i, engine in enumerate(self.rollout_engines):
+            start_rank = i * self.args.rollout_num_gpus_per_engine
+            end_rank = (i + 1) * self.args.rollout_num_gpus_per_engine
+            group_ranks = list(range(start_rank, end_rank))
+            new_group = dist.new_group(
+                ranks=group_ranks,
+                backend="gloo",
             )
-            q_bias = q_bias.contiguous().flatten()
-            k_bias = k_bias.contiguous().flatten()
-            v_bias = v_bias.contiguous().flatten()
-            return [
-                (f"model.layers.{layer_idx}.self_attn.q_proj.bias", q_bias),
-                (f"model.layers.{layer_idx}.self_attn.k_proj.bias", k_bias),
-                (f"model.layers.{layer_idx}.self_attn.v_proj.bias", v_bias),
-            ]
-        elif rest == "mlp.linear_fc1.weight":
-            gate_weight, up_weight = param.chunk(2, dim=0)
-            return [
-                (f"model.layers.{layer_idx}.mlp.gate_proj.weight", gate_weight),
-                (f"model.layers.{layer_idx}.mlp.up_proj.weight", up_weight),
-            ]
-        elif rest == "mlp.linear_fc2.weight":
-            return [(f"model.layers.{layer_idx}.mlp.down_proj.weight", param)]
-        elif rest == "self_attention.linear_qkv.layer_norm_weight":
-            return [(f"model.layers.{layer_idx}.input_layernorm.weight", param)]
-        elif rest == "mlp.linear_fc1.layer_norm_weight":
-            return [(f"model.layers.{layer_idx}.post_attention_layernorm.weight", param)]
+            if dist.get_rank() in group_ranks:
+                self._ipc_gather_src = start_rank
+                self._ipc_gather_group = new_group
+                self._ipc_engine = engine
 
-        # qk norm
-        elif rest == "self_attention.q_layernorm.weight":
-            return [(f"model.layers.{layer_idx}.self_attn.q_norm.weight", param)]
-        elif rest == "self_attention.k_layernorm.weight":
-            return [(f"model.layers.{layer_idx}.self_attn.k_norm.weight", param)]
+    def update_weights(self):
+        rank = dist.get_rank()
+        if rank == 0:
+            ray.get([engine.reset_prefix_cache.remote() for engine in self.rollout_engines])
+        dist.barrier(group=get_gloo_group())
+        for param_infos in tqdm(self.param_info_buckets, disable=rank != 0, desc="Update weights"):
+            self._update_bucket_weights_from_tensor(param_infos)
 
-        # sandwitch norm
-        elif rest == "post_self_attn_layernorm.weight":
-            return [(f"model.layers.{layer_idx}.post_self_attn_layernorm.weight", param)]
-        elif rest == "post_mlp_layernorm.weight":
-            return [(f"model.layers.{layer_idx}.post_mlp_layernorm.weight", param)]
+    def _update_bucket_weights_from_tensor(self, param_infos):
+        pp_size = mpu.get_pipeline_model_parallel_world_size()
+        ep_size = mpu.get_expert_model_parallel_world_size()
+        rank = dist.get_rank()
+        # init params:
+        params = []
+        for info in param_infos:
+            if dist.get_rank() == info.src_rank:
+                params.append(
+                    torch.nn.Parameter(
+                        self.weights["actor"][info.name].to(device=torch.cuda.current_device(), non_blocking=True)
+                    )
+                )
+            else:
+                params.append(torch.empty(info.shape, dtype=info.dtype, device=torch.cuda.current_device()))
+        torch.cuda.synchronize()
 
-    raise ValueError(f"Unknown parameter name: {name}")
+        # broadcast params across pp ranks
+        if pp_size > 1:
+            handles = []
+            for info, param in zip(param_infos, params):
+                if info.src_rank in dist.get_process_group_ranks(mpu.get_pipeline_model_parallel_group()):
+                    handles.append(
+                        torch.distributed.broadcast(
+                            param, src=info.src_rank, group=mpu.get_pipeline_model_parallel_group(), async_op=True
+                        )
+                    )
+            for handle in handles:
+                handle.wait()
 
+        # broadcast params across ep ranks
+        if ep_size > 1:
+            handles = []
+            for info, param in zip(param_infos, params):
+                if ".experts." in info.name:
+                    src_rank = (
+                        info.src_rank
+                        if info.src_rank in dist.get_process_group_ranks(mpu.get_expert_model_parallel_group())
+                        else rank
+                    )
+                    handles.append(
+                        torch.distributed.broadcast(
+                            param, src=src_rank, group=mpu.get_expert_model_parallel_group(), async_op=True
+                        )
+                    )
+            for handle in handles:
+                handle.wait()
 
-def convert_qwen2_to_hf(args, name, param):
-    if name == "module.module.embedding.word_embeddings.weight":
-        return [("model.embed_tokens.weight", param)]
-    if name == "module.module.output_layer.weight":
-        return [("lm_head.weight", param)]
-    if name == "module.module.decoder.final_layernorm.weight":
-        return [("model.norm.weight", param)]
-
-    try:
-        head_dim = args.kv_channels if args.kv_channels is not None else args.hidden_size // args.num_attention_heads
-    except:
-        head_dim = args.hidden_size // args.num_attention_heads
-    value_num_per_group = args.num_attention_heads // args.num_query_groups
-
-    decoder_layers_pattern = r"module\.module\.decoder\.layers\.(\d+)\.(.+)"
-    match = re.match(decoder_layers_pattern, name)
-    if match:
-        layer_idx, rest = match.groups()
-        if rest == "self_attention.linear_proj.weight":
-            return [(f"model.layers.{layer_idx}.self_attn.o_proj.weight", param)]
-        elif rest == "self_attention.linear_qkv.weight":
-
-            param = param.view(args.num_query_groups, -1, head_dim, args.hidden_size)
-            q_param, k_param, v_param = torch.split(param, split_size_or_sections=[value_num_per_group, 1, 1], dim=1)
-            q_param = q_param.reshape(-1, args.hidden_size)
-            k_param = k_param.reshape(-1, args.hidden_size)
-            v_param = v_param.reshape(-1, args.hidden_size)
-            return [
-                (f"model.layers.{layer_idx}.self_attn.q_proj.weight", q_param),
-                (f"model.layers.{layer_idx}.self_attn.k_proj.weight", k_param),
-                (f"model.layers.{layer_idx}.self_attn.v_proj.weight", v_param),
-            ]
-        elif rest == "self_attention.linear_qkv.bias":
-            param = param.view(args.num_query_groups, -1)
-            q_bias, k_bias, v_bias = torch.split(
-                param,
-                split_size_or_sections=[value_num_per_group * head_dim, head_dim, head_dim],
-                dim=1,
+        converted_named_tensors = []
+        for info, param in zip(param_infos, params):
+            # set tp attrs
+            for key, value in info.attrs.items():
+                setattr(param, key, value)
+            # gather param
+            param = all_gather_param(info.name, param)
+            param = remove_padding(info.name, param, self.vocab_size)
+            converted_named_tensors.extend(
+                convert_to_hf(self.args, self.model_name, info.name, param, self.quantization_config)
             )
-            q_bias = q_bias.contiguous().flatten()
-            k_bias = k_bias.contiguous().flatten()
-            v_bias = v_bias.contiguous().flatten()
-            return [
-                (f"model.layers.{layer_idx}.self_attn.q_proj.bias", q_bias),
-                (f"model.layers.{layer_idx}.self_attn.k_proj.bias", k_bias),
-                (f"model.layers.{layer_idx}.self_attn.v_proj.bias", v_bias),
-            ]
-        elif rest == "mlp.linear_fc1.weight":
-            gate_weight, up_weight = param.chunk(2, dim=0)
-            return [
-                (f"model.layers.{layer_idx}.mlp.gate_proj.weight", gate_weight),
-                (f"model.layers.{layer_idx}.mlp.up_proj.weight", up_weight),
-            ]
-        elif rest == "mlp.linear_fc2.weight":
-            return [(f"model.layers.{layer_idx}.mlp.down_proj.weight", param)]
-        elif rest == "self_attention.linear_qkv.layer_norm_weight":
-            return [(f"model.layers.{layer_idx}.input_layernorm.weight", param)]
-        elif rest == "mlp.linear_fc1.layer_norm_weight":
-            return [(f"model.layers.{layer_idx}.post_attention_layernorm.weight", param)]
+        self._update_converted_params_from_tensor(converted_named_tensors)
 
-        # qk norm
-        elif rest == "self_attention.q_layernorm.weight":
-            return [(f"model.layers.{layer_idx}.self_attn.q_norm.weight", param)]
-        elif rest == "self_attention.k_layernorm.weight":
-            return [(f"model.layers.{layer_idx}.self_attn.k_norm.weight", param)]
+    def _update_converted_params_from_tensor(self, converted_named_tensors):
+        ipc_handle = MultiprocessingSerializer.serialize(converted_named_tensors, output_str=True)
+        ipc_handles = (
+            [None] * dist.get_world_size(self._ipc_gather_group) if self._ipc_gather_src == dist.get_rank() else None
+        )
+        dist.gather_object(
+            ipc_handle,
+            object_gather_list=ipc_handles,
+            dst=self._ipc_gather_src,
+            group=self._ipc_gather_group,
+        )
 
-    raise ValueError(f"Unknown parameter name: {name}")
-
-
-def convert_qwen3moe_to_hf(args, name, param):
-    if name == "module.module.embedding.word_embeddings.weight":
-        return [("model.embed_tokens.weight", param)]
-    if name == "module.module.output_layer.weight":
-        return [("lm_head.weight", param)]
-    if name == "module.module.decoder.final_layernorm.weight":
-        return [("model.norm.weight", param)]
-
-    try:
-        head_dim = args.kv_channels if args.kv_channels is not None else args.hidden_size // args.num_attention_heads
-    except:
-        head_dim = args.hidden_size // args.num_attention_heads
-    value_num_per_group = args.num_attention_heads // args.num_query_groups
-
-    decoder_layers_pattern = r"module\.module\.decoder\.layers\.(\d+)\.(.+)"
-    match = re.match(decoder_layers_pattern, name)
-    if match:
-        layer_idx, rest = match.groups()
-
-        # experts
-        expert_pattern = r"mlp.experts\.(.+)\.weight(\d+)"
-        match = re.match(expert_pattern, rest)
-        if match:
-            rest, expert_idx = match.groups()
-            if rest == "linear_fc1":
-                gate_weight, up_weight = param.chunk(2, dim=0)
-                outputs = [
-                    (f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.gate_proj.weight", gate_weight),
-                    (f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.up_proj.weight", up_weight),
-                ]
-                return outputs
-            elif rest == "linear_fc2":
-                outputs = [
-                    (f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.weight", param),
-                ]
-                if args.sglang_enable_ep_moe:
-                    outputs += [
-                        (
-                            f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.input_scale",
-                            torch.tensor(1.0, dtype=torch.float32, device=param.device),
-                        ),
-                        (
-                            f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.weight_scale",
-                            torch.tensor(1.0, dtype=torch.float32, device=param.device),
-                        ),
-                    ]
-                return outputs
-            else:
-                raise ValueError(f"Unknown expert parameter name: {name}")
-
-        # shared expert
-        shared_expert_pattern = r"mlp.shared_experts\.(.+)"
-        match = re.match(shared_expert_pattern, rest)
-        if match:
-            rest = match.groups()[0]
-            if rest == "linear_fc1.weight":
-                gate_weight, up_weight = param.chunk(2, dim=0)
-                return [
-                    (f"model.layers.{layer_idx}.mlp.shared_experts.gate_proj.weight", gate_weight),
-                    (f"model.layers.{layer_idx}.mlp.shared_experts.up_proj.weight", up_weight),
-                ]
-            elif rest == "linear_fc2.weight":
-                return [(f"model.layers.{layer_idx}.mlp.shared_experts.down_proj.weight", param)]
-            else:
-                raise ValueError(f"Unknown shared expert parameter name: {name}")
-
-        if rest == "self_attention.linear_proj.weight":
-            return [(f"model.layers.{layer_idx}.self_attn.o_proj.weight", param)]
-        elif rest == "self_attention.linear_qkv.weight":
-
-            param = param.view(args.num_query_groups, -1, head_dim, args.hidden_size)
-            q_param, k_param, v_param = torch.split(param, split_size_or_sections=[value_num_per_group, 1, 1], dim=1)
-            q_param = q_param.reshape(-1, args.hidden_size)
-            k_param = k_param.reshape(-1, args.hidden_size)
-            v_param = v_param.reshape(-1, args.hidden_size)
-            return [
-                (f"model.layers.{layer_idx}.self_attn.q_proj.weight", q_param),
-                (f"model.layers.{layer_idx}.self_attn.k_proj.weight", k_param),
-                (f"model.layers.{layer_idx}.self_attn.v_proj.weight", v_param),
-            ]
-        elif rest == "self_attention.linear_qkv.bias":
-            param = param.view(args.num_query_groups, -1)
-            q_bias, k_bias, v_bias = torch.split(
-                param,
-                split_size_or_sections=[value_num_per_group * head_dim, head_dim, head_dim],
-                dim=1,
+        if dist.get_rank() == self._ipc_gather_src:
+            ref = self._ipc_engine.update_weights_from_tensor.remote(
+                ipc_handles=ipc_handles,
             )
-            q_bias = q_bias.contiguous().flatten()
-            k_bias = k_bias.contiguous().flatten()
-            v_bias = v_bias.contiguous().flatten()
-            return [
-                (f"model.layers.{layer_idx}.self_attn.q_proj.bias", q_bias),
-                (f"model.layers.{layer_idx}.self_attn.k_proj.bias", k_bias),
-                (f"model.layers.{layer_idx}.self_attn.v_proj.bias", v_bias),
+            ray.get(ref)
+
+
+class UpdateWeightFromDistributed:
+    def __init__(self, args, model, weights, *, model_name, quantization_config, vocab_size):
+        self.args = args
+        self.model = model
+        self.model_name = model_name
+        self.vocab_size = vocab_size
+        self.quantization_config = quantization_config
+
+    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
+        self.rollout_engines = rollout_engines
+        self.rollout_engine_lock = rollout_engine_lock
+
+        # For TP:
+        #   1. AllGather paramters to rank 0
+        #   2. Broadcast parameters from rank 0 to all sglang engines
+        self._is_pp_src_rank = (
+            mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
+        )
+        pp_rank = mpu.get_pipeline_model_parallel_rank()
+        if self._is_pp_src_rank:
+            self._group_name = f"slime-pp_{pp_rank}"
+
+        if self._is_pp_src_rank:
+            master_address = ray._private.services.get_node_ip_address()
+            with socket.socket() as sock:
+                sock.bind(("", 0))
+                master_port = sock.getsockname()[1]
+            world_size = self.args.rollout_num_gpus + 1
+
+            refs = [
+                engine.init_process_group.remote(
+                    master_address,
+                    master_port,
+                    i * self.args.rollout_num_gpus_per_engine + 1,
+                    world_size,
+                    self._group_name,
+                    backend="nccl",
+                )
+                for i, engine in enumerate(self.rollout_engines)
             ]
-        elif rest == "mlp.linear_fc1.weight":
-            gate_weight, up_weight = param.chunk(2, dim=0)
-            return [
-                (f"model.layers.{layer_idx}.mlp.gate_proj.weight", gate_weight),
-                (f"model.layers.{layer_idx}.mlp.up_proj.weight", up_weight),
-            ]
-        elif rest == "mlp.linear_fc2.weight":
-            return [(f"model.layers.{layer_idx}.mlp.down_proj.weight", param)]
-        elif rest == "self_attention.linear_qkv.layer_norm_weight":
-            return [(f"model.layers.{layer_idx}.input_layernorm.weight", param)]
-        elif rest == "mlp.linear_fc1.layer_norm_weight":
-            return [(f"model.layers.{layer_idx}.post_attention_layernorm.weight", param)]
-        elif rest == "pre_mlp_layernorm.weight":
-            return [(f"model.layers.{layer_idx}.post_attention_layernorm.weight", param)]
-        elif rest == "mlp.router.weight":
-            return [(f"model.layers.{layer_idx}.mlp.gate.weight", param)]
-        elif rest == "mlp.router.expert_bias":
-            return [(f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias", param)]
-
-        # qk norm
-        elif rest == "self_attention.q_layernorm.weight":
-            return [(f"model.layers.{layer_idx}.self_attn.q_norm.weight", param)]
-        elif rest == "self_attention.k_layernorm.weight":
-            return [(f"model.layers.{layer_idx}.self_attn.k_norm.weight", param)]
-
-    raise ValueError(f"Unknown parameter name: {name}")
-
-
-def convert_deepseekv3_to_hf(args, name, param):
-    if name == "module.module.embedding.word_embeddings.weight":
-        return [("model.embed_tokens.weight", param)]
-    if name == "module.module.output_layer.weight":
-        return [("lm_head.weight", param)]
-    if name == "module.module.decoder.final_layernorm.weight":
-        return [("model.norm.weight", param)]
-
-    try:
-        head_dim = args.kv_channels if args.kv_channels is not None else args.hidden_size // args.num_attention_heads
-    except:
-        head_dim = args.hidden_size // args.num_attention_heads
-    value_num_per_group = args.num_attention_heads // args.num_query_groups
-
-    decoder_layers_pattern = r"module\.module\.decoder\.layers\.(\d+)\.(.+)"
-    match = re.match(decoder_layers_pattern, name)
-    if match:
-        layer_idx, rest = match.groups()
-
-        # experts
-        expert_pattern = r"mlp.experts\.(.+)\.weight(\d+)"
-        match = re.match(expert_pattern, rest)
-        if match:
-            rest, expert_idx = match.groups()
-            if rest == "linear_fc1":
-                gate_weight, up_weight = param.chunk(2, dim=0)
-                outputs = [
-                    (f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.gate_proj.weight", gate_weight),
-                    (f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.up_proj.weight", up_weight),
-                ]
-                return outputs
-            elif rest == "linear_fc2":
-                outputs = [
-                    (f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.weight", param),
-                ]
-                if args.sglang_enable_ep_moe:
-                    outputs += [
-                        (
-                            f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.input_scale",
-                            torch.tensor(1.0, dtype=torch.float32, device=param.device),
-                        ),
-                        (
-                            f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.weight_scale",
-                            torch.tensor(1.0, dtype=torch.float32, device=param.device),
-                        ),
-                    ]
-                return outputs
-            else:
-                raise ValueError(f"Unknown expert parameter name: {name}")
-
-        # shared expert
-        shared_expert_pattern = r"mlp.shared_experts\.(.+)"
-        match = re.match(shared_expert_pattern, rest)
-        if match:
-            rest = match.groups()[0]
-            if rest == "linear_fc1.weight":
-                gate_weight, up_weight = param.chunk(2, dim=0)
-                return [
-                    (f"model.layers.{layer_idx}.mlp.shared_experts.gate_proj.weight", gate_weight),
-                    (f"model.layers.{layer_idx}.mlp.shared_experts.up_proj.weight", up_weight),
-                ]
-            elif rest == "linear_fc2.weight":
-                return [(f"model.layers.{layer_idx}.mlp.shared_experts.down_proj.weight", param)]
-            else:
-                raise ValueError(f"Unknown shared expert parameter name: {name}")
-
-        if rest == "self_attention.linear_proj.weight":
-            return [(f"model.layers.{layer_idx}.self_attn.o_proj.weight", param)]
-        elif rest == "self_attention.linear_q_proj.weight":
-            return [(f"model.layers.{layer_idx}.self_attn.q_proj.weight", param)]
-        elif rest == "self_attention.linear_qkv.bias":
-            param = param.view(args.num_query_groups, -1)
-            q_bias, k_bias, v_bias = torch.split(
-                param,
-                split_size_or_sections=[value_num_per_group * head_dim, head_dim, head_dim],
-                dim=1,
+            self._model_update_groups = init_process_group(
+                backend="nccl",
+                init_method=f"tcp://{master_address}:{master_port}",
+                world_size=world_size,
+                rank=0,
+                group_name=self._group_name,
             )
-            q_bias = q_bias.contiguous().flatten()
-            k_bias = k_bias.contiguous().flatten()
-            v_bias = v_bias.contiguous().flatten()
-            return [
-                (f"model.layers.{layer_idx}.self_attn.q_proj.bias", q_bias),
-                (f"model.layers.{layer_idx}.self_attn.k_proj.bias", k_bias),
-                (f"model.layers.{layer_idx}.self_attn.v_proj.bias", v_bias),
-            ]
-        elif rest == "mlp.linear_fc1.weight":
-            gate_weight, up_weight = param.chunk(2, dim=0)
-            return [
-                (f"model.layers.{layer_idx}.mlp.gate_proj.weight", gate_weight),
-                (f"model.layers.{layer_idx}.mlp.up_proj.weight", up_weight),
-            ]
-        elif rest == "mlp.linear_fc2.weight":
-            return [(f"model.layers.{layer_idx}.mlp.down_proj.weight", param)]
-        elif rest == "self_attention.linear_qkv.layer_norm_weight" or rest == "input_layernorm.weight":
-            return [(f"model.layers.{layer_idx}.input_layernorm.weight", param)]
-        elif rest == "mlp.linear_fc1.layer_norm_weight":
-            return [(f"model.layers.{layer_idx}.post_attention_layernorm.weight", param)]
-        elif rest == "self_attention.linear_kv_down_proj.weight":
-            return [(f"model.layers.{layer_idx}.self_attn.kv_a_proj_with_mqa.weight", param)]
-        elif rest == "self_attention.linear_kv_up_proj.layer_norm_weight":
-            return [(f"model.layers.{layer_idx}.self_attn.kv_a_layernorm.weight", param)]
-        elif rest == "self_attention.linear_kv_up_proj.weight":
-            return [(f"model.layers.{layer_idx}.self_attn.kv_b_proj.weight", param)]
-        elif rest == "pre_mlp_layernorm.weight":
-            return [(f"model.layers.{layer_idx}.post_attention_layernorm.weight", param)]
-        elif rest == "mlp.router.weight":
-            return [(f"model.layers.{layer_idx}.mlp.gate.weight", param)]
-        elif rest == "mlp.router.expert_bias":
-            return [(f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias", param)]
+            ray.get(refs)
 
-    raise ValueError(f"Unknown parameter name: {name}")
+    def update_weights(self):
+        if dist.get_rank() == 0:
+            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
+            ray.get([engine.reset_prefix_cache.remote() for engine in self.rollout_engines])
+        dist.barrier(group=get_gloo_group())
+
+        buffer_size = 0
+        converted_named_tensors = []
+        # non expert params
+        pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
+
+        for name, param in named_parameters(self.args, self.model):
+            if ".experts." in name:
+                continue
+            buffer_size = self._update_weight_from_distributed(
+                name, param, converted_named_tensors, buffer_size, pbar=pbar
+            )
+
+        if converted_named_tensors:
+            self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
+
+        dist.barrier(group=get_gloo_group())
+
+        buffer_size = 0
+        named_tensors = []
+        for name, param in named_parameters(self.args, self.model):
+            if ".experts." not in name:
+                continue
+            buffer_size = self._update_expert_weight_from_distributed(
+                name, param, named_tensors, buffer_size, pbar=pbar
+            )
+
+        if named_tensors:
+            self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
+
+        dist.barrier(group=get_gloo_group())
+        if dist.get_rank() == 0:
+            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
+        dist.barrier(group=get_gloo_group())
+
+    def _update_weight_from_distributed(self, name, param, converted_named_tensors, buffer_size, pbar=None):
+        param = all_gather_param(name, param)
+        param = remove_padding(name, param, self.vocab_size)
+        if not self._is_pp_src_rank:
+            return
+
+        param_size = param.numel() * param.element_size()
+        if buffer_size + param_size > self.args.update_weight_buffer_size:
+            self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
+            buffer_size = 0
+        converted_named_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
+        buffer_size += param_size
+        return buffer_size
+
+    def _update_expert_weight_from_distributed(self, name, param, named_tensors, buffer_size, pbar=None):
+        param = all_gather_param(name, param)
+        param = remove_padding(name, param, self.vocab_size)
+
+        param_size = param.numel() * param.element_size()
+        if (
+            buffer_size + param_size
+        ) * mpu.get_expert_model_parallel_world_size() > self.args.update_weight_buffer_size:
+            self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
+            buffer_size = 0
+
+        named_tensors.append((name, param))
+        buffer_size += param_size
+        return buffer_size
+
+    def _update_expert_bucket_weights_from_distributed(self, named_tensors, pbar=None):
+        names = [name for name, _ in named_tensors]
+        all_names = [None] * mpu.get_expert_model_parallel_world_size()
+        dist.all_gather_object(all_names, names, group=mpu.get_expert_model_parallel_group())
+
+        for names in all_names:
+            assert len(named_tensors) == len(names), f"mismatch names length: {len(named_tensors)} != {len(names)}"
+
+        all_gathered_params = [[] for _ in range(mpu.get_expert_model_parallel_world_size())]
+        handles = []
+        for i, (name, param) in enumerate(named_tensors):
+            params = [
+                torch.empty_like(param.data, device=torch.cuda.current_device())
+                for _ in range(mpu.get_expert_model_parallel_world_size())
+            ]
+            handle = dist.all_gather(params, param.data, group=mpu.get_expert_model_parallel_group(), async_op=True)
+            handles.append(handle)
+            for ep_rank, names in enumerate(all_names):
+                all_gathered_params[ep_rank].append((names[i], params[ep_rank]))
+        for handle in handles:
+            handle.wait()
+
+        named_tensors.clear()
+        if not self._is_pp_src_rank:
+            return
+
+        all_gathered_params = sum(all_gathered_params, [])
+        converted_hf_tensors = []
+        for name, param in all_gathered_params:
+            converted_hf_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
+        self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar=pbar)
+
+    def _update_bucket_weights_from_distributed(self, converted_named_tensors, pbar=None):
+        # lock the rollout engines to prevent dead lock on broadcast.
+        while not ray.get(self.rollout_engine_lock.acquire.remote()):
+            time.sleep(0.1)
+
+        refs = [
+            engine.update_weights_from_distributed.remote(
+                names=[name for name, _ in converted_named_tensors],
+                dtypes=[param.dtype for _, param in converted_named_tensors],
+                shapes=[param.shape for _, param in converted_named_tensors],
+                group_name=self._group_name,
+            )
+            for engine in self.rollout_engines
+        ]
+
+        handles = []
+        for _, param in converted_named_tensors:
+            handles.append(dist.broadcast(param.data, 0, group=self._model_update_groups, async_op=True))
+        for handle in handles:
+            handle.wait()
+
+        ray.get(refs)
+        converted_named_tensors.clear()
+        ray.get(self.rollout_engine_lock.release.remote())
+        pbar.update(1)

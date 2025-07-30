@@ -12,24 +12,24 @@ if TYPE_CHECKING:
 
 
 def get_base_gpu_id(args, rank):
-    num_gpus = min(8, args.rollout_num_gpus_per_engine)
+    num_gpus = min(args.rollout_num_gpus_per_node, args.rollout_num_gpus_per_engine)
     if args.colocate:
-        start_index = (rank * num_gpus) % 8
+        start_index = (rank * num_gpus) % args.rollout_num_gpus_per_node
     else:
         num_actor_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
-        start_index = (num_actor_gpus + rank * num_gpus) % 8
+        start_index = (num_actor_gpus + rank * num_gpus) % args.rollout_num_gpus_per_node
     return start_index
 
 
 class SglangEngine:
 
-    def __init__(self, args, rank, dist_init_addr, port, nccl_port, other_ports=None, used_ports=None):
+    def __init__(self, args, rank, dist_init_addr, port, nccl_port):
         self.args = args
 
         # remove the CUDA_VISIBLE_DEVICES set by ray and use base_gpu_id
         os.environ.pop("CUDA_VISIBLE_DEVICES", None)
 
-        nnodes = max(1, args.rollout_num_gpus_per_engine // 8)
+        nnodes = max(1, args.rollout_num_gpus_per_engine // args.rollout_num_gpus_per_node)
         node_rank = rank % nnodes
         kwargs = {
             "model_path": args.hf_checkpoint,
@@ -52,14 +52,8 @@ class SglangEngine:
             "pp_size": args.sglang_pp_size,
             "ep_size": args.sglang_ep_size,
             # always skip warmup to prevent warmup timeout.
-            "skip_warmup": True,
+            "skip_server_warmup": True,
         }
-
-        if nnodes > 1:
-            kwargs["other_ports"] = other_ports
-
-        if used_ports is not None:
-            os.environ["SGLANG_USED_PORT"] = ",".join(map(str, used_ports))
 
         unused_keys = set(kwargs.keys())
         for attr in dataclasses.fields(ServerArgs):
@@ -94,11 +88,11 @@ class SglangEngine:
         self.llm.flush_cache()
 
     def sleep(self, level=1):
+        # Adhoc solution to ensure no running requests
         self.llm.flush_cache()
         self.llm.release_memory_occupation()
 
     def wake_up(self):
-        self.llm.flush_cache()
         self.llm.resume_memory_occupation()
 
     def pause_generation(self):

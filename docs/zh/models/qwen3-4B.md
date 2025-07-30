@@ -1,4 +1,4 @@
-# 示例：Qwen3-4B 模型
+# 示例：Qwen3-4B
 
 [English](../../en/models/qwen3-4B.md)
 
@@ -43,7 +43,7 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 
 ```bash
 cd /root/slime
-bash script/run-qwen3-4B.sh
+bash scripts/run-qwen3-4B.sh
 ```
 
 ### 参数简介
@@ -58,6 +58,14 @@ source "${SCRIPT_DIR}/models/qwen3-4B.sh"
 ```
 
 从 [scripts/models/qwen3-4B.sh](../../../scripts/models/qwen3-4B.sh) 读取模型的 config。这些 config 都是 megatron 的参数。在使用 megatron 进行训练的时候，megatron 无法从 ckpt 中读取模型 config，需要我们自行配置。我们在 [scripts/models](../../../scripts/models/) 中提供了一些样例。
+
+⚠️  注意检查模型文件中的 `--rotary-base` 等配置是否对应你当前训练模型的配置，因为同一个模型结构的不同模型可能有不同的取值。在这种情况下，你可以在导入模型参数后在脚本里进行覆盖，例如：
+
+```bash
+source "${SCRIPT_DIR}/models/qwen3-4B.sh"
+
+MODEL_ARGS += ( --rotary-base 10000 )
+```
 
 #### CKPT_ARGS
 
@@ -136,7 +144,7 @@ EVAL_ARGS=(
 
 ```bash
 PERF_ARGS=(
-   --tensor-model-parallel-size 1
+   --tensor-model-parallel-size 2
    --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
@@ -155,7 +163,7 @@ PERF_ARGS=(
 
 #### GRPO_ARGS
 
-目前 slime 只支持 GRPO，这是一些 grpo 相关的参数：
+目前 slime 这是一些 grpo 相关的参数：
 
 ```bash
 GRPO_ARGS=(
@@ -163,8 +171,6 @@ GRPO_ARGS=(
    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
-   # 目前无用
-   --kl-coef 0.00
    --entropy-coef 0.00
    --eps-clip 0.2
    --eps-clip-high 0.28
@@ -197,34 +203,6 @@ SGLANG_ARGS=(
 
 ⚠️  slime 会用 sgl-router 来调度多个 sglang server，在不开启 dp attention 的情况下不支持 `dp_size`。
 
-### 训推分离
-
-在原始的脚本中，资源配置如下：
-
-```bash
-ray job submit ... \
-   -- python3 train.py \
-   --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 8 \
-   --colocate \
-   ...
-```
-
-即开启训推一体（colocate），并且训练部分会使用 1 机 8 卡，推理会和训练共同使用这 8 张卡张卡。
-
-如果想使用训推分离的功能，需要去掉 `--colocate` 并配置上 `--rollout-num-gpus`，例如：
-
-```bash
-ray job submit ... \
-   -- python3 train.py \
-   --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 2 \
-   --rollout-num-gpus 6 \
-   ...
-```
-
-此时，就会分配 2 张卡给训练，6 张卡给推理。
-
 ### dynamic sampling
 
 slime 支持了更复杂的 sampling 方案，例如 [DAPO](https://dapo-sia.github.io/) 中的 dynamic sampling。如果要开启 dynamic sampling，需要配置：
@@ -253,6 +231,24 @@ def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
 
 当我们收到了 32 * 8 条数据时，我们会立刻停止采样，而不会等剩余的数据采样完成。如果删除的数据超过了 32 条 prompt（剩余的小于 32 条 prompt），那么我们会再采样 64 条 prompt。
 
+### partial rollout
+
+在进行 dynamic sampling 的过程中，会提前终止（abort）大量请求，我们可以通过配置 `--partial-rollout` 参数来将生成到一半的请求保存至 data buffer，在下一个 rollout 中取出来继续进行数据生成，从而进一步优化性能。
+
+可以通过配置 `--buffer-filter-path` 来自定义如何从 buffer 中取出数据，默认的函数为：
+
+```python
+def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
+    num_to_pop = min(len(buffer), num_samples)
+    samples = buffer[:num_to_pop]
+    del buffer[:num_to_pop]
+    return samples
+```
+
+即每次取出前 `num_samples` 个 prompt 对应的 `num_samples * n_samples_per_prompt` 条数据。
+
+⚠️  每条 partial rollout sample 的 `sample.metadata` 中存储了第一次进行生成的 rollout id，可以用于数据过滤。
+
 ### bf16 训练 fp8 推理
 
 slime 还支持 bf16 训练，fp8 推理。对于 Qwen3-4B 模型，只需要下载如下模型：
@@ -271,3 +267,53 @@ huggingface-cli download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
 即可触发 fp8 训练。目前我们会将 bf16 权重直接 cast 为 fp8，后续会逐渐添加对精度影响更小的量化方案。
 
 ⚠️  训练的 megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的。
+
+### 训推分离
+
+在原始的脚本中，资源配置如下：
+
+```bash
+ray job submit ... \
+   -- python3 train.py \
+   --actor-num-nodes 1 \
+   --actor-num-gpus-per-node 8 \
+   --colocate \
+   ...
+```
+
+即开启训推一体（colocate），并且训练部分会使用 1 机 8 卡，推理会和训练共同使用这 8 张卡张卡。
+
+如果想使用训推分离的功能，需要去掉 `--colocate` 并配置上 `--rollout-num-gpus`，例如：
+
+```bash
+ray job submit ... \
+   -- python3 train.py \
+   --actor-num-nodes 1 \
+   --actor-num-gpus-per-node 2 \
+   --rollout-num-gpus 6 \
+   ...
+```
+
+此时，就会分配 2 张卡给训练，6 张卡给推理。
+
+⚠️  在进行训推分离的时候，每个 sglang server 上的并发度太大，超过了 sglang 默认的 cuda graph 的并发度（默认最大 160），影响推理速度。可以用以下 2 种方式进行调整：
+
+1. 通过 `--sglang-server-concurrency` 限制发给一个 sglang server 的最大并发量，例如：
+
+   ```bash
+   --sglang-server-concurrency 160
+    ```
+
+2. 使用 `--sglang-cuda-graph-bs`，即 sglang 原生的 `--cuda-graph-bs`, 增大 sglang 初始化的 cuda graph 数量，例如：
+
+   ```bash
+   --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
+   ```
+
+### 异步训练
+
+当进行训推分离时，你会发现训练和推理的 GPU 总是相互等待着，为了避免这种资源空闲，我们可以开启异步训练。开启的方式即为将启动脚本中的 `train.py` 改变为 `train_async.py`。这样 slime 就会在进行当前 rollout 的训练时进行下一个 rollout 的数据生成了。
+
+`train.py` 和 `train_async.py` 的差别只在于 train loop 的同步逻辑，我们通过 ray 的异步（`.remote`, `ray.get`）实现了这点。
+
+⚠️  在异步训练时，sglang 的性能检测日志与训练日志可能会混到一起，不易区分，可以通过 `--sglang-log-level` 来减少 sglang 的日志。

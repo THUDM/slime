@@ -6,6 +6,7 @@ import requests
 from sglang.srt.entrypoints.http_server import launch_server
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import kill_process_tree
+from urllib3.exceptions import NewConnectionError
 
 
 def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
@@ -124,6 +125,8 @@ class HttpServerEngineAdapter:
                 response = requests.get(f"http://{self.server_args.host}:{self.server_args.port}/flush_cache")
                 if response.status_code == 200:
                     break
+            except NewConnectionError as e:
+                raise e
             except Exception as e:
                 print(f"Error flushing cache: {e}")
                 continue
@@ -153,7 +156,7 @@ class HttpServerEngineAdapter:
             },
         )
 
-    def update_weights_from_distributed(self, names, dtypes, shapes, group_name):
+    def update_weights_from_distributed(self, names, dtypes, shapes, group_name, flush_cache=False):
         return self._make_request(
             "update_weights_from_distributed",
             {
@@ -161,6 +164,7 @@ class HttpServerEngineAdapter:
                 "dtypes": [str(dtype).replace("torch.", "") for dtype in dtypes],
                 "shapes": shapes,
                 "group_name": group_name,
+                "flush_cache": flush_cache,
             },
         )
 

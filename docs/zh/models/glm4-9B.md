@@ -1,4 +1,4 @@
-# 示例：GLM4-9B 模型
+# 示例：GLM4-9B
 
 [English](../../en/models/glm4-9B.md)
 
@@ -59,6 +59,14 @@ source "${SCRIPT_DIR}/models/glm4-9B.sh"
 ```
 
 从 [scripts/models/glm4-9B.sh](../../../scripts/models/glm4-9B.sh) 读取模型的 config。这些 config 都是 megatron 的参数。在使用 megatron 进行训练的时候，megatron 无法从 ckpt 中读取模型 config，需要我们自行配置。我们在 [scripts/models](../../../scripts/models/) 中提供了一些样例。
+
+⚠️  注意检查模型文件中的 `--rotary-base` 等配置是否对应你当前训练模型的配置，因为同一个模型结构的不同模型可能有不同的取值。在这种情况下，你可以在导入模型参数后在脚本里进行覆盖，例如：
+
+```bash
+source "${SCRIPT_DIR}/models/glm4-9B.sh"
+
+MODEL_ARGS += ( --rotary-base 10000 )
+```
 
 #### CKPT_ARGS
 
@@ -156,7 +164,7 @@ PERF_ARGS=(
 
 #### GRPO_ARGS
 
-目前 slime 只支持 GRPO，这是一些 grpo 相关的参数：
+目前 slime 这是一些 grpo 相关的参数：
 
 ```bash
 GRPO_ARGS=(
@@ -164,8 +172,6 @@ GRPO_ARGS=(
    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
-   # 目前无用
-   --kl-coef 0.00
    --entropy-coef 0.00
    --eps-clip 0.2
    --eps-clip-high 0.28
@@ -254,3 +260,21 @@ def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
 ```
 
 当我们收到了 32 * 8 条数据时，我们会立刻停止采样，而不会等剩余的数据采样完成。如果删除的数据超过了 32 条 prompt（剩余的小于 32 条 prompt），那么我们会再采样 64 条 prompt。
+
+### partial rollout
+
+在进行 dynamic sampling 的过程中，会提前终止（abort）大量请求，我们可以通过配置 `--partial-rollout` 参数来将生成到一半的请求保存至 data buffer，在下一个 rollout 中取出来继续进行数据生成，从而进一步优化性能。
+
+可以通过配置 `--buffer-filter-path` 来自定义如何从 buffer 中取出数据，默认的函数为：
+
+```python
+def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
+    num_to_pop = min(len(buffer), num_samples)
+    samples = buffer[:num_to_pop]
+    del buffer[:num_to_pop]
+    return samples
+```
+
+即每次取出前 `num_samples` 个 prompt 对应的 `num_samples * n_samples_per_prompt` 条数据。
+
+⚠️  每条 partial rollout sample 的 `sample.metadata` 中存储了第一次进行生成的 rollout id，可以用于数据过滤。

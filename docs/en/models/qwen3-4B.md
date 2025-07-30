@@ -1,4 +1,4 @@
-# Example: Qwen3-4B Model
+# Example: Qwen3-4B
 
 [中文版](../../zh/models/qwen3-4B.md)
 
@@ -58,6 +58,14 @@ source "${SCRIPT_DIR}/models/qwen3-4B.sh"
 ```
 
 This reads the model's configuration from [scripts/models/qwen3-4B.sh](../../../scripts/models/qwen3-4B.sh). These are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in [scripts/models](../../../scripts/models/).
+
+⚠️  Ensure that settings such as `--rotary-base` in the model configuration file match the settings of the model you are currently training. This is because different models, even with the same architecture, might use different values. If needed, you can override these parameters in your script after loading the model weights. For instance:
+
+```bash
+source "${SCRIPT_DIR}/models/qwen3-4B.sh"
+
+MODEL_ARGS += ( --rotary-base 10000 )
+```
 
 #### CKPT\_ARGS
 
@@ -136,7 +144,7 @@ When `dynamic_batch_size` is enabled, the traditional `micro_batch_size` is igno
 
 ```bash
 PERF_ARGS=(
-   --tensor-model-parallel-size 1
+   --tensor-model-parallel-size 2
    --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
@@ -155,7 +163,7 @@ PERF_ARGS=(
 
 #### GRPO\_ARGS
 
-Currently, slime only supports GRPO. Here are some GRPO-related parameters:
+Here are some GRPO-related parameters:
 
 ```bash
 GRPO_ARGS=(
@@ -163,8 +171,6 @@ GRPO_ARGS=(
    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
-   # Currently unused
-   --kl-coef 0.00
    --entropy-coef 0.00
    --eps-clip 0.2
    --eps-clip-high 0.28
@@ -197,34 +203,6 @@ SGLANG_ARGS=(
 
 ⚠️ slime uses `sgl-router` to schedule multiple sglang servers. `dp_size` is not supported when DP attention is disabled.
 
-### Decoupled Training and Inference
-
-In the original script, the resource configuration is as follows:
-
-```bash
-ray job submit ... \
-   -- python3 train.py \
-   --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 8 \
-   --colocate \
-   ...
-```
-
-This enables co-located training and inference, where the training part uses 1 machine with 8 GPUs, and inference shares these 8 GPUs with training.
-
-If you want to use the decoupled training and inference feature, you need to remove `--colocate` and configure `--rollout-num-gpus`. For example:
-
-```bash
-ray job submit ... \
-   -- python3 train.py \
-   --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 2 \
-   --rollout-num-gpus 6 \
-   ...
-```
-
-In this case, 2 GPUs will be allocated for training, and 6 GPUs will be allocated for inference.
-
 ### Dynamic Sampling
 
 slime supports more complex sampling schemes, such as the dynamic sampling in [DAPO](https://dapo-sia.github.io/). To enable dynamic sampling, you need to configure:
@@ -253,6 +231,24 @@ def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
 
 When we have received 32 \* 8 data points, we will immediately stop the current sampling round and will not wait for the remaining data to be sampled. If more than 32 prompts' worth of data is discarded (leaving fewer than 32 prompts' worth), we will then sample another 64 prompts.
 
+### Partial Rollout
+
+During the process of dynamic sampling, a large number of requests are aborted prematurely. We can configure the `--partial-rollout` parameter to save these partially generated requests to a data buffer. In the next rollout, these requests can be retrieved to continue data generation, thereby further optimizing performance.
+
+You can customize how data is retrieved from the buffer by configuring the `--buffer-filter-path`. The default function is:
+
+```python
+def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
+    num_to_pop = min(len(buffer), num_samples)
+    samples = buffer[:num_to_pop]
+    del buffer[:num_to_pop]
+    return samples
+```
+
+This means that each time, the data corresponding to the first `num_samples` prompts is retrieved, totaling `num_samples * n_samples_per_prompt` items.
+
+⚠️ The `sample.metadata` of each partial rollout sample stores the rollout ID from its initial generation, which can be used for data filtering.
+
 ### BF16 Training with FP8 Inference
 
 slime also supports BF16 training with FP8 inference. For the Qwen3-4B model, you just need to download the following model:
@@ -271,3 +267,51 @@ And replace `--hf-checkpoint` with:
 This will trigger FP8 inference. Currently, we directly cast the BF16 weights to FP8. In the future, we will gradually add more sophisticated quantization schemes that have less impact on precision.
 
 ⚠️ The Megatron checkpoint for training still needs to be the one that was originally converted from the BF16 Hugging Face model.
+
+### Decoupled Training and Inference
+
+In the original script, the resource configuration is as follows:
+
+```bash
+ray job submit ... \
+   -- python3 train.py \
+   --actor-num-nodes 1 \
+   --actor-num-gpus-per-node 8 \
+   --colocate \
+   ...
+```
+
+This enables co-located training and inference, where the training part uses 1 machine with 8 GPUs, and inference shares these 8 GPUs with training.
+
+If you want to use the decoupled training and inference feature, you need to remove `--colocate` and configure `--rollout-num-gpus`. For example:
+
+```bash
+ray job submit ... \
+   -- python3 train.py \
+   --actor-num-nodes 1 \
+   --actor-num-gpus-per-node 2 \
+   --rollout-num-gpus 6 \
+   ...
+```
+
+In this case, 2 GPUs will be allocated for training, and 6 GPUs will be allocated for inference.
+
+⚠️  If the concurrency on each sglang server is too high, it may exceed sglang's default CUDA graph concurrency limit (the default maximum is 160), which will affect inference speed. You can adjust this in the following two ways:
+
+1.  Use `--sglang-server-concurrency` to limit the maximum number of concurrent requests sent to a single sglang server. For example:
+
+    ```bash
+    --sglang-server-concurrency 160
+    ```
+
+2.  Use `--sglang-cuda-graph-bs` (which corresponds to sglang's native `--cuda-graph-bs` argument) to increase the number of CUDA graphs initialized by sglang. For example:
+
+    ```bash
+    --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
+    ```
+
+### Asynchronous Training
+
+When you separate training and inference, you may notice that the training and inference GPUs are always waiting for each other. To prevent these resources from being idle, we can enable asynchronous training. This can be done by changing `train.py` to `train_async.py` in the startup script. By doing this, slime will generate data for the next rollout while training on the current one.
+
+The only difference between `train.py` and `train_async.py` lies in the synchronization logic of the training loop. We achieve this by using Ray's asynchronous features (`.remote`, `ray.get`).

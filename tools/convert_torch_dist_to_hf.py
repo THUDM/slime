@@ -13,7 +13,7 @@ import torch.distributed.checkpoint as dist_cp
 from transformers import AutoConfig
 from typing_extensions import override
 
-from slime.backends.megatron_utils.update_weight_utils import convert_to_hf
+from slime.backends.megatron_utils.update_weight_utils import convert_to_hf, remove_padding
 
 
 class UnpicklerWrapper(pickle.Unpickler):
@@ -103,7 +103,7 @@ def get_named_params(args, state_dict):
         yield from get_layer_param(args, name, param)
 
 
-def save_tensors(args, model_name, state_dict, output_dir, chunk_size):
+def save_tensors(args, model_name, state_dict, output_dir, chunk_size, vocab_size=None):
     # for slime update_weight compatible
     setattr(args, "sglang_enable_ep_moe", False)
 
@@ -114,6 +114,8 @@ def save_tensors(args, model_name, state_dict, output_dir, chunk_size):
     total_size = 0
     modeltensors = [{}]
     for name, param in get_named_params(args, state_dict):
+        if vocab_size:
+            param = remove_padding(name, param, vocab_size)
         converted_named_tensors = convert_to_hf(args, model_name, name, param)
         for converted_name, converted_param in converted_named_tensors:
             tensor_size = converted_param.numel() * converted_param.element_size()
@@ -176,6 +178,12 @@ if __name__ == "__main__":
         default=5 * 1024**3,
         help="Chunk size for saving tensors, default is 2GB.",
     )
+    parser.add_argument(
+        "--vocab-size",
+        type=int,
+        default=None,
+        help="Vocab size for removing padding, if applicable. If not provided, no padding will be removed.",
+    )
     args = parser.parse_args()
 
     if os.path.exists(args.output_dir) and not args.force:
@@ -202,7 +210,7 @@ if __name__ == "__main__":
     )
     print(f"model loaded in {time.time()-t:.2f} sec.")
 
-    save_tensors(megatron_args, args.model_name, state_dict, args.output_dir, args.chunk_size)
+    save_tensors(megatron_args, args.model_name, state_dict, args.output_dir, args.chunk_size, args.vocab_size)
 
     if args.origin_hf_dir:
         copy_assets(args.origin_hf_dir, args.output_dir)

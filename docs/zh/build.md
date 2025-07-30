@@ -27,15 +27,20 @@ micromamba run -n slime pip install cmake ninja
 ####################
 # sglang deps
 ####################
-cd /root/
-git clone https://github.com/sgl-project/sglang.git --branch v0.4.7
-cd /root/sglang/
+export BASE_DIR=/root/
+cd $BASE_DIR
+git clone https://github.com/sgl-project/sglang.git --branch v0.4.9.post2 --depth 1
+cd $BASE_DIR/sglang/
 micromamba run -n slime pip -v install -e "python[all]"
-micromamba run -n slime pip install sglang-router
+# TODO: change to pip install sglang-router after it has a new release
+micromamba run -n slime pip install sglang-router --force-reinstall
 
 ####################
 # megatron deps
 ####################
+TORCH_CUDA_ARCH_LIST="9.0;9.0a" micromamba run -n slime \
+  pip -v install --no-build-isolation \
+  git+https://github.com/fanshiqing/grouped_gemm@v1.1.4
 # apex
 TORCH_CUDA_ARCH_LIST="9.0;9.0a" NVCC_APPEND_FLAGS="--threads 4" \
 micromamba run -n slime \
@@ -58,15 +63,16 @@ micromamba run -n slime pip install -e .
 # other deps
 ####################
 micromamba run -n slime pip install git+https://github.com/zhuzilin/cumem_allocator.git --no-build-isolation
+micromamba run -n slime pip install git+https://github.com/ISEEKYAN/mbridge.git --no-deps
 
 ####################
 # slime
 ####################
-cd /root/
+cd $BASE_DIR
 git clone https://github.com/THUDM/slime.git
 cd slime/
 micromamba run -n slime pip install -e .
 # apply patch
-cd /root/sglang
+cd $BASE_DIR/sglang
 git apply /root/slime/docker/patch/sglang.patch
 ```

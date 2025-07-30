@@ -13,7 +13,7 @@ class Timer(metaclass=SingletonMeta):
         self.start_time = {}
 
     def start(self, name):
-        assert name not in self.timers, f"Timer {name} already started."
+        assert name not in self.start_time, f"Timer {name} already started."
         self.start_time[name] = time()
 
     def end(self, name):

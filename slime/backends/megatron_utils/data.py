@@ -1,46 +1,20 @@
 import math
-from typing import Any, Optional
 
 import numpy as np
 import ray
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-import wandb
 from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.utils import get_model_config
 
+import wandb
 from slime.utils.flops_utils import calculate_fwd_flops
-from slime.utils.memory_utils import clear_memory
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.timer import Timer
 
-LOCAL_STORAGE = {}
-LOCAL_METADATA = {}
-
-
-def set_local_storage(key: str, value: Any):
-    LOCAL_STORAGE[key] = value
-
-
-def get_local_storage(key: Optional[str] = None):
-    if key is None:
-        return LOCAL_STORAGE
-    return LOCAL_STORAGE.get(key, None)
-
-
-def clear_local_storage():
-    LOCAL_STORAGE.clear()
-    clear_memory()
-
-
-def set_metadata(key: str, value: Any):
-    LOCAL_METADATA[key] = value
-
-
-def get_metadata(key: Optional[str] = None):
-    return LOCAL_METADATA.get(key, None)
+from ..utils.data import DataIterator, get_minimum_num_micro_batch_size
 
 
 def get_batch(data_iterator, keys):
@@ -51,7 +25,8 @@ def get_batch(data_iterator, keys):
 
     packed_seq_params = None
     tokens = batch["tokens"]
-    pad_token_id = get_metadata("padding_token_id")
+    # use 0 as the pad token id should be fine?
+    pad_token_id = 0
 
     # for cp, we need all tokens to calculate logprob
     batch["unconcat_tokens"] = tokens
@@ -103,64 +78,7 @@ def get_batch(data_iterator, keys):
     return batch
 
 
-class DataIterator:
-    def __init__(
-        self,
-        micro_batch_size: Optional[int] = None,
-        micro_batch_indices: Optional[list[list[int]]] = None,
-    ):
-        self.micro_batch_size = micro_batch_size
-        self.micro_batch_indices = micro_batch_indices
-        assert micro_batch_size is None or micro_batch_indices is None
-        self.offset = 0
-
-    def get_next(self, keys):
-        batch = {}
-        for key in keys:
-            vals = get_local_storage(key)
-            if vals is None:
-                batch[key] = None
-            else:
-                if self.micro_batch_indices is not None:
-                    indices = self.micro_batch_indices[self.offset]
-                    batch[key] = [vals[i] for i in indices]
-                else:
-                    assert self.offset + self.micro_batch_size <= len(
-                        vals
-                    ), f"offset: {self.offset}, micro_batch_size: {self.micro_batch_size}, len(vals): {len(vals)}"
-                    batch[key] = vals[self.offset : self.offset + self.micro_batch_size]
-
-        if self.micro_batch_indices is not None:
-            self.offset += 1
-        else:
-            self.offset += self.micro_batch_size
-        return batch
-
-    def reset(self):
-        self.offset = 0
-        return self
-
-
-def ceildiv(a, b):
-    return -(-a // b)
-
-
-def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu):
-    # use first fit to get the number of micro batches
-    max_tokens_per_gpu *= mpu.get_context_parallel_world_size()
-    batches = []
-    for l in total_lengths:
-        for i in range(len(batches)):
-            if batches[i] + l <= max_tokens_per_gpu:
-                batches[i] += l
-                break
-        else:
-            batches.append(l)
-
-    return len(batches)
-
-
-def get_data_iterator(args, model):
+def get_data_iterator(args, model, rollout_data):
     num_local_samples = (
         args.rollout_batch_size
         * args.n_samples_per_prompt
@@ -182,19 +100,22 @@ def get_data_iterator(args, model):
         log_probs_data_iterator = []
         train_data_iterator = []
         for i in range(vpp_size):
-            log_probs_data_iterator.append(DataIterator(args.ref_micro_batch_size))
-            train_data_iterator.append(DataIterator(args.micro_batch_size))
+            log_probs_data_iterator.append(DataIterator(rollout_data, args.ref_micro_batch_size))
+            train_data_iterator.append(DataIterator(rollout_data, args.micro_batch_size))
     else:
         assert args.max_tokens_per_gpu is not None
         # calculate the number of mirobatches for each step
-        samples = LOCAL_STORAGE["total_lengths"]
+        cp_size = mpu.get_context_parallel_world_size()
+        samples = rollout_data["total_lengths"]
         assert len(samples) == num_local_samples
         num_microbatches = []
         for i in range(num_steps_per_rollout):
             start, end = i * num_local_gbs, (i + 1) * num_local_gbs
-            num_microbatches.append(get_minimum_num_micro_batch_size(samples[start:end], args.max_tokens_per_gpu))
+            num_microbatches.append(
+                get_minimum_num_micro_batch_size(samples[start:end], args.max_tokens_per_gpu, cp_size)
+            )
 
-        num_microbatches.append(get_minimum_num_micro_batch_size(samples, args.max_tokens_per_gpu))
+        num_microbatches.append(get_minimum_num_micro_batch_size(samples, args.max_tokens_per_gpu, cp_size))
 
         num_microbatches = torch.tensor(num_microbatches, dtype=torch.int, device=torch.cuda.current_device())
         dist.all_reduce(num_microbatches, op=dist.ReduceOp.MAX, group=mpu.get_data_parallel_group())
@@ -213,19 +134,19 @@ def get_data_iterator(args, model):
         train_num_microbatches = num_microbatches
 
         # balance the each micro batch
-        samples = LOCAL_STORAGE["total_lengths"]
+        samples = rollout_data["total_lengths"]
         # get log_probs data iterator
         partitions = get_seqlen_balanced_partitions(samples, log_probs_num_microbatches, equal_size=False)
 
         log_probs_data_iterator = []
         for i in range(vpp_size):
-            log_probs_data_iterator.append(DataIterator(None, micro_batch_indices=partitions))
+            log_probs_data_iterator.append(DataIterator(rollout_data, None, micro_batch_indices=partitions))
 
         # balance the number of mirobatches across steps
         micro_batch_indices = []
         for i, num_mbs in enumerate(train_num_microbatches):
             start, end = i * num_local_gbs, (i + 1) * num_local_gbs
-            samples = LOCAL_STORAGE["total_lengths"][start:end]
+            samples = rollout_data["total_lengths"][start:end]
             partitions = get_seqlen_balanced_partitions(samples, num_mbs, equal_size=False)
             for j in range(num_mbs):
                 for k in range(len(partitions[j])):
@@ -233,11 +154,11 @@ def get_data_iterator(args, model):
             micro_batch_indices.extend(partitions)
 
         assert len(set(sum(micro_batch_indices, []))) == num_local_samples
-        train_data_iterator = DataIterator(None, micro_batch_indices=micro_batch_indices)
+        train_data_iterator = DataIterator(rollout_data, None, micro_batch_indices=micro_batch_indices)
 
         train_data_iterator = []
         for i in range(vpp_size):
-            train_data_iterator.append(DataIterator(None, micro_batch_indices=micro_batch_indices))
+            train_data_iterator.append(DataIterator(rollout_data, None, micro_batch_indices=micro_batch_indices))
 
     return (
         log_probs_data_iterator,
@@ -247,83 +168,13 @@ def get_data_iterator(args, model):
     )
 
 
-def process_rollout_data(rollout_id, args, data_buffer):
-    rank = dist.get_rank()
-    dp_rank = mpu.get_data_parallel_rank(with_context_parallel=False)
-    dp_size = mpu.get_data_parallel_world_size(with_context_parallel=False)
-
-    if rank == 0:
-        data = ray.get(data_buffer.get_data.remote(rollout_id))
-        dist.broadcast_object_list([data], src=0)
-    else:
-        data = [None]
-        dist.broadcast_object_list(data, src=0)
-        data = data[0]
-
-    # save the unprocessed reward for logging
-    rewards = data["rewards"]
-    if "raw_reward" in data:
-        raw_rewards = data["raw_reward"]
-    else:
-        raw_rewards = rewards
-    set_local_storage("raw_reward", raw_rewards)
-
-    if args.advantage_estimator == "grpo" and args.rewards_normalization:
-        # group norm
-        rewards = torch.tensor([r for r in rewards], dtype=torch.float)
-        rewards = rewards.reshape(-1, args.n_samples_per_prompt)
-        mean = rewards.mean(dim=-1, keepdim=True)
-        rewards = rewards - mean
-        if args.grpo_std_normalization:
-            std = rewards.std(dim=-1, keepdim=True)
-            rewards = rewards / (std + 1e-6)
-        rewards = rewards.flatten().tolist()
-        data["rewards"] = rewards
-
-    total_lengths = [len(t) for t in data["tokens"]]
-    data["total_lengths"] = total_lengths
-
-    # save the seqlen of the whole rollout batch
-    Timer().seq_lens = total_lengths
-
-    if args.balance_data:
-        parititions = get_seqlen_balanced_partitions(total_lengths, dp_size, equal_size=True)
-
-    def get_partition(val):
-        if args.balance_data:
-            return [val[i] for i in parititions[dp_rank]]
-        else:
-            return val[dp_rank::dp_size]
-
-    for key in [
-        "tokens",
-        "total_lengths",
-        "response_lengths",
-        "rewards",
-        "truncated",
-        "loss_masks",
-        "round_number",
-    ]:
-        if key not in data:
-            continue
-        val = get_partition(data[key])
-        # move tokens to GPU in advance
-        if key == "tokens":
-            val = [torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device()) for t in val]
-        elif key == "loss_masks":
-            val = [torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in val]
-
-        # save the data to local storage
-        set_local_storage(key, val)
-
-
-def log_rollout_data(rollout_id, args):
+def log_rollout_data(rollout_id, args, rollout_data):
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
         cp_size = mpu.get_context_parallel_world_size()
         log_dict = {}
-        response_lengths = get_local_storage("response_lengths")
-        for key, val in get_local_storage().items():
-            if key == "tokens" or key == "loss_masks":
+        response_lengths = rollout_data["response_lengths"]
+        for key, val in rollout_data.items():
+            if key == "tokens" or key == "loss_masks" or key == "sample_indices":
                 continue
             # Upload per sample mean for each rollout value
             # There are the following assumptions:
@@ -352,7 +203,7 @@ def log_rollout_data(rollout_id, args):
                 log_dict,
                 gathered_log_dict,
                 dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
-                group=mpu.get_data_parallel_group(with_context_parallel=True),
+                group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
             )
             dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
             reduced_log_dict = {
@@ -371,21 +222,21 @@ def log_rollout_data(rollout_id, args):
                 log_dict,
                 None,
                 dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
-                group=mpu.get_data_parallel_group(with_context_parallel=True),
+                group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
             )
 
     if args.log_multi_turn:
-        log_multi_turn_data(rollout_id, args)
+        log_multi_turn_data(rollout_id, args, rollout_data)
     if args.log_passrate:
-        log_passrate(rollout_id, args)
+        log_passrate(rollout_id, args, rollout_data)
 
 
-def log_multi_turn_data(rollout_id, args):
+def log_multi_turn_data(rollout_id, args, rollout_data):
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
         cp_size = mpu.get_context_parallel_world_size()
         log_dict = {}
-        response_lengths = get_local_storage("response_lengths")
-        for key, val in get_local_storage().items():
+        response_lengths = rollout_data["response_lengths"]
+        for key, val in rollout_data.items():
             if key == "loss_masks":
                 if val:  # Check if val is not empty
                     device = val[0].device  # Get device from first tensor
@@ -419,7 +270,7 @@ def log_multi_turn_data(rollout_id, args):
                 log_dict,
                 gathered_log_dict,
                 dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
-                group=mpu.get_data_parallel_group(with_context_parallel=True),
+                group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
             )
             dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
             reduced_log_dict = {
@@ -433,16 +284,14 @@ def log_multi_turn_data(rollout_id, args):
                 log_dict,
                 None,
                 dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
-                group=mpu.get_data_parallel_group(with_context_parallel=True),
+                group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
             )
 
 
-def log_passrate(rollout_id, args):
+def log_passrate(rollout_id, args, rollout_data):
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
-        cp_size = mpu.get_context_parallel_world_size()
         log_dict = {}
-        response_lengths = get_local_storage("response_lengths")
-        for key, val in get_local_storage().items():
+        for key, val in rollout_data.items():
             if key != "raw_reward":
                 continue
 
@@ -484,7 +333,7 @@ def log_passrate(rollout_id, args):
                 log_dict,
                 gathered_log_dict,
                 dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
-                group=mpu.get_data_parallel_group(with_context_parallel=True),
+                group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
             )
             dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
             reduced_log_dict = {
@@ -498,18 +347,18 @@ def log_passrate(rollout_id, args):
                 log_dict,
                 None,
                 dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
-                group=mpu.get_data_parallel_group(with_context_parallel=True),
+                group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
             )
 
 
-def log_eval_data(rollout_id, args, data_buffer):
+def log_eval_data(rollout_id, args, rollout_data_ref):
     if (
         mpu.get_tensor_model_parallel_rank() == 0
         and mpu.is_pipeline_last_stage()
         and mpu.get_data_parallel_rank(with_context_parallel=True) == 0
     ):
         rank = dist.get_rank()
-        data = ray.get(data_buffer.get_data.remote(rollout_id, evaluation=True))
+        data = ray.get(rollout_data_ref.inner)
 
         log_dict = {}
         for key in data.keys():
@@ -538,31 +387,19 @@ def log_perf_data(rollout_id, args):
     ):
         log_dict = {f"perf/{key}_time": val for key, val in timer_instance.log_dict().items()}
 
-        # Calculate TFlops metrics with proper error handling
         if "perf/actor_train_time" in log_dict:
-            try:
-                world_size = dist.get_world_size()
-                total_fwd_flops = calculate_fwd_flops(seqlens=timer_instance.seq_lens, args=args) / world_size / 1e12
+            world_size = dist.get_world_size()
+            total_fwd_flops = calculate_fwd_flops(seqlens=timer_instance.seq_lens, args=args) / world_size / 1e12
 
-                # Only calculate log_probs_tflops if the timing exists
-                if "perf/log_probs_time" in log_dict and log_dict["perf/log_probs_time"] > 0:
-                    log_dict["perf/log_probs_tflops"] = total_fwd_flops / log_dict["perf/log_probs_time"]
-                else:
-                    print(
-                        f"Warning: 'perf/log_probs_time' not found or is zero, skipping log_probs_tflops calculation"
-                    )
+            if "perf/log_probs_time" in log_dict:
+                log_dict["perf/log_probs_tflops"] = total_fwd_flops / log_dict["perf/log_probs_time"]
 
-                # Only calculate ref_log_probs_tflops if the timing exists
-                if "perf/ref_log_probs_time" in log_dict and log_dict["perf/ref_log_probs_time"] > 0:
-                    log_dict["perf/ref_log_probs_tflops"] = total_fwd_flops / log_dict["perf/ref_log_probs_time"]
+            if "perf/ref_log_probs_time" in log_dict:
+                log_dict["perf/ref_log_probs_tflops"] = total_fwd_flops / log_dict["perf/ref_log_probs_time"]
 
-                # Calculate actor_train_tflops with safety check
-                if log_dict["perf/actor_train_time"] > 0:
-                    log_dict["perf/actor_train_tflops"] = 3 * total_fwd_flops / log_dict["perf/actor_train_time"]
-            except Exception as e:
-                print(f"Warning: Error calculating TFlops metrics: {e}")
+            if log_dict["perf/actor_train_time"] > 0:
+                log_dict["perf/actor_train_tflops"] = 3 * total_fwd_flops / log_dict["perf/actor_train_time"]
 
-        # Calculate wait time ratio with proper checks
         if "perf/train_wait_time" in log_dict and "perf/train_time" in log_dict:
             total_time = log_dict["perf/train_wait_time"] + log_dict["perf/train_time"]
             if total_time > 0:

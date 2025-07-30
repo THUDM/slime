@@ -1,4 +1,4 @@
-# Example: GLM4-9B Model
+# Example: GLM4-9B
 
 [中文版](../../zh/models/glm4-9B.md)
 
@@ -59,6 +59,14 @@ source "${SCRIPT_DIR}/models/glm4-9B.sh"
 ```
 
 Reads the model's config from [scripts/models/glm4-9B.sh](../../../scripts/models/glm4-9B.sh). These configs are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in [scripts/models](../../../scripts/models/).
+
+⚠️  Ensure that settings such as `--rotary-base` in the model configuration file match the settings of the model you are currently training. This is because different models, even with the same architecture, might use different values. If needed, you can override these parameters in your script after loading the model weights. For instance:
+
+```bash
+source "${SCRIPT_DIR}/models/glm4-9B.sh"
+
+MODEL_ARGS += ( --rotary-base 10000 )
+```
 
 #### CKPT\_ARGS
 
@@ -156,7 +164,7 @@ PERF_ARGS=(
 
 #### GRPO\_ARGS
 
-Currently, slime only supports GRPO. Here are some GRPO-related parameters:
+Here are some GRPO-related parameters:
 
 ```bash
 GRPO_ARGS=(
@@ -164,8 +172,6 @@ GRPO_ARGS=(
    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
-   # Currently unused
-   --kl-coef 0.00
    --entropy-coef 0.00
    --eps-clip 0.2
    --eps-clip-high 0.28
@@ -254,3 +260,21 @@ def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
 ```
 
 When we have received 32 \* 8 data points, we will immediately stop sampling and will not wait for the remaining data to be sampled. If more than 32 prompts' worth of data is discarded (leaving fewer than 32 prompts' worth), we will then sample another 64 prompts.
+
+### Partial Rollout
+
+During the process of dynamic sampling, a large number of requests are aborted prematurely. We can configure the `--partial-rollout` parameter to save these partially generated requests to a data buffer. In the next rollout, these requests can be retrieved to continue data generation, thereby further optimizing performance.
+
+You can customize how data is retrieved from the buffer by configuring the `--buffer-filter-path`. The default function is:
+
+```python
+def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
+    num_to_pop = min(len(buffer), num_samples)
+    samples = buffer[:num_to_pop]
+    del buffer[:num_to_pop]
+    return samples
+```
+
+This means that each time, the data corresponding to the first `num_samples` prompts is retrieved, totaling `num_samples * n_samples_per_prompt` items.
+
+⚠️ The `sample.metadata` of each partial rollout sample stores the rollout ID from its initial generation, which can be used for data filtering.
