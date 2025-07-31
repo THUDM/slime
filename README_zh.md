@@ -219,4 +219,4 @@ ray job submit --address="http://127.0.0.1:8265" \
 ## 常见 Q&A 与致谢
 
 - 常见问题请见 [Q&A](docs/zh/qa.md)
-- 特别感谢以下项目 & 社区：SGLang、Megatron‑LM、mbridge、OpenRLHF、veRL 等。
+- 特别感谢以下项目 & 社区：SGLang、Megatron‑LM、mbridge、OpenRLHF、veRL、Pai-Megatron-Patch 等。

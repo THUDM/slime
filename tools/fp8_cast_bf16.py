@@ -1,3 +1,4 @@
+# Adapt from https://github.com/alibaba/Pai-Megatron-Patch/blob/2b201af08336dea0403df7c6b497c964cf5a2e75/toolkits/model_checkpoints_convertor/deepseek/fp8_cast_bf16.py
 import os
 import json
 from argparse import ArgumentParser
@@ -6,13 +7,41 @@ from tqdm import tqdm
 
 import torch
 from safetensors.torch import load_file, save_file
+import triton
+import triton.language as tl
 
-from kernel import weight_dequant
+
+@triton.jit
+def weight_dequant_kernel(x_ptr, s_ptr, y_ptr, M, N, BLOCK_SIZE: tl.constexpr):
+    pid_m = tl.program_id(axis=0)
+    pid_n = tl.program_id(axis=1)
+    n = tl.cdiv(N, BLOCK_SIZE)
+    offs_m = pid_m * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offs_n = pid_n * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offs = offs_m[:, None] * N + offs_n[None, :]
+    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+    x = tl.load(x_ptr + offs, mask=mask).to(tl.float32)
+    s = tl.load(s_ptr + pid_m * n + pid_n)
+    y = x * s
+    tl.store(y_ptr + offs, y, mask=mask)
+
+
+def weight_dequant(x: torch.Tensor, s: torch.Tensor, block_size: int = 128) -> torch.Tensor:
+    assert x.is_contiguous() and s.is_contiguous()
+    assert x.dim() == 2 and s.dim() == 2
+    M, N = x.size()
+    y = torch.empty_like(x, dtype=torch.get_default_dtype())
+    grid = lambda meta: (triton.cdiv(M, meta["BLOCK_SIZE"]), triton.cdiv(N, meta["BLOCK_SIZE"]))
+    weight_dequant_kernel[grid](x, s, y, M, N, BLOCK_SIZE=block_size)
+    return y
 
 
 def main(fp8_path, bf16_path):
     torch.set_default_dtype(torch.bfloat16)
     os.makedirs(bf16_path, exist_ok=True)
+    os.system("cp -rf " + fp8_path + "/config.json " + bf16_path)
+    os.system("cp -rf " + fp8_path + "/*.py " + bf16_path)
+    os.system("cp -rf " + fp8_path + "/tokenizer* " + bf16_path)
     model_index_file = os.path.join(fp8_path, "model.safetensors.index.json")
     with open(model_index_file, "r") as f:
         model_index = json.load(f)

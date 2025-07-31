@@ -221,4 +221,4 @@ For complete usage instructions, please refer to the [Usage Documentation](docs/
 ## FAQ & Acknowledgements
 
   - For frequently asked questions, please see the [Q\&A](docs/en/qa.md)
-  - Special thanks to the following projects & communities: SGLang, Megatron‑LM, mbridge, OpenRLHF, veRL, and others.
+  - Special thanks to the following projects & communities: SGLang, Megatron‑LM, mbridge, OpenRLHF, veRL, Pai-Megatron-Patch and others.
