@@ -13,6 +13,7 @@ import wandb
 from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.timer import Timer
+from .cp_utils import get_sum_of_sample_mean, slice_with_cp
 
 from ..utils.data import DataIterator, get_minimum_num_micro_batch_size
 
@@ -32,20 +33,7 @@ def get_batch(data_iterator, keys):
     batch["unconcat_tokens"] = tokens
 
     cp_size = mpu.get_context_parallel_world_size()
-    cp_rank = mpu.get_context_parallel_rank()
-    if cp_size > 1:
-
-        def pad_and_split_tokens(tokens: list[torch.Tensor]):
-            # pad
-            chunk_size = (len(tokens) + 2 * cp_size - 1) // (2 * cp_size)
-            pad = 2 * cp_size * chunk_size - len(tokens)
-            tokens = F.pad(tokens, (0, pad), value=pad_token_id)
-            # get 2 chunk for thd cp
-            start_1, end_1 = chunk_size * cp_rank, chunk_size * (cp_rank + 1)
-            start_2, end_2 = chunk_size * (2 * cp_size - cp_rank - 1), chunk_size * (2 * cp_size - cp_rank)
-            return torch.cat([tokens[start_1:end_1], tokens[start_2:end_2]])
-
-        tokens = [pad_and_split_tokens(t) for t in tokens]
+    tokens = [slice_with_cp(t, pad_token_id) for t in tokens]
 
     cu_seqlens = [0]
     for t in tokens:
@@ -79,6 +67,21 @@ def get_batch(data_iterator, keys):
 
 
 def get_data_iterator(args, model, rollout_data):
+    """
+    Creates data iterators for training and log probability evaluation, supporting both static and dynamic batch sizes,
+    with optional virtual pipeline parallelism and sequence length balancing.
+    Args:
+        args: An object containing configuration parameters, including batch sizes, micro batch sizes,
+              dynamic batch size usage, and maximum tokens per GPU et.al.
+        model: The model or list of model stages, used to extract configuration for parallelism.
+        rollout_data: A dictionary containing rollout data, including 'total_lengths' for each sample.
+    Returns:
+        tuple: A tuple containing:
+            - log_probs_data_iterator: List of DataIterator objects for log probability evaluation.
+            - log_probs_num_microbatches: Number of microbatches for log probability evaluation.
+            - train_data_iterator: List of DataIterator objects for training.
+            - train_num_microbatches: List of number of microbatches for each training step.
+    """
     num_local_samples = (
         args.rollout_batch_size
         * args.n_samples_per_prompt
@@ -88,20 +91,21 @@ def get_data_iterator(args, model, rollout_data):
     num_steps_per_rollout = num_local_samples // num_local_gbs
 
     vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size()
-    config = get_model_config(model[0])
-
     if vpp_size is None:
         vpp_size = 1
+
+    def _generate_data_iterator(rollout_data, micro_batch_size, micro_batch_indices=None):
+        data_iterator = []
+        for _ in range(vpp_size):
+            data_iterator.append(DataIterator(rollout_data, micro_batch_size, micro_batch_indices))
+        return data_iterator
 
     if not args.use_dynamic_batch_size:
         log_probs_num_microbatches = num_local_samples // args.ref_micro_batch_size
         train_num_microbatches = [num_local_gbs // args.micro_batch_size for _ in range(num_steps_per_rollout)]
 
-        log_probs_data_iterator = []
-        train_data_iterator = []
-        for i in range(vpp_size):
-            log_probs_data_iterator.append(DataIterator(rollout_data, args.ref_micro_batch_size))
-            train_data_iterator.append(DataIterator(rollout_data, args.micro_batch_size))
+        log_probs_data_iterator = _generate_data_iterator(rollout_data, args.ref_micro_batch_size)
+        train_data_iterator = _generate_data_iterator(rollout_data, args.micro_batch_size)
     else:
         assert args.max_tokens_per_gpu is not None
         # calculate the number of mirobatches for each step
@@ -121,6 +125,7 @@ def get_data_iterator(args, model, rollout_data):
         dist.all_reduce(num_microbatches, op=dist.ReduceOp.MAX, group=mpu.get_data_parallel_group())
 
         # vpp requies the number of microbatches to be divisible by vpp_size
+        config = get_model_config(model[0])
         if config.microbatch_group_size_per_vp_stage:
             num_microbatches = torch.clamp(
                 num_microbatches
@@ -138,9 +143,7 @@ def get_data_iterator(args, model, rollout_data):
         # get log_probs data iterator
         partitions = get_seqlen_balanced_partitions(samples, log_probs_num_microbatches, equal_size=False)
 
-        log_probs_data_iterator = []
-        for i in range(vpp_size):
-            log_probs_data_iterator.append(DataIterator(rollout_data, None, micro_batch_indices=partitions))
+        log_probs_data_iterator = _generate_data_iterator(rollout_data, None, partitions)
 
         # balance the number of mirobatches across steps
         micro_batch_indices = []
@@ -154,11 +157,8 @@ def get_data_iterator(args, model, rollout_data):
             micro_batch_indices.extend(partitions)
 
         assert len(set(sum(micro_batch_indices, []))) == num_local_samples
-        train_data_iterator = DataIterator(rollout_data, None, micro_batch_indices=micro_batch_indices)
 
-        train_data_iterator = []
-        for i in range(vpp_size):
-            train_data_iterator.append(DataIterator(rollout_data, None, micro_batch_indices=micro_batch_indices))
+        train_data_iterator = _generate_data_iterator(rollout_data, None, micro_batch_indices)
 
     return (
         log_probs_data_iterator,
@@ -173,6 +173,9 @@ def log_rollout_data(rollout_id, args, rollout_data):
         cp_size = mpu.get_context_parallel_world_size()
         log_dict = {}
         response_lengths = rollout_data["response_lengths"]
+        loss_masks = rollout_data["loss_masks"]
+        total_lengths = rollout_data["total_lengths"]
+
         for key, val in rollout_data.items():
             if key == "tokens" or key == "loss_masks" or key == "sample_indices":
                 continue
@@ -181,13 +184,14 @@ def log_rollout_data(rollout_id, args, rollout_data):
             # - Each dp rank has the same number of samples
             if isinstance(val, list):
                 if isinstance(val[0], torch.Tensor):
-                    if cp_size == 1:
-                        val = sum([v.mean() for v in val]) / len(val)
+                    # NOTE: Here we have to do the clone().detach(), otherwise the tensor will be
+                    # modified in place and will cause problem for the next rollout.
+                    val = torch.cat(val).clone().detach()
+                    if key in ["log_probs", "ref_log_probs", "returns", "advantages"] and loss_masks is not None:
+                        sum_of_sample_mean = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks)
+                        val = cp_size * sum_of_sample_mean(val) / len(loss_masks)
                     else:
-                        # When cp_size > 1, the denominator should be the length of the response lengths. Also, to make
-                        # sure these values can be divided by `mpu.get_data_parallel_world_size(with_context_parallel=True)`
-                        # multiply by the cp_size.
-                        val = sum([cp_size * v.sum() / l for v, l in zip(val, response_lengths)]) / len(val)
+                        val = val.mean() * cp_size
                 else:
                     val = sum(val) / len(val)
             elif isinstance(val, torch.Tensor):

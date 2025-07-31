@@ -83,14 +83,14 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         raw_rewards = rewards
     rollout_data["raw_reward"] = raw_rewards
 
-    if args.advantage_estimator in ["grpo", "reinforce_plus_plus_baseline"] and args.rewards_normalization:
+    if args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"] and args.rewards_normalization:
         # group norm
         rewards = torch.tensor([r for r in rewards], dtype=torch.float)
         rewards = rewards.reshape(-1, args.n_samples_per_prompt)
         mean = rewards.mean(dim=-1, keepdim=True)
         rewards = rewards - mean
 
-        if args.advantage_estimator == "grpo" and args.grpo_std_normalization:
+        if args.advantage_estimator in ["grpo", "gspo"] and args.grpo_std_normalization:
             std = rewards.std(dim=-1, keepdim=True)
             rewards = rewards / (std + 1e-6)
 

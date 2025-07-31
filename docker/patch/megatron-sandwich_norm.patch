@@ -1,5 +1,17 @@
+diff --git a/megatron/core/extensions/transformer_engine.py b/megatron/core/extensions/transformer_engine.py
+index d572f055..01181339 100644
+--- a/megatron/core/extensions/transformer_engine.py
++++ b/megatron/core/extensions/transformer_engine.py
+@@ -282,6 +282,7 @@ class TELinear(te.pytorch.Linear):
+         )
+ 
+         for param in self.parameters():
++            setattr(param, "parallel_mode", parallel_mode)
+             if is_expert:
+                 # Reduce the gradient on the expert_data_parallel group for expert linear layers
+                 setattr(param, "allreduce", not self.expert_parallel)
 diff --git a/megatron/core/models/gpt/gpt_layer_specs.py b/megatron/core/models/gpt/gpt_layer_specs.py
-index fe5ce425..6ce9b647 100755
+index 860ee64a..80944b70 100755
 --- a/megatron/core/models/gpt/gpt_layer_specs.py
 +++ b/megatron/core/models/gpt/gpt_layer_specs.py
 @@ -79,6 +79,8 @@ def get_gpt_layer_with_transformer_engine_spec(
@@ -69,7 +81,7 @@ index 4e583e5c..121451a2 100644
      """Whether to run real-time tests."""
  
 diff --git a/megatron/core/transformer/transformer_layer.py b/megatron/core/transformer/transformer_layer.py
-index 87c2a339..49b2f546 100644
+index 5c5b33e8..165aa646 100644
 --- a/megatron/core/transformer/transformer_layer.py
 +++ b/megatron/core/transformer/transformer_layer.py
 @@ -224,6 +224,7 @@ class TransformerLayerSubmodules:
@@ -141,10 +153,10 @@ index 87c2a339..49b2f546 100644
              # discard the output of the pre-mlp layernorm and register the recompute
              # as a gradient hook of mlp_output_with_bias[0]
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
-index 3e07c9b5..3b1835e4 100644
+index 1ac1e57a..43b36a9f 100644
 --- a/megatron/training/arguments.py
 +++ b/megatron/training/arguments.py
-@@ -1135,6 +1135,9 @@ def core_transformer_config_from_args(args, config_class=None):
+@@ -1148,6 +1148,9 @@ def core_transformer_config_from_args(args, config_class=None):
      if args.is_hybrid_model:
          kw_args['is_hybrid_model'] = args.is_hybrid_model
  
@@ -154,7 +166,7 @@ index 3e07c9b5..3b1835e4 100644
      # handle quantization config
      # NOTE: Kitchen arguments are only added to the namespace when
      # Kitchen library is available.
-@@ -1423,6 +1426,10 @@ def _add_network_size_args(parser):
+@@ -1436,6 +1439,10 @@ def _add_network_size_args(parser):
                         action='store_true',
                         help='If set, use original BERT residula connection '
                         'ordering.')

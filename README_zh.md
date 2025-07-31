@@ -14,7 +14,7 @@
   - [环境准备](#环境准备)
   - [示例](#示例)
     - [Dense 模型示例：GLM-4-9B 与 Qwen3-4B](#Dense-模型示例GLM-4-9B-与-Qwen3-4B)
-    - [MoE 模型示例：Qwen3-30B-A3B 与 DeepSeek-R1](#MoE-模型示例Qwen3-30B-A3B-与-DeepSeek-R1)
+    - [MoE 模型示例：GLM-4.5、Qwen3-30B-A3B 与 DeepSeek-R1](#MoE-模型示例GLM-45Qwen3-30B-A3B-与-DeepSeek-R1)
     - [多轮对话 + 工具调用示例：Search-R1 lite](#多轮对话--工具调用示例Search-R1-lite)
     - [SFT 示例：Qwen3-4B-Base + OpenHermes-2.5](#SFT-示例Qwen3-4B-Base--OpenHermes-25)
 - [Checkpoint 格式转换](#checkpoint-格式转换)
@@ -61,11 +61,12 @@ pip install -e .
 - [示例：GLM-4-9B](docs/zh/models/glm4-9B.md)
 - [示例：Qwen3-4B](docs/zh/models/qwen3-4B.md)
 
-#### MoE 模型示例：Qwen3-30B-A3B 与 DeepSeek-R1
+#### MoE 模型示例：GLM-4.5、Qwen3-30B-A3B 与 DeepSeek-R1
 
 我们也提供了 MoE 模型的示例，请查看：
 
-- [示例：Qwen3-30B-A3B](docs/zh/models/qwen3-30B-A3B.md)
+- [示例：64xH100 训练 GLM-4.5](docs/zh/models/glm4.5-355B-A32B.md)
+- [示例：8xH100 训练 Qwen3-30B-A3B](docs/zh/models/qwen3-30B-A3B.md)
 - [示例：128xH100 训练 DeepSeek-R1](docs/zh/models/deepseek-r1.md)
 
 #### 多轮对话 + 工具调用示例：Search-R1 lite
@@ -88,13 +89,30 @@ slime 不仅仅是一个 RL 框架，我们还支持了各种后训练流程。�
 
 #### HF → Megatron torch_dist ckpt
 
-我们推荐使用 [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch) 进行转换。如果你目前在使用的模型不被 Pai-Megatron-Patch 支持，可以使用 [mbridge](https://github.com/ISEEKYAN/mbridge.git) 转换：
+我们使用 [mbridge](https://github.com/ISEEKYAN/mbridge.git) 进行 checkpoint 转换，使用方式如下：
 
 ```bash
 cd slime/
+
+source scripts/models/glm4-9B.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
+    ${MODEL_ARGS[@]} \
     --hf-checkpoint /root/GLM-Z1-9B-0414 \
     --save /root/GLM-Z1-9B-0414_torch_dist
+```
+
+转换需要使用 GPU，如果模型较大，可以用如下方式进行多机多卡的转换，并且在转换时像训练一样配置上合适的并行，例如：
+
+```bash
+source scripts/models/glm4.5-355B-A32B.sh
+PYTHONPATH=/root/Megatron-LM/ torchrun \
+   --nproc-per-node 8 \
+   --master-addr ${MASTER_ADDR} --master-port 12345 \
+   --nnodes=2 --node-rank ${NODE_RANK} \
+   tools/convert_hf_to_torch_dist.py \
+   ${MODEL_ARGS[@]} \
+   --hf-checkpoint $BASE_DIR/GLM-4.5-355B-A32B/ \
+   --save $BASE_DIR/GLM-4.5-355B-A32B_torch_dist/
 ```
 
 ⚠️  如果出现找不到 slime 的问题，请在 slime 目录下 `pip install -e .`。
@@ -196,4 +214,4 @@ ray job submit --address="http://127.0.0.1:8265" \
 ## 常见 Q&A 与致谢
 
 - 常见问题请见 [Q&A](docs/zh/qa.md)
-- 特别感谢以下项目 & 社区：SGLang、Megatron‑LM、mbridge、OpenRLHF、veRL 等。
+- 特别感谢以下项目 & 社区：SGLang、Megatron‑LM、mbridge、OpenRLHF、veRL、Pai-Megatron-Patch 等。

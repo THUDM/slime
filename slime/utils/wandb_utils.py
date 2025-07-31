@@ -39,6 +39,9 @@ def init_wandb_secondary(args, wandb_run_id):
         id=wandb_run_id,
         entity=args.wandb_team,
         project=args.wandb_project,
+        config=args.__dict__,
+        resume="allow",
+        reinit=True,
         settings=wandb.Settings(
             mode="shared",
             x_primary=False,

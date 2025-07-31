@@ -15,6 +15,8 @@ def train(args):
     # create the rollout manager, with sglang engines inside.
     rollout_manager = create_rollout_manager(args, pgs["rollout"], wandb_run_id=wandb_run_id)
 
+    assert args.offload and args.colocate, "Offload and colocate must be enabled"
+
     # calculate num_rollout from num_epoch
     num_rollout_per_epoch = None
     if args.num_rollout is None:

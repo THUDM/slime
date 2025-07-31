@@ -12,48 +12,43 @@ Regarding parallelism, for sglang we will enable EP64, activate dp attention, an
 
 ## Environment Setup
 
-To prepare the DeepSeek R1 checkpoint, you will need to use [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch).
+For instructions on setting up the environment and downloading data, please refer to [Example: Qwen3-4B](./qwen3-4B.md).
 
-First, download DeepSeek-R1 to a directory accessible by all machines (hereinafter referred to as `$BASE_DIR`):
+To prepare the DeepSeek R1 checkpoint, first you will need to download DeepSeek-R1 to a directory accessible by all machines (hereinafter referred to as `$BASE_DIR`):
 
 ```bash
 huggingface-cli download deepseek-ai/DeepSeek-R1 --local-dir $BASE_DIR/DeepSeek-R1
 ```
 
-The Hugging Face checkpoint for DeepSeek-R1 is in a block-quantized fp8 format. To convert it into a torch_dist format that Megatron can load, you first need to use Pai-Megatron-Patch to convert it to a bf16 Hugging Face checkpoint:
+The Hugging Face checkpoint for DeepSeek-R1 is in a block-quantized fp8 format. To convert it into a torch_dist format that Megatron can load, you first need to convert it to a bf16 Hugging Face checkpoint:
 
 ```bash
-cd $BASE_DIR/
-git clone --recurse-submodules https://github.com/alibaba/Pai-Megatron-Patch.git
-
-export MP_PP0_LAYERS=5
-cd Pai-Megatron-Patch/toolkits/model_checkpoints_convertor/deepseek
-python fp8_cast_bf16.py --input-fp8-hf-path $BASE_DIR/DeepSeek-R1 --output-bf16-hf-path $BASE_DIR/DeepSeek-R1-bf16/
+cd slime/
+python tools/fp8_cast_bf16.py --input-fp8-hf-path $BASE_DIR/DeepSeek-R1 --output-bf16-hf-path $BASE_DIR/DeepSeek-R1-bf16/
 ```
 
-Next, we need to use Pai-Megatron-Patch's multi-node conversion script to convert the bf16 version of DeepSeek-R1 into the torch_dist format. Specifically, execute the following on 4 separate nodes:
+Next, we need to convert the bf16 version of DeepSeek-R1 into the torch_dist format. Specifically, execute the following on 4 separate nodes:
 
 ```bash
-cd $BASE_DIR/Pai-Megatron-Patch/toolkits/distributed_checkpoints_convertor
-
-MASTER_ADDR=$MASTER_ADDR \
-MASTER_PORT=$MASTER_PORT \
-WORLD_SIZE=4 \
-RANK=$RANK \
-PYTHONPATH=/root/Megatron-LM \
-MODEL_PARALLEL_ARGS="--tensor-model-parallel-size 1 --pipeline-model-parallel-size 8 --expert-tensor-parallel-size 1 --expert-model-parallel-size 4 --decoder-first-pipeline-num-layers 7 --decoder-last-pipeline-num-layers 6" \
-bash scripts/deepseek_v3/run_32xH20.sh \
-   A37B \
-   $BASE_DIR/DeepSeek-R1-bf16/ \
-   $BASE_DIR/DeepSeek-R1_torch_dist/ \
-   false \
-   true \
-   bf16
+cd slime/
+source scripts/models/deepseek-v3.sh
+PYTHONPATH=/root/Megatron-LM/ torchrun \
+   --nproc-per-node 8 \
+   --master-addr ${MASTER_ADDR} --master-port 12345 \
+   --nnodes=4 --node-rank ${NODE_RANK} \
+   tools/convert_hf_to_torch_dist.py \
+   ${MODEL_ARGS[@]} \
+   --tensor-model-parallel-size 1 \
+   --pipeline-model-parallel-size 8 \
+   --expert-tensor-parallel-size 1 \
+   --expert-model-parallel-size 4 \
+   --decoder-first-pipeline-num-layers 7 \
+   --decoder-last-pipeline-num-layers 6 \
+   --hf-checkpoint $BASE_DIR/DeepSeek-R1-bf16/ \
+   --save $BASE_DIR/DeepSeek-R1_torch_dist/
 ```
 
-Here, `MASTER_ADDR` is the IP of node0, and `MASTER_PORT` is a specific port, both configured similarly to a multi-node `torchrun` setup. `RANK` indicates the node's index.
-
-For instructions on setting up the environment and downloading data, please refer to [Example: Qwen3-4B](./qwen3-4B.md).
+Here, `MASTER_ADDR` is the IP of node0, and `NODE_RANK` indicates the node's index, both configured similarly to a multi-node `torchrun` setup.
 
 ## Executing the Training
 
@@ -109,46 +104,6 @@ CKPT_ARGS=(
 ```
 
 slime will perform online quantization during training based on the quantization configuration in `hf_checkpoint`. For instance, in the current example, we are using the fp8 checkpoint of DeepSeek R1. This means that when updating parameters, we will first perform blockwise quantization on the parameters before passing them to sglang.
-
-#### ROLLOUT\_ARGS
-
-```bash
-ROLLOUT_ARGS=(
-   # Prompt dataset, each line is a json
-   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
-   --input-key prompt
-   --label-key label
-   # If the `input_key` in the prompt contains an OpenAI message,
-   # it will perform tokenizer.apply_chat_template(...)
-   --apply-chat-template
-   # Whether to shuffle the data
-   --rollout-shuffle
-
-   # Reward model type,
-   # slime provides many types and --custom-rm-path for customization
-   --rm-type deepscaler
-
-   # Total number of rollouts to train
-   --num-rollout 3000
-   # Number of prompts in one rollout
-   --rollout-batch-size 128
-   # Number of replies to sample for each prompt
-   # One rollout will have rollout_batch_size * n_samples_per_prompt items
-   --n-samples-per-prompt 8
-   # Rollout sampling parameters
-   --rollout-max-response-len 32768
-   --rollout-temperature 0.8
-
-   # Use double the batch size for sampling, and filter out samples where the reward variance is 0
-   --over-sampling-batch-size 256
-   --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
-
-   # Number of training steps corresponding to one rollout
-   --num-steps-per-rollout 4
-   # Whether to balance data during training, which may improve speed
-   --balance-data
-)
-```
 
 #### PERF\_ARGS
 
@@ -247,14 +202,7 @@ Some additional Megatron configurations. Note that Megatron's deepep is configur
 
 ```bash
 MISC_ARGS=(
-   # default dropout in megatron is 0.1
-   --attention-dropout 0.0
-   --hidden-dropout 0.0
-   # should be good for model performance
-   --accumulate-allreduce-grads-in-fp32
-   --attention-softmax-in-fp32
-   # need to comment this when using model with MLA
-   # --attention-backend flash
+   ...
 
    # use deepep for megatron
    --moe-enable-deepep

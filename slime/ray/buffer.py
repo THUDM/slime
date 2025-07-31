@@ -75,17 +75,20 @@ class Buffer:
         """
         if not samples:
             return
-
-        assert len(samples) % self.args.n_samples_per_prompt == 0
-        for i in range(0, len(samples), self.args.n_samples_per_prompt):
-            group = samples[i : i + self.args.n_samples_per_prompt]
+        assert isinstance(samples, list), f"samples must be a list, got {type(samples)}"
+        assert isinstance(samples[0], list), f"the elements of samples must be list, got {type(samples[0])}"
+        for i in range(0, len(samples)):
+            assert (
+                len(samples[i]) == self.args.n_samples_per_prompt
+            ), f"the length of the elements of samples must be equal to n_samples_per_prompt, got {len(samples[i])} != {self.args.n_samples_per_prompt}"
+            group = samples[i]  # type: ignore
             self.buffer.append(group)
 
     def generate(self, rollout_id, evaluation=False):
         self.rollout_id = rollout_id
         if self.args.debug_train_only and evaluation:
             # if debug train only, we don't generate evaluation data
-            return
+            return Box(ray.put({}))
 
         if not evaluation and self.args.load_debug_rollout_data:
             data = torch.load(

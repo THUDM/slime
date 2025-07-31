@@ -14,46 +14,41 @@
 
 搭建环境与下载数据的方法可以参考 [示例：Qwen3-4B](./qwen3-4B.md)。
 
-准备 DeepSeek R1 的 ckpt 则需要使用 [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch)。
-
-首先在多机均可访问到的地址（下记为 `$BASE_DIR`）上下载 DeepSeek-R1：
+准备 DeepSeek R1 的 ckpt 首先需要在多机均可访问到的地址（下记为 `$BASE_DIR`）上下载 DeepSeek-R1：
 
 ```bash
 huggingface-cli download deepseek-ai/DeepSeek-R1 --local-dir $BASE_DIR/DeepSeek-R1
 ```
 
-DeepSeek-R1 的 huggingface ckpt 为 block-quant 的 fp8 格式，为了转换一个 Megatron 可以加载的 torch dist 格式，需要加载先利用 Pai-Megatron-Patch 转化为 bf16 的 huggingface ckpt：
+DeepSeek-R1 的 huggingface ckpt 为 block-quant 的 fp8 格式，为了转换一个 Megatron 可以加载的 torch dist 格式，需要先转化一个 bf16 的 huggingface ckpt：
 
 ```bash
-cd $BASE_DIR/
-git clone --recurse-submodules https://github.com/alibaba/Pai-Megatron-Patch.git
-
-export MP_PP0_LAYERS=5
-cd Pai-Megatron-Patch/toolkits/model_checkpoints_convertor/deepseek
-python fp8_cast_bf16.py --input-fp8-hf-path $BASE_DIR/DeepSeek-R1 --output-bf16-hf-path $BASE_DIR/DeepSeek-R1-bf16/
+cd slime/
+python tools/fp8_cast_bf16.py --input-fp8-hf-path $BASE_DIR/DeepSeek-R1 --output-bf16-hf-path $BASE_DIR/DeepSeek-R1-bf16/
 ```
 
-之后我们需要使用 Pai-Megatron-Patch 的多机转换脚本将 bf16 版本的 DeepSeek-R1 转换为 torch dist 格式。具体为在 4 台机器上分别执行：
+之后我们需要将 bf16 版本的 DeepSeek-R1 转换为 torch dist 格式。具体为在 4 台机器上分别执行：
 
 ```bash
-cd $BASE_DIR/Pai-Megatron-Patch/toolkits/distributed_checkpoints_convertor
-
-MASTER_ADDR=$MASTER_ADDR \
-MASTER_PORT=$MASTER_PORT \
-WORLD_SIZE=4 \
-RANK=$RANK \
-PYTHONPATH=/root/Megatron-LM \
-MODEL_PARALLEL_ARGS="--tensor-model-parallel-size 1 --pipeline-model-parallel-size 8 --expert-tensor-parallel-size 1 --expert-model-parallel-size 4 --decoder-first-pipeline-num-layers 7 --decoder-last-pipeline-num-layers 6" \
-bash scripts/deepseek_v3/run_32xH20.sh \
-   A37B \
-   $BASE_DIR/DeepSeek-R1-bf16/ \
-   $BASE_DIR/DeepSeek-R1_torch_dist/ \
-   false \
-   true \
-   bf16
+cd slime/
+source scripts/models/deepseek-v3.sh
+PYTHONPATH=/root/Megatron-LM/ torchrun \
+   --nproc-per-node 8 \
+   --master-addr ${MASTER_ADDR} --master-port 12345 \
+   --nnodes=4 --node-rank ${NODE_RANK} \
+   tools/convert_hf_to_torch_dist.py \
+   ${MODEL_ARGS[@]} \
+   --tensor-model-parallel-size 1 \
+   --pipeline-model-parallel-size 8 \
+   --expert-tensor-parallel-size 1 \
+   --expert-model-parallel-size 4 \
+   --decoder-first-pipeline-num-layers 7 \
+   --decoder-last-pipeline-num-layers 6 \
+   --hf-checkpoint $BASE_DIR/DeepSeek-R1-bf16/ \
+   --save $BASE_DIR/DeepSeek-R1_torch_dist/
 ```
 
-其中 `MASTER_ADDR` 为 node0 的 ip，`MASTER_PORT` 为某个端口，这两者就像是在进行多机 `torchrun` 的时候进行的配置。`RANK` 表示这是第几台机器。
+其中 `MASTER_ADDR` 为 node0 的 ip，`NODE_RANK` 表示这是第几台机器，这两者就像是在多机 `torchrun` 的时候进行的配置。
 
 ## 执行训练
 
@@ -110,47 +105,6 @@ CKPT_ARGS=(
 ```
 
 slime 会根据 `hf_checkpoint` 中的量化配置从而在训练中进行在线量化。例如当前的例子中，我们使用的是 DeepSeek R1 的 fp8 ckpt，那么在进行参数更新的时候，我们会首先将参数进行 blockwise quant，再传至 sglang。
-
-#### ROLLOUT_ARGS
-
-```bash
-ROLLOUT_ARGS=(
-   # prompt 数据集，每行是个 json
-   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
-   --input-key prompt
-   --label-key label
-   # 如果 prompt 的 `input_key` 中是 openai message，
-   # 会进行 tokenizer.apply_chat_template(...)
-   --apply-chat-template
-   # 是否 shuffle 数据
-   --rollout-shuffle
-
-   # reward model 类型，
-   # slime 提供了很多类型以及用于自定义的 --custom-rm-path
-   --rm-type deepscaler
-
-   # 一共要训练多少 rollout
-   --num-rollout 3000
-   # 一个 rollout 有多少 prompt
-   --rollout-batch-size 128
-   # 每个 prompt 采多少回复
-   # 一个 rollout 会有 rollout_batch_size * n_samples_per_prompt 条
-   --n-samples-per-prompt 8
-   # rollout sampling param
-   --rollout-max-response-len 32768
-   --rollout-temperature 0.8
-
-   # 用双倍的 batch size 进行采样，并筛掉 reward 的方差为 0 的 sample
-   --over-sampling-batch-size 256
-   --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
-
-
-   # 一次 rollout 对应几个训练步
-   --num-steps-per-rollout 4
-   # 是否在训练时 balance data，可能对速度有好处
-   --balance-data
-)
-```
 
 #### PERF_ARGS
 
@@ -249,14 +203,7 @@ SGLANG_ARGS=(
 
 ```bash
 MISC_ARGS=(
-   # default dropout in megatron is 0.1
-   --attention-dropout 0.0
-   --hidden-dropout 0.0
-   # should be good for model performance
-   --accumulate-allreduce-grads-in-fp32
-   --attention-softmax-in-fp32
-   # need to comment this when using model with MLA
-   # --attention-backend flash
+   ...
 
    # use deepep for megatron
    --moe-enable-deepep

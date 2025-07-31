@@ -50,15 +50,13 @@ def compute_approx_kl(
 
 @torch.compile(dynamic=True)
 def compute_policy_loss(
-    log_probs: torch.Tensor,
-    old_logprobs: torch.Tensor,
+    ppo_kl: torch.Tensor,
     advantages: torch.Tensor,
     eps_clip: float,
     eps_clip_high: float,
     eps_clip_c: Optional[float] = None,
 ):
-    approx_kl = old_logprobs - log_probs
-    ratio = (-approx_kl).exp()
+    ratio = (-ppo_kl).exp()
     pg_losses1 = -ratio * advantages
     pg_losses2 = -ratio.clamp(1 - eps_clip, 1 + eps_clip_high) * advantages
     clip_pg_losses1 = torch.maximum(pg_losses1, pg_losses2)
@@ -74,7 +72,7 @@ def compute_policy_loss(
     else:
         pg_losses = clip_pg_losses1
 
-    return pg_losses, clipfrac, approx_kl
+    return pg_losses, clipfrac
 
 
 def compute_log_probs(logits: torch.Tensor, tokens: torch.Tensor, process_group: Optional[dist.ProcessGroup]):

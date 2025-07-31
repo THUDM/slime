@@ -16,6 +16,8 @@ def train(args):
     # create the rollout manager, with sglang engines inside.
     rollout_manager = create_rollout_manager(args, pgs["rollout"], wandb_run_id=wandb_run_id)
 
+    assert not args.offload and not args.colocate, "Offload and colocate are not supported for full async RL training."
+
     # calculate num_rollout from num_epoch
     num_rollout_per_epoch = None
     if args.num_rollout is None:

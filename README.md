@@ -14,7 +14,7 @@
       - [Environment Setup](#environment-setup)
       - [Examples](#examples)
         - [Dense Model Examples: GLM-4-9B and Qwen3-4B](#Dense-Model-Examples-GLM-4-9B-and-Qwen3-4B)
-        - [MoE Model Example: Qwen3-30B-A3B and DeepSeek-R1](#MoE-Model-Example-Qwen3-30B-A3B-and-DeepSeek-R1)
+        - [MoE Model Examples: GLM-4.5, Qwen3-30B-A3B and DeepSeek-R1](#MoE-Model-Examples-GLM-45-Qwen3-30B-A3B-and-DeepSeek-R1)
         - [Multi-Turn + Tool Calling Example: Search-R1 lite](#Multi-Turn--Tool-Calling-Example-Search-R1-lite)
         - [SFT Example: Qwen3-4B-Base with OpenHermes-2.5](#SFT-Example-Qwen3-4B-Base-with-OpenHermes-25)
   - [Checkpoint Format Conversion](#checkpoint-format-conversion)
@@ -61,11 +61,12 @@ We provide examples to use [GLM-4-9B](https://huggingface.co/THUDM/GLM-Z1-9B-041
 - [Example: GLM-4-9B](docs/en/models/glm4-9B.md).
 - [Example: Qwen3-4B](docs/en/models/qwen3-4B.md).
 
-#### MoE Model Example: Qwen3-30B-A3B and DeepSeek-R1
+#### MoE Model Examples: GLM-4.5, Qwen3-30B-A3B and DeepSeek-R1
 
 For MoE example, please refer to:
 
-- [Example: Qwen3-30B-A3B](docs/en/models/qwen3-30B-A3B.md).
+- [Example: Training GLM-4.5 wtih 64xH100](docs/en/models/glm4.5-355B-A32B.md)
+- [Example: Training Qwen3-30B-A3B with 8xH100](docs/en/models/qwen3-30B-A3B.md).
 - [Example: Training DeepSeek R1 with 128xH100](docs/en/models/deepseek-r1.md)
 
 #### Multi-Turn + Tool Calling Example: Search-R1 lite
@@ -86,15 +87,30 @@ Since slime uses Megatron, and Megatron does not support loading Hugging Face ch
 
 #### HF → Megatron torch\_dist ckpt
 
-We recommend using [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch) for mcore checkpoint conversion.
-
-If the mode you are using are not supported by Pai-Megatron-Patch, you could use [mbridge](https://github.com/ISEEKYAN/mbridge.git) for conversion:
+We are using [mbridge](https://github.com/ISEEKYAN/mbridge.git) for conversion:
 
 ```bash
 cd slime/
+
+source scripts/models/glm4-9B.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
+    ${MODEL_ARGS[@]} \
     --hf-checkpoint /root/GLM-Z1-9B-0414 \
     --save /root/GLM-Z1-9B-0414_torch_dist
+```
+
+This conversion requires GPU, so for large models, you can use the following methods to convert with multiple GPUS, note that you can add parallel config the same way as training:
+
+```bash
+source scripts/models/glm4.5-355B-A32B.sh
+PYTHONPATH=/root/Megatron-LM/ torchrun \
+   --nproc-per-node 8 \
+   --master-addr ${MASTER_ADDR} --master-port 12345 \
+   --nnodes=2 --node-rank ${NODE_RANK} \
+   tools/convert_hf_to_torch_dist.py \
+   ${MODEL_ARGS[@]} \
+   --hf-checkpoint $BASE_DIR/GLM-4.5-355B-A32B/ \
+   --save $BASE_DIR/GLM-4.5-355B-A32B_torch_dist/
 ```
 
 ⚠️ If you encounter an issue where slime cannot be found, please run `pip install -e .` in the slime directory.
@@ -200,4 +216,4 @@ For complete usage instructions, please refer to the [Usage Documentation](docs/
 ## FAQ & Acknowledgements
 
   - For frequently asked questions, please see the [Q\&A](docs/en/qa.md)
-  - Special thanks to the following projects & communities: SGLang, Megatron‑LM, mbridge, OpenRLHF, veRL, and others.
+  - Special thanks to the following projects & communities: SGLang, Megatron‑LM, mbridge, OpenRLHF, veRL, Pai-Megatron-Patch and others.

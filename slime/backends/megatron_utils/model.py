@@ -6,6 +6,7 @@ from functools import partial
 
 import torch
 from megatron.core import mpu
+from megatron.core.enums import ModelType
 from megatron.core.distributed import DistributedDataParallel as DDP
 from megatron.core.distributed import DistributedDataParallelConfig, finalize_model_grads
 from megatron.core.models.gpt import GPTModel
@@ -22,7 +23,7 @@ from slime.utils.memory_utils import clear_memory
 from .checkpoint import load_checkpoint, save_checkpoint
 from .data import get_batch
 from .loss import get_log_probs_and_entropy, loss_function
-from .models import get_model_provider_and_type
+from .model_provider import get_model_provider_func
 
 if torch.version.hip:
     from vllm.device_allocator.cumem import CuMemAllocator
@@ -69,8 +70,6 @@ def get_optimizer_param_scheduler(args, optimizer):
 
 def setup_model_and_optimizer(
     args,
-    model_provider_func,
-    model_type,
     no_wd_decay_cond=None,
     scale_lr_cond=None,
     lr_mult=1.0,
@@ -79,7 +78,7 @@ def setup_model_and_optimizer(
     assert not args.moe_use_upcycling
     assert args.load is not None or args.pretrained_checkpoint is not None
 
-    model = get_model(model_provider_func, model_type, wrap_with_ddp=False)
+    model = get_model(get_model_provider_func(args), ModelType.encoder_or_decoder, wrap_with_ddp=False)
 
     allocator = CuMemAllocator.get_instance() if args.colocate else None
     with allocator.use_memory_pool(tag="model") if args.colocate else nullcontext():
@@ -493,13 +492,7 @@ def save(iteration, model, optimizer, opt_param_scheduler):
 
 
 def initialize_model_and_optimizer(args):
-    model_provider, model_type = get_model_provider_and_type()
-
-    model, optimizer, opt_param_scheduler = setup_model_and_optimizer(
-        args,
-        model_provider,
-        model_type,
-    )
+    model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args)
     clear_memory()
     iteration, _ = load_checkpoint(
         model,

@@ -15,7 +15,7 @@ from slime.utils.ppo_utils import (
     get_reinforce_plus_plus_returns,
 )
 
-from .cp_utils import get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
+from .cp_utils import get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean, all_gather_with_cp
 
 
 def calculate_log_probs_and_entropy(logits, tokens, with_entropy: bool = False):
@@ -146,7 +146,7 @@ def compute_advantages_and_returns(args, rollout_data):
         ]
     rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
 
-    if args.advantage_estimator == "grpo":
+    if args.advantage_estimator in ["grpo", "gspo"]:
         returns = get_grpo_returns(rewards, kl)
         # TODO: is the copy necessary?
         advantages = [r for r in returns]
@@ -228,7 +228,7 @@ def compute_advantages_and_returns(args, rollout_data):
 
 def policy_loss_function(args, batch, logits, sum_of_sample_mean):
     advantages = torch.cat(batch["advantages"], dim=0)
-    old_log_probs = torch.cat(batch["log_probs"], dim=0)
+    old_log_probs = batch["log_probs"]
 
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
@@ -243,19 +243,39 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
     )
 
     log_probs = log_probs_and_entropy["log_probs"]
-    entropy = log_probs_and_entropy["entropy"]
 
-    log_probs = torch.cat(log_probs, dim=0)
-    entropy = torch.cat(entropy, dim=0)
+    if args.advantage_estimator == "gspo":
+        full_log_probs = [
+            all_gather_with_cp(log_prob, total_length, response_length)
+            for log_prob, total_length, response_length in zip(log_probs, total_lengths, response_lengths)
+        ]
+        full_old_log_probs = [
+            all_gather_with_cp(old_log_prob, total_length, response_length)
+            for old_log_prob, total_length, response_length in zip(old_log_probs, total_lengths, response_lengths)
+        ]
+        loss_masks = batch["loss_masks"]
+        ppo_kl = [
+            ((old_logprob - log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+            for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks)
+        ]
+        ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, log_probs)]
+        ppo_kl = torch.cat(ppo_kl, dim=0)
+        log_probs = torch.cat(log_probs, dim=0)
+        assert ppo_kl.shape == log_probs.shape, f"{ppo_kl.shape} vs {log_probs.shape}"
+    else:
+        old_log_probs = torch.cat(batch["log_probs"], dim=0)
+        log_probs = torch.cat(log_probs, dim=0)
+        ppo_kl = old_log_probs - log_probs
 
-    entropy_loss = sum_of_sample_mean(entropy)
-
-    pg_loss, pg_clipfrac, ppo_kl = compute_policy_loss(
-        log_probs, old_log_probs, advantages, args.eps_clip, args.eps_clip_high
-    )
+    pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
     pg_loss = sum_of_sample_mean(pg_loss)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
     ppo_kl = sum_of_sample_mean(ppo_kl)
+
+    # entropy loss
+    entropy = log_probs_and_entropy["entropy"]
+    entropy = torch.cat(entropy, dim=0)
+    entropy_loss = sum_of_sample_mean(entropy)
 
     loss = pg_loss - args.entropy_coef * entropy_loss
 

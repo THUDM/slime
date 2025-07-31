@@ -33,7 +33,9 @@ huggingface-cli download --repo-type dataset zhuzilin/aime-2024 \
 ```bash
 # mcore checkpoint
 cd /root/slime
+source scripts/models/glm4-9B.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
+    ${MODEL_ARGS[@]} \
     --hf-checkpoint /root/GLM-Z1-9B-0414 \
     --save /root/GLM-Z1-9B-0414_torch_dist
 ```

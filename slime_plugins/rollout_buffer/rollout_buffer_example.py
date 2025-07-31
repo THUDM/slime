@@ -73,13 +73,15 @@ def select_rollout_data(args, results, need_length):
     # Flatten selected groups back to sample list
     selected_results = []
     for group_id, timestamp, group_items in selected_groups:
-        selected_results.extend(group_items)
+        selected_results.append(group_items)
 
     # Statistics for monitoring
     if selected_groups:
         newest_ts = selected_groups[0][1]
         oldest_ts = selected_groups[-1][1]
-        print(f"📈 Selected {len(selected_groups)} groups with {len(selected_results)} samples")
+        print(
+            f"📈 Selected {len(selected_groups)} groups with {len(selected_results)*args.n_samples_per_prompt} samples"
+        )
         print(f"📈 Group timestamp range: {oldest_ts:.2f} to {newest_ts:.2f}")
         print(f"📈 Time span: {newest_ts - oldest_ts:.2f} seconds")
 
@@ -263,35 +265,38 @@ async def generate_rollout_async(
     print("finally get rollout data with length: ", len(results))
     sample_results = []
 
-    for i, record in enumerate(results):
-        oai_messages = record["messages"]
+    for i, group_record in enumerate(results):
+        group_results = []
+        for record in group_record:
+            oai_messages = record["messages"]
 
-        mask_generator = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type=args.loss_mask_type)
-        token_ids, loss_mask = mask_generator.get_loss_mask(oai_messages)
-        response_length = mask_generator.get_response_lengths([loss_mask])[0]
+            mask_generator = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type=args.loss_mask_type)
+            token_ids, loss_mask = mask_generator.get_loss_mask(oai_messages)
+            response_length = mask_generator.get_response_lengths([loss_mask])[0]
 
-        loss_mask = loss_mask[-response_length:]
+            loss_mask = loss_mask[-response_length:]
 
-        sample_results.append(
-            Sample(
-                index=record["instance_id"],
-                prompt=record["uid"],
-                tokens=token_ids,
-                response_length=response_length,
-                reward=record["reward"],
-                status=(
-                    Sample.Status.COMPLETED
-                    if "finish_reason" not in record["extra_info"] or record["extra_info"]["finish_reason"] != "length"
-                    else Sample.Status.TRUNCATED
-                ),
-                loss_mask=loss_mask,
-                metadata={**record["extra_info"]},
+            group_results.append(
+                Sample(
+                    index=record["instance_id"],
+                    prompt=record["uid"],
+                    tokens=token_ids,
+                    response_length=response_length,
+                    reward=record["reward"],
+                    status=(
+                        Sample.Status.COMPLETED
+                        if "finish_reason" not in record["extra_info"]
+                        or record["extra_info"]["finish_reason"] != "length"
+                        else Sample.Status.TRUNCATED
+                    ),
+                    loss_mask=loss_mask,
+                    metadata={**record["extra_info"]},
+                )
             )
-        )
-    final_return_results = []
+        sample_results.append(group_results)
 
     data_buffer.add_samples(sample_results)
-    final_return_results = data_buffer.get_samples(args.rollout_batch_size)
+    final_return_results = data_buffer.get_samples(args.rollout_batch_size)  # type: ignore
 
     return final_return_results
 
