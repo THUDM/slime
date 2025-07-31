@@ -812,7 +812,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
 
 def parse_args(add_custom_arguments=None):
-    from slime.backends.megatron_utils import _vocab_size_with_padding
+    from slime.backends.megatron_utils import set_default_megatron_args
     from slime.backends.megatron_utils import parse_args as megatron_parse_args
     from slime.backends.megatron_utils import validate_args as megatron_validate_args
 
@@ -826,24 +826,7 @@ def parse_args(add_custom_arguments=None):
     args.rank = 0
     args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
 
-    # always use zero optimizer
-    args.use_distributed_optimizer = True
-    # TODO: maybe change this after megatron has good fp8 support
-    args.bf16 = True
-    # placeholders
-    args.seq_length = 4096
-    args.max_position_embeddings = args.seq_length
-    # compatible for megatron
-    if hasattr(args, "rope_type") and args.rope_type is None:
-        args.rope_type = "yarn"
-
-    if args.vocab_size and not args.padded_vocab_size:
-        args.padded_vocab_size = _vocab_size_with_padding(args.vocab_size, args)
-
-    if not args.tokenizer_model and not args.tokenizer_type:
-        print(f"--tokenizer-model not set, use --hf-checkpoint as tokenizer model.")
-        args.tokenizer_model = args.hf_checkpoint
-        args.tokenizer_type = "HuggingFaceTokenizer"
+    args = set_default_megatron_args(args)
 
     if args.ref_micro_batch_size is None:
         args.ref_micro_batch_size = args.micro_batch_size

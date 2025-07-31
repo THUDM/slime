@@ -1,7 +1,7 @@
 import logging
 
 from .actor import MegatronTrainRayActor
-from .arguments import _vocab_size_with_padding, parse_args, validate_args
+from .arguments import parse_args, validate_args, set_default_megatron_args
 from .checkpoint import load_checkpoint, save_checkpoint
 from .initialize import init
 from .model import initialize_model_and_optimizer
@@ -14,7 +14,7 @@ __all__ = [
     "validate_args",
     "load_checkpoint",
     "save_checkpoint",
-    "_vocab_size_with_padding",
+    "set_default_megatron_args",
     "MegatronTrainRayActor",
     "init",
     "initialize_model_and_optimizer",

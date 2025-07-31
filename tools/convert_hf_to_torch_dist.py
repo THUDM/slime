@@ -9,7 +9,7 @@ import torch.distributed as dist
 from slime.backends.megatron_utils.model_provider import get_model_provider_func
 from megatron.core.enums import ModelType
 from megatron.training.arguments import parse_args, validate_args
-from megatron.training.tokenizer.tokenizer import _vocab_size_with_padding
+from megatron.training.tokenizer.tokenizer import set_default_megatron_args
 from slime.backends.megatron_utils.initialize import init
 from megatron.training.checkpointing import save_checkpoint
 from megatron.training.training import get_model
@@ -26,22 +26,9 @@ def add_convertion_args(parser):
 
 def get_args():
     args = parse_args(add_convertion_args)
-    # always use zero optimizer
-    args.use_distributed_optimizer = True
-    # TODO: maybe change this after megatron has good fp8 support
-    args.bf16 = True
-    # placeholders
-    args.seq_length = 4096
-    args.max_position_embeddings = args.seq_length
+    args = set_default_megatron_args(args)
 
-    if args.vocab_size and not args.padded_vocab_size:
-        args.padded_vocab_size = _vocab_size_with_padding(args.vocab_size, args)
-
-    if not args.tokenizer_model and not args.tokenizer_type:
-        print(f"--tokenizer-model not set, use --hf-checkpoint as tokenizer model.")
-        args.tokenizer_model = args.hf_checkpoint
-        args.tokenizer_type = "HuggingFaceTokenizer"
-
+    # set to pass megatron validate_args
     args.save_interval = 1
     args.micro_batch_size = 1
     world_size = int(os.environ.get("WORLD_SIZE", "1"))
