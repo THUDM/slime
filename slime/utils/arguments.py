@@ -833,6 +833,9 @@ def parse_args(add_custom_arguments=None):
     # placeholders
     args.seq_length = 4096
     args.max_position_embeddings = args.seq_length
+    # compatible for megatron
+    if hasattr(args, "rope_type") and args.rope_type is None:
+        args.rope_type = "yarn"
 
     if args.vocab_size and not args.padded_vocab_size:
         args.padded_vocab_size = _vocab_size_with_padding(args.vocab_size, args)

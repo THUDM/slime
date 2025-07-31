@@ -20,8 +20,7 @@ def all_gather_param(name, param):
         return param
 
     assert hasattr(param, "tensor_model_parallel"), f"{name} does not have tensor_model_parallel attribute"
-    if not param.tensor_model_parallel:
-        # if mpu.get_tensor_model_parallel_world_size() == 1:
+    if not param.tensor_model_parallel or getattr(param, "parallel_mode", None) == "duplicated":
         return param.data
 
     if ".experts." in name:
@@ -135,6 +134,7 @@ def get_param_infos(args, model) -> list[ParamInfo]:
                 "tensor_model_parallel": getattr(param, "tensor_model_parallel", False),
                 "partition_dim": getattr(param, "partition_dim", -1),
                 "partition_stride": getattr(param, "partition_stride", 1),
+                "parallel_mode": getattr(param, "parallel_mode", None),
             },
             size=param.numel() * param.element_size(),
             src_rank=rank,
