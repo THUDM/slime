@@ -992,6 +992,7 @@ def hf_validate_args(args, hf_config):
         ("intermediate_size", "ffn_hidden_size", equal),
         ("tie_word_embeddings", "untie_embeddings_and_output_weights", lambda x, y: not x == y),
         ("rms_norm_eps", "norm_epsilon", equal),
+        ("rope_theta", "rotary_base", equal),
     ]:
         if hasattr(hf_config, hf_config_name):
             assert compare_fn(getattr(hf_config, hf_config_name), getattr(args, megatron_config_name)), (

@@ -202,8 +202,6 @@ class RolloutManager:
         ).remote()
 
     def async_generate(self, rollout_id, evaluation=False):
-        if self.args.debug_train_only:
-            return
         return self.data_buffer.generate.remote(rollout_id, evaluation=evaluation)
 
     def async_reset_prefix_cache(self):

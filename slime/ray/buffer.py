@@ -88,7 +88,7 @@ class Buffer:
         self.rollout_id = rollout_id
         if self.args.debug_train_only and evaluation:
             # if debug train only, we don't generate evaluation data
-            return
+            return Box(ray.put({}))
 
         if not evaluation and self.args.load_debug_rollout_data:
             data = torch.load(
