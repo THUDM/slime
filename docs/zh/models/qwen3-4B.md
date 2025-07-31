@@ -32,7 +32,9 @@ huggingface-cli download --repo-type dataset zhuzilin/aime-2024 \
 ```bash
 # mcore checkpoint
 cd /root/slime
+source scripts/models/qwen3-4B.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
+    ${MODEL_ARGS[@]} \
     --hf-checkpoint /root/Qwen3-4B \
     --save /root/Qwen3-4B_torch_dist
 ```

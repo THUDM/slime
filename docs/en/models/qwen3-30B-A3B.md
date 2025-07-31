@@ -6,17 +6,18 @@
 
 The environment setup, model download, data, and checkpoint conversion are the same as for the Qwen3-4B model. You can refer to [Example: Qwen3-4B Model](./qwen3-4B.md), replacing mentions of Qwen3-4B with Qwen3-30B-A3B.
 
-### Checkpoint Conversion
-
-⚠️ **Use [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch) for MoE models** (as mbridge may has bugs)
+To convert huggingface checkpoint to torch_dist, please try:
 
 ```bash
-git clone --recurse-submodules https://github.com/alibaba/Pai-Megatron-Patch.git
-cd Pai-Megatron-Patch/toolkits/distributed_checkpoints_convertor
-bash scripts/qwen3/run_8xH20.sh A3B /root/Qwen3-30B-A3B /root/Qwen3-30B-A3B_torch_dist false true bf16
+cd slime/
+pip install -e .
+source scripts/models/qwen3-30B-A3B.sh
+PYTHONPATH=/root/Megatron-LM/ torchrun --nproc-per-node 8 \
+   tools/convert_hf_to_torch_dist.py \
+   ${MODEL_ARGS[@]} \
+   --hf-checkpoint /root/Qwen3-30B-A3B/ \
+   --save /root/Qwen3-30B-A3B_torch_dist/
 ```
-
-[Full instructions](https://github.com/alibaba/Pai-Megatron-Patch/blob/main/examples/qwen3/README.md)
 
 ## Run Training
 

@@ -88,13 +88,36 @@ slime 不仅仅是一个 RL 框架，我们还支持了各种后训练流程。�
 
 #### HF → Megatron torch_dist ckpt
 
-我们推荐使用 [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch) 进行转换。如果你目前在使用的模型不被 Pai-Megatron-Patch 支持，可以使用 [mbridge](https://github.com/ISEEKYAN/mbridge.git) 转换：
+我们使用 [mbridge](https://github.com/ISEEKYAN/mbridge.git) 进行 checkpoint 转换，使用方式如下：
 
 ```bash
 cd slime/
+
+source scripts/models/glm4-9B.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
+    ${MODEL_ARGS[@]} \
     --hf-checkpoint /root/GLM-Z1-9B-0414 \
     --save /root/GLM-Z1-9B-0414_torch_dist
+```
+
+转换需要使用 GPU，如果模型较大，可以用如下方式进行多机多卡的转换，并且在转换时像训练一样配置上合适的并行，例如：
+
+```bash
+source scripts/models/deepseek-v3.sh
+PYTHONPATH=/root/Megatron-LM/ torchrun \
+   --nproc-per-node 8 \
+   --master-addr ${MASTER_ADDR} --master-port 12345 \
+   --nnodes=${NUM_NODES} --node-rank ${NODE_RANK} \
+   tools/convert_hf_to_torch_dist.py \
+   ${MODEL_ARGS[@]} \
+   --tensor-model-parallel-size 1 \
+   --pipeline-model-parallel-size 8 \
+   --expert-tensor-parallel-size 1 \
+   --expert-model-parallel-size 4 \
+   --decoder-first-pipeline-num-layers 7 \
+   --decoder-last-pipeline-num-layers 6 \
+   --hf-checkpoint $BASE_DIR/DeepSeek-R1-bf16/ \
+   --save $BASE_DIR/DeepSeek-R1_torch_dist/
 ```
 
 ⚠️  如果出现找不到 slime 的问题，请在 slime 目录下 `pip install -e .`。

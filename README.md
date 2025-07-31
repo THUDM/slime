@@ -86,15 +86,36 @@ Since slime uses Megatron, and Megatron does not support loading Hugging Face ch
 
 #### HF → Megatron torch\_dist ckpt
 
-We recommend using [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch) for mcore checkpoint conversion.
-
-If the mode you are using are not supported by Pai-Megatron-Patch, you could use [mbridge](https://github.com/ISEEKYAN/mbridge.git) for conversion:
+We are using [mbridge](https://github.com/ISEEKYAN/mbridge.git) for conversion:
 
 ```bash
 cd slime/
+
+source scripts/models/glm4-9B.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
+    ${MODEL_ARGS[@]} \
     --hf-checkpoint /root/GLM-Z1-9B-0414 \
     --save /root/GLM-Z1-9B-0414_torch_dist
+```
+
+This conversion requires GPU, so for large models, you can use the following methods to convert with multiple GPUS, note that you can add parallel config the same way as training:
+
+```bash
+source scripts/models/deepseek-v3.sh
+PYTHONPATH=/root/Megatron-LM/ torchrun \
+   --nproc-per-node 8 \
+   --master-addr ${MASTER_ADDR} --master-port 12345 \
+   --nnodes=${NUM_NODES} --node-rank ${NODE_RANK} \
+   tools/convert_hf_to_torch_dist.py \
+   ${MODEL_ARGS[@]} \
+   --tensor-model-parallel-size 1 \
+   --pipeline-model-parallel-size 8 \
+   --expert-tensor-parallel-size 1 \
+   --expert-model-parallel-size 4 \
+   --decoder-first-pipeline-num-layers 7 \
+   --decoder-last-pipeline-num-layers 6 \
+   --hf-checkpoint $BASE_DIR/DeepSeek-R1-bf16/ \
+   --save $BASE_DIR/DeepSeek-R1_torch_dist/
 ```
 
 ⚠️ If you encounter an issue where slime cannot be found, please run `pip install -e .` in the slime directory.

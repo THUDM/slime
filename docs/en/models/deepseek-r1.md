@@ -12,48 +12,43 @@ Regarding parallelism, for sglang we will enable EP64, activate dp attention, an
 
 ## Environment Setup
 
-To prepare the DeepSeek R1 checkpoint, you will need to use [Pai-Megatron-Patch](https://github.com/alibaba/Pai-Megatron-Patch).
+For instructions on setting up the environment and downloading data, please refer to [Example: Qwen3-4B](./qwen3-4B.md).
 
-First, download DeepSeek-R1 to a directory accessible by all machines (hereinafter referred to as `$BASE_DIR`):
+To prepare the DeepSeek R1 checkpoint, first you will need to download DeepSeek-R1 to a directory accessible by all machines (hereinafter referred to as `$BASE_DIR`):
 
 ```bash
 huggingface-cli download deepseek-ai/DeepSeek-R1 --local-dir $BASE_DIR/DeepSeek-R1
 ```
 
-The Hugging Face checkpoint for DeepSeek-R1 is in a block-quantized fp8 format. To convert it into a torch_dist format that Megatron can load, you first need to use Pai-Megatron-Patch to convert it to a bf16 Hugging Face checkpoint:
+The Hugging Face checkpoint for DeepSeek-R1 is in a block-quantized fp8 format. To convert it into a torch_dist format that Megatron can load, you first need to convert it to a bf16 Hugging Face checkpoint:
 
 ```bash
-cd $BASE_DIR/
-git clone --recurse-submodules https://github.com/alibaba/Pai-Megatron-Patch.git
-
-export MP_PP0_LAYERS=5
-cd Pai-Megatron-Patch/toolkits/model_checkpoints_convertor/deepseek
-python fp8_cast_bf16.py --input-fp8-hf-path $BASE_DIR/DeepSeek-R1 --output-bf16-hf-path $BASE_DIR/DeepSeek-R1-bf16/
+cd slime/
+python tools/fp8_cast_bf16.py --input-fp8-hf-path $BASE_DIR/DeepSeek-R1 --output-bf16-hf-path $BASE_DIR/DeepSeek-R1-bf16/
 ```
 
-Next, we need to use Pai-Megatron-Patch's multi-node conversion script to convert the bf16 version of DeepSeek-R1 into the torch_dist format. Specifically, execute the following on 4 separate nodes:
+Next, we need to convert the bf16 version of DeepSeek-R1 into the torch_dist format. Specifically, execute the following on 4 separate nodes:
 
 ```bash
-cd $BASE_DIR/Pai-Megatron-Patch/toolkits/distributed_checkpoints_convertor
-
-MASTER_ADDR=$MASTER_ADDR \
-MASTER_PORT=$MASTER_PORT \
-WORLD_SIZE=4 \
-RANK=$RANK \
-PYTHONPATH=/root/Megatron-LM \
-MODEL_PARALLEL_ARGS="--tensor-model-parallel-size 1 --pipeline-model-parallel-size 8 --expert-tensor-parallel-size 1 --expert-model-parallel-size 4 --decoder-first-pipeline-num-layers 7 --decoder-last-pipeline-num-layers 6" \
-bash scripts/deepseek_v3/run_32xH20.sh \
-   A37B \
-   $BASE_DIR/DeepSeek-R1-bf16/ \
-   $BASE_DIR/DeepSeek-R1_torch_dist/ \
-   false \
-   true \
-   bf16
+cd slime/
+source scripts/models/deepseek-v3.sh
+PYTHONPATH=/root/Megatron-LM/ torchrun \
+   --nproc-per-node 8 \
+   --master-addr ${MASTER_ADDR} --master-port 12345 \
+   --nnodes=4 --node-rank ${NODE_RANK} \
+   tools/convert_hf_to_torch_dist.py \
+   ${MODEL_ARGS[@]} \
+   --tensor-model-parallel-size 1 \
+   --pipeline-model-parallel-size 8 \
+   --expert-tensor-parallel-size 1 \
+   --expert-model-parallel-size 4 \
+   --decoder-first-pipeline-num-layers 7 \
+   --decoder-last-pipeline-num-layers 6 \
+   --hf-checkpoint $BASE_DIR/DeepSeek-R1-bf16/ \
+   --save $BASE_DIR/DeepSeek-R1_torch_dist/
 ```
 
-Here, `MASTER_ADDR` is the IP of node0, and `MASTER_PORT` is a specific port, both configured similarly to a multi-node `torchrun` setup. `RANK` indicates the node's index.
-
-For instructions on setting up the environment and downloading data, please refer to [Example: Qwen3-4B](./qwen3-4B.md).
+Here, `MASTER_ADDR` is the IP of node0, and `NODE_RANK` indicates the node's index, both configured similarly to a multi-node `torchrun` setup.
 
 ## Executing the Training
 

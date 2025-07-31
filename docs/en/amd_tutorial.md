@@ -68,9 +68,10 @@ Use [mbridge](https://github.com/ISEEKYAN/mbridge.git) or [Megatron-LM-amd_versi
 
 ```bash
 cd slime/
-# PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
+source scripts/models/qwen3-4B.sh
 MEGATRON_LM_PATH=$(pip list | grep megatron-core | awk '{print $NF}')
 PYTHONPATH=${MEGATRON_LM_PATH} python tools/convert_hf_to_torch_dist.py \
+    ${MODEL_ARGS[@]} \
     --hf-checkpoint model/Qwen3-4B \
     --save model/Qwen3-4B_torch_dist
 ```
