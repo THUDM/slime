@@ -390,17 +390,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             # mbs for the training, will be ignored if `use_dynamic_batch_size` is set.
             reset_megatron_args(parser, "--micro-batch-size", 1)
-            # mbs for calculating the log probs, will be ignored if `use_dynamic_batch_size` is set.
-            parser.add_argument(
-                "--ref-micro-batch-size",
-                type=int,
-                default=None,
-                help=(
-                    "Micro batch size for calculating log probs, as we won't do backward during log probs calculation, "
-                    "we can set it to a larger value than the micro batch size for training. "
-                    "This will be ignored if `use_dynamic_batch_size` is set."
-                ),
-            )
             parser.add_argument(
                 "--balance-data",
                 action="store_true",
@@ -837,9 +826,6 @@ def parse_args(add_custom_arguments=None):
     args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
 
     args = set_default_megatron_args(args)
-
-    if args.ref_micro_batch_size is None:
-        args.ref_micro_batch_size = args.micro_batch_size
 
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):

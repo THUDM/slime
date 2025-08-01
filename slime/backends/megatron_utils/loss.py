@@ -261,7 +261,6 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
         ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, log_probs)]
         ppo_kl = torch.cat(ppo_kl, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
-        assert ppo_kl.shape == log_probs.shape, f"{ppo_kl.shape} vs {log_probs.shape}"
     else:
         old_log_probs = torch.cat(batch["log_probs"], dim=0)
         log_probs = torch.cat(log_probs, dim=0)

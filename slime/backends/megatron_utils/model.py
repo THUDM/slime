@@ -161,8 +161,12 @@ def disable_forward_pre_hook(model_chunks, param_sync=True):
 
 
 @torch.no_grad()
-def forward_only(args, model, data_iterator, num_microbatches, store_prefix="", rollout_data=None):
+def forward_only(args, model, data_iterator, num_microbatches, store_prefix=""):
     """Only do the forward pass and calculate the logprob."""
+
+    # reset data iterator
+    for iterator in data_iterator:
+        iterator.reset()
 
     config = get_model_config(model[0])
 
@@ -211,26 +215,26 @@ def forward_only(args, model, data_iterator, num_microbatches, store_prefix="", 
     forward_backward_func = get_forward_backward_func()
     # Don't care about timing during evaluation
     config.timers = None
-    # collect_non_loss_data
-    forward_data_store = forward_backward_func(
-        forward_step_func=forward_step,
-        data_iterator=data_iterator,
-        model=model,
-        num_microbatches=num_microbatches,
-        seq_length=args.seq_length,
-        micro_batch_size=args.ref_micro_batch_size,
-        forward_only=True,
-        collect_non_loss_data=True,
-    )
-
-    # Empty unused memory
-    if args.empty_unused_memory_level >= 1:
-        torch.cuda.empty_cache()
+    forward_data_store = []
+    num_steps_per_rollout = args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    for step_id in range(num_steps_per_rollout):
+        # collect_non_loss_data
+        forward_data_store += forward_backward_func(
+            forward_step_func=forward_step,
+            data_iterator=data_iterator,
+            model=model,
+            num_microbatches=num_microbatches[step_id],
+            seq_length=args.seq_length,
+            micro_batch_size=args.micro_batch_size,
+            forward_only=True,
+            collect_non_loss_data=True,
+        )
 
     # Move model back to the train mode.
     for model_module in model:
         model_module.train()
 
+    rollout_data = {}
     # Store the results on the last stage
     if mpu.is_pipeline_last_stage():
         keys = forward_data_store[0].keys()
@@ -249,6 +253,7 @@ def forward_only(args, model, data_iterator, num_microbatches, store_prefix="", 
                     origin_values[origin_index] = value
                 values = origin_values
             rollout_data[f"{store_prefix}{key}"] = values
+    return rollout_data
 
 
 def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, opt_param_scheduler, num_microbatches):
@@ -313,10 +318,6 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
         forward_only=False,
     )
 
-    # Empty unused memory.
-    if args.empty_unused_memory_level >= 1:
-        torch.cuda.empty_cache()
-
     valid_step = True
     if not getattr(args, "check_for_nan_in_loss_and_grad", True):
         found_inf_flag = optimizer.prepare_grads()
@@ -341,10 +342,6 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
     for model_chunk in model:
         model_chunk.zero_grad_buffer()
     optimizer.zero_grad()
-
-    # Empty unused memory.
-    if args.empty_unused_memory_level >= 2:
-        torch.cuda.empty_cache()
 
     if mpu.is_pipeline_last_stage(ignore_virtual=True):
         # Average loss across microbatches.
@@ -375,6 +372,9 @@ def should_disable_forward_pre_hook(args):
 def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_microbatches):
     """Training function: run train_step desired number of times."""
     args = get_args()
+
+    for iterator in data_iterator:
+        iterator.reset()
 
     # Turn on training mode which enables dropout.
     for model_module in model:
