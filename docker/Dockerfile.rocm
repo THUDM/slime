@@ -1,6 +1,6 @@
 #### Use the base image
 # Thanks to Yang Wang (https://www.microsoft.com/en-us/research/people/yangwang5/) for working on the patch for this ROCm base Docker image to support virtual memory management on MI300X.
-FROM "rlfoundation.azurecr.io/rocm6.3.4:vllm-0.8.5-numa-patch-ubuntu-22.04"
+FROM "yushengsuthu/verl:verl-0.4.1_ubuntu-22.04_rocm6.3.4-numa-patch_vllm0.8.5_sglang0.4.6.post4"
 
 SHELL ["/bin/bash", "-ceuxo", "pipefail"]
 
