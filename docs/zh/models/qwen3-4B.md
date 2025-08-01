@@ -9,6 +9,7 @@
 ```bash
 cd /root/
 git clone https://github.com/THUDM/slime.git
+cd slime/
 pip install -e .
 ```
 

@@ -9,6 +9,7 @@ After pulling the `zhuzilin/slime:latest` image, initialize the image environmen
 ```bash
 cd /root/
 git clone https://github.com/THUDM/slime.git
+cd slime/
 pip install -e .
 ```
 
