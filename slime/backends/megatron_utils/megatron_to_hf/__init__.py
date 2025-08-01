@@ -8,13 +8,78 @@ from .glm4moe import convert_glm4moe_to_hf
 from .llama import convert_llama_to_hf
 from .qwen2 import convert_qwen2_to_hf
 from .qwen3moe import convert_qwen3moe_to_hf
+import triton
+import triton.language as tl
 
 
 def ceildiv(a, b):
     return -(-a // b)
 
 
-def quantize_param(name, weight, weight_block_size):
+@triton.jit
+def per_block_fp8_quant_kernel(
+    weight_ptr,
+    qweight_ptr,
+    scale_ptr,
+    n_tiles_n,
+    n_tiles_k,
+    n,
+    k,
+    BLOCK_N: tl.constexpr,
+    BLOCK_K: tl.constexpr,
+    FP8_MIN: tl.constexpr,
+    FP8_MAX: tl.constexpr,
+):
+    pid_n = tl.program_id(0)
+    pid_k = tl.program_id(1)
+
+    offs_n = pid_n * BLOCK_N + tl.arange(0, BLOCK_N)
+    offs_k = pid_k * BLOCK_K + tl.arange(0, BLOCK_K)
+
+    mask_n = offs_n < n
+    mask_k = offs_k < k
+    mask = mask_n[:, None] & mask_k[None, :]
+
+    weight_block = tl.load(weight_ptr + offs_n[:, None] * k + offs_k[None, :], mask=mask, other=0.0)
+
+    block_max = tl.max(tl.abs(weight_block))
+
+    scale = tl.where(block_max == 0.0, 1.0, block_max / FP8_MIN)
+
+    tl.store(scale_ptr + pid_n * n_tiles_k + pid_k, scale)
+
+    qweight = tl.where(mask, tl.clamp(weight_block / scale, FP8_MIN, FP8_MAX), 0.0)
+    tl.store(qweight_ptr + offs_n[:, None] * k + offs_k[None, :], qweight, mask=mask)
+
+
+def per_block_fp8_quant_triton(name, weight, weight_block_size):
+    """Triton-based quantize_param function with same interface as PyTorch version"""
+    assert name.endswith(".weight"), f"Expected weight parameter, got {name}"
+
+    n, k = weight.shape
+    block_n, block_k = weight_block_size
+    n_tiles_n = (n + block_n - 1) // block_n
+    n_tiles_k = (k + block_k - 1) // block_k
+
+    # Allocate output tensors
+    qweight = torch.empty_like(weight, dtype=torch.float8_e4m3fn, device=weight.device)
+    scales = torch.empty((n_tiles_n, n_tiles_k), dtype=torch.float32, device=weight.device)
+
+    # Launch Triton kernel
+    grid = (n_tiles_n, n_tiles_k)
+    FP8_MIN = float(torch.finfo(torch.float8_e4m3fn).min)
+    FP8_MAX = float(torch.finfo(torch.float8_e4m3fn).max)
+
+    per_block_fp8_quant_kernel[grid](
+        weight, qweight, scales, n_tiles_n, n_tiles_k, n, k, block_n, block_k, FP8_MIN, FP8_MAX
+    )
+
+    # Return in same format as PyTorch version
+    scale_name = name.replace(".weight", ".weight_scale_inv")
+    return [(name, qweight), (scale_name, scales.squeeze())]
+
+
+def quantize_param_torch(name, weight, weight_block_size):
     assert name.endswith(".weight"), f"Expected weight parameter, got {name}"
     FP8_MIN = torch.finfo(torch.float8_e4m3fn).min
     FP8_MAX = torch.finfo(torch.float8_e4m3fn).max
@@ -57,13 +122,15 @@ def quantize_param(name, weight, weight_block_size):
     return [(name, qweight), (scale_name, scale)]
 
 
-def quantize_params(args, megatron_name, converted_named_params, quantization_config):
+def quantize_params(args, megatron_name, converted_named_params, quantization_config, use_triton_kernel=True):
     if quantization_config is None:
         return converted_named_params
     assert quantization_config["quant_method"] == "fp8"
     assert quantization_config["fmt"] == "e4m3"
     assert quantization_config["activation_scheme"] == "dynamic"
     weight_block_size = quantization_config.get("weight_block_size", None)
+
+    quantize_param_func = per_block_fp8_quant_triton if use_triton_kernel else quantize_param_torch
 
     decoder_layers_pattern = r"module\.module\.decoder\.layers\.(\d+)\.(.+)"
     match = re.match(decoder_layers_pattern, megatron_name)
@@ -87,7 +154,7 @@ def quantize_params(args, megatron_name, converted_named_params, quantization_co
                 # TODO: find a clearer way.
                 if converted_name.endswith("_scale"):
                     continue
-                quantize_named_params.extend(quantize_param(converted_name, param, weight_block_size))
+                quantize_named_params.extend(quantize_param_func(converted_name, param, weight_block_size))
 
             return quantize_named_params
 
@@ -102,7 +169,7 @@ def quantize_params(args, megatron_name, converted_named_params, quantization_co
         ]:
             quantize_named_params = []
             for converted_name, param in converted_named_params:
-                quantize_named_params.extend(quantize_param(converted_name, param, weight_block_size))
+                quantize_named_params.extend(quantize_param_func(converted_name, param, weight_block_size))
 
             return quantize_named_params
 
@@ -120,7 +187,7 @@ def quantize_params(args, megatron_name, converted_named_params, quantization_co
     ]:
         quantize_named_params = []
         for converted_name, param in converted_named_params:
-            quantize_named_params.extend(quantize_param(converted_name, param, weight_block_size))
+            quantize_named_params.extend(quantize_param_func(converted_name, param, weight_block_size))
 
         return quantize_named_params
 
