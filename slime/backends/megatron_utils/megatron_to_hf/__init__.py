@@ -1,6 +1,10 @@
 import re
+from typing import Tuple
+
 import torch
 import torch.nn.functional as F
+import triton
+import triton.language as tl
 
 from .deepseekv3 import convert_deepseekv3_to_hf
 from .glm4 import convert_glm4_to_hf
@@ -14,11 +18,102 @@ def ceildiv(a, b):
     return -(-a // b)
 
 
+# Original implementation reference:
+# https://github.com/pytorch/ao/blob/main/torchao/prototype/blockwise_fp8/blockwise_quantization.py
+@triton.jit
+def fp8_blockwise_weight_quant_kernel(
+    x_ptr, y_ptr, s_ptr, M, N, BLOCK_SIZE: tl.constexpr
+):
+    """
+    Quantizes the input tensor `x_ptr` and stores the result in `y_ptr` and the scaling factors in `s_ptr`.
+
+    Args:
+        x_ptr (tl.pointer): Pointer to the input tensor.
+        y_ptr (tl.pointer): Pointer to the output tensor where quantized values will be stored.
+        s_ptr (tl.pointer): Pointer to the output tensor where scaling factors will be stored.
+        M (int): Number of rows in the weight matrix.
+        N (int): Number of columns in the weight matrix.
+        BLOCK_SIZE (tl.constexpr): The size of the block to be processed by each program instance.
+    """
+    pid_m = tl.program_id(axis=0)
+    pid_n = tl.program_id(axis=1)
+    n = tl.cdiv(N, BLOCK_SIZE)
+    offs_m = pid_m * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offs_n = pid_n * BLOCK_SIZE + tl.arange(0, BLOCK_SIZE)
+    offs = offs_m[:, None] * N + offs_n[None, :]
+    mask = (offs_m[:, None] < M) & (offs_n[None, :] < N)
+    x = tl.load(x_ptr + offs, mask=mask).to(tl.float32)
+    s = tl.max(tl.abs(x)) / 448.0
+    y = x / s
+    y = y.to(y_ptr.dtype.element_ty)
+    tl.store(y_ptr + offs, y, mask=mask)
+    tl.store(s_ptr + pid_m * n + pid_n, s)
+
+
+# Original implementation reference:
+# https://github.com/pytorch/ao/blob/main/torchao/prototype/blockwise_fp8/blockwise_quantization.py
+def fp8_blockwise_weight_quant(
+    x: torch.Tensor, block_size: int = 128, dtype=torch.float8_e4m3fn
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    Quantizes the given weight tensor using block-wise quantization with block size being BLOCK_SIZExBLOCK_SIZE.
+
+    Args:
+        x (torch.Tensor): The weight tensor to be quantized.
+        block_size (int, optional): The block size to use for quantization. Defaults to 128.
+        dtype (torch.dtype, optional): The dtype to use for the quantized tensor. Defaults to `torch.float8_e4m3fn`.
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: A tuple containing:
+            - The quantized weight tensor with dtype `dtype`.
+            - A tensor of scaling factors with dtype `torch.float32`.
+    """
+    assert x.is_contiguous(), "Input tensor must be contiguous"
+    assert x.dim() == 2, "Input tensor must have 2 dimensions"
+    assert x.size(0) % block_size == 0 and x.size(1) % block_size == 0, (
+        f"Both dimensions of x must be divisible by block_size (block_size={block_size})"
+    )
+    assert dtype in [
+        torch.float8_e4m3fn,
+        torch.float8_e5m2,
+    ], "dtype must be torch.float8_e4m3fn or torch.float8_e5m2"
+    M, N = x.size()
+    y = torch.empty_like(x, dtype=dtype)
+    s = x.new_empty(M // block_size, N // block_size, dtype=torch.float32)
+    grid = lambda meta: (
+        triton.cdiv(M, meta["BLOCK_SIZE"]),
+        triton.cdiv(N, meta["BLOCK_SIZE"]),
+    )
+    fp8_blockwise_weight_quant_kernel[grid](x, y, s, M, N, BLOCK_SIZE=block_size)
+    return y, s
+
+def _pad_to_tile(x, tile=128):
+    M, K = x.shape
+    Mp = triton.cdiv(M, tile) * tile
+    Kp = triton.cdiv(K, tile) * tile
+    if Mp == M and Kp == K:
+        return x, 0, 0
+    x_pad = F.pad(x, (0, Kp - K, 0, Mp - M), value=0.0)
+    return x_pad, Mp - M, Kp - K
+
+
 def quantize_param(name, weight, weight_block_size):
     assert name.endswith(".weight"), f"Expected weight parameter, got {name}"
     FP8_MIN = torch.finfo(torch.float8_e4m3fn).min
     FP8_MAX = torch.finfo(torch.float8_e4m3fn).max
-    if weight_block_size is not None:
+    if weight_block_size == (128, 128):
+        # triton per block quant
+            tile = 128
+            w_pad, _, _ = _pad_to_tile(weight, tile)
+            q_pad, scale = fp8_blockwise_weight_quant(w_pad, block_size=tile, dtype=torch.float8_e4m3fn)
+
+            M, K = weight.shape
+            qweight = q_pad[:M, :K]
+            n_tiles_m = triton.cdiv(M, tile)
+            n_tiles_k = triton.cdiv(K, tile)
+            scale = scale[:n_tiles_m, :n_tiles_k].contiguous()
+            scale_name = name.replace(".weight", ".weight_scale_inv")
+    elif weight_block_size is not None:
         # per block quant
         block_n, block_k = weight_block_size[0], weight_block_size[1]
 
