@@ -42,6 +42,7 @@ Based on the `zhuzilin/slime:latest` image (pre-installed with SGLang 0.4.7 and 
 ```bash
 docker run --rm --gpus all --ipc=host --shm-size=16g \
   --ulimit memlock=-1 --ulimit stack=67108864 \
+  -p 8265:8265 \
   -it zhuzilin/slime:latest /bin/bash
 
 git clone https://github.com/THUDM/slime.git

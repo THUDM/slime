@@ -172,7 +172,7 @@ MISC_ARGS=(
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 
 NUM_GPUS=$(echo ${HIP_VISIBLE_DEVICES} | tr ',' '\n' | wc -l)
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 
 # "PYTHONPATH": "/workspace/Megatron-LM-amd_version/",
