@@ -2,7 +2,6 @@ import abc
 import os
 from datetime import timedelta
 
-import ray
 import torch
 import torch.distributed as dist
 
@@ -25,20 +24,18 @@ class TrainRayActor(RayActor):
         # TODO: currently this doesn't work as ray has already set torch.cuda.device_count().
         # os.environ.pop("CUDA_VISIBLE_DEVICES", None)
         # os.environ["LOCAL_RANK"] = str(ray.get_gpu_ids()[0])
-        os.environ["LOCAL_RANK"] = str(ray.get_gpu_ids()[0])
+        os.environ["LOCAL_RANK"] = "0"
 
     def init(self, args, role, wandb_run_id, with_ref=False):
         self.args = args
         self.role = role
         self.with_ref = with_ref
 
-        local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        torch.cuda.set_device(f"cuda:{local_rank}")
-
-        dist.init_process_group(
-            backend=args.distributed_backend,
-            timeout=timedelta(minutes=args.distributed_timeout_minutes),
-        )
+        if not dist.is_initialized():
+            dist.init_process_group(
+                backend=args.distributed_backend,
+                timeout=timedelta(minutes=args.distributed_timeout_minutes),
+            )
 
         args.rank = dist.get_rank()
         args.world_size = dist.get_world_size()
