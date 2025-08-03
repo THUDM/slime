@@ -198,6 +198,7 @@ async def abort(args, rollout_id: int):
     return aborted_samples
 
 
+# TODO Change into token-in-token-out generation
 async def generate_rollout_async(args, rollout_id: int, data_source) -> list[list[Sample]]:
     """An example to implement the generate_rollout function for an rule based rm rollout generation.
 
