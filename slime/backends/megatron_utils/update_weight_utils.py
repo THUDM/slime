@@ -47,6 +47,73 @@ def all_gather_param(name, param):
     return param
 
 
+def all_gather_params_async(param_infos_and_params):
+    """
+    Perform async all_gather for a batch of parameters to improve performance.
+    
+    Args:
+        param_infos_and_params: List of (param_info, param) tuples
+        
+    Returns:
+        List of gathered parameters in the same order
+    """
+    # Phase 1: Start all async all_gather operations
+    gather_tasks = []
+    handles = []
+    
+    for info, param in param_infos_and_params:
+        # Prepare async all_gather
+        if "expert_bias" in info.name:
+            gather_tasks.append((info, param, None, None, None))
+            handles.append(None)
+        elif not param.tensor_model_parallel or getattr(param, "parallel_mode", None) == "duplicated":
+            gather_tasks.append((info, param.data, None, None, None))
+            handles.append(None)
+        else:
+            # Start async all_gather
+            if ".experts." in info.name:
+                tp_size = mpu.get_expert_tensor_parallel_world_size()
+                tp_group = mpu.get_expert_tensor_parallel_group()
+            else:
+                tp_size = mpu.get_tensor_model_parallel_world_size()
+                tp_group = mpu.get_tensor_model_parallel_group()
+            
+            param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
+            handle = dist.all_gather(param_partitions, param.data, group=tp_group, async_op=True)
+            gather_tasks.append((info, None, handle, param_partitions, param.partition_dim))
+            handles.append(handle)
+    
+    # Phase 2: Wait for ALL async operations to complete at once
+    # This ensures maximum parallelism by not blocking on individual operations
+    for handle in handles:
+        if handle is not None:
+            handle.wait()
+    
+    # Phase 3: Process all results after all communications are done
+    gathered_params = []
+    for info, direct_param, handle, param_partitions, partition_dim in gather_tasks:
+        if handle is None:
+            # No all_gather needed
+            param = direct_param
+        else:
+            # Process the gathered partitions (same logic as original all_gather_param)
+            assert partition_dim is not None, "partition_stride != 1 is not supported"
+            # TODO: here we did an extra copy during concat, maybe merge this with convert_to_hf is better?
+            # TODO: check only GLU is used.
+            if "linear_fc1.weight" in info.name:
+                param_partitions = [p.chunk(2, dim=0) for p in param_partitions]
+                param_partitions = [p[0] for p in param_partitions] + [p[1] for p in param_partitions]
+            # this is bug in megatron's grouped moe.
+            if "linear_fc2.weight" in info.name:
+                if partition_dim == 0:
+                    partition_dim = 1
+            param = torch.cat(param_partitions, dim=partition_dim)
+        
+        gathered_params.append(param)
+    
+    return gathered_params
+
+
 def remove_padding(name, param, vocab_size):
     if name == "module.module.embedding.word_embeddings.weight" or name == "module.module.output_layer.weight":
         return param[:vocab_size]
@@ -289,13 +356,17 @@ class UpdateWeightFromTensor:
             for handle in handles:
                 handle.wait()
 
-        converted_named_tensors = []
+        # Set tp attrs for all params
         for info, param in zip(param_infos, params):
-            # set tp attrs
             for key, value in info.attrs.items():
                 setattr(param, key, value)
-            # gather param
-            param = all_gather_param(info.name, param)
+        
+        # Batch async all_gather for all parameters
+        gathered_params = all_gather_params_async(list(zip(param_infos, params)))
+        
+        # Process gathered params
+        converted_named_tensors = []
+        for info, param in zip(param_infos, gathered_params):
             param = remove_padding(info.name, param, self.vocab_size)
             converted_named_tensors.extend(
                 convert_to_hf(self.args, self.model_name, info.name, param, self.quantization_config)
