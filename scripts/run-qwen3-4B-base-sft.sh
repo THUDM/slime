@@ -35,7 +35,7 @@ CKPT_ARGS=(
 )
 
 SFT_ARGS=(
-   --rollout-function-path slime.rollout.sft_example.generate_rollout
+   --rollout-function-path slime.rollout.sft_rollout.generate_rollout
    --prompt-data /root/openhermes2_5.parquet
    --input-key messages
    --rollout-shuffle

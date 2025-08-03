@@ -95,7 +95,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-function-path",
                 type=str,
-                default="slime.rollout.sglang_example.generate_rollout",
+                default="slime.rollout.sglang_rollout.generate_rollout",
                 help=(
                     "Path to the rollout generation function."
                     "You should use this model to create your own custom rollout function, "
