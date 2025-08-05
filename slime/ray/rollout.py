@@ -30,7 +30,7 @@ class RolloutRayActor(RayActor):
 
         if self.args.offload:
             # offload the engine to the CPU
-            self.infer_engine.sleep()
+            self.sleep()
 
     def init_process_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
         return self.infer_engine.init_process_group(
