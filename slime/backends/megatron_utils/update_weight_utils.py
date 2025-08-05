@@ -310,7 +310,7 @@ class UpdateWeightFromTensor:
     def update_weights(self):
         rank = dist.get_rank()
         if rank == 0:
-            ray.get([engine.reset_prefix_cache.remote() for engine in self.rollout_engines])
+            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
         for param_infos in tqdm(self.param_info_buckets, disable=rank != 0, desc="Update weights"):
             self._update_bucket_weights_from_tensor(param_infos)
@@ -382,19 +382,19 @@ class UpdateWeightFromTensor:
 
     def _update_converted_params_from_tensor(self, converted_named_tensors):
         ipc_handle = MultiprocessingSerializer.serialize(converted_named_tensors, output_str=True)
-        ipc_handles = (
+        serialized_named_tensors = (
             [None] * dist.get_world_size(self._ipc_gather_group) if self._ipc_gather_src == dist.get_rank() else None
         )
         dist.gather_object(
             ipc_handle,
-            object_gather_list=ipc_handles,
+            object_gather_list=serialized_named_tensors,
             dst=self._ipc_gather_src,
             group=self._ipc_gather_group,
         )
 
         if dist.get_rank() == self._ipc_gather_src:
             ref = self._ipc_engine.update_weights_from_tensor.remote(
-                ipc_handles=ipc_handles,
+                serialized_named_tensors=serialized_named_tensors,
             )
             ray.get(ref)
 
@@ -451,7 +451,7 @@ class UpdateWeightFromDistributed:
     def update_weights(self):
         if dist.get_rank() == 0:
             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
-            ray.get([engine.reset_prefix_cache.remote() for engine in self.rollout_engines])
+            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
         buffer_size = 0
