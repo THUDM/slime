@@ -80,8 +80,11 @@ def setup_model_and_optimizer(
 
     model = get_model(get_model_provider_func(args), ModelType.encoder_or_decoder, wrap_with_ddp=False)
 
-    allocator = CuMemAllocator.get_instance() if args.colocate else None
-    with allocator.use_memory_pool(tag="model") if args.colocate else nullcontext():
+    with (
+        CuMemAllocator.get_instance().use_memory_pool(tag="model")
+        if args.offload and not args.experimental_offload
+        else nullcontext()
+    ):
         config = get_model_config(model[0])
 
         kwargs = {}

@@ -1,5 +1,6 @@
 import abc
 import os
+import ctypes
 from datetime import timedelta
 
 import ray
@@ -28,6 +29,10 @@ class TrainRayActor(RayActor):
         os.environ["LOCAL_RANK"] = str(ray.get_gpu_ids()[0])
 
     def init(self, args, role, wandb_run_id, with_ref=False):
+        if args.experimental_offload:
+            import pytorch_malloc
+
+            self.libcudart = ctypes.PyDLL(pytorch_malloc.get_library_path())
         self.args = args
         self.role = role
         self.with_ref = with_ref

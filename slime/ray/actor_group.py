@@ -24,6 +24,7 @@ class RayTrainGroup:
 
     def __init__(
         self,
+        args,
         num_nodes,
         num_gpus_per_node,
         pg: tuple[PlacementGroup, list[int]],
@@ -32,6 +33,7 @@ class RayTrainGroup:
         resources: Dict[str, float] = None,
         num_resources_per_node: int = None,
     ) -> None:
+        self.args = args
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self._wandb_run_id = wandb_run_id
@@ -50,17 +52,22 @@ class RayTrainGroup:
         assert pg is not None
         pg, reordered_bundle_indices = pg
 
+        env_vars = {
+            # because sglang will always set NCCL_CUMEM_ENABLE to 0
+            # we need also set it to 0 to prevent nccl error.
+            "NCCL_CUMEM_ENABLE": "0",
+            "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES": "1",
+            "RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES": "1",
+        }
+
+        if self.args.experimental_offload:
+            import pytorch_malloc
+
+            env_vars["LD_PRELOAD"] = pytorch_malloc.get_library_path()
+
         TrainRayActor = ray.remote(
             num_gpus=1,
-            runtime_env={
-                "env_vars": {
-                    # because sglang will always set NCCL_CUMEM_ENABLE to 0
-                    # we need also set it to 0 to prevent nccl error.
-                    "NCCL_CUMEM_ENABLE": "0",
-                    "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES": "1",
-                    "RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES": "1",
-                }
-            },
+            runtime_env={"env_vars": env_vars},
         )(MegatronTrainRayActor)
 
         # Create worker actors

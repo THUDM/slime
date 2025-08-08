@@ -64,11 +64,6 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.keep_old_actor:
             self.load_other_checkpoint("old_actor", args.load)
 
-        if self.args.offload:
-            # recover to actor in the end.
-            self.update_gpu_params_dict(self.weights["actor"])
-            self.sleep(("model"))
-
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
         self.weight_updator = update_weight_cls(
             self.args,
@@ -81,6 +76,11 @@ class MegatronTrainRayActor(TrainRayActor):
 
         # empty cache after initialization
         clear_memory()
+
+        if self.args.offload:
+            # recover to actor in the end.
+            self.update_gpu_params_dict(self.weights["actor"])
+            self.sleep(("model"))
 
         self.rollout_engines = None
         self.data_buffer = None
@@ -120,23 +120,27 @@ class MegatronTrainRayActor(TrainRayActor):
         print_memory(f"before offload model")
         self.update_cpu_params_dict(self.weights["actor"])
 
-        allocator = CuMemAllocator.get_instance()
-        allocator.sleep(offload_tags=tags)
+        if self.args.experimental_offload:
+            self.libcudart.pause()
+        else:
+            allocator = CuMemAllocator.get_instance()
+            allocator.sleep(offload_tags=tags)
 
-        clear_memory()
         print_memory(f"after offload model")
 
     @timer
     def wake_up(self, tags):
         assert self.args.offload
-        clear_memory()
         print_memory("before wake_up model")
 
         if isinstance(tags, str):
             tags = (tags,)
 
-        allocator = CuMemAllocator.get_instance()
-        allocator.wake_up(tags)
+        if self.args.experimental_offload:
+            self.libcudart.resume()
+        else:
+            allocator = CuMemAllocator.get_instance()
+            allocator.wake_up(tags)
 
         clear_memory()
         print_memory("after wake_up model")
@@ -285,15 +289,19 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
-        torch.cuda.empty_cache()
+        if self.args.experimental_offload:
+            self.libcudart.disable()
+
         self.weight_updator.update_weights()
         dist.barrier(group=get_gloo_group())
-        clear_memory()
         print_memory("after update_weights")
 
         if getattr(self.args, "keep_old_actor", False):
             print("update rollout model on cpu using actor model")
             self.update_cpu_params_dict(self.weights["old_actor"])
+
+        if self.args.experimental_offload:
+            self.libcudart.enable()
 
     def load_other_checkpoint(self, model_tag, path):
         old_args = self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune
