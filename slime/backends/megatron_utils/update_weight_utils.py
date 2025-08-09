@@ -4,6 +4,7 @@ import time
 from tqdm import tqdm
 from contextlib import nullcontext
 from sglang.srt.utils import MultiprocessingSerializer
+from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 import inspect
 
 import ray
@@ -319,6 +320,13 @@ class UpdateWeightFromTensor:
         rank = dist.get_rank()
         if rank == 0:
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
+            if self.args.offload:
+                ray.get(
+                    [
+                        engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS])
+                        for engine in self.rollout_engines
+                    ]
+                )
         dist.barrier(group=get_gloo_group())
         if self.args.experimental_offload:
             pool = torch.cuda.MemPool(self.allocator)
@@ -329,6 +337,14 @@ class UpdateWeightFromTensor:
         if self.args.experimental_offload:
             # must manually delete here to release the memory
             del pool
+        dist.barrier(group=get_gloo_group())
+        if rank == 0 and self.args.offload:
+            ray.get(
+                [
+                    engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE])
+                    for engine in self.rollout_engines
+                ]
+            )
 
     def _update_bucket_weights_from_tensor(self, param_infos):
         pp_size = mpu.get_pipeline_model_parallel_world_size()

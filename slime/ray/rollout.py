@@ -164,5 +164,5 @@ class RolloutManager:
     def async_offload(self):
         return [engine.release_memory_occupation.remote() for engine in self.rollout_engines]
 
-    def async_onload(self):
-        return [engine.resume_memory_occupation.remote() for engine in self.rollout_engines]
+    def async_onload(self, tags=None):
+        return [engine.resume_memory_occupation.remote(tags) for engine in self.rollout_engines]

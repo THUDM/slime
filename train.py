@@ -36,9 +36,6 @@ def train(args):
     # initialize the connection for weight update during training
     ray.get(actor_model.async_init_weight_update_connections(rollout_manager))
 
-    if args.offload:
-        ray.get(rollout_manager.async_onload())
-
     # always update weight first so that sglang has the loaded weights from training.
     ray.get(actor_model.async_update_weights())
 
@@ -67,7 +64,6 @@ def train(args):
 
         if args.offload:
             ray.get(actor_model.async_offload())
-            ray.get(rollout_manager.async_onload())
 
         ray.get(actor_model.async_update_weights())
 
