@@ -435,7 +435,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "The maximum number of tokens per GPU for dynamic batch size. "
-                    "Not that when enabling context parallel (CP), the max tokens per gpu should be around "
+                    "Note that when enabling context parallel (CP), the max tokens per gpu should be around "
                     "`max_response_len // cp_size` instead of `max_response_len`."
                 ),
             )
