@@ -393,7 +393,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--n-samples-per-prompt", type=int, default=1, help="Number of responses for each prompt in generation"
             )
 
-            # gbs of the training, not that the gbs if of sample, not of prompts,
+            # gbs of the training, note that the gbs is of sample, not of prompts,
             # so if you hope to train 1 step for each rollout, the global_bach_size should be set as
             # `rollout_batch_size * n_samples_per_prompt`.
             reset_megatron_args(parser, "--global-batch-size", None)
