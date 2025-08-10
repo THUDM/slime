@@ -1,5 +1,5 @@
 diff --git a/megatron/core/extensions/transformer_engine.py b/megatron/core/extensions/transformer_engine.py
-index d572f055..01181339 100644
+index 8646313a..074d3f96 100644
 --- a/megatron/core/extensions/transformer_engine.py
 +++ b/megatron/core/extensions/transformer_engine.py
 @@ -282,6 +282,7 @@ class TELinear(te.pytorch.Linear):
@@ -35,6 +35,177 @@ index 860ee64a..80944b70 100755
                  sharded_state_dict_keys_map={
                      "mlp.0.weight": "mlp.linear_fc1.layer_norm_weight",
                      "mlp.0.bias": "mlp.linear_fc1.layer_norm_bias",
+diff --git a/megatron/core/parallel_state.py b/megatron/core/parallel_state.py
+index 46400c39..59fa5dbd 100644
+--- a/megatron/core/parallel_state.py
++++ b/megatron/core/parallel_state.py
+@@ -9,6 +9,7 @@ from typing import Callable, List, Optional
+ 
+ import numpy as np
+ import torch
++import torch.distributed as dist
+ 
+ from .utils import GlobalMemoryBuffer, is_torch_min_version
+ 
+@@ -163,6 +164,158 @@ def get_nccl_options(pg_name, nccl_comm_cfgs):
+         return None
+ 
+ 
++old_new_group = None
++
++
++def monkey_patch_torch_dist():
++    print("Applying monkey patch to torch.distributed", flush=True)
++    global old_new_group
++    if old_new_group is not None:
++        return
++
++    old_new_group = dist.new_group
++
++    def new_group(*args, **kwargs):
++        group = old_new_group(*args, **kwargs)
++        # skip none nccl group.
++        if (
++            len(args) >= 3 and args[2] == "gloo" or
++            "backend" in kwargs and kwargs["backend"] == "gloo"
++        ):
++            return group
++        
++        # Get ranks from arguments
++        if len(args) >= 1 and args[0] is not None:
++            ranks = args[0]
++        elif "ranks" in kwargs and kwargs["ranks"] is not None:
++            ranks = kwargs["ranks"]
++        else:
++            # If no ranks specified, use all ranks in world
++            ranks = list(range(dist.get_world_size()))
++
++        if len(ranks) == 1:
++            return group
++
++        group = ReloadableProcessGroup(group, ranks)
++        return group
++
++    dist.new_group = new_group
++
++    def get_new_function(func):
++        def new_function(*args, **kwargs):
++            args = (
++                arg.group if isinstance(arg, ReloadableProcessGroup) else arg
++                for arg in args
++            )
++            kwargs = {
++                k: (v.group if isinstance(v, ReloadableProcessGroup) else v)
++                for k, v in kwargs.items()
++            }
++            return func(*args, **kwargs)
++        return new_function
++
++    dist.get_rank = get_new_function(dist.get_rank)
++    dist.get_world_size = get_new_function(dist.get_world_size)
++    dist.get_backend = get_new_function(dist.get_backend)
++    dist.get_process_group_ranks = get_new_function(dist.get_process_group_ranks)
++
++    dist.all_reduce = get_new_function(dist.all_reduce)
++    dist.all_gather = get_new_function(dist.all_gather)
++    dist.all_gather_into_tensor = get_new_function(dist.all_gather_into_tensor)
++    dist.all_gather_object = get_new_function(dist.all_gather_object)
++    dist.all_to_all = get_new_function(dist.all_to_all)
++    dist.all_to_all_single = get_new_function(dist.all_to_all_single)
++    dist.broadcast = get_new_function(dist.broadcast)
++    dist.reduce = get_new_function(dist.reduce)
++    dist.reduce_scatter = get_new_function(dist.reduce_scatter)
++    dist.reduce_scatter_tensor = get_new_function(dist.reduce_scatter_tensor)
++    dist.scatter = get_new_function(dist.scatter)
++    dist.gather = get_new_function(dist.gather)
++    dist.barrier = get_new_function(dist.barrier)
++    dist.send = get_new_function(dist.send)
++    dist.recv = get_new_function(dist.recv)
++
++    # p2p
++    old_isend = dist.isend
++    old_irecv = dist.irecv
++
++    dist.isend = get_new_function(dist.isend)
++    dist.irecv = get_new_function(dist.irecv)
++
++    def get_new_p2pop_function(func):
++        def new_function(*args, **kwargs):
++            def convert(arg):
++                if isinstance(arg, ReloadableProcessGroup):
++                    return arg.group
++                elif arg == dist.isend:
++                    arg = old_isend
++                elif arg == dist.irecv:
++                    arg = old_irecv
++                return arg
++
++            args = (convert(arg) for arg in args)
++            kwargs = {
++                k: convert(v)
++                for k, v in kwargs.items()
++            }
++            return func(*args, **kwargs)
++        return new_function
++    
++    dist.P2POp.__new__ = get_new_p2pop_function(dist.P2POp.__new__)
++    dist.P2POp.__init__ = get_new_p2pop_function(dist.P2POp.__init__)
++
++
++
++class ReloadableProcessGroup:
++    GROUPS = []
++
++    def __init__(self, group, ranks):
++        #print(f"Creating ReloadableProcessGroup with ranks: {ranks}", flush=True)
++        self.group = group
++        self.group_info = {
++            "ranks": ranks,
++        }
++        ReloadableProcessGroup.GROUPS.append(self)
++
++    def __getattr__(self, name):
++        return getattr(self.group, name)
++
++    @staticmethod
++    def destroy_process_groups():
++        for reloadable_group in ReloadableProcessGroup.GROUPS:
++            if reloadable_group.group is None:
++                continue
++            #print(f"Destroying process group: {reloadable_group.group_info['ranks']}")
++            dist.destroy_process_group(reloadable_group.group)
++            del reloadable_group.group
++            reloadable_group.group = None
++
++    @staticmethod
++    def reload_process_groups():
++        for reloadable_group in ReloadableProcessGroup.GROUPS:
++            if reloadable_group.group is not None:
++                continue
++            #print(f"Reloading process group: {reloadable_group.group_info['ranks']}")
++            group = old_new_group(
++                ranks=reloadable_group.group_info["ranks"],
++                backend="nccl"
++            )
++            reloadable_group.group = group
++
++
++def destroy_process_groups():
++    """Destroy all reloadable process groups."""
++    ReloadableProcessGroup.destroy_process_groups()
++
++
++def reload_process_groups():
++    """Reload all reloadable process groups."""
++    ReloadableProcessGroup.reload_process_groups()
++
++
++monkey_patch_torch_dist()
++
++
+ def create_group(
+     ranks=None,
+     timeout=None,
 diff --git a/megatron/core/pipeline_parallel/p2p_communication.py b/megatron/core/pipeline_parallel/p2p_communication.py
 index 4bdc7af6..f7a26f45 100644
 --- a/megatron/core/pipeline_parallel/p2p_communication.py
@@ -67,7 +238,7 @@ index 4bdc7af6..f7a26f45 100644
          ops.append(recv_next_op)
      if len(ops) > 0:
 diff --git a/megatron/core/transformer/transformer_config.py b/megatron/core/transformer/transformer_config.py
-index 4e583e5c..121451a2 100644
+index 2443e31f..d0ea0c96 100644
 --- a/megatron/core/transformer/transformer_config.py
 +++ b/megatron/core/transformer/transformer_config.py
 @@ -173,6 +173,9 @@ class TransformerConfig(ModelParallelConfig):
@@ -81,7 +252,7 @@ index 4e583e5c..121451a2 100644
      """Whether to run real-time tests."""
  
 diff --git a/megatron/core/transformer/transformer_layer.py b/megatron/core/transformer/transformer_layer.py
-index 5c5b33e8..165aa646 100644
+index 6dbb43f2..4146b3e2 100644
 --- a/megatron/core/transformer/transformer_layer.py
 +++ b/megatron/core/transformer/transformer_layer.py
 @@ -224,6 +224,7 @@ class TransformerLayerSubmodules:
@@ -100,7 +271,7 @@ index 5c5b33e8..165aa646 100644
  
      # Mapping for sharded tensor keys to be applied in `sharded_state_dict` method
      sharded_state_dict_keys_map: Dict[str, str] = field(default_factory=dict)
-@@ -334,6 +336,14 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+@@ -336,6 +338,14 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
          # [Module 3: BiasDropoutFusion]
          self.self_attn_bda = build_module(submodules.self_attn_bda)
  
@@ -115,7 +286,7 @@ index 5c5b33e8..165aa646 100644
          # [Module 4: Post SelfAttention] Optional Layernorm after self-attn
          self.pre_cross_attn_layernorm = build_module(
              submodules.pre_cross_attn_layernorm,
-@@ -391,6 +401,13 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+@@ -393,6 +403,13 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
          # [Module 9: BiasDropoutFusion]
          self.mlp_bda = build_module(submodules.mlp_bda)
  
@@ -129,7 +300,7 @@ index 5c5b33e8..165aa646 100644
          self.recompute_input_layernorm = False
          self.recompute_pre_mlp_layernorm = False
          self.recompute_mlp = False
-@@ -514,6 +531,11 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+@@ -516,6 +533,11 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
                  attention_output_with_bias[0]
              )
  
@@ -141,7 +312,7 @@ index 5c5b33e8..165aa646 100644
          # TODO: could we move `bias_dropout_add_exec_handler` itself
          # inside the module provided in the `bias_dropout_add_spec` module?
          nvtx_range_push(suffix="self_attn_bda")
-@@ -614,6 +636,10 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+@@ -616,6 +638,10 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
          else:
              mlp_output_with_bias = self.mlp(pre_mlp_layernorm_output)
  
@@ -153,10 +324,10 @@ index 5c5b33e8..165aa646 100644
              # discard the output of the pre-mlp layernorm and register the recompute
              # as a gradient hook of mlp_output_with_bias[0]
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
-index 1ac1e57a..43b36a9f 100644
+index 7746018b..87f9aa94 100644
 --- a/megatron/training/arguments.py
 +++ b/megatron/training/arguments.py
-@@ -1148,6 +1148,9 @@ def core_transformer_config_from_args(args, config_class=None):
+@@ -1153,6 +1153,9 @@ def core_transformer_config_from_args(args, config_class=None):
      if args.is_hybrid_model:
          kw_args['is_hybrid_model'] = args.is_hybrid_model
  
@@ -166,7 +337,7 @@ index 1ac1e57a..43b36a9f 100644
      # handle quantization config
      # NOTE: Kitchen arguments are only added to the namespace when
      # Kitchen library is available.
-@@ -1436,6 +1439,10 @@ def _add_network_size_args(parser):
+@@ -1443,6 +1446,10 @@ def _add_network_size_args(parser):
                         action='store_true',
                         help='If set, use original BERT residula connection '
                         'ordering.')

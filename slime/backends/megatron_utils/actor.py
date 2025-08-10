@@ -119,6 +119,8 @@ class MegatronTrainRayActor(TrainRayActor):
         clear_memory()
         print_memory(f"before offload model")
         self.update_cpu_params_dict(self.weights["actor"])
+        if hasattr(mpu, "destroy_process_groups"):
+            mpu.destroy_process_groups()
 
         if self.args.experimental_offload:
             self.libcudart.pause()
@@ -143,6 +145,8 @@ class MegatronTrainRayActor(TrainRayActor):
             allocator.wake_up(tags)
 
         clear_memory()
+        if hasattr(mpu, "reload_process_groups"):
+            mpu.reload_process_groups()
         print_memory("after wake_up model")
 
     def set_data_buffer(self, data_buffer):
@@ -289,6 +293,8 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
+        if hasattr(mpu, "reload_process_groups"):
+            mpu.reload_process_groups()
         if self.args.experimental_offload:
             self.libcudart.disable()
 
@@ -302,6 +308,8 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.experimental_offload:
             self.libcudart.enable()
+        if hasattr(mpu, "destroy_process_groups"):
+            mpu.destroy_process_groups()
 
     def load_other_checkpoint(self, model_tag, path):
         old_args = self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune
