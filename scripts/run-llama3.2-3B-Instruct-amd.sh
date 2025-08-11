@@ -121,7 +121,7 @@ WANDB_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
-   --sglang-mem-fraction-static 0.7
+   --sglang-mem-fraction-static 0.4
 )
 
 MISC_ARGS=(
