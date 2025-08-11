@@ -1,6 +1,7 @@
 import logging
 from pathlib import Path
 from typing import Union
+import wandb
 
 import ray
 import torch
@@ -20,6 +21,25 @@ def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) ->
     samples = buffer[:num_to_pop]
     del buffer[:num_to_pop]
     return samples
+
+
+def log_eval_data(rollout_id, args, data):
+    log_dict = {}
+    for key in data.keys():
+        rewards = data[key]["rewards"]
+        log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
+        if "truncated" in data[key]:
+            truncated = data[key]["truncated"]
+            log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
+
+    print(f"eval {rollout_id}: {log_dict}")
+    if args.use_wandb:
+        log_dict["eval/step"] = (
+            rollout_id
+            if not args.wandb_always_use_train_step
+            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+        )
+        wandb.log(log_dict)
 
 
 @ray.remote
@@ -88,7 +108,7 @@ class Buffer:
         self.rollout_id = rollout_id
         if self.args.debug_train_only and evaluation:
             # if debug train only, we don't generate evaluation data
-            return Box(ray.put({}))
+            return
 
         if not evaluation and self.args.load_debug_rollout_data:
             data = torch.load(
@@ -117,8 +137,9 @@ class Buffer:
                     path,
                 )
             data = self._convert_samples_to_train_data(data)
-
-        return Box(ray.put(data))
+            return Box(ray.put(data))
+        else:
+            log_eval_data(rollout_id, self.args, data)
 
     def get_data(self, rollout_id, evaluation=False):
         data_pool = self.train_data_pool if not evaluation else self.eval_data_pool

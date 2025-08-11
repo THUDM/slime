@@ -20,7 +20,7 @@ from slime.utils.wandb_utils import init_wandb_secondary
 
 from ..utils.data import process_rollout_data
 from .checkpoint import load_checkpoint
-from .data import get_data_iterator, log_eval_data, log_perf_data, log_rollout_data
+from .data import get_data_iterator, log_perf_data, log_rollout_data
 from .initialize import get_gloo_group, init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns
 from .model import forward_only, initialize_model_and_optimizer, save, train
@@ -262,13 +262,6 @@ class MegatronTrainRayActor(TrainRayActor):
 
         log_perf_data(rollout_id, self.args)
         Timer().start("train_wait")
-
-    def eval(self, rollout_id, rollout_data_ref):
-        if self.args.debug_train_only:
-            return
-
-        # TODO: is logging enough?
-        log_eval_data(rollout_id, self.args, rollout_data_ref)
 
     def save_model(self, iteration, with_optimizer=True):
         if self.args.debug_rollout_only:

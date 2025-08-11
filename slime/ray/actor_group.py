@@ -117,10 +117,6 @@ class RayTrainGroup:
         """Do one rollout training"""
         return [actor.train.remote(rollout_id, rollout_data_ref) for actor in self._actor_handlers]
 
-    def async_eval(self, rollout_id, rollout_data_ref):
-        """Evaluate the model"""
-        return [actor.eval.remote(rollout_id, rollout_data_ref) for actor in self._actor_handlers]
-
     def async_save_model(self, step_id):
         """Save actor model on rank 0."""
         return [actor.save_model.remote(step_id) for actor in self._actor_handlers]

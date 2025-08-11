@@ -326,6 +326,7 @@ class UpdateWeightFromTensor:
             for param_infos in tqdm(self.param_info_buckets, disable=rank != 0, desc="Update weights"):
                 self._update_bucket_weights_from_tensor(param_infos)
 
+        dist.barrier(group=get_gloo_group())
         if self.args.experimental_offload:
             # must manually delete here to release the memory
             del pool
