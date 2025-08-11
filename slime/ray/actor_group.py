@@ -56,6 +56,8 @@ class RayTrainGroup:
             # because sglang will always set NCCL_CUMEM_ENABLE to 0
             # we need also set it to 0 to prevent nccl error.
             "NCCL_CUMEM_ENABLE": "0",
+            "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES": "1",
+            "RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES": "1",
         }
 
         if self.args.experimental_offload:
