@@ -15,6 +15,7 @@ from slime.utils.types import ParamInfo
 from .initialize import get_gloo_group
 from .megatron_to_hf import convert_to_hf  # noqa: F401
 from slime.utils.distributed_utils import init_process_group
+from sglang.srt.patch_torch import monkey_patch_torch_reductions
 
 
 def all_gather_param(name, param):
@@ -331,6 +332,7 @@ class UpdateWeightFromTensor:
             del pool
 
     def _update_bucket_weights_from_tensor(self, param_infos):
+        monkey_patch_torch_reductions()
         pp_size = mpu.get_pipeline_model_parallel_world_size()
         ep_size = mpu.get_expert_model_parallel_world_size()
         rank = dist.get_rank()
