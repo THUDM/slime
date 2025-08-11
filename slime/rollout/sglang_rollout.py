@@ -220,7 +220,7 @@ async def abort(args, rollout_id: int):
             for sample in group:
                 if sample.response and "start_rollout_id" not in sample.metadata:
                     sample.metadata["start_rollout_id"] = rollout_id
-            aborted_samples += group
+            aborted_samples.append(group)
             count += len(group)
 
     if args.partial_rollout:
