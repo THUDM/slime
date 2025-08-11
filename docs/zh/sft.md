@@ -59,7 +59,7 @@ bash script/run-qwen3-4B-base-sft.sh
 
    ```bash
    SFT_ARGS=(
-      --rollout-function-path slime.rollout.sft_example.generate_rollout
+      --rollout-function-path slime.rollout.sft_rollout.generate_rollout
       --prompt-data /root/openhermes2_5.parquet
       --input-key messages
       --rollout-shuffle
@@ -74,7 +74,7 @@ bash script/run-qwen3-4B-base-sft.sh
    )
    ```
 
-   slime 中的 sft 实际上是复用了 slime 的 custom rollout 功能，通过 `--rollout-function-path` 将数据生成部分从使用 sglang 的 RL rollout，切换成了从文件中读取数据的 sft 版本，即 `slime.rollout.sft_example.generate_rollout`。
+   slime 中的 sft 实际上是复用了 slime 的 custom rollout 功能，通过 `--rollout-function-path` 将数据生成部分从使用 sglang 的 RL rollout，切换成了从文件中读取数据的 sft 版本，即 `slime.rollout.sft_rollout.generate_rollout`。
 
    对于 sft 来说，建议将 `rollout_batch_size` 与 `global_batch_size` 设置成相同的，并不要配置 `n_samples_per_prompt`，这样相当于是读一个 batch 就训一个 batch。
 

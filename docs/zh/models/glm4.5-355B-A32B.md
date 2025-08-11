@@ -14,7 +14,7 @@
 huggingface-cli download zai-org/GLM-4.5 --local-dir $BASE_DIR/GLM-4.5-355B-A32B
 ```
 
-通过如下方式通过 2 机 16 卡讲 huggingface checkpoint 转换为 torch dist 格式：
+通过如下方式通过 2 机 16 卡将 huggingface checkpoint 转换为 torch dist 格式：
 
 ```bash
 cd slime/
@@ -155,5 +155,39 @@ MISC_ARGS=(
    # use deepep for megatron
    --moe-enable-deepep
    --moe-token-dispatcher-type flex
+)
+```
+
+## 用 fp8 进行数据生成
+
+开源版本的 GLM-4.5 fp8 ckpt 使用的是 per-channel 量化，目前无法在 sglang 中使用 deepep。我们可以利用 slime 提供的工具转换一个 128x128 per-block 量化的 checkpoint：
+
+```bash
+cd slime/
+python tools/convert_hf_to_fp8.py \
+    --model-dir $BASE_DIR/GLM-4.5-355B-A32B/ \
+    --save-dir $BASE_DIR/GLM-4.5-355B-A32B-FP8/ \
+    --strategy block --block-size 128 128 \
+    --max-workers 4
+```
+
+之后将 `--hf-checkpoint` 设置为 `$BASE_DIR/GLM-4.5-355B-A32B-FP8/` 就可以在训练中使用 fp8 进行 rollout 了。
+
+一个样例的 fp8 `SGLANG_ARGS` 为：
+
+```bash
+SGLANG_ARGS=(
+   --rollout-num-gpus-per-engine 32
+   --sglang-mem-fraction-static 0.5
+   --sglang-enable-dp-attention
+   --sglang-dp-size 32
+   --sglang-ep-size 32
+   --sglang-moe-dense-tp-size 1
+   --sglang-enable-dp-lm-head
+   --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 128)
+   --sglang-disable-radix-cache
+
+   --sglang-moe-a2a-backend deepep
+   --sglang-deepep-mode auto
 )
 ```

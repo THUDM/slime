@@ -7,6 +7,12 @@
 1.  **High-Performance Training**: Supports efficient training in various modes by connecting Megatron with SGLang;
 2.  **Flexible Data Generation**: Enables arbitrary training data generation workflows through custom data generation interfaces and server-based engines.
 
+## Blogs
+
+- Our vision: [slime: An SGLang-Native Post-Training Framework for RL Scaling](https://lmsys.org/blog/2025-07-09-slime/).
+- Our ideas on agentic training: [Agent-Oriented Design: An Asynchronous and Decoupled Framework for Agentic RL](https://www.notion.so/Agent-Oriented-Design-An-Asynchronous-and-Decoupled-Framework-for-Agentic-RL-2278e692d081802cbdd5d37cef76a547).
+- slime has served as the RL framework for GLM-4.5: [GLM-4.5: Reasoning, Coding, and Agentic Abililties](https://z.ai/blog/glm-4.5)
+
 ## Table of Contents
 
   - [Architecture Overview](#architecture-overview)
@@ -42,6 +48,7 @@ Based on the `zhuzilin/slime:latest` image (pre-installed with SGLang 0.4.7 and 
 ```bash
 docker run --rm --gpus all --ipc=host --shm-size=16g \
   --ulimit memlock=-1 --ulimit stack=67108864 \
+  -p 8265:8265 \
   -it zhuzilin/slime:latest /bin/bash
 
 git clone https://github.com/THUDM/slime.git
@@ -126,6 +133,8 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_torch_dist_to_hf.py \
   --output-dir /root/GLM-Z1-9B-0414-iter_xxx \
   --origin-hf-dir /root/GLM-Z1-9B-0414
 ```
+
+There are times when Megatron padded embedding, you can pass `--vocab-size` to make sure the embedding size of the converted HF ckpt is correct.
 
 ⚠️ Since the `torch_dist` checkpoint converted by mbridge does not currently save args, you cannot convert the checkpoint from the previous step back to HF format.
 

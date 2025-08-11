@@ -64,11 +64,6 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.keep_old_actor:
             self.load_other_checkpoint("old_actor", args.load)
 
-        if self.args.offload:
-            # recover to actor in the end.
-            self.update_gpu_params_dict(self.weights["actor"])
-            self.sleep(("model"))
-
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
         self.weight_updator = update_weight_cls(
             self.args,
@@ -81,6 +76,11 @@ class MegatronTrainRayActor(TrainRayActor):
 
         # empty cache after initialization
         clear_memory()
+
+        if self.args.offload:
+            # recover to actor in the end.
+            self.update_gpu_params_dict(self.weights["actor"])
+            self.sleep(("model"))
 
         self.rollout_engines = None
         self.data_buffer = None
@@ -119,26 +119,34 @@ class MegatronTrainRayActor(TrainRayActor):
         clear_memory()
         print_memory(f"before offload model")
         self.update_cpu_params_dict(self.weights["actor"])
+        if hasattr(mpu, "destroy_process_groups"):
+            mpu.destroy_process_groups()
 
-        allocator = CuMemAllocator.get_instance()
-        allocator.sleep(offload_tags=tags)
+        if self.args.experimental_offload:
+            self.libcudart.pause()
+        else:
+            allocator = CuMemAllocator.get_instance()
+            allocator.sleep(offload_tags=tags)
 
-        clear_memory()
         print_memory(f"after offload model")
 
     @timer
     def wake_up(self, tags):
         assert self.args.offload
-        clear_memory()
         print_memory("before wake_up model")
 
         if isinstance(tags, str):
             tags = (tags,)
 
-        allocator = CuMemAllocator.get_instance()
-        allocator.wake_up(tags)
+        if self.args.experimental_offload:
+            self.libcudart.resume()
+        else:
+            allocator = CuMemAllocator.get_instance()
+            allocator.wake_up(tags)
 
         clear_memory()
+        if hasattr(mpu, "reload_process_groups"):
+            mpu.reload_process_groups()
         print_memory("after wake_up model")
 
     def set_data_buffer(self, data_buffer):
@@ -157,25 +165,19 @@ class MegatronTrainRayActor(TrainRayActor):
     def compute_log_prob(
         self,
         model_tag,
-        log_probs_data_iterator,
-        log_probs_num_microbatches,
+        data_iterator,
+        num_microbatches,
         store_prefix="",
-        rollout_data=None,
     ):
-        # reset data iterator
-        for data_iterator in log_probs_data_iterator:
-            data_iterator.reset()
-
         self.update_gpu_params_dict(self.weights[model_tag])
 
         with timer(f"{store_prefix}log_probs"):
-            forward_only(
+            return forward_only(
                 self.args,
                 self.model,
-                log_probs_data_iterator,
-                log_probs_num_microbatches,
+                data_iterator,
+                num_microbatches,
                 store_prefix=store_prefix,
-                rollout_data=rollout_data,
             )
 
     def train(self, rollout_id, rollout_data_ref):
@@ -197,30 +199,27 @@ class MegatronTrainRayActor(TrainRayActor):
                 rollout_data = self._get_rollout_data(rollout_data_ref)
 
                 # Create data iterator for log_probs and train.
-                (
-                    log_probs_data_iterator,
-                    log_probs_num_microbatches,
-                    train_data_iterator,
-                    train_num_microbatches,
-                ) = get_data_iterator(self.args, self.model, rollout_data)
+                data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
 
             if self.args.compute_advantages_and_returns:
                 if "ref" in self.weights:
                     self.update_gpu_params_dict(self.weights["ref"])
-                    self.compute_log_prob(
-                        "ref",
-                        log_probs_data_iterator,
-                        log_probs_num_microbatches,
-                        store_prefix="ref_",
-                        rollout_data=rollout_data,
+                    rollout_data.update(
+                        self.compute_log_prob(
+                            "ref",
+                            data_iterator,
+                            num_microbatches,
+                            store_prefix="ref_",
+                        )
                     )
 
-                self.compute_log_prob(
-                    "old_actor" if self.args.keep_old_actor else "actor",
-                    log_probs_data_iterator,
-                    log_probs_num_microbatches,
-                    store_prefix="",
-                    rollout_data=rollout_data,
+                rollout_data.update(
+                    self.compute_log_prob(
+                        "old_actor" if self.args.keep_old_actor else "actor",
+                        data_iterator,
+                        num_microbatches,
+                        store_prefix="",
+                    )
                 )
                 # when there is old actor, we need to update the model params to actor manually
                 if "old_actor" in self.weights:
@@ -242,8 +241,8 @@ class MegatronTrainRayActor(TrainRayActor):
                     self.model,
                     self.optimizer,
                     self.opt_param_scheduler,
-                    train_data_iterator,
-                    train_num_microbatches,
+                    data_iterator,
+                    num_microbatches,
                 )
 
         # TODO extract to a function during refactor
@@ -294,15 +293,23 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
-        torch.cuda.empty_cache()
+        if hasattr(mpu, "reload_process_groups"):
+            mpu.reload_process_groups()
+        if self.args.experimental_offload:
+            self.libcudart.disable()
+
         self.weight_updator.update_weights()
         dist.barrier(group=get_gloo_group())
-        clear_memory()
         print_memory("after update_weights")
 
         if getattr(self.args, "keep_old_actor", False):
             print("update rollout model on cpu using actor model")
             self.update_cpu_params_dict(self.weights["old_actor"])
+
+        if self.args.experimental_offload:
+            self.libcudart.enable()
+        if hasattr(mpu, "destroy_process_groups"):
+            mpu.destroy_process_groups()
 
     def load_other_checkpoint(self, model_tag, path):
         old_args = self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune

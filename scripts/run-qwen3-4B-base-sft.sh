@@ -35,7 +35,7 @@ CKPT_ARGS=(
 )
 
 SFT_ARGS=(
-   --rollout-function-path slime.rollout.sft_example.generate_rollout
+   --rollout-function-path slime.rollout.sft_rollout.generate_rollout
    --prompt-data /root/openhermes2_5.parquet
    --input-key messages
    --rollout-shuffle
@@ -99,7 +99,7 @@ MISC_ARGS=(
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 export no_proxy="127.0.0.1,${MASTER_ADDR}"
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 
 # Build the runtime environment JSON with proper variable substitution

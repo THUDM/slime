@@ -46,7 +46,7 @@ CKPT_ARGS=(
 )
 
 SFT_ARGS=(
-   --rollout-function-path slime.rollout.sft_example.generate_rollout
+   --rollout-function-path slime.rollout.sft_rollout.generate_rollout
    --prompt-data ${BASE_FOLDER}/openhermes2_5.parquet
    --input-key messages
    --rollout-shuffle
@@ -112,14 +112,14 @@ MISC_ARGS=(
 
 # launch the master node of ray in container
 export no_proxy="127.0.0.1,${MASTER_ADDR}"
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 for WORKER_IP in $(awk '{print $1}' /root/mpi_rack_hostfile); do
   if [[ "$WORKER_IP" == "$MLP_WORKER_0_HOST" ]]; then
     continue
   fi
   echo "Starting Ray worker on ${WORKER_IP}"
   ssh root@"${WORKER_IP}" \
-    "pkill -9 sglang ; ray stop --force ; pkill -9 python ; ray start --address=${MASTER_ADDR}:6379 --num-gpus 8 --node-ip-address ${WORKER_IP} --disable-usage-stats" &
+    "pkill -9 sglang ; ray stop --force ; pkill -9 python ; ray start --address=${MASTER_ADDR}:6379 --num-gpus 8 --node-ip-address ${WORKER_IP} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265" &
 done
 wait
 

@@ -19,7 +19,7 @@ docker pull rlsys/slime:slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9
 Or you can use the [Dockerfile.rocm](docker/Dockerfile.rocm) to build it on your side.
 ```bash
 cd docker
-docker build -f Dockerfile.rocm -t slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-core-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch
+docker build -f Dockerfile.rocm -t slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-core-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch .
 ```
 
 Acknowledgement: Thanks to [Yang Wang](https://www.microsoft.com/en-us/research/people/yangwang5/) for working on the patch for this ROCm base Docker image to support virtual memory management on MI300X.

@@ -59,7 +59,7 @@ You can compare [run-qwen3-4B-base-sft.sh](../../scripts/run-qwen3-4B.sh) with [
 
     ```bash
     SFT_ARGS=(
-       --rollout-function-path slime.rollout.sft_example.generate_rollout
+       --rollout-function-path slime.rollout.sft_rollout.generate_rollout
        --prompt-data /root/openhermes2_5.parquet
        --input-key messages
        --rollout-shuffle
@@ -74,7 +74,7 @@ You can compare [run-qwen3-4B-base-sft.sh](../../scripts/run-qwen3-4B.sh) with [
     )
     ```
 
-    SFT actually reuses the custom rollout functionality of slime. By using `--rollout-function-path`, the data generation part is switched from the RL rollout that uses `sglang` to the SFT version that reads data from a file, which is `slime.rollout.sft_example.generate_rollout`.
+    SFT actually reuses the custom rollout functionality of slime. By using `--rollout-function-path`, the data generation part is switched from the RL rollout that uses `sglang` to the SFT version that reads data from a file, which is `slime.rollout.sft_rollout.generate_rollout`.
 
     For SFT, it is recommended to set `rollout_batch_size` and `global_batch_size` to the same value and not to configure `n_samples_per_prompt`. This is equivalent to training one batch right after reading one batch.
 

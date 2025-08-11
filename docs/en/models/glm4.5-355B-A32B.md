@@ -157,3 +157,36 @@ MISC_ARGS=(
    --moe-token-dispatcher-type flex
 )
 ```
+
+## FP8 Rollout
+
+The open-source FP8 checkpoint of GLM-4.5 is of per-channel quantization, which could not enable deepep in SGLang. We can use the tool scripts within slime to convert an FP8 checkpoint of 128x128 per-block quant:
+
+```bash
+python tools/convert_hf_to_fp8.py \
+    --model-dir $BASE_DIR/GLM-4.5-355B-A32B/ \
+    --save-dir $BASE_DIR/GLM-4.5-355B-A32B-FP8/ \
+    --strategy block --block-size 128 128 \
+    --max-workers 4
+```
+
+Then, simply change `--hf-checkpoint` to `$BASE_DIR/GLM-4.5-355B-A32B-FP8/` to enable FP8 rollout.
+
+And exemplar `SGLANG_ARGS` for FP8 is:
+
+```bash
+SGLANG_ARGS=(
+   --rollout-num-gpus-per-engine 32
+   --sglang-mem-fraction-static 0.5
+   --sglang-enable-dp-attention
+   --sglang-dp-size 32
+   --sglang-ep-size 32
+   --sglang-moe-dense-tp-size 1
+   --sglang-enable-dp-lm-head
+   --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 128)
+   --sglang-disable-radix-cache
+
+   --sglang-moe-a2a-backend deepep
+   --sglang-deepep-mode auto
+)
+```

@@ -176,7 +176,7 @@ TBD
 
 slime supports customizing data generation (rollout) to various degrees.
 
-  - By default, it uses the `generate_rollout` function from [slime/rollout/sglang\_example.py](../../slime/rollout/sglang_example.py) for data generation. This file implements an asynchronous (asyncio) data generation flow based on SGLang and supports features like dynamic sampling and partial rollout.
+  - By default, it uses the `generate_rollout` function from [slime/rollout/sglang\_example.py](../../slime/rollout/sglang_rollout.py) for data generation. This file implements an asynchronous (asyncio) data generation flow based on SGLang and supports features like dynamic sampling and partial rollout.
 
   - You can completely replace the `generate_rollout` in sglang\_example.py by using the `--rollout-function-path` parameter. You just need to ensure that the function signature passed via `--rollout-function-path` is as follows:
 
@@ -247,7 +247,7 @@ slime supports customizing data generation (rollout) to various degrees.
         return sample
     ```
 
-    For a more complete version, please refer to [slime/rollout/sglang\_example.py](../../slime/rollout/sglang_example.py).
+    For a more complete version, please refer to [slime/rollout/sglang\_example.py](../../slime/rollout/sglang_rollout.py).
 
   - Sometimes, you may also need to support a custom reward model. This can be configured by setting `--custom-rm-path`.
 

@@ -65,6 +65,14 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This will always be true when --colocate is set."
                 ),
             )
+            parser.add_argument(
+                "--experimental-offload",
+                action="store_true",
+                default=False,
+                help=(
+                    "Enable a more aggressive offload strategy that uses pytorch_malloc to offload the CUDA memory. "
+                ),
+            )
 
             return parser
 
@@ -95,7 +103,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-function-path",
                 type=str,
-                default="slime.rollout.sglang_example.generate_rollout",
+                default="slime.rollout.sglang_rollout.generate_rollout",
                 help=(
                     "Path to the rollout generation function."
                     "You should use this model to create your own custom rollout function, "
@@ -180,6 +188,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "The seed for the random number generator during rollout. "
                     "This is used to shuffle the prompts and also for the random sampling of the prompts."
+                ),
+            )
+            parser.add_argument(
+                "--use-token-output",
+                action="store_true",
+                default=False,
+                help=(
+                    "Use token-based output from SGLang instead of string-based output. "
+                    "This avoids encode/decode overhead and directly stores tokens, "
+                    "which is more efficient for training workflows."
                 ),
             )
 
@@ -390,17 +408,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             # mbs for the training, will be ignored if `use_dynamic_batch_size` is set.
             reset_megatron_args(parser, "--micro-batch-size", 1)
-            # mbs for calculating the log probs, will be ignored if `use_dynamic_batch_size` is set.
-            parser.add_argument(
-                "--ref-micro-batch-size",
-                type=int,
-                default=None,
-                help=(
-                    "Micro batch size for calculating log probs, as we won't do backward during log probs calculation, "
-                    "we can set it to a larger value than the micro batch size for training. "
-                    "This will be ignored if `use_dynamic_batch_size` is set."
-                ),
-            )
             parser.add_argument(
                 "--balance-data",
                 action="store_true",
@@ -837,9 +844,6 @@ def parse_args(add_custom_arguments=None):
     args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
 
     args = set_default_megatron_args(args)
-
-    if args.ref_micro_batch_size is None:
-        args.ref_micro_batch_size = args.micro_batch_size
 
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):

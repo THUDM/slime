@@ -181,9 +181,9 @@ TBD
 
 slime 支持不同程度的自定义数据生成（rollout）。
 
-- 默认会使用 [slime/rollout/sglang_example.py](../../slime/rollout/sglang_example.py) 中的 `generate_rollout` 函数进行数据生成。这个文件中实现了基于 sglang 的异步（asyncio）数据生成流程，并支持了例如 dynamic sampling，partial rollout 等功能；
+- 默认会使用 [slime/rollout/sglang_rollout.py](../../slime/rollout/sglang_rollout.py) 中的 `generate_rollout` 函数进行数据生成。这个文件中实现了基于 sglang 的异步（asyncio）数据生成流程，并支持了例如 dynamic sampling，partial rollout 等功能；
 
-- 可以通过 `--rollout-function-path` 参数，完全替换 sglang_example.py 中的 `generate_rollout`，只需要保证 `--rollout-function-path` 传入的函数签名满足：
+- 可以通过 `--rollout-function-path` 参数，完全替换 sglang_rollout.py 中的 `generate_rollout`，只需要保证 `--rollout-function-path` 传入的函数签名满足：
 
   ```python
   def generate_rollout(args, rollout_id, data_buffer, evaluation=False) -> list[list[Sample]]:
@@ -247,7 +247,7 @@ slime 支持不同程度的自定义数据生成（rollout）。
       return sample
   ```
 
-   更完备的版本请查看 [slime/rollout/sglang_example.py](../../slime/rollout/sglang_example.py)。
+   更完备的版本请查看 [slime/rollout/sglang_rollout.py](../../slime/rollout/sglang_rollout.py)。
 
 - 有的时候，我们还需要支持自定义的 reward model，可以通过配置 `--custom-rm-path` 来进行配置。
 

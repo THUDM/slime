@@ -1,6 +1,5 @@
 import re
 import torch
-import torch.nn.functional as F
 
 from .deepseekv3 import convert_deepseekv3_to_hf
 from .glm4 import convert_glm4_to_hf
@@ -8,6 +7,8 @@ from .glm4moe import convert_glm4moe_to_hf
 from .llama import convert_llama_to_hf
 from .qwen2 import convert_qwen2_to_hf
 from .qwen3moe import convert_qwen3moe_to_hf
+
+from slime.utils.fp8_kernel import blockwise_cast_to_fp8_triton
 
 
 def ceildiv(a, b):
@@ -19,34 +20,7 @@ def quantize_param(name, weight, weight_block_size):
     FP8_MIN = torch.finfo(torch.float8_e4m3fn).min
     FP8_MAX = torch.finfo(torch.float8_e4m3fn).max
     if weight_block_size is not None:
-        # per block quant
-        block_n, block_k = weight_block_size[0], weight_block_size[1]
-
-        shape_0, shape_1 = weight.shape
-
-        n_tiles = ceildiv(shape_0, block_n)
-        k_tiles = ceildiv(shape_1, block_k)
-
-        q_weight = F.pad(
-            weight,
-            (0, k_tiles * block_k - shape_1, 0, n_tiles * block_n - shape_0),
-            mode="constant",
-            value=0.0,
-        )
-
-        qweight = q_weight.reshape(n_tiles, block_n, k_tiles, block_k)
-        block_max = torch.max(torch.abs(qweight), dim=1, keepdim=True)[0]
-        block_max = torch.max(block_max, dim=3, keepdim=True)[0]
-
-        scale = block_max.to(torch.float32) / FP8_MAX
-        qweight = (
-            (qweight / scale)
-            .clamp(min=FP8_MIN, max=FP8_MAX)
-            .reshape((n_tiles * block_n, k_tiles * block_k))
-            .to(torch.float8_e4m3fn)
-        )
-        qweight = qweight[:shape_0, :shape_1]
-        scale = scale.squeeze()
+        qweight, scale = blockwise_cast_to_fp8_triton(weight, weight_block_size)
         scale_name = name.replace(".weight", ".weight_scale_inv")
     else:
         # per tensor quant

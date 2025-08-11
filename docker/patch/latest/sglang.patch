@@ -1,0 +1,164 @@
+diff --git a/python/sglang/srt/configs/model_config.py b/python/sglang/srt/configs/model_config.py
+index f3643d154..34e7b5104 100644
+--- a/python/sglang/srt/configs/model_config.py
++++ b/python/sglang/srt/configs/model_config.py
+@@ -438,14 +438,14 @@ class ModelConfig:
+             ).lower()
+ 
+             # Detect which checkpoint is it
+-            for _, method in QUANTIZATION_METHODS.items():
+-                quantization_override = method.override_quantization_method(
+-                    quant_cfg, self.quantization
+-                )
+-                if quantization_override:
+-                    quant_method = quantization_override
+-                    self.quantization = quantization_override
+-                    break
++            #for _, method in QUANTIZATION_METHODS.items():
++            #    quantization_override = method.override_quantization_method(
++            #        quant_cfg, self.quantization
++            #    )
++            #    if quantization_override:
++            #        quant_method = quantization_override
++            #        self.quantization = quantization_override
++            #        break
+ 
+             # Verify quantization configurations.
+             if self.quantization is None:
+diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/entrypoints/http_server.py
+index 180d33820..a6e87b83c 100644
+--- a/python/sglang/srt/entrypoints/http_server.py
++++ b/python/sglang/srt/entrypoints/http_server.py
+@@ -231,6 +231,18 @@ async def validate_json_request(raw_request: Request):
+ 
+ 
+ @app.get("/health")
++async def health() -> Response:
++    """Check the health of the http server."""
++    if _global_state.tokenizer_manager.gracefully_exit:
++        logger.info("Health check request received during shutdown. Returning 503.")
++        return Response(status_code=503)
++
++    if not _global_state.tokenizer_manager.server_status.is_healthy():
++        return Response(status_code=503)
++
++    return Response(status_code=200)
++
++
+ @app.get("/health_generate")
+ async def health_generate(request: Request) -> Response:
+     """
+@@ -1103,6 +1115,8 @@ def _wait_and_warmup(
+             pipe_finish_writer,
+         ):
+             return
++    else:
++        _global_state.tokenizer_manager.server_status = ServerStatus.Up
+ 
+     logger.info("The server is fired up and ready to roll!")
+ 
+diff --git a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py b/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
+index c711d4427..8a454a438 100644
+--- a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
++++ b/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
+@@ -164,6 +164,7 @@ class DeepEPBuffer:
+                 f"Consider using --deepep-config to change the behavior."
+             )
+ 
++        num_qps_per_rank = 20
+         cls._buffer = Buffer(
+             group,
+             num_nvl_bytes,
+diff --git a/python/sglang/srt/layers/quantization/fp8.py b/python/sglang/srt/layers/quantization/fp8.py
+index 1b0824051..c2a053845 100644
+--- a/python/sglang/srt/layers/quantization/fp8.py
++++ b/python/sglang/srt/layers/quantization/fp8.py
+@@ -354,10 +354,10 @@ class Fp8LinearMethod(LinearMethodBase):
+                 return
+             else:
+                 weight, weight_scale = layer.weight.data, layer.weight_scale_inv.data
+-            layer.weight = torch.nn.Parameter(weight, requires_grad=False)
+-            layer.weight_scale_inv = torch.nn.Parameter(
+-                weight_scale, requires_grad=False
+-            )
++            #layer.weight = torch.nn.Parameter(weight, requires_grad=False)
++            #layer.weight_scale_inv = torch.nn.Parameter(
++            #    weight_scale, requires_grad=False
++            #)
+             return
+ 
+         layer.weight = torch.nn.Parameter(layer.weight.data, requires_grad=False)
+diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
+index 5f9b7f20f..3800f26de 100644
+--- a/python/sglang/srt/managers/scheduler.py
++++ b/python/sglang/srt/managers/scheduler.py
+@@ -1337,7 +1337,7 @@ class Scheduler(
+ 
+         if memory_leak:
+             msg = "token_to_kv_pool_allocator memory leak detected! " f"{token_msg}"
+-            raise ValueError(msg)
++            #raise ValueError(msg)
+ 
+         if self.disaggregation_mode == DisaggregationMode.DECODE:
+             req_total_size = (
+@@ -1352,7 +1352,7 @@ class Scheduler(
+                 f"available_size={len(self.req_to_token_pool.free_slots)}, "
+                 f"total_size={self.req_to_token_pool.size}\n"
+             )
+-            raise ValueError(msg)
++            #raise ValueError(msg)
+ 
+         if (
+             self.enable_metrics
+diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
+index cbd1c7332..1759f0721 100644
+--- a/python/sglang/srt/managers/tokenizer_manager.py
++++ b/python/sglang/srt/managers/tokenizer_manager.py
+@@ -1037,10 +1037,15 @@ class TokenizerManager:
+         request: Optional[fastapi.Request] = None,
+     ) -> Tuple[bool, str]:
+         self.auto_create_handle_loop()
+-        assert (
+-            self.server_args.dp_size == 1
+-        ), "dp_size must be 1 for init parameter update group"
+-        result = (await self.init_weights_update_group_communicator(obj))[0]
++        results = await self.init_weights_update_group_communicator(obj)
++        if self.server_args.dp_size == 1:
++            result = results[0]
++            return result.success, result.message
++        else:
++            all_success = all([r.success for r in results])
++            all_message = [r.message for r in results]
++            all_message = " | ".join(all_message)
++            return all_success, all_message
+         return result.success, result.message
+ 
+     async def update_weights_from_distributed(
+@@ -1049,9 +1054,6 @@ class TokenizerManager:
+         request: Optional[fastapi.Request] = None,
+     ) -> Tuple[bool, str]:
+         self.auto_create_handle_loop()
+-        assert (
+-            self.server_args.dp_size == 1 or self.server_args.enable_dp_attention
+-        ), "dp_size must be 1 or dp attention must be enabled for update weights from distributed"
+ 
+         if obj.abort_all_requests:
+             self.abort_request(abort_all=True)
+@@ -1059,8 +1061,15 @@ class TokenizerManager:
+         # This means that weight sync
+         # cannot run while requests are in progress.
+         async with self.model_update_lock.writer_lock:
+-            result = (await self.update_weights_from_distributed_communicator(obj))[0]
+-            return result.success, result.message
++            results = await self.update_weights_from_distributed_communicator(obj)
++            if self.server_args.dp_size == 1:
++                result = results[0]
++                return result.success, result.message
++            else:
++                all_success = all([r.success for r in results])
++                all_message = [r.message for r in results]
++                all_message = " | ".join(all_message)
++                return all_success, all_message
+ 
+     async def update_weights_from_tensor(
+         self,

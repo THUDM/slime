@@ -38,6 +38,7 @@ class GenerateState(metaclass=SingletonMeta):
             no_stop_trim=True,
             spaces_between_special_tokens=False,
         )
+
         self.reset()
 
     def reset(self):
@@ -71,8 +72,9 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     ), f"Sample status is {sample.status}"
 
     if len(sample.response) > 0:
-        response_token_ids = state.tokenizer(sample.response, add_special_tokens=False)["input_ids"]
-        sampling_params["max_new_tokens"] -= len(response_token_ids)
+        sampling_params["max_new_tokens"] -= len(sample.tokens) - len(
+            state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
+        )
 
     assert (
         sampling_params["max_new_tokens"] >= 0
@@ -81,20 +83,49 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         sample.status = Sample.Status.TRUNCATED
         return sample
 
-    # Handle partial rollout samples: continue generation from existing response
-    input_text = sample.prompt + sample.response
-
+    # Prepare payload - shared structure
     payload = {
-        "text": input_text,
         "sampling_params": sampling_params,
+        "return_logprob": args.use_token_output,
     }
 
+    if args.use_token_output:
+        # Token-based mode: use tokens directly
+        if len(sample.response) > 0:
+            input_token_ids = sample.tokens
+        else:
+            # First turn: initialize with prompt tokens
+            prompt_token_ids = state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
+            input_token_ids = prompt_token_ids
+            # Initialize sample.tokens with prompt for subsequent turns
+            if not sample.tokens:  # Only set if empty
+                sample.tokens = prompt_token_ids
+        payload["input_ids"] = input_token_ids
+    else:
+        # String-based mode: original implementation
+        input_text = sample.prompt + sample.response
+        payload["text"] = input_text
+
     output = await post(url, payload, use_http2=args.use_http2)
-    sample.response += output["text"]
-    prompt_tokens_ids = state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
-    response_token_ids = state.tokenizer(sample.response, add_special_tokens=False)["input_ids"]
-    sample.tokens = prompt_tokens_ids + response_token_ids
-    sample.response_length = len(response_token_ids)
+
+    if args.use_token_output:
+        # Extract new response tokens
+        assert (
+            "meta_info" in output and "output_token_logprobs" in output["meta_info"]
+        ), "output_token_logprobs is not in the output"
+        new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
+
+        # Update sample with tokens directly - avoiding re-tokenization
+        sample.tokens = sample.tokens + new_response_tokens
+        sample.response_length += len(new_response_tokens)
+        sample.response += state.tokenizer.decode(new_response_tokens, skip_special_tokens=False)
+    else:
+        # String-based processing
+        sample.response += output["text"]
+        prompt_tokens_ids = state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
+        response_token_ids = state.tokenizer(sample.response, add_special_tokens=False)["input_ids"]
+        sample.tokens = prompt_tokens_ids + response_token_ids
+        sample.response_length = len(response_token_ids)
 
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":

@@ -1,4 +1,9 @@
-FROM lmsysorg/sglang:latest AS base
+ARG SGLANG_VERSION=latest
+FROM lmsysorg/sglang:${SGLANG_VERSION} AS sglang
+
+# we need to write this again after from
+ARG SGLANG_VERSION
+ARG MEGATRON_COMMIT=main
 
 # TODO: change to pip install sglang-router after it has a new release
 RUN pip install sglang-router --force-reinstall
@@ -15,11 +20,12 @@ RUN NVCC_APPEND_FLAGS="--threads 4" \
   pip -v install --disable-pip-version-check --no-cache-dir \
   --no-build-isolation \
   --config-settings "--build-option=--cpp_ext --cuda_ext --parallel 8" git+https://github.com/NVIDIA/apex.git
-# transformer engine
-RUN pip -v install transformer_engine[pytorch] --no-build-isolation
+# transformer engine, we install with --no-deps to avoid installing torch and torch-extensions
+RUN pip install pybind11
+RUN pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@stable
 # flash attn
 # the newest version megatron supports is v2.7.4.post1
-RUN pip install https://github.com/Dao-AILab/flash-attention/releases/download/v2.7.4.post1/flash_attn-2.7.4.post1+cu12torch2.6cxx11abiTRUE-cp310-cp310-linux_x86_64.whl
+RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1
 
 WORKDIR /root/
 RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
@@ -27,17 +33,18 @@ RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
     pip install -e .
 
 # sandwitch norm for GLM models
-COPY patch/megatron-sandwich_norm.patch /root/Megatron-LM/
+COPY patch/${SGLANG_VERSION}/megatron.patch /root/Megatron-LM/
 RUN cd Megatron-LM && \
-    git apply megatron-sandwich_norm.patch --3way && \
+    git checkout ${MEGATRON_COMMIT} && \
+    git apply megatron.patch --3way && \
     if grep -R -n '^<<<<<<< ' .; then \
       echo "Patch failed to apply cleanly. Please resolve conflicts." && \
       exit 1; \
     fi && \
-    rm megatron-sandwich_norm.patch
+    rm megatron.patch
 
 # sglang patch
-COPY patch/sglang.patch /sgl-workspace/sglang/
+COPY patch/${SGLANG_VERSION}/sglang.patch /sgl-workspace/sglang/
 RUN cd /sgl-workspace/sglang && \
   git apply sglang.patch && \
   if grep -R -n '^<<<<<<< ' .; then \
@@ -45,3 +52,5 @@ RUN cd /sgl-workspace/sglang && \
     exit 1; \
   fi && \
   rm sglang.patch
+
+RUN rm /root/.tmux.conf

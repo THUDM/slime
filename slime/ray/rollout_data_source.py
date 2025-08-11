@@ -5,6 +5,7 @@ from pathlib import Path
 import torch
 from slime.utils.data import Dataset
 from transformers import AutoTokenizer
+from slime.utils.types import Sample
 
 
 # TODO may further refactor data-loading part later

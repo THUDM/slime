@@ -2,7 +2,9 @@ import re
 import socket
 import time
 from tqdm import tqdm
+from contextlib import nullcontext
 from sglang.srt.utils import MultiprocessingSerializer
+import inspect
 
 import ray
 import torch
@@ -47,6 +49,73 @@ def all_gather_param(name, param):
     return param
 
 
+def all_gather_params_async(param_infos_and_params):
+    """
+    Perform async all_gather for a batch of parameters to improve performance.
+
+    Args:
+        param_infos_and_params: List of (param_info, param) tuples
+
+    Returns:
+        List of gathered parameters in the same order
+    """
+    # Phase 1: Start all async all_gather operations
+    gather_tasks = []
+    handles = []
+
+    for info, param in param_infos_and_params:
+        # Prepare async all_gather
+        if "expert_bias" in info.name:
+            gather_tasks.append((info, param, None, None, None))
+            handles.append(None)
+        elif not param.tensor_model_parallel or getattr(param, "parallel_mode", None) == "duplicated":
+            gather_tasks.append((info, param.data, None, None, None))
+            handles.append(None)
+        else:
+            # Start async all_gather
+            if ".experts." in info.name:
+                tp_size = mpu.get_expert_tensor_parallel_world_size()
+                tp_group = mpu.get_expert_tensor_parallel_group()
+            else:
+                tp_size = mpu.get_tensor_model_parallel_world_size()
+                tp_group = mpu.get_tensor_model_parallel_group()
+
+            param_partitions = [torch.empty_like(param.data) for _ in range(tp_size)]
+            handle = dist.all_gather(param_partitions, param.data, group=tp_group, async_op=True)
+            gather_tasks.append((info, None, handle, param_partitions, param.partition_dim))
+            handles.append(handle)
+
+    # Phase 2: Wait for ALL async operations to complete at once
+    # This ensures maximum parallelism by not blocking on individual operations
+    for handle in handles:
+        if handle is not None:
+            handle.wait()
+
+    # Phase 3: Process all results after all communications are done
+    gathered_params = []
+    for info, direct_param, handle, param_partitions, partition_dim in gather_tasks:
+        if handle is None:
+            # No all_gather needed
+            param = direct_param
+        else:
+            # Process the gathered partitions (same logic as original all_gather_param)
+            assert partition_dim is not None, "partition_stride != 1 is not supported"
+            # TODO: here we did an extra copy during concat, maybe merge this with convert_to_hf is better?
+            # TODO: check only GLU is used.
+            if "linear_fc1.weight" in info.name:
+                param_partitions = [p.chunk(2, dim=0) for p in param_partitions]
+                param_partitions = [p[0] for p in param_partitions] + [p[1] for p in param_partitions]
+            # this is bug in megatron's grouped moe.
+            if "linear_fc2.weight" in info.name:
+                if partition_dim == 0:
+                    partition_dim = 1
+            param = torch.cat(param_partitions, dim=partition_dim)
+
+        gathered_params.append(param)
+
+    return gathered_params
+
+
 def remove_padding(name, param, vocab_size):
     if name == "module.module.embedding.word_embeddings.weight" or name == "module.module.output_layer.weight":
         return param[:vocab_size]
@@ -59,8 +128,14 @@ def named_parameters(args, model):
     if args.num_experts:
         expert_offset = ep_rank * args.num_experts // ep_size
 
-    for model_module in model:
-        layer_offset = get_transformer_layer_offset(model_module.config)
+    sig = inspect.signature(get_transformer_layer_offset)
+    need_vp_stage = "vp_stage" in sig.parameters
+
+    for vp_stage, model_module in enumerate(model):
+        if need_vp_stage:
+            layer_offset = get_transformer_layer_offset(model_module.config, vp_stage)
+        else:
+            layer_offset = get_transformer_layer_offset(model_module.config)
         for name, param in model_module.named_parameters():
             # for model without ddp wrap
             if not name.startswith("module.module."):
@@ -216,6 +291,13 @@ class UpdateWeightFromTensor:
         self.quantization_config = quantization_config
         self.param_info_buckets = get_param_info_buckets(self.args, self.model)
 
+        if self.args.experimental_offload:
+            import pytorch_malloc
+
+            self.allocator = torch.cuda.memory.CUDAPluggableAllocator(
+                pytorch_malloc.get_library_path(), "my_malloc", "my_free"
+            ).allocator()
+
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines
 
@@ -236,10 +318,17 @@ class UpdateWeightFromTensor:
     def update_weights(self):
         rank = dist.get_rank()
         if rank == 0:
-            ray.get([engine.reset_prefix_cache.remote() for engine in self.rollout_engines])
+            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
-        for param_infos in tqdm(self.param_info_buckets, disable=rank != 0, desc="Update weights"):
-            self._update_bucket_weights_from_tensor(param_infos)
+        if self.args.experimental_offload:
+            pool = torch.cuda.MemPool(self.allocator)
+        with torch.cuda.use_mem_pool(pool) if self.args.experimental_offload else nullcontext():
+            for param_infos in tqdm(self.param_info_buckets, disable=rank != 0, desc="Update weights"):
+                self._update_bucket_weights_from_tensor(param_infos)
+
+        if self.args.experimental_offload:
+            # must manually delete here to release the memory
+            del pool
 
     def _update_bucket_weights_from_tensor(self, param_infos):
         pp_size = mpu.get_pipeline_model_parallel_world_size()
@@ -289,13 +378,17 @@ class UpdateWeightFromTensor:
             for handle in handles:
                 handle.wait()
 
-        converted_named_tensors = []
+        # Set tp attrs for all params
         for info, param in zip(param_infos, params):
-            # set tp attrs
             for key, value in info.attrs.items():
                 setattr(param, key, value)
-            # gather param
-            param = all_gather_param(info.name, param)
+
+        # Batch async all_gather for all parameters
+        gathered_params = all_gather_params_async(list(zip(param_infos, params)))
+
+        # Process gathered params
+        converted_named_tensors = []
+        for info, param in zip(param_infos, gathered_params):
             param = remove_padding(info.name, param, self.vocab_size)
             converted_named_tensors.extend(
                 convert_to_hf(self.args, self.model_name, info.name, param, self.quantization_config)
@@ -304,19 +397,19 @@ class UpdateWeightFromTensor:
 
     def _update_converted_params_from_tensor(self, converted_named_tensors):
         ipc_handle = MultiprocessingSerializer.serialize(converted_named_tensors, output_str=True)
-        ipc_handles = (
+        serialized_named_tensors = (
             [None] * dist.get_world_size(self._ipc_gather_group) if self._ipc_gather_src == dist.get_rank() else None
         )
         dist.gather_object(
             ipc_handle,
-            object_gather_list=ipc_handles,
+            object_gather_list=serialized_named_tensors,
             dst=self._ipc_gather_src,
             group=self._ipc_gather_group,
         )
 
         if dist.get_rank() == self._ipc_gather_src:
             ref = self._ipc_engine.update_weights_from_tensor.remote(
-                ipc_handles=ipc_handles,
+                serialized_named_tensors=serialized_named_tensors,
             )
             ray.get(ref)
 
@@ -351,7 +444,7 @@ class UpdateWeightFromDistributed:
             world_size = self.args.rollout_num_gpus + 1
 
             refs = [
-                engine.init_process_group.remote(
+                engine.init_weights_update_group.remote(
                     master_address,
                     master_port,
                     i * self.args.rollout_num_gpus_per_engine + 1,
@@ -373,7 +466,7 @@ class UpdateWeightFromDistributed:
     def update_weights(self):
         if dist.get_rank() == 0:
             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
-            ray.get([engine.reset_prefix_cache.remote() for engine in self.rollout_engines])
+            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
         buffer_size = 0

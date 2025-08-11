@@ -1,6 +1,7 @@
 # Adapt from https://github.com/NVIDIA/Megatron-LM/blob/b1efb3c7126ef7615e8c333432d76e08038e17ff/pretrain_gpt.py
 import inspect
 from contextlib import nullcontext
+from typing import Optional
 
 from megatron.core.models.gpt import GPTModel
 from megatron.core.models.gpt.gpt_layer_specs import (
@@ -13,7 +14,7 @@ from megatron.training.arguments import core_transformer_config_from_args
 
 
 def get_model_provider_func(args):
-    def model_provider(pre_process=True, post_process=True) -> GPTModel:
+    def model_provider(pre_process=True, post_process=True, vp_stage: Optional[int] = None) -> GPTModel:
         """Builds the model.
 
         If you set the use_legacy_models to True, it will return the legacy GPT model and if not the mcore GPT model.
@@ -39,7 +40,12 @@ def get_model_provider_func(args):
         else:
             if args.num_experts:
                 # Define the decoder block spec
-                transformer_layer_spec = get_gpt_decoder_block_spec(config, use_transformer_engine=use_te)
+                kwargs = {
+                    "use_transformer_engine": use_te,
+                }
+                if vp_stage is not None:
+                    kwargs["vp_stage"] = vp_stage
+                transformer_layer_spec = get_gpt_decoder_block_spec(config, **kwargs)
             else:
                 # Define the decoder layer spec
                 if use_te:
@@ -92,10 +98,19 @@ def get_model_provider_func(args):
             "rope_scaling": args.use_rope_scaling,
         }
 
+        if vp_stage is not None:
+            kwargs["vp_stage"] = vp_stage
+
         if getattr(args, "mtp_num_layers", None):
             from megatron.core.models.gpt.gpt_layer_specs import get_gpt_mtp_block_spec
 
-            mtp_block_spec = get_gpt_mtp_block_spec(config, transformer_layer_spec, use_transformer_engine=use_te)
+            mtp_kwargs = {
+                "use_transformer_engine": use_te,
+            }
+            if vp_stage is not None:
+                mtp_kwargs["vp_stage"] = vp_stage
+
+            mtp_block_spec = get_gpt_mtp_block_spec(config, transformer_layer_spec, **mtp_kwargs)
             kwargs["mtp_block_spec"] = mtp_block_spec
 
         with build_model_context(**build_model_context_args):

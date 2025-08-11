@@ -77,10 +77,8 @@ def get_data_iterator(args, model, rollout_data):
         rollout_data: A dictionary containing rollout data, including 'total_lengths' for each sample.
     Returns:
         tuple: A tuple containing:
-            - log_probs_data_iterator: List of DataIterator objects for log probability evaluation.
-            - log_probs_num_microbatches: Number of microbatches for log probability evaluation.
-            - train_data_iterator: List of DataIterator objects for training.
-            - train_num_microbatches: List of number of microbatches for each training step.
+            - data_iterator: List of DataIterator objects for log probability evaluation.
+            - num_microbatches: Number of microbatches for log probability evaluation.
     """
     num_local_samples = (
         args.rollout_batch_size
@@ -101,11 +99,8 @@ def get_data_iterator(args, model, rollout_data):
         return data_iterator
 
     if not args.use_dynamic_batch_size:
-        log_probs_num_microbatches = num_local_samples // args.ref_micro_batch_size
-        train_num_microbatches = [num_local_gbs // args.micro_batch_size for _ in range(num_steps_per_rollout)]
-
-        log_probs_data_iterator = _generate_data_iterator(rollout_data, args.ref_micro_batch_size)
-        train_data_iterator = _generate_data_iterator(rollout_data, args.micro_batch_size)
+        num_microbatches = [num_local_gbs // args.micro_batch_size for _ in range(num_steps_per_rollout)]
+        data_iterator = _generate_data_iterator(rollout_data, args.micro_batch_size)
     else:
         assert args.max_tokens_per_gpu is not None
         # calculate the number of mirobatches for each step
@@ -118,8 +113,6 @@ def get_data_iterator(args, model, rollout_data):
             num_microbatches.append(
                 get_minimum_num_micro_batch_size(samples[start:end], args.max_tokens_per_gpu, cp_size)
             )
-
-        num_microbatches.append(get_minimum_num_micro_batch_size(samples, args.max_tokens_per_gpu, cp_size))
 
         num_microbatches = torch.tensor(num_microbatches, dtype=torch.int, device=torch.cuda.current_device())
         dist.all_reduce(num_microbatches, op=dist.ReduceOp.MAX, group=mpu.get_data_parallel_group())
@@ -135,19 +128,12 @@ def get_data_iterator(args, model, rollout_data):
             )
 
         num_microbatches = num_microbatches.tolist()
-        log_probs_num_microbatches = num_microbatches.pop()
-        train_num_microbatches = num_microbatches
 
         # balance the each micro batch
         samples = rollout_data["total_lengths"]
-        # get log_probs data iterator
-        partitions = get_seqlen_balanced_partitions(samples, log_probs_num_microbatches, equal_size=False)
-
-        log_probs_data_iterator = _generate_data_iterator(rollout_data, None, partitions)
-
         # balance the number of mirobatches across steps
         micro_batch_indices = []
-        for i, num_mbs in enumerate(train_num_microbatches):
+        for i, num_mbs in enumerate(num_microbatches):
             start, end = i * num_local_gbs, (i + 1) * num_local_gbs
             samples = rollout_data["total_lengths"][start:end]
             partitions = get_seqlen_balanced_partitions(samples, num_mbs, equal_size=False)
@@ -158,13 +144,11 @@ def get_data_iterator(args, model, rollout_data):
 
         assert len(set(sum(micro_batch_indices, []))) == num_local_samples
 
-        train_data_iterator = _generate_data_iterator(rollout_data, None, micro_batch_indices)
+        data_iterator = _generate_data_iterator(rollout_data, None, micro_batch_indices)
 
     return (
-        log_probs_data_iterator,
-        log_probs_num_microbatches,
-        train_data_iterator,
-        train_num_microbatches,
+        data_iterator,
+        num_microbatches,
     )
 
 

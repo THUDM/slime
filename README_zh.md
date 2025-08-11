@@ -129,6 +129,8 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_torch_dist_to_hf.py \
   --origin-hf-dir /root/GLM-Z1-9B-0414
 ```
 
+由于 Megatron 会对 embedding 做 padding，可能会出现转换出来的 hf checkpoint 的 embedding 形状不匹配的问题。这时需要在转换时设置 `--vocab-size`。
+
 ⚠️ 由于 mbridge 转换的 torch_dist ckpt 目前不保存 args，不能基于上一步的 torch_dist ckpt 反转回 HF。
 
 #### 任意 Megatron ckpt → HF
