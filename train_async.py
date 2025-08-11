@@ -74,7 +74,7 @@ def train(args):
             (rollout_id + 1) % args.eval_interval == 0
             or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
         ):
-            ray.get(rollout_manager.async_generate(rollout_id, evaluation=True))
+            ray.get(rollout_manager.async_eval(rollout_id))
 
 
 if __name__ == "__main__":

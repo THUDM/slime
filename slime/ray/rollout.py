@@ -159,8 +159,11 @@ class RolloutManager:
             num_gpus=0,
         ).remote()
 
-    def async_generate(self, rollout_id, evaluation=False):
-        return self.data_buffer.generate.remote(rollout_id, evaluation=evaluation)
+    def async_generate(self, rollout_id):
+        return self.data_buffer.generate.remote(rollout_id)
+
+    def async_eval(self, rollout_id):
+        return self.data_buffer.eval.remote(rollout_id)
 
     def async_offload(self):
         return [engine.release_memory_occupation.remote() for engine in self.rollout_engines]

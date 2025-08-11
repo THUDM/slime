@@ -104,49 +104,43 @@ class Buffer:
             group = samples[i]  # type: ignore
             self.buffer.append(group)
 
-    def generate(self, rollout_id, evaluation=False):
+    def generate(self, rollout_id):
         self.rollout_id = rollout_id
-        if self.args.debug_train_only and evaluation:
-            # if debug train only, we don't generate evaluation data
-            return
 
-        if not evaluation and self.args.load_debug_rollout_data:
+        if self.args.load_debug_rollout_data:
             data = torch.load(
                 open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
         else:
-            generate_rollout = self.eval_generate_rollout if evaluation else self.generate_rollout
-            data = generate_rollout(self.args, rollout_id, self, evaluation=evaluation)
+            data = self.generate_rollout(self.args, rollout_id, self, evaluation=False)
             # flatten the data if it is a list of lists
-            if not evaluation and isinstance(data[0], list):
+            if isinstance(data[0], list):
                 data = sum(data, [])
 
         # TODO to be refactored (originally Buffer._set_data)
-        if not evaluation:
-            # TODO extract to a function during refactor
-            if (path_template := self.args.save_debug_rollout_data) is not None:
-                path = Path(path_template.format(rollout_id=self.rollout_id))
-                print(f"Save debug rollout data to {path}")
-                path.parent.mkdir(parents=True, exist_ok=True)
-                torch.save(
-                    dict(
-                        rollout_id=self.rollout_id,
-                        samples=[sample.to_dict() for sample in data],
-                    ),
-                    path,
-                )
-            data = self._convert_samples_to_train_data(data)
-            return Box(ray.put(data))
-        else:
-            log_eval_data(rollout_id, self.args, data)
+        # TODO extract to a function during refactor
+        if (path_template := self.args.save_debug_rollout_data) is not None:
+            path = Path(path_template.format(rollout_id=self.rollout_id))
+            print(f"Save debug rollout data to {path}")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                dict(
+                    rollout_id=self.rollout_id,
+                    samples=[sample.to_dict() for sample in data],
+                ),
+                path,
+            )
+        data = self._convert_samples_to_train_data(data)
+        return Box(ray.put(data))
 
-    def get_data(self, rollout_id, evaluation=False):
-        data_pool = self.train_data_pool if not evaluation else self.eval_data_pool
-        assert rollout_id in data_pool
-        data = data_pool[rollout_id]
-        del data_pool[rollout_id]
-        return data
+    def eval(self, rollout_id):
+        if self.args.debug_train_only:
+            # if debug train only, we don't generate evaluation data
+            return
+
+        data = self.eval_generate_rollout(self.args, rollout_id, self, evaluation=True)
+        log_eval_data(rollout_id, self.args, data)
 
     def _convert_samples_to_train_data(self, samples: Union[list[Sample], list[list[Sample]]]):
         """
