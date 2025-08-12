@@ -5,6 +5,7 @@ from .deepseekv3 import convert_deepseekv3_to_hf
 from .glm4 import convert_glm4_to_hf
 from .glm4moe import convert_glm4moe_to_hf
 from .llama import convert_llama_to_hf
+from .mimo import convert_mimo_to_hf
 from .qwen2 import convert_qwen2_to_hf
 from .qwen3moe import convert_qwen3moe_to_hf
 
@@ -146,6 +147,8 @@ def convert_to_hf(args, model_name, name, param, quantization_config=None):
 
     elif "llama" in model_name:
         converted_named_tensors = convert_llama_to_hf(args, name, param)
+    elif "mimo" in model_name:
+        converted_named_tensors = convert_mimo_to_hf(args, name, param)
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
