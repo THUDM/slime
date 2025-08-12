@@ -31,8 +31,8 @@ CKPT_ARGS=(
    --hf-checkpoint /root/MiMo-7B-RL
    #--hf-checkpoint /root/Qwen3-4B-FP8
    --ref-load /root/MiMo-7B-RL_torch_dist
-   # --load /root/MiMo-7B-RL_slime/
-   --save /root/MiMo-7B-RL_slime/
+   --load /root/MiMo-7B-RL-mtp_slime/
+   --save /root/MiMo-7B-RL-mtp_slime/
    --save-interval 2000
 )
 
@@ -43,7 +43,7 @@ ROLLOUT_ARGS=(
    --apply-chat-template
    --rollout-shuffle
    --rm-type deepscaler
-   --num-rollout 3000
+   --num-rollout 30
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 8192
@@ -98,10 +98,10 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   --use-wandb
-   --wandb-project slime-mimo-7B-rl
-   --wandb-group mtp-8gpu
-   --wandb-key ${WANDB_API_KEY}
+   # --use-wandb
+   # --wandb-project slime-mimo-7B-rl
+   # --wandb-group mimo
+   # --wandb-key ${WANDB_API_KEY}
 )
 
 SGLANG_ARGS=(
@@ -109,10 +109,10 @@ SGLANG_ARGS=(
    --sglang-mem-fraction-static 0.5
 
    # for speculative decoding
-   # --sglang-speculative-algorithm EAGLE
-   # --sglang-speculative-num-steps 1
-   # --sglang-speculative-eagle-topk 1
-   # --sglang-speculative-num-draft-tokens 2
+   --sglang-speculative-algorithm EAGLE
+   --sglang-speculative-num-steps 1
+   --sglang-speculative-eagle-topk 1
+   --sglang-speculative-num-draft-tokens 2
 )
 
 MISC_ARGS=(
@@ -144,6 +144,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    -- python3 train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 8 \
+   --rollout-num-gpus-per-node 8 \
    --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
