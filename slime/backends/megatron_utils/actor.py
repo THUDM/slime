@@ -1,4 +1,5 @@
 from pathlib import Path
+from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
@@ -7,7 +8,7 @@ import torch.distributed as dist
 if torch.version.hip:
     from vllm.device_allocator.cumem import CuMemAllocator
 else:
-    from cumem_allocator import CuMemAllocator
+    from torch_memory_saver import torch_memory_saver
 
 from megatron.core import mpu
 
@@ -122,8 +123,8 @@ class MegatronTrainRayActor(TrainRayActor):
         if hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()
 
-        if self.args.experimental_offload:
-            self.libcudart.pause()
+        if not torch.version.hip:
+            torch_memory_saver.pause()
         else:
             allocator = CuMemAllocator.get_instance()
             allocator.sleep(offload_tags=tags)
@@ -138,8 +139,8 @@ class MegatronTrainRayActor(TrainRayActor):
         if isinstance(tags, str):
             tags = (tags,)
 
-        if self.args.experimental_offload:
-            self.libcudart.resume()
+        if not torch.version.hip:
+            torch_memory_saver.resume()
         else:
             allocator = CuMemAllocator.get_instance()
             allocator.wake_up(tags)
@@ -288,19 +289,16 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if hasattr(mpu, "reload_process_groups"):
             mpu.reload_process_groups()
-        if self.args.experimental_offload:
-            self.libcudart.disable()
 
-        self.weight_updator.update_weights()
-        dist.barrier(group=get_gloo_group())
-        print_memory("after update_weights")
+        with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
+            print_memory("before update_weights")
+            self.weight_updator.update_weights()
+            print_memory("after update_weights")
 
-        if getattr(self.args, "keep_old_actor", False):
-            print("update rollout model on cpu using actor model")
-            self.update_cpu_params_dict(self.weights["old_actor"])
+            if getattr(self.args, "keep_old_actor", False):
+                print("update rollout model on cpu using actor model")
+                self.update_cpu_params_dict(self.weights["old_actor"])
 
-        if self.args.experimental_offload:
-            self.libcudart.enable()
         if hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()
 

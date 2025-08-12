@@ -1,6 +1,7 @@
 from typing import Dict, Optional
-
+import os
 import ray
+import torch
 
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
@@ -60,10 +61,18 @@ class RayTrainGroup:
             "RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES": "1",
         }
 
-        if self.args.experimental_offload:
-            import pytorch_malloc
+        if not torch.version.hip:
+            import torch_memory_saver
 
-            env_vars["LD_PRELOAD"] = pytorch_malloc.get_library_path()
+            dynlib_path = os.path.join(
+                os.path.dirname(os.path.dirname(torch_memory_saver.__file__)),
+                "torch_memory_saver_hook_mode_preload.abi3.so",
+            )
+            assert os.path.exists(dynlib_path), f"LD_PRELOAD so file {dynlib_path} does not exist."
+
+            env_vars["LD_PRELOAD"] = dynlib_path
+            env_vars["TMS_INIT_ENABLE"] = "1"
+            env_vars["TMS_INIT_ENABLE_CPU_BACKUP"] = "1"
 
         TrainRayActor = ray.remote(
             num_gpus=1,

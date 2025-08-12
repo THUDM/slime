@@ -28,7 +28,7 @@ from .model_provider import get_model_provider_func
 if torch.version.hip:
     from vllm.device_allocator.cumem import CuMemAllocator
 else:
-    from cumem_allocator import CuMemAllocator
+    pass
 
 
 def get_optimizer_param_scheduler(args, optimizer):
@@ -82,7 +82,7 @@ def setup_model_and_optimizer(
 
     with (
         CuMemAllocator.get_instance().use_memory_pool(tag="model")
-        if args.offload and not args.experimental_offload
+        if args.offload and torch.version.hip
         else nullcontext()
     ):
         config = get_model_config(model[0])

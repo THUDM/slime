@@ -71,14 +71,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This will always be true when --colocate is set."
                 ),
             )
-            parser.add_argument(
-                "--experimental-offload",
-                action="store_true",
-                default=False,
-                help=(
-                    "Enable a more aggressive offload strategy that uses pytorch_malloc to offload the CUDA memory. "
-                ),
-            )
 
             return parser
 

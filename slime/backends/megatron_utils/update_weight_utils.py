@@ -2,7 +2,6 @@ import re
 import socket
 import time
 from tqdm import tqdm
-from contextlib import nullcontext
 from sglang.srt.utils import MultiprocessingSerializer
 import inspect
 
@@ -299,13 +298,6 @@ class UpdateWeightFromTensor:
         self.quantization_config = quantization_config
         self.param_info_buckets = get_param_info_buckets(self.args, self.model)
 
-        if self.args.experimental_offload:
-            import pytorch_malloc
-
-            self.allocator = torch.cuda.memory.CUDAPluggableAllocator(
-                pytorch_malloc.get_library_path(), "my_malloc", "my_free"
-            ).allocator()
-
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines
 
@@ -329,16 +321,10 @@ class UpdateWeightFromTensor:
         if rank == 0:
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
-        if self.args.experimental_offload:
-            pool = torch.cuda.MemPool(self.allocator)
-        with torch.cuda.use_mem_pool(pool) if self.args.experimental_offload else nullcontext():
-            for param_infos in tqdm(self.param_info_buckets, disable=rank != 0, desc="Update weights"):
-                self._update_bucket_weights_from_tensor(param_infos)
+        for param_infos in tqdm(self.param_info_buckets, disable=rank != 0, desc="Update weights"):
+            self._update_bucket_weights_from_tensor(param_infos)
 
         dist.barrier(group=get_gloo_group())
-        if self.args.experimental_offload:
-            # must manually delete here to release the memory
-            del pool
 
     def _update_bucket_weights_from_tensor(self, param_infos):
         monkey_patch_torch_reductions()
