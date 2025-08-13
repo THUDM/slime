@@ -133,7 +133,6 @@ async def abort(state, args, pendings, rollout_id: int):
 
     return aborted_samples
 
-
 def _submit_generate_tasks(state, get_samples, min_submit_size: int):
     new_pendings = set()
 
