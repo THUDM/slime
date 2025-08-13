@@ -5,6 +5,7 @@ from slime.rollout.components.base_rollout_fn import RolloutFnInitParams, Rollou
 
 class LegacyAdapterRolloutFn:
     def __init__(self, params: RolloutFnInitParams, original_fn: Callable):
+        print("Using legacy format for rollout fn.")
         self.original_fn = original_fn
         self.init_params = params
 
