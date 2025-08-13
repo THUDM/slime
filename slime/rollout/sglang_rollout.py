@@ -330,9 +330,9 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
 
 
 def _generate_one_step(
-        init_params: RolloutFnInitParams,
-        params: RolloutFnCallParams,
-        get_samples,
+    init_params: RolloutFnInitParams,
+    params: RolloutFnCallParams,
+    get_samples,
 ):
     if init_params.evaluation:
         return run(eval_rollout(init_params.args, params.rollout_id))

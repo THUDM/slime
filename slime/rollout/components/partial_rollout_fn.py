@@ -76,13 +76,15 @@ class PartialRolloutFn:
         assert isinstance(samples[0], list), f"the elements of samples must be list, got {type(samples[0])}"
         for i in range(0, len(samples)):
             assert (
-                    len(samples[i]) == self.args.n_samples_per_prompt
+                len(samples[i]) == self.args.n_samples_per_prompt
             ), f"the length of the elements of samples must be equal to n_samples_per_prompt, got {len(samples[i])} != {self.args.n_samples_per_prompt}"
             group = samples[i]  # type: ignore
             self.aborted_samples_buffer.append(group)
 
 
-def _buffer_filter_pop_first(args, rollout_id, aborted_samples_buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
+def _buffer_filter_pop_first(
+    args, rollout_id, aborted_samples_buffer: list[list[Sample]], num_samples: int
+) -> list[list[Sample]]:
     num_to_pop = min(len(aborted_samples_buffer), num_samples)
     samples = aborted_samples_buffer[:num_to_pop]
     del aborted_samples_buffer[:num_to_pop]
