@@ -162,6 +162,8 @@ def _postprocess_done_data(
         dynamic_filter,
         max_num_outputs: int,
 ):
+    new_data = []
+
     for task in raw_done_tasks:
         group: list[Sample] = task.result()
 
@@ -179,9 +181,11 @@ def _postprocess_done_data(
 
         # add the samples to the data
         # NOTE: here we have not stored all the unused samples back to the data buffer.
-        if len(data) < target_data_size:
-            data.append(group)
+        if len(new_data) + len(old_data) < target_data_size:
+            new_data.append(group)
             pbar.update(args.n_samples_per_prompt)
+
+    return new_data
 
 async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     """An example to implement the generate_rollout function for an rule based rm rollout generation.
