@@ -1,11 +1,12 @@
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Protocol, Any
 
 from slime.utils.types import Sample
 
 
 @dataclass
 class RolloutFnInitParams:
+    args: Any
     evaluation: bool
     TODO
 
