@@ -9,5 +9,16 @@ class LegacyAdapterRolloutFn:
         self.init_params = params
 
     def __call__(self, params: RolloutFnCallParams) -> RolloutFnCallOutput:
-        samples = self.original_fn(self.init_params.args, params.rollout_id, TODO, evaluation=self.init_params.evaluation)
-        return RolloutFnCallOutput(samples=samples)
+        raw_output = self.original_fn(
+            self.init_params.args,
+            params.rollout_id,
+            TODO,
+            evaluation=self.init_params.evaluation,
+        )
+
+        if self.init_params.evaluation:
+            samples, metrics = None, raw_output
+        else:
+            samples, metrics = raw_output, None
+
+        return RolloutFnCallOutput(samples=samples, metrics=metrics)

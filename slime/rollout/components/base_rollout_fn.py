@@ -18,6 +18,7 @@ class RolloutFnCallParams:
 @dataclass
 class RolloutFnCallOutput:
     samples: list[list[Sample]]
+    metrics: dict[str, Any]  # TODO what is the type
 
 
 class BaseRolloutFn(Protocol):
