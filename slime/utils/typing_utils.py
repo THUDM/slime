@@ -19,4 +19,4 @@ def get_function_num_args(x):
         elif p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
             optional += 1
 
-    return required, optional
+    return required + optional
