@@ -10,7 +10,7 @@ from slime.utils.data import Dataset
 from slime.utils.http_utils import get, post
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
-from slime.rollout.components.sample_generator import generate_one_sample_vanilla
+from slime.rollout.components.sample_generator import generate_one_sample_vanilla, sglang_abort
 from .components.base_rollout_fn import RolloutFnCallParams, RolloutFnInitParams, RolloutFnCallOutput
 from .components.partial_rollout_fn import PartialRolloutFn
 
@@ -106,14 +106,8 @@ async def abort(state, args, pendings, rollout_id: int):
 
     assert not state.aborted
     state.aborted = True
-    response = await get(
-        f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers", use_http2=args.use_http2
-    )
 
-    # abort all the requests
-    for url in response["urls"]:
-        print(f"Abort request for {url}", flush=True)
-        await post(f"{url}/abort_request", {"abort_all": True}, use_http2=False)
+    await sglang_abort()
 
     # make sure all the pending tasks are finished
     count = 0

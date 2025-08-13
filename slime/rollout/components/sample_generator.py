@@ -1,4 +1,4 @@
-from slime.utils.http_utils import post
+from slime.utils.http_utils import post, get
 from slime.utils.types import Sample
 
 
@@ -74,3 +74,16 @@ async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, sampling_
             sample.status = Sample.Status.COMPLETED
 
     return sample
+
+
+# TODO maybe move
+async def sglang_abort(args):
+    list_workers_resp = await get(
+        f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers", use_http2=args.use_http2
+    )
+    worker_urls = list_workers_resp["urls"]
+
+    # abort all the requests
+    for url in worker_urls:
+        print(f"Abort request for {url}", flush=True)
+        await post(f"{url}/abort_request", {"abort_all": True}, use_http2=False)
