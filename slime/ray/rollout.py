@@ -39,9 +39,7 @@ def create_rollout_engines(args, pg):
                 num_cpus=num_cpus,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
-                runtime_env={
-                    "env_vars": {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST}
-                },
+                runtime_env={"env_vars": {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST}},
             ).remote(args, rank=i)
         )
 
