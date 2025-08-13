@@ -50,10 +50,7 @@ class PartialRolloutFn:
         samples = self.buffer_filter(self.args, rollout_id, self.aborted_samples_buffer, num_samples)
         return samples
 
-    def _add_samples(self, samples: list[list[Sample]]):
-        """
-        Add a sample group to aborted_samples_buffer.
-        """
+    def _add_samples_to_aborted_samples_buffer(self, samples: list[list[Sample]]):
         if not samples:
             return
         assert isinstance(samples, list), f"samples must be a list, got {type(samples)}"
