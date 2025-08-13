@@ -106,7 +106,7 @@ async def abort(state, args, pendings, rollout_id: int):
     assert not state.aborted
     state.aborted = True
 
-    await sglang_abort()
+    await sglang_abort(args)
 
     # make sure all the pending tasks are finished
     count = 0
