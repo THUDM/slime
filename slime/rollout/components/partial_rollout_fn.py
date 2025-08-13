@@ -25,15 +25,16 @@ class PartialRolloutFn:
             self.buffer_filter = load_function(self.args.buffer_filter_path)
 
     def __call__(self, params: RolloutFnCallParams) -> RolloutFnCallOutput:
+        TODO_get_samples_rollout_id_needs_partial
         return TODO
 
     # TODO simplify remaining logic
-    def _get_samples(self, num_samples: int) -> list[list[Sample]]:
+    def _get_samples(self, num_samples: int, rollout_id: int) -> list[list[Sample]]:
         """
         Return num_samples samples
         """
 
-        samples = self._get_samples_from_buffer(num_samples)
+        samples = self._get_samples_from_buffer(num_samples, rollout_id=rollout_id)
         num_samples -= len(samples)
 
         if num_samples == 0:
@@ -42,7 +43,7 @@ class PartialRolloutFn:
         samples += self.data_source.get_samples(num_samples=num_samples)
         return samples
 
-    def _get_samples_from_buffer(self, num_samples: int) -> list[list[Sample]]:
+    def _get_samples_from_buffer(self, num_samples: int, rollout_id: int) -> list[list[Sample]]:
         if len(self.aborted_samples_buffer) == 0 or num_samples == 0:
             return []
 
