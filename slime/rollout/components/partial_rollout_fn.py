@@ -57,7 +57,7 @@ class PartialRolloutFn:
         if not samples:
             return
 
-        # TODO improve code
+        # TODO improve code, e.g. separate assertion and addition
         assert isinstance(samples, list), f"samples must be a list, got {type(samples)}"
         assert isinstance(samples[0], list), f"the elements of samples must be list, got {type(samples[0])}"
         for i in range(0, len(samples)):
