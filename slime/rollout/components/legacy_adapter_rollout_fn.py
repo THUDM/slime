@@ -13,7 +13,7 @@ class LegacyAdapterRolloutFn:
         raw_output = self.original_fn(
             self.init_params.args,
             params.rollout_id,
-            TODO,
+            self,
             evaluation=self.init_params.evaluation,
         )
 
