@@ -42,7 +42,6 @@ class LegacyAdapterRolloutFn:
         else:
             return RolloutFnCallOutput(samples=raw_output, metrics=None)
 
-    # TODO simplify remaining logic
     def get_samples(self, num_samples: int) -> list[list[Sample]]:
         """
         Return num_samples samples
