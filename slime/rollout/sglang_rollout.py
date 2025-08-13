@@ -50,7 +50,6 @@ def reset_state(state):
     state.aborted = False
 
 
-
 async def generate_and_rm(state, args, sample: Sample, sampling_params: dict, evaluation=False) -> Sample:
     # For samples with existing response, check if they're complete
     if sample.status == Sample.Status.COMPLETED or sample.status == Sample.Status.TRUNCATED:
