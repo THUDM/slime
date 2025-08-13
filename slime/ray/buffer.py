@@ -59,7 +59,7 @@ class Buffer:
 
         self.data_source = RolloutDataSource(args)
 
-        params = RolloutFnInitParams(args=args, buffer=self, evaluation=False)
+        params = RolloutFnInitParams(args=args, data_source=self.data_source, evaluation=False)
         self.generate_rollout = _load_rollout_fn(self.args.rollout_function_path, params)
         self.eval_generate_rollout = _load_rollout_fn(self.args.eval_function_path, replace(params, evaluation=True))
         print(f"import {self.args.rollout_function_path} as generate_rollout function.")
