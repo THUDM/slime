@@ -17,6 +17,44 @@ class PartialRolloutFn:
     def __call__(self, params: RolloutFnCallParams) -> RolloutFnCallOutput:
         return TODO
 
+    # TODO simplify remaining logic
+    def _get_samples(self, num_samples: int) -> list[list[Sample]]:
+        """
+        Return num_samples samples
+        """
+
+        samples = self._get_samples_from_buffer(num_samples)
+        num_samples -= len(samples)
+
+        if num_samples == 0:
+            return samples
+
+        samples += self.data_source.get_samples(num_samples=num_samples)
+        return samples
+
+    def _get_samples_from_buffer(self, num_samples: int) -> list[list[Sample]]:
+        if len(self.aborted_samples_buffer) == 0 or num_samples == 0:
+            return []
+
+        samples = self.buffer_filter(self.args, self.rollout_id, self.aborted_samples_buffer, num_samples)
+        return samples
+
+    def _add_samples(self, samples: list[list[Sample]]):
+        """
+        Add a sample group to aborted_samples_buffer.
+        """
+        if not samples:
+            return
+        assert isinstance(samples, list), f"samples must be a list, got {type(samples)}"
+        assert isinstance(samples[0], list), f"the elements of samples must be list, got {type(samples[0])}"
+        for i in range(0, len(samples)):
+            assert (
+                    len(samples[i]) == self.args.n_samples_per_prompt
+            ), f"the length of the elements of samples must be equal to n_samples_per_prompt, got {len(samples[i])} != {self.args.n_samples_per_prompt}"
+            group = samples[i]  # type: ignore
+            self.aborted_samples_buffer.append(group)
+
+
 def _buffer_filter_pop_first(args, rollout_id, aborted_samples_buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
     num_to_pop = min(len(aborted_samples_buffer), num_samples)
     samples = aborted_samples_buffer[:num_to_pop]

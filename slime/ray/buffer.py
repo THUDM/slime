@@ -20,7 +20,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
-
 def log_eval_data(rollout_id, args, data):
     log_dict = {}
     for key in data.keys():
@@ -69,43 +68,6 @@ class Buffer:
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset
         return len(self.data_source.dataset) // self.args.rollout_batch_size
-
-    # TODO simplify remaining logic
-    def get_samples(self, num_samples: int) -> list[list[Sample]]:
-        """
-        Return num_samples samples
-        """
-
-        samples = self._get_samples_from_buffer(num_samples)
-        num_samples -= len(samples)
-
-        if num_samples == 0:
-            return samples
-
-        samples += self.data_source.get_samples(num_samples=num_samples)
-        return samples
-
-    def _get_samples_from_buffer(self, num_samples: int) -> list[list[Sample]]:
-        if len(self.aborted_samples_buffer) == 0 or num_samples == 0:
-            return []
-
-        samples = self.buffer_filter(self.args, self.rollout_id, self.aborted_samples_buffer, num_samples)
-        return samples
-
-    def add_samples(self, samples: list[list[Sample]]):
-        """
-        Add a sample group to aborted_samples_buffer.
-        """
-        if not samples:
-            return
-        assert isinstance(samples, list), f"samples must be a list, got {type(samples)}"
-        assert isinstance(samples[0], list), f"the elements of samples must be list, got {type(samples[0])}"
-        for i in range(0, len(samples)):
-            assert (
-                len(samples[i]) == self.args.n_samples_per_prompt
-            ), f"the length of the elements of samples must be equal to n_samples_per_prompt, got {len(samples[i])} != {self.args.n_samples_per_prompt}"
-            group = samples[i]  # type: ignore
-            self.aborted_samples_buffer.append(group)
 
     def generate(self, rollout_id):
         self.rollout_id = rollout_id
