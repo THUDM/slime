@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from typing import Protocol
 
+from slime.utils.types import Sample
+
 
 @dataclass
 class RolloutFnInitParams:
@@ -15,7 +17,7 @@ class RolloutFnCallParams:
 
 @dataclass
 class RolloutFnCallOutput:
-    TODO
+    samples: list[list[Sample]]
 
 
 class BaseRolloutFn(Protocol):
