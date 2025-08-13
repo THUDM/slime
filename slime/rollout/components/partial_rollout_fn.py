@@ -28,7 +28,7 @@ class PartialRolloutFn:
         TODO_get_samples_rollout_id_needs_partial
         return TODO
 
-    # TODO simplify remaining logic
+    # TODO simplify
     def _get_samples(self, num_samples: int, rollout_id: int) -> list[list[Sample]]:
         """
         Return num_samples samples
