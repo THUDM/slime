@@ -6,10 +6,13 @@ import wandb
 import ray
 import torch
 
+from slime.rollout.components.base_rollout_fn import RolloutFnInitParams
+from slime.rollout.components.legacy_adapter_rollout_fn import LegacyAdapterRolloutFn
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
 from slime.ray.rollout_data_source import RolloutDataSource
 from slime.utils.ray_utils import Box
+from slime.utils.typing_utils import get_function_num_args
 from slime.utils.wandb_utils import init_wandb_secondary
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -43,8 +46,15 @@ def log_eval_data(rollout_id, args, data):
 
 
 # TODO maybe move
-def _load_rollout_fn(path: str):
-    return load_function(path)
+def _load_rollout_fn(path: str, params: RolloutFnInitParams):
+    obj = load_function(path)
+    num_args = get_function_num_args(obj)
+    assert num_args in {1, 4}, f"{num_args=}"
+    if num_args == 4:
+        obj = LegacyAdapterRolloutFn(params, obj)
+    else:
+        obj = obj(params)
+    return obj
 
 
 @ray.remote
@@ -63,8 +73,8 @@ class Buffer:
         else:
             self.buffer_filter = load_function(self.args.buffer_filter_path)
 
-        self.generate_rollout = _load_rollout_fn(self.args.rollout_function_path)
-        self.eval_generate_rollout = _load_rollout_fn(self.args.eval_function_path)
+        self.generate_rollout = _load_rollout_fn(self.args.rollout_function_path, RolloutFnInitParams())
+        self.eval_generate_rollout = _load_rollout_fn(self.args.eval_function_path, RolloutFnInitParams())
         print(f"import {self.args.rollout_function_path} as generate_rollout function.")
         print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
