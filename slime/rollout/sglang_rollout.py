@@ -8,7 +8,7 @@ from transformers import AutoTokenizer
 from slime.utils.async_utils import run
 from slime.utils.data import Dataset
 from slime.utils.http_utils import get, post
-from slime.utils.misc import SingletonMeta, load_function
+from slime.utils.misc import load_function
 from slime.utils.types import Sample
 from slime.rollout.components.sample_generator import generate_one_sample_vanilla
 from .components.base_rollout_fn import RolloutFnCallParams, RolloutFnInitParams, RolloutFnCallOutput
@@ -45,10 +45,12 @@ class GenerateState:
 
         reset_state(self)
 
+
 def reset_state(state):
     state.remaining_batch_size = 0
     state.pendings = set()
     state.aborted = False
+
 
 def submit_generate_tasks(state, samples: list[list[Sample]]):
     for group in samples:
@@ -99,7 +101,9 @@ async def generate_and_rm(state, args, sample: Sample, sampling_params: dict, ev
     return sample
 
 
-async def generate_and_rm_group(state, args, group: list[Sample], sampling_params: dict, evaluation=False) -> list[Sample]:
+async def generate_and_rm_group(
+    state, args, group: list[Sample], sampling_params: dict, evaluation=False
+) -> list[Sample]:
     if state.aborted:
         return group
 
@@ -325,10 +329,10 @@ async def eval_rollout_single_dataset(state, args, rollout_id, name, path):
 
 
 def _generate_one_step(
-        init_params: RolloutFnInitParams,
-        params: RolloutFnCallParams,
-        state: GenerateState,
-        get_samples,
+    init_params: RolloutFnInitParams,
+    params: RolloutFnCallParams,
+    state: GenerateState,
+    get_samples,
 ):
     if init_params.evaluation:
         return run(eval_rollout(state, init_params.args, params.rollout_id))

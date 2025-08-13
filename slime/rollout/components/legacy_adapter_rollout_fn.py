@@ -73,7 +73,7 @@ class LegacyAdapterRolloutFn:
         assert isinstance(samples[0], list), f"the elements of samples must be list, got {type(samples[0])}"
         for i in range(0, len(samples)):
             assert (
-                    len(samples[i]) == self.args.n_samples_per_prompt
+                len(samples[i]) == self.args.n_samples_per_prompt
             ), f"the length of the elements of samples must be equal to n_samples_per_prompt, got {len(samples[i])} != {self.args.n_samples_per_prompt}"
             group = samples[i]  # type: ignore
             self.buffer.append(group)

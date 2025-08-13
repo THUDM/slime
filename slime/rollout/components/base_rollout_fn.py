@@ -5,7 +5,6 @@ from slime.utils.types import Sample
 
 if TYPE_CHECKING:
     from slime.ray.rollout_data_source import RolloutDataSource
-    from slime.ray.buffer import Buffer
 
 
 @dataclass
@@ -23,7 +22,7 @@ class RolloutFnCallParams:
 @dataclass
 class RolloutFnCallOutput:
     samples: Optional[list[list[Sample]]] = None
-    metrics: Optional[dict[str, Any]] = None # TODO what is the type
+    metrics: Optional[dict[str, Any]] = None  # TODO what is the type
 
 
 class BaseRolloutFn(Protocol):
