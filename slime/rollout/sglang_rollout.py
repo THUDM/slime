@@ -156,12 +156,13 @@ def _submit_generate_tasks(state, get_samples, min_submit_size: int):
 
     return new_pendings
 
+
 def _postprocess_done_data(
-        args,
-        raw_done_tasks,
-        dynamic_filter,
-        do_print: bool,
-        max_num_outputs: int,
+    args,
+    raw_done_tasks,
+    dynamic_filter,
+    do_print: bool,
+    max_num_outputs: int,
 ):
     new_data = []
 
@@ -187,6 +188,7 @@ def _postprocess_done_data(
         new_data.append(group)
 
     return new_data, do_print
+
 
 async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     """An example to implement the generate_rollout function for an rule based rm rollout generation.
@@ -218,7 +220,8 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
     while len(data) < target_data_size:
         pendings += _submit_generate_tasks(
-            state, get_samples,
+            state,
+            get_samples,
             min_submit_size=target_data_size - len(data) - len(pendings),
         )
 
@@ -234,7 +237,6 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
         )
         data += filtered_done_data
         pbar.update(args.n_samples_per_prompt * len(filtered_done_data))
-
 
     pbar.close()
     print(
