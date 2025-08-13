@@ -1,7 +1,6 @@
 from typing import Callable
 
 from slime.rollout.components.base_rollout_fn import RolloutFnInitParams, RolloutFnCallParams, RolloutFnCallOutput
-from slime.utils.types import Sample
 
 
 class LegacyAdapterRolloutFn:

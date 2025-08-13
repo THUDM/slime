@@ -12,7 +12,7 @@ def get_function_num_args(x):
     optional = 0
 
     for p in sig.parameters.values():
-        if p.name == 'self':
+        if p.name == "self":
             continue
         if p.default is inspect.Parameter.empty and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD):
             required += 1
