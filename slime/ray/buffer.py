@@ -20,12 +20,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
-def pop_first(args, rollout_id, aborted_samples_buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
-    num_to_pop = min(len(aborted_samples_buffer), num_samples)
-    samples = aborted_samples_buffer[:num_to_pop]
-    del aborted_samples_buffer[:num_to_pop]
-    return samples
-
 
 def log_eval_data(rollout_id, args, data):
     log_dict = {}
@@ -65,14 +59,6 @@ class Buffer:
         init_wandb_secondary(args, wandb_run_id)
 
         self.data_source = RolloutDataSource(args)
-
-        # a list of sample group.
-        # each group has n_samples_per_prompt samples, all of them has the same prompt.
-        self.aborted_samples_buffer: list[list[Sample]] = []
-        if self.args.buffer_filter_path is None:
-            self.buffer_filter = pop_first
-        else:
-            self.buffer_filter = load_function(self.args.buffer_filter_path)
 
         params = RolloutFnInitParams(args=args, buffer=self, evaluation=False)
         self.generate_rollout = _load_rollout_fn(self.args.rollout_function_path, params)
