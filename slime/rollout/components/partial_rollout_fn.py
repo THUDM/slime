@@ -40,7 +40,7 @@ class PartialRolloutFn:
         if num_samples == 0:
             return samples
 
-        samples += self.data_source.get_samples(num_samples=num_samples)
+        samples += self._get_samples_from_data_source(num_samples=num_samples)
         return samples
 
     def _get_samples_from_buffer(self, num_samples: int, rollout_id: int) -> list[list[Sample]]:
@@ -49,6 +49,9 @@ class PartialRolloutFn:
 
         samples = self.buffer_filter(self.args, rollout_id, self.aborted_samples_buffer, num_samples)
         return samples
+
+    def _get_samples_from_data_source(self, num_samples: int) -> list[list[Sample]]:
+        return self.data_source.get_samples(num_samples=num_samples)
 
     def _add_samples_to_buffer(self, samples: list[list[Sample]]):
         if not samples:
