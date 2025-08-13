@@ -160,6 +160,7 @@ def _postprocess_done_data(
         args,
         raw_done_tasks,
         dynamic_filter,
+        do_print: bool,
         max_num_outputs: int,
 ):
     new_data = []
@@ -167,7 +168,6 @@ def _postprocess_done_data(
     for task in raw_done_tasks:
         group: list[Sample] = task.result()
 
-        TODO_do_print
         if do_print:
             print(
                 f"First rollout sample: {[group[0].prompt + group[0].response]}, label: {group[0].label}, reward: {group[0].reward}",
@@ -186,7 +186,7 @@ def _postprocess_done_data(
 
         new_data.append(group)
 
-    return new_data
+    return new_data, do_print
 
 async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     """An example to implement the generate_rollout function for an rule based rm rollout generation.
@@ -225,10 +225,11 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
         # wait for the generation to finish
         raw_done_tasks, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
 
-        filtered_done_data = _postprocess_done_data(
+        filtered_done_data, do_print = _postprocess_done_data(
             args,
             raw_done_tasks=raw_done_tasks,
             dynamic_filter=dynamic_filter,
+            do_print=do_print,
             max_num_outputs=target_data_size - len(data),
         )
         data += filtered_done_data
