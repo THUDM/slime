@@ -188,7 +188,7 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
         while state.remaining_batch_size < target_data_size:
             # get samples from the buffer and submit the generation requests.
             samples = get_samples(args.over_sampling_batch_size)
-            state.submit_generate_tasks(samples)
+            submit_generate_tasks(state, samples)
 
         # wait for the generation to finish
         done, state.pendings = await asyncio.wait(state.pendings, return_when=asyncio.FIRST_COMPLETED)
@@ -229,7 +229,7 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     data = sorted(data, key=lambda group: group[0].index)
 
     # reset the global state to prevent effects on the next rollout or eval.
-    state.reset()
+    reset_state(state)
     return RolloutFnCallOutput(samples=data), aborted_samples
 
 
