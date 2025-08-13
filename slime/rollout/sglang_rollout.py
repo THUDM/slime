@@ -157,7 +157,9 @@ def _submit_generate_tasks(state, get_samples, min_submit_size: int):
     return new_pendings
 
 def _postprocess_done_data(
+        args,
         raw_done_tasks,
+        dynamic_filter,
         max_num_outputs: int,
 ):
     for task in raw_done_tasks:
@@ -218,7 +220,12 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
         # wait for the generation to finish
         raw_done_tasks, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
 
-        _postprocess_done_data(raw_done_tasks, max_num_outputs=TODO)
+        _postprocess_done_data(
+            args,
+            raw_done_tasks=raw_done_tasks,
+            dynamic_filter=dynamic_filter,
+            max_num_outputs=TODO,
+        )
 
 
     pbar.close()
