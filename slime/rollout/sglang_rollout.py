@@ -1,5 +1,6 @@
 import asyncio
 import copy
+from functools import partial
 
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -10,7 +11,7 @@ from slime.utils.http_utils import get, post
 from slime.utils.misc import SingletonMeta, load_function
 from slime.utils.types import Sample
 from slime.rollout.components.sample_generator import generate_one_sample_vanilla
-from .components.base_rollout_fn import RolloutFnCallParams
+from .components.base_rollout_fn import RolloutFnCallParams, RolloutFnInitParams
 from .components.partial_rollout_fn import PartialRolloutFn
 
 from .rm_hub import async_rm, batched_async_rm
@@ -328,15 +329,20 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
     }
 
 
-def _generate_one_step(params: RolloutFnCallParams, get_samples):
-    assert args.rollout_global_dataset
-    if evaluation:
-        return run(eval_rollout(args, rollout_id))
-    return run(generate_rollout_async(args, rollout_id, get_samples))
+def _generate_one_step(
+        init_params: RolloutFnInitParams,
+        params: RolloutFnCallParams,
+        get_samples,
+):
+    if init_params.evaluation:
+        return run(eval_rollout(init_params.args, params.rollout_id))
+    else:
+        return run(generate_rollout_async(init_params.args, params.rollout_id, get_samples))
 
 
-def create_rollout_fn(params):
+def create_rollout_fn(params: RolloutFnInitParams):
+    assert params.args.rollout_global_dataset
     return PartialRolloutFn(
         params=params,
-        generate_one_step=_generate_one_step,
+        generate_one_step=partial(_generate_one_step, init_params=params),
     )
