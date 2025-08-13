@@ -134,12 +134,12 @@ async def abort(state, args, pendings, rollout_id: int):
     return aborted_samples
 
 
-def _submit_generate_tasks(args, get_samples, min_size: int):
+def _submit_generate_tasks(state, get_samples, min_size: int):
     new_pendings = set()
 
     while len(new_pendings) + len(data) < target_data_size:
         # get samples from the buffer and submit the generation requests.
-        samples = get_samples(args.over_sampling_batch_size)
+        samples = get_samples(state.args.over_sampling_batch_size)
         for group in samples:
             new_pendings.add(
                 asyncio.create_task(
@@ -185,7 +185,7 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
     while len(data) < target_data_size:
-        pendings += _submit_generate_tasks(args, get_samples, min_size=TODO)
+        pendings += _submit_generate_tasks(state, get_samples, min_size=TODO)
 
         # wait for the generation to finish
         done, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
