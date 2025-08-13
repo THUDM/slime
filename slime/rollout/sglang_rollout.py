@@ -11,7 +11,7 @@ from slime.utils.http_utils import get, post
 from slime.utils.misc import SingletonMeta, load_function
 from slime.utils.types import Sample
 from slime.rollout.components.sample_generator import generate_one_sample_vanilla
-from .components.base_rollout_fn import RolloutFnCallParams, RolloutFnInitParams
+from .components.base_rollout_fn import RolloutFnCallParams, RolloutFnInitParams, RolloutFnCallOutput
 from .components.partial_rollout_fn import PartialRolloutFn
 
 from .rm_hub import async_rm, batched_async_rm
@@ -157,7 +157,7 @@ async def abort(args, rollout_id: int):
     return aborted_samples
 
 
-async def generate_rollout_async(args, rollout_id: int, get_samples) -> list[list[Sample]]:
+async def generate_rollout_async(args, rollout_id: int, get_samples):
     """An example to implement the generate_rollout function for an rule based rm rollout generation.
 
     Args:
@@ -232,7 +232,7 @@ async def generate_rollout_async(args, rollout_id: int, get_samples) -> list[lis
 
     # reset the global state to prevent effects on the next rollout or eval.
     state.reset()
-    return data, aborted_samples
+    return RolloutFnCallOutput(samples=data), aborted_samples
 
 
 EVAL_PROMPT_DATASET = {}
@@ -244,7 +244,7 @@ async def eval_rollout(args, rollout_id):
     for i in range(0, len(args.eval_prompt_data), 2):
         name, path = args.eval_prompt_data[i : i + 2]
         results.update(await eval_rollout_single_dataset(args, rollout_id, name, path))
-    return results, []
+    return RolloutFnCallOutput(metrics=results), []
 
 
 async def eval_rollout_single_dataset(args, rollout_id, name, path):
