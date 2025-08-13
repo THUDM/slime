@@ -25,10 +25,10 @@ class PartialRolloutFn:
         # each group has n_samples_per_prompt samples, all of them has the same prompt.
         self.aborted_samples_buffer: list[list[Sample]] = []
 
-        if self.args.buffer_filter_path is None:
-            self.buffer_filter = _buffer_filter_pop_first
+        if (p := self.args.buffer_filter_path) is not None:
+            self.buffer_filter = load_function(p)
         else:
-            self.buffer_filter = load_function(self.args.buffer_filter_path)
+            self.buffer_filter = _buffer_filter_pop_first
 
     def __call__(self, params: RolloutFnCallParams) -> RolloutFnCallOutput:
         completed_samples, aborted_samples = self.generate_one_step(
