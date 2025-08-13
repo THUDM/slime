@@ -16,7 +16,7 @@ from .components.partial_rollout_fn import PartialRolloutFn
 
 from .rm_hub import async_rm, batched_async_rm
 
-__all__ = ["generate_rollout"]
+__all__ = ["create_rollout_fn"]
 
 
 class GenerateState(metaclass=SingletonMeta):
