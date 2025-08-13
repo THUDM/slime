@@ -116,7 +116,7 @@ async def generate_and_rm_group(state, args, group: list[Sample], sampling_param
     return group
 
 
-async def abort(args, rollout_id: int):
+async def abort(state, args, rollout_id: int):
     aborted_samples = []
 
     assert not state.aborted
@@ -216,7 +216,7 @@ async def generate_rollout_async(args, rollout_id: int, get_samples):
     )
 
     # there are still some unfinished requests, abort them
-    aborted_samples = await abort(args, rollout_id)
+    aborted_samples = await abort(state, args, rollout_id)
 
     if over_sampling_filter is not None:
         data = over_sampling_filter(args, data)[: args.rollout_batch_size]
@@ -237,11 +237,11 @@ async def eval_rollout(args, rollout_id):
     results = {}
     for i in range(0, len(args.eval_prompt_data), 2):
         name, path = args.eval_prompt_data[i : i + 2]
-        results.update(await eval_rollout_single_dataset(args, rollout_id, name, path))
+        results.update(await eval_rollout_single_dataset(state, args, rollout_id, name, path))
     return RolloutFnCallOutput(metrics=results), []
 
 
-async def eval_rollout_single_dataset(args, rollout_id, name, path):
+async def eval_rollout_single_dataset(state, args, rollout_id, name, path):
     """An example to implement the eval_rollout function for an rule based rm rollout generation.
 
     Args:
@@ -293,6 +293,7 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
             sample_index += 1
             tasks.append(
                 generate_and_rm(
+                    state,
                     args,
                     sample,
                     sampling_params=sampling_params,
