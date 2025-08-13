@@ -215,11 +215,11 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     target_data_size = args.over_sampling_batch_size if over_sampling_filter is not None else args.rollout_batch_size
 
     data = []
-    pendings = []
+    pendings = set()
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
     while len(data) < target_data_size:
-        pendings += _submit_generate_tasks(
+        pendings |= _submit_generate_tasks(
             state,
             get_samples,
             min_submit_size=target_data_size - len(data) - len(pendings),
