@@ -7,7 +7,7 @@ import wandb
 import ray
 import torch
 
-from slime.rollout.components.base_rollout_fn import RolloutFnInitParams
+from slime.rollout.components.base_rollout_fn import RolloutFnInitParams, RolloutFnCallParams
 from slime.rollout.components.legacy_adapter_rollout_fn import LegacyAdapterRolloutFn
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
@@ -130,7 +130,7 @@ class Buffer:
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
         else:
-            data = self.generate_rollout(TODO)
+            data = self.generate_rollout(RolloutFnCallParams(TODO))
             # flatten the data if it is a list of lists
             if isinstance(data[0], list):
                 data = sum(data, [])
@@ -156,7 +156,7 @@ class Buffer:
             # if debug train only, we don't generate evaluation data
             return
 
-        data = self.eval_generate_rollout(TODO)
+        data = self.eval_generate_rollout(RolloutFnCallParams(TODO))
         log_eval_data(rollout_id, self.args, data)
 
     def _convert_samples_to_train_data(self, samples: Union[list[Sample], list[list[Sample]]]):
