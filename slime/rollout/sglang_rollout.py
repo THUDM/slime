@@ -183,7 +183,6 @@ def _postprocess_done_data(
         # NOTE: here we have not stored all the unused samples back to the data buffer.
         if len(new_data) + len(old_data) < target_data_size:
             new_data.append(group)
-            pbar.update(args.n_samples_per_prompt)
 
     return new_data
 
@@ -224,12 +223,14 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
         # wait for the generation to finish
         raw_done_tasks, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
 
-        _postprocess_done_data(
+        filtered_done_data = _postprocess_done_data(
             args,
             raw_done_tasks=raw_done_tasks,
             dynamic_filter=dynamic_filter,
             max_num_outputs=TODO,
         )
+        data += filtered_done_data
+        pbar.update(args.n_samples_per_prompt * len(filtered_done_data))
 
 
     pbar.close()
