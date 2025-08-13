@@ -56,6 +56,8 @@ class PartialRolloutFn:
     def _add_samples_to_buffer(self, samples: list[list[Sample]]):
         if not samples:
             return
+
+        # TODO improve code
         assert isinstance(samples, list), f"samples must be a list, got {type(samples)}"
         assert isinstance(samples[0], list), f"the elements of samples must be list, got {type(samples[0])}"
         for i in range(0, len(samples)):
