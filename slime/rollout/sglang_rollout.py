@@ -185,7 +185,10 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
     while len(data) < target_data_size:
-        pendings += _submit_generate_tasks(state, get_samples, min_size=target_data_size - len(data))
+        pendings += _submit_generate_tasks(
+            state, get_samples,
+            min_size=target_data_size - len(data) - len(pendings),
+        )
 
         # wait for the generation to finish
         done, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
