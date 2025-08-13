@@ -5,7 +5,9 @@ from slime.rollout.components.base_rollout_fn import RolloutFnInitParams, Rollou
 
 class LegacyAdapterRolloutFn:
     def __init__(self, params: RolloutFnInitParams, original_fn: Callable):
-        TODO
+        self.original_fn = original_fn
+        self.init_params = params
 
     def __call__(self, params: RolloutFnCallParams) -> RolloutFnCallOutput:
-        return TODO
+        samples = self.original_fn(self.init_params.args, params.rollout_id, TODO, evaluation=self.init_params.evaluation)
+        return RolloutFnCallOutput(samples=samples)

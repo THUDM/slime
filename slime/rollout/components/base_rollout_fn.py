@@ -8,12 +8,11 @@ from slime.utils.types import Sample
 class RolloutFnInitParams:
     args: Any
     evaluation: bool
-    TODO
 
 
 @dataclass
 class RolloutFnCallParams:
-    TODO
+    rollout_id: int
 
 
 @dataclass
