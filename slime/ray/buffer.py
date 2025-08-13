@@ -151,9 +151,6 @@ class Buffer:
     def get_metadata(self):
         return self.data_source.metadata
 
-    def get_buffer_length(self):
-        return len(self.aborted_samples_buffer)
-
     def save(self, rollout_id):
         self.data_source.save(rollout_id)
 
