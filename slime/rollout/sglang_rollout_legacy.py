@@ -1,3 +1,7 @@
+"""
+This file demonstrates the legacy rollout fn API usage. Prefer to use the new APIs.
+"""
+
 import asyncio
 import copy
 
