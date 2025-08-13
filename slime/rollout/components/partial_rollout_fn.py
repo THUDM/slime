@@ -1,3 +1,4 @@
+from functools import partial
 from typing import Callable
 
 from slime.rollout.components.base_rollout_fn import RolloutFnInitParams, RolloutFnCallParams, RolloutFnCallOutput
@@ -25,8 +26,10 @@ class PartialRolloutFn:
             self.buffer_filter = load_function(self.args.buffer_filter_path)
 
     def __call__(self, params: RolloutFnCallParams) -> RolloutFnCallOutput:
-        TODO_get_samples_rollout_id_needs_partial
-        return TODO
+        return self.generate_one_step(
+            params=params,
+            get_samples=partial(self._get_samples, rollout_id=params.rollout_id),
+        )
 
     # TODO simplify
     def _get_samples(self, num_samples: int, rollout_id: int) -> list[list[Sample]]:
