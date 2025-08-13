@@ -82,6 +82,12 @@ class LegacyAdapterRolloutFn:
     def get_buffer_length(self):
         return len(self.buffer)
 
+    def update_metadata(self, metadata: dict):
+        self.data_source.metadata.update(metadata)
+
+    def get_metadata(self):
+        return self.data_source.metadata
+
 
 def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
     num_to_pop = min(len(buffer), num_samples)
