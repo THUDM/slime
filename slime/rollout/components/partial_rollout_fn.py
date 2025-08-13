@@ -1,21 +1,28 @@
+from typing import Callable
+
 from slime.rollout.components.base_rollout_fn import RolloutFnInitParams, RolloutFnCallParams, RolloutFnCallOutput
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
 
 
 class PartialRolloutFn:
-    def __init__(self, params: RolloutFnInitParams):
+    def __init__(
+        self,
+        params: RolloutFnInitParams,
+        generate_one_step: Callable,
+    ):
         self.args = params.args
         self.data_source = params.data_source
+        self.generate_one_step = generate_one_step
 
         # a list of sample group.
         # each group has n_samples_per_prompt samples, all of them has the same prompt.
         self.aborted_samples_buffer: list[list[Sample]] = []
+
         if self.args.buffer_filter_path is None:
             self.buffer_filter = _buffer_filter_pop_first
         else:
             self.buffer_filter = load_function(self.args.buffer_filter_path)
-
 
     def __call__(self, params: RolloutFnCallParams) -> RolloutFnCallOutput:
         return TODO
