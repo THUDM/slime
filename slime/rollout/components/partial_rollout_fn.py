@@ -7,9 +7,12 @@ from slime.utils.types import Sample
 
 
 class PartialRolloutFn:
-    """
-    A rollout fn to support partial rollout.
-    It maintains an aborted_samples_buffer, which directly follows the Kimi partial rollout paper.
+    """A rollout fn to support partial rollout.
+
+    The user only needs to provide `generate_one_step` to do arbitrary generation for one step,
+    and this class maintains an aborted_samples_buffer ("Replay Buffer" in paper) for partial rollout.
+
+    For more details, please visit https://arxiv.org/abs/2501.12599
     """
 
     def __init__(
