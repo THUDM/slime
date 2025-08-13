@@ -128,7 +128,7 @@ class Buffer:
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
         else:
-            data = self.generate_rollout(self.args, rollout_id, self, evaluation=False)
+            data = self.generate_rollout(TODO)
             # flatten the data if it is a list of lists
             if isinstance(data[0], list):
                 data = sum(data, [])
@@ -154,7 +154,7 @@ class Buffer:
             # if debug train only, we don't generate evaluation data
             return
 
-        data = self.eval_generate_rollout(self.args, rollout_id, self, evaluation=True)
+        data = self.eval_generate_rollout(TODO)
         log_eval_data(rollout_id, self.args, data)
 
     def _convert_samples_to_train_data(self, samples: Union[list[Sample], list[list[Sample]]]):
