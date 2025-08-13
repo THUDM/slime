@@ -67,9 +67,6 @@ class PartialRolloutFn:
             group = samples[i]  # type: ignore
             self.aborted_samples_buffer.append(group)
 
-    def _get_buffer_length(self):
-        return len(self.aborted_samples_buffer)
-
 
 def _buffer_filter_pop_first(args, rollout_id, aborted_samples_buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
     num_to_pop = min(len(aborted_samples_buffer), num_samples)
