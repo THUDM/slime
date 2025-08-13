@@ -181,7 +181,7 @@ def _postprocess_done_data(
 
         # add the samples to the data
         # NOTE: here we have not stored all the unused samples back to the data buffer.
-        if len(new_data) >= target_data_size - len(old_data):
+        if len(new_data) >= max_num_outputs:
             continue
 
         new_data.append(group)
@@ -229,7 +229,7 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
             args,
             raw_done_tasks=raw_done_tasks,
             dynamic_filter=dynamic_filter,
-            max_num_outputs=TODO,
+            max_num_outputs=target_data_size - len(data),
         )
         data += filtered_done_data
         pbar.update(args.n_samples_per_prompt * len(filtered_done_data))
