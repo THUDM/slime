@@ -351,3 +351,7 @@ def generate_abortable_samples(args, rollout_id, data_source, evaluation=False):
     if evaluation:
         return run(eval_rollout(args, rollout_id))
     return run(generate_rollout_async(args, rollout_id, data_source))
+
+
+def create_rollout_fn():
+    return TODO
