@@ -148,7 +148,7 @@ def _submit_generate_tasks(state, get_samples, min_submit_size: int):
                         state,
                         state.args,
                         group,
-                        sampling_params=compute_sampling_params(args),
+                        sampling_params=compute_sampling_params(state.args),
                         evaluation=False,
                     )
                 )
