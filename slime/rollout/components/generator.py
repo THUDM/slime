@@ -6,7 +6,7 @@ async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, sampling_
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
     assert (
-            sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
+        sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
     ), f"Sample status is {sample.status}"
 
     if len(sample.response) > 0:
@@ -15,7 +15,7 @@ async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, sampling_
         )
 
     assert (
-            sampling_params["max_new_tokens"] >= 0
+        sampling_params["max_new_tokens"] >= 0
     ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
     if sampling_params["max_new_tokens"] == 0:
         sample.status = Sample.Status.TRUNCATED
@@ -49,7 +49,7 @@ async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, sampling_
     if args.use_token_output:
         # Extract new response tokens
         assert (
-                "meta_info" in output and "output_token_logprobs" in output["meta_info"]
+            "meta_info" in output and "output_token_logprobs" in output["meta_info"]
         ), "output_token_logprobs is not in the output"
         new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
 
@@ -74,4 +74,3 @@ async def generate_one_sample_vanilla(args, tokenizer, sample: Sample, sampling_
             sample.status = Sample.Status.COMPLETED
 
     return sample
-
