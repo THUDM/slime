@@ -6,6 +6,7 @@ from slime.utils.types import Sample
 class PartialRolloutFn:
     def __init__(self, params: RolloutFnInitParams):
         self.args = params.args
+        self.data_source = params.data_source
 
         # a list of sample group.
         # each group has n_samples_per_prompt samples, all of them has the same prompt.
