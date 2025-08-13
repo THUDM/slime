@@ -27,8 +27,6 @@ from .model_provider import get_model_provider_func
 
 if torch.version.hip:
     from vllm.device_allocator.cumem import CuMemAllocator
-else:
-    pass
 
 
 def get_optimizer_param_scheduler(args, optimizer):
