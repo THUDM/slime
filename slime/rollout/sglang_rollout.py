@@ -225,6 +225,7 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     return RolloutFnCallOutput(samples=data), aborted_samples
 
 
+# TODO do not use global variable
 EVAL_PROMPT_DATASET = {}
 
 
