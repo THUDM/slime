@@ -1,6 +1,7 @@
 from typing import Callable
 
 from slime.rollout.components.base_rollout_fn import RolloutFnInitParams, RolloutFnCallParams, RolloutFnCallOutput
+from slime.utils.types import Sample
 
 
 class LegacyAdapterRolloutFn:
@@ -23,5 +24,19 @@ class LegacyAdapterRolloutFn:
         else:
             return RolloutFnCallOutput(samples=raw_output, metrics=None)
 
+
 class _LegacyDataBufferAdapter:
-    TODO
+    def get_samples(self, num_samples: int) -> list[list[Sample]]:
+        TODO
+
+    def add_samples(self, samples: list[list[Sample]]):
+        TODO
+
+    def update_metadata(self, metadata: dict):
+        TODO
+
+    def get_metadata(self):
+        TODO
+
+    def get_buffer_length(self):
+        TODO
