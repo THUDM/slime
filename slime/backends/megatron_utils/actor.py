@@ -287,7 +287,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
-        if hasattr(mpu, "reload_process_groups"):
+        if self.args.offload and hasattr(mpu, "reload_process_groups"):
             mpu.reload_process_groups()
 
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
@@ -299,7 +299,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 print("update rollout model on cpu using actor model")
                 self.update_cpu_params_dict(self.weights["old_actor"])
 
-        if hasattr(mpu, "destroy_process_groups"):
+        if self.args.offload and hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()
 
     def load_other_checkpoint(self, model_tag, path):

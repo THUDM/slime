@@ -8,7 +8,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.buffer import Buffer
 from slime.utils.http_utils import find_available_port, get_host_info, run_router
-from .utils import Lock
+from .utils import Lock, NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
 from typing import List
 
 
@@ -39,12 +39,7 @@ def create_rollout_engines(args, pg):
                 num_cpus=num_cpus,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
-                runtime_env={
-                    "env_vars": {
-                        "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES": "1",
-                        "RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES": "1",
-                    }
-                },
+                runtime_env={"env_vars": {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST}},
             ).remote(args, rank=i)
         )
 
