@@ -137,7 +137,7 @@ async def abort(state, args, pendings, rollout_id: int):
 def _submit_generate_tasks(state, get_samples, min_size: int):
     new_pendings = set()
 
-    while len(new_pendings) + len(data) < target_data_size:
+    while len(new_pendings) < target_data_size - len(data):
         # get samples from the buffer and submit the generation requests.
         samples = get_samples(state.args.over_sampling_batch_size)
         for group in samples:
