@@ -9,8 +9,9 @@ from slime.utils.types import Sample
 class PartialRolloutFn:
     """A rollout fn to support partial rollout.
 
-    The user only needs to provide `generate_one_step` to do arbitrary generation for one step,
-    and this class maintains an aborted_samples_buffer ("Replay Buffer" in paper) for partial rollout.
+    The user only needs to provide `generate_one_step` to do arbitrary generation for one step (the
+    "rollout worker" green box in paper), and this class maintains an aborted_samples_buffer (the
+    "Replay Buffer" red box in paper) for partial rollout.
 
     For more details, please visit https://arxiv.org/abs/2501.12599
     """
