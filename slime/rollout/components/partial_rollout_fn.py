@@ -30,7 +30,7 @@ class PartialRolloutFn:
             params=params,
             get_samples=partial(self._get_samples, rollout_id=params.rollout_id),
         )
-        self.aborted_samples_buffer += aborted_samples
+        self._add_samples_to_buffer(aborted_samples)
         return completed_samples
 
     # TODO simplify
