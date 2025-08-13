@@ -47,7 +47,6 @@ class GenerateState:
 
 
 def reset_state(state):
-    state.remaining_batch_size = 0
     state.pendings = set()
     state.aborted = False
 
@@ -166,10 +165,11 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     target_data_size = args.over_sampling_batch_size if over_sampling_filter is not None else args.rollout_batch_size
 
     data = []
+    remaining_batch_size = 0
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
     while len(data) < target_data_size:
-        while state.remaining_batch_size < target_data_size:
+        while remaining_batch_size < target_data_size:
             # get samples from the buffer and submit the generation requests.
             samples = get_samples(args.over_sampling_batch_size)
             for group in samples:
@@ -185,7 +185,7 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
                         )
                     )
                 )
-            state.remaining_batch_size += len(samples)
+            remaining_batch_size += len(samples)
 
         # wait for the generation to finish
         done, state.pendings = await asyncio.wait(state.pendings, return_when=asyncio.FIRST_COMPLETED)
@@ -201,7 +201,7 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
 
             assert len(group) == args.n_samples_per_prompt
             if dynamic_filter is not None and not dynamic_filter(args, group):
-                state.remaining_batch_size -= 1
+                remaining_batch_size -= 1
                 continue
 
             # add the samples to the data
