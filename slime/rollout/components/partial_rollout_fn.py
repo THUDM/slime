@@ -26,10 +26,12 @@ class PartialRolloutFn:
             self.buffer_filter = load_function(self.args.buffer_filter_path)
 
     def __call__(self, params: RolloutFnCallParams) -> RolloutFnCallOutput:
-        return self.generate_one_step(
+        completed_samples, aborted_samples = self.generate_one_step(
             params=params,
             get_samples=partial(self._get_samples, rollout_id=params.rollout_id),
         )
+        self.aborted_samples_buffer += aborted_samples
+        return completed_samples
 
     # TODO simplify
     def _get_samples(self, num_samples: int, rollout_id: int) -> list[list[Sample]]:
