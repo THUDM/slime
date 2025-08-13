@@ -47,7 +47,6 @@ class GenerateState:
 
 
 def reset_state(state):
-    state.pendings = set()
     state.aborted = False
 
 
@@ -103,7 +102,7 @@ async def generate_and_rm_group(
     return group
 
 
-async def abort(state, args, rollout_id: int):
+async def abort(state, args, pendings, rollout_id: int):
     aborted_samples = []
 
     assert not state.aborted
@@ -119,8 +118,8 @@ async def abort(state, args, rollout_id: int):
 
     # make sure all the pending tasks are finished
     count = 0
-    while state.pendings:
-        done, state.pendings = await asyncio.wait(state.pendings, return_when=asyncio.FIRST_COMPLETED)
+    while pendings:
+        done, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
 
         if not args.partial_rollout:
             continue
@@ -165,6 +164,7 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     target_data_size = args.over_sampling_batch_size if over_sampling_filter is not None else args.rollout_batch_size
 
     data = []
+    pendings = []
     remaining_batch_size = 0
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
@@ -173,7 +173,7 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
             # get samples from the buffer and submit the generation requests.
             samples = get_samples(args.over_sampling_batch_size)
             for group in samples:
-                state.pendings.add(
+                pendings.add(
                     asyncio.create_task(
                         # submit a group of samples as a single task.
                         generate_and_rm_group(
@@ -188,7 +188,7 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
             remaining_batch_size += len(samples)
 
         # wait for the generation to finish
-        done, state.pendings = await asyncio.wait(state.pendings, return_when=asyncio.FIRST_COMPLETED)
+        done, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
             group: list[Sample] = task.result()
 
@@ -217,7 +217,7 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     )
 
     # there are still some unfinished requests, abort them
-    aborted_samples = await abort(state, args, rollout_id)
+    aborted_samples = await abort(state, args, pendings, rollout_id)
 
     if over_sampling_filter is not None:
         data = over_sampling_filter(args, data)[: args.rollout_batch_size]
