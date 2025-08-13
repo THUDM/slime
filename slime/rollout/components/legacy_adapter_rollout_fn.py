@@ -6,7 +6,7 @@ from slime.utils.types import Sample
 
 class LegacyAdapterRolloutFn:
     def __init__(self, params: RolloutFnInitParams, original_fn: Callable):
-        print("Using legacy format for rollout fn.")
+        print("Using legacy format for rollout fn. Please switch to the new format.")
         self.original_fn = original_fn
         self.init_params = params
 
