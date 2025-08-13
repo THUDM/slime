@@ -7,7 +7,6 @@ from transformers import AutoTokenizer
 
 from slime.utils.async_utils import run
 from slime.utils.data import Dataset
-from slime.utils.http_utils import get, post
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
 from slime.rollout.components.sample_generator import generate_one_sample_vanilla, sglang_abort
