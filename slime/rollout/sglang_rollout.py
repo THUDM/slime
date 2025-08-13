@@ -156,10 +156,14 @@ def _submit_generate_tasks(state, get_samples, min_submit_size: int):
 
     return new_pendings
 
-def _postprocess_done_data(raw_done_tasks, max_num_outputs: int):
-    for task in done:
+def _postprocess_done_data(
+        raw_done_tasks,
+        max_num_outputs: int,
+):
+    for task in raw_done_tasks:
         group: list[Sample] = task.result()
 
+        TODO_do_print
         if do_print:
             print(
                 f"First rollout sample: {[group[0].prompt + group[0].response]}, label: {group[0].label}, reward: {group[0].reward}",
