@@ -42,6 +42,11 @@ def log_eval_data(rollout_id, args, data):
         wandb.log(log_dict)
 
 
+# TODO maybe move
+def _load_rollout_fn(path: str):
+    return load_function(path)
+
+
 @ray.remote
 class Buffer:
     def __init__(self, args, wandb_run_id):
@@ -58,8 +63,8 @@ class Buffer:
         else:
             self.buffer_filter = load_function(self.args.buffer_filter_path)
 
-        self.generate_rollout = load_function(self.args.rollout_function_path)
-        self.eval_generate_rollout = load_function(self.args.eval_function_path)
+        self.generate_rollout = _load_rollout_fn(self.args.rollout_function_path)
+        self.eval_generate_rollout = _load_rollout_fn(self.args.eval_function_path)
         print(f"import {self.args.rollout_function_path} as generate_rollout function.")
         print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
