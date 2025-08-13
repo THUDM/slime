@@ -181,7 +181,7 @@ def _postprocess_done_data(
 
         # add the samples to the data
         # NOTE: here we have not stored all the unused samples back to the data buffer.
-        if len(new_data) + len(old_data) >= target_data_size:
+        if len(new_data) >= target_data_size - len(old_data):
             continue
 
         new_data.append(group)
