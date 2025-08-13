@@ -1,4 +1,5 @@
 import logging
+from dataclasses import replace
 from pathlib import Path
 from typing import Union
 import wandb
@@ -73,8 +74,9 @@ class Buffer:
         else:
             self.buffer_filter = load_function(self.args.buffer_filter_path)
 
-        self.generate_rollout = _load_rollout_fn(self.args.rollout_function_path, RolloutFnInitParams())
-        self.eval_generate_rollout = _load_rollout_fn(self.args.eval_function_path, RolloutFnInitParams())
+        params = RolloutFnInitParams(evaluation=False)
+        self.generate_rollout = _load_rollout_fn(self.args.rollout_function_path, params)
+        self.eval_generate_rollout = _load_rollout_fn(self.args.eval_function_path, replace(params, evaluation=True))
         print(f"import {self.args.rollout_function_path} as generate_rollout function.")
         print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
