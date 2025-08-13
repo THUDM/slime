@@ -56,6 +56,7 @@ def submit_generate_tasks(state, samples: list[list[Sample]]):
             asyncio.create_task(
                 # submit a group of samples as a single task.
                 generate_and_rm_group(
+                    state,
                     state.args,
                     group,
                     sampling_params=state.sampling_params.copy(),
@@ -66,7 +67,7 @@ def submit_generate_tasks(state, samples: list[list[Sample]]):
     state.remaining_batch_size += len(samples)
 
 
-async def generate_and_rm(args, sample: Sample, sampling_params: dict, evaluation=False) -> Sample:
+async def generate_and_rm(state, args, sample: Sample, sampling_params: dict, evaluation=False) -> Sample:
     # For samples with existing response, check if they're complete
     if sample.status == Sample.Status.COMPLETED or sample.status == Sample.Status.TRUNCATED:
         assert sample.response is not None
@@ -98,12 +99,12 @@ async def generate_and_rm(args, sample: Sample, sampling_params: dict, evaluatio
     return sample
 
 
-async def generate_and_rm_group(args, group: list[Sample], sampling_params: dict, evaluation=False) -> list[Sample]:
+async def generate_and_rm_group(state, args, group: list[Sample], sampling_params: dict, evaluation=False) -> list[Sample]:
     if state.aborted:
         return group
 
     group = await asyncio.gather(
-        *[generate_and_rm(args, sample, sampling_params.copy(), evaluation=evaluation) for sample in group]
+        *[generate_and_rm(state, args, sample, sampling_params.copy(), evaluation=evaluation) for sample in group]
     )
 
     # for the rm that need the whole group, we will not do the rm here
