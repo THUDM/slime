@@ -156,6 +156,27 @@ def _submit_generate_tasks(state, get_samples, min_submit_size: int):
 
     return new_pendings
 
+def _postprocess_done_data(raw_done_tasks, max_num_outputs: int):
+    for task in done:
+        group: list[Sample] = task.result()
+
+        if do_print:
+            print(
+                f"First rollout sample: {[group[0].prompt + group[0].response]}, label: {group[0].label}, reward: {group[0].reward}",
+                flush=True,
+            )
+            do_print = False
+
+        assert len(group) == args.n_samples_per_prompt
+        if dynamic_filter is not None and not dynamic_filter(args, group):
+            continue
+
+        # add the samples to the data
+        # NOTE: here we have not stored all the unused samples back to the data buffer.
+        if len(data) < target_data_size:
+            data.append(group)
+            pbar.update(args.n_samples_per_prompt)
+
 async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     """An example to implement the generate_rollout function for an rule based rm rollout generation.
 
@@ -191,26 +212,10 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
         )
 
         # wait for the generation to finish
-        done, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
-        for task in done:
-            group: list[Sample] = task.result()
+        raw_done_tasks, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
 
-            if do_print:
-                print(
-                    f"First rollout sample: {[group[0].prompt + group[0].response]}, label: {group[0].label}, reward: {group[0].reward}",
-                    flush=True,
-                )
-                do_print = False
+        _postprocess_done_data(raw_done_tasks, max_num_outputs=TODO)
 
-            assert len(group) == args.n_samples_per_prompt
-            if dynamic_filter is not None and not dynamic_filter(args, group):
-                continue
-
-            # add the samples to the data
-            # NOTE: here we have not stored all the unused samples back to the data buffer.
-            if len(data) < target_data_size:
-                data.append(group)
-                pbar.update(args.n_samples_per_prompt)
 
     pbar.close()
     print(
