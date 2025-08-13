@@ -153,7 +153,7 @@ async def abort(state, args, rollout_id: int):
     return aborted_samples
 
 
-async def generate_rollout_async(args, rollout_id: int, get_samples):
+async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     """An example to implement the generate_rollout function for an rule based rm rollout generation.
 
     Args:
@@ -232,7 +232,7 @@ async def generate_rollout_async(args, rollout_id: int, get_samples):
 EVAL_PROMPT_DATASET = {}
 
 
-async def eval_rollout(args, rollout_id):
+async def eval_rollout(state, args, rollout_id):
     assert not args.group_rm, "Group RM is not supported for eval rollout"
     results = {}
     for i in range(0, len(args.eval_prompt_data), 2):
@@ -327,17 +327,19 @@ async def eval_rollout_single_dataset(state, args, rollout_id, name, path):
 def _generate_one_step(
         init_params: RolloutFnInitParams,
         params: RolloutFnCallParams,
+        state: GenerateState,
         get_samples,
 ):
     if init_params.evaluation:
-        return run(eval_rollout(init_params.args, params.rollout_id))
+        return run(eval_rollout(state, init_params.args, params.rollout_id))
     else:
-        return run(generate_rollout_async(init_params.args, params.rollout_id, get_samples))
+        return run(generate_rollout_async(state, init_params.args, params.rollout_id, get_samples))
 
 
 def create_rollout_fn(params: RolloutFnInitParams):
     assert params.args.rollout_global_dataset
+    state = GenerateState(args=params.args)
     return PartialRolloutFn(
         params=params,
-        generate_one_step=partial(_generate_one_step, init_params=params),
+        generate_one_step=partial(_generate_one_step, init_params=params, state=state),
     )
