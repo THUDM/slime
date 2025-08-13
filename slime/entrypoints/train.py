@@ -84,6 +84,10 @@ def train(args):
             ray.get(rollout_manager.async_eval(rollout_id))
 
 
-if __name__ == "__main__":
+def run():
     args = parse_args()
     train(args)
+
+
+if __name__ == "__main__":
+    run()
