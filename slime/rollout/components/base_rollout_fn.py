@@ -5,7 +5,6 @@ from slime.utils.types import Sample
 
 if TYPE_CHECKING:
     from slime.ray.rollout_data_source import RolloutDataSource
-    from slime.ray.buffer import Buffer
 
 
 @dataclass
