@@ -62,9 +62,7 @@ class GenerateState(metaclass=SingletonMeta):
         self.remaining_batch_size += len(samples)
 
 
-async def generate(args, sample: Sample, sampling_params) -> Sample:
-    state = GenerateState(args)
-
+async def generate(args, tokenizer, sample: Sample, sampling_params) -> Sample:
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
     assert (
@@ -73,7 +71,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
     if len(sample.response) > 0:
         sampling_params["max_new_tokens"] -= len(sample.tokens) - len(
-            state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
+            tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
         )
 
     assert (
@@ -95,7 +93,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             input_token_ids = sample.tokens
         else:
             # First turn: initialize with prompt tokens
-            prompt_token_ids = state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
+            prompt_token_ids = tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
             input_token_ids = prompt_token_ids
             # Initialize sample.tokens with prompt for subsequent turns
             if not sample.tokens:  # Only set if empty
@@ -118,12 +116,12 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         # Update sample with tokens directly - avoiding re-tokenization
         sample.tokens = sample.tokens + new_response_tokens
         sample.response_length += len(new_response_tokens)
-        sample.response += state.tokenizer.decode(new_response_tokens, skip_special_tokens=False)
+        sample.response += tokenizer.decode(new_response_tokens, skip_special_tokens=False)
     else:
         # String-based processing
         sample.response += output["text"]
-        prompt_tokens_ids = state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
-        response_token_ids = state.tokenizer(sample.response, add_special_tokens=False)["input_ids"]
+        prompt_tokens_ids = tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
+        response_token_ids = tokenizer(sample.response, add_special_tokens=False)["input_ids"]
         sample.tokens = prompt_tokens_ids + response_token_ids
         sample.response_length = len(response_token_ids)
 
@@ -158,7 +156,7 @@ async def generate_and_rm(args, sample: Sample, sampling_params: dict, evaluatio
             custom_generate_func = load_function(args.custom_generate_function_path)
             sample = await custom_generate_func(args, sample, sampling_params)
         else:
-            sample = await generate(args, sample, sampling_params)
+            sample = await generate(args, state.tokenizer, sample, sampling_params)
 
     if sample.status == Sample.Status.ABORTED:
         return sample
