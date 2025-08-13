@@ -336,6 +336,7 @@ def _generate_one_step(
         return run(generate_rollout_async(state, init_params.args, params.rollout_id, get_samples))
 
 
+# Can use such function-based approach, or use class-based approach
 def create_rollout_fn(params: RolloutFnInitParams):
     assert params.args.rollout_global_dataset
     state = GenerateState(args=params.args)
