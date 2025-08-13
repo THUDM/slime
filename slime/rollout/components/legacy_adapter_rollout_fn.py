@@ -17,8 +17,6 @@ class LegacyAdapterRolloutFn:
         )
 
         if self.init_params.evaluation:
-            samples, metrics = None, raw_output
+            return RolloutFnCallOutput(samples=None, metrics=raw_output)
         else:
-            samples, metrics = raw_output, None
-
-        return RolloutFnCallOutput(samples=samples, metrics=metrics)
+            return RolloutFnCallOutput(samples=raw_output, metrics=None)

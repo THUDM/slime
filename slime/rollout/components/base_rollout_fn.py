@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Protocol, Any
+from typing import Protocol, Any, Optional
 
 from slime.utils.types import Sample
 
@@ -17,8 +17,8 @@ class RolloutFnCallParams:
 
 @dataclass
 class RolloutFnCallOutput:
-    samples: list[list[Sample]]
-    metrics: dict[str, Any]  # TODO what is the type
+    samples: Optional[list[list[Sample]]]
+    metrics: Optional[dict[str, Any]]  # TODO what is the type
 
 
 class BaseRolloutFn(Protocol):
