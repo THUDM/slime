@@ -70,8 +70,6 @@ class Buffer:
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
     def generate(self, rollout_id):
-        self.rollout_id = rollout_id
-
         if self.args.load_debug_rollout_data:
             data = torch.load(
                 open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
@@ -86,12 +84,12 @@ class Buffer:
         # TODO to be refactored (originally Buffer._set_data)
         # TODO extract to a function during refactor
         if (path_template := self.args.save_debug_rollout_data) is not None:
-            path = Path(path_template.format(rollout_id=self.rollout_id))
+            path = Path(path_template.format(rollout_id=rollout_id))
             print(f"Save debug rollout data to {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(
                 dict(
-                    rollout_id=self.rollout_id,
+                    rollout_id=rollout_id,
                     samples=[sample.to_dict() for sample in data],
                 ),
                 path,
