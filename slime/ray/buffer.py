@@ -20,10 +20,10 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
-def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
-    num_to_pop = min(len(buffer), num_samples)
-    samples = buffer[:num_to_pop]
-    del buffer[:num_to_pop]
+def pop_first(args, rollout_id, aborted_samples_buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
+    num_to_pop = min(len(aborted_samples_buffer), num_samples)
+    samples = aborted_samples_buffer[:num_to_pop]
+    del aborted_samples_buffer[:num_to_pop]
     return samples
 
 
@@ -68,7 +68,7 @@ class Buffer:
 
         # a list of sample group.
         # each group has n_samples_per_prompt samples, all of them has the same prompt.
-        self.buffer: list[list[Sample]] = []
+        self.aborted_samples_buffer: list[list[Sample]] = []
         if self.args.buffer_filter_path is None:
             self.buffer_filter = pop_first
         else:
@@ -100,15 +100,15 @@ class Buffer:
         return samples
 
     def _get_samples_from_buffer(self, num_samples: int) -> list[list[Sample]]:
-        if len(self.buffer) == 0 or num_samples == 0:
+        if len(self.aborted_samples_buffer) == 0 or num_samples == 0:
             return []
 
-        samples = self.buffer_filter(self.args, self.rollout_id, self.buffer, num_samples)
+        samples = self.buffer_filter(self.args, self.rollout_id, self.aborted_samples_buffer, num_samples)
         return samples
 
     def add_samples(self, samples: list[list[Sample]]):
         """
-        Add a sample group to buffer.
+        Add a sample group to aborted_samples_buffer.
         """
         if not samples:
             return
@@ -119,7 +119,7 @@ class Buffer:
                 len(samples[i]) == self.args.n_samples_per_prompt
             ), f"the length of the elements of samples must be equal to n_samples_per_prompt, got {len(samples[i])} != {self.args.n_samples_per_prompt}"
             group = samples[i]  # type: ignore
-            self.buffer.append(group)
+            self.aborted_samples_buffer.append(group)
 
     def generate(self, rollout_id):
         self.rollout_id = rollout_id
@@ -204,7 +204,7 @@ class Buffer:
         return self.data_source.metadata
 
     def get_buffer_length(self):
-        return len(self.buffer)
+        return len(self.aborted_samples_buffer)
 
     def save(self, rollout_id):
         self.data_source.save(rollout_id)
