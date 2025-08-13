@@ -4,17 +4,17 @@ from typing import Protocol
 
 @dataclass
 class RolloutFnInitParams:
-    pass
+    TODO
 
 
 @dataclass
 class RolloutFnCallParams:
-    pass
+    TODO
 
 
 @dataclass
 class RolloutFnCallOutput:
-    pass
+    TODO
 
 
 class BaseRolloutFn(Protocol):
