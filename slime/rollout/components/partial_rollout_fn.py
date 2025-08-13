@@ -5,13 +5,15 @@ from slime.utils.types import Sample
 
 class PartialRolloutFn:
     def __init__(self, params: RolloutFnInitParams):
+        self.args = params.args
+
         # a list of sample group.
         # each group has n_samples_per_prompt samples, all of them has the same prompt.
         self.aborted_samples_buffer: list[list[Sample]] = []
-        if params.args.buffer_filter_path is None:
+        if self.args.buffer_filter_path is None:
             self.buffer_filter = _buffer_filter_pop_first
         else:
-            self.buffer_filter = load_function(params.args.buffer_filter_path)
+            self.buffer_filter = load_function(self.args.buffer_filter_path)
 
 
     def __call__(self, params: RolloutFnCallParams) -> RolloutFnCallOutput:
@@ -36,7 +38,7 @@ class PartialRolloutFn:
         if len(self.aborted_samples_buffer) == 0 or num_samples == 0:
             return []
 
-        samples = self.buffer_filter(self.args, self.rollout_id, self.aborted_samples_buffer, num_samples)
+        samples = self.buffer_filter(self.args, rollout_id, self.aborted_samples_buffer, num_samples)
         return samples
 
     def _add_samples(self, samples: list[list[Sample]]):
