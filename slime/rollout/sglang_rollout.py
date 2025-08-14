@@ -191,34 +191,7 @@ def _postprocess_done_data(
 
 
 async def generate_rollout_async(state, args, rollout_id: int, get_samples):
-    """Generate one rollout round (async) with optional dynamic filtering, over-sampling, and partial buffering.
-
-    Behavior matrix and interactions:
-    - dynamic_sampling_filter_path (optional):
-        Each finished group of `n_samples_per_prompt` is filtered online. Failed
-        groups are dropped immediately and do not count toward the target.
-
-    - over_sampling_filter (optional):
-        After collecting enough valid groups, apply the final selector to rank
-        and keep only `rollout_batch_size` groups; the rest are discarded and not
-        written back to the partial buffer.
-
-    - over_sampling_batch_size (submission granularity):
-        Task replenishment submits in chunks of `over_sampling_batch_size` groups
-        even if the remaining gap is smaller. This intentional oversubmission keeps
-        throughput high, and any leftover in-flight tasks will be aborted once the
-        target is met.
-
-    - collect_aborted_samples (aka --partial-rollout):
-        When the target is reached, abort remaining pending requests. If enabled,
-        partially generated groups from those aborted tasks are buffered and can be
-        resumed in later rounds to mitigate long-tail latency.
-
-    Notes:
-    - If `over_sampling_filter` is set, this loop stops after collecting
-      `over_sampling_batch_size` VALID groups, then downsamples to `rollout_batch_size`.
-    - If both filters are disabled and `over_sampling_batch_size == rollout_batch_size`,
-      typically there are no pending tasks to abort, so partial buffering will not trigger.
+    """An example to implement the generate_rollout function for an rule based rm rollout generation.
 
     Args:
         args: the whole args
@@ -238,20 +211,13 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
         load_function(args.over_sampling_filter_path) if args.over_sampling_filter_path is not None else None
     )
 
-    # target_data_size is the number of VALID groups to collect this round.
-    # - If over_sampling_filter is set: collect `over_sampling_batch_size` groups,
-    #   then rank/select the top `rollout_batch_size` at the end.
-    # - Else: collect `rollout_batch_size` groups directly.
+    # target_data_size is the total number of valid samples to get
     target_data_size = args.over_sampling_batch_size if over_sampling_filter is not None else args.rollout_batch_size
 
     data = []
     pendings = set()
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
-    # Replenish tasks according to the current gap:
-    #   gap = target_data_size - len(data) - len(pendings)
-    # Note: _submit_generate_tasks() submits in chunks of `over_sampling_batch_size`,
-    # so it can overshoot the exact gap by design to keep the pipeline saturated.
     while len(data) < target_data_size:
         pendings |= _submit_generate_tasks(
             state,
