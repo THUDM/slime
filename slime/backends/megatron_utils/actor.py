@@ -84,7 +84,6 @@ class MegatronTrainRayActor(TrainRayActor):
             self.sleep(("model"))
 
         self.rollout_engines = None
-        self.data_buffer = None
 
         self.rollout_data_postprocess = None
         if self.args.rollout_data_postprocess_path is not None:
@@ -149,9 +148,6 @@ class MegatronTrainRayActor(TrainRayActor):
         if hasattr(mpu, "reload_process_groups"):
             mpu.reload_process_groups()
         print_memory("after wake_up model")
-
-    def set_data_buffer(self, data_buffer):
-        self.data_buffer = data_buffer
 
     def _get_rollout_data(self, rollout_data_ref):
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.

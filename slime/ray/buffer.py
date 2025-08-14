@@ -8,19 +8,12 @@ import torch
 
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
-from slime.ray.rollout_data_source import RolloutDataSource
+from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
 from slime.utils.ray_utils import Box
 from slime.utils.wandb_utils import init_wandb_secondary
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
-
-
-def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
-    num_to_pop = min(len(buffer), num_samples)
-    samples = buffer[:num_to_pop]
-    del buffer[:num_to_pop]
-    return samples
 
 
 def log_eval_data(rollout_id, args, data):
@@ -43,20 +36,14 @@ def log_eval_data(rollout_id, args, data):
 
 
 @ray.remote
-class Buffer:
+class RolloutController:
+    """The class to run rollout and convert rollout data to training data."""
+
     def __init__(self, args, wandb_run_id):
         self.args = args
         init_wandb_secondary(args, wandb_run_id)
 
-        self.data_source = RolloutDataSource(args)
-
-        # a list of sample group.
-        # each group has n_samples_per_prompt samples, all of them has the same prompt.
-        self.buffer: list[list[Sample]] = []
-        if self.args.buffer_filter_path is None:
-            self.buffer_filter = pop_first
-        else:
-            self.buffer_filter = load_function(self.args.buffer_filter_path)
+        self.data_source = RolloutDataSourceWithBuffer(args)
 
         self.generate_rollout = load_function(self.args.rollout_function_path)
         self.eval_generate_rollout = load_function(self.args.eval_function_path)
@@ -67,43 +54,6 @@ class Buffer:
         assert self.args.rollout_global_dataset
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
-    # TODO simplify remaining logic
-    def get_samples(self, num_samples: int) -> list[list[Sample]]:
-        """
-        Return num_samples samples
-        """
-
-        samples = self._get_samples_from_buffer(num_samples)
-        num_samples -= len(samples)
-
-        if num_samples == 0:
-            return samples
-
-        samples += self.data_source.get_samples(num_samples=num_samples)
-        return samples
-
-    def _get_samples_from_buffer(self, num_samples: int) -> list[list[Sample]]:
-        if len(self.buffer) == 0 or num_samples == 0:
-            return []
-
-        samples = self.buffer_filter(self.args, self.rollout_id, self.buffer, num_samples)
-        return samples
-
-    def add_samples(self, samples: list[list[Sample]]):
-        """
-        Add a sample group to buffer.
-        """
-        if not samples:
-            return
-        assert isinstance(samples, list), f"samples must be a list, got {type(samples)}"
-        assert isinstance(samples[0], list), f"the elements of samples must be list, got {type(samples[0])}"
-        for i in range(0, len(samples)):
-            assert (
-                len(samples[i]) == self.args.n_samples_per_prompt
-            ), f"the length of the elements of samples must be equal to n_samples_per_prompt, got {len(samples[i])} != {self.args.n_samples_per_prompt}"
-            group = samples[i]  # type: ignore
-            self.buffer.append(group)
-
     def generate(self, rollout_id):
         self.rollout_id = rollout_id
 
@@ -113,7 +63,7 @@ class Buffer:
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
         else:
-            data = self.generate_rollout(self.args, rollout_id, self, evaluation=False)
+            data = self.generate_rollout(self.args, rollout_id, self.data_source, evaluation=False)
             # flatten the data if it is a list of lists
             if isinstance(data[0], list):
                 data = sum(data, [])
@@ -139,7 +89,7 @@ class Buffer:
             # if debug train only, we don't generate evaluation data
             return
 
-        data = self.eval_generate_rollout(self.args, rollout_id, self, evaluation=True)
+        data = self.eval_generate_rollout(self.args, rollout_id, self.data_source, evaluation=True)
         log_eval_data(rollout_id, self.args, data)
 
     def _convert_samples_to_train_data(self, samples: Union[list[Sample], list[list[Sample]]]):
@@ -177,17 +127,6 @@ class Buffer:
         if samples[0].metadata and "round_number" in samples[0].metadata:
             train_data["round_number"] = [sample.metadata["round_number"] for sample in samples]
         return train_data
-
-    # TODO remove
-    def update_metadata(self, metadata: dict):
-        self.data_source.metadata.update(metadata)
-
-    # TODO remove
-    def get_metadata(self):
-        return self.data_source.metadata
-
-    def get_buffer_length(self):
-        return len(self.buffer)
 
     def save(self, rollout_id):
         self.data_source.save(rollout_id)

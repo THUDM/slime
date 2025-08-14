@@ -19,7 +19,7 @@ def train(args):
     # calculate num_rollout from num_epoch
     num_rollout_per_epoch = None
     if args.num_rollout is None:
-        num_rollout_per_epoch = ray.get(rollout_manager.data_buffer.get_num_rollout_per_epoch.remote())
+        num_rollout_per_epoch = ray.get(rollout_manager.controller.get_num_rollout_per_epoch.remote())
         args.num_rollout = num_rollout_per_epoch * args.num_epoch
     assert args.num_rollout > 0
 
@@ -32,7 +32,7 @@ def train(args):
         args.start_rollout_id = start_rollout_ids[0]
 
     if args.rollout_global_dataset:
-        ray.get(rollout_manager.data_buffer.load.remote(args.start_rollout_id - 1))
+        ray.get(rollout_manager.controller.load.remote(args.start_rollout_id - 1))
 
     # initialize the connection for weight update during training
     ray.get(actor_model.async_init_weight_update_connections(rollout_manager))
@@ -66,7 +66,7 @@ def train(args):
         ):
             ray.get(actor_model.async_save_model(rollout_id))
             if args.rollout_global_dataset:
-                ray.get(rollout_manager.data_buffer.save.remote(rollout_id))
+                ray.get(rollout_manager.controller.save.remote(rollout_id))
 
         if args.offload:
             ray.get(actor_model.async_offload())
