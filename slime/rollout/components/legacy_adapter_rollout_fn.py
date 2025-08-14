@@ -37,6 +37,14 @@ class LegacyAdapterRolloutFn:
         )
         del self.rollout_id
 
+    def __call__(self, params: RolloutFnCallParams) -> RolloutFnCallOutput:
+        raw_output = self.original_fn(
+            self.init_params.args,
+            params.rollout_id,
+            self.init_params.buffer,
+            evaluation=self.init_params.evaluation,
+        )
+
         if self.init_params.evaluation:
             return RolloutFnCallOutput(samples=None, metrics=raw_output)
         else:
