@@ -133,61 +133,6 @@ async def abort(state, args, pendings, rollout_id: int):
 
     return aborted_samples
 
-def _submit_generate_tasks(state, get_samples, min_submit_size: int):
-    new_pendings = set()
-
-    while len(new_pendings) < min_submit_size:
-        # get samples from the buffer and submit the generation requests.
-        samples = get_samples(state.args.over_sampling_batch_size)
-        for group in samples:
-            new_pendings.add(
-                asyncio.create_task(
-                    # submit a group of samples as a single task.
-                    generate_and_rm_group(
-                        state,
-                        state.args,
-                        group,
-                        sampling_params=compute_sampling_params(state.args),
-                        evaluation=False,
-                    )
-                )
-            )
-
-    return new_pendings
-
-
-def _postprocess_done_data(
-    args,
-    raw_done_tasks,
-    dynamic_filter,
-    do_print: bool,
-    max_num_outputs: int,
-):
-    new_data = []
-
-    for task in raw_done_tasks:
-        group: list[Sample] = task.result()
-
-        if do_print:
-            print(
-                f"First rollout sample: {[group[0].prompt + group[0].response]}, label: {group[0].label}, reward: {group[0].reward}",
-                flush=True,
-            )
-            do_print = False
-
-        assert len(group) == args.n_samples_per_prompt
-        if dynamic_filter is not None and not dynamic_filter(args, group):
-            continue
-
-        # add the samples to the data
-        # NOTE: here we have not stored all the unused samples back to the data buffer.
-        if len(new_data) >= max_num_outputs:
-            continue
-
-        new_data.append(group)
-
-    return new_data, do_print
-
 
 async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     """An example to implement the generate_rollout function for an rule based rm rollout generation.
@@ -215,27 +160,50 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
 
     data = []
     pendings = set()
+    remaining_batch_size = 0
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
     while len(data) < target_data_size:
-        pendings |= _submit_generate_tasks(
-            state,
-            get_samples,
-            min_submit_size=target_data_size - len(data) - len(pendings),
-        )
+        while remaining_batch_size < target_data_size:
+            # get samples from the buffer and submit the generation requests.
+            samples = get_samples(args.over_sampling_batch_size)
+            for group in samples:
+                pendings.add(
+                    asyncio.create_task(
+                        # submit a group of samples as a single task.
+                        generate_and_rm_group(
+                            state,
+                            state.args,
+                            group,
+                            sampling_params=compute_sampling_params(args),
+                            evaluation=False,
+                        )
+                    )
+                )
+            remaining_batch_size += len(samples)
 
         # wait for the generation to finish
-        raw_done_tasks, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
+        done, pendings = await asyncio.wait(pendings, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            group: list[Sample] = task.result()
 
-        filtered_done_data, do_print = _postprocess_done_data(
-            args,
-            raw_done_tasks=raw_done_tasks,
-            dynamic_filter=dynamic_filter,
-            do_print=do_print,
-            max_num_outputs=target_data_size - len(data),
-        )
-        data += filtered_done_data
-        pbar.update(args.n_samples_per_prompt * len(filtered_done_data))
+            if do_print:
+                print(
+                    f"First rollout sample: {[group[0].prompt + group[0].response]}, label: {group[0].label}, reward: {group[0].reward}",
+                    flush=True,
+                )
+                do_print = False
+
+            assert len(group) == args.n_samples_per_prompt
+            if dynamic_filter is not None and not dynamic_filter(args, group):
+                remaining_batch_size -= 1
+                continue
+
+            # add the samples to the data
+            # NOTE: here we have not stored all the unused samples back to the data buffer.
+            if len(data) < target_data_size:
+                data.append(group)
+                pbar.update(args.n_samples_per_prompt)
 
     pbar.close()
     print(
