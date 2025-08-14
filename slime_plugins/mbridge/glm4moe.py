@@ -36,18 +36,20 @@ class GLM4MoEBridge(Qwen2MoEBridge):
         convert_names = []
         for keyword, mapping_names in self._MTP_MAPPING.items():
             if keyword in name:
-                convert_names.extend(
-                    [x.format(layer_number=num_layers) for x in mapping_names]
-                )
+                convert_names.extend([x.format(layer_number=num_layers) for x in mapping_names])
                 break
             elif "mlp" in name:
                 mtp_layer_index = int(re.findall(r"mtp\.layers\.(\d+)\.", name)[0])
-                name_ = re.sub(r"^mtp\.layers.\d+.transformer_layer", f"model.layers.{num_layers+mtp_layer_index}", name)
+                name_ = re.sub(
+                    r"^mtp\.layers.\d+.transformer_layer", f"model.layers.{num_layers+mtp_layer_index}", name
+                )
                 convert_names = self._weight_name_mapping_mlp(name_)
                 break
             elif "self_attention" in name:
                 mtp_layer_index = int(re.findall(r"mtp\.layers.(\d+)\.", name)[0])
-                name_ = re.sub(r"^mtp\.layers.\d+.transformer_layer", f"model.layers.{num_layers+mtp_layer_index}", name)
+                name_ = re.sub(
+                    r"^mtp\.layers.\d+.transformer_layer", f"model.layers.{num_layers+mtp_layer_index}", name
+                )
                 convert_names = self._weight_name_mapping_attention(name_)
                 break
 
@@ -65,9 +67,7 @@ class GLM4MoEBridge(Qwen2MoEBridge):
         Returns:
             list: Corresponding Hugging Face weight names
         """
-        assert (
-            "_extra_state" not in mcore_weights_name
-        ), "extra_state should not be loaded"
+        assert "_extra_state" not in mcore_weights_name, "extra_state should not be loaded"
         direct_name_mapping = {
             "embedding.word_embeddings.weight": "model.embed_tokens.weight",
             "decoder.final_layernorm.weight": "model.norm.weight",
@@ -83,9 +83,7 @@ class GLM4MoEBridge(Qwen2MoEBridge):
         elif "mlp" in mcore_weights_name:
             return self._weight_name_mapping_mlp(mcore_weights_name)
         else:
-            raise NotImplementedError(
-                f"Unsupported parameter name: {mcore_weights_name}"
-            )
+            raise NotImplementedError(f"Unsupported parameter name: {mcore_weights_name}")
 
     def _build_config(self):
         """

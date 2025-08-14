@@ -245,13 +245,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
 
-            # partial rollout
             parser.add_argument(
-                "--partial-rollout",
+                "--collect-aborted-samples",
                 action="store_true",
                 default=False,
                 help=(
-                    "Whether to use partial rollout. "
+                    "Whether to Collected aborted samples into the data buffer"
                     "If set, the unfinished samples during dynamic sampling will be recycled back to data buffer. "
                     "This is useful for long responses."
                 ),
