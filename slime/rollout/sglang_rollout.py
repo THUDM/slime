@@ -7,9 +7,10 @@ from transformers import AutoTokenizer
 
 from slime.utils.async_utils import run
 from slime.utils.data import Dataset
+from slime.utils.http_utils import get, post
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
-from slime.rollout.components.sample_generator import generate_one_sample_vanilla, sglang_abort
+from slime.rollout.components.sample_generator import generate_one_sample_vanilla
 from .components.base_rollout_fn import RolloutFnCallParams, RolloutFnInitParams, RolloutFnCallOutput
 from .components.partial_rollout_fn import PartialRolloutFn
 
@@ -30,26 +31,23 @@ class GenerateState:
         self.semaphore = asyncio.Semaphore(
             args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
         )
+        self.sampling_params = dict(
+            temperature=args.rollout_temperature,
+            top_p=args.rollout_top_p,
+            top_k=args.rollout_top_k,
+            max_new_tokens=args.rollout_max_response_len,
+            stop=args.rollout_stop,
+            stop_token_ids=args.rollout_stop_token_ids,
+            skip_special_tokens=args.rollout_skip_special_tokens,
+            no_stop_trim=True,
+            spaces_between_special_tokens=False,
+        )
 
         reset_state(self)
 
 
 def reset_state(state):
     state.aborted = False
-
-
-def compute_sampling_params(args):
-    return dict(
-        temperature=args.rollout_temperature,
-        top_p=args.rollout_top_p,
-        top_k=args.rollout_top_k,
-        max_new_tokens=args.rollout_max_response_len,
-        stop=args.rollout_stop,
-        stop_token_ids=args.rollout_stop_token_ids,
-        skip_special_tokens=args.rollout_skip_special_tokens,
-        no_stop_trim=True,
-        spaces_between_special_tokens=False,
-    )
 
 
 async def generate_and_rm(state, args, sample: Sample, sampling_params: dict, evaluation=False) -> Sample:
@@ -108,8 +106,14 @@ async def abort(state, args, pendings, rollout_id: int):
 
     assert not state.aborted
     state.aborted = True
+    response = await get(
+        f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers", use_http2=args.use_http2
+    )
 
-    await sglang_abort(args)
+    # abort all the requests
+    for url in response["urls"]:
+        print(f"Abort request for {url}", flush=True)
+        await post(f"{url}/abort_request", {"abort_all": True}, use_http2=False)
 
     # make sure all the pending tasks are finished
     count = 0
@@ -175,7 +179,7 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
                             state,
                             state.args,
                             group,
-                            sampling_params=compute_sampling_params(args),
+                            sampling_params=state.sampling_params.copy(),
                             evaluation=False,
                         )
                     )
@@ -225,7 +229,6 @@ async def generate_rollout_async(state, args, rollout_id: int, get_samples):
     return RolloutFnCallOutput(samples=data), aborted_samples
 
 
-# TODO do not use global variable
 EVAL_PROMPT_DATASET = {}
 
 
