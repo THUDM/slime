@@ -20,6 +20,13 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
+def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
+    num_to_pop = min(len(buffer), num_samples)
+    samples = buffer[:num_to_pop]
+    del buffer[:num_to_pop]
+    return samples
+
+
 def log_eval_data(rollout_id, args, data):
     log_dict = {}
     for key in data.keys():
@@ -59,7 +66,15 @@ class Buffer:
 
         self.data_source = RolloutDataSource(args)
 
-        params = RolloutFnInitParams(args=args, data_source=self.data_source, evaluation=False)
+        # a list of sample group.
+        # each group has n_samples_per_prompt samples, all of them has the same prompt.
+        self.buffer: list[list[Sample]] = []
+        if self.args.buffer_filter_path is None:
+            self.buffer_filter = pop_first
+        else:
+            self.buffer_filter = load_function(self.args.buffer_filter_path)
+
+        params = RolloutFnInitParams(args=args, buffer=self, evaluation=False)
         self.generate_rollout = _load_rollout_fn(self.args.rollout_function_path, params)
         self.eval_generate_rollout = _load_rollout_fn(self.args.eval_function_path, replace(params, evaluation=True))
         print(f"import {self.args.rollout_function_path} as generate_rollout function.")
@@ -69,7 +84,46 @@ class Buffer:
         assert self.args.rollout_global_dataset
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
+    # TODO simplify remaining logic
+    def get_samples(self, num_samples: int) -> list[list[Sample]]:
+        """
+        Return num_samples samples
+        """
+
+        samples = self._get_samples_from_buffer(num_samples)
+        num_samples -= len(samples)
+
+        if num_samples == 0:
+            return samples
+
+        samples += self.data_source.get_samples(num_samples=num_samples)
+        return samples
+
+    def _get_samples_from_buffer(self, num_samples: int) -> list[list[Sample]]:
+        if len(self.buffer) == 0 or num_samples == 0:
+            return []
+
+        samples = self.buffer_filter(self.args, self.rollout_id, self.buffer, num_samples)
+        return samples
+
+    def add_samples(self, samples: list[list[Sample]]):
+        """
+        Add a sample group to buffer.
+        """
+        if not samples:
+            return
+        assert isinstance(samples, list), f"samples must be a list, got {type(samples)}"
+        assert isinstance(samples[0], list), f"the elements of samples must be list, got {type(samples[0])}"
+        for i in range(0, len(samples)):
+            assert (
+                len(samples[i]) == self.args.n_samples_per_prompt
+            ), f"the length of the elements of samples must be equal to n_samples_per_prompt, got {len(samples[i])} != {self.args.n_samples_per_prompt}"
+            group = samples[i]  # type: ignore
+            self.buffer.append(group)
+
     def generate(self, rollout_id):
+        self.rollout_id = rollout_id
+
         if self.args.load_debug_rollout_data:
             data = torch.load(
                 open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
@@ -84,12 +138,12 @@ class Buffer:
         # TODO to be refactored (originally Buffer._set_data)
         # TODO extract to a function during refactor
         if (path_template := self.args.save_debug_rollout_data) is not None:
-            path = Path(path_template.format(rollout_id=rollout_id))
+            path = Path(path_template.format(rollout_id=self.rollout_id))
             print(f"Save debug rollout data to {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(
                 dict(
-                    rollout_id=rollout_id,
+                    rollout_id=self.rollout_id,
                     samples=[sample.to_dict() for sample in data],
                 ),
                 path,
@@ -140,6 +194,17 @@ class Buffer:
         if samples[0].metadata and "round_number" in samples[0].metadata:
             train_data["round_number"] = [sample.metadata["round_number"] for sample in samples]
         return train_data
+
+    # TODO remove
+    def update_metadata(self, metadata: dict):
+        self.data_source.metadata.update(metadata)
+
+    # TODO remove
+    def get_metadata(self):
+        return self.data_source.metadata
+
+    def get_buffer_length(self):
+        return len(self.buffer)
 
     def save(self, rollout_id):
         self.data_source.save(rollout_id)

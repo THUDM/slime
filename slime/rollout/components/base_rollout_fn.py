@@ -4,14 +4,15 @@ from typing import Protocol, Any, Optional, TYPE_CHECKING
 from slime.utils.types import Sample
 
 if TYPE_CHECKING:
-    from slime.ray.rollout_data_source import RolloutDataSource
+    from slime.ray.buffer import Buffer
 
 
 @dataclass
 class RolloutFnInitParams:
     args: Any
     evaluation: bool
-    data_source: "RolloutDataSource"
+    # TODO remove in next step
+    buffer: "Buffer"
 
 
 @dataclass
