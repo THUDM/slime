@@ -31,8 +31,8 @@ def init_wandb_primary(args):
     offline = _is_offline_mode(args)
 
     # Only perform explicit login when NOT offline
-    if (not offline) and getattr(args, "wandb_key", None) is not None:
-        wandb.login(key=args.wandb_key, host=getattr(args, "wandb_host", None))
+    if (not offline) and args.wandb_key is not None:
+        wandb.login(key=args.wandb_key, host=args.wandb_host)
 
     # Prepare wandb init parameters
     # add random 6 length string with characters
