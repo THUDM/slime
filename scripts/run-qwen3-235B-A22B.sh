@@ -122,7 +122,7 @@ WANDB_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 32
-   --sglang-mem-fraction-static 0.5
+   --sglang-mem-fraction-static 0.7
    --sglang-enable-ep-moe
    --sglang-enable-dp-attention
    --sglang-dp-size 4

@@ -200,7 +200,7 @@ These are the parameters required by sglang. Here, `--rollout-num-gpus-per-engin
 ```bash
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
-   --sglang-mem-fraction-static 0.5
+   --sglang-mem-fraction-static 0.7
 )
 ```
 
