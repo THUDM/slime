@@ -2,6 +2,18 @@ import os
 import wandb
 
 
+def _is_offline_mode(args) -> bool:
+    """Detect whether W&B should run in offline mode.
+
+    Priority order:
+    1) args.wandb_mode if provided
+    2) WANDB_MODE environment variable
+    """
+    if args.wandb_mode:
+        return args.wandb_mode == "offline"
+    return os.environ.get("WANDB_MODE") == "offline"
+
+
 def init_wandb_primary(args):
     if not args.use_wandb:
         return None
@@ -15,10 +27,14 @@ def init_wandb_primary(args):
             print("W&B disabled mode enabled. No data will be logged.")
         elif args.wandb_mode == "online":
             print("W&B online mode enabled. Data will be uploaded to cloud.")
-    
-    if args.wandb_key is not None:
-        wandb.login(key=args.wandb_key, host=args.wandb_host)
 
+    offline = _is_offline_mode(args)
+
+    # Only perform explicit login when NOT offline
+    if (not offline) and getattr(args, "wandb_key", None) is not None:
+        wandb.login(key=args.wandb_key, host=getattr(args, "wandb_host", None))
+
+    # Prepare wandb init parameters
     # add random 6 length string with characters
     if args.wandb_random_suffix:
         group = args.wandb_group + "_" + wandb.util.generate_id()
@@ -34,14 +50,21 @@ def init_wandb_primary(args):
         "group": group,
         "name": run_name,
         "config": args.__dict__,
-        "settings": wandb.Settings(mode="shared", x_primary=True),
     }
-    
+
+    # Configure settings based on offline/online mode
+    if offline:
+        init_kwargs["settings"] = wandb.Settings(mode="offline")
+    else:
+        init_kwargs["settings"] = wandb.Settings(mode="shared", x_primary=True)
+
     # Add custom directory if specified
     if args.wandb_dir:
+        # Ensure directory exists to avoid backend crashes
+        os.makedirs(args.wandb_dir, exist_ok=True)
         init_kwargs["dir"] = args.wandb_dir
         print(f"W&B logs will be stored in: {args.wandb_dir}")
-    
+
     wandb.init(**init_kwargs)
 
     _init_wandb_common()
@@ -58,7 +81,8 @@ def init_wandb_secondary(args, wandb_run_id):
     if args.wandb_mode:
         os.environ["WANDB_MODE"] = args.wandb_mode
 
-    # Prepare wandb init parameters
+    offline = _is_offline_mode(args)
+
     init_kwargs = {
         "id": wandb_run_id,
         "entity": args.wandb_team,
@@ -66,17 +90,23 @@ def init_wandb_secondary(args, wandb_run_id):
         "config": args.__dict__,
         "resume": "allow",
         "reinit": True,
-        "settings": wandb.Settings(
+    }
+
+    # Configure settings based on offline/online mode
+    if offline:
+        init_kwargs["settings"] = wandb.Settings(mode="offline")
+    else:
+        init_kwargs["settings"] = wandb.Settings(
             mode="shared",
             x_primary=False,
             x_update_finish_state=False,
-        ),
-    }
-    
+        )
+
     # Add custom directory if specified
     if args.wandb_dir:
+        os.makedirs(args.wandb_dir, exist_ok=True)
         init_kwargs["dir"] = args.wandb_dir
-    
+
     wandb.init(**init_kwargs)
 
     _init_wandb_common()
