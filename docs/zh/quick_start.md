@@ -128,17 +128,23 @@ CKPT_ARGS=(
 整个训练流程可视为一个 **“数据采样 → 权重更新”** 的闭环。
 
 **阶段一：数据采样 (Rollout)**
--   `--rollout-batch-size`: 定义每轮采样的 **Prompt 数量**。
--   `--n-samples-per-prompt`: 定义每个 Prompt 生成的**回复数量**。
-> 二者相乘，决定了**单轮采样的总数据产出量**。
+- `--rollout-batch-size`：定义每轮采样的 **Prompt 数量**  
+- `--n-samples-per-prompt`：定义每个 Prompt 生成的 **回复数量**  
+
+> 两者相乘，决定了 **单轮采样产生的总样本数**。
 
 **阶段二：模型训练 (Training)**
--   `--global-batch-size`: 定义**更新一次权重**（训练一步）所需的样本量。
--   `--num-steps-per-rollout`: 定义使用当前这批数据，总共执行**多少次权重更新**。
-> 二者相乘，决定了**单轮训练的总数据消耗量**。
+- `--global-batch-size`：定义 **执行一次参数更新（optimizer.step）** 所需的样本量  
+- `--num-steps-per-rollout`：定义使用当前采样数据，**总共执行多少次参数更新**  
+
+> 两者相乘，决定了 **单轮训练消耗的总样本数**。 
+ 
+> ⚠️ 这里的 **参数更新** 指训练环节的 optimizer.step()，不同于训练引擎向推理引擎发起的权重同步(Weight Sync)。
 
 在这个过程中，每轮的“产出”与“消耗”必须相等，遵循以下约束：
-**`(rollout-batch-size × n-samples-per-prompt) = (global-batch-size × num-steps-per-rollout)`**
+**`(rollout-batch-size × n-samples-per-prompt) = (global-batch-size × num-steps-per-rollout)`** 
+
+- 在 slime 中，如果设置了 `--num-steps-per-rollout` ，`--global-batch-size`未设置则会被自动设置，设置了则会被用上述公式校验。
 
 **训练流程次数控制**
 -   `--num-rollout`: 控制整个 **“采样→训练”** 循环的**总执行轮次**。
