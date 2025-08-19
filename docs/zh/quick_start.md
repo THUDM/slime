@@ -1,13 +1,16 @@
 
-# Slime 快速使用指南
+# slime 快速使用指南
 
-本文档将引导您快速搭建环境、准备数据，并开始使用 Slime 进行模型训练。
+本文档从搭建环境开始，在一小时内带您快速上手 slime，涵盖环境配置，数据准备，训练启动和关键代码解析和魔改。
 
-# 1. 基础环境搭建
+## 基础环境搭建
 
-Slime 包含针对 `sglang/megatron` 的临时补丁。为避免潜在的环境配置问题，强烈建议用户使用我们提供的最新 Docker 镜像，它已预置好所有依赖。
+slime 包含针对 sglang/megatron 的临时补丁。为避免潜在的环境配置问题，强烈建议**用户使用我们提供的最新 Docker 镜像**，它已预置好所有依赖。
 
-## 1.1 拉取并启动 Docker 容器
+- 对于不方便使用 docker 的场景，请参考 [从零搭建环境](./docs/zh/build.md)；
+- 对于 AMD 支持，请参考 [AMD 使用教程](./docs/en/amd_tutorial.md)。
+
+### 拉取并启动 Docker 容器
 
 请执行以下命令，拉取最新镜像并启动一个交互式容器：
 
@@ -21,9 +24,9 @@ docker run --rm --gpus all --ipc=host --shm-size=16g \
   -it zhuzilin/slime:latest /bin/bash
 ```
 
-## 1.2 安装 Slime
+### 安装 slime
 
-进入 Docker 容器后，请按照以下步骤克隆 Slime 仓库并进行安装：
+进入 Docker 容器后，请按照以下步骤克隆 slime 仓库并进行安装：
 
 ```bash
 # 路径可根据实际情况调整
@@ -33,30 +36,33 @@ cd slime
 pip install -e .
 ```
 
-# 2. 模型与数据集下载
+## 模型与数据集下载
 
-可以从 Hugging Face、ModelScope 等平台下载所需的模型和数据集。以下是使用 `huggingface-cli` 下载示例资源的命令：
+可以从 Hugging Face、ModelScope 等平台下载所需的模型和数据集。以下是使用 `huggingface_hub` 下载示例资源的命令：
 
 ```bash
+
+pip install -U huggingface_hub
+
 # 下载模型权重 (GLM-Z1-9B)
-huggingface-cli download THUDM/GLM-Z1-9B-0414 --local-dir /root/GLM-Z1-9B-0414
+hf download THUDM/GLM-Z1-9B-0414 --local-dir /root/GLM-Z1-9B-0414
 
 # 下载训练数据集 (dapo-math-17k)
-huggingface-cli download --repo-type dataset zhuzilin/dapo-math-17k \
+hf download --repo-type dataset zhuzilin/dapo-math-17k \
   --local-dir /root/dapo-math-17k
 
 # 下载评估数据集 (aime-2024)
-huggingface-cli download --repo-type dataset zhuzilin/aime-2024 \
+hf download --repo-type dataset zhuzilin/aime-2024 \
   --local-dir /root/aime-2024
 ```
 
-# 3. 模型权重转换
+## 模型权重转换
 
-## 3.1 Hugging Face 格式 转换为 Megatron 格式
+### Hugging Face 格式 转换为 Megatron 格式
 
 当使用 Megatron 作为训练后端时，需要先将 Hugging Face 格式的模型权重转换为 Megatron `torch_dist` 格式。
 
-首先，加载目标模型的配置文件。`slime/scripts/models` 目录下包含了支持模型的配置文件。需要 `source` 对应模型的脚本，将配置参数加载到当前环境中。
+首先，加载目标模型的配置文件。`slime/scripts/models` 目录下包含了支持模型的配置文件。需要 `source` 对应模型的脚本，将配置参数加载到当前环境中。此处我们以 GLM4-9B 模型为例子，对于 Qwen3-4B，Qwen3-30B-A3B，是类似的。
 
 ```bash
 cd /root/slime
@@ -74,7 +80,7 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     --save /root/GLM-Z1-9B-0414_torch_dist
 ```
 
-# 4. 训练脚本参数概览
+## 训练脚本与参数概览
 
 完成上述准备工作后，即可运行训练脚本。
 
@@ -83,9 +89,9 @@ cd /root/slime
 bash script/run-glm4-9B.sh
 ```
 
-以下是 `run-glm4-9B.sh` 脚本中各参数组的详细说明。
+我们还是以 run-glm4-9B.sh 脚本为例，简单分析主要参数的作用。
 
-#### **MODEL_ARGS**: 模型配置参数
+### **MODEL_ARGS**: 模型配置参数
 
 ```bash
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
@@ -100,11 +106,11 @@ source "${SCRIPT_DIR}/models/glm4-9B.sh"
 > MODEL_ARGS+=(--rotary-base 10000)
 > ```
 
-#### **CKPT_ARGS**: 检查点与路径参数
+### **CKPT_ARGS**: 检查点与路径参数
 
 ```bash
 CKPT_ARGS=(
-   # SGLang 所需的 HF 格式检查点，也用于加载 Tokenizer
+   # 用于加载tokenizer等其他信息，实际上不会使用hf 路径中的模型权重参数
    --hf-checkpoint /root/GLM-Z1-9B-0414
    # 参考模型 (Reference Model) 的 Megatron 格式检查点
    --ref-load /root/GLM-Z1-9B-0414_torch_dist
@@ -117,7 +123,7 @@ CKPT_ARGS=(
 )
 ```
 
-#### **ROLLOUT_ARGS**: 数据生成（Rollout）参数
+### **ROLLOUT_ARGS**: 数据生成（Rollout）参数
 
 ```bash
 ROLLOUT_ARGS=(
@@ -133,13 +139,16 @@ ROLLOUT_ARGS=(
    # Reward Model 类型。Slime 内置多种类型，也支持通过 --custom-rm-path 自定义
    --rm-type deepscaler
 
-   # 总共训练的 Rollout 数量
+   # Number of rollout steps. 
    --num-rollout 3000
-   # 每个 Rollout 包含的 Prompt 数量
+   # 每次 Rollout 包含的 Prompt 数量
    --rollout-batch-size 32
    # 每个 Prompt 采样的回复数量
-   # (一个 Rollout 总生成数据量 = rollout_batch_size * n_samples_per_prompt)
    --n-samples-per-prompt 8
+
+   # global batch size 可以来指定训练一个 step 需要用多少轨迹 
+   # global_batch_size = rollout_batch_size * n_samples_per_prompt
+   --global-batch-size 128
    
    # Rollout 采样参数
    --rollout-max-response-len 8192
@@ -152,7 +161,7 @@ ROLLOUT_ARGS=(
 )
 ```
 
-#### **EVAL_ARGS**: 评估参数
+### **EVAL_ARGS**: 评估参数
 
 评估过程会继承大部分 Rollout 参数，但您可以通过以下参数进行覆盖，以实现与训练不同的评估策略。
 
@@ -171,12 +180,14 @@ EVAL_ARGS=(
 )
 ```
 
-#### **PERF_ARGS**: 性能与并行参数
+### **PERF_ARGS**: 性能与并行参数
 
-这部分主要包含 Megatron 的并行配置。`--use-dynamic-batch-size` 和 `--max-tokens-per-gpu` 是 Slime 添加的特有优化。
+这部分主要包含 Megatron 的并行配置。`--use-dynamic-batch-size` 和 `--max-tokens-per-gpu` 是 slime 添加的特有优化。
 
+
+-   `--max-tokens-per-gpu`: 每张 GPU 处理的最大 Token 数。启用动态批处理（`use_dynamic_batch_size`）后，系统会智能地将长短不一的样本打包，使每个 micro-batch 的总 Token 数接近此限制，从而提升训练效率。如果单个样本长度超过该值，它将独立形成一个 batch。在上下文并行（CP）模式下，`N` 张 CP 卡共享 `N * max_tokens_per_gpu` 的总长度。
 -   `--use-dynamic-batch-size`: 启用动态批处理。此时会忽略 `--micro-batch-size`。
--   `--max-tokens-per-gpu`: 每张 GPU 处理的最大 Token 数。启用动态批处理后，系统会智能地将长短不一的样本打包，使每个 micro-batch 的总 Token 数接近此限制，从而提升训练效率。如果单个样本长度超过该值，它将独立形成一个 batch。在上下文并行（CP）模式下，`N` 张 CP 卡共享 `N * max_tokens_per_gpu` 的总长度。
+
 
 > 💡 **提示**：
 >  slime 总是会通过 data packing 的方法训练模型，并且严格保证 per sample loss 或 per token loss，也就是开启 dynamic batch size 不会对 loss 计算有影响，推荐开启。
@@ -200,7 +211,9 @@ PERF_ARGS=(
 )
 ```
 
-#### **GRPO_ARGS**: GRPO 算法参数
+### **GRPO_ARGS**: GRPO 算法参数
+
+-   `--use-kl-loss`: 启用此选项将加载一个参考模型（Reference Model），并计算当前模型与参考模型之间的 KL 散度（KL Divergence）作为一项监控指标。KL 散度是否被计入最终的训练损失（Loss），取决于 `--kl-loss-coef` 参数。若该参数设置为 0，则 KL 散度仅作为观测指标显示，而不会参与损失计算。
 
 ```bash
 GRPO_ARGS=(
@@ -214,7 +227,7 @@ GRPO_ARGS=(
 )
 ```
 
-#### **OPTIMIZER_ARGS**: 优化器参数
+### **OPTIMIZER_ARGS**: 优化器参数
 
 ```bash
 OPTIMIZER_ARGS=(
@@ -227,14 +240,14 @@ OPTIMIZER_ARGS=(
 )
 ```
 
-#### **SGLANG_ARGS**: SGLang 服务参数
+### **SGLANG_ARGS**: SGLang 服务参数
 
 这部分参数用于配置 SGLang 推理服务。
 - `--rollout-num-gpus-per-engine`: 基本等同于 SGLang 的 `tp_size`。
 - 其他 SGLang 参数可以通过添加 `--sglang-` 前缀传递给 Slime。
 
 > ⚠️ **注意**：
-> Slime 使用 `sgl-router` 调度多个 SGLang 服务。在不开启 DP Attention 的情况下，不支持 `dp_size`。
+> slime 使用 `sgl-router` 调度多个 SGLang Server。在不开启 DP Attention 的情况下，不支持 `dp_size`， 通过 `rollout-num-gpus/rollout-num-gpus-per-engine` 得到相应数目的 SGLang Server 数量。
 
 ```bash
 SGLANG_ARGS=(
@@ -242,11 +255,11 @@ SGLANG_ARGS=(
 )
 ```
 
-# 5. 特性介绍
+## 特性介绍
 
-## 5.1 Colocated Actor and Rollout
+### Colocated Actor and Rollout
 
-默认情况下，训练（Actor）和推理（Rollout）的资源是分开指定的，即使它们可能共享同一批 GPU。
+在默认的配置下，训练（Actor）和推理（Rollout）的资源是分开指定的，通过 ray 给训练部分分配 `actor_num_nodes * actor_num_gpus_per_node` 张 GPU，给推理分配 `rollout_num_gpus` 张 GPU，也就是实现了训推分离。
 
 **标准（分离）配置**：
 ```bash
@@ -260,7 +273,8 @@ ray job submit ... \
 上述配置中，Actor 使用 4 张卡，Rollout 也使用 4 张卡，两者并行运行。
 
 **训推一体化（Colocated）配置**：
-要将训练和推理部署在同一组 GPU 上，请添加 `--colocate` 参数，并移除 `--rollout-num-gpus`。
+要将训练和推理部署在同一组 GPU 上，请添加 `--colocate` 参数，开启后会忽略 `--rollout-num-gpus` 让训练和推理的卡数相等。
+
 
 ```bash
 ray job submit ... \
@@ -275,9 +289,9 @@ ray job submit ... \
 > ⚠️ **注意**：
 > 在训推一体化模式下，Megatron 会预先占用一部分显存。您需要通过调整 `--sglang-mem-fraction-static` 参数来降低 SGLang 的显存占用比例，以避免显存不足。
 
-## 5.2 Dynamic Sampling
+### Dynamic Sampling
 
-Slime 支持更复杂的采样策略，例如 [DAPO](https://dapo-sia.github.io/) 中使用的动态采样。要启用此功能，需配置以下参数：
+slime 支持更复杂的采样策略，例如 [DAPO](https://dapo-sia.github.io/) 中使用的动态采样。要启用此功能，需配置以下参数：
 
 ```bash
    --over-sampling-batch-size 64 \
@@ -298,7 +312,7 @@ def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
     return torch.tensor(rewards, dtype=torch.float).std() > 0.0
 ```
 
-## 5.3 Partial Rollout
+### Partial Rollout
 
 在动态采样过程中，大量请求可能会被提前中止（abort），造成计算资源浪费。通过启用 `--partial-rollout` 参数，可以将这些生成到一半的样本缓存起来，在下一个 Rollout 阶段继续生成，从而提升性能。
 
@@ -317,12 +331,12 @@ def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) ->
 
 
 
-## 5.4 bf16 训练 fp8 推理
+### bf16 训练 fp8 推理
 
 slime 还支持 bf16 训练，fp8 推理。对于 Qwen3-4B 模型，只需要下载如下模型：
 
 ```bash
-huggingface-cli download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
+hf download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
 ```
 
 并将 `--hf-checkpoint` 替换为：
@@ -337,23 +351,23 @@ huggingface-cli download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
 ⚠️  训练的 megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的。
 
 
-# 6. Multiturn 适配
+## Multiturn 适配
 
-Slime 框架高度可扩展，支持复杂的 Agent 场景（如多轮交互与工具调用）。其核心机制是通过自定义函数，重写默认的数据生成 (Rollout) 与奖励计算 (Reward) 逻辑。
+slime 框架高度可扩展，支持复杂的 Agent 场景（如多轮交互与工具调用）。其核心机制是通过自定义函数，重写默认的数据生成 (Rollout) 与奖励计算 (Reward) 逻辑。
 
-本文以一个基于 [Search-R1](https://github.com/PeterGriffinJin/Search-R1) 的实现为例，说明如何适配 Slime 以支持多轮交互。
+本文以一个基于 [Search-R1](https://github.com/PeterGriffinJin/Search-R1) 的实现为例，说明如何适配 slime 以支持多轮交互。
 
-## 6.1 适配思路总结
+### 适配思路总结
 
-适配 Slime 以支持多轮交互主要包含三个步骤：
+适配 slime 以支持多轮交互主要包含三个步骤：
 
-1.  **数据准备**：将多轮交互数据集适配为 Slime 的 `Sample` 对象。将对话历史、真实标签等映射到 `prompt` 和 `label` 字段，并将工具定义、中间状态等额外信息存入 `metadata` 字段，供后续函数调用。
+1.  **数据准备**：将多轮交互数据集适配为 slime 的 `Sample` 对象。将对话历史、真实标签等映射到 `prompt` 和 `label` 字段，并将工具定义、中间状态等额外信息存入 `metadata` 字段，供后续函数调用。
 
 2.  **实现自定义生成函数**：编写函数模拟“模型生成动作 → 执行工具 → 拼接观察结果”的交互循环，并正确处理 Loss Masking。
 
 3.  **实现自定义奖励函数**：编写函数评估完整的交互轨迹，返回最终的奖励分数。
 
-## 6.2 数据准备与映射
+### 数据准备与映射
 
 为了向自定义函数传递复杂的上下文信息，您需要在**数据预处理阶段**就将所有相关的额外字段聚合起来。
 
@@ -375,7 +389,7 @@ Slime 框架高度可扩展，支持复杂的 Agent 场景（如多轮交互与�
 
 ### 步骤二：在训练脚本中指定映射
 
-完成数据准备后，在训练脚本中，通过 `ROLLOUT_ARGS` 将这个预处理好的 `metadata` 列映射到 Slime 的 `Sample.metadata` 字段。
+完成数据准备后，在训练脚本中，通过 `ROLLOUT_ARGS` 将这个预处理好的 `metadata` 列映射到 slime 的 `Sample.metadata` 字段。
 
 ```bash
 ROLLOUT_ARGS+=(
@@ -389,14 +403,14 @@ ROLLOUT_ARGS+=(
    --label-key final_answer
 
    # 4. 将预先构造好的 "metadata" 列加载到 Sample.metadata
-   #    Slime 会自动将其解析为 Python 字典
+   #    slime 会自动将其解析为 Python 字典
    --metadata-key metadata
 )
 ```
 
 通过这种方式，您就可以在自定义的 `generate` 或 `reward` 函数中，通过 `sample.metadata['session_id']` 等方式，方便地访问到所有预先准备好的结构化信息。
 
-## 6.3 编写自定义生成函数
+### 编写自定义生成函数
 
 首先，通过 `--rollout-generate-func-path` 参数指定一个自定义的异步 Python 函数。
 
@@ -409,10 +423,12 @@ ROLLOUT_ARGS+=(
 3.  **解析并执行动作**: 解析模型输出，识别动作与参数，并调用外部工具或 API（如 Google 搜索）。
 4.  **构建观察结果**: 将工具返回的结果格式化后，追加到对话历史中，作为下一轮的输入。
 5.  **处理 Loss Masking**: 这是 Agent 训练的关键。
+    -  需要注意的是： `loss_mask` 应该和 `response` 一样长，其中需要算 loss 的 token 为 1，mask 掉的为 0
     -   **模型生成**的 token (如思考、动作指令) → `loss_mask` 设为 `1`，参与损失计算。
     -   **工具或环境返回**的 token (如 API 结果) → `loss_mask` 设为 `0`，不参与损失计算。
 6.  **终止条件**: 当模型生成终止标签（如 `<answer>...`）或达到最大轮次时，结束循环。
 7.  **封装返回**: 将完整的交互历史、token ID 和 `loss_masks` 填充到 `Sample` 对象中并返回。
+
 
 **代码示例（概念）**:
 ```python
@@ -425,6 +441,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         model_output = await call_sglang(prompt + full_response, ...)
         # ... tokenization and appending ...
         loss_masks += [1] * len(model_tokens) # loss_mask = 1
+        full_response += model_output
 
         # 2. 解析并执行动作
         action, content = parse_action(model_output)
@@ -433,6 +450,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             tool_output = await google_search(content)
             # ... tokenization and appending ...
             loss_masks += [0] * len(tool_tokens) # loss_mask = 0
+            full_response += tool_output
             
         elif action == "answer":
             break # 结束循环
@@ -444,7 +462,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     return sample
 ```
 
-## 6.4 编写自定义奖励函数
+### 编写自定义奖励函数
 
 类似地，通过 `--reward-fn-path` 指定自定义奖励函数。
 
@@ -452,7 +470,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
 该函数接收完整的 `Sample` 对象，根据最终交互结果计算得分。可以在此实现自定义计分逻辑，或调用外部的 Reward Model 服务。
 
-## 6.5 在训练脚本中配置
+### 在训练脚本中配置
 
 最后，在训练脚本中，通过以下参数启用上述自定义函数：
 
@@ -467,8 +485,8 @@ ROLLOUT_ARGS+=(
 ```
 
 
-# 7. 大规模 MOE 模型的多机训练
-Slime 针对大规模混合专家（MoE）模型的分布式训练进行了深度优化。我们提供了一些端到端的训练案例以供参考：
+## 大规模 MOE 模型的多机训练
+slime 针对大规模混合专家（MoE）模型的分布式训练进行了深度优化。我们提供了一些端到端的训练案例以供参考：
 
 - [示例：64xH100 训练 GLM-4.5](docs/zh/models/glm4.5-355B-A32B.md)
 - [示例：8xH100 训练 Qwen3-30B-A3B](docs/zh/models/qwen3-30B-A3B.md)
