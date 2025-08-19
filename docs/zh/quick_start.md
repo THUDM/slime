@@ -125,6 +125,24 @@ CKPT_ARGS=(
 
 ### **ROLLOUT_ARGS**: 数据生成（Rollout）参数
 
+整个训练流程可视为一个 **“数据采样 → 权重更新”** 的闭环。
+
+**阶段一：数据采样 (Rollout)**
+-   `--rollout-batch-size`: 定义每轮采样的 **Prompt 数量**。
+-   `--n-samples-per-prompt`: 定义每个 Prompt 生成的**回复数量**。
+> 二者相乘，决定了**单轮采样的总数据产出量**。
+
+**阶段二：模型训练 (Training)**
+-   `--global-batch-size`: 定义**更新一次权重**（训练一步）所需的样本量。
+-   `--num-steps-per-rollout`: 定义使用当前这批数据，总共执行**多少次权重更新**。
+> 二者相乘，决定了**单轮训练的总数据消耗量**。
+
+在这个过程中，每轮的“产出”与“消耗”必须相等，遵循以下约束：
+**`(rollout-batch-size × n-samples-per-prompt) = (global-batch-size × num-steps-per-rollout)`**
+
+**训练流程次数控制**
+-   `--num-rollout`: 控制整个 **“采样→训练”** 循环的**总执行轮次**。
+
 ```bash
 ROLLOUT_ARGS=(
    # Prompt 数据集，JSONL 格式
@@ -139,23 +157,17 @@ ROLLOUT_ARGS=(
    # Reward Model 类型。Slime 内置多种类型，也支持通过 --custom-rm-path 自定义
    --rm-type deepscaler
 
-   # Number of rollout steps. 
+   # 这五个参数来控制 rollout 与 train 的关系
    --num-rollout 3000
-   # 每次 Rollout 包含的 Prompt 数量
-   --rollout-batch-size 32
-   # 每个 Prompt 采样的回复数量
+   --rollout-batch-size 16
    --n-samples-per-prompt 8
-
-   # global batch size 可以来指定训练一个 step 需要用多少轨迹 
-   # global_batch_size = rollout_batch_size * n_samples_per_prompt
+   --num-steps-per-rollout 1
    --global-batch-size 128
    
    # Rollout 采样参数
    --rollout-max-response-len 8192
    --rollout-temperature 0.8
 
-   # 每个 Rollout 对应多少个训练步
-   --num-steps-per-rollout 1
    # 是否在训练时平衡数据长度，可能提升训练速度
    --balance-data
 )
