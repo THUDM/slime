@@ -1,8 +1,10 @@
 #!/bin/bash
 
-# hf download meta-llama/Llama-3.2-3B-Instruct --local-dir /root/Llama-3.2-3B-Instruct
 
-# for rerun the task
+# bash scripts/run-qwen3-4B-amd.sh
+
+
+####clear before training
 pkill -9 sglang
 sleep 3
 ray stop --force
@@ -12,7 +14,9 @@ sleep 3
 pkill -9 ray
 pkill -9 python
 
+
 set -euxo pipefail
+
 
 ### AMD Support ###
 SLIME_DIR="/home/yushensu/projects/slime" # Need to change to your own path
@@ -29,25 +33,41 @@ export RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=${RAY_EXPERIMENTAL_NOSET_HIP_V
 export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"} #You can choose which gpus to use
 ####################
 
+
+# ### AMD Support ### (If you do not istall, please install them)
+# # # Clone and install Megatron-LMi-amd_version
+# export MAX_JOBS=512
+# cd $SLIME_DIR
+# pip uninstall megatron-core -y
+# if [ ! -d "Megatron-LM-amd_version" ]; then
+#     git clone git@github.com:yushengsu-thu/Megatron-LM-amd_version.git
+# else
+#     echo "Megatron-LM-amd_version directory already exists, skipping clone"
+# fi
+# cd Megatron-LM-amd_version
+# pip install -vvv -e . 
+# cd $SLIME_DIR
+
+# # Install slime
+# pip install -e .
+# ####################
+
+
+
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
 
-# NVLINK_COUNT=$(nvidia-smi | grep -o "NVLink" | wc -l)
-# if [ "$NVLINK_COUNT" -gt 0 ]; then
-#     HAS_NVLINK=1
-# else
-#     HAS_NVLINK=0
-# fi
-# echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/models/llama3.2-3B-Instruct-amd.sh"
+source "${SCRIPT_DIR}/models/qwen3-8B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint ${MODEL_DIR}/Llama-3.2-3B-Instruct
-   --ref-load ${MODEL_DIR}/Llama-3.2-3B-Instruct_torch_dist
-   --load ${MODEL_DIR}/Llama-3.2-3B-Instruct_slime/
-   --save ${MODEL_DIR}/Llama-3.2-3B-Instruct_slime/
+   --hf-checkpoint ${MODEL_DIR}/Qwen3-8B
+   #--hf-checkpoint /root/Qwen3-4B-FP8
+   --ref-load ${MODEL_DIR}/Qwen3-8B_torch_dist
+   # --ref-load ${MODEL_DIR}/Qwen3-8B_torch_dist_amd_new
+   --load ${MODEL_DIR}/Qwen3-8B_slime/
+   --save ${MODEL_DIR}/Qwen3-8B_slime/
    --save-interval 20
 )
 
@@ -57,11 +77,11 @@ ROLLOUT_ARGS=(
    --label-key label
    --apply-chat-template
    --rollout-shuffle
-   --rm-type math
-   --num-epoch 1
+   --rm-type deepscaler
+   --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-response-len 16384
+   --rollout-max-response-len 8192
    --rollout-temperature 0.8
 
    --global-batch-size 256
@@ -69,9 +89,9 @@ ROLLOUT_ARGS=(
 )
 
 EVAL_ARGS=(
-   --eval-interval 10
+   --eval-interval 20
    --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
-   --n-samples-per-eval-prompt 8
+   --n-samples-per-eval-prompt 16
    --eval-max-response-len 16384
    --eval-top-p 0.7
 )
@@ -113,16 +133,24 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   # --use-wandb
+   #--use-wandb
    # --wandb-project slime-dev
-   # --wandb-group llama3.2-3B
-   # --wandb-key ${WANDB_API_KEY}
+   # --wandb-group qwen3-4B-test
+   # --wandb-key ${WANDB_KEY}
 )
 
+### AMD Support ###
+# Need to fix some issue with torch_memory_saver in rocm to support larger  --sglang-mem-fraction-static 
+# SGLANG_ARGS=(
+#    --rollout-num-gpus-per-engine 2
+#    --sglang-mem-fraction-static 0.7
+# )
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
    --sglang-mem-fraction-static 0.4
 )
+####################
+
 
 MISC_ARGS=(
    # default dropout in megatron is 0.1
@@ -145,16 +173,17 @@ export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 NUM_GPUS=$(echo ${HIP_VISIBLE_DEVICES} | tr ',' '\n' | wc -l)
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
-# Build the runtime environment JSON with proper variable substitution
-RUNTIME_ENV_JSON="{
-  \"env_vars\": {
-    \"PYTHONPATH\": \"/workspace/Megatron-LM-amd_version/\",
-    \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\"
-  }
-}"
+
+# "PYTHONPATH": "/workspace/Megatron-LM-amd_version/",
+MEGATRON_LM_PATH=$(pip list | grep megatron-core | awk '{print $NF}')
 
 ray job submit --address="http://127.0.0.1:8265" \
-   --runtime-env-json="${RUNTIME_ENV_JSON}" \
+   --runtime-env-json='{
+     "env_vars": {
+        "PYTHONPATH": "/workspace/Megatron-LM-amd_version/",
+        "CUDA_DEVICE_MAX_CONNECTIONS": "1"
+     }
+   }' \
    -- python3 train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 8 \
@@ -164,11 +193,13 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
+   ${DISTRIBUTED_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
    ${MISC_ARGS[@]}
+
 
 
 ####clear after training
@@ -181,3 +212,13 @@ pkill -9 python
 sleep 3
 pkill -9 ray
 pkill -9 python
+
+
+
+
+
+
+
+
+
+

@@ -64,7 +64,8 @@ source "${SCRIPT_DIR}/models/qwen3-4B.sh"
 CKPT_ARGS=(
    --hf-checkpoint ${MODEL_DIR}/Qwen3-4B
    #--hf-checkpoint /root/Qwen3-4B-FP8
-   --ref-load ${MODEL_DIR}/Qwen3-4B_torch
+   --ref-load ${MODEL_DIR}/Qwen3-4B_torch_dist
+   # --ref-load ${MODEL_DIR}/Qwen3-4B_torch_dist_amd_new
    --load ${MODEL_DIR}/Qwen3-4B_slime/
    --save ${MODEL_DIR}/Qwen3-4B_slime/
    --save-interval 20
