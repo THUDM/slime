@@ -36,7 +36,7 @@ index 860ee64a..80944b70 100755
                      "mlp.0.weight": "mlp.linear_fc1.layer_norm_weight",
                      "mlp.0.bias": "mlp.linear_fc1.layer_norm_bias",
 diff --git a/megatron/core/parallel_state.py b/megatron/core/parallel_state.py
-index 46400c39..59fa5dbd 100644
+index 46400c39..b24a9108 100644
 --- a/megatron/core/parallel_state.py
 +++ b/megatron/core/parallel_state.py
 @@ -9,6 +9,7 @@ from typing import Callable, List, Optional
@@ -47,7 +47,7 @@ index 46400c39..59fa5dbd 100644
  
  from .utils import GlobalMemoryBuffer, is_torch_min_version
  
-@@ -163,6 +164,158 @@ def get_nccl_options(pg_name, nccl_comm_cfgs):
+@@ -163,6 +164,211 @@ def get_nccl_options(pg_name, nccl_comm_cfgs):
          return None
  
  
@@ -121,6 +121,7 @@ index 46400c39..59fa5dbd 100644
 +    dist.barrier = get_new_function(dist.barrier)
 +    dist.send = get_new_function(dist.send)
 +    dist.recv = get_new_function(dist.recv)
++    dist._coalescing_manager = get_new_function(dist._coalescing_manager)
 +
 +    # p2p
 +    old_isend = dist.isend
@@ -153,10 +154,14 @@ index 46400c39..59fa5dbd 100644
 +
 +
 +
-+class ReloadableProcessGroup:
++class ReloadableProcessGroup(torch.distributed.ProcessGroup):
 +    GROUPS = []
 +
 +    def __init__(self, group, ranks):
++        super().__init__(
++            rank=dist.get_rank(group),
++            size=dist.get_world_size(group),
++        )
 +        #print(f"Creating ReloadableProcessGroup with ranks: {ranks}", flush=True)
 +        self.group = group
 +        self.group_info = {
@@ -188,6 +193,54 @@ index 46400c39..59fa5dbd 100644
 +                backend="nccl"
 +            )
 +            reloadable_group.group = group
++
++    def rank(self) -> int: return self.group.rank()
++    def size(self) -> int: return self.group.size()
++    def name(self) -> str: return self.group.name()
++
++    def shutdown(self) -> None:
++        if self.group is not None:
++            self.group.shutdown()
++
++    def abort(self) -> None:
++        if self.group is not None:
++            self.group.abort()
++
++    def _fwd(self, method, *args, **kwargs):
++        inner = self.group
++        if inner is None:
++            raise RuntimeError("ReloadableProcessGroup: inner PG is None, call reload() first.")
++        return getattr(inner, method)(*args, **kwargs)
++
++    def barrier(self, *a, **kw): return self._fwd("barrier", *a, **kw)
++    def broadcast(self, *a, **kw): return self._fwd("broadcast", *a, **kw)
++    def allreduce(self, *a, **kw): return self._fwd("allreduce", *a, **kw)
++    def allreduce_coalesced(self, *a, **kw): return self._fwd("allreduce_coalesced", *a, **kw)
++    def reduce(self, *a, **kw): return self._fwd("reduce", *a, **kw)
++    def allgather(self, *a, **kw): return self._fwd("allgather", *a, **kw)
++    def _allgather_base(self, *a, **kw): return self._fwd("_allgather_base", *a, **kw)
++    def allgather_coalesced(self, *a, **kw): return self._fwd("allgather_coalesced", *a, **kw)
++    def allgather_into_tensor_coalesced(self, *a, **kw): return self._fwd("allgather_into_tensor_coalesced", *a, **kw)
++    def gather(self, *a, **kw): return self._fwd("gather", *a, **kw)
++    def scatter(self, *a, **kw): return self._fwd("scatter", *a, **kw)
++    def reduce_scatter(self, *a, **kw): return self._fwd("reduce_scatter", *a, **kw)
++    def _reduce_scatter_base(self, *a, **kw): return self._fwd("_reduce_scatter_base", *a, **kw)
++    def reduce_scatter_tensor_coalesced(self, *a, **kw): return self._fwd("reduce_scatter_tensor_coalesced", *a, **kw)
++    def alltoall_base(self, *a, **kw): return self._fwd("alltoall_base", *a, **kw)
++    def alltoall(self, *a, **kw): return self._fwd("alltoall", *a, **kw)
++    def send(self, *a, **kw): return self._fwd("send", *a, **kw)
++    def recv(self, *a, **kw): return self._fwd("recv", *a, **kw)
++    def recv_anysource(self, *a, **kw): return self._fwd("recv_anysource", *a, **kw)
++
++    def _start_coalescing(self, *a, **kw): return self._fwd("_start_coalescing", *a, **kw)
++    def _end_coalescing(self, *a, **kw): return self._fwd("_end_coalescing", *a, **kw)
++    def _get_backend_name(self): return self._fwd("_get_backend_name")
++    def _get_backend(self, *a, **kw): return self._fwd("_get_backend", *a, **kw)
++    def _set_default_backend(self, *a, **kw): return self._fwd("_set_default_backend", *a, **kw)
++    @property
++    def bound_device_id(self): return self.group.bound_device_id
++    @bound_device_id.setter
++    def bound_device_id(self, dev): self.group.bound_device_id = dev
 +
 +
 +def destroy_process_groups():
@@ -238,7 +291,7 @@ index 4bdc7af6..f7a26f45 100644
          ops.append(recv_next_op)
      if len(ops) > 0:
 diff --git a/megatron/core/transformer/transformer_config.py b/megatron/core/transformer/transformer_config.py
-index 2443e31f..d0ea0c96 100644
+index b944946a..87742aa8 100644
 --- a/megatron/core/transformer/transformer_config.py
 +++ b/megatron/core/transformer/transformer_config.py
 @@ -173,6 +173,9 @@ class TransformerConfig(ModelParallelConfig):
@@ -324,7 +377,7 @@ index 6dbb43f2..4146b3e2 100644
              # discard the output of the pre-mlp layernorm and register the recompute
              # as a gradient hook of mlp_output_with_bias[0]
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
-index 7746018b..87f9aa94 100644
+index 0959a66f..c25f1cd5 100644
 --- a/megatron/training/arguments.py
 +++ b/megatron/training/arguments.py
 @@ -1153,6 +1153,9 @@ def core_transformer_config_from_args(args, config_class=None):

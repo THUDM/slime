@@ -7,7 +7,6 @@ import requests
 from transformers import AutoTokenizer
 
 import wandb
-from slime.ray.buffer import Buffer
 from slime.utils.async_utils import run
 from slime.utils.mask_utils import MultiTurnLossMaskGenerator
 from slime.utils.types import Sample
@@ -201,9 +200,7 @@ def start_rollout(api_base_url: str, args, metadata):
             print(f"[start_rollout] Failed to send rollout config: {e}")
 
 
-async def generate_rollout_async(
-    args, rollout_id: int, data_buffer: Buffer, evaluation: bool = False
-) -> Dict[str, Any]:
+async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation: bool = False) -> Dict[str, Any]:
 
     global START_ROLLOUT
     if evaluation:

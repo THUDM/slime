@@ -1,7 +1,6 @@
 import math
 
 import numpy as np
-import ray
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -337,33 +336,6 @@ def log_passrate(rollout_id, args, rollout_data):
                 dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
                 group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
             )
-
-
-def log_eval_data(rollout_id, args, rollout_data_ref):
-    if (
-        mpu.get_tensor_model_parallel_rank() == 0
-        and mpu.is_pipeline_last_stage()
-        and mpu.get_data_parallel_rank(with_context_parallel=True) == 0
-    ):
-        rank = dist.get_rank()
-        data = ray.get(rollout_data_ref.inner)
-
-        log_dict = {}
-        for key in data.keys():
-            rewards = data[key]["rewards"]
-            log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
-            if "truncated" in data[key]:
-                truncated = data[key]["truncated"]
-                log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
-
-        print(f"eval {rollout_id}: {log_dict}")
-        if args.use_wandb:
-            log_dict["eval/step"] = (
-                rollout_id
-                if not args.wandb_always_use_train_step
-                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-            )
-            wandb.log(log_dict)
 
 
 def log_perf_data(rollout_id, args):

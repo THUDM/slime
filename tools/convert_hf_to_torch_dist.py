@@ -20,7 +20,10 @@ import slime_plugins.mbridge  # noqa: F401
 def add_convertion_args(parser):
     """Add conversion arguments to the parser"""
     parser.add_argument("--hf-checkpoint", type=str, required=True, help="HuggingFace model path")
-    parser.add_argument("--padded-vocab-size", type=int, default=None)
+    try:
+        parser.add_argument("--padded-vocab-size", type=int, default=None)
+    except:
+        pass
     return parser
 
 

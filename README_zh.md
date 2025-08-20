@@ -37,7 +37,7 @@
 
 ### 环境准备
 
-基于镜像 zhuzilin/slime:latest（已预装 SGLang 0.4.7 和 Megatron）：
+基于镜像 zhuzilin/slime:latest（已预装最新版 SGLang 和 Megatron）：
 
 ```bash
 docker run --rm --gpus all --ipc=host --shm-size=16g \

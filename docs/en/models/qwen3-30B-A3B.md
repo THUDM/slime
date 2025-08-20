@@ -62,7 +62,7 @@ Here, we will briefly introduce the MoE-related parts in the [run-qwen3-30B-A3B.
     ```bash
     SGLANG_ARGS=(
        --rollout-num-gpus-per-engine 8
-       --sglang-mem-fraction-static 0.5
+       --sglang-mem-fraction-static 0.7
        --sglang-enable-ep-moe
        --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
     )
@@ -90,7 +90,7 @@ In addition, you can make the following changes:
    ```bash
    SGLANG_ARGS=(
       --rollout-num-gpus-per-engine 24
-      --sglang-mem-fraction-static 0.5
+      --sglang-mem-fraction-static 0.7
       --sglang-enable-ep-moe
       --sglang-enable-dp-attention
       --sglang-dp-size 3

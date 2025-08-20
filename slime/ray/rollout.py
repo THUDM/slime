@@ -6,9 +6,9 @@ import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
-from slime.ray.buffer import Buffer
+from slime.ray.buffer import RolloutController
 from slime.utils.http_utils import find_available_port, get_host_info, run_router
-from .utils import Lock
+from .utils import Lock, NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
 from typing import List
 
 
@@ -39,6 +39,7 @@ def create_rollout_engines(args, pg):
                 num_cpus=num_cpus,
                 num_gpus=num_gpus,
                 scheduling_strategy=scheduling_strategy,
+                runtime_env={"env_vars": {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST}},
             ).remote(args, rank=i)
         )
 
@@ -145,7 +146,7 @@ class RolloutManager:
     def __init__(self, args, pg, wandb_run_id):
         self.args = args
         _start_router(args)
-        self.data_buffer = Buffer.options(
+        self.controller = RolloutController.options(
             num_cpus=1,
             num_gpus=0,
         ).remote(args, wandb_run_id=wandb_run_id)
@@ -159,8 +160,11 @@ class RolloutManager:
             num_gpus=0,
         ).remote()
 
-    def async_generate(self, rollout_id, evaluation=False):
-        return self.data_buffer.generate.remote(rollout_id, evaluation=evaluation)
+    def async_generate(self, rollout_id):
+        return self.controller.generate.remote(rollout_id)
+
+    def async_eval(self, rollout_id):
+        return self.controller.eval.remote(rollout_id)
 
     def async_offload(self):
         return [engine.release_memory_occupation.remote() for engine in self.rollout_engines]

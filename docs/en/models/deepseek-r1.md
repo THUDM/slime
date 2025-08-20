@@ -177,7 +177,7 @@ The final `--sglang-server-concurrency` is a parameter specific to slime. It is 
 ```bash
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 64
-   --sglang-mem-fraction-static 0.5
+   --sglang-mem-fraction-static 0.7
    --sglang-enable-ep-moe
 
    # dp attention

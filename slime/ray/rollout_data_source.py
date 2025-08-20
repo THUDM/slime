@@ -3,6 +3,7 @@ import os
 from pathlib import Path
 
 import torch
+from slime.utils.misc import load_function
 from slime.utils.data import Dataset
 from transformers import AutoTokenizer
 from slime.utils.types import Sample
@@ -79,6 +80,9 @@ class RolloutDataSource:
 
         return samples
 
+    def add_samples(self, samples: list[list[Sample]]):
+        raise RuntimeError(f"Cannot add samples to {self.__class__.__name__}. This is a read-only data source.")
+
     def save(self, rollout_id):
         if not self.args.rollout_global_dataset:
             return
@@ -115,3 +119,67 @@ class RolloutDataSource:
 
         if self.args.rollout_global_dataset and self.args.rollout_shuffle:
             self.dataset.shuffle(self.epoch_id)
+
+
+class RolloutDataSourceWithBuffer(RolloutDataSource):
+    def __init__(self, args):
+        super().__init__(args)
+        self.buffer = []
+        if self.args.buffer_filter_path is None:
+            self.buffer_filter = pop_first
+        else:
+            self.buffer_filter = load_function(self.args.buffer_filter_path)
+
+    def get_samples(self, num_samples: int) -> list[list[Sample]]:
+        """
+        Return num_samples samples
+        """
+
+        samples = self._get_samples_from_buffer(num_samples)
+        num_samples -= len(samples)
+
+        if num_samples == 0:
+            return samples
+
+        samples += super().get_samples(num_samples=num_samples)
+        return samples
+
+    def _get_samples_from_buffer(self, num_samples: int) -> list[list[Sample]]:
+        if len(self.buffer) == 0 or num_samples == 0:
+            return []
+
+        samples = self.buffer_filter(self.args, None, self.buffer, num_samples)
+        return samples
+
+    def add_samples(self, samples: list[list[Sample]]):
+        """
+        Add a sample group to buffer.
+        """
+        if not samples:
+            return
+        assert isinstance(samples, list), f"samples must be a list, got {type(samples)}"
+        assert isinstance(samples[0], list), f"the elements of samples must be list, got {type(samples[0])}"
+        for i in range(0, len(samples)):
+            assert (
+                len(samples[i]) == self.args.n_samples_per_prompt
+            ), f"the length of the elements of samples must be equal to n_samples_per_prompt, got {len(samples[i])} != {self.args.n_samples_per_prompt}"
+            group = samples[i]  # type: ignore
+            self.buffer.append(group)
+
+    # TODO remove
+    def update_metadata(self, metadata: dict):
+        self.metadata.update(metadata)
+
+    # TODO remove
+    def get_metadata(self):
+        return self.metadata
+
+    def get_buffer_length(self):
+        return len(self.buffer)
+
+
+def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
+    num_to_pop = min(len(buffer), num_samples)
+    samples = buffer[:num_to_pop]
+    del buffer[:num_to_pop]
+    return samples

@@ -13,5 +13,4 @@ MODEL_ARGS=(
    --group-query-attention
    --num-query-groups 2
    --vocab-size 151936
-   --untie-embeddings-and-output-weights
 )

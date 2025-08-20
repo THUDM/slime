@@ -1,6 +1,5 @@
 import abc
 import os
-import ctypes
 from datetime import timedelta
 
 import ray
@@ -8,6 +7,14 @@ import torch
 import torch.distributed as dist
 
 from slime.ray.ray_actor import RayActor
+
+
+def get_local_gpu_id():
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES", None)
+    if cvd is None:
+        return ray.get_gpu_ids()[0]
+    else:
+        return cvd.split(",").index(str(ray.get_gpu_ids()[0]))
 
 
 class TrainRayActor(RayActor):
@@ -26,13 +33,9 @@ class TrainRayActor(RayActor):
         # TODO: currently this doesn't work as ray has already set torch.cuda.device_count().
         # os.environ.pop("CUDA_VISIBLE_DEVICES", None)
         # os.environ["LOCAL_RANK"] = str(ray.get_gpu_ids()[0])
-        os.environ["LOCAL_RANK"] = str(ray.get_gpu_ids()[0])
+        os.environ["LOCAL_RANK"] = str(get_local_gpu_id())
 
     def init(self, args, role, wandb_run_id, with_ref=False):
-        if args.experimental_offload:
-            import pytorch_malloc
-
-            self.libcudart = ctypes.PyDLL(pytorch_malloc.get_library_path())
         self.args = args
         self.role = role
         self.with_ref = with_ref
@@ -62,10 +65,6 @@ class TrainRayActor(RayActor):
 
     @abc.abstractmethod
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
-        raise NotImplementedError
-
-    @abc.abstractmethod
-    def set_data_buffer(self, data_buffer):
         raise NotImplementedError
 
     @abc.abstractmethod

@@ -121,7 +121,12 @@ def all_gather_with_cp(tensor: torch.Tensor, total_length: int, response_length:
     assert chunk_1.shape[0] == logits_offset[1][1] - logits_offset[1][0]
 
     def zero(len):
-        return torch.zeros([len] + list(tensor.shape[1:]), dtype=tensor.dtype, device=tensor.device)
+        return torch.zeros(
+            [len] + list(tensor.shape[1:]),
+            dtype=tensor.dtype,
+            device=tensor.device,
+            requires_grad=True,
+        )
 
     # logprob should be within the range of [prompt_length - 1, total_length - 1]
     if chunk_0.shape[0] == 0 and chunk_1.shape[0] == 0:

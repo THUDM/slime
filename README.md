@@ -43,7 +43,7 @@
 
 ### Environment Setup
 
-Based on the `zhuzilin/slime:latest` image (pre-installed with SGLang 0.4.7 and Megatron):
+Based on the `zhuzilin/slime:latest` image (pre-installed with latest SGLang and Megatron):
 
 ```bash
 docker run --rm --gpus all --ipc=host --shm-size=16g \

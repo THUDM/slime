@@ -138,7 +138,7 @@ sglang 所需的参数，这里 `--rollout-num-gpus-per-engine` 基本对应 sgl
 ```bash
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 32
-   --sglang-mem-fraction-static 0.5
+   --sglang-mem-fraction-static 0.7
    --sglang-enable-dp-attention
    --sglang-dp-size 4
 )
@@ -178,7 +178,7 @@ python tools/convert_hf_to_fp8.py \
 ```bash
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 32
-   --sglang-mem-fraction-static 0.5
+   --sglang-mem-fraction-static 0.7
    --sglang-enable-dp-attention
    --sglang-dp-size 32
    --sglang-ep-size 32

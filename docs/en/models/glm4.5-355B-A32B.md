@@ -138,7 +138,7 @@ These are the parameters required by sglang. Here, `--rollout-num-gpus-per-engin
 ```bash
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 32
-   --sglang-mem-fraction-static 0.5
+   --sglang-mem-fraction-static 0.7
    --sglang-enable-dp-attention
    --sglang-dp-size 4
 )
@@ -177,7 +177,7 @@ And exemplar `SGLANG_ARGS` for FP8 is:
 ```bash
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 32
-   --sglang-mem-fraction-static 0.5
+   --sglang-mem-fraction-static 0.7
    --sglang-enable-dp-attention
    --sglang-dp-size 32
    --sglang-ep-size 32
