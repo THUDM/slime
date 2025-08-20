@@ -234,7 +234,7 @@ def log_multi_turn_data(rollout_id, args, rollout_data):
                     log_dict["raw_response_length/response_length_max"] = raw_response_lengths.max().item()
                     log_dict["raw_response_length/response_length_min"] = raw_response_lengths.min().item()
                     log_dict["raw_response_length/response_length_clip_ratio"] = (
-                        (raw_response_lengths > args.rollout_max_response_len).float().mean().item()
+                        (raw_response_lengths >= args.rollout_max_response_len).float().mean().item()
                     )
 
                     # Vectorized sum calculation using torch - stay on GPU
