@@ -1,4 +1,3 @@
-
 # slime 快速使用指南
 
 本文档从搭建环境开始，在一小时内带您快速上手 slime，涵盖环境配置，数据准备，训练启动和关键代码解析和魔改。
@@ -317,7 +316,7 @@ slime 支持更复杂的采样策略，例如 [DAPO](https://dapo-sia.github.io/
      slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
 ```
 
-- **`--over-sampling-batch-size`**: 设置一个大于 `rollout_batch_size` 的值。例如，如果 `rollout_batch_size` 为 32，`over_sampling_batch_size` 设为 64，系统会一次性为 64 个 Prompt 生成样本。
+- **`--over-sampling-batch-size`**: 设置一个大于 `rollout_batch_size` 的值。例如，如果 `rollout_batch_size` 为 32，`over_sampling_batch_size` 设为 64，系统会一次性为 64 个 Prompt 生成样本。最后会通过 std 从大到小保留`rollout_batch_size` 的样本量， 而不是64个
 - **`--dynamic-sampling-filter-path`**: 指定一个过滤函数。系统会异步收集每个 Prompt 的所有样本（`n_samples_per_prompt` 条），然后调用此函数进行筛选。如果函数返回 `True`，则保留这组样本；否则丢弃。
 
 **工作流程示例**：
