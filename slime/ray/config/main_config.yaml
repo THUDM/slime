@@ -1,0 +1,15 @@
+#root/workspace/slime_latest/slime/ray/config/main_config.yaml
+defaults:
+  - global_base  # 包含全局参数
+  - tasks: [task_A, task_B]  # This will create a tasks configuration group
+  - _self_
+  
+# 这些参数会覆盖 global_base 中的默认值
+tasks_num: 2
+actor_num_nodes: 1 
+actor_num_gpus_per_node: 2 
+rollout_num_gpus: 2 
+rollout_num_gpus_per_engine: 1 
+offload: true 
+
+

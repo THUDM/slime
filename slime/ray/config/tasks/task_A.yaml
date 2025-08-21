@@ -1,0 +1,75 @@
+# @package tasks.task_0
+# 任务A的配置
+
+# 任务A特定的参数会覆盖base中的参数
+#source，是作为环境变量传入的
+model_config_path: /root/workspace/slime_latest/slime/slime/ray/config/model/qwen3-0.6B.yaml
+hf-checkpoint: /root/workspace/models/HF/Qwen3-0.6B
+
+ref-load: /root/workspace/models/Torch/Qwen3-0.6B
+load: /root/workspace/slime_latest/slime/experiments/json/qwen06b
+save: /root/workspace/slime_latest/slime/experiments/json/qwen06b
+save-interval: 1
+
+prompt-data: /root/workspace/data/slime_start/dapo-math-17k/dapo-math-17k.jsonl
+input-key: prompt
+label-key: label
+apply-chat-template: True
+rollout-shuffle: True
+rm-type: deepscaler
+num-rollout: 2
+rollout-batch-size: 2
+n-samples-per-prompt: 1
+rollout-max-response-len: 1024
+rollout-temperature: 0.8
+
+global-batch-size: 2
+balance-data: True
+
+eval-prompt-data: aime /root/workspace/data/slime_start/aime-2024/aime-2024.jsonl
+n-samples-per-eval-prompt: 16
+eval-max-response-len: 16384
+eval-top-p: 0.7
+
+tensor-model-parallel-size: 1
+sequence-parallel: True
+pipeline-model-parallel-size: 1
+context-parallel-size: 1
+expert-model-parallel-size: 1
+expert-tensor-parallel-size: 1
+
+recompute-granularity: full
+recompute-method: uniform
+recompute-num-layers: 1
+
+# --micro-batch-size 256
+use-dynamic-batch-size: True
+max-tokens-per-gpu: 1024
+
+optimizer: adam
+lr: 1e-6
+lr-decay-style: constant
+weight-decay: 0.1
+adam-beta1: 0.9
+adam-beta2: 0.98
+
+use-wandb: True
+wandb-project: 0812-0.6b
+wandb-group: 2task
+
+sglang-mem-fraction-static: 0.8
+
+# default dropout in megatron is 0.1
+attention-dropout: 0.0
+hidden-dropout: 0.0
+# should be good for model performance
+accumulate-allreduce-grads-in-fp32: True
+attention-softmax-in-fp32: True
+# need to comment this when using model with MLA
+attention-backend: flash
+
+actor_num_nodes: 1 
+actor_num_gpus_per_node: 2 
+rollout_num_gpus: 2 
+rollout_num_gpus_per_engine: 1 
+offload: true

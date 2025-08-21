@@ -1,0 +1,14 @@
+# 全局基础配置 - 包含所有全局参数
+# @package _global_
+
+# ========== Global Parameters from main_config ==========
+tasks_num: 2
+actor_num_nodes: 1 
+actor_num_gpus_per_node: 2 
+rollout_num_gpus: 2 
+rollout_num_gpus_per_engine: 1 
+offload: true
+
+# ========== Debug Arguments ==========
+debug_rollout_only: false
+debug_train_only: false

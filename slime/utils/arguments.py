@@ -786,21 +786,36 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_rollout_buffer_arguments(parser)
         parser = add_custom_megatron_plugins_arguments(parser)
         # For megatron
-        parser.add_argument("--padded-vocab-size", type=int, default=None)
         parser.add_argument("--tasks-num", type=int, default=None)
+        parser.add_argument("--update-from-disk",action="store_true",default=False)
+        try:
+            parser.add_argument("--padded-vocab-size", type=int, default=None)
+        except:
+            pass
 
         return parser
 
     return add_slime_arguments
 
 
-def parse_args(add_custom_arguments=None):
+def parse_args(add_custom_arguments=None, argv=None):
+    import sys
     from slime.backends.megatron_utils import _vocab_size_with_padding
     from slime.backends.megatron_utils import parse_args as megatron_parse_args
     from slime.backends.megatron_utils import validate_args as megatron_validate_args
 
-    add_slime_arguments = get_slime_extra_args_provider(add_custom_arguments)
-    args = megatron_parse_args(extra_args_provider=add_slime_arguments)
+    original_argv = sys.argv
+    if argv is not None:
+        # The first element of sys.argv is the script name, which we preserve.
+        sys.argv = [original_argv[0]] + argv
+
+    try:
+        add_slime_arguments = get_slime_extra_args_provider(add_custom_arguments)
+        # Megatron's parse_args reads from sys.argv directly and does not accept an 'args' keyword.
+        args = megatron_parse_args(extra_args_provider=add_slime_arguments)
+    finally:
+        # Restore the original sys.argv to avoid side effects.
+        sys.argv = original_argv
 
     if args.hf_checkpoint:
         hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
@@ -967,6 +982,53 @@ def parse_args(add_custom_arguments=None):
     sglang_validate_args(args)
 
     return args
+
+
+def parse_multi_task_args(yaml_files):
+    import yaml
+
+    def yaml_to_argv(yaml_config):
+        argv = []
+        for key, value in yaml_config.items():
+            flag = f"--{key.replace('_', '-')}"
+            if isinstance(value, bool):
+                if value:
+                    argv.append(flag)
+            elif isinstance(value, list):
+                argv.append(flag)
+                argv.extend([str(v) for v in value])
+            else:
+                argv.append(flag)
+                argv.append(str(value))
+        return argv
+
+    tasks_args_list = []
+    for yaml_file in yaml_files:
+        with open(yaml_file, "r") as f:
+            task_config = yaml.safe_load(f)
+
+        model_config_path = task_config.pop("model_config_path", None)
+
+        if model_config_path:
+            # Get the directory of the current yaml_file to resolve relative paths
+            base_dir = os.path.dirname(yaml_file)
+            # If model_config_path is not absolute, join it with the base_dir
+            if not os.path.isabs(model_config_path):
+                model_config_path = os.path.join(base_dir, model_config_path)
+            
+            with open(model_config_path, "r") as f:
+                model_config = yaml.safe_load(f)
+            # Merge dictionaries. task_config values take precedence.
+            merged_config = {**model_config, **task_config}
+        else:
+            merged_config = task_config
+
+        # Each task is parsed independently
+        task_argv = yaml_to_argv(merged_config)
+        args = parse_args(argv=task_argv)
+        tasks_args_list.append(args)
+
+    return tasks_args_list
 
 
 def hf_validate_args(args, hf_config):

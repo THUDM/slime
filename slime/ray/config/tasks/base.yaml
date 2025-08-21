@@ -1,0 +1,921 @@
+# 基础配置文件 - 包含所有 arguments.py 中的参数默认值
+# @package _group_
+
+# ========== Cluster Arguments ==========
+seed: 42
+actor_num_nodes: 1
+actor_num_gpus_per_node: 8
+rollout_num_gpus: null
+rollout_num_gpus_per_engine: 1
+colocate: false
+offload: false
+
+# ========== Rollout Arguments ==========
+hf_checkpoint: null
+model_name: null
+rollout_function_path: "slime.rollout.sglang_example.generate_rollout"
+rollout_temperature: 1.0
+rollout_top_p: 1.0
+rollout_top_k: -1
+rollout_max_prompt_len: null
+rollout_max_response_len: 1024
+rollout_skip_special_tokens: false
+rollout_stop: null
+rollout_stop_token_ids: null
+rollout_shuffle: false
+rollout_seed: 42
+
+# Sampling parameters
+over_sampling_batch_size: null
+over_sampling_filter_input_size: null
+over_sampling_filter_path: null
+dynamic_sampling_filter_path: null
+
+# Partial rollout
+partial_rollout: false
+custom_generate_function_path: null
+buffer_filter_path: null
+
+# Update weight parameters
+update_weight_buffer_size: 536870912  # 512 * 1024**2
+update_weights_interval: 1
+keep_old_actor: false
+rollout_data_postprocess_path: null
+
+# ========== Data Arguments ==========
+num_rollout: null
+num_epoch: null
+rollout_global_dataset: true  # default true (--disable-rollout-global-dataset sets to false)
+prompt_data: null
+apply_chat_template: false
+input_key: "input"
+label_key: null
+metadata_key: "metadata"
+tool_key: null
+start_rollout_id: null
+
+# Batch sizes
+rollout_batch_size: null  # required=True in argparse
+n_samples_per_prompt: 1
+global_batch_size: null
+num_steps_per_rollout: null
+micro_batch_size: 1
+ref_micro_batch_size: null
+balance_data: false
+
+# Dynamic batch size
+use_dynamic_batch_size: false
+max_tokens_per_gpu: null
+log_probs_max_tokens_per_gpu: null
+
+# ========== Evaluation Arguments ==========
+eval_function_path: null
+eval_interval: null
+eval_prompt_data: null
+eval_input_key: null
+eval_label_key: null
+eval_tool_key: null
+n_samples_per_eval_prompt: 1
+eval_temperature: null
+eval_top_p: null
+eval_top_k: null
+eval_max_response_len: null
+eval_min_new_tokens: null
+
+# ========== Algorithm Arguments ==========
+ref_load: null
+eps_clip: 0.2
+eps_clip_high: null
+eps_clip_c: null
+kl_coef: 0.0
+loss_type: "policy_loss"
+custom_loss_function_path: null
+kl_loss_type: "kl"
+advantage_estimator: "grpo"
+compute_advantages_and_returns: true  # --disable-compute-advantages-and-returns sets to false
+use_kl_loss: false
+kl_loss_coef: 0.0
+entropy_coef: 0.0
+gamma: 1.0
+normalize_advantages: false
+grpo_std_normalization: true  # --disable-grpo-std-normalization sets to false
+rewards_normalization: true  # --disable-rewards-normalization sets to false
+use_rollout_entropy: false
+
+# ========== Wandb Arguments ==========
+use_wandb: false
+wandb_key: null
+wandb_host: null
+wandb_team: null
+wandb_group: null
+wandb_project: null
+wandb_random_suffix: true  # --disable-wandb-random-suffix sets to false
+wandb_always_use_train_step: false
+log_multi_turn: false
+log_passrate: false
+wandb_run_id: null
+
+# ========== Debug Arguments ==========
+save_debug_rollout_data: null
+load_debug_rollout_data: null
+debug_rollout_only: false
+debug_train_only: false
+
+# ========== Network Arguments ==========
+http_proxy: null
+use_http2: false
+
+# ========== Reward Model Arguments ==========
+rm_type: null
+reward_key: null
+eval_reward_key: null
+group_rm: false
+rm_url: null
+custom_rm_path: null
+
+# ========== Rollout Buffer Arguments ==========
+rollout_buffer_url: null
+fetch_trajectory_retry_times: -1
+min_batch_collection_ratio: 1.0
+rollout_task_type: "math"
+loss_mask_type: "qwen"
+
+# ========== Custom Megatron Plugins Arguments ==========
+custom_megatron_init_path: null
+custom_megatron_before_log_prob_hook_path: null
+custom_megatron_before_train_step_hook_path: null
+
+# ========== Megatron Arguments ==========
+# Megatron Arguments - A
+account_for_embedding_in_pipeline_split: false
+account_for_loss_in_pipeline_split: false
+accumulate_allreduce_grads_in_fp32: false
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_eps: 1e-08
+add_bias_linear: true
+add_position_embedding: true
+add_qkv_bias: false
+adlr_autoresume: false
+adlr_autoresume_interval: 1000
+align_grad_reduce: true
+align_param_gather: true
+app_tag_run_name: null
+app_tag_run_version: "0.0.0"
+apply_layernorm_1p: false
+apply_query_key_layer_scaling: false
+apply_residual_connection_post_layernorm: false
+apply_rope_fusion: true
+async_save: null
+async_tensor_model_parallel_allreduce: true
+attention_backend: "auto"
+attention_dropout: 0.1
+attention_softmax_in_fp32: false
+auto_detect_ckpt_format: false
+
+# Megatron Arguments - B
+barrier_with_L1_time: true
+batch_size: null
+bert_binary_head: true
+bert_embedder_type: "megatron"
+bert_load: null
+bf16: false
+bias_dropout_fusion: true
+bias_gelu_fusion: true
+bias_swiglu_fusion: true
+biencoder_projection_dim: 0
+biencoder_shared_query_context_model: false
+block_data_path: null
+
+# Megatron Arguments - C
+calc_ft_timeouts: false
+calculate_per_token_loss: false
+check_for_large_grads: false
+check_for_nan_in_loss_and_grad: true
+check_for_spiky_loss: false
+check_weight_hash_across_dp_replicas_interval: null
+checkpoint_activations: false
+ckpt_assume_constant_structure: false
+ckpt_convert_format: null
+ckpt_convert_save: null
+ckpt_convert_update_legacy_dist_opt_format: false
+ckpt_format: "torch_dist"
+ckpt_fully_parallel_load: false
+ckpt_fully_parallel_save: true
+ckpt_fully_parallel_save_deprecated: false
+ckpt_step: null
+classes_fraction: 1.0
+clip_grad: 1.0
+clone_scatter_output_in_embedding: true
+config_logger_dir: ""
+context_parallel_size: 1
+cp_comm_type: ['p2p']
+create_attention_mask_in_dataloader: true
+cross_entropy_fusion_impl: "native"
+cross_entropy_loss_fusion: false
+cuda_graph_scope: "full"
+cuda_graph_warmup_steps: 3
+
+# Megatron Arguments - D
+data_args_path: null
+data_cache_path: null
+data_parallel_random_init: false
+data_parallel_sharding_strategy: "no_shard"
+data_path: null
+data_per_class_fraction: 1.0
+data_sharding: true
+dataloader_type: null
+ddp_average_in_collective: false
+ddp_bucket_size: null
+ddp_num_buckets: null
+ddp_pad_buckets_for_high_nccl_busbw: false
+decoder_first_pipeline_num_layers: null
+decoder_last_pipeline_num_layers: null
+decoder_num_layers: null
+decoder_seq_length: null
+decoupled_lr: null
+decoupled_min_lr: null
+decrease_batch_size_if_needed: false
+defer_embedding_wgrad_compute: false
+delay_wgrad_compute: false
+deprecated_use_mcore_models: false
+deterministic_mode: false
+dino_bottleneck_size: 256
+dino_freeze_last_layer: 1
+dino_head_hidden_size: 2048
+dino_local_crops_number: 10
+dino_local_img_size: 96
+dino_norm_last_layer: false
+dino_teacher_temp: 0.07
+dino_warmup_teacher_temp: 0.04
+dino_warmup_teacher_temp_epochs: 30
+disable_bf16_reduced_precision_matmul: false
+disable_mamba_mem_eff_path: false
+disable_straggler_on_startup: false
+dist_ckpt_format_deprecated: null
+dist_ckpt_strictness: "assume_ok_unexpected"
+distribute_saved_activations: false
+distributed_backend: "nccl"
+distributed_timeout_minutes: 10
+
+# Megatron Arguments - E
+embedding_init_method_std: null
+embedding_path: null
+empty_unused_memory_level: 0
+enable_cuda_graph: false
+enable_experimental: false
+enable_ft_package: false
+enable_gloo_process_groups: true
+enable_msc: true
+enable_one_logger: true
+encoder_num_layers: null
+encoder_seq_length: null
+end_weight_decay: null
+eod_mask_loss: false
+error_injection_rate: 0
+error_injection_type: "transient_error"
+eval_iters: 100
+evidence_data_path: null
+exit_duration_in_mins: null
+exit_interval: null
+exit_on_missing_checkpoint: false
+exit_signal_handler: false
+exp_avg_dtype: "fp32"
+exp_avg_sq_dtype: "fp32"
+expert_model_parallel_size: 1
+expert_tensor_parallel_size: null
+external_cuda_graph: false
+
+# Megatron Arguments - F
+ffn_hidden_size: null
+finetune: false
+first_last_layers_bf16: false
+flash_decode: false
+fp16: false
+fp16_lm_cross_entropy: false
+fp32_residual_connection: false
+fp8: null
+fp8_amax_compute_algo: "most_recent"
+fp8_amax_history_len: 1
+fp8_interval: 1
+fp8_margin: 0
+fp8_param_gather: false
+fp8_recipe: "delayed"
+fp8_wgrad: true
+fsdp_double_buffer: false
+
+# Megatron Arguments - G
+grad_reduce_in_bf16: false
+gradient_accumulation_fusion: true
+gradient_reduce_div_fusion: true
+group_query_attention: false
+
+# Megatron Arguments - H
+head_lr_mult: 1.0
+heterogeneous_layers_config_encoded_json: null
+heterogeneous_layers_config_path: null
+hidden_dropout: 0.1
+hidden_size: null
+hierarchical_context_parallel_sizes: null
+high_priority_stream_groups: []
+hybrid_attention_ratio: 0.0
+hybrid_mlp_ratio: 0.0
+hybrid_override_pattern: null
+hysteresis: 2
+
+# Megatron Arguments - I
+ict_head_size: null
+ict_load: null
+img_h: 224
+img_w: 224
+indexer_batch_size: 128
+indexer_log_interval: 1000
+inference_batch_times_seqlen_threshold: -1
+inference_dynamic_batching: false
+inference_dynamic_batching_buffer_guaranteed_fraction: 0.2
+inference_dynamic_batching_buffer_overflow_factor: null
+inference_dynamic_batching_buffer_size_gb: 40.0
+inference_dynamic_batching_chunk_size: 256
+inference_dynamic_batching_max_requests_override: null
+inference_dynamic_batching_max_tokens_override: null
+inference_dynamic_batching_num_cuda_graphs: 16
+inference_max_batch_size: 8
+inference_max_seq_length: 2560
+inference_rng_tracker: false
+init_method_std: 0.02
+init_method_xavier_uniform: false
+init_model_with_meta_device: false
+initial_loss_scale: 4294967296
+inprocess_active_world_size: 1
+inprocess_barrier_timeout: 120
+inprocess_completion_timeout: 120
+inprocess_empty_cuda_cache: false
+inprocess_granularity: "node"
+inprocess_hard_timeout: 90
+inprocess_heartbeat_interval: 30
+inprocess_heartbeat_timeout: 60
+inprocess_last_call_wait: 1
+inprocess_max_iterations: null
+inprocess_monitor_process_interval: 1.0
+inprocess_monitor_thread_interval: 1.0
+inprocess_progress_watchdog_interval: 1.0
+inprocess_restart: false
+inprocess_soft_timeout: 60
+inprocess_termination_grace_time: 1
+is_hybrid_model: false
+iter_per_epoch: 1250
+iterations_to_skip: []
+
+# Megatron Arguments - K-L
+keep_fp8_transpose_cache_when_using_custom_fsdp: false
+kitchen_config_file: null
+kitchen_recipe_number: null
+kv_channels: null
+kv_lora_rank: 32
+lazy_mpu_init: null
+load: null
+load_main_params_from_ckpt: null
+load_model_opt_format: false
+local_rank: 0
+log_energy: false
+log_interval: 100
+log_loss_scale_to_tensorboard: true
+log_memory_to_tensorboard: false
+log_num_zeros_in_grad: false
+log_params_norm: false
+log_progress: false
+log_straggler: false
+log_throughput: false
+log_timers_to_tensorboard: false
+log_validation_ppl_to_tensorboard: false
+log_world_size_to_tensorboard: false
+logging_level: null
+loss_scale: null
+loss_scale_window: 1000
+lr: null
+lr_decay_iters: null
+lr_decay_samples: null
+lr_decay_style: "linear"
+lr_warmup_fraction: null
+lr_warmup_init: 0.0
+lr_warmup_iters: 0
+lr_warmup_samples: 0
+lr_wsd_decay_iters: null
+lr_wsd_decay_samples: null
+lr_wsd_decay_style: "exponential"
+
+# Megatron Arguments - M
+main_grads_dtype: "fp32"
+main_params_dtype: "fp32"
+make_vocab_size_divisible_by: 128
+mamba_head_dim: 64
+mamba_num_groups: 8
+mamba_num_heads: null
+mamba_state_dim: 128
+manual_gc: false
+manual_gc_eval: true
+manual_gc_interval: 0
+mask_factor: 1.0
+mask_prob: 0.15
+mask_type: "random"
+masked_softmax_fusion: true
+max_position_embeddings: null
+max_tokens_to_oom: 12000
+memory_snapshot_path: "snapshot.pickle"
+merge_file: null
+microbatch_group_size_per_vp_stage: null
+mid_level_dataset_surplus: 0.005
+min_loss_scale: 1.0
+min_lr: 0.0
+mlp_chunks_for_prefill: 1
+mmap_bin_files: true
+mock_data: false
+model_parallel_size: null
+moe_apply_probs_on_input: false
+moe_aux_loss_coeff: 0.0
+moe_deepep_num_sms: 20
+moe_enable_deepep: false
+moe_expert_capacity_factor: null
+moe_extended_tp: false
+moe_ffn_hidden_size: null
+moe_grouped_gemm: false
+moe_input_jitter_eps: null
+moe_layer_freq: 1
+moe_layer_recompute: false
+moe_pad_expert_input_to_capacity: false
+moe_per_layer_logging: false
+moe_permute_fusion: false
+moe_router_bias_update_rate: 0.001
+moe_router_dtype: null
+moe_router_enable_expert_bias: false
+moe_router_force_load_balancing: false
+moe_router_group_topk: null
+moe_router_load_balancing_type: "aux_loss"
+moe_router_num_groups: null
+moe_router_padding_for_fp8: false
+moe_router_pre_softmax: false
+moe_router_score_function: "softmax"
+moe_router_topk: 2
+moe_router_topk_scaling_factor: null
+moe_shared_expert_intermediate_size: null
+moe_shared_expert_overlap: false
+moe_token_dispatcher_type: "allgather"
+moe_token_drop_policy: "probs"
+moe_upcycling_granularity: 1
+moe_use_legacy_grouped_gemm: false
+moe_use_upcycling: false
+moe_z_loss_coeff: null
+mrope_section: null
+mscale: 1.0
+mscale_all_dim: 0.0
+mtp_loss_scaling_factor: 0.1
+mtp_num_layers: null
+multi_latent_attention: false
+
+# Megatron Arguments - N-O
+nccl_all_reduce_for_prefill: false
+nccl_communicator_config_path: null
+nccl_ub: false
+no_load_optim: null
+no_load_rng: null
+no_persist_layer_norm: false
+no_rope_freq: null
+no_save_optim: null
+no_save_rng: null
+non_persistent_ckpt_type: null
+non_persistent_global_ckpt_dir: null
+non_persistent_local_ckpt_algo: "fully_parallel"
+non_persistent_local_ckpt_dir: null
+non_persistent_save_interval: null
+norm_epsilon: 1e-05
+normalization: "LayerNorm"
+num_attention_heads: null
+num_channels: 3
+num_classes: 1000
+num_dataset_builder_threads: 1
+num_distributed_optimizer_instances: 1
+num_experts: null
+num_layers: null
+num_layers_at_end_in_bf16: 1
+num_layers_at_start_in_bf16: 1
+num_layers_per_virtual_pipeline_stage: null
+num_query_groups: 1
+num_virtual_stages_per_pipeline_rank: null
+num_workers: 2
+object_storage_cache_path: null
+one_logger_async: false
+one_logger_project: "megatron-lm"
+one_logger_run_name: null
+onnx_safe: null
+openai_gelu: false
+optimizer: "adam"
+optimizer_cpu_offload: false
+optimizer_offload_fraction: 1.0
+output_bert_embeddings: false
+overlap_cpu_optimizer_d2h_h2d: false
+overlap_grad_reduce: false
+overlap_moe_expert_parallel_comm: false
+overlap_p2p_comm: true
+overlap_p2p_comm_warmup_flush: false
+overlap_param_gather: false
+overlap_param_gather_with_optimizer_step: false
+override_opt_param_scheduler: false
+
+# Megatron Arguments - P-Q
+padded_vocab_size: null
+patch_dim: 16
+per_split_data_args_path: null
+perform_initialization: true
+pin_cpu_grads: true
+pin_cpu_params: true
+pipeline_model_parallel_comm_backend: null
+pipeline_model_parallel_layout: null
+pipeline_model_parallel_size: 1
+position_embedding_type: "learned_absolute"
+post_mlp_layernorm: false
+post_self_attn_layernorm: false
+pretrained_checkpoint: null
+profile: false
+profile_ranks: [0]
+profile_step_end: 12
+profile_step_start: 10
+q_lora_rank: null
+qk_head_dim: 128
+qk_l2_norm: false
+qk_layernorm: false
+qk_pos_emb_head_dim: 64
+query_in_block_prob: 0.1
+
+# Megatron Arguments - R
+rampup_batch_size: null
+recompute_activations: false
+recompute_granularity: null
+recompute_method: null
+recompute_modules: null
+recompute_num_layers: null
+record_memory_history: false
+relative_attention_max_distance: 128
+relative_attention_num_buckets: 32
+replication: false
+replication_factor: 2
+replication_jump: null
+rerun_mode: "validate_results"
+reset_attention_mask: false
+reset_position_ids: false
+result_rejected_tracker_filename: null
+retriever_report_topk_accuracies: []
+retriever_score_scaling: false
+retriever_seq_length: 256
+retro_add_retriever: false
+retro_attention_gate: 1
+retro_cyclic_train_iters: null
+retro_encoder_attention_dropout: 0.1
+retro_encoder_hidden_dropout: 0.1
+retro_encoder_layers: 2
+retro_num_neighbors: 2
+retro_num_retrieved_chunks: 2
+retro_project_dir: null
+retro_verify_neighbor_count: true
+reuse_grad_buf_for_mxfp8_param_ag: false
+rope_scaling_factor: 8.0
+rope_type: null
+rotary_base: 10000
+rotary_interleaved: false
+rotary_percent: 1.0
+rotary_scaling_factor: 1.0
+rotary_seq_len_interpolation_factor: null
+run_workload_inspector_server: false
+
+# Megatron Arguments - S
+sample_rate: 1.0
+save: null
+save_interval: null
+save_retain_interval: null
+scatter_gather_tensors_in_pipeline: true
+seq_length: null
+sequence_parallel: false
+sft: false
+sft_tokenizer_prompt_format: "nemotron-h-aligned"
+sgd_momentum: 0.9
+short_seq_prob: 0.1
+skip_train: false
+spec: null
+split: null
+squared_relu: false
+start_weight_decay: null
+straggler_ctrlr_port: 65535
+straggler_minmax_count: 1
+suggested_communication_unit_size: null
+swiglu: false
+swin_backbone_type: "tiny"
+symmetric_ar_type: null
+
+# Megatron Arguments - T
+te_rng_tracker: false
+tensor_model_parallel_size: 1
+tensorboard_dir: null
+tensorboard_log_interval: 1
+tensorboard_queue_size: 1000
+test_data_path: null
+test_mode: false
+tiktoken_num_special_tokens: 1000
+tiktoken_pattern: null
+tiktoken_special_tokens: null
+timing_log_level: 0
+timing_log_option: "minmax"
+titles_data_path: null
+tokenizer_model: null
+tokenizer_type: null
+torch_fsdp2_reshard_after_forward: true
+tp_comm_bootstrap_backend: "nccl"
+tp_comm_bulk_dgrad: true
+tp_comm_bulk_wgrad: true
+tp_comm_overlap: false
+tp_comm_overlap_ag: true
+tp_comm_overlap_cfg: null
+tp_comm_overlap_rs: true
+tp_comm_overlap_rs_dgrad: false
+tp_comm_split_ag: true
+tp_comm_split_rs: true
+train_data_path: null
+train_iters: null
+train_samples: null
+train_sync_interval: null
+transformer_impl: "transformer_engine"
+
+# Megatron Arguments - U-V
+untie_embeddings_and_output_weights: false
+use_checkpoint_args: false
+use_checkpoint_opt_param_scheduler: false
+use_cpu_initialization: null
+use_custom_fsdp: false
+use_dist_ckpt_deprecated: false
+use_distributed_optimizer: false
+use_flash_attn: false
+use_fused_weighted_squared_relu: false
+use_legacy_models: false
+use_mp_args_from_checkpoint_args: false
+use_one_sent_docs: false
+use_persistent_ckpt_worker: false
+use_precision_aware_optimizer: false
+use_pytorch_profiler: false
+use_ring_exchange_p2p: false
+use_rope_scaling: false
+use_rotary_position_embeddings: false
+use_sharp: false
+use_tokenizer_model_from_checkpoint_args: true
+use_torch_fsdp2: false
+use_torch_optimizer_for_cpu_offload: false
+use_tp_pp_dp_mapping: false
+v_head_dim: 128
+valid_data_path: null
+vision_backbone_type: "vit"
+vision_pretraining: false
+vision_pretraining_type: "classify"
+vocab_extra_ids: 0
+vocab_file: null
+vocab_size: null
+
+# Megatron Arguments - W-Y
+wandb_exp_name: ""
+wandb_save_dir: ""
+warmup: null
+weight_decay: 0.01
+weight_decay_incr_style: "constant"
+wgrad_deferral_limit: 0
+yaml_cfg: null
+
+# ========== SGLang Arguments ==========
+# SGLang Router Arguments
+sglang_router_ip: null
+sglang_router_port: null
+sglang_server_concurrency: 512
+
+# SGLang Tokenizer Arguments
+sglang_tokenizer_path: null
+sglang_tokenizer_mode: "auto"
+sglang_skip_tokenizer_init: false
+
+# SGLang Model Loading Arguments
+sglang_load_format: "auto"
+sglang_model_loader_extra_config: "{}"
+sglang_context_length: null
+sglang_is_embedding: false
+sglang_enable_multimodal: null
+sglang_revision: null
+sglang_model_impl: "auto"
+
+# SGLang Server Arguments
+sglang_host: "127.0.0.1"
+sglang_warmups: null
+
+# SGLang Quantization Arguments
+sglang_quantization: null
+sglang_quantization_param_path: null
+sglang_kv_cache_dtype: "auto"
+
+# SGLang Memory Management Arguments
+sglang_mem_fraction_static: null
+sglang_max_running_requests: null
+sglang_max_queued_requests: 9223372036854775807
+sglang_max_total_tokens: null
+sglang_chunked_prefill_size: null
+sglang_max_prefill_tokens: 16384
+sglang_schedule_policy: "fcfs"
+sglang_schedule_conservativeness: 1.0
+sglang_cpu_offload_gb: 0
+sglang_page_size: null
+sglang_hybrid_kvcache_ratio: null
+sglang_swa_full_tokens_ratio: 0.8
+sglang_disable_hybrid_swa_memory: false
+
+# SGLang Device Arguments
+sglang_device: null
+sglang_tensor_parallel_size: 1
+sglang_pipeline_parallel_size: 1
+sglang_max_micro_batch_size: null
+
+# SGLang Streaming Arguments
+sglang_stream_interval: 1
+sglang_stream_output: false
+sglang_constrained_json_whitespace_pattern: null
+
+# SGLang System Arguments
+sglang_watchdog_timeout: 300
+sglang_dist_timeout: null
+sglang_download_dir: null
+sglang_sleep_on_idle: false
+
+# SGLang Logging Arguments
+sglang_log_level: "info"
+sglang_log_level_http: null
+sglang_log_requests: false
+sglang_log_requests_level: 2
+sglang_crash_dump_folder: null
+sglang_show_time_cost: false
+
+# SGLang Metrics Arguments
+sglang_enable_metrics: false
+sglang_enable_metrics_for_all_schedulers: false
+sglang_bucket_time_to_first_token: null
+sglang_bucket_inter_token_latency: null
+sglang_bucket_e2e_request_latency: null
+sglang_collect_tokens_histogram: false
+sglang_decode_log_interval: 40
+sglang_enable_request_time_stats_logging: false
+sglang_kv_events_config: null
+
+# SGLang API Arguments
+sglang_api_key: null
+sglang_served_model_name: null
+sglang_chat_template: null
+sglang_completion_template: null
+sglang_file_storage_path: "sglang_storage"
+sglang_enable_cache_report: false
+sglang_reasoning_parser: null
+sglang_tool_call_parser: null
+sglang_tool_server: null
+
+# SGLang Data Parallel Arguments
+sglang_data_parallel_size: 1
+sglang_load_balance_method: "round_robin"
+sglang_json_model_override_args: "{}"
+sglang_preferred_sampling_params: null
+
+# SGLang LoRA Arguments
+sglang_enable_lora: null
+sglang_max_lora_rank: null
+sglang_lora_target_modules: null
+sglang_lora_paths: null
+sglang_max_loras_per_batch: 8
+sglang_max_loaded_loras: null
+sglang_lora_backend: "triton"
+
+# SGLang Attention Backend Arguments
+sglang_attention_backend: null
+sglang_prefill_attention_backend: null
+sglang_decode_attention_backend: null
+sglang_sampling_backend: null
+sglang_grammar_backend: null
+sglang_mm_attention_backend: null
+
+# SGLang Speculative Decoding Arguments
+sglang_speculative_algorithm: null
+sglang_speculative_draft_model_path: null
+sglang_speculative_num_steps: null
+sglang_speculative_eagle_topk: null
+sglang_speculative_num_draft_tokens: null
+sglang_speculative_accept_threshold_single: 1.0
+sglang_speculative_accept_threshold_acc: 1.0
+sglang_speculative_token_map: null
+
+# SGLang Expert Parallel Arguments
+sglang_expert_parallel_size: 1
+sglang_moe_a2a_backend: null
+sglang_enable_flashinfer_cutlass_moe: false
+sglang_enable_flashinfer_trtllm_moe: false
+sglang_enable_flashinfer_allreduce_fusion: false
+sglang_deepep_mode: "auto"
+sglang_ep_num_redundant_experts: 0
+sglang_ep_dispatch_algorithm: null
+sglang_init_expert_location: "trivial"
+sglang_enable_eplb: false
+sglang_eplb_algorithm: "auto"
+sglang_eplb_rebalance_num_iterations: 1000
+sglang_eplb_rebalance_layers_per_chunk: null
+sglang_expert_distribution_recorder_mode: null
+sglang_expert_distribution_recorder_buffer_size: null
+sglang_enable_expert_distribution_metrics: false
+sglang_deepep_config: null
+sglang_moe_dense_tp_size: null
+
+# SGLang Hierarchical Cache Arguments
+sglang_enable_hierarchical_cache: false
+sglang_hicache_ratio: 2.0
+sglang_hicache_size: 0
+sglang_hicache_write_policy: "write_through_selective"
+sglang_hicache_io_backend: "kernel"
+sglang_hicache_mem_layout: "layer_first"
+sglang_hicache_storage_backend: null
+sglang_hicache_storage_prefetch_policy: "best_effort"
+
+# SGLang Double Sparsity Arguments
+sglang_enable_double_sparsity: false
+sglang_ds_channel_config_path: null
+sglang_ds_heavy_channel_num: 32
+sglang_ds_heavy_token_num: 256
+sglang_ds_heavy_channel_type: "qk"
+sglang_ds_sparse_decode_threshold: 4096
+
+# SGLang CUDA Graph Arguments
+sglang_disable_radix_cache: false
+sglang_cuda_graph_max_bs: null
+sglang_cuda_graph_bs: null
+sglang_disable_cuda_graph: false
+sglang_disable_cuda_graph_padding: false
+sglang_enable_profile_cuda_graph: false
+sglang_enable_cudagraph_gc: false
+
+# SGLang Communication Arguments
+sglang_enable_nccl_nvls: false
+sglang_enable_symm_mem: false
+sglang_enable_tokenizer_batch_encode: false
+sglang_disable_outlines_disk_cache: false
+sglang_disable_custom_all_reduce: false
+sglang_enable_mscclpp: false
+sglang_disable_overlap_schedule: false
+sglang_enable_mixed_chunk: false
+sglang_enable_dp_attention: false
+sglang_enable_dp_lm_head: false
+sglang_enable_two_batch_overlap: false
+sglang_tbo_token_distribution_threshold: 0.48
+
+# SGLang Compilation Arguments
+sglang_enable_torch_compile: false
+sglang_torch_compile_max_bs: 32
+sglang_torchao_config: ""
+
+# SGLang Debug Arguments
+sglang_enable_nan_detection: false
+sglang_enable_p2p_check: false
+sglang_triton_attention_reduce_in_fp32: false
+sglang_triton_attention_num_kv_splits: 8
+sglang_num_continuous_decode_steps: 1
+sglang_delete_ckpt_after_loading: false
+sglang_allow_auto_truncate: false
+sglang_enable_custom_logit_processor: false
+sglang_flashinfer_mla_disable_ragged: false
+sglang_disable_shared_experts_fusion: false
+sglang_disable_chunked_prefix_cache: false
+sglang_disable_fast_image_processor: false
+sglang_enable_return_hidden_states: false
+sglang_enable_triton_kernel_moe: false
+sglang_enable_flashinfer_mxfp4_moe: false
+sglang_scheduler_recv_interval: 1
+
+# SGLang Debug Tensor Dump Arguments
+sglang_debug_tensor_dump_output_folder: null
+sglang_debug_tensor_dump_input_file: null
+sglang_debug_tensor_dump_inject: false
+sglang_debug_tensor_dump_prefill_only: false
+
+# SGLang Disaggregation Arguments
+sglang_disaggregation_mode: "null"
+sglang_disaggregation_transfer_backend: "mooncake"
+sglang_disaggregation_bootstrap_port: 8998
+sglang_disaggregation_decode_tp: null
+sglang_disaggregation_decode_dp: null
+sglang_disaggregation_prefill_pp: 1
+sglang_disaggregation_ib_device: null
+sglang_num_reserved_decode_tokens: 512
+sglang_pdlb_url: null
+
+# SGLang Weight Loader Arguments
+sglang_custom_weight_loader: null
+sglang_enable_pdmux: false
+sglang_sm_group_num: 3
+sglang_weight_loader_disable_mmap: false
+
+# SGLang MOE Arguments
+sglang_enable_ep_moe: false
+sglang_enable_deepep_moe: false

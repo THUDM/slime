@@ -161,3 +161,13 @@ class SglangEngine:
 
     def get_weights_by_name(self, name):
         print(self.llm.get_weights_by_name(name))
+    
+    def update_weights_from_disk(self,model_path):
+        tp = TracePoint(f"task-{self.args.task_id}: sglang engine update weights from disk", "1")
+        tp.begin()
+        MemTracePoint.record("before update weights from disk")
+        
+        self.llm.update_weights_from_disk(model_path)
+        
+        MemTracePoint.record("after update weights from disk")
+        tp.end()

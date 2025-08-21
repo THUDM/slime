@@ -13,6 +13,7 @@ class Task:
         self.args.task_id = Task._task_id
         self.task_id = Task._task_id
         Task._task_id = Task._task_id + 1
+        self.args.save= f"{self.args.save}/{self.task_id}"
         assert Task._task_id <= self.args.tasks_num
         vinit()
         tp = TracePoint(f"task-{self.task_id}: __init__ task", "1")
@@ -42,6 +43,7 @@ class Task:
         # breakpoint()
         tp = TracePoint(f"task-{self.task_id}: init task", "1")
         tp.begin()
+        self.args.model_path = None
         self.num_rollout_per_epoch = None
         if self.args.num_rollout is None:
             self.num_rollout_per_epoch = await self.rollout_generator.data_buffer.get_num_rollout_per_epoch.remote()
@@ -61,6 +63,5 @@ class Task:
 
         # breakpoint()
         await self.actor_model.async_init_weight_update_connections(self.rollout_generator)
-
         self.start_rollout_ids=start_rollout_ids
         tp.end()

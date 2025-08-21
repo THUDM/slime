@@ -1,8 +1,8 @@
-diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
-index afb4b87..20917d8 100644
---- a/python/sglang/srt/managers/scheduler.py
-+++ b/python/sglang/srt/managers/scheduler.py
-@@ -2841,17 +2841,82 @@ def is_health_check_generate_req(recv_req):
+diff --git a/python/sglang/srt/managers/scheduler_update_weights_mixin.py b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
+index 8da3d07be..a3dbb7dfb 100644
+--- a/python/sglang/srt/managers/scheduler_update_weights_mixin.py
++++ b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
+@@ -135,14 +135,80 @@ class SchedulerUpdateWeightsMixin:
  
  
  def _export_static_state(model):
@@ -55,6 +55,7 @@ index afb4b87..20917d8 100644
 -    self_named_buffers = dict(model.named_buffers())
 -    for name, tensor in static_params["buffers"]:
 -        self_named_buffers[name][...] = tensor
++
 +    # Restore buffers
 +    if "buffers" in static_params:
 +        self_named_buffers = dict(model.named_buffers())
@@ -90,6 +91,3 @@ index afb4b87..20917d8 100644
 +                except RuntimeError:
 +                    # Skip parameters that cause errors during restoration
 +                    continue
- 
- 
- def run_scheduler_process(

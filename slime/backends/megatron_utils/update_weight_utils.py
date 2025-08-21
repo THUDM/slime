@@ -482,7 +482,6 @@ class UpdateWeightFromDistributed:
         # lock the rollout engines to prevent dead lock on broadcast.
         while not (await self.rollout_engine_lock.acquire.remote()):
             await asyncio.sleep(0.1)
-
         refs = [
             engine.update_weights_from_distributed.remote(
                 names=[name for name, _ in converted_named_tensors],
@@ -492,6 +491,7 @@ class UpdateWeightFromDistributed:
             )
             for engine in self.rollout_engines
         ]
+        
 
         handles = []
         for _, param in converted_named_tensors:
@@ -501,5 +501,18 @@ class UpdateWeightFromDistributed:
 
         await asyncio.gather(*refs)
         converted_named_tensors.clear()
+        await self.rollout_engine_lock.release.remote()
+        pbar.update(1)
+
+    async def update_weights_from_disk(self,pbar=None):
+        while not (await self.rollout_engine_lock.acquire.remote()):
+            await asyncio.sleep(0.1)
+        refs = [
+            engine.update_weights_from_disk.remote(
+                model_path=self.args.model_path
+            )
+            for engine in self.rollout_engines
+        ]
+        await asyncio.gather(*refs)
         await self.rollout_engine_lock.release.remote()
         pbar.update(1)

@@ -23,11 +23,13 @@ class SchedulerParams:
 
     # TODO:should read multi tasks args from different yaml file
     def __post_init__(self):
-        self.pgs = create_placement_groups(self.tasks_args_template)
-        self.tasks_num = self.tasks_args_template.tasks_num
-        
-        self.tasks_args_template.pgs = self.pgs
+        task_args=self.tasks_args_template[0]
+        self.pgs = create_placement_groups(task_args)
+
+        for task_args in self.tasks_args_template:
+            task_args.pgs = self.pgs
+            task_args.tasks_num = self.tasks_num
 
         # TODO 读取task_args_dir下的list，然后分别整理成参数列表返回
-        self.tasks_args = [copy.deepcopy(self.tasks_args_template) for _ in range(self.tasks_num)]
+        self.tasks_args= self.tasks_args_template
 

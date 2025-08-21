@@ -185,3 +185,11 @@ class HttpServerEngineAdapter:
                     "name": name
                 }
             )
+    def update_weights_from_disk(self, model_path: str):
+        """Update model weights from disk."""
+        return self._make_request(
+            "update_weights_from_disk",
+            {
+                "model_path": model_path
+            }
+        )

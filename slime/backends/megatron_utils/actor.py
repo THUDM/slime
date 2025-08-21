@@ -26,6 +26,7 @@ from .data import get_data_iterator, log_eval_data, log_perf_data, log_rollout_d
 from .initialize import get_gloo_group, init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns
 from .model import forward_only, initialize_model_and_optimizer, save, train
+from megatron.training.global_vars import get_args
 from .update_weight_utils import (
     named_parameters,
     UpdateWeightFromTensor,
@@ -40,6 +41,11 @@ class MegatronTrainRayActor(TrainRayActor):
         super().init(args, role, with_ref)
     
         wandb_run_id = init(args)
+        env_arg=get_args()
+        env_arg.save=args.save
+        print("*"*100)
+        print(f"{env_arg.save}")
+        print("*"*100)
         self.args.wandb_run_id = wandb_run_id
 
         # read config and tokenizer serialized to prevent concurrent writing bug.
@@ -416,6 +422,37 @@ class MegatronTrainRayActor(TrainRayActor):
             MemTracePoint.record("before weight update")
             await self.weight_updator.update_weights()
             MemTracePoint.record("after weight update")
+
+            dist.barrier(group=get_gloo_group(self.args.task_id))
+            
+            MemTracePoint.record("before clear memory")
+            clear_memory()
+            MemTracePoint.record("after clear memory")
+            print_memory("after update_weights")
+
+            if getattr(self.args, "keep_old_actor", False):
+                MemTracePoint.record("before update old actor")
+                print("update rollout model on cpu using actor model")
+                self.update_cpu_params_dict(self.weights["old_actor"])
+                MemTracePoint.record("after update old actor")
+
+        tp.end()
+    async def update_weights_from_disk(self):
+        tp = TracePoint(f"task-{self.args.task_id}: update weights", "1")
+        tp.begin()
+        MemTracePoint.record("before update weights")
+
+        with timer(self._task_id, "update_weight"):
+            if self.args.debug_train_only or self.args.debug_rollout_only:
+                return
+
+            MemTracePoint.record("before empty cache")
+            torch.cuda.empty_cache()
+            MemTracePoint.record("after empty cache")
+
+            MemTracePoint.record("before weight update from disk")
+            await self.weight_updator.update_weights_from_disk()
+            MemTracePoint.record("after weight update from disk")
 
             dist.barrier(group=get_gloo_group(self.args.task_id))
             

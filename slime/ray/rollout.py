@@ -81,6 +81,17 @@ class RolloutRayActor(RayActor):
         MemTracePoint.record("after update weights from tensor")
         tp.end()
         return result
+    
+    def update_weights_from_disk(self, model_path):
+        tp = TracePoint(f"task-{self.args.task_id}: update weights from disk", "1")
+        tp.begin()
+        MemTracePoint.record("before update weights from disk")
+        
+        result = self.infer_engine.update_weights_from_disk(model_path)
+        
+        MemTracePoint.record("after update weights from disk")
+        tp.end()
+        return result
 
     def reset_prefix_cache(self):
         tp = TracePoint(f"task-{self.args.task_id}: reset prefix cache", "1")
