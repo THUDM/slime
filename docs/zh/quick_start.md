@@ -95,8 +95,8 @@ bash script/run-glm4-9B.sh
 ```bash
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/glm4-9B.sh"
-
 ```
+
 此部分通过 `source` 命令从 `scripts/models/glm4-9B.sh` 文件中加载模型配置。这些配置均为 Megatron 所需的超参数。由于 Megatron 无法直接从检查点（checkpoint）中读取模型配置，因此需要手动指定。我们在 `scripts/models/` 目录下提供了一些常用模型的配置示例。
 
 > ⚠️ **注意**：
