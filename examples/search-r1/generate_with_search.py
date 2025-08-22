@@ -101,7 +101,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     prompt_tokens_ids = state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
     response = ""
     response_token_ids = []
-    loss_masks = []
+    loss_mask = []
     for _ in range(SEARCH_R1_CONFIGS["max_turns"]):
         payload = {
             "text": prompt + response,
@@ -120,7 +120,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         cur_response_token_ids = state.tokenizer(cur_response, add_special_tokens=False)["input_ids"]
         response += cur_response
         response_token_ids += cur_response_token_ids
-        loss_masks += [1] * len(cur_response_token_ids)
+        loss_mask += [1] * len(cur_response_token_ids)
 
         if output["meta_info"]["finish_reason"]["type"] == "length":
             break
@@ -133,12 +133,12 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         obs_tokens_ids = state.tokenizer(next_obs, add_special_tokens=False)["input_ids"]
         response += next_obs
         response_token_ids += obs_tokens_ids
-        loss_masks += [0] * len(obs_tokens_ids)
+        loss_mask += [0] * len(obs_tokens_ids)
 
     sample.tokens = prompt_tokens_ids + response_token_ids
     sample.response_length = len(response_token_ids)
     sample.response = response
-    sample.loss_masks = loss_masks
+    sample.loss_mask = loss_mask
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":
             sample.status = Sample.Status.TRUNCATED
