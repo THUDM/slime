@@ -90,11 +90,12 @@ bash script/run-glm4-9B.sh
 
 我们还是以 run-glm4-9B.sh 脚本为例，简单分析主要参数的作用。
 
-### **MODEL_ARGS**: 模型配置参数
+### MODEL_ARGS: 模型配置参数
 
 ```bash
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/glm4-9B.sh"
+
 ```
 此部分通过 `source` 命令从 `scripts/models/glm4-9B.sh` 文件中加载模型配置。这些配置均为 Megatron 所需的超参数。由于 Megatron 无法直接从检查点（checkpoint）中读取模型配置，因此需要手动指定。我们在 `scripts/models/` 目录下提供了一些常用模型的配置示例。
 
@@ -105,11 +106,11 @@ source "${SCRIPT_DIR}/models/glm4-9B.sh"
 > MODEL_ARGS+=(--rotary-base 10000)
 > ```
 
-### **CKPT_ARGS**: 检查点与路径参数
+### CKPT_ARGS: 检查点与路径参数
 
 ```bash
 CKPT_ARGS=(
-   # 用于加载tokenizer等其他信息，实际上不会使用hf 路径中的模型权重参数
+   # 用于加载 tokenizer 等其他信息，实际上不会使用 hf 路径中的模型权重参数
    --hf-checkpoint /root/GLM-Z1-9B-0414
    # 参考模型 (Reference Model) 的 Megatron 格式检查点
    --ref-load /root/GLM-Z1-9B-0414_torch_dist
@@ -122,19 +123,19 @@ CKPT_ARGS=(
 )
 ```
 
-### **ROLLOUT_ARGS**: 数据生成（Rollout）参数
+### ROLLOUT_ARGS: 数据生成（Rollout）参数
 
 整个训练流程可视为一个 **“数据采样 → 权重更新”** 的闭环。
 
 **阶段一：数据采样 (Rollout)**
 - `--rollout-batch-size`：定义每轮采样的 **Prompt 数量**  
-- `--n-samples-per-prompt`：定义每个 Prompt 生成的 **回复数量**  
+- `--n-samples-per-prompt`：定义每个 Prompt 生成的 **回复数量** (用于 GRPO 类似算法)
 
 > 两者相乘，决定了 **单轮采样产生的总样本数**。
 
 **阶段二：模型训练 (Training)**
 - `--global-batch-size`：定义 **执行一次参数更新（optimizer.step）** 所需的样本量  
-- `--num-steps-per-rollout`：定义使用当前采样数据，**总共执行多少次参数更新**  
+- `--num-steps-per-rollout`：定义使用当前采样数据，**总共执行多少次参数更新**  (我们默认为 1，使用 on-policy 训练)
 
 > 两者相乘，决定了 **单轮训练消耗的总样本数**。 
 
@@ -143,7 +144,7 @@ CKPT_ARGS=(
 在这个过程中，每轮的“产出”与“消耗”必须相等，遵循以下约束：
 **`(rollout-batch-size × n-samples-per-prompt) = (global-batch-size × num-steps-per-rollout)`** 
 
-- 在 slime 中，如果设置了 `--num-steps-per-rollout` ，`--global-batch-size`未设置则会被自动设置，设置了则会被用上述公式校验。
+- 在 slime 中，如果设置了 `--num-steps-per-rollout` ，`--global-batch-size` 未设置则会被自动设置，设置了则会被用上述公式校验。
 
 **训练流程次数控制**
 -   `--num-rollout`: 控制整个 **“采样→训练”** 循环的**总执行轮次**。
@@ -159,7 +160,7 @@ ROLLOUT_ARGS=(
    # 是否在 Rollout 阶段打乱数据
    --rollout-shuffle
 
-   # Reward Model 类型。Slime 内置多种类型，也支持通过 --custom-rm-path 自定义
+   # Reward Model 类型。slime 内置多种类型，也支持通过 --custom-rm-path 自定义
    --rm-type deepscaler
 
    # 这五个参数来控制 rollout 与 train 的关系
@@ -178,7 +179,7 @@ ROLLOUT_ARGS=(
 )
 ```
 
-### **EVAL_ARGS**: 评估参数
+### EVAL_ARGS: 评估参数
 
 评估过程会继承大部分 Rollout 参数，但您可以通过以下参数进行覆盖，以实现与训练不同的评估策略。
 
@@ -197,7 +198,7 @@ EVAL_ARGS=(
 )
 ```
 
-### **PERF_ARGS**: 性能与并行参数
+### PERF_ARGS: 性能与并行参数
 
 这部分主要包含 Megatron 的并行配置。`--use-dynamic-batch-size` 和 `--max-tokens-per-gpu` 是 slime 添加的特有优化。
 
@@ -207,7 +208,7 @@ EVAL_ARGS=(
 
 
 > 💡 **提示**：
->  slime 总是会通过 data packing 的方法训练模型，并且严格保证 per sample loss 或 per token loss，也就是开启 dynamic batch size 不会对 loss 计算有影响，推荐开启。
+>  slime 总是会通过 data packing 的方法训练模型，并且严格保证 per sample loss 或 per token loss 是正确的。因此，开启 dynamic batch size 不会对 loss 计算有影响，强烈推荐开启。
 
 ```bash
 PERF_ARGS=(
@@ -228,7 +229,7 @@ PERF_ARGS=(
 )
 ```
 
-### **GRPO_ARGS**: GRPO 算法参数
+### GRPO_ARGS: GRPO 算法参数
 
 -   `--use-kl-loss`: 启用此选项将加载一个参考模型（Reference Model），并计算当前模型与参考模型之间的 KL 散度（KL Divergence）作为一项监控指标。KL 散度是否被计入最终的训练损失（Loss），取决于 `--kl-loss-coef` 参数。若该参数设置为 0，则 KL 散度仅作为观测指标显示，而不会参与损失计算。
 
@@ -244,7 +245,7 @@ GRPO_ARGS=(
 )
 ```
 
-### **OPTIMIZER_ARGS**: 优化器参数
+### OPTIMIZER_ARGS: 优化器参数
 
 ```bash
 OPTIMIZER_ARGS=(
@@ -257,14 +258,14 @@ OPTIMIZER_ARGS=(
 )
 ```
 
-### **SGLANG_ARGS**: SGLang 服务参数
+### SGLANG_ARGS: SGLang 服务参数
 
 这部分参数用于配置 SGLang 推理服务。
 - `--rollout-num-gpus-per-engine`: 基本等同于 SGLang 的 `tp_size`。
-- 其他 SGLang 参数可以通过添加 `--sglang-` 前缀传递给 Slime。
+- 其他 SGLang 参数可以通过添加 `--sglang-` 前缀传递给 slime,  slime 会自动透传给 SGLang。例如，要设置 SGLang 的 `--log-level INFO` 参数，只需使用 `--sglang-log-level INFO` 即可。
 
 > ⚠️ **注意**：
-> slime 使用 `sgl-router` 调度多个 SGLang Server。在不开启 DP Attention 的情况下，不支持 `dp_size`， 通过 `rollout-num-gpus/rollout-num-gpus-per-engine` 得到相应数目的 SGLang Server 数量。
+> slime 使用 `sgl-router` 调度多个 SGLang Server。在不开启 DP Attention 的情况下， `dp_size` 会通过 `rollout-num-gpus/rollout-num-gpus-per-engine` 计算得到。
 
 ```bash
 SGLANG_ARGS=(
@@ -276,7 +277,7 @@ SGLANG_ARGS=(
 
 ### Colocated Actor and Rollout
 
-在默认的配置下，训练（Actor）和推理（Rollout）的资源是分开指定的，通过 ray 给训练部分分配 `actor_num_nodes * actor_num_gpus_per_node` 张 GPU，给推理分配 `rollout_num_gpus` 张 GPU，也就是实现了训推分离。
+在默认的配置下，训练（Actor）和推理（Rollout）的资源是分开指定的，通过 ray 给训练部分分配 `actor_num_nodes * actor_num_gpus_per_node` 张 GPU，给推理分配 `rollout_num_gpus` 张 GPU，也即训推分离。
 
 **标准（分离）配置**：
 ```bash
@@ -304,7 +305,7 @@ ray job submit ... \
 此时，训练和推理将共享全部 8 张 GPU。
 
 > ⚠️ **注意**：
-> 在训推一体化模式下，Megatron 会预先占用一部分显存。您需要通过调整 `--sglang-mem-fraction-static` 参数来降低 SGLang 的显存占用比例，以避免显存不足。
+> 在训推一体化模式下，Megatron 初始化后才能被 offload 掉，会占据一定量的显存。您需要通过调整 `--sglang-mem-fraction-static` 参数来降低 SGLang 的显存占用比例，以避免显存不足。通常我们建议为 0.8。
 
 ### Dynamic Sampling
 
@@ -316,18 +317,25 @@ slime 支持更复杂的采样策略，例如 [DAPO](https://dapo-sia.github.io/
      slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
 ```
 
-- **`--over-sampling-batch-size`**: 设置一个大于 `rollout_batch_size` 的值。例如，如果 `rollout_batch_size` 为 32，`over_sampling_batch_size` 设为 64，系统会一次性为 64 个 Prompt 生成样本。最后会通过 std 从大到小保留`rollout_batch_size` 的样本量， 而不是64个
-- **`--dynamic-sampling-filter-path`**: 指定一个过滤函数。系统会异步收集每个 Prompt 的所有样本（`n_samples_per_prompt` 条），然后调用此函数进行筛选。如果函数返回 `True`，则保留这组样本；否则丢弃。
+这里 `over_sampling_batch_size` 需要大于 ``rollout_batch_size`，例如配置为：
 
-**工作流程示例**：
-当系统收集到足够的、通过筛选的样本（满足 `rollout_batch_size` 的数量，例如 32 组）后，会立即停止当前轮次的采样，即使还有未完成的超采样请求。如果丢弃的样本过多，导致剩余样本不足，系统会启动新一轮的超采样。
+```bash
+   --rollout-batch-size 32 \
+   --n-samples-per-prompt 8 \
+   --over-sampling-batch-size 64 \
+```
 
-示例中的过滤函数 `check_reward_nonzero_std` 会检查一组样本的奖励（reward）标准差是否大于零，即判断样本的得分是否存在差异（而非全对或全错）。
+那么 sampling 会直接采样 64 条 prompt，每条 prompt 采样 8 次。因为 slime 内部进行的是异步采样，所以我们会先后获得每个 prompt 的 8 条回复。在收到回复时，会用 `dynamic_sampling_filter_path` 对应的函数进行筛选，如果通过，则留下这 8 条数据，否则则丢掉。
+
+示例中的过滤函数 `check_reward_nonzero_std` 会检查一组样本的奖励（reward）标准差是否大于零，确保留下的每组样本其奖励分数都存在差异，从而避免数据过于单一，提升了数据的多样性。
+
 ```python
 def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
     rewards = [sample.reward for sample in samples]
     return torch.tensor(rewards, dtype=torch.float).std() > 0.0
 ```
+
+如果过滤函数非常严格，导致大量 prompt 组被丢弃，系统会监控 ` remaining_batch_size` 中待处理的任务数量。一旦待处理的任务数因丢弃过多而降至目标数 (32) 以下，系统会自动触发新一轮的过采样，再次请求  `over_sampling_batch_size` (64) 个新的 prompt 重复上述流程。
 
 ### Partial Rollout
 
@@ -343,14 +351,16 @@ def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) ->
     return samples
 ```
 
+即每次取出前 `num_samples` 个 prompt 对应的 `num_samples * n_samples_per_prompt` 条数据。
+
 > 💡 **提示**：
-> 每个部分生成的样本（Partial Rollout Sample）的 `sample.metadata` 中会记录其首次生成的 `rollout_id`，可用于数据分析或进一步的过滤。
+> 每条 partial rollout sample 的 `sample.metadata` 中存储了第一次进行生成的 rollout id，可以用于数据过滤。
 
 
 
 ### bf16 训练 fp8 推理
 
-slime 还支持 bf16 训练，fp8 推理。对于 Qwen3-4B 模型，只需要下载如下模型：
+slime 直接支持 bf16 训练，fp8 推理。对于 Qwen3-4B 模型，只需要下载如下模型：
 
 ```bash
 hf download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
@@ -359,8 +369,11 @@ hf download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
 并将 `--hf-checkpoint` 替换为：
 
 ```bash
-#--hf-checkpoint /root/Qwen3-4B
---hf-checkpoint /root/Qwen3-4B-FP8
+   # 用于加载 tokenizer 等其他信息，实际上不会使用 hf 路径中的模型权重参数
+   --hf-checkpoint /root/Qwen3-4B-FP8
+
+   #  megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的 dist 权重，不因为 FP rollout 而去做修改。
+   --ref-load /root/Qwen3-4B_torch_dist
 ```
 
 即可触发 fp8 训练。目前我们会将 bf16 权重直接 cast 为 fp8，后续会逐渐添加对精度影响更小的量化方案。
@@ -372,7 +385,7 @@ hf download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
 
 slime 框架高度可扩展，支持复杂的 Agent 场景（如多轮交互与工具调用）。其核心机制是通过自定义函数，重写默认的数据生成 (Rollout) 与奖励计算 (Reward) 逻辑。
 
-本文以一个基于 [Search-R1](https://github.com/PeterGriffinJin/Search-R1) 的实现为例，说明如何适配 slime 以支持多轮交互。
+本部分以一个基于 [Search-R1](https://github.com/PeterGriffinJin/Search-R1) 的实现为例，说明如何适配 slime 以支持多轮交互。
 
 ### 适配思路总结
 
