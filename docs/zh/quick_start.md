@@ -174,7 +174,7 @@ ROLLOUT_ARGS=(
    --rollout-max-response-len 8192
    --rollout-temperature 0.8
 
-   # 是否在训练时平衡数据长度，可能提升训练速度
+   # 对 rollout 阶段收集的数据进行负载均衡。它确保了分配到每个训练进程（DP rank）的计算任务量大致相等，可能对训练速度有好处
    --balance-data
 )
 ```
@@ -201,7 +201,6 @@ EVAL_ARGS=(
 ### PERF_ARGS: 性能与并行参数
 
 这部分主要包含 Megatron 的并行配置。`--use-dynamic-batch-size` 和 `--max-tokens-per-gpu` 是 slime 添加的特有优化。
-
 
 -   `--max-tokens-per-gpu`: 每张 GPU 处理的最大 Token 数。启用动态批处理（`use_dynamic_batch_size`）后，系统会智能地将长短不一的样本打包，使每个 micro-batch 的总 Token 数接近此限制，从而提升训练效率。如果单个样本长度超过该值，它将独立形成一个 batch。在上下文并行（CP）模式下，`N` 张 CP 卡共享 `N * max_tokens_per_gpu` 的总长度。
 -   `--use-dynamic-batch-size`: 启用动态批处理。此时会忽略 `--micro-batch-size`。
