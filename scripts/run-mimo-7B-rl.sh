@@ -110,9 +110,13 @@ SGLANG_ARGS=(
 
    # for speculative decoding
    --sglang-speculative-algorithm EAGLE
-   --sglang-speculative-num-steps 1
+   --sglang-speculative-num-steps 3
    --sglang-speculative-eagle-topk 1
-   --sglang-speculative-num-draft-tokens 2
+   --sglang-speculative-num-draft-tokens 4
+
+   # flashInfer has bug with speculative decoding, as mentioned in https://github.com/sgl-project/sglang/issues/9481
+   # so we use fa3 instead
+   --sglang-attention-backend fa3
 )
 
 MISC_ARGS=(
