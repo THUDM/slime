@@ -188,7 +188,7 @@ EVAL_ARGS=(
    # 评估间隔（Rollout 数）
    --eval-interval 5
    # 评估用的 Prompt 数据集
-   --eval-prompt-data /root/aime-2024/aime-2024.jsonl
+   --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
    # 每个评估 Prompt 的采样数量
    --n-samples-per-eval-prompt 16
    # 评估时最大响应长度
