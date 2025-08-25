@@ -77,8 +77,6 @@ pip install -e .
 
 #### SFT 示例：Qwen3-4B-Base + OpenHermes-2.5
 
-slime is not just a RL framework, we support a diverse set of post-training setups. For an SFT example, please refer to:
-
 slime 不仅仅是一个 RL 框架，我们还支持了各种后训练流程。如果想使用 SFT，请参看：
 
 - [示例: Qwen3-4B-Base + OpenHermes-2.5](docs/zh/sft.md).
