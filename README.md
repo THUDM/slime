@@ -17,12 +17,6 @@
 
   - [Architecture Overview](#architecture-overview)
   - [Quick Start](#quick-start)
-      - [Environment Setup](#environment-setup)
-      - [Examples](#examples)
-        - [Dense Model Examples: GLM-4-9B and Qwen3-4B](#Dense-Model-Examples-GLM-4-9B-and-Qwen3-4B)
-        - [MoE Model Examples: GLM-4.5, Qwen3-30B-A3B and DeepSeek-R1](#MoE-Model-Examples-GLM-45-Qwen3-30B-A3B-and-DeepSeek-R1)
-        - [Multi-Turn + Tool Calling Example: Search-R1 lite](#Multi-Turn--Tool-Calling-Example-Search-R1-lite)
-        - [SFT Example: Qwen3-4B-Base with OpenHermes-2.5](#SFT-Example-Qwen3-4B-Base-with-OpenHermes-25)
   - [Checkpoint Format Conversion](#checkpoint-format-conversion)
   - [Starting the Training Process](#starting-the-training-process)
   - [Argument Descriptions](#argument-descriptions)
@@ -41,54 +35,10 @@
 
 ## Quick Start
 
-### Environment Setup
+For a comprehensive quick start guide covering environment setup, data preparation, training startup, and key code analysis, please refer to:
+- [Quick Start Guide](./docs/en/quick_start.md)
 
-Based on the `zhuzilin/slime:latest` image (pre-installed with latest SGLang and Megatron):
-
-```bash
-docker run --rm --gpus all --ipc=host --shm-size=16g \
-  --ulimit memlock=-1 --ulimit stack=67108864 \
-  -p 8265:8265 \
-  -it zhuzilin/slime:latest /bin/bash
-
-git clone https://github.com/THUDM/slime.git
-cd slime
-pip install -e .
-```
-
-- If you prefer not to use Docker, or if it's inconvenient, please refer to [Setting up the Environment from Scratch](./docs/en/build.md).
-- For AMD support, please refer to [AMD Tutorial](./docs/en/amd_tutorial.md).
-
-### Examples
-
-#### Dense Model Examples: GLM-4-9B and Qwen3-4B
-
-We provide examples to use [GLM-4-9B](https://huggingface.co/THUDM/GLM-Z1-9B-0414) and [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B), please refer to:
-
-- [Example: GLM-4-9B](docs/en/models/glm4-9B.md).
-- [Example: Qwen3-4B](docs/en/models/qwen3-4B.md).
-
-#### MoE Model Examples: GLM-4.5, Qwen3-30B-A3B and DeepSeek-R1
-
-For MoE example, please refer to:
-
-- [Example: Training GLM-4.5 wtih 64xH100](docs/en/models/glm4.5-355B-A32B.md)
-- [Example: Training Qwen3-30B-A3B with 8xH100](docs/en/models/qwen3-30B-A3B.md).
-- [Example: Training DeepSeek R1 with 128xH100](docs/en/models/deepseek-r1.md)
-
-#### Multi-Turn + Tool Calling Example: Search-R1 lite
-
-For multi-turn and tool calling, we also provides an minimal reimplenmentation of Search-R1, please refer to:
-
-- [Example: Search-R1 lite](examples/search-r1/README.md).
-
-#### SFT Example: Qwen3-4B-Base with OpenHermes-2.5
-
-slime is not just a RL framework, we support a diverse set of post-training setups. For an SFT example, please refer to:
-
-- [Example: Qwen3-4B-Base with OpenHermes-2.5](docs/en/sft.md).
-
-### Checkpoint Format Conversion
+## Checkpoint Format Conversion
 
 Since slime uses Megatron, and Megatron does not support loading Hugging Face checkpoints directly, we need to convert the model to the `torch_dist` format that Megatron supports.
 
