@@ -125,6 +125,7 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         "loss_masks",
         "round_number",
         "sample_indices",
+        "rollout_log_probs",
     ]:
         if key not in data:
             continue
