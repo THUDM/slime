@@ -370,7 +370,7 @@ And replace `--hf-checkpoint` with:
    --ref-load /root/Qwen3-4B_torch_dist
 ```
 
-This will trigger fp8 training. Currently, we will directly cast bf16 weights to fp8, and we will gradually add quantization schemes with less impact on accuracy in the future.
+This will trigger fp8 inference. Currently, we will directly cast bf16 weights to fp8, and we will gradually add quantization schemes with less impact on accuracy in the future.
 
 ⚠️ The training megatron checkpoint still needs to be the one converted from bf16 huggingface at the beginning.
 
