@@ -1,3 +1,23 @@
+diff --git a/megatron/core/distributed/__init__.py b/megatron/core/distributed/__init__.py
+index fe26e8b4..500da66c 100644
+--- a/megatron/core/distributed/__init__.py
++++ b/megatron/core/distributed/__init__.py
+@@ -11,3 +11,20 @@ from .finalize_model_grads import finalize_model_grads
+ from .fsdp.mcore_fsdp_adapter import FullyShardedDataParallel
+ from .torch_fully_sharded_data_parallel import TorchFullyShardedDataParallel
+ from .torch_fully_sharded_data_parallel_config import TorchFullyShardedDataParallelConfig
++
++# Backward compatibility patch for FSDP module reorganization
++import sys
++import importlib.util
++
++spec = importlib.util.find_spec('megatron.core.distributed.fsdp.src.megatron_fsdp')
++if spec:
++    custom_fsdp = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(custom_fsdp)
++    sys.modules['megatron.core.distributed.custom_fsdp'] = custom_fsdp
++    if hasattr(custom_fsdp, 'MegatronFSDP'):
++        custom_fsdp.FullyShardedDataParallel = custom_fsdp.MegatronFSDP
 diff --git a/megatron/core/extensions/transformer_engine.py b/megatron/core/extensions/transformer_engine.py
 index 99c3edc0..26ea5cb4 100644
 --- a/megatron/core/extensions/transformer_engine.py
