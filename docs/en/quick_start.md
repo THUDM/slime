@@ -43,7 +43,7 @@ You can download required models and datasets from platforms like Hugging Face, 
 pip install -U huggingface_hub
 
 # Download model weights (GLM-Z1-9B)
-hf download THUDM/GLM-Z1-9B-0414 --local-dir /root/GLM-Z1-9B-0414
+hf download zai-org/GLM-Z1-9B-0414 --local-dir /root/GLM-Z1-9B-0414
 
 # Download training dataset (dapo-math-17k)
 hf download --repo-type dataset zhuzilin/dapo-math-17k \

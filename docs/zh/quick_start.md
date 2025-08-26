@@ -44,7 +44,7 @@ pip install -e .
 pip install -U huggingface_hub
 
 # 下载模型权重 (GLM-Z1-9B)
-hf download THUDM/GLM-Z1-9B-0414 --local-dir /root/GLM-Z1-9B-0414
+hf download zai-org/GLM-Z1-9B-0414 --local-dir /root/GLM-Z1-9B-0414
 
 # 下载训练数据集 (dapo-math-17k)
 hf download --repo-type dataset zhuzilin/dapo-math-17k \
