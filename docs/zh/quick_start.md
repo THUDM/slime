@@ -6,7 +6,7 @@
 
 由于 slime 可能会包含针对 sglang/megatron 的临时补丁（patch）。为避免潜在的环境配置问题，强烈建议**用户使用我们提供的最新 Docker 镜像**，它已预置好所有依赖。
 
-- 对于不方便使用 docker 的场景，请参考 [从零搭建环境](./docs/zh/build.md)；
+- 对于不方便使用 docker 的场景，请参考 [从零搭建环境](build.md)；
 - 对于 AMD 支持，请参考 [AMD 使用教程](../../docs/en/amd_tutorial.md)。
 
 ### 拉取并启动 Docker 容器
