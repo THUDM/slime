@@ -519,6 +519,6 @@ ROLLOUT_ARGS+=(
 ## 大规模 MOE 模型的多机训练
 slime 针对大规模混合专家（MoE）模型的分布式训练进行了深度优化。我们提供了一些端到端的训练案例以供参考：
 
-- [示例：64xH100 训练 GLM-4.5](../../docs/zh/models/glm4.5-355B-A32B.md)
-- [示例：8xH100 训练 Qwen3-30B-A3B](../../docs/zh/models/qwen3-30B-A3B.md)
-- [示例：128xH100 训练 DeepSeek-R1](../../docs/zh/models/deepseek-r1.md)
+- [示例：64xH100 训练 GLM-4.5](models/glm4.5-355B-A32B.md)
+- [示例：8xH100 训练 Qwen3-30B-A3B](models/qwen3-30B-A3B.md)
+- [示例：128xH100 训练 DeepSeek-R1](models/deepseek-r1.md)
