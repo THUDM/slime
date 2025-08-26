@@ -35,6 +35,19 @@ index 860ee64a..80944b70 100755
                  sharded_state_dict_keys_map={
                      "mlp.0.weight": "mlp.linear_fc1.layer_norm_weight",
                      "mlp.0.bias": "mlp.linear_fc1.layer_norm_bias",
+diff --git a/megatron/core/models/gpt/gpt_model.py b/megatron/core/models/gpt/gpt_model.py
+index 62b22cb5..e42acbb1 100644
+--- a/megatron/core/models/gpt/gpt_model.py
++++ b/megatron/core/models/gpt/gpt_model.py
+@@ -442,7 +442,7 @@ class GPTModel(LanguageModule):
+         if self.share_embeddings_and_output_weights:
+             output_weight = self.shared_embedding_or_output_weight()
+ 
+-        if mtp_in_postprocess:
++        if mtp_in_postprocess and labels is not None:
+             hidden_states = self.mtp(
+                 input_ids=input_ids,
+                 position_ids=position_ids,
 diff --git a/megatron/core/parallel_state.py b/megatron/core/parallel_state.py
 index 46400c39..b24a9108 100644
 --- a/megatron/core/parallel_state.py
@@ -377,10 +390,10 @@ index 6dbb43f2..4146b3e2 100644
              # discard the output of the pre-mlp layernorm and register the recompute
              # as a gradient hook of mlp_output_with_bias[0]
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
-index 0959a66f..c25f1cd5 100644
+index 6df8af46..3bd3179f 100644
 --- a/megatron/training/arguments.py
 +++ b/megatron/training/arguments.py
-@@ -1153,6 +1153,9 @@ def core_transformer_config_from_args(args, config_class=None):
+@@ -1152,6 +1152,9 @@ def core_transformer_config_from_args(args, config_class=None):
      if args.is_hybrid_model:
          kw_args['is_hybrid_model'] = args.is_hybrid_model
  
@@ -390,7 +403,7 @@ index 0959a66f..c25f1cd5 100644
      # handle quantization config
      # NOTE: Kitchen arguments are only added to the namespace when
      # Kitchen library is available.
-@@ -1443,6 +1446,10 @@ def _add_network_size_args(parser):
+@@ -1442,6 +1445,10 @@ def _add_network_size_args(parser):
                         action='store_true',
                         help='If set, use original BERT residula connection '
                         'ordering.')
