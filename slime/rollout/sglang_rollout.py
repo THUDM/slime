@@ -121,9 +121,9 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         if sample.rollout_log_probs is None:
             sample.rollout_log_probs = []
         sample.rollout_log_probs.extend(new_response_log_probs)
-    assert sample.response_length == len(
-        sample.rollout_log_probs
-    ), f"response_length: {sample.response_length} vs {len(sample.rollout_log_probs)}"
+        assert sample.response_length == len(
+            sample.rollout_log_probs
+        ), f"response_length: {sample.response_length} vs {len(sample.rollout_log_probs)}"
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":
             sample.status = Sample.Status.TRUNCATED
