@@ -264,7 +264,7 @@ OPTIMIZER_ARGS=(
 - 其他 SGLang 参数可以通过添加 `--sglang-` 前缀传递给 slime,  slime 会自动透传给 SGLang。例如，要设置 SGLang 的 `--log-level INFO` 参数，只需使用 `--sglang-log-level INFO` 即可。
 
 > ⚠️ **注意**：
-> slime 使用 `sgl-router` 调度多个 SGLang Server。在不开启 DP Attention 的情况下， `dp_size` 会通过 `rollout-num-gpus/rollout-num-gpus-per-engine` 计算得到。
+> slime 使用 `sgl-router` 调度多个 SGLang Server。在不开启 DP Attention 的情况下， `dp_size` 会通过 `rollout-num-gpus / rollout-num-gpus-per-engine` 计算得到。
 
 ```bash
 SGLANG_ARGS=(
@@ -306,6 +306,8 @@ ray job submit ... \
 > ⚠️ **注意**：
 > 在训推一体化模式下，Megatron 初始化后才能被 offload 掉，会占据一定量的显存。您需要通过调整 `--sglang-mem-fraction-static` 参数来降低 SGLang 的显存占用比例，以避免显存不足。通常我们建议为 0.8。
 
+> 此外，[torch_memory_saver](https://github.com/fzyzcjy/torch_memory_saver) 里面的一些优化只能在训推一体模式中使用，因为需要释放 GPU 显存。训推分离模式暂不支持。
+
 ### Dynamic Sampling
 
 slime 支持更复杂的采样策略，例如 [DAPO](https://dapo-sia.github.io/) 中使用的动态采样。要启用此功能，需配置以下参数：
@@ -316,7 +318,7 @@ slime 支持更复杂的采样策略，例如 [DAPO](https://dapo-sia.github.io/
      slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
 ```
 
-这里 `over_sampling_batch_size` 需要大于 ``rollout_batch_size`，例如配置为：
+这里 `over_sampling_batch_size` 需要大于 `rollout_batch_size`，例如配置为：
 
 ```bash
    --rollout-batch-size 32 \
