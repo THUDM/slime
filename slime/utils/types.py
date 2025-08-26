@@ -20,6 +20,7 @@ class Sample:
     reward: Optional[Union[float, dict[str, Any]]] = None
     loss_mask: Optional[list[int]] = None
     rollout_log_probs: Optional[list[float]] = None  # Log probabilities from rollout engine
+    completion_tokens: Optional[int] = None
 
     class Status(Enum):
         PENDING = "pending"

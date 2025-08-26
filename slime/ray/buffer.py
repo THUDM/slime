@@ -167,6 +167,15 @@ class RolloutController:
         if samples[0].rollout_log_probs is not None:
             train_data["rollout_log_probs"] = [sample.rollout_log_probs for sample in samples]
 
+        if samples[0].metadata and "rollout_time" in samples[0].metadata:
+            train_data["rollout_time"] = samples[0].metadata["rollout_time"]
+        if samples[0].metadata and "completion_tokens_stats" in samples[0].metadata:
+            train_data["completion_tokens_stats"] = samples[0].metadata["completion_tokens_stats"]
+        if samples[0].metadata and "partial_samples" in samples[0].metadata:
+            train_data["partial_samples"] = samples[0].metadata["partial_samples"]
+        if samples[0].metadata and "total_off_policy_tokens" in samples[0].metadata:
+            train_data["total_off_policy_tokens"] = samples[0].metadata["total_off_policy_tokens"]
+
         return train_data
 
     def save(self, rollout_id):
