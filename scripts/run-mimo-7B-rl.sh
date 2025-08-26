@@ -27,7 +27,7 @@ echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/mimo-7B-rl.sh"
 
-CKPT_ARGS=(
+ CKPT_ARGS=(
    --hf-checkpoint /root/MiMo-7B-RL
    #--hf-checkpoint /root/Qwen3-4B-FP8
    --ref-load /root/MiMo-7B-RL_torch_dist
@@ -43,7 +43,7 @@ ROLLOUT_ARGS=(
    --apply-chat-template
    --rollout-shuffle
    --rm-type deepscaler
-   --num-rollout 30
+   --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 8192
@@ -99,14 +99,16 @@ OPTIMIZER_ARGS=(
 
 WANDB_ARGS=(
    # --use-wandb
-   # --wandb-project slime-mimo-7B-rl
-   # --wandb-group mimo
+   # --wandb-project slime-dev
+   # --wandb-group mimo-7B-rl-test
    # --wandb-key ${WANDB_API_KEY}
 )
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
-   --sglang-mem-fraction-static 0.5
+   --sglang-mem-fraction-static 0.7
+   # if speculative decoding has bug, this can help debug
+   # --debug-rollout-only
 
    # for speculative decoding
    --sglang-speculative-algorithm EAGLE
@@ -114,9 +116,18 @@ SGLANG_ARGS=(
    --sglang-speculative-eagle-topk 1
    --sglang-speculative-num-draft-tokens 4
 
-   # flashInfer has bug with speculative decoding, as mentioned in https://github.com/sgl-project/sglang/issues/9481
-   # so we use fa3 instead
-   --sglang-attention-backend fa3
+   # bug exists when cuda graph do padding (both fa3 and flashInfer)
+   # temporarily skip this problem by extending the original cuda graph batch size
+   # https://github.com/sgl-project/sglang/issues/8336
+   # https://github.com/sgl-project/sglang/issues/9521
+   --sglang-cuda-graph-bs $(seq 1 32) $(seq 40 8 64) $(seq 80 16 160)
+
+   # improve performance by enlarging the max running requests
+   # --sglang-max-running-requests 128
+
+   # If flashInfer has bug with speculative decoding, use fa3 instead
+   # https://github.com/sgl-project/sglang/issues/9481
+   # --sglang-attention-backend fa3
 )
 
 MISC_ARGS=(
