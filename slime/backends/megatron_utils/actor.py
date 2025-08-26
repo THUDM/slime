@@ -96,10 +96,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.rollout_data_postprocess = load_function(self.args.rollout_data_postprocess_path)
 
         self.prof = None
-        if (
-            args.use_pytorch_profiler
-            and torch.distributed.get_rank() == 0
-        ):
+        if args.use_pytorch_profiler and torch.distributed.get_rank() == 0:
             self.prof = torch.profiler.profile(
                 schedule=torch.profiler.schedule(
                     wait=max(args.profile_step_start - 1, 0),
@@ -253,11 +250,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
             log_rollout_data(rollout_id, self.args, rollout_data)
 
-            if (
-                self.args.use_pytorch_profiler
-                and torch.distributed.get_rank() == 0
-                and self.prof is not None
-            ):
+            if self.args.use_pytorch_profiler and torch.distributed.get_rank() == 0 and self.prof is not None:
                 self.prof.step()
 
             # Train
