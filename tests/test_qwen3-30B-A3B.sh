@@ -14,11 +14,11 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/../scripts/models/glm4-9B.sh"
+source "${SCRIPT_DIR}/../scripts/models/qwen3-30B-A3B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/models/GLM-Z1-9B-0414/
-   --ref-load /root/GLM-Z1-9B-0414_torch_dist
+   --hf-checkpoint /root/models/Qwen3-30B-A3B-FP8
+   --ref-load /root/Qwen3-30B-A3B_torch_dist
 )
 
 ROLLOUT_ARGS=(
@@ -49,11 +49,11 @@ EVAL_ARGS=(
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 2
+   --tensor-model-parallel-size 4
    --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 2
-   --expert-model-parallel-size 1
+   --expert-model-parallel-size 8
    --expert-tensor-parallel-size 1
 
    --recompute-granularity full
@@ -61,17 +61,17 @@ PERF_ARGS=(
    --recompute-num-layers 1
 
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 4608
+   --max-tokens-per-gpu 16384
 )
 
 GRPO_ARGS=(
-   --advantage-estimator grpo
+   --advantage-estimator gspo
    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
+   --kl-coef 0.00
    --entropy-coef 0.00
-   --eps-clip 0.2
-   --eps-clip-high 0.28
+   --eps-clip 4e-4
 )
 
 OPTIMIZER_ARGS=(
@@ -81,10 +81,21 @@ OPTIMIZER_ARGS=(
    --weight-decay 0.1
    --adam-beta1 0.9
    --adam-beta2 0.98
+
+   --optimizer-cpu-offload
+   --overlap-cpu-optimizer-d2h-h2d
+   --use-precision-aware-optimizer
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 2
+   --rollout-num-gpus-per-engine 8
+   --sglang-mem-fraction-static 0.8
+
+   --sglang-moe-a2a-backend deepep
+   --sglang-deepep-mode auto
+
+   --sglang-max-running-requests 512
+   --sglang-disable-radix-cache
 )
 
 MISC_ARGS=(
@@ -96,6 +107,9 @@ MISC_ARGS=(
    --attention-softmax-in-fp32
    # need to comment this when using model with MLA
    --attention-backend flash
+
+   --moe-token-dispatcher-type flex
+   --moe-enable-deepep
 )
 
 # launch the master node of ray in container
@@ -117,8 +131,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 4 \
-   --rollout-num-gpus 4 \
+   --actor-num-gpus-per-node 8 \
+   --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \

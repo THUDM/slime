@@ -196,6 +196,17 @@ def log_rollout_data(rollout_id, args, rollout_data):
             reduced_log_dict = {
                 f"rollout/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
             }
+            if args.ci_test:
+                if (
+                    rollout_id == 0
+                    and "rollout/log_probs" in reduced_log_dict
+                    and "rollout/ref_log_probs" in reduced_log_dict
+                ):
+                    assert reduced_log_dict["rollout/log_probs"] == reduced_log_dict["rollout/ref_log_probs"]
+                if "rollout/log_probs" in reduced_log_dict:
+                    assert -0.5 < reduced_log_dict["rollout/log_probs"] < 0
+                if "rollout/entropy" in reduced_log_dict:
+                    assert 0 < reduced_log_dict["rollout/entropy"] < 0.5
             print(f"rollout {rollout_id}: {reduced_log_dict}")
             if args.use_wandb:
                 reduced_log_dict["rollout/step"] = (

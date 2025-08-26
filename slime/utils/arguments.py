@@ -826,6 +826,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             return parser
 
+        def add_ci_arguments(parser):
+            parser.add_argument(
+                "--ci-test",
+                action="store_true",
+            )
+            return parser
+
         # Add custom arguments in front to prevent overwritten some slime arguments.
         if add_custom_arguments is not None:
             parser = add_custom_arguments(parser)
@@ -842,6 +849,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_reward_model_arguments(parser)
         parser = add_rollout_buffer_arguments(parser)
         parser = add_custom_megatron_plugins_arguments(parser)
+        parser = add_ci_arguments(parser)
         # For megatron
         try:
             parser.add_argument("--padded-vocab-size", type=int, default=None)
