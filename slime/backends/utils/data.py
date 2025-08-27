@@ -138,4 +138,14 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
 
         rollout_data[key] = val
 
+    metadata_keys = [
+        "rollout_time",
+        "completion_tokens_stats",
+        "partial_samples",
+        "total_off_policy_tokens",
+    ]
+    for key in metadata_keys:
+        if key in data:
+            rollout_data[key] = data[key]
+
     return rollout_data

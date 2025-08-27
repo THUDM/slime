@@ -1,6 +1,7 @@
 import asyncio
 import copy
-
+import time
+import numpy as np
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
@@ -27,6 +28,8 @@ class GenerateState(metaclass=SingletonMeta):
         self.semaphore = asyncio.Semaphore(
             args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
         )
+        self.rollout_start_time: float = None
+        self.completion_tokens_list: list = []
         self.sampling_params = dict(
             temperature=args.rollout_temperature,
             top_p=args.rollout_top_p,
@@ -45,6 +48,9 @@ class GenerateState(metaclass=SingletonMeta):
         self.remaining_batch_size = 0
         self.pendings = set()
         self.aborted = False
+        self.completion_tokens_list = []
+        self.partial_samples_count = 0
+        self.total_off_policy_tokens = 0
 
     def submit_generate_tasks(self, samples: list[list[Sample]]):
         for group in samples:
@@ -62,7 +68,7 @@ class GenerateState(metaclass=SingletonMeta):
         self.remaining_batch_size += len(samples)
 
 
-async def generate(args, sample: Sample, sampling_params) -> Sample:
+async def generate(args, sample: Sample, sampling_params, evaluation=False) -> Sample:
     state = GenerateState(args)
 
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
@@ -73,6 +79,9 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
     if len(sample.response) > 0:
         sampling_params["max_new_tokens"] -= len(sample.tokens) - len(
+            state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
+        )
+        state.total_off_policy_tokens += len(sample.tokens) - len(
             state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
         )
 
@@ -114,6 +123,9 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     sample.tokens = sample.tokens + new_response_tokens
     sample.response_length += len(new_response_tokens)
     sample.response += output["text"]
+    sample.completion_tokens = output["meta_info"]["completion_tokens"]
+    if not evaluation:
+        state.completion_tokens_list.append(sample.completion_tokens)
 
     # Extract rollout log probabilities for off-policy correction
     if args.enable_off_policy_correction:
@@ -153,9 +165,9 @@ async def generate_and_rm(args, sample: Sample, sampling_params: dict, evaluatio
 
         if args.custom_generate_function_path is not None:
             custom_generate_func = load_function(args.custom_generate_function_path)
-            sample = await custom_generate_func(args, sample, sampling_params)
+            sample = await custom_generate_func(args, sample, sampling_params, evaluation=evaluation)
         else:
-            sample = await generate(args, sample, sampling_params)
+            sample = await generate(args, sample, sampling_params, evaluation=evaluation)
 
     # for the rm that need the whole group, we will not do the rm here
     if args.group_rm:
@@ -214,7 +226,6 @@ async def abort(args, rollout_id: int):
         await post(f"{url}/abort_request", {"abort_all": True}, use_http2=False)
 
     # make sure all the pending tasks are finished
-    count = 0
     while state.pendings:
         done, state.pendings = await asyncio.wait(state.pendings, return_when=asyncio.FIRST_COMPLETED)
 
@@ -225,13 +236,14 @@ async def abort(args, rollout_id: int):
         for task in done:
             group = task.result()
             for sample in group:
-                if sample.response and "start_rollout_id" not in sample.metadata:
-                    sample.metadata["start_rollout_id"] = rollout_id
+                if sample.response:
+                    state.partial_samples_count += 1
+                    if "start_rollout_id" not in sample.metadata:
+                        sample.metadata["start_rollout_id"] = rollout_id
             aborted_samples.append(group)
-            count += len(group)
 
     if args.partial_rollout:
-        print(f"Collected {count} partial samples into the data buffer", flush=True)
+        print(f"Collected {state.partial_samples_count} partial samples into the data buffer", flush=True)
 
     return aborted_samples
 
@@ -264,6 +276,7 @@ async def generate_rollout_async(args, rollout_id: int, data_source) -> list[lis
 
     data = []
     do_print = True
+    state.rollout_start_time = time.time()
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
     while len(data) < target_data_size:
         while state.remaining_batch_size < target_data_size:
@@ -308,6 +321,28 @@ async def generate_rollout_async(args, rollout_id: int, data_source) -> list[lis
 
     assert len(data) == args.rollout_batch_size, f"Got {len(data)} samples, expected {args.rollout_batch_size}"
     data = sorted(data, key=lambda group: group[0].index)
+
+    rollout_time = time.time() - state.rollout_start_time
+
+    completion_tokens_stats = {}
+    if state.completion_tokens_list:
+        completion_tokens_array = np.array(state.completion_tokens_list)
+        completion_tokens_stats = {"total_completion_tokens": np.sum(completion_tokens_array).item()}
+
+    if len(data) > 0:
+        data[0][0].metadata.update(
+            {
+                "rollout_time": rollout_time,
+                "completion_tokens_stats": completion_tokens_stats,
+            }
+        )
+        if args.partial_rollout:
+            data[0][0].metadata.update(
+                {
+                    "partial_samples": state.partial_samples_count,
+                    "total_off_policy_tokens": state.total_off_policy_tokens,
+                }
+            )
 
     # reset the global state to prevent effects on the next rollout or eval.
     state.reset()

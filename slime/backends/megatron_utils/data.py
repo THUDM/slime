@@ -159,8 +159,46 @@ def log_rollout_data(rollout_id, args, rollout_data):
         loss_masks = rollout_data["loss_masks"]
         total_lengths = rollout_data["total_lengths"]
 
+        # Process completion tokens statistics
+        completion_tokens_stats = rollout_data.get("completion_tokens_stats")
+        if completion_tokens_stats:
+            log_dict["total_tokens"] = completion_tokens_stats.get("total_completion_tokens", 0)
+
+        # Process partial samples count
+        partial_samples = rollout_data.get("partial_samples")
+        if partial_samples is not None:
+            log_dict["partial_samples"] = partial_samples
+
+        # Process off-policy tokens statistics
+        total_off_policy_tokens = rollout_data.get("total_off_policy_tokens")
+        if total_off_policy_tokens is not None:
+            total_tokens = log_dict.get("total_tokens", 0)
+            if total_tokens > 0:
+                log_dict["off_policy_ratio"] = total_off_policy_tokens / (total_tokens + total_off_policy_tokens)
+
+        # Process rollout time and throughput statistics
+        rollout_time = rollout_data.get("rollout_time")
+        if rollout_time and rollout_time > 0 and completion_tokens_stats:
+            total_completion_tokens = completion_tokens_stats.get("total_completion_tokens", 0)
+            if total_completion_tokens > 0:
+                # NOTE(Yuzhen): Currently we can only divide by total data collection time, which include the time for reward computation.
+                # This is not accurate especially for scenarios where the reward computation is costly.
+                # Feel free to contribute if you have a better way to deal with this.
+                tokens_per_second_per_gpu = total_completion_tokens / rollout_time / args.rollout_num_gpus
+                log_dict["rollout_time"] = rollout_time
+                log_dict["tokens_per_second_per_gpu"] = tokens_per_second_per_gpu
+
         for key, val in rollout_data.items():
-            if key == "tokens" or key == "loss_masks" or key == "sample_indices" or key == "rollout_log_probs":
+            if key in [
+                "tokens",
+                "loss_masks",
+                "sample_indices",
+                "rollout_log_probs",
+                "completion_tokens_stats",
+                "partial_samples",
+                "total_off_policy_tokens",
+                "rollout_time",
+            ]:
                 continue
             # Upload per sample mean for each rollout value
             # There are the following assumptions:
