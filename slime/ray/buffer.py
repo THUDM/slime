@@ -108,11 +108,15 @@ class RolloutController:
             rewards = torch.tensor(raw_rewards, dtype=torch.float)
             rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
             mean = rewards.mean(dim=-1, keepdim=True)
-            rewards = rewards - mean
 
             if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
                 std = rewards.std(dim=-1, keepdim=True)
-                rewards = rewards / (std + 1e-6)
+                std = torch.where(std < 1e-6, torch.tensor(1.0), std)
+
+            rewards = rewards - mean
+
+            if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
+                rewards = rewards / std
 
             return raw_rewards, rewards.flatten().tolist()
 
