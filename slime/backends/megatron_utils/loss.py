@@ -268,53 +268,17 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
 
     pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
 
-    # Apply off-policy correction using importance sampling if enabled
-    if args.enable_off_policy_correction and "rollout_log_probs" in batch and batch["rollout_log_probs"] is not None:
-        rollout_log_probs = batch["rollout_log_probs"]
-        rollout_log_probs_tensors = []
-        for i, rollout_log_prob_list in enumerate(rollout_log_probs):
-            # Extract response portion: last response_length elements
-            assert batch["response_lengths"][i] == len(
-                rollout_log_prob_list
-            ), f"{batch['response_lengths'][i]} vs {len(rollout_log_prob_list)}"
-            rollout_log_probs_tensors.append(torch.tensor(rollout_log_prob_list, device=log_probs.device))
+    # Apply TIS off-policy correction using importance sampling if enabled
+    if args.use_tis:
+        assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
+        rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
+        old_log_probs = torch.cat(batch["log_probs"], dim=0)
 
-        # Apply CP cutting to rollout_log_probs to match current policy structure
-        cp_size = mpu.get_context_parallel_world_size()
+        tis = torch.exp(log_probs - rollout_log_probs)
+        tis_clip = torch.clamp(tis, max=args.tis_clip)
+        tis_clipfrac = tis_clip < tis
 
-        if cp_size > 1:
-            rollout_log_probs_cut = []
-            for i, rollout_tensor in enumerate(rollout_log_probs_tensors):
-                total_length = total_lengths[i]
-                response_length = response_lengths[i]
-                prompt_length = total_length - response_length
-
-                # Get CP offset information (same as in get_sum_of_sample_mean)
-                _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(total_length, response_length)
-
-                # Extract the chunks for this CP rank (same logic as loss_mask cutting)
-                chunk_0 = rollout_tensor[tokens_offset[0][0] - prompt_length : tokens_offset[0][1] - prompt_length]
-                chunk_1 = rollout_tensor[tokens_offset[1][0] - prompt_length : tokens_offset[1][1] - prompt_length]
-
-                # Concatenate the chunks
-                cut_tensor = torch.cat([chunk_0, chunk_1], dim=0)
-                rollout_log_probs_cut.append(cut_tensor)
-
-            rollout_log_probs_flat = torch.cat(rollout_log_probs_cut, dim=0)
-        else:
-            # No CP, use original tensors
-            rollout_log_probs_flat = torch.cat(rollout_log_probs_tensors, dim=0)
-
-        current_policy_log_probs = log_probs  # Already CP-cut
-
-        # Calculate importance sampling ratio
-        importance_ratio = torch.exp(current_policy_log_probs - rollout_log_probs_flat)
-
-        # Clamp the importance ratio directly
-        clamped_importance_ratio = torch.clamp(importance_ratio, max=args.off_policy_correction_clip_threshold)
-
-        # Apply the correction to policy loss
-        pg_loss = pg_loss * clamped_importance_ratio.detach()
+        pg_loss = pg_loss * tis_clip
 
     pg_loss = sum_of_sample_mean(pg_loss)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
@@ -345,17 +309,22 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
     if log_probs.numel() == 0:
         loss += 0 * logits.sum()
 
-    return (
-        loss,
-        {
-            "loss": loss.clone().detach(),
-            "pg_loss": pg_loss.clone().detach(),
-            "entropy_loss": entropy_loss.clone().detach(),
-            "pg_clipfrac": pg_clipfrac.clone().detach(),
-            "ppo_kl": ppo_kl.clone().detach(),
-            "kl_loss": kl_loss.clone().detach(),
-        },
-    )
+    reported_loss = {
+        "loss": loss.clone().detach(),
+        "pg_loss": pg_loss.clone().detach(),
+        "entropy_loss": entropy_loss.clone().detach(),
+        "pg_clipfrac": pg_clipfrac.clone().detach(),
+        "ppo_kl": ppo_kl.clone().detach(),
+    }
+
+    if args.use_kl_loss:
+        reported_loss["kl_loss"] = kl_loss.clone().detach()
+
+    if args.use_tis:
+        reported_loss["tis"] = sum_of_sample_mean(tis).clone().detach()
+        reported_loss["tis_clipfrac"] = sum_of_sample_mean(tis_clipfrac).clone().detach()
+
+    return loss, reported_loss
 
 
 def sft_loss_function(args, batch, logits, sum_of_sample_mean):

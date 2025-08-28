@@ -200,6 +200,9 @@ class MegatronTrainRayActor(TrainRayActor):
     def train(self, rollout_id, rollout_data_ref):
         Timer().end("train_wait")
 
+        if self.args.offload:
+            self.wake_up(("model"))
+
         if self.args.debug_rollout_only:
             # For debug rollout, we just log the data and return.
             rollout_data = self._get_rollout_data(rollout_data_ref)
@@ -207,9 +210,6 @@ class MegatronTrainRayActor(TrainRayActor):
             log_perf_data(rollout_id, self.args)
             Timer().start("train_wait")
             return
-
-        if self.args.offload:
-            self.wake_up(("model"))
 
         with timer("train"):
             with timer("data_preprocess"):

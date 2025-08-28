@@ -72,6 +72,8 @@ GRPO_ARGS=(
    --entropy-coef 0.00
    --eps-clip 0.2
    --eps-clip-high 0.28
+
+   --use-tis
 )
 
 OPTIMIZER_ARGS=(

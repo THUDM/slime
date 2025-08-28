@@ -587,13 +587,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             # Off-Policy Correction using Importance Sampling: https://fengyao.notion.site/off-policy-rl
             parser.add_argument(
-                "--enable-off-policy-correction",
+                "--use-tis",
                 action="store_true",
                 default=False,
-                help="Enable off-policy correction using importance sampling with rollout log probabilities.",
+                help="Enable TIS from https://fengyao.notion.site/off-policy-rl for off-policy importance sampling.",
             )
             parser.add_argument(
-                "--off-policy-correction-clip-threshold",
+                "--tis-clip",
                 type=float,
                 default=2.0,
                 help="Clipping threshold C for importance sampling ratios to control variance.",

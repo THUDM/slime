@@ -106,24 +106,20 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     # Extract new response tokens
     if "output_token_logprobs" in output["meta_info"]:
         new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
+        new_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
     else:
         # abort
         new_response_tokens = []
+        new_response_log_probs = []
 
     # Update sample with tokens directly - avoiding re-tokenization
     sample.tokens = sample.tokens + new_response_tokens
     sample.response_length += len(new_response_tokens)
     sample.response += output["text"]
+    if sample.rollout_log_probs is None:
+        sample.rollout_log_probs = []
+    sample.rollout_log_probs += new_response_log_probs
 
-    # Extract rollout log probabilities for off-policy correction
-    if args.enable_off_policy_correction:
-        new_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
-        if sample.rollout_log_probs is None:
-            sample.rollout_log_probs = []
-        sample.rollout_log_probs.extend(new_response_log_probs)
-        assert sample.response_length == len(
-            sample.rollout_log_probs
-        ), f"response_length: {sample.response_length} vs {len(sample.rollout_log_probs)}"
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":
             sample.status = Sample.Status.TRUNCATED

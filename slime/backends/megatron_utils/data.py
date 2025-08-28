@@ -160,7 +160,7 @@ def log_rollout_data(rollout_id, args, rollout_data):
         total_lengths = rollout_data["total_lengths"]
 
         for key, val in rollout_data.items():
-            if key == "tokens" or key == "loss_masks" or key == "sample_indices" or key == "rollout_log_probs":
+            if key == "tokens" or key == "loss_masks" or key == "sample_indices":
                 continue
             # Upload per sample mean for each rollout value
             # There are the following assumptions:
@@ -170,7 +170,10 @@ def log_rollout_data(rollout_id, args, rollout_data):
                     # NOTE: Here we have to do the clone().detach(), otherwise the tensor will be
                     # modified in place and will cause problem for the next rollout.
                     val = torch.cat(val).clone().detach()
-                    if key in ["log_probs", "ref_log_probs", "returns", "advantages"] and loss_masks is not None:
+                    if (
+                        key in ["log_probs", "ref_log_probs", "rollout_log_probs", "returns", "advantages"]
+                        and loss_masks is not None
+                    ):
                         sum_of_sample_mean = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks)
                         val = cp_size * sum_of_sample_mean(val) / len(loss_masks)
                     else:

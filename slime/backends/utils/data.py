@@ -138,4 +138,18 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
 
         rollout_data[key] = val
 
+    if "rollout_log_probs" in rollout_data:
+        from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
+
+        rollout_data["rollout_log_probs"] = [
+            torch.tensor(
+                slice_log_prob_with_cp(log_prob, total_length, response_length),
+                device=torch.cuda.current_device(),
+                dtype=torch.bfloat16,  # TODO: hardcode to bf16 at the moment
+            )
+            for log_prob, total_length, response_length in zip(
+                rollout_data["rollout_log_probs"], rollout_data["total_lengths"], rollout_data["response_lengths"]
+            )
+        ]
+
     return rollout_data
