@@ -181,6 +181,6 @@ def slice_log_prob_with_cp(log_prob: list[float], total_length: int, response_le
     prompt_length = total_length - response_length
     _, _, logits_offset, _ = get_logits_and_tokens_offset_with_cp(total_length, response_length)
 
-    chunk_1 = log_prob[logits_offset[0][1] - (prompt_length - 1) : logits_offset[0][0] - (prompt_length - 1)]
-    chunk_2 = log_prob[logits_offset[1][1] - (prompt_length - 1) : logits_offset[1][0] - (prompt_length - 1)]
+    chunk_1 = log_prob[logits_offset[0][0] - (prompt_length - 1) : logits_offset[0][1] - (prompt_length - 1)]
+    chunk_2 = log_prob[logits_offset[1][0] - (prompt_length - 1) : logits_offset[1][1] - (prompt_length - 1)]
     return chunk_1 + chunk_2
