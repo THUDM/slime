@@ -61,10 +61,6 @@ For complete usage instructions, please refer to the [Usage Documentation](docs/
 
   - For debugging tips, please refer to the [Debugging Guide](docs/en/debug.md)
 
-## Hardware Support
-- Nvidia: refer to this repo README
-- AMD: refer to the [tutorial](docs/en/amd_tutorial.md)
-
 ## FAQ & Acknowledgements
 
   - For frequently asked questions, please see the [Q\&A](docs/en/qa.md)

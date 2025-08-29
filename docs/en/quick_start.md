@@ -8,7 +8,7 @@ This document will guide you through setting up the environment and getting star
 
 Since slime may contain temporary patches for sglang/megatron, to avoid potential environment configuration issues, we strongly recommend **users to use our latest Docker image**, which comes pre-configured with all dependencies.
 
-- For scenarios where Docker is not convenient, please refer to [Building Environment from Scratch](./build.md);
+- For scenarios where Docker is not convenient, please refer to [build_conda.sh](./../../build_conda.sh);
 - For AMD support, please refer to [AMD Usage Tutorial](./amd_tutorial.md).
 
 ### Pull and Start Docker Container
@@ -554,5 +554,4 @@ ray job submit --address="http://127.0.0.1:8265" \
 slime has been deeply optimized for distributed training of large-scale Mixture of Experts (MoE) models. We provide some end-to-end training cases for reference:
 
 - [Example: 64xH100 Training GLM-4.5](models/glm4.5-355B-A32B.md)
-- [Example: 8xH100 Training Qwen3-30B-A3B](models/qwen3-30B-A3B.md)
 - [Example: 128xH100 Training DeepSeek-R1](models/deepseek-r1.md) 
