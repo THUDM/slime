@@ -274,9 +274,10 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
         rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
         old_log_probs = torch.cat(batch["log_probs"], dim=0)
 
-        tis = torch.exp(log_probs - rollout_log_probs)
-        tis_clip = torch.clamp(tis, max=args.tis_clip)
-        tis_clipfrac = tis_clip < tis
+        tis = torch.exp(old_log_probs - rollout_log_probs)
+        ois = (-ppo_kl).exp()
+        tis_clip = torch.clamp(tis, min=args.tis_clip_low, max=args.tis_clip)
+        tis_clipfrac = tis_clip != tis
 
         pg_loss = pg_loss * tis_clip
 
@@ -322,6 +323,7 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
 
     if args.use_tis:
         reported_loss["tis"] = sum_of_sample_mean(tis).clone().detach()
+        reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
         reported_loss["tis_clipfrac"] = sum_of_sample_mean(tis_clipfrac).clone().detach()
 
     return loss, reported_loss

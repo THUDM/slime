@@ -601,6 +601,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=2.0,
                 help="Clipping threshold C for importance sampling ratios to control variance.",
             )
+            parser.add_argument(
+                "--tis-clip-low",
+                type=float,
+                default=0,
+                help="Lower bound clipping threshold C for importance sampling ratios to control variance.",
+            )
             return parser
 
         # wandb
