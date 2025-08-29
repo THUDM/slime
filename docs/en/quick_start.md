@@ -1,5 +1,7 @@
 # slime Quick Start Guide
 
+![中文版](../zh/quick_start.md)
+
 This document will guide you through setting up the environment and getting started with slime within one hour, covering environment configuration, data preparation, training startup, and key code analysis and modifications.
 
 ## Basic Environment Setup
@@ -77,6 +79,22 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     --hf-checkpoint /root/GLM-Z1-9B-0414 \
     --save /root/GLM-Z1-9B-0414_torch_dist
 ```
+
+For larger models, you can use `torchrun` to start the covnersion script to convert with multi-gpus or even multi-nodes.
+
+### Convert from Megatron Format to Hugging Face Format
+
+You can use the following script to convert the saved Megatron chekcpoints back to Hugging Face format:
+
+```bash
+PYTHONPATH=/root/Megatron-LM python tools/convert_torch_dist_to_hf.py \
+  --input-dir /path/to/torch_dist_ckpt/iter_xxx/ \
+  --output-dir /root/GLM-Z1-9B-0414-iter_xxx \
+  --origin-hf-dir /root/GLM-Z1-9B-0414
+```
+
+Note that as Megatron will do padding to embedding for better performance, it may happen that the converted embedding is not correct. In that case, please manually set `--vocab-size` during convertion.
+
 
 ## Training Script and Parameter Overview
 
@@ -506,7 +524,32 @@ ROLLOUT_ARGS+=(
 )
 ```
 
-## Multi-Machine Training for Large-Scale MOE Models
+## Multi-Node Training for Large-Scale MOE Models
+
+To start a multi-node task, you need to first start a Ray cluster. On node 0, run:
+
+```bash
+# Node0 (HEAD)
+ray start --head --node-ip-address ${MASTER_ADDR} \
+  --num-gpus 8 --disable-usage-stats
+
+# Other Nodes
+ray start --address=${MASTER_ADDR}:6379 --num-gpus 8
+```
+
+After the Ray cluster has started, you can submit a job from node 0, for example:
+
+```bash
+ray job submit --address="http://127.0.0.1:8265" \
+   --runtime-env-json='{
+     "env_vars": {
+        "PYTHONPATH": "/root/Megatron-LM/",
+        ... # e.g., no_proxy, API variables, etc.
+     }
+   }' \
+   -- python3 train.py \
+   --... # Other Megatron/SGLang/slime arguments
+```
 
 slime has been deeply optimized for distributed training of large-scale Mixture of Experts (MoE) models. We provide some end-to-end training cases for reference:
 

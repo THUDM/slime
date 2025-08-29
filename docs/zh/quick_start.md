@@ -1,5 +1,7 @@
 # slime 快速使用指南
 
+![English](../en/quick_start.md)
+
 本文档从搭建环境开始，在一小时内带您快速上手 slime，涵盖环境配置，数据准备，训练启动和关键代码解析和魔改。
 
 ## 基础环境搭建
@@ -78,6 +80,21 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     --hf-checkpoint /root/GLM-Z1-9B-0414 \
     --save /root/GLM-Z1-9B-0414_torch_dist
 ```
+
+对于更大的模型，可以使用 `torchrun` 来启动转换脚本，从而使用多张 GPU 甚至多机进行权重转换。
+
+### Megatron 格式 转换为 Hugging Face 格式
+
+可以通过这样的方式将训练过程中保存的 Megatron 格式的权重转换回 Huggingface 格式：
+
+```bash
+PYTHONPATH=/root/Megatron-LM python tools/convert_torch_dist_to_hf.py \
+  --input-dir /path/to/torch_dist_ckpt/iter_xxx/ \
+  --output-dir /root/GLM-Z1-9B-0414-iter_xxx \
+  --origin-hf-dir /root/GLM-Z1-9B-0414
+```
+
+由于 Megatron 会对 embedding 做 padding，可能会出现转换出来的权重的 embedding 形状不匹配的问题。这时需要在转换时设置 `--vocab-size`。
 
 ## 训练脚本与参数概览
 
@@ -515,8 +532,33 @@ ROLLOUT_ARGS+=(
 )
 ```
 
-
 ## 大规模 MOE 模型的多机训练
+
+为了启动多机任务，首先需要启动一个 ray 集群，即在 node 0 运行：
+
+```bash
+# Node0（HEAD）
+ray start --head --node-ip-address ${MASTER_ADDR} \
+  --num-gpus 8 --disable-usage-stats
+
+# 其他 Node
+ray start --address=${MASTER_ADDR}:6379 --num-gpus 8
+```
+
+在 ray 集群启动后，可以在 node 0 提交任务，例如：
+
+```bash
+ray job submit --address="http://127.0.0.1:8265" \
+   --runtime-env-json='{
+     "env_vars": {
+        "PYTHONPATH": "/root/Megatron-LM/",
+        ... # e.g. no_proxy、接口变量等
+     }
+   }' \
+   -- python3 train.py \
+   --...（其他 Megatron/SGLang/slime 参数）
+```
+
 slime 针对大规模混合专家（MoE）模型的分布式训练进行了深度优化。我们提供了一些端到端的训练案例以供参考：
 
 - [示例：64xH100 训练 GLM-4.5](models/glm4.5-355B-A32B.md)
