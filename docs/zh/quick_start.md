@@ -1,6 +1,6 @@
 # slime 快速使用指南
 
-![English](../en/quick_start.md)
+[English Version](../en/quick_start.md)
 
 本文档从搭建环境开始，在一小时内带您快速上手 slime，涵盖环境配置，数据准备，训练启动和关键代码解析和魔改。
 
@@ -102,7 +102,7 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_torch_dist_to_hf.py \
 
 ```bash
 cd /root/slime
-bash script/run-glm4-9B.sh
+bash scripts/run-glm4-9B.sh
 ```
 
 我们还是以 run-glm4-9B.sh 脚本为例，简单分析主要参数的作用。

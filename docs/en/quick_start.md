@@ -1,6 +1,6 @@
 # slime Quick Start Guide
 
-![中文版](../zh/quick_start.md)
+[中文版](../zh/quick_start.md)
 
 This document will guide you through setting up the environment and getting started with slime within one hour, covering environment configuration, data preparation, training startup, and key code analysis and modifications.
 
@@ -102,7 +102,7 @@ After completing the above preparation work, you can run the training script.
 
 ```bash
 cd /root/slime
-bash script/run-glm4-9B.sh
+bash scripts/run-glm4-9B.sh
 ```
 
 We still use the run-glm4-9B.sh script as an example to briefly analyze the main parameters.
