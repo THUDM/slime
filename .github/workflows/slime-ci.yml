@@ -1,9 +1,6 @@
 name: GPU CI
 
 on:
-  push:
-    branches: [main]
-    paths: "slime/**"
   pull_request:
     branches: [main]
     paths: "slime/**"
