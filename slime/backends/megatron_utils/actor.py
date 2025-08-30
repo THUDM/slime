@@ -14,7 +14,7 @@ from megatron.core import mpu
 
 from transformers import AutoConfig, AutoTokenizer
 
-from slime.ray.ppo_actor import TrainRayActor
+from slime.ray.train_actor import TrainRayActor
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
