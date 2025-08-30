@@ -8,6 +8,10 @@ on:
     branches: [main]
     paths: "slime/**"
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   # GPU tests on self-hosted runner
   test-disaggregate-glm4-9B:
