@@ -59,11 +59,16 @@ if [ ! -d "$BASE_DIR/slime" ]; then
   cd $BASE_DIR
   git clone  https://github.com/THUDM/slime.git
   cd slime/
+  export SLIME_DIR=$BASE_DIR/slime
+  pip install -e .
+else
+  export SLIME_DIR=$BASE_DIR/
+  pip install -e .
 fi
 
-pip install -e .
+
 # apply patch
 cd $BASE_DIR/sglang
-git apply $BASE_DIR/slime/docker/patch/v0.5.0rc0-cu126/sglang.patch
+git apply $SLIME_DIR/docker/patch/v0.5.0rc0-cu126/sglang.patch
 cd $BASE_DIR/Megatron-LM
-git apply $BASE_DIR/slime/docker/patch/v0.5.0rc0-cu126/megatron.patch
+git apply $SLIME_DIR/docker/patch/v0.5.0rc0-cu126/megatron.patch
