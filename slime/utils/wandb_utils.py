@@ -130,7 +130,7 @@ def _init_wandb_common():
 def get_wandb_offline_dir(args):
     """Get the directory where offline W&B data is stored."""
     if _is_offline_mode(args):
-        if args and hasattr(args, 'wandb_dir') and args.wandb_dir:
+        if args and hasattr(args, "wandb_dir") and args.wandb_dir:
             # Use custom directory if specified
             return args.wandb_dir
         else:
@@ -138,5 +138,3 @@ def get_wandb_offline_dir(args):
             # This will be created automatically by wandb
             return os.path.expanduser("~/wandb")
     return None
-
-

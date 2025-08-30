@@ -8,7 +8,7 @@
 
 由于 slime 可能会包含针对 sglang/megatron 的临时补丁（patch）。为避免潜在的环境配置问题，强烈建议**用户使用我们提供的最新 Docker 镜像**，它已预置好所有依赖。
 
-- 对于不方便使用 docker 的场景，请参考 [从零搭建环境](./build.md)；
+- 对于不方便使用 docker 的场景，请参考 [build_conda.sh](./../../build_conda.sh)；
 - 对于 AMD 支持，请参考 [AMD 使用教程](../en/amd_tutorial.md)。
 
 ### 拉取并启动 Docker 容器
@@ -562,5 +562,4 @@ ray job submit --address="http://127.0.0.1:8265" \
 slime 针对大规模混合专家（MoE）模型的分布式训练进行了深度优化。我们提供了一些端到端的训练案例以供参考：
 
 - [示例：64xH100 训练 GLM-4.5](models/glm4.5-355B-A32B.md)
-- [示例：8xH100 训练 Qwen3-30B-A3B](models/qwen3-30B-A3B.md)
 - [示例：128xH100 训练 DeepSeek-R1](models/deepseek-r1.md)
