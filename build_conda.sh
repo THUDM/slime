@@ -6,8 +6,6 @@ set -ex
 yes '' | "${SHELL}" <(curl -L micro.mamba.pm/install.sh)
 source ~/.bashrc
 
-micromamba self-update
-
 micromamba create -n slime python=3.12 pip -c conda-forge -y
 micromamba activate slime
 export CUDA_HOME="$CONDA_PREFIX"
