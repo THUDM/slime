@@ -83,6 +83,9 @@ def init_wandb_secondary(args, wandb_run_id):
 
     offline = _is_offline_mode(args)
 
+    if (not offline) and args.wandb_key is not None:
+        wandb.login(key=args.wandb_key, host=args.wandb_host)
+
     init_kwargs = {
         "id": wandb_run_id,
         "entity": args.wandb_team,
@@ -121,7 +124,6 @@ def _init_wandb_common():
     wandb.define_metric("passrate/*", step_metric="rollout/step")
     wandb.define_metric("eval/step")
     wandb.define_metric("eval/*", step_metric="eval/step")
-    wandb.define_metric("perf/step")
     wandb.define_metric("perf/*", step_metric="rollout/step")
 
 

@@ -76,26 +76,7 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         data = data[0]
 
     # save the unprocessed reward for logging
-    rewards = data["rewards"]
-    if "raw_reward" in data:
-        raw_rewards = data["raw_reward"]
-    else:
-        raw_rewards = rewards
-    rollout_data["raw_reward"] = raw_rewards
-
-    if args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"] and args.rewards_normalization:
-        # group norm
-        rewards = torch.tensor([r for r in rewards], dtype=torch.float)
-        rewards = rewards.reshape(-1, args.n_samples_per_prompt)
-        mean = rewards.mean(dim=-1, keepdim=True)
-        rewards = rewards - mean
-
-        if args.advantage_estimator in ["grpo", "gspo"] and args.grpo_std_normalization:
-            std = rewards.std(dim=-1, keepdim=True)
-            rewards = rewards / (std + 1e-6)
-
-        rewards = rewards.flatten().tolist()
-        data["rewards"] = rewards
+    rollout_data["raw_reward"] = data["raw_reward"]
 
     total_lengths = [len(t) for t in data["tokens"]]
     data["total_lengths"] = total_lengths
@@ -144,6 +125,7 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         "loss_masks",
         "round_number",
         "sample_indices",
+        "rollout_log_probs",
     ]:
         if key not in data:
             continue
@@ -155,5 +137,19 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
             val = [torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in val]
 
         rollout_data[key] = val
+
+    if "rollout_log_probs" in rollout_data:
+        from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
+
+        rollout_data["rollout_log_probs"] = [
+            torch.tensor(
+                slice_log_prob_with_cp(log_prob, total_length, response_length),
+                device=torch.cuda.current_device(),
+                dtype=torch.bfloat16,  # TODO: hardcode to bf16 at the moment
+            )
+            for log_prob, total_length, response_length in zip(
+                rollout_data["rollout_log_probs"], rollout_data["total_lengths"], rollout_data["response_lengths"]
+            )
+        ]
 
     return rollout_data

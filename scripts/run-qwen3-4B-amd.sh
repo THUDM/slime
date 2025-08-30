@@ -1,10 +1,6 @@
 #!/bin/bash
 
-
-# bash scripts/run-qwen3-4B-amd.sh
-
-
-####clear before training
+# for rerun the task
 pkill -9 sglang
 sleep 3
 ray stop --force
@@ -57,6 +53,7 @@ export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"} #You can ch
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
 
+# Current Model convert script on AMD GPU has some issue, please download the converted model from here: https://huggingface.co/zyzshishui0627/models 
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/qwen3-4B.sh"
@@ -64,7 +61,8 @@ source "${SCRIPT_DIR}/models/qwen3-4B.sh"
 CKPT_ARGS=(
    --hf-checkpoint ${MODEL_DIR}/Qwen3-4B
    #--hf-checkpoint /root/Qwen3-4B-FP8
-   --ref-load ${MODEL_DIR}/Qwen3-4B_torch
+   --ref-load ${MODEL_DIR}/Qwen3-4B_torch_dist
+   # --ref-load ${MODEL_DIR}/Qwen3-4B_torch_dist_amd_new
    --load ${MODEL_DIR}/Qwen3-4B_slime/
    --save ${MODEL_DIR}/Qwen3-4B_slime/
    --save-interval 20
@@ -76,9 +74,7 @@ ROLLOUT_ARGS=(
    --label-key label
    --apply-chat-template
    --rollout-shuffle
-
    --rm-type deepscaler
-
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
@@ -134,7 +130,7 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   #--use-wandb
+   # --use-wandb
    # --wandb-project slime-dev
    # --wandb-group qwen3-4B-test
    # --wandb-key ${WANDB_KEY}
@@ -148,10 +144,8 @@ WANDB_ARGS=(
 # )
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
-   --sglang-mem-fraction-static 0.4
+   --sglang-mem-fraction-static 0.7
 )
-####################
-
 
 MISC_ARGS=(
    # default dropout in megatron is 0.1
@@ -164,7 +158,7 @@ MISC_ARGS=(
    --attention-backend flash
    ### AMD Support ###
    # disable gradient accumulation fusion: Need to add apex to enable this
-   # --no-gradient-accumulation-fusion
+   --no-gradient-accumulation-fusion
    ###################
 )
 
@@ -201,26 +195,3 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
    ${MISC_ARGS[@]}
-
-
-
-####clear after training
-
-pkill -9 sglang
-sleep 3
-ray stop --force
-pkill -9 ray
-pkill -9 python
-sleep 3
-pkill -9 ray
-pkill -9 python
-
-
-
-
-
-
-
-
-
-

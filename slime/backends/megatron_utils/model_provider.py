@@ -1,5 +1,6 @@
 # Adapt from https://github.com/NVIDIA/Megatron-LM/blob/b1efb3c7126ef7615e8c333432d76e08038e17ff/pretrain_gpt.py
 import inspect
+import torch
 from contextlib import nullcontext
 from typing import Optional
 
@@ -28,6 +29,29 @@ def get_model_provider_func(args):
             Union[GPTModel, megatron.legacy.model.GPTModel]: The returned model
         """
         use_te = args.transformer_impl == "transformer_engine"
+
+        if args.record_memory_history:
+            torch.cuda.memory._record_memory_history(
+                # True,
+                # keep 100,000 alloc/free events from before the snapshot
+                max_entries=100000,
+                # record stack information for the trace events
+                # trace_alloc_record_context=True,
+                stacks="all",
+            )
+
+            def oom_observer(device, alloc, device_alloc, device_free):
+                # snapshot right after an OOM happened
+                print("saving allocated state during OOM")
+                snapshot = torch.cuda.memory._snapshot()
+                from pickle import dump
+
+                dump(
+                    snapshot,
+                    open(f"oom_rank-{torch.distributed.get_rank()}_{args.memory_snapshot_path}", "wb"),
+                )
+
+            torch._C._cuda_attach_out_of_memory_observer(oom_observer)
 
         # Experimental loading arguments from yaml
         config = core_transformer_config_from_args(args)

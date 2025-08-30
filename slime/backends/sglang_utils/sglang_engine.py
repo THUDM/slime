@@ -130,10 +130,6 @@ class SGLangEngine(RayActor):
                 f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_args.host}:{self.server_args.port}"
             )
 
-        if self.args.offload:
-            # offload the engine to the CPU
-            self.release_memory_occupation()
-
     def _make_request(self, endpoint: str, payload: Optional[dict] = None):
         """Make a POST request to the specified endpoint with the given payload.
 
@@ -197,6 +193,7 @@ class SGLangEngine(RayActor):
         kill_process_tree(self.process.pid)
 
     def release_memory_occupation(self):
+        self.flush_cache()
         return self._make_request("release_memory_occupation")
 
     def resume_memory_occupation(self, tags: List[str] = None):

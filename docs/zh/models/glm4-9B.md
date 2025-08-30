@@ -17,7 +17,7 @@ pip install -e .
 
 ```bash
 # hf checkpoint
-huggingface-cli download THUDM/GLM-Z1-9B-0414 --local-dir /root/GLM-Z1-9B-0414
+huggingface-cli download zai-org/GLM-Z1-9B-0414 --local-dir /root/GLM-Z1-9B-0414
 
 # train data
 huggingface-cli download --repo-type dataset zhuzilin/dapo-math-17k \

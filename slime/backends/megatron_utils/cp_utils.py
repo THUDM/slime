@@ -121,7 +121,12 @@ def all_gather_with_cp(tensor: torch.Tensor, total_length: int, response_length:
     assert chunk_1.shape[0] == logits_offset[1][1] - logits_offset[1][0]
 
     def zero(len):
-        return torch.zeros([len] + list(tensor.shape[1:]), dtype=tensor.dtype, device=tensor.device)
+        return torch.zeros(
+            [len] + list(tensor.shape[1:]),
+            dtype=tensor.dtype,
+            device=tensor.device,
+            requires_grad=True,
+        )
 
     # logprob should be within the range of [prompt_length - 1, total_length - 1]
     if chunk_0.shape[0] == 0 and chunk_1.shape[0] == 0:
@@ -163,3 +168,19 @@ def slice_with_cp(tokens: torch.Tensor, pad_value):
     start_1, end_1 = chunk_size * cp_rank, chunk_size * (cp_rank + 1)
     start_2, end_2 = chunk_size * (2 * cp_size - cp_rank - 1), chunk_size * (2 * cp_size - cp_rank)
     return torch.cat([tokens[start_1:end_1], tokens[start_2:end_2]])
+
+
+def slice_log_prob_with_cp(log_prob: list[float], total_length: int, response_length: int):
+    assert len(log_prob) == response_length
+
+    cp_size = mpu.get_context_parallel_world_size()
+
+    if cp_size == 1:
+        return log_prob
+
+    prompt_length = total_length - response_length
+    _, _, logits_offset, _ = get_logits_and_tokens_offset_with_cp(total_length, response_length)
+
+    chunk_1 = log_prob[logits_offset[0][0] - (prompt_length - 1) : logits_offset[0][1] - (prompt_length - 1)]
+    chunk_2 = log_prob[logits_offset[1][0] - (prompt_length - 1) : logits_offset[1][1] - (prompt_length - 1)]
+    return chunk_1 + chunk_2

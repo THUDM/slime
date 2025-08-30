@@ -14,15 +14,15 @@ If you are running Slime on AMD's Instinct, please refer to the following materi
 
 You can download the prebuilt image from DockerHub: [rlsys/slime](https://hub.docker.com/r/rlsys/slime/tags). 
 ```bash
-docker pull rlsys/slime:slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-core-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch
+docker pull rlsys/slime:slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch-vim
 ```
 Or you can use the [Dockerfile.rocm](docker/Dockerfile.rocm) to build it on your side.
 ```bash
 cd docker
-docker build -f Dockerfile.rocm -t slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-core-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch .
+docker build -f Dockerfile.rocm -t slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch-vim .
 ```
 
-Acknowledgement: Thanks to [Yang Wang](https://www.microsoft.com/en-us/research/people/yangwang5/) for working on the patch for this ROCm base Docker image to support virtual memory management on MI300X.
+Acknowledgement: Thanks to [Yang Wang](https://www.microsoft.com/en-us/research/people/yangwang5/) for working on the patch for this [ROCm base Docker image](https://hub.docker.com/r/rlsys/rocm-6.3.4-patch/tags) to support virtual memory management on MI300X.
 
 
 ## Quick Start
@@ -46,7 +46,7 @@ docker run --rm -it \
   --ulimit memlock=-1 \
   --ulimit stack=67108864 \
   -w $PWD \
-  rlsys/slime:slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-core-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch \
+  rlsys/slime:slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch-vim \
   /bin/bash
 ```
 
@@ -75,6 +75,8 @@ PYTHONPATH=${MEGATRON_LM_PATH} python tools/convert_hf_to_torch_dist.py \
     --hf-checkpoint model/Qwen3-4B \
     --save model/Qwen3-4B_torch_dist
 ```
+
+Note: You might encounter some issue in the current model convert script on AMD GPUs. You can go [here](https://huggingface.co/zyzshishui0627/models) to dowload the converted models.
 
 ⚠️ If you encounter an issue where slime cannot be found, please run `pip install -e .` in the slime directory.
 

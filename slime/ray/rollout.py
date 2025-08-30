@@ -105,6 +105,9 @@ def create_rollout_engines(args, pg):
     init_handles = [engine.init.remote(**ports) for engine, ports in zip(rollout_engines, addr_and_ports)]
     ray.get(init_handles)
 
+    if args.offload:
+        ray.get([engine.release_memory_occupation.remote() for engine in rollout_engines])
+
     return rollout_engines
 
 
@@ -121,6 +124,7 @@ def _start_router(args):
         host=args.sglang_router_ip,
         port=args.sglang_router_port,
         balance_abs_threshold=0,
+        prometheus_port=find_available_port(random.randint(4000, 5000)),
     )
 
     if hasattr(router_args, "log_level"):

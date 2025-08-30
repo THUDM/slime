@@ -1,3 +1,4 @@
+
 #!/bin/bash
 
 # for rerun the task
@@ -24,15 +25,15 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/models/qwen3-4B.sh"
+source "${SCRIPT_DIR}/models/mimo-7B-rl.sh"
 
-CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-4B
+ CKPT_ARGS=(
+   --hf-checkpoint /root/MiMo-7B-RL
    #--hf-checkpoint /root/Qwen3-4B-FP8
-   --ref-load /root/Qwen3-4B_torch_dist
-   --load /root/Qwen3-4B_slime/
-   --save /root/Qwen3-4B_slime/
-   --save-interval 20
+   --ref-load /root/MiMo-7B-RL_torch_dist
+   --load /root/MiMo-7B-RL-mtp_slime/
+   --save /root/MiMo-7B-RL-mtp_slime/
+   --save-interval 2000
 )
 
 ROLLOUT_ARGS=(
@@ -55,13 +56,13 @@ ROLLOUT_ARGS=(
 EVAL_ARGS=(
    --eval-interval 20
    --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
-   --n-samples-per-eval-prompt 16
-   --eval-max-response-len 16384
+   --n-samples-per-eval-prompt 1
+   --eval-max-response-len 8192
    --eval-top-p 0.7
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 1
+   --tensor-model-parallel-size 2
    --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
@@ -78,20 +79,18 @@ PERF_ARGS=(
 )
 
 GRPO_ARGS=(
-   --advantage-estimator reinforce_plus_plus
+   --advantage-estimator grpo
    --use-kl-loss
    --kl-loss-coef 0.00
-   --kl-loss-type low_var_kl5
+   --kl-loss-type low_var_kl
    --entropy-coef 0.00
    --eps-clip 0.2
    --eps-clip-high 0.28
-   --gamma 1.0
-   --normalize-advantages
 )
 
 OPTIMIZER_ARGS=(
    --optimizer adam
-   --lr 5e-7
+   --lr 1e-6
    --lr-decay-style constant
    --weight-decay 0.1
    --adam-beta1 0.9
@@ -99,15 +98,36 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-#    --use-wandb
-#    --wandb-project slime-dev
-#    --wandb-group qwen3-4B-test-reinforce_plus_plus
-#    --wandb-key ${WANDB_KEY}
+   # --use-wandb
+   # --wandb-project slime-dev
+   # --wandb-group mimo-7B-rl-test
+   # --wandb-key ${WANDB_API_KEY}
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 2
+   --rollout-num-gpus-per-engine 1
    --sglang-mem-fraction-static 0.7
+   # if speculative decoding has bug, this can help debug
+   # --debug-rollout-only
+
+   # for speculative decoding
+   --sglang-speculative-algorithm EAGLE
+   --sglang-speculative-num-steps 3
+   --sglang-speculative-eagle-topk 1
+   --sglang-speculative-num-draft-tokens 4
+
+   # bug exists when cuda graph do padding (both fa3 and flashInfer)
+   # temporarily skip this problem by extending the original cuda graph batch size
+   # https://github.com/sgl-project/sglang/issues/8336
+   # https://github.com/sgl-project/sglang/issues/9521
+   --sglang-cuda-graph-bs $(seq 1 32) $(seq 40 8 64) $(seq 80 16 160)
+
+   # improve performance by enlarging the max running requests
+   # --sglang-max-running-requests 128
+
+   # If flashInfer has bug with speculative decoding, use fa3 instead
+   # https://github.com/sgl-project/sglang/issues/9481
+   # --sglang-attention-backend fa3
 )
 
 MISC_ARGS=(
@@ -123,8 +143,7 @@ MISC_ARGS=(
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-export MASTER_PORT=${MASTER_PORT:-"12345"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats
 
 # Build the runtime environment JSON with proper variable substitution
 RUNTIME_ENV_JSON="{
@@ -140,6 +159,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    -- python3 train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 8 \
+   --rollout-num-gpus-per-node 8 \
    --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \

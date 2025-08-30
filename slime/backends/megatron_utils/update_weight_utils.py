@@ -231,8 +231,13 @@ def get_param_infos(args, model) -> list[ParamInfo]:
             if src_rank == rank:
                 continue
             for name, info in infos.items():
-                assert name not in param_infos, f"Duplicate parameter name: {name}"
-                param_infos[name] = info
+                if name in param_infos:
+                    assert args.mtp_num_layers is not None
+                    old_info = param_infos[name]
+                    if old_info.src_rank > src_rank:
+                        param_infos[name] = info
+                else:
+                    param_infos[name] = info
 
     if ep_size > 1:
         param_infos_list = [None] * ep_size

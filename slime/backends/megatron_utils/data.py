@@ -170,7 +170,7 @@ def log_rollout_data(rollout_id, args, rollout_data):
                     # NOTE: Here we have to do the clone().detach(), otherwise the tensor will be
                     # modified in place and will cause problem for the next rollout.
                     val = torch.cat(val).clone().detach()
-                    if key in ["log_probs", "ref_log_probs", "returns", "advantages"] and loss_masks is not None:
+                    if key in ["log_probs", "ref_log_probs", "rollout_log_probs", "returns", "advantages"]:
                         sum_of_sample_mean = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks)
                         val = cp_size * sum_of_sample_mean(val) / len(loss_masks)
                     else:
@@ -196,6 +196,17 @@ def log_rollout_data(rollout_id, args, rollout_data):
             reduced_log_dict = {
                 f"rollout/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
             }
+            if args.ci_test:
+                if (
+                    rollout_id == 0
+                    and "rollout/log_probs" in reduced_log_dict
+                    and "rollout/ref_log_probs" in reduced_log_dict
+                ):
+                    assert reduced_log_dict["rollout/log_probs"] == reduced_log_dict["rollout/ref_log_probs"]
+                if "rollout/log_probs" in reduced_log_dict:
+                    assert -0.5 < reduced_log_dict["rollout/log_probs"] < 0
+                if "rollout/entropy" in reduced_log_dict:
+                    assert 0 < reduced_log_dict["rollout/entropy"] < 0.5
             print(f"rollout {rollout_id}: {reduced_log_dict}")
             if args.use_wandb:
                 reduced_log_dict["rollout/step"] = (
@@ -234,7 +245,7 @@ def log_multi_turn_data(rollout_id, args, rollout_data):
                     log_dict["raw_response_length/response_length_max"] = raw_response_lengths.max().item()
                     log_dict["raw_response_length/response_length_min"] = raw_response_lengths.min().item()
                     log_dict["raw_response_length/response_length_clip_ratio"] = (
-                        (raw_response_lengths > args.rollout_max_response_len).float().mean().item()
+                        (raw_response_lengths >= args.rollout_max_response_len).float().mean().item()
                     )
 
                     # Vectorized sum calculation using torch - stay on GPU

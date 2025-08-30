@@ -5,6 +5,7 @@ from megatron.core import mpu
 
 from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
+from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
 from slime.utils.ppo_utils import (
     compute_approx_kl,
     compute_entropy_from_logits,
@@ -14,8 +15,6 @@ from slime.utils.ppo_utils import (
     get_reinforce_plus_plus_baseline_advantages,
     get_reinforce_plus_plus_returns,
 )
-
-from .cp_utils import get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean, all_gather_with_cp
 
 
 def calculate_log_probs_and_entropy(logits, tokens, with_entropy: bool = False):
@@ -52,7 +51,7 @@ def get_log_probs_and_entropy(
     assert logits.dtype == torch.float32, f"{logits.dtype}"
 
     logits = logits.squeeze(0)
-    logits.div_(args.rollout_temperature)
+    logits = logits.div(args.rollout_temperature)
 
     cp_size = mpu.get_context_parallel_world_size()
 
@@ -253,6 +252,7 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
             all_gather_with_cp(old_log_prob, total_length, response_length)
             for old_log_prob, total_length, response_length in zip(old_log_probs, total_lengths, response_lengths)
         ]
+
         loss_masks = batch["loss_masks"]
         ppo_kl = [
             ((old_logprob - log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
@@ -267,6 +267,20 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
         ppo_kl = old_log_probs - log_probs
 
     pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
+
+    # Apply TIS off-policy correction using importance sampling if enabled
+    if args.use_tis:
+        assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
+        rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
+        old_log_probs = torch.cat(batch["log_probs"], dim=0)
+
+        tis = torch.exp(old_log_probs - rollout_log_probs)
+        ois = (-ppo_kl).exp()
+        tis_clip = torch.clamp(tis, min=args.tis_clip_low, max=args.tis_clip)
+        tis_clipfrac = tis_clip != tis
+
+        pg_loss = pg_loss * tis_clip
+
     pg_loss = sum_of_sample_mean(pg_loss)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
     ppo_kl = sum_of_sample_mean(ppo_kl)
@@ -296,17 +310,23 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
     if log_probs.numel() == 0:
         loss += 0 * logits.sum()
 
-    return (
-        loss,
-        {
-            "loss": loss.clone().detach(),
-            "pg_loss": pg_loss.clone().detach(),
-            "entropy_loss": entropy_loss.clone().detach(),
-            "pg_clipfrac": pg_clipfrac.clone().detach(),
-            "ppo_kl": ppo_kl.clone().detach(),
-            "kl_loss": kl_loss.clone().detach(),
-        },
-    )
+    reported_loss = {
+        "loss": loss.clone().detach(),
+        "pg_loss": pg_loss.clone().detach(),
+        "entropy_loss": entropy_loss.clone().detach(),
+        "pg_clipfrac": pg_clipfrac.clone().detach(),
+        "ppo_kl": ppo_kl.clone().detach(),
+    }
+
+    if args.use_kl_loss:
+        reported_loss["kl_loss"] = kl_loss.clone().detach()
+
+    if args.use_tis:
+        reported_loss["tis"] = sum_of_sample_mean(tis).clone().detach()
+        reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
+        reported_loss["tis_clipfrac"] = sum_of_sample_mean(tis_clipfrac).clone().detach()
+
+    return loss, reported_loss
 
 
 def sft_loss_function(args, batch, logits, sum_of_sample_mean):

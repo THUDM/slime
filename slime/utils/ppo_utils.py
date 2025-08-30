@@ -4,7 +4,6 @@ from typing import List, Optional
 
 import torch
 import torch.distributed as dist
-from megatron.core import mpu
 
 from slime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
 
@@ -159,6 +158,8 @@ def get_reinforce_plus_plus_returns(
         List[torch.Tensor]: A list of return (G_t) tensors for the
                             local sequence chunks owned by the current GPU rank.
     """
+    from megatron.core import mpu
+
     cp_size = mpu.get_context_parallel_world_size()
     cp_rank = mpu.get_context_parallel_rank()
 
