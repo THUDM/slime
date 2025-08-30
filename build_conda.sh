@@ -13,8 +13,9 @@ export CUDA_HOME="$CONDA_PREFIX"
 export BASE_DIR=${BASE_DIR:-"/root"}
 cd $BASE_DIR
 # install sglang
-git clone -b v0.5.0rc0 https://github.com/sgl-project/sglang.git
+git clone https://github.com/sgl-project/sglang.git
 cd sglang
+git checkout 8ecf6b9d2480c3f600826c7d8fef6a16ed603c3f
 # Install the python packages
 pip install -e "python[all]"
 
