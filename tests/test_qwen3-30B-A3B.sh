@@ -119,13 +119,15 @@ export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 export no_proxy="127.0.0.1,${MASTER_ADDR}"
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats
 
+export CUDA_HOME=${CUDA_HOME:-"/usr/local/cuda"}
 # Build the runtime environment JSON with proper variable substitution
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"PYTHONPATH\": \"/root/Megatron-LM/\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
-    \"no_proxy\": \"${no_proxy}\"
+    \"no_proxy\": \"${no_proxy}\",
+    \"CUDA_HOME\": \"${CUDA_HOME}\"
   }
 }"
 
