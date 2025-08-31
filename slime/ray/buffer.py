@@ -81,7 +81,7 @@ class RolloutController:
 
     def post_process_rewards(self, samples: Union[list[Sample], list[list[Sample]]]):
         if self.custom_reward_post_process_func is not None:
-            return self.custom_reward_post_process_func(self.args, raw_rewards)
+            return self.custom_reward_post_process_func(self.args, samples)
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
         if (

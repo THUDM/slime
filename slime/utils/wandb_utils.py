@@ -127,15 +127,10 @@ def _init_wandb_common():
     wandb.define_metric("perf/*", step_metric="rollout/step")
 
 
-def is_wandb_offline():
-    """Check if W&B is running in offline mode."""
-    return os.environ.get("WANDB_MODE") == "offline"
-
-
-def get_wandb_offline_dir(args=None):
+def get_wandb_offline_dir(args):
     """Get the directory where offline W&B data is stored."""
-    if is_wandb_offline():
-        if args and hasattr(args, "wandb_dir") and args.wandb_dir:
+    if _is_offline_mode(args):
+        if args and hasattr(args, 'wandb_dir') and args.wandb_dir:
             # Use custom directory if specified
             return args.wandb_dir
         else:
@@ -143,3 +138,5 @@ def get_wandb_offline_dir(args=None):
             # This will be created automatically by wandb
             return os.path.expanduser("~/wandb")
     return None
+
+

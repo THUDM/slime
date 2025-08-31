@@ -77,14 +77,16 @@ PERF_ARGS=(
 )
 
 GRPO_ARGS=(
-   --advantage-estimator grpo
+   --advantage-estimator gspo
    #--use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    --kl-coef 0.00
    --entropy-coef 0.00
-   --eps-clip 0.2
-   --eps-clip-high 0.28
+   --eps-clip 1e-4
+   --eps-clip-high 2e-4
+
+   --use-tis
 )
 
 OPTIMIZER_ARGS=(
