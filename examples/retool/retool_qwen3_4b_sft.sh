@@ -24,44 +24,34 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "/root/slime/scripts/models/qwen3-4B-2507.sh"
+source "/root/slime/scripts/models/qwen3-4B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/font-info/qwen3-4b-sft
-   --ref-load /root/font-info/qwen3-4b-sft_torch_dist
-   # --load /root/Qwen3-4B_slime/
-   --save /root/font-info/qwen3-4b-sft/qwen3-4b-sft-multi-turn-verl/
-   --save-interval 20
+   --hf-checkpoint /root/slime/models/Qwen/Qwen3-4B-Instruct/
+   --ref-load /root/slime/models/Qwen/Qwen3-4B-Instruct_torch_dist
+#    --load ./models/Qwen/Qwen3-4B-Instruct_slime/
+   --save /root/slime/models/Qwen/Qwen3-4B-Instruct_sft_slime/
+   --save-interval 1000
+   --rotary-base 5000000
 )
 
-ROLLOUT_ARGS=(
-   --prompt-data /root/dapo-math-17k-processed/dapo_math_17k_cleaned.jsonl
-   --input-key prompt
-   --label-key label
-   --apply-chat-template
+SFT_ARGS=(
+   --rollout-function-path slime.rollout.sft_rollout.generate_rollout
+   --prompt-data ./data/retool/ReTool-SFT.parquet
+   --input-key messages
    --rollout-shuffle
-   --reward-key score
-   --num-rollout 3000
-   --rollout-batch-size 32
-   --n-samples-per-prompt 8
-   --rollout-max-response-len 8192
-   --rollout-temperature 0.8
+   --num-epoch 3
+   --rollout-batch-size 128
+   --global-batch-size 128
 
-   --global-batch-size 256
-   --balance-data
-)
-
-EVAL_ARGS=(
-   --eval-interval 20
-   --eval-prompt-data aime  /root/aime-2024/aime-2024.jsonl
-   --n-samples-per-eval-prompt 30
-   --eval-max-response-len 16384
-   --eval-top-p 0.6
-   --eval-temperature 1.0
+   --loss-type sft_loss
+   --calculate-per-token-loss
+   --disable-compute-advantages-and-returns
+   --debug-train-only
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 2
+   --tensor-model-parallel-size 1
    --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
@@ -77,35 +67,23 @@ PERF_ARGS=(
    --max-tokens-per-gpu 9216
 )
 
-GRPO_ARGS=(
-   --advantage-estimator grpo
-   --use-kl-loss
-   --kl-loss-coef 0.00
-   --kl-loss-type low_var_kl
-   --entropy-coef 0.00
-   --eps-clip 0.2
-   --eps-clip-high 0.28
-)
-
 OPTIMIZER_ARGS=(
    --optimizer adam
-   --lr 1e-6
-   --lr-decay-style constant
+   --lr 1e-5
+   --lr-warmup-iters 128
+   --lr-decay-style cosine
+   --min-lr 1e-6
+   --lr-warmup-fraction 0.9
    --weight-decay 0.1
    --adam-beta1 0.9
-   --adam-beta2 0.98
+   --adam-beta2 0.95
 )
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-project slime-dapo
-   --wandb-group qwen3-4B-test-multi-turn
+   --wandb-project slime-dev
+   --wandb-group qwen3-4B-base-sft
    --wandb-key ${WANDB_KEY}
-)
-
-SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 2
-   --sglang-mem-fraction-static 0.7
 )
 
 MISC_ARGS=(
@@ -119,19 +97,16 @@ MISC_ARGS=(
    --attention-backend flash
 )
 
-CUSTOM_ARGS=(
-   --custom-generate-function-path generate_with_retool.generate
-   --custom-rm-path generate_with_retool.reward_func
-)
-
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+export no_proxy="127.0.0.1,${MASTER_ADDR}"
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+
 
 # Build the runtime environment JSON with proper variable substitution
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
-    \"PYTHONPATH\": \"/root/Megatron-LM/:${SCRIPT_DIR}:/root/slime\",
+    \"PYTHONPATH\": \"/root/Megatron-LM/\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\"
   }
@@ -139,20 +114,15 @@ RUNTIME_ENV_JSON="{
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
-   -- python3 train.py \
+   -- python3 train_async.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 4 \
-   --rollout-num-gpus-per-node 4 \
-   --colocate \
+   --actor-num-gpus-per-node 8 \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
-   ${ROLLOUT_ARGS[@]} \
+   ${SFT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
-   ${GRPO_ARGS[@]} \
    ${DISTRIBUTED_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \
-   ${SGLANG_ARGS[@]} \
-   ${MISC_ARGS[@]} \
-   ${CUSTOM_ARGS[@]}
+   ${MISC_ARGS[@]}

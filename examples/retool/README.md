@@ -33,17 +33,28 @@ hf download --repo-type dataset zhuzilin/aime-2024  --local-dir /root/aime-2024
 hf download font-info/qwen3-4b-sft-SGLang-RL --local-dir /root/font-info/qwen3-4b-sft
 ```
 
-2. SFT:
+2. Create torch dict
 ```bash
-bash examples/retool/retool_sft_qwen3_4b.sh
+source scripts/models/qwen3-4B-2507.sh
+PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
+    ${MODEL_ARGS[@]} \
+    --hf-checkpoint /root/font-info/qwen3-4b-sft \
+    --rotary-base 5000000 \
+    --save /root/font-info/qwen3-4b-sft_torch_dist
+
 ```
 
-3. RL:
+3. SFT:
 ```bash
-bash examples/retool/run_qwen3_4B_RL.sh
+bash examples/retool/retool_qwen3_4b_sft.sh
 ```
 
-3. Use in your training scripts by importing the generate function:
+4. RL:
+```bash
+bash examples/retool/retool_qwen3_4b_rl.sh
+```
+
+5. Use in your training scripts by importing the generate function:
 ```python
 from generate_with_retool import generate, reward_func
 ```
