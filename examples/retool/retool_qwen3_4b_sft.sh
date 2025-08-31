@@ -27,10 +27,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "/root/slime/scripts/models/qwen3-4B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/slime/models/Qwen/Qwen3-4B-Instruct/
-   --ref-load /root/slime/models/Qwen/Qwen3-4B-Instruct_torch_dist
+   --hf-checkpoint /root/Qwen/Qwen3-4B-Instruct-2507/
+   --ref-load /root/Qwen/Qwen3-4B-Instruct-2507_torch_dist
 #    --load ./models/Qwen/Qwen3-4B-Instruct_slime/
-   --save /root/slime/models/Qwen/Qwen3-4B-Instruct_sft_slime/
+   --save /root/Qwen/Qwen3-4B-Instruct-2507_sft_slime/
    --save-interval 1000
    --rotary-base 5000000
 )
