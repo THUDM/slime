@@ -16,12 +16,18 @@ class RayTrainGroup:
     Functions start with 'async' should return list of object refs
 
     Args:
+        args (Namespace): Arguments for the actor group.
         num_nodes (int): Number of nodes for this actor group.
         num_gpus_per_node (int): Number of gpus for this actor group.
         pg (PlacementGroup, optional): Placement group to schedule actor on.
             If none, create new placement group automatically. Defaults to None.
+        wandb_run_id (str, optional): Weights and biases run id. Defaults to None.
         num_gpus_per_actor (float, optional): Number of gpus allocated for each actor.
             If < 1.0, multiple models can share same gpu. Defaults to 1.
+        resources (Dict[str, int], optional): Custom resources to allocate for each actor.
+            See https://docs.ray.io/en/latest/ray-core/scheduling/resources.html
+        num_resources_per_node (int, optional): Number of custom resources to allocate for each node.
+            See https://docs.ray.io/en/latest/ray-core/scheduling/resources.html
     """
 
     def __init__(
