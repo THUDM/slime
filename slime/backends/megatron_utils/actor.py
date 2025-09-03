@@ -51,7 +51,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_rollout_only:
             Timer().start("train_wait")
             return 0
-        
+
         (self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id) = initialize_model_and_optimizer(
             args
         )
