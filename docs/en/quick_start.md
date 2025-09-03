@@ -433,9 +433,9 @@ You need to convert it to:
 After completing data preparation, in the training script, map this preprocessed `metadata` column to slime's `Sample.metadata` field through `ROLLOUT_ARGS`.
 
 ```bash
-ROLLOUT_ARGS+=(
+ROLLOUT_ARGS=(
    # 1. Specify the preprocessed dataset file
-   --prompt-data /root/nq_search/train_processed.parquet
+   --prompt-data /root/nq_search/train_processed.json
 
    # 2. Map "question" column to input prompt
    --prompt-key question
@@ -453,7 +453,7 @@ Through this approach, you can easily access all pre-prepared structured informa
 
 ### Writing Custom Generation Function
 
-First, specify a custom asynchronous Python function through the `--rollout-generate-func-path` parameter.
+First, specify a custom asynchronous Python function through the `--custom-generate-function-path` parameter.
 
 **Function Signature**: `async def generate(args, sample: Sample, sampling_params) -> Sample:`
 
@@ -504,7 +504,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
 ### Writing Custom Reward Function
 
-Similarly, specify a custom reward function through `--reward-fn-path`.
+Similarly, specify a custom reward function through `--custom-rm-path`.
 
 **Function Signature**: `async def reward_func(args, sample: Sample, **kwargs) -> float:`
 
@@ -515,12 +515,12 @@ This function receives a complete `Sample` object and calculates scores based on
 Finally, in the training script, enable the above custom functions through the following parameters:
 
 ```bash
-ROLLOUT_ARGS+=(
+CUSTOM_ARGS=(
    # Specify the path of custom generation function (format: path.to.your.file:function_name)
-   --rollout-generate-func-path your_module.multiturn_logic:generate
+   --custom-generate-function-path your_module.multiturn_logic:generate
 
    # Specify the path of custom reward function
-   --reward-fn-path your_module.multiturn_logic:reward_func
+   --custom-rm-path your_module.multiturn_logic:reward_func
 )
 ```
 

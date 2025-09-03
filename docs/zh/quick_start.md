@@ -440,9 +440,9 @@ slime 框架高度可扩展，支持复杂的 Agent 场景（如多轮交互与�
 完成数据准备后，在训练脚本中，通过 `ROLLOUT_ARGS` 将这个预处理好的 `metadata` 列映射到 slime 的 `Sample.metadata` 字段。
 
 ```bash
-ROLLOUT_ARGS+=(
+ROLLOUT_ARGS=(
    # 1. 指定预处理后的数据集文件
-   --prompt-data /root/nq_search/train_processed.parquet
+   --prompt-data /root/nq_search/train_processed.json
 
    # 2. 将 "question" 列映射为输入 prompt
    --prompt-key question
@@ -460,7 +460,7 @@ ROLLOUT_ARGS+=(
 
 ### 编写自定义生成函数
 
-首先，通过 `--rollout-generate-func-path` 参数指定一个自定义的异步 Python 函数。
+首先，通过 `--custom-generate-function-path` 参数指定一个自定义的异步 Python 函数。
 
 **函数签名**: `async def generate(args, sample: Sample, sampling_params) -> Sample:`
 
@@ -512,7 +512,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
 ### 编写自定义奖励函数
 
-类似地，通过 `--reward-fn-path` 指定自定义奖励函数。
+类似地，通过 `--custom-rm-path` 指定自定义奖励函数。
 
 **函数签名**: `async def reward_func(args, sample: Sample, **kwargs) -> float:`
 
@@ -523,12 +523,12 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 最后，在训练脚本中，通过以下参数启用上述自定义函数：
 
 ```bash
-ROLLOUT_ARGS+=(
+CUSTOM_ARGS=(
    # 指定自定义生成函数的路径 (格式: path.to.your.file:function_name)
-   --rollout-generate-func-path your_module.multiturn_logic:generate
+   --custom-generate-function-path your_module.multiturn_logic:generate
 
    # 指定自定义奖励函数的路径
-   --reward-fn-path your_module.multiturn_logic:reward_func
+   --custom-rm-path your_module.multiturn_logic:reward_func
 )
 ```
 
