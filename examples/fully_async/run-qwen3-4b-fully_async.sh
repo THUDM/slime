@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 # for rerun the task
@@ -25,19 +24,20 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/models/mimo-7B-rl.sh"
+source "${SCRIPT_DIR}/../../scripts/models/qwen3-4B.sh"
 
- CKPT_ARGS=(
-   --hf-checkpoint /root/MiMo-7B-RL
+CKPT_ARGS=(
+   --hf-checkpoint /root/Qwen3-4B
    #--hf-checkpoint /root/Qwen3-4B-FP8
-   --ref-load /root/MiMo-7B-RL_torch_dist
-   --load /root/MiMo-7B-RL-mtp_slime/
-   --save /root/MiMo-7B-RL-mtp_slime/
-   --save-interval 2000
+   --ref-load /root/Qwen3-4B_torch_dist
+   --load /root/Qwen3-4B_slime/
+   --save /root/Qwen3-4B_slime/
+   --save-interval 20
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
+   --rollout-function-path fully_async_rollout.generate_rollout_fully_async
+   --prompt-data /mnt/o1_alicloud/personal/zzl/rl_data/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
    --apply-chat-template
@@ -51,14 +51,6 @@ ROLLOUT_ARGS=(
 
    --global-batch-size 256
    --balance-data
-)
-
-EVAL_ARGS=(
-   --eval-interval 20
-   --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
-   --n-samples-per-eval-prompt 1
-   --eval-max-response-len 8192
-   --eval-top-p 0.7
 )
 
 PERF_ARGS=(
@@ -86,6 +78,8 @@ GRPO_ARGS=(
    --entropy-coef 0.00
    --eps-clip 0.2
    --eps-clip-high 0.28
+
+   --use-tis
 )
 
 OPTIMIZER_ARGS=(
@@ -97,22 +91,8 @@ OPTIMIZER_ARGS=(
    --adam-beta2 0.98
 )
 
-WANDB_ARGS=(
-   # --use-wandb
-   # --wandb-project slime-dev
-   # --wandb-group mimo-7B-rl-test
-   # --wandb-key ${WANDB_API_KEY}
-)
-
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
-   --sglang-mem-fraction-static 0.7
-
-   # for speculative decoding
-   --sglang-speculative-algorithm EAGLE
-   --sglang-speculative-num-steps 3
-   --sglang-speculative-eagle-topk 1
-   --sglang-speculative-num-draft-tokens 4
 )
 
 MISC_ARGS=(
@@ -130,10 +110,9 @@ MISC_ARGS=(
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats
 
-# Build the runtime environment JSON with proper variable substitution
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
-    \"PYTHONPATH\": \"/root/Megatron-LM/\",
+    \"PYTHONPATH\": \"/root/Megatron-LM/:${SCRIPT_DIR}\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\"
   }
@@ -141,18 +120,16 @@ RUNTIME_ENV_JSON="{
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
-   -- python3 train.py \
+   -- python3 train_async.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 8 \
-   --colocate \
+   --actor-num-gpus-per-node 4 \
+   --rollout-num-gpus 4 \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
    ${DISTRIBUTED_ARGS[@]} \
-   ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
-   ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
    ${MISC_ARGS[@]}
