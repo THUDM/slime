@@ -1019,8 +1019,7 @@ def parse_args(add_custom_arguments=None):
             "num_epoch is not set, but num_rollout is not set, " "please set --num-rollout or --num-epoch"
         )
 
-    if not args.debug_rollout_only:
-        megatron_validate_args(args)
+    megatron_validate_args(args)
 
     # always use varlen
     args.variable_seq_lengths = True
