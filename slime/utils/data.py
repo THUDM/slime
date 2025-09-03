@@ -1,7 +1,6 @@
 import random
 import numpy as np
-
-from pandas as pd
+import pandas as pd
 
 from slime.utils.types import Sample
 
