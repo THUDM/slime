@@ -36,7 +36,6 @@ hf download font-info/qwen3-4b-sft-SGLang-RL --local-dir /root/font-info/qwen3-4
 2. Create torch dict
 For SFT 
 ```bash
-```bash
 source scripts/models/qwen3-4B.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
@@ -46,7 +45,6 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 ```
 
 Or RL only
-```
 ```bash
 source scripts/models/qwen3-4B.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
@@ -59,6 +57,7 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 
 3. SFT:
 ```bash
+python examples/retool/sft_data_processing.py
 bash examples/retool/retool_qwen3_4b_sft.sh
 ```
 

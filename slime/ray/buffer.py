@@ -186,7 +186,8 @@ def log_rollout_data(rollout_id, args, data, rollout_time):
     log_dict = {}
     response_lengths = [sum(loss_mask) for loss_mask in data["loss_masks"]]
     log_dict["perf/rollout_time"] = rollout_time
-    log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
+    if args.rollout_num_gpus is not None:
+        log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
     print(f"perf {rollout_id}: {log_dict}")
     if args.use_wandb:
