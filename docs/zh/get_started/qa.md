@@ -1,4 +1,4 @@
-# slime 常见 Q&A
+# 常见 Q&A
 
 [English](../en/qa.md)
 

@@ -1,6 +1,5 @@
-# Example: Training DeepSeek R1 with 128xH100
+# Training DeepSeek R1 with 128xH100
 
-[中文版](../../zh/models/deepseek-r1.md)
 
 This is an example of doing DeepSeek R1 RL training using 128xH100 GPUs.
 

@@ -1,4 +1,4 @@
-# 示例：GLM4-9B
+# GLM4-9B
 
 [English](../../en/models/glm4-9B.md)
 

@@ -1,6 +1,4 @@
-# Example: Qwen3-4B
-
-[中文版](../../zh/models/qwen3-4B.md)
+# Qwen3-4B
 
 ## Environment Setup
 

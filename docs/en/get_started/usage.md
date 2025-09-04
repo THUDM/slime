@@ -1,6 +1,5 @@
-# Usage Documentation
+# Usage Guide
 
-[中文版](../zh/usage.md)
 
 ## Introduction to slime Parameters
 

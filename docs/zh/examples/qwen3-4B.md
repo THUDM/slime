@@ -1,4 +1,4 @@
-# 示例：Qwen3-4B
+# Qwen3-4B
 
 [English](../../en/models/qwen3-4B.md)
 

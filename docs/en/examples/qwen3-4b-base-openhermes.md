@@ -1,6 +1,5 @@
-# Example: Qwen3-4B-Base with OpenHermes-2.5
+# Qwen3-4B-Base with OpenHermes-2.5
 
-[中文版](../zh/sft.md)
 
 ## Environment Preparation
 

@@ -1,4 +1,4 @@
-# 示例：Qwen3-4B-Base + OpenHermes-2.5
+# Qwen3-4B-Base + OpenHermes-2.5
 
 [English](../en/sft.md)
 

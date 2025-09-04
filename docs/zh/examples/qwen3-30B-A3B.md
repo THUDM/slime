@@ -1,4 +1,4 @@
-# 示例：8xH100 训练 Qwen3-30B-A3B
+# 8xH100 训练 Qwen3-30B-A3B
 
 [English](../../en/models/qwen3-30B-A3B.md)
 

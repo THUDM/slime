@@ -1,6 +1,4 @@
-# slime FAQ
-
-[中文版](../zh/qa.md)
+# FAQ
 
 1.  **Why do I see garbled text during training?**
 

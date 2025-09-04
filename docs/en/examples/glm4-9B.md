@@ -1,6 +1,5 @@
-# Example: GLM4-9B
+# GLM4-9B
 
-[中文版](../../zh/models/glm4-9B.md)
 
 ## Environment Setup
 

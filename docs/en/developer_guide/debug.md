@@ -1,6 +1,4 @@
-# Debugging Guide
-
-[中文版](../zh/debug.md)
+# Debugging
 
 ## Aligning Precision
 

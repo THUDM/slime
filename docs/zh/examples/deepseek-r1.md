@@ -1,4 +1,4 @@
-# 示例：128xH100 训练 DeepSeek R1
+# 128xH100 训练 DeepSeek R1
 
 [English](../../en/models/deepseek-r1.md)
 

@@ -1,6 +1,5 @@
-# slime Quick Start Guide
+# Quick Start
 
-[中文版](../zh/quick_start.md)
 
 This document will guide you through setting up the environment and getting started with slime within one hour, covering environment configuration, data preparation, training startup, and key code analysis and modifications.
 

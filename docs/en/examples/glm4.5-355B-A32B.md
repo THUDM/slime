@@ -1,6 +1,5 @@
-# Example: Training GLM-4.5 with 64xH100
+# Training GLM-4.5 with 64xH100
 
-[中文版](../../zh/models/glm4.5-355B-A32B.md)
 
 This is an example of doing GLM-4.5 RL training using 64xH100 GPUs.
 

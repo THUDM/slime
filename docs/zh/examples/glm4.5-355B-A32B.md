@@ -1,4 +1,4 @@
-# 示例：64xH100 训练 GLM-4.5
+# 64xH100 训练 GLM-4.5
 
 [English](../../en/models/glm4.5-355B-A32B.md)
 
