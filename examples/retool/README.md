@@ -1,4 +1,4 @@
-# Retool Example
+# Retool: from SFT to RL
 
 This example demonstrates how to use the retool functionality for tool-enabled language model generation.
 

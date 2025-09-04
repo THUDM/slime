@@ -5,7 +5,7 @@
 
 ## Introduction
 
-If you are running Slime on AMD's Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified ROCm dependencies, and provide an example for running the experiments. The current rocm docker only support AMD's MI300 and MI325 GPUs.
+If you are running slime on AMD's Instinct, please refer to the following materials. This tutorial will explain how to set up the development environment (Docker), use the modified ROCm dependencies, and provide an example for running the experiments. The current rocm docker only support AMD's MI300 and MI325 GPUs.
 
 
 <!-- First, you need to configure the slime runtime environment according to the [Readme](../../README.md) documentation and cd to the slime project directory. -->

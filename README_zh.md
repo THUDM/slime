@@ -31,7 +31,7 @@
 
 有关环境配置、数据准备、训练启动和关键代码分析的完整快速开始指南，请参考：
 
-- [快速开始指南](./docs/zh/quick_start.md)
+- [快速开始指南](./docs/zh/get_started/quick_start.md)
 
 我还还额外提供了一些使用样例，请参考样例目录：[examples](examples/)。
 
@@ -43,7 +43,7 @@
 2. **sglang 参数**：支持环境中安装的 sglang 的所有参数，这些参数需要以 `--sglang` 起始，例如 `--mem-fraction-static` 需要通过 `--sglang-mem-fraction-static` 传入。
 3. **slime 自身的参数**：请见：[slime/utils/arguments.py](slime/utils/arguments.py)
 
-完整使用说明请查阅 [使用文档](docs/zh/usage.md)。
+完整使用说明请查阅 [使用文档](docs/zh/get_started/usage.md)。
 
 ## 开发指南
 
@@ -56,9 +56,9 @@
   pre-commit install
   ```
 
-- 调试技巧请参考 [debug 指南](docs/zh/debug.md)
+- 调试技巧请参考 [debug 指南](docs/zh/developer_guide/debug.md)
 
 ## 常见 Q&A 与致谢
 
-- 常见问题请见 [Q&A](docs/zh/qa.md)
+- 常见问题请见 [Q&A](docs/zh/get_started/qa.md)
 - 特别感谢以下项目 & 社区：SGLang、Megatron‑LM、mbridge、OpenRLHF、veRL、Pai-Megatron-Patch 等。

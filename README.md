@@ -38,7 +38,7 @@
 ## Quick Start
 
 For a comprehensive quick start guide covering environment setup, data preparation, training startup, and key code analysis, please refer to:
-- [Quick Start Guide](./docs/en/quick_start.md)
+- [Quick Start Guide](./docs/en/get_started/quick_start.md)
 
 We also provides examples for some usecases not covered in the quick start guide, please check [examples](examples/).
 
@@ -50,7 +50,7 @@ Arguments in slime are divided into three categories:
 2.  **SGLang arguments**: All arguments for the installed SGLang are supported. These arguments must be prefixed with `--sglang-`. For example, `--mem-fraction-static` should be passed as `--sglang-mem-fraction-static`.
 3.  **slime-specific arguments**: Please refer to: [slime/utils/arguments.py](slime/utils/arguments.py)
 
-For complete usage instructions, please refer to the [Usage Documentation](docs/en/usage.md).
+For complete usage instructions, please refer to the [Usage Documentation](docs/en/get_started/usage.md).
 
 ## Developer Guide
 
@@ -63,9 +63,9 @@ For complete usage instructions, please refer to the [Usage Documentation](docs/
     pre-commit install
     ```
 
-  - For debugging tips, please refer to the [Debugging Guide](docs/en/debug.md)
+  - For debugging tips, please refer to the [Debugging Guide](docs/en/developer_guide/debug.md)
 
 ## FAQ & Acknowledgements
 
-  - For frequently asked questions, please see the [Q\&A](docs/en/qa.md)
+  - For frequently asked questions, please see the [Q\&A](docs/en/get_started/qa.md)
   - Special thanks to the following projects & communities: SGLang, Megatron‑LM, mbridge, OpenRLHF, veRL, Pai-Megatron-Patch and others.

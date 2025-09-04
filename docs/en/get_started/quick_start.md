@@ -7,8 +7,8 @@ This document will guide you through setting up the environment and getting star
 
 Since slime may contain temporary patches for sglang/megatron, to avoid potential environment configuration issues, we strongly recommend **users to use our latest Docker image**, which comes pre-configured with all dependencies.
 
-- For scenarios where Docker is not convenient, please refer to [build_conda.sh](./../../build_conda.sh);
-- For AMD support, please refer to [AMD Usage Tutorial](./amd_tutorial.md).
+- For scenarios where Docker is not convenient, please refer to [build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh);
+- For AMD support, please refer to [AMD Usage Tutorial](../platform_support/amd_tutorial.md).
 
 ### Pull and Start Docker Container
 

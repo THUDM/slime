@@ -1,4 +1,4 @@
-# 用 OpenHermes-2.5 来 SFT Qwen3-4B-Base
+# SFT Qwen3-4B-Base
 
 [English](../en/sft.md)
 

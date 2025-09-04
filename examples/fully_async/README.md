@@ -7,7 +7,7 @@ This example shows a simple way to make rollout generation **fully asynchronous*
 * `run-qwen3-4b-fully_async.sh`: example launch script with Qwen3‑4B.
 
 ### Prerequisite
-First set up model & environment following [Example: Qwen3-4B Model](../../docs/en/models/qwen3-4B.md).
+First set up model & environment following the Qwen3-4B example.
 
 ### Quick Start
 ```bash

@@ -42,7 +42,7 @@ For details on parameter meanings and configuration, see the [SGLang speculative
   2. Specify a broader range for `--sglang-cuda-graph-bs` to avoid batch sizes that trigger CUDA graph padding.
   3. Disable CUDA graph (not recommended due to significant performance loss).
   4. **Notice:** Disabling CUDA graph padding with `--sglang-disable-cuda-graph-padding` is currently ineffective for speculative decoding. See [SGLang `cuda_graph_runner.py`](tbd).
-* For debugging, enable Slime’s `--debug-rollout-only` flag to isolate rollout behavior from parameter updates or model offloading.
+* For debugging, enable slime’s `--debug-rollout-only` flag to isolate rollout behavior from parameter updates or model offloading.
 
 ```bash
 # If speculative decoding fails, this can help debug
