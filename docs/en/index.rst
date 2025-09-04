@@ -1,11 +1,6 @@
 slime Documentation
 ====================
 
-.. raw:: html
-
-   <a href="/slime/zh/index.html" class="btn btn-outline-primary mb-2" target="_blank">切换至中文版</a>
-
-
 slime is an LLM post-training framework for RL scaling, providing two core capabilities:
 
 - High-Performance Training: Supports efficient training in various modes by connecting Megatron with SGLang;

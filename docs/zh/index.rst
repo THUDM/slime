@@ -1,11 +1,6 @@
 slime文档
 ====================
 
-.. raw:: html
-
-   <a href="/slime/index.html" class="btn btn-outline-primary mb-2" target="_blank">Change to English</a>
-
-
 slime 是一个面向 RL 扩展的 LLM 后训练框架，提供两大核心能力：
 
 - 高性能训练：通过连接 Megatron 与 SGLang，支持多种模式下的高效训练；

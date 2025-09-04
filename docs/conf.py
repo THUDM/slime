@@ -92,7 +92,7 @@ source_suffix = {
 
 master_doc = "index"
 
-language = "en"
+language = os.environ.get("SLIME_DOC_LANG", "en")
 
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
 
@@ -130,6 +130,10 @@ html_context = {
 
 html_static_path = ["_static"]
 html_css_files = ["css/custom_log.css"]
+# Add custom javascript for language toggle (en <-> zh)
+html_js_files = [
+    "js/lang-toggle.js",
+]
 
 
 def _sync_examples(app):
@@ -186,7 +190,6 @@ def _sync_examples(app):
 
 
 def setup(app):
-    app.add_css_file("css/custom_log.css")
     # ensure examples are synced before reading source files
     app.connect("builder-inited", _sync_examples)
 
