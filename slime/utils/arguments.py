@@ -127,6 +127,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--rollout-top-k", type=int, default=-1, help="the top-k for the inference engine during rollout."
             )
             parser.add_argument(
+                "--rollout-max-context-len",
+                type=int,
+                default=None,
+                help=(
+                    "The maximum context size for the inference engine during rollout."
+                    "It should no exceed the `max_position_embeddinds` in Huggingface model's `config.json`"
+                ),
+            )
+            parser.add_argument(
                 "--rollout-max-prompt-len",
                 type=int,
                 default=None,
