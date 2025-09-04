@@ -21,8 +21,8 @@ def get_global_worker(args, data_buffer):
     with _worker_lock:
         if _global_worker is None or not _global_worker.worker_thread.is_alive():
             print("Creating new global async worker...")
-            _global_worker = SimpleAsyncRolloutWorker(args, data_buffer, concurrency=args.sglang_server_concurrency)
-            _global_worker.start_continuous()
+            _global_worker = AsyncRolloutWorker(args, data_buffer, concurrency=args.sglang_server_concurrency)
+            _global_worker.start()
         return _global_worker
 
 
@@ -35,7 +35,7 @@ def stop_global_worker():
             _global_worker = None
 
 
-class SimpleAsyncRolloutWorker:
+class AsyncRolloutWorker:
     """
     Simplified asynchronous rollout worker, using threads instead of processes
     Supports continuous running, independent of rollout function lifecycle
@@ -117,7 +117,7 @@ class SimpleAsyncRolloutWorker:
         """Worker function running in independent thread"""
         asyncio.run(self.continuous_worker_loop())
 
-    def start_continuous(self):
+    def start(self):
         """Start continuous work mode"""
         if self.worker_thread is None or not self.worker_thread.is_alive():
             self.worker_thread = threading.Thread(target=self.worker_thread_func, daemon=True)
