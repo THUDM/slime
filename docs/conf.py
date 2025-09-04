@@ -104,7 +104,7 @@ html_copy_source = True
 html_last_updated_fmt = ""
 
 html_theme_options = {
-    "repository_url": "https://github.com/sgl-project/sgl-project.github.io",
+    "repository_url": "https://github.com/THUDM/slime",
     "repository_branch": "main",
     "show_navbar_depth": 3,
     "max_navbar_depth": 4,
@@ -142,23 +142,23 @@ myst_enable_extensions = [
 ]
 myst_heading_anchors = 5
 
-htmlhelp_basename = "sglangdoc"
+htmlhelp_basename = "slimedoc"
 
 latex_elements = {}
 
 latex_documents = [
-    (master_doc, "sglang.tex", "sglang Documentation", "SGLang Team", "manual"),
+    (master_doc, "slime.tex", "slime Documentation", "slime Team", "manual"),
 ]
 
-man_pages = [(master_doc, "sglang", "sglang Documentation", [author], 1)]
+man_pages = [(master_doc, "slime", "slime Documentation", [author], 1)]
 
 texinfo_documents = [
     (
         master_doc,
-        "sglang",
-        "sglang Documentation",
+        "slime",
+        "slime Documentation",
         author,
-        "sglang",
+        "slime",
         "One line description of project.",
         "Miscellaneous",
     ),
