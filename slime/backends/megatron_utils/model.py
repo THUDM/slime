@@ -215,7 +215,7 @@ def forward_only(args, model, data_iterator, num_microbatches, store_prefix=""):
     # Don't care about timing during evaluation
     config.timers = None
     forward_data_store = []
-    num_steps_per_rollout = args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    num_steps_per_rollout = len(num_microbatches)
     for step_id in range(num_steps_per_rollout):
         # collect_non_loss_data
         forward_data_store += forward_backward_func(
@@ -422,7 +422,7 @@ def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_
         config.param_sync_func = None
         pre_hook_enabled = False
 
-    num_steps_per_rollout = args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    num_steps_per_rollout = len(num_microbatches)
 
     # Run training iterations till done.
     for step_id in range(num_steps_per_rollout):

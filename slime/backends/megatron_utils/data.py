@@ -79,11 +79,7 @@ def get_data_iterator(args, model, rollout_data):
             - data_iterator: List of DataIterator objects for log probability evaluation.
             - num_microbatches: Number of microbatches for log probability evaluation.
     """
-    num_local_samples = (
-        args.rollout_batch_size
-        * args.n_samples_per_prompt
-        // mpu.get_data_parallel_world_size(with_context_parallel=False)
-    )
+    num_local_samples = len(rollout_data["total_lengths"])
     num_local_gbs = args.global_batch_size // mpu.get_data_parallel_world_size(with_context_parallel=False)
     num_steps_per_rollout = num_local_samples // num_local_gbs
 
