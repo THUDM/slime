@@ -38,8 +38,8 @@ class RayTrainGroup:
         pg: tuple[PlacementGroup, list[int]],
         wandb_run_id: Optional[str] = None,
         num_gpus_per_actor: float = 1,
-        resources: Optional[Dict[str, float]|None] = None,
-        num_resources_per_node: Optional[int|None] = None,
+        resources: Optional[Dict[str, float] | None] = None,
+        num_resources_per_node: Optional[int | None] = None,
     ) -> None:
         self.args = args
         self._num_nodes = num_nodes
