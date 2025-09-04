@@ -39,6 +39,9 @@ slime 是一个面向 RL 扩展的 LLM 后训练框架，提供两大核心能�
    :caption: 其他用法
 
    examples/qwen3-4b-base-openhermes.md
+   _examples_synced/search-r1/README.md
+   _examples_synced/fully_async/README.md
+   _examples_synced/retool/README.md
 
 .. toctree::
    :maxdepth: 1
@@ -51,3 +54,10 @@ slime 是一个面向 RL 扩展的 LLM 后训练框架，提供两大核心能�
    :caption: 开发指南
 
    developer_guide/debug.md
+
+.. toctree::
+   :maxdepth: 1
+   :caption: 博客
+
+   blogs/introducing_slime.md
+   blogs/release_v0.1.0.md

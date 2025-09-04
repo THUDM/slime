@@ -60,3 +60,10 @@ slime is an LLM post-training framework for RL scaling, providing two core capab
    :caption: Hardware Platforms
 
    platform_support/amd_tutorial.md
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Blogs
+
+   blogs/introducing_slime.md
+   blogs/release_v0.1.0.md

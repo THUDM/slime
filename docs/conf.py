@@ -149,15 +149,11 @@ def _sync_examples(app):
         "en": {
             "dir": docs_root / "en",
             "readme_name": "README.md",
-            "title": "External Examples (Auto Synced)",
-            "note": "This section is auto-generated from repository examples/ by copying README.md of each example.",
         },
         "zh": {
             "dir": docs_root / "zh",
             # primary preferred name; will fallback to README.md
             "readme_name": "README_zh.md",
-            "title": "外部示例 (自动同步)",
-            "note": "本节由构建时自动从仓库 examples/ 复制示例文档生成；优先使用 README_zh.md，若不存在则回退到 README.md。",
         },
     }
 
