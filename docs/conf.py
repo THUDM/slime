@@ -4,7 +4,7 @@ from datetime import datetime
 
 sys.path.insert(0, os.path.abspath("../.."))
 
-__version__ = '0.0.1'
+__version__ = "0.0.1"
 
 project = "slime"
 copyright = f"2025-{datetime.now().year}, slime"
