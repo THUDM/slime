@@ -885,7 +885,12 @@ def parse_args(add_custom_arguments=None):
         args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
         args = set_default_megatron_args(args)
     else:
-        # 直接走 FSDP 的解析与返回（目前与 megatron 风格不同，不复用额外 slime 参数）
+        print("⚠️ " * 50)
+        print(
+            f"⚠️  SLIME_BACKEND {backend} is experimental and not yet verified.\n"
+            "⚠️  Please avoid using it unless you are actively developing it."
+        )
+        print("⚠️ " * 50)
         from slime.backends.fsdp_utils.arguments import load_fsdp_args
 
         args = load_fsdp_args(extra_args_provider=add_slime_arguments)

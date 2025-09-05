@@ -178,7 +178,6 @@ class FSDPTrainRayActor(TrainRayActor):
         assert (
             grad_accum > 0
         ), f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
-        grad_accum = getattr(self.args, "gradient_accumulation_steps", 1)
 
         if self.ref_model is not None:
             self.compute_log_prob("ref", padded_batches, store_prefix="ref_")
@@ -270,6 +269,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 reported_accum.setdefault(k, []).append(v)
 
             if (mbs_id + 1) % grad_accum == 0:
+                # TODO: check if the grad norm is global grad norm.
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
