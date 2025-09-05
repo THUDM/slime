@@ -12,9 +12,9 @@ import wandb
 from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.timer import Timer
-from .cp_utils import get_sum_of_sample_mean, slice_with_cp
 
 from ..utils.data import DataIterator, get_minimum_num_micro_batch_size
+from .cp_utils import get_sum_of_sample_mean, slice_with_cp
 
 
 def get_batch(data_iterator, keys):

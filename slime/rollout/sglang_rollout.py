@@ -394,7 +394,10 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
         if do_print:
             print([sample.prompt + sample.response], sample.reward, flush=True)
             do_print = False
-        data.append(sample)
+        if isinstance(sample, list):
+            data.extend(sample)
+        else:
+            data.append(sample)
         pbar.update(1)
     pbar.close()
 

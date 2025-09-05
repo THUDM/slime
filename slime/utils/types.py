@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Union, Any
+from typing import Any, Optional, Union
 
 import torch
 
@@ -29,6 +29,8 @@ class Sample:
 
     status: Status = Status.PENDING
     metadata: dict = field(default_factory=dict)
+    # metadata used during training, e.g., what loss to use for this sample.
+    train_metadata: Optional[dict] = None
 
     def to_dict(self):
         value = self.__dict__.copy()

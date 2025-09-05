@@ -886,8 +886,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 def parse_args(add_custom_arguments=None):
     add_slime_arguments = get_slime_extra_args_provider(add_custom_arguments)
 
-    from slime.backends.megatron_utils import set_default_megatron_args
     from slime.backends.megatron_utils import parse_args as megatron_parse_args
+    from slime.backends.megatron_utils import set_default_megatron_args
     from slime.backends.megatron_utils import validate_args as megatron_validate_args
 
     args = megatron_parse_args(extra_args_provider=add_slime_arguments)

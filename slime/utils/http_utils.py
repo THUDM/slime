@@ -1,8 +1,9 @@
 import asyncio
 import multiprocessing
+import os
 import random
 import socket
-import os
+
 import httpx
 
 SLIME_HOST_IP_ENV = "SLIME_HOST_IP"

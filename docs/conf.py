@@ -1,8 +1,8 @@
 import os
+import shutil
 import sys
 from datetime import datetime
 from pathlib import Path
-import shutil
 
 sys.path.insert(0, os.path.abspath("../.."))
 

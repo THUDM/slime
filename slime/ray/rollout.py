@@ -1,6 +1,7 @@
 import multiprocessing
 import random
 import time
+from typing import List
 
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
@@ -8,8 +9,8 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.buffer import RolloutController
 from slime.utils.http_utils import find_available_port, get_host_info, run_router
-from .utils import Lock, NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
-from typing import List
+
+from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
 
 
 def create_rollout_engines(args, pg):

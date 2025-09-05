@@ -7,6 +7,7 @@ import torch
 import torch.distributed as dist
 
 from slime.ray.ray_actor import RayActor
+from slime.utils.distributed_utils import init_gloo_group
 
 
 def get_local_gpu_id():
@@ -47,6 +48,7 @@ class TrainRayActor(RayActor):
             backend=args.distributed_backend,
             timeout=timedelta(minutes=args.distributed_timeout_minutes),
         )
+        init_gloo_group()
 
         args.rank = dist.get_rank()
         args.world_size = dist.get_world_size()

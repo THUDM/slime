@@ -2,19 +2,17 @@ import os
 import shutil
 
 import torch
-from mbridge import AutoBridge
-from megatron.training.arguments import parse_args
-from megatron.training.checkpointing import get_checkpoint_name, get_checkpoint_tracker_filename, save_checkpoint
 import torch.distributed as dist
-from slime.backends.megatron_utils.model_provider import get_model_provider_func
+from mbridge import AutoBridge
 from megatron.core.enums import ModelType
 from megatron.training.arguments import parse_args, validate_args
-from slime.backends.megatron_utils import set_default_megatron_args
-from slime.backends.megatron_utils.initialize import init
-from megatron.training.checkpointing import save_checkpoint
+from megatron.training.checkpointing import get_checkpoint_name, get_checkpoint_tracker_filename, save_checkpoint
 from megatron.training.training import get_model
 
 import slime_plugins.mbridge  # noqa: F401
+from slime.backends.megatron_utils import set_default_megatron_args
+from slime.backends.megatron_utils.initialize import init
+from slime.backends.megatron_utils.model_provider import get_model_provider_func
 
 
 def add_convertion_args(parser):

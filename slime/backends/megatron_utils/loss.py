@@ -5,7 +5,6 @@ from megatron.core import mpu
 
 from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
-from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
 from slime.utils.ppo_utils import (
     compute_approx_kl,
     compute_entropy_from_logits,
@@ -15,6 +14,8 @@ from slime.utils.ppo_utils import (
     get_reinforce_plus_plus_baseline_advantages,
     get_reinforce_plus_plus_returns,
 )
+
+from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
 
 
 def calculate_log_probs_and_entropy(logits, tokens, with_entropy: bool = False):

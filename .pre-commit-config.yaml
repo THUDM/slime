@@ -23,6 +23,15 @@ repos:
       - id: autoflake
         args: [--remove-all-unused-imports, --in-place]
 
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2          # 选一个稳定版本
+    hooks:
+      - id: isort
+        args:
+          - "--profile=black"        # 常见：与 Black 对齐风格
+          - "--filter-files"         # 忽略已在 .gitignore 的文件
+        additional_dependencies: []  # 需要插件时在这里加
+
   - repo: https://github.com/psf/black
     rev: 24.3.0
     hooks:

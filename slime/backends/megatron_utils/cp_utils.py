@@ -1,6 +1,6 @@
 import torch
-import torch.nn.functional as F
 import torch.distributed as dist
+import torch.nn.functional as F
 from megatron.core import mpu
 
 

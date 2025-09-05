@@ -1,6 +1,6 @@
 # Adapted from https://github.com/volcengine/verl/blob/cb809d66e46dfd3342d008628891a14a054fa424/recipe/retool/retool.py
 import re
-from typing import Dict, List, Any
+from typing import Any, Dict, List
 
 try:
     from jinja2 import Template
@@ -18,7 +18,7 @@ except ImportError:
     raise ImportError("MathDapo is not installed")
 
 # Import tool sandbox functionality
-from tool_sandbox import tool_registry, TOOL_CONFIGS, SEMAPHORE
+from tool_sandbox import SEMAPHORE, TOOL_CONFIGS, tool_registry
 
 # Jinja2 template for tool-enabled conversations
 TOOL_TEMPLATE = """<|im_start|>system
