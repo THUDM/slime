@@ -29,7 +29,7 @@ from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTe
 
 class MegatronTrainRayActor(TrainRayActor):
     def init(self, args, role, wandb_run_id, with_ref=False):
-        super().init(args, role, with_ref)
+        super().init(args, role, wandb_run_id, with_ref)
 
         init(args)
 

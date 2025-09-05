@@ -3,7 +3,6 @@ from typing import Optional
 import ray
 import torch
 import torch.distributed as dist
-from megatron.core import mpu
 
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.timer import Timer
@@ -78,6 +77,8 @@ def get_data_iterator(args, model, rollout_data):
             - data_iterator: List of DataIterator objects for log probability evaluation.
             - num_microbatches: Number of microbatches for log probability evaluation.
     """
+    from megatron.core import mpu
+
     dp_size = mpu.get_data_parallel_world_size(with_context_parallel=False)
     dp_group = mpu.get_data_parallel_group()
     vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size()

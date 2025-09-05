@@ -5,8 +5,6 @@ from typing import List, Optional
 import torch
 import torch.distributed as dist
 
-from slime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
-
 
 @torch.compile(dynamic=True)
 def compute_approx_kl(
@@ -171,6 +169,8 @@ def get_reinforce_plus_plus_returns(
         prompt_len = total_len - response_len
 
         if cp_size > 1:
+            from slime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
+
             # Step 1: Gather all KL chunks and token_offsets from all ranks
             _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(total_len, response_len)
 

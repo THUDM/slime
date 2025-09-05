@@ -287,8 +287,6 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
         kl_loss = sum_of_sample_mean(kl)
 
         loss = loss + args.kl_loss_coef * kl_loss
-    else:
-        kl_loss = torch.tensor(0.0, device=log_probs.device)
 
     # make sure the gradient could backprop correctly.
     if log_probs.numel() == 0:

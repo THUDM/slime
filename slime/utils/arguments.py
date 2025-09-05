@@ -74,6 +74,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
 
+            reset_megatron_args(parser, "--distributed-backend", str, "nccl")
+            reset_megatron_args(parser, "--distributed-timeout-minutes", int, 10)
+
             return parser
 
         # rollout
@@ -866,19 +869,25 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 def parse_args(add_custom_arguments=None):
     add_slime_arguments = get_slime_extra_args_provider(add_custom_arguments)
 
-    from slime.backends.megatron_utils import parse_args as megatron_parse_args
-    from slime.backends.megatron_utils import set_default_megatron_args
-    from slime.backends.megatron_utils import validate_args as megatron_validate_args
+    backend = os.environ.get("SLIME_BACKEND", "megatron").lower()
+    if backend == "megatron":
+        from slime.backends.megatron_utils import parse_args as megatron_parse_args
+        from slime.backends.megatron_utils import set_default_megatron_args
+        from slime.backends.megatron_utils import validate_args as megatron_validate_args
 
-    args = megatron_parse_args(extra_args_provider=add_slime_arguments)
-    if args.hf_checkpoint:
-        hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
-        hf_validate_args(args, hf_config)
+        args = megatron_parse_args(extra_args_provider=add_slime_arguments)
+        if getattr(args, "hf_checkpoint", None):
+            hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+            hf_validate_args(args, hf_config)
 
-    args.rank = 0
-    args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
+        args.rank = 0
+        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
+        args = set_default_megatron_args(args)
+    else:
+        # 直接走 FSDP 的解析与返回（目前与 megatron 风格不同，不复用额外 slime 参数）
+        from slime.backends.fsdp_utils.arguments import load_fsdp_args
 
-    args = set_default_megatron_args(args)
+        args = load_fsdp_args(extra_args_provider=add_slime_arguments)
 
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):
@@ -1008,16 +1017,17 @@ def parse_args(add_custom_arguments=None):
             "num_epoch is not set, but num_rollout is not set, " "please set --num-rollout or --num-epoch"
         )
 
-    megatron_validate_args(args)
+    if backend == "megatron":
+        megatron_validate_args(args)
 
-    # always use varlen
-    args.variable_seq_lengths = True
-    if getattr(args, "moe_token_dispatcher_type", None) == "allgather":
-        print(
-            "--moe-token-dispatcher-type allgather does not support variable sequence length, "
-            "please use alltoall dispatcher instead."
-        )
-        args.moe_token_dispatcher_type = "alltoall"
+        # always use varlen
+        args.variable_seq_lengths = True
+        if getattr(args, "moe_token_dispatcher_type", None) == "allgather":
+            print(
+                "--moe-token-dispatcher-type allgather does not support variable sequence length, "
+                "please use alltoall dispatcher instead."
+            )
+            args.moe_token_dispatcher_type = "alltoall"
 
     sglang_validate_args(args)
 

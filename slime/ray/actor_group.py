@@ -6,7 +6,6 @@ import torch
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from slime.backends.megatron_utils import MegatronTrainRayActor
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
 
 
@@ -80,10 +79,20 @@ class RayTrainGroup:
             env_vars["TMS_INIT_ENABLE"] = "1"
             env_vars["TMS_INIT_ENABLE_CPU_BACKUP"] = "1"
 
+        backend = os.environ.get("SLIME_BACKEND", "megatron").lower()
+        if backend == "megatron":
+            from slime.backends.megatron_utils import MegatronTrainRayActor
+
+            actor_impl = MegatronTrainRayActor
+        else:
+            from slime.backends.fsdp_utils import FSDPTrainRayActor
+
+            actor_impl = FSDPTrainRayActor
+
         TrainRayActor = ray.remote(
             num_gpus=1,
             runtime_env={"env_vars": env_vars},
-        )(MegatronTrainRayActor)
+        )(actor_impl)
 
         # Create worker actors
         self._actor_handlers = []

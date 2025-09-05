@@ -74,10 +74,6 @@ class TrainRayActor(RayActor):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def eval(self, rollout_id, rollout_data_ref):
-        raise NotImplementedError
-
-    @abc.abstractmethod
     def save_model(self, iteration, with_optimizer=True):
         raise NotImplementedError
 
