@@ -254,12 +254,9 @@ async def generate_rollout_async(args, rollout_id: int, data_source) -> list[lis
     dynamic_filter = (
         load_function(args.dynamic_sampling_filter_path) if args.dynamic_sampling_filter_path is not None else None
     )
-    over_sampling_filter = (
-        load_function(args.over_sampling_filter_path) if args.over_sampling_filter_path is not None else None
-    )
 
     # target_data_size is the total number of valid samples to get
-    target_data_size = args.over_sampling_batch_size if over_sampling_filter is not None else args.rollout_batch_size
+    target_data_size = args.rollout_batch_size
 
     data = []
     do_print = True
@@ -303,9 +300,6 @@ async def generate_rollout_async(args, rollout_id: int, data_source) -> list[lis
 
     # there are still some unfinished requests, abort them
     aborted_samples = await abort(args, rollout_id)
-
-    if over_sampling_filter is not None:
-        data = over_sampling_filter(args, data)[: args.rollout_batch_size]
 
     assert len(data) == args.rollout_batch_size, f"Got {len(data)} samples, expected {args.rollout_batch_size}"
     data = sorted(data, key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)

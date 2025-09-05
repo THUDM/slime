@@ -6,14 +6,11 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
-from megatron.core.utils import get_model_config
 
 import wandb
 from slime.utils.flops_utils import calculate_fwd_flops
-from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.timer import Timer
 
-from ..utils.data import DataIterator, get_minimum_num_micro_batch_size
 from .cp_utils import get_sum_of_sample_mean, slice_with_cp
 
 
@@ -65,86 +62,37 @@ def get_batch(data_iterator, keys):
     return batch
 
 
-def get_data_iterator(args, model, rollout_data):
-    """
-    Creates data iterators for training and log probability evaluation, supporting both static and dynamic batch sizes,
-    with optional virtual pipeline parallelism and sequence length balancing.
-    Args:
-        args: An object containing configuration parameters, including batch sizes, micro batch sizes,
-              dynamic batch size usage, and maximum tokens per GPU et.al.
-        model: The model or list of model stages, used to extract configuration for parallelism.
-        rollout_data: A dictionary containing rollout data, including 'total_lengths' for each sample.
-    Returns:
-        tuple: A tuple containing:
-            - data_iterator: List of DataIterator objects for log probability evaluation.
-            - num_microbatches: Number of microbatches for log probability evaluation.
-    """
-    num_local_samples = len(rollout_data["total_lengths"])
-    num_local_gbs = args.global_batch_size // mpu.get_data_parallel_world_size(with_context_parallel=False)
-    num_steps_per_rollout = num_local_samples // num_local_gbs
-
-    vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size()
-    if vpp_size is None:
-        vpp_size = 1
-
-    def _generate_data_iterator(rollout_data, micro_batch_size, micro_batch_indices=None):
-        data_iterator = []
-        for _ in range(vpp_size):
-            data_iterator.append(DataIterator(rollout_data, micro_batch_size, micro_batch_indices))
-        return data_iterator
-
-    if not args.use_dynamic_batch_size:
-        num_microbatches = [num_local_gbs // args.micro_batch_size for _ in range(num_steps_per_rollout)]
-        data_iterator = _generate_data_iterator(rollout_data, args.micro_batch_size)
+def gather_log_data(metic_name, args, rollout_id, log_dict):
+    if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
+        gathered_log_dict = [None] * mpu.get_data_parallel_world_size(with_context_parallel=True)
+        # Not sure if this will be a performance bottleneck.
+        dist.gather_object(
+            log_dict,
+            gathered_log_dict,
+            dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
+            group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
+        )
+        dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
+        reduced_log_dict = {
+            f"{metic_name}/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
+        }
+        print(f"{metic_name} {rollout_id}: {reduced_log_dict}")
+        if args.use_wandb:
+            reduced_log_dict["rollout/step"] = (
+                rollout_id
+                if not args.wandb_always_use_train_step
+                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+            )
+            wandb.log(reduced_log_dict)
+        return reduced_log_dict
     else:
-        assert args.max_tokens_per_gpu is not None
-        # calculate the number of mirobatches for each step
-        cp_size = mpu.get_context_parallel_world_size()
-        samples = rollout_data["total_lengths"]
-        assert len(samples) == num_local_samples
-        num_microbatches = []
-        for i in range(num_steps_per_rollout):
-            start, end = i * num_local_gbs, (i + 1) * num_local_gbs
-            num_microbatches.append(
-                get_minimum_num_micro_batch_size(samples[start:end], args.max_tokens_per_gpu, cp_size)
-            )
-
-        num_microbatches = torch.tensor(num_microbatches, dtype=torch.int, device=torch.cuda.current_device())
-        dist.all_reduce(num_microbatches, op=dist.ReduceOp.MAX, group=mpu.get_data_parallel_group())
-
-        # vpp requies the number of microbatches to be divisible by vpp_size
-        config = get_model_config(model[0])
-        if config.microbatch_group_size_per_vp_stage:
-            num_microbatches = torch.clamp(
-                num_microbatches
-                // config.microbatch_group_size_per_vp_stage
-                * config.microbatch_group_size_per_vp_stage,
-                min=1,
-            )
-
-        num_microbatches = num_microbatches.tolist()
-
-        # balance the each micro batch
-        samples = rollout_data["total_lengths"]
-        # balance the number of mirobatches across steps
-        micro_batch_indices = []
-        for i, num_mbs in enumerate(num_microbatches):
-            start, end = i * num_local_gbs, (i + 1) * num_local_gbs
-            samples = rollout_data["total_lengths"][start:end]
-            partitions = get_seqlen_balanced_partitions(samples, num_mbs, equal_size=False)
-            for j in range(num_mbs):
-                for k in range(len(partitions[j])):
-                    partitions[j][k] += start
-            micro_batch_indices.extend(partitions)
-
-        assert len(set(sum(micro_batch_indices, []))) == num_local_samples
-
-        data_iterator = _generate_data_iterator(rollout_data, None, micro_batch_indices)
-
-    return (
-        data_iterator,
-        num_microbatches,
-    )
+        dist.gather_object(
+            log_dict,
+            None,
+            dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
+            group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
+        )
+        return None
 
 
 def log_rollout_data(rollout_id, args, rollout_data):
@@ -179,45 +127,18 @@ def log_rollout_data(rollout_id, args, rollout_data):
                 raise ValueError(f"Unsupported type: {type(val)}")
             log_dict[key] = val.item() if isinstance(val, torch.Tensor) else val
 
-        if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
-            gathered_log_dict = [None] * mpu.get_data_parallel_world_size(with_context_parallel=True)
-            # Not sure if this will be a performance bottleneck.
-            dist.gather_object(
-                log_dict,
-                gathered_log_dict,
-                dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
-                group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
-            )
-            dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
-            reduced_log_dict = {
-                f"rollout/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
-            }
-            if args.ci_test:
-                if (
-                    rollout_id == 0
-                    and "rollout/log_probs" in reduced_log_dict
-                    and "rollout/ref_log_probs" in reduced_log_dict
-                ):
-                    assert reduced_log_dict["rollout/log_probs"] == reduced_log_dict["rollout/ref_log_probs"]
-                if "rollout/log_probs" in reduced_log_dict:
-                    assert -0.5 < reduced_log_dict["rollout/log_probs"] < 0
-                if "rollout/entropy" in reduced_log_dict:
-                    assert 0 < reduced_log_dict["rollout/entropy"] < 0.5
-            print(f"rollout {rollout_id}: {reduced_log_dict}")
-            if args.use_wandb:
-                reduced_log_dict["rollout/step"] = (
-                    rollout_id
-                    if not args.wandb_always_use_train_step
-                    else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-                )
-                wandb.log(reduced_log_dict)
-        else:
-            dist.gather_object(
-                log_dict,
-                None,
-                dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
-                group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
-            )
+        reduced_log_dict = gather_log_data("rollout", args, rollout_id, log_dict)
+        if args.ci_test and reduced_log_dict is not None:
+            if (
+                rollout_id == 0
+                and "rollout/log_probs" in reduced_log_dict
+                and "rollout/ref_log_probs" in reduced_log_dict
+            ):
+                assert reduced_log_dict["rollout/log_probs"] == reduced_log_dict["rollout/ref_log_probs"]
+            if "rollout/log_probs" in reduced_log_dict:
+                assert -0.5 < reduced_log_dict["rollout/log_probs"] < 0
+            if "rollout/entropy" in reduced_log_dict:
+                assert 0 < reduced_log_dict["rollout/entropy"] < 0.5
 
     if args.log_multi_turn:
         log_multi_turn_data(rollout_id, args, rollout_data)
@@ -227,9 +148,7 @@ def log_rollout_data(rollout_id, args, rollout_data):
 
 def log_multi_turn_data(rollout_id, args, rollout_data):
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
-        cp_size = mpu.get_context_parallel_world_size()
         log_dict = {}
-        response_lengths = rollout_data["response_lengths"]
         for key, val in rollout_data.items():
             if key == "loss_masks":
                 if val:  # Check if val is not empty
@@ -257,29 +176,7 @@ def log_multi_turn_data(rollout_id, args, rollout_data):
                 log_dict["multi_turn_metric/round_number_mean"] = np.mean(round_number_array)
                 log_dict["multi_turn_metric/round_number_max"] = np.max(round_number_array)
                 log_dict["multi_turn_metric/round_number_min"] = np.min(round_number_array)
-        if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
-            gathered_log_dict = [None] * mpu.get_data_parallel_world_size(with_context_parallel=True)
-            # Not sure if this will be a performance bottleneck.
-            dist.gather_object(
-                log_dict,
-                gathered_log_dict,
-                dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
-                group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
-            )
-            dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
-            reduced_log_dict = {
-                f"multi_turn/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
-            }
-            print(f"multi_turn {rollout_id}: {reduced_log_dict}")
-            if args.use_wandb:
-                wandb.log(reduced_log_dict)
-        else:
-            dist.gather_object(
-                log_dict,
-                None,
-                dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
-                group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
-            )
+        gather_log_data("multi_turn", args, rollout_id, log_dict)
 
 
 def log_passrate(rollout_id, args, rollout_data):
@@ -320,29 +217,7 @@ def log_passrate(rollout_id, args, rollout_data):
                 pass_k = np.mean(pass_k_estimates)
                 log_dict[f"pass@{k}"] = pass_k
 
-        if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
-            gathered_log_dict = [None] * mpu.get_data_parallel_world_size(with_context_parallel=True)
-            # Not sure if this will be a performance bottleneck.
-            dist.gather_object(
-                log_dict,
-                gathered_log_dict,
-                dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
-                group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
-            )
-            dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
-            reduced_log_dict = {
-                f"passrate/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
-            }
-            print(f"passrate {rollout_id}: {reduced_log_dict}")
-            if args.use_wandb:
-                wandb.log(reduced_log_dict)
-        else:
-            dist.gather_object(
-                log_dict,
-                None,
-                dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
-                group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
-            )
+        gather_log_data("passrate", args, rollout_id, log_dict)
 
 
 def log_perf_data(rollout_id, args):
