@@ -215,26 +215,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--over-sampling-filter-input-size",
-                type=int,
-                default=None,
-                help=(
-                    "This is the input size for the over sampling filter."
-                    "This value will replace the rollout_batch_size as target batch size "
-                    "(number of complete, valid samples to be generated) when the over sampling filter is applied."
-                ),
-            )
-            parser.add_argument(
-                "--over-sampling-filter-path",
-                type=str,
-                default=None,
-                help=(
-                    "This parameter is used with the over_sampling_filter_input_size. "
-                    "The over sampling filter is applied only after enough data has been generated."
-                    "You could use `slime.rollout.filter_hub.over_sampling_filters.sort_by_reward_std` as an example."
-                ),
-            )
-            parser.add_argument(
                 "--dynamic-sampling-filter-path",
                 type=str,
                 default=None,
@@ -886,8 +866,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 def parse_args(add_custom_arguments=None):
     add_slime_arguments = get_slime_extra_args_provider(add_custom_arguments)
 
-    from slime.backends.megatron_utils import set_default_megatron_args
     from slime.backends.megatron_utils import parse_args as megatron_parse_args
+    from slime.backends.megatron_utils import set_default_megatron_args
     from slime.backends.megatron_utils import validate_args as megatron_validate_args
 
     args = megatron_parse_args(extra_args_provider=add_slime_arguments)

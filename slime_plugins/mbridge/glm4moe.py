@@ -1,7 +1,7 @@
 import re
 
 from mbridge.core import register_model
-from mbridge.models import Qwen2MoEBridge, Qwen2Bridge
+from mbridge.models import Qwen2Bridge, Qwen2MoEBridge
 
 
 @register_model("glm4_moe")

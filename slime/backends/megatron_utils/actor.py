@@ -1,9 +1,8 @@
-from pathlib import Path
 from contextlib import nullcontext
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
-
 
 if torch.version.hip:
     from vllm.device_allocator.cumem import CuMemAllocator
@@ -11,25 +10,21 @@ else:
     from torch_memory_saver import torch_memory_saver
 
 from megatron.core import mpu
-
 from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
+from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
-from ..utils.data import process_rollout_data
+from ..utils.data import get_data_iterator, process_rollout_data
 from .checkpoint import load_checkpoint
-from .data import get_data_iterator, log_perf_data, log_rollout_data
-from .initialize import get_gloo_group, init, is_megatron_main_rank
+from .data import log_perf_data, log_rollout_data
+from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns
 from .model import forward_only, initialize_model_and_optimizer, save, train
-from .update_weight_utils import (
-    named_parameters,
-    UpdateWeightFromTensor,
-    UpdateWeightFromDistributed,
-)
+from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor, named_parameters
 
 
 class MegatronTrainRayActor(TrainRayActor):

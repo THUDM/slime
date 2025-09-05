@@ -14,17 +14,18 @@ options:
                         Number of worker threads for parallel processing
 """
 
-import gc
-import os
-import json
-import torch
-import torch.nn.functional as F
-import safetensors
-import safetensors.torch
 import argparse
+import gc
+import json
+import os
 import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
+
+import safetensors
+import safetensors.torch
+import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 
 FP8_INFO = torch.finfo(torch.float8_e4m3fn)

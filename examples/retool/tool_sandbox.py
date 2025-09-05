@@ -8,14 +8,15 @@ This module provides:
 """
 
 import asyncio
+import gc
+import os
 import re
 import subprocess
 import tempfile
-import os
-import gc
-import psutil
-from typing import Dict, List, Any
 from contextlib import contextmanager
+from typing import Any, Dict, List
+
+import psutil
 
 # Configuration for tool execution
 TOOL_CONFIGS = {
@@ -60,7 +61,6 @@ def aggressive_cleanup_memory():
     import sys
 
     # Note: sys.intern doesn't have a clear method, so we skip this
-
     # Clear module cache if possible
     if hasattr(sys, "modules"):
         # Don't clear all modules, but clear some common ones that might cache data

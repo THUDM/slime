@@ -1,14 +1,13 @@
 import asyncio
-import threading
 import queue
+import threading
 import time
 from typing import List
 
+# Import core functions from sglang_rollout directly to avoid code duplication
+from slime.rollout.sglang_rollout import GenerateState, generate_and_rm_group
 from slime.utils.async_utils import run
 from slime.utils.types import Sample
-
-# Import core functions from sglang_rollout directly to avoid code duplication
-from slime.rollout.sglang_rollout import generate_and_rm_group, GenerateState
 
 # Global worker manager
 _global_worker = None

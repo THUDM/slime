@@ -1,16 +1,16 @@
 import logging
 from pathlib import Path
-from typing import Union
 from time import time
-import wandb
+from typing import Union
 
 import ray
 import torch
 
-from slime.utils.misc import load_function
-from slime.utils.types import Sample
+import wandb
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
+from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
+from slime.utils.types import Sample
 from slime.utils.wandb_utils import init_wandb_secondary
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -156,6 +156,9 @@ class RolloutController:
         # Add rollout log probabilities for off-policy correction
         if samples[0].rollout_log_probs is not None:
             train_data["rollout_log_probs"] = [sample.rollout_log_probs for sample in samples]
+
+        if samples[0].train_metadata is not None:
+            train_data["metadata"] = [sample.train_metadata for sample in samples]
 
         return train_data
 
