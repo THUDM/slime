@@ -105,6 +105,12 @@ class FSDPTrainRayActor(TrainRayActor):
         if torch_memory_saver is not None:
             torch_memory_saver.resume()
 
+    def save_model(self, iteration, with_optimizer=True):
+        if self.args.debug_rollout_only:
+            return
+
+        raise NotImplementedError()
+
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines
 
@@ -141,14 +147,12 @@ class FSDPTrainRayActor(TrainRayActor):
             padded_loss_masks = [
                 # -1 because its the loss mask for logprob
                 [0] * (len(t) - len(l) - 1) + l + [0] * (max_len - len(t))
-                for l, t in batch_loss_masks
+                for l, t in zip(batch_loss_masks, batch_tokens)
             ]
             padded_batches.append(
                 {
                     "tokens": torch.tensor(padded_tokens, dtype=torch.long, device=torch.cuda.current_device()),
-                    "loss_masks": torch.tensor(
-                        padded_loss_masks, dtype=torch.long, device=torch.cuda.current_device()
-                    ),
+                    "loss_masks": torch.tensor(padded_loss_masks, dtype=torch.int, device=torch.cuda.current_device()),
                     "rewards": torch.tensor(
                         rollout_data["rewards"][i : i + self.args.micro_batch_size],
                         dtype=torch.float,
@@ -160,6 +164,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
     def train(self, rollout_id, rollout_data_ref):  # type: ignore[override]
         Timer().end("train_wait")
+
+        if self.args.offload:
+            self.wake_up(("model"))
 
         world_size = dist.get_world_size()
         rank = dist.get_rank()
@@ -188,13 +195,15 @@ class FSDPTrainRayActor(TrainRayActor):
         # TODO: finish log rollout_data
         log_dict = {}
         for key in ["log_probs", "ref_log_probs", "advantages", "returns"]:
+            if key not in padded_batches[0]:
+                continue
             val = torch.tensor([0.0], device=torch.cuda.current_device())
             for batch in padded_batches:
                 val += per_sample_mean(batch[key], batch["loss_masks"]).item()
             dist.all_reduce(val, op=dist.ReduceOp.SUM)
-            log_dict[f"rollout/{key}"] = val / len(padded_batches) / world_size
+            log_dict[f"rollout/{key}"] = (val / len(padded_batches) / world_size).item()
         if dist.get_rank() == 0:
-            print(f"rollout {rollout_id}: {log_probs}")
+            print(f"rollout {rollout_id}: {log_dict}")
             if self.args.use_wandb:
                 log_dict["rollout/step"] = (
                     rollout_id
@@ -225,6 +234,8 @@ class FSDPTrainRayActor(TrainRayActor):
             pg_clipfrac = per_sample_mean(pg_clipfrac, batch["loss_masks"])
             ppo_kl = per_sample_mean(ppo_kl.abs(), batch["loss_masks"])
 
+            loss = pg_loss
+
             if self.args.use_tis:
                 raise NotImplementedError("implement TIS")
 
@@ -243,6 +254,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
             reported = {
                 "loss": pg_loss.detach(),
+                "pg_loss": pg_loss.detach(),
                 "pg_clipfrac": pg_clipfrac.detach(),
                 "ppo_kl": ppo_kl.detach(),
             }
@@ -262,24 +274,27 @@ class FSDPTrainRayActor(TrainRayActor):
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
                 # Aggregate logs
-                aggregated = {k: torch.stack(v).mean() for k, v in reported_accum.items()}
-                # TODO: mean value across dp ranks
+                aggregated = {k: torch.stack(v).mean().item() for k, v in reported_accum.items()}
+                # TODO: change this, this is slow.
+                reduced_aggregated = [None] * world_size
+                dist.all_gather_object(reduced_aggregated, aggregated)
+                # Mean across dp ranks
+                aggregated = {}
+                for k in reported_accum.keys():
+                    aggregated[k] = sum([r[k] for r in reduced_aggregated]) / world_size
                 reported_accum = {}
                 if dist.get_rank() == 0:
+                    log_dict = {
+                        f"train/{k}": (val.item() if torch.is_tensor(val) else val) for k, val in aggregated.items()
+                    }
+                    log_dict["train/grad_norm"] = grad_norm.item() if not isinstance(grad_norm, float) else grad_norm
+                    for gid, group in enumerate(self.optimizer.param_groups):
+                        if "lr" in group:
+                            log_dict[f"train/lr-pg_{gid}"] = group["lr"]
+                    print(f"step {self.global_step}: {log_dict}")
                     if self.args.use_wandb:
-                        log_dict = {
-                            f"train/{k}": (val.item() if torch.is_tensor(val) else val)
-                            for k, val in aggregated.items()
-                        }
-                        log_dict["train/grad_norm"] = (
-                            grad_norm.item() if not isinstance(grad_norm, float) else grad_norm
-                        )
-                        for gid, group in enumerate(self.optimizer.param_groups):
-                            if "lr" in group:
-                                log_dict[f"train/lr-pg_{gid}"] = group["lr"]
                         log_dict["train/step"] = self.global_step
                         wandb.log(log_dict)
-                    print(f"step {self.global_step}: {log_dict}")
                 self.global_step += 1
 
         Timer().start("train_wait")

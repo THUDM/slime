@@ -8,17 +8,6 @@ import yaml
 
 @dataclass
 class FSDPArgs:
-    # General
-    seed: int = 42
-    micro_batch_size: int = 1  # per-rank micro batch size
-    global_batch_size: int = 1  # used for LR schedule steps estimation
-    max_steps: int = 10
-    save_interval: int = 0  # 0 => only final
-    log_interval: int = 1
-    eval_interval: int = 0
-    max_seq_len: int = 2048
-    resume_from: Optional[str] = None
-
     # Optim
     optimizer: str = "adam"
     lr: float = 2e-5

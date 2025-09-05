@@ -218,26 +218,6 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         if key not in data:
             continue
         val = get_partition(data[key])
-        # move tokens to GPU in advance
-        if key == "tokens":
-            val = [torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device()) for t in val]
-        elif key == "loss_masks":
-            val = [torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in val]
-
         rollout_data[key] = val
-
-    if "rollout_log_probs" in rollout_data:
-        from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
-
-        rollout_data["rollout_log_probs"] = [
-            torch.tensor(
-                slice_log_prob_with_cp(log_prob, total_length, response_length),
-                device=torch.cuda.current_device(),
-                dtype=torch.float32,
-            )
-            for log_prob, total_length, response_length in zip(
-                rollout_data["rollout_log_probs"], rollout_data["total_lengths"], rollout_data["response_lengths"]
-            )
-        ]
 
     return rollout_data

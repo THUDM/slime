@@ -20,6 +20,7 @@ from slime.utils.wandb_utils import init_wandb_secondary
 
 from ..utils.data import get_data_iterator, process_rollout_data
 from .checkpoint import load_checkpoint
+from .cp_utils import slice_log_prob_with_cp
 from .data import log_perf_data, log_rollout_data
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns
@@ -167,12 +168,32 @@ class MegatronTrainRayActor(TrainRayActor):
     def _get_rollout_data(self, rollout_data_ref):
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
         # Both first pp stage and the last pp stage will recieve the data.
-        return process_rollout_data(
+        rollout_data = process_rollout_data(
             self.args,
             rollout_data_ref,
             mpu.get_data_parallel_rank(with_context_parallel=False),
             mpu.get_data_parallel_world_size(with_context_parallel=False),
         )
+        # TODO: this is ugly, move to somewhere else?
+        # move tokens to GPU in advance
+        rollout_data["tokens"] = [
+            torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device()) for t in rollout_data["tokens"]
+        ]
+        rollout_data["loss_masks"] = [
+            torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
+        ]
+        if "rollout_log_probs" in rollout_data:
+            rollout_data["rollout_log_probs"] = [
+                torch.tensor(
+                    slice_log_prob_with_cp(log_prob, total_length, response_length),
+                    device=torch.cuda.current_device(),
+                    dtype=torch.float32,
+                )
+                for log_prob, total_length, response_length in zip(
+                    rollout_data["rollout_log_probs"], rollout_data["total_lengths"], rollout_data["response_lengths"]
+                )
+            ]
+        return rollout_data
 
     def compute_log_prob(
         self,
