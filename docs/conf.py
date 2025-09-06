@@ -130,10 +130,9 @@ html_context = {
 
 html_static_path = ["_static"]
 html_css_files = ["css/custom_log.css"]
-# Add custom javascript for language toggle (en <-> zh) and RunLLM widget
+# Add custom javascript for language toggle (en <-> zh)
 html_js_files = [
     "js/lang-toggle.js",
-    "js/runllm-widget.js",
 ]
 
 
