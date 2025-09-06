@@ -116,6 +116,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     sample.tokens = sample.tokens + new_response_tokens
     sample.response_length += len(new_response_tokens)
     sample.response += output["text"]
+    sample.weight_versions.append(output["meta_info"]["weight_version"])
     if sample.rollout_log_probs is None:
         sample.rollout_log_probs = []
     sample.rollout_log_probs += new_response_log_probs
