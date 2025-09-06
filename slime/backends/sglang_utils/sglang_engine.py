@@ -19,7 +19,7 @@ def get_base_gpu_id(args, rank):
         start_index = (rank * num_gpus) % args.rollout_num_gpus_per_node
     else:
         num_actor_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
-        start_index = (num_actor_gpus + rank * num_gpus) % args.rollout_num_gpus_per_node
+        start_index = num_actor_gpus + rank * num_gpus % args.rollout_num_gpus_per_node
     return start_index
 
 
