@@ -81,6 +81,11 @@ def main():
     torch.cuda.set_device(dist.get_rank() % torch.cuda.device_count())
     args = get_args()
     init(args)
+    
+    # if using AMD gpus, we have to do the conversion in cpu
+    if hasattr(torch.version, 'hip') and torch.version.hip is not None:
+        assert args.use_cpu_initialization, "AMD GPU requires --use_cpu_initialization=True"
+
     model = get_model(get_model_provider_func(args), ModelType.encoder_or_decoder, wrap_with_ddp=False)
 
     # Load model
@@ -88,6 +93,9 @@ def main():
     bridge = AutoBridge.from_pretrained(hf_model_path, trust_remote_code=True)
     bridge.load_weights(model, hf_model_path)
     print(f"Model loaded: {hf_model_path}")
+
+    if args.use_cpu_initialization:
+        model[0] = model[0].cpu()
 
     save_checkpoint(1, model, None, None, 0)
 
