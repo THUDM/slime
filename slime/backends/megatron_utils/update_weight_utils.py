@@ -1,20 +1,21 @@
+import inspect
 import re
 import socket
 import time
-from tqdm import tqdm
-from sglang.srt.utils import MultiprocessingSerializer
-import inspect
 
 import ray
 import torch
 import torch.distributed as dist
 from megatron.core import mpu
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
-from slime.utils.types import ParamInfo
-from .initialize import get_gloo_group
-from .megatron_to_hf import convert_to_hf  # noqa: F401
-from slime.utils.distributed_utils import init_process_group
 from sglang.srt.patch_torch import monkey_patch_torch_reductions
+from sglang.srt.utils import MultiprocessingSerializer
+from tqdm import tqdm
+
+from slime.utils.distributed_utils import get_gloo_group, init_process_group
+from slime.utils.types import ParamInfo
+
+from .megatron_to_hf import convert_to_hf  # noqa: F401
 
 try:
     from sglang.srt.model_executor.model_runner import FlattenedTensorBucket
@@ -285,7 +286,7 @@ def get_param_info_buckets(args, model) -> list[list[ParamInfo]]:
             tp_size = mpu.get_tensor_model_parallel_world_size()
         param_size = info.size * tp_size
 
-        if buffer_size + param_size > args.update_weight_buffer_size:
+        if buffer_size + param_size > args.update_weight_buffer_size and len(param_info_buckets[-1]) > 0:
             param_info_buckets.append([])
             buffer_size = 0
         param_info_buckets[-1].append(info)

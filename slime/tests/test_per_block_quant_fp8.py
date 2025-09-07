@@ -1,12 +1,10 @@
-import torch.nn.functional as F
-
 import torch
-import triton
-from slime.utils.fp8_kernel import blockwise_cast_to_fp8_triton
-from transformer_engine.pytorch.tensor.float8_blockwise_tensor import (
-    Float8BlockQuantizer,
-)
+import torch.nn.functional as F
 import transformer_engine_torch as tex
+import triton
+from transformer_engine.pytorch.tensor.float8_blockwise_tensor import Float8BlockQuantizer
+
+from slime.utils.fp8_kernel import blockwise_cast_to_fp8_triton
 
 device = "cuda"
 dtype = torch.bfloat16

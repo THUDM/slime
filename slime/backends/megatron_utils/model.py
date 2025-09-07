@@ -6,9 +6,9 @@ from functools import partial
 
 import torch
 from megatron.core import mpu
-from megatron.core.enums import ModelType
 from megatron.core.distributed import DistributedDataParallel as DDP
 from megatron.core.distributed import DistributedDataParallelConfig, finalize_model_grads
+from megatron.core.enums import ModelType
 from megatron.core.models.gpt import GPTModel
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
@@ -95,8 +95,6 @@ def setup_model_and_optimizer(
         kwargs["bucket_size"] = args.ddp_bucket_size
         kwargs["pad_buckets_for_high_nccl_busbw"] = args.ddp_pad_buckets_for_high_nccl_busbw
         kwargs["average_in_collective"] = args.ddp_average_in_collective
-        if args.use_custom_fsdp and args.use_precision_aware_optimizer:
-            kwargs["preserve_fp32_weights"] = False
         ddp_config = DistributedDataParallelConfig(**kwargs)
 
         # In the custom FSDP and DDP use path, we need to initialize the bucket size.
@@ -217,7 +215,7 @@ def forward_only(args, model, data_iterator, num_microbatches, store_prefix=""):
     # Don't care about timing during evaluation
     config.timers = None
     forward_data_store = []
-    num_steps_per_rollout = args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    num_steps_per_rollout = len(num_microbatches)
     for step_id in range(num_steps_per_rollout):
         # collect_non_loss_data
         forward_data_store += forward_backward_func(
@@ -293,6 +291,7 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
                 "ref_log_probs",
                 "values",
                 "advantages",
+                "rollout_log_probs",
             ],
         )
 
@@ -367,7 +366,7 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
 
 def should_disable_forward_pre_hook(args):
     """Block forward pre-hook for certain configurations."""
-    return not args.use_custom_fsdp and args.use_distributed_optimizer and args.overlap_param_gather
+    return args.use_distributed_optimizer and args.overlap_param_gather
 
 
 def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_microbatches):
@@ -423,7 +422,7 @@ def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_
         config.param_sync_func = None
         pre_hook_enabled = False
 
-    num_steps_per_rollout = args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    num_steps_per_rollout = len(num_microbatches)
 
     # Run training iterations till done.
     for step_id in range(num_steps_per_rollout):
@@ -467,6 +466,12 @@ def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_
             if args.use_wandb:
                 log_dict["train/step"] = accumulated_step_id
                 wandb.log(log_dict)
+
+            if args.ci_test:
+                if step_id == 0 and "train/ppo_kl" in log_dict and "train/pg_clipfrac" in log_dict:
+                    assert log_dict["train/ppo_kl"] == 0.0 and log_dict["train/pg_clipfrac"] == 0.0
+                if accumulated_step_id == 0 and "train/kl_loss" in log_dict:
+                    assert log_dict["train/kl_loss"] == 0.0
 
             print(f"step {accumulated_step_id}: {log_dict}")
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.

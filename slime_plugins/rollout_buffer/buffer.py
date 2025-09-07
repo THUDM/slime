@@ -5,7 +5,7 @@ import json
 import pathlib
 import threading
 import time
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional
 
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request

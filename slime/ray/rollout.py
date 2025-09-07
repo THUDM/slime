@@ -1,6 +1,7 @@
 import multiprocessing
 import random
 import time
+from typing import List
 
 import ray
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
@@ -8,8 +9,8 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.buffer import RolloutController
 from slime.utils.http_utils import find_available_port, get_host_info, run_router
-from .utils import Lock, NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
-from typing import List
+
+from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
 
 
 def create_rollout_engines(args, pg):
@@ -105,6 +106,9 @@ def create_rollout_engines(args, pg):
     init_handles = [engine.init.remote(**ports) for engine, ports in zip(rollout_engines, addr_and_ports)]
     ray.get(init_handles)
 
+    if args.offload:
+        ray.get([engine.release_memory_occupation.remote() for engine in rollout_engines])
+
     return rollout_engines
 
 
@@ -121,6 +125,7 @@ def _start_router(args):
         host=args.sglang_router_ip,
         port=args.sglang_router_port,
         balance_abs_threshold=0,
+        prometheus_port=find_available_port(random.randint(4000, 5000)),
     )
 
     if hasattr(router_args, "log_level"):

@@ -1,8 +1,4 @@
 import dataclasses
-
-
-from sglang.srt.server_args import ServerArgs
-from slime.utils.http_utils import get_host_info
 import multiprocessing
 import time
 from typing import List, Optional
@@ -12,7 +8,9 @@ from sglang.srt.entrypoints.http_server import launch_server
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import kill_process_tree
 from urllib3.exceptions import NewConnectionError
+
 from slime.ray.ray_actor import RayActor
+from slime.utils.http_utils import get_host_info
 
 
 def get_base_gpu_id(args, rank):
@@ -130,10 +128,6 @@ class SGLangEngine(RayActor):
                 f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_args.host}:{self.server_args.port}"
             )
 
-        if self.args.offload:
-            # offload the engine to the CPU
-            self.release_memory_occupation()
-
     def _make_request(self, endpoint: str, payload: Optional[dict] = None):
         """Make a POST request to the specified endpoint with the given payload.
 
@@ -197,6 +191,7 @@ class SGLangEngine(RayActor):
         kill_process_tree(self.process.pid)
 
     def release_memory_occupation(self):
+        self.flush_cache()
         return self._make_request("release_memory_occupation")
 
     def resume_memory_occupation(self, tags: List[str] = None):

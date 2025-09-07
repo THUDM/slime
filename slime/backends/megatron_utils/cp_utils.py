@@ -1,6 +1,6 @@
 import torch
-import torch.nn.functional as F
 import torch.distributed as dist
+import torch.nn.functional as F
 from megatron.core import mpu
 
 
@@ -168,3 +168,19 @@ def slice_with_cp(tokens: torch.Tensor, pad_value):
     start_1, end_1 = chunk_size * cp_rank, chunk_size * (cp_rank + 1)
     start_2, end_2 = chunk_size * (2 * cp_size - cp_rank - 1), chunk_size * (2 * cp_size - cp_rank)
     return torch.cat([tokens[start_1:end_1], tokens[start_2:end_2]])
+
+
+def slice_log_prob_with_cp(log_prob: list[float], total_length: int, response_length: int):
+    assert len(log_prob) == response_length
+
+    cp_size = mpu.get_context_parallel_world_size()
+
+    if cp_size == 1:
+        return log_prob
+
+    prompt_length = total_length - response_length
+    _, _, logits_offset, _ = get_logits_and_tokens_offset_with_cp(total_length, response_length)
+
+    chunk_1 = log_prob[logits_offset[0][0] - (prompt_length - 1) : logits_offset[0][1] - (prompt_length - 1)]
+    chunk_2 = log_prob[logits_offset[1][0] - (prompt_length - 1) : logits_offset[1][1] - (prompt_length - 1)]
+    return chunk_1 + chunk_2

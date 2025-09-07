@@ -4,9 +4,6 @@ from typing import List, Optional
 
 import torch
 import torch.distributed as dist
-from megatron.core import mpu
-
-from slime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
 
 
 @torch.compile(dynamic=True)
@@ -159,6 +156,8 @@ def get_reinforce_plus_plus_returns(
         List[torch.Tensor]: A list of return (G_t) tensors for the
                             local sequence chunks owned by the current GPU rank.
     """
+    from megatron.core import mpu
+
     cp_size = mpu.get_context_parallel_world_size()
     cp_rank = mpu.get_context_parallel_rank()
 
@@ -170,6 +169,8 @@ def get_reinforce_plus_plus_returns(
         prompt_len = total_len - response_len
 
         if cp_size > 1:
+            from slime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
+
             # Step 1: Gather all KL chunks and token_offsets from all ranks
             _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(total_len, response_len)
 
@@ -272,3 +273,23 @@ def get_reinforce_plus_plus_baseline_advantages(
     ]
 
     return unwhitened_advantages
+
+
+def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool = False):
+    logits = logits.contiguous()
+    # TODO: not sure why we need to clone the logits here.
+    # Without the clone, the backward will trigger inplace edit error.
+    # It seems that the function with tp will modify the logits inplace.
+    if logits.size(0) != 0:
+        log_prob = compute_log_probs(logits.clone(), tokens, tp_group)
+    else:
+        log_prob = logits.new_zeros((0,))
+
+    if with_entropy:
+        if logits.size(0) != 0:
+            entropy = compute_entropy_from_logits(logits.clone(), tp_group)
+        else:
+            entropy = logits.new_zeros((0,))
+    else:
+        entropy = None
+    return log_prob, entropy

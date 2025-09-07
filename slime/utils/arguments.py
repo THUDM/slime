@@ -6,7 +6,7 @@ from slime.backends.sglang_utils.arguments import add_sglang_arguments
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 
 
-def reset_megatron_args(parser, name, default):
+def reset_megatron_args(parser, name, type, default):
     """
     Reset the default value of a Megatron argument.
     :param parser: The argument parser.
@@ -17,6 +17,8 @@ def reset_megatron_args(parser, name, default):
         if name in action.option_strings:
             action.default = default
             break
+    else:
+        parser.add_argument(name, type=type, default=default)
 
 
 def get_slime_extra_args_provider(add_custom_arguments=None):
@@ -72,6 +74,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
 
+            reset_megatron_args(parser, "--distributed-backend", str, "nccl")
+            reset_megatron_args(parser, "--distributed-timeout-minutes", int, 10)
+
             return parser
 
         # rollout
@@ -123,6 +128,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             parser.add_argument(
                 "--rollout-top-k", type=int, default=-1, help="the top-k for the inference engine during rollout."
+            )
+            parser.add_argument(
+                "--rollout-max-context-len",
+                type=int,
+                default=None,
+                help=(
+                    "The maximum context size for the inference engine during rollout."
+                    "It should no exceed the `max_position_embeddinds` in Huggingface model's `config.json`"
+                ),
             )
             parser.add_argument(
                 "--rollout-max-prompt-len",
@@ -201,26 +215,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Regardless of whether partial rollout is used or filters are applied, "
                     "the sampling granularity is always determined by this value. "
                     "If this value is None, rollout_batch_size will be used as the default over_sampling_batch_size."
-                ),
-            )
-            parser.add_argument(
-                "--over-sampling-filter-input-size",
-                type=int,
-                default=None,
-                help=(
-                    "This is the input size for the over sampling filter."
-                    "This value will replace the rollout_batch_size as target batch size "
-                    "(number of complete, valid samples to be generated) when the over sampling filter is applied."
-                ),
-            )
-            parser.add_argument(
-                "--over-sampling-filter-path",
-                type=str,
-                default=None,
-                help=(
-                    "This parameter is used with the over_sampling_filter_input_size. "
-                    "The over sampling filter is applied only after enough data has been generated."
-                    "You could use `slime.rollout.filter_hub.over_sampling_filters.sort_by_reward_std` as an example."
                 ),
             )
             parser.add_argument(
@@ -384,7 +378,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             # gbs of the training, note that the gbs is of sample, not of prompts,
             # so if you hope to train 1 step for each rollout, the global_bach_size should be set as
             # `rollout_batch_size * n_samples_per_prompt`.
-            reset_megatron_args(parser, "--global-batch-size", None)
+            reset_megatron_args(parser, "--global-batch-size", int, None)
             parser.add_argument(
                 "--num-steps-per-rollout",
                 type=int,
@@ -395,7 +389,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             # mbs for the training, will be ignored if `use_dynamic_batch_size` is set.
-            reset_megatron_args(parser, "--micro-batch-size", 1)
+            reset_megatron_args(parser, "--micro-batch-size", int, 1)
             parser.add_argument(
                 "--balance-data",
                 action="store_true",
@@ -451,10 +445,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
 
             # change the default value of eval_interval from Megatron to None
-            for action in parser._actions:
-                if "--eval-interval" in action.option_strings:
-                    action.default = None
-                    break
+            reset_megatron_args(parser, "--eval-interval", int, None)
 
             parser.add_argument(
                 "--eval-prompt-data",
@@ -496,6 +487,14 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "When --load is not set, this will be used as the initial checkpoint for training. "
                 ),
             )
+            parser.add_argument(
+                "--ref-ckpt-step", type=int, default=None, help="The checkpoint step for reference model. "
+            )
+            reset_megatron_args(parser, "--load", str, None)
+            reset_megatron_args(parser, "--save", str, None)
+            reset_megatron_args(parser, "--save-interval", int, None)
+            reset_megatron_args(parser, "--seed", int, 1234)
+
             parser.add_argument("--eps-clip", type=float, default=0.2, help="PPO clip range")
             parser.add_argument("--eps-clip-high", type=float, default=None, help="PPO clip upper range")
             parser.add_argument(
@@ -585,6 +584,25 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This is useful for doing special loss mask."
                 ),
             )
+            # Off-Policy Correction using Importance Sampling: https://fengyao.notion.site/off-policy-rl
+            parser.add_argument(
+                "--use-tis",
+                action="store_true",
+                default=False,
+                help="Enable TIS from https://fengyao.notion.site/off-policy-rl for off-policy importance sampling.",
+            )
+            parser.add_argument(
+                "--tis-clip",
+                type=float,
+                default=2.0,
+                help="Clipping threshold C for importance sampling ratios to control variance.",
+            )
+            parser.add_argument(
+                "--tis-clip-low",
+                type=float,
+                default=0,
+                help="Lower bound clipping threshold C for importance sampling ratios to control variance.",
+            )
             return parser
 
         # wandb
@@ -608,7 +626,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--wandb-host", type=str, default=None)
             parser.add_argument("--wandb-team", type=str, default=None)
             parser.add_argument("--wandb-group", type=str, default=None)
-            reset_megatron_args(parser, "--wandb-project", None)
+            reset_megatron_args(parser, "--wandb-project", str, None)
             parser.add_argument(
                 "--disable-wandb-random-suffix",
                 action="store_false",
@@ -746,6 +764,14 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "The function should have the signature `def custom_rm(args, sample) -> float`."
                 ),
             )
+            parser.add_argument(
+                "--custom-reward-post-process-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to the custom function that will post process reward, by default it will be the normalization for grpo. "
+                ),
+            )
             return parser
 
         def add_rollout_buffer_arguments(parser):
@@ -805,6 +831,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             return parser
 
+        def add_ci_arguments(parser):
+            parser.add_argument(
+                "--ci-test",
+                action="store_true",
+            )
+            return parser
+
         # Add custom arguments in front to prevent overwritten some slime arguments.
         if add_custom_arguments is not None:
             parser = add_custom_arguments(parser)
@@ -820,8 +853,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_network_arguments(parser)
         parser = add_reward_model_arguments(parser)
         parser = add_rollout_buffer_arguments(parser)
-        parser = add_custom_megatron_plugins_arguments(parser)
+        parser = add_ci_arguments(parser)
+
         # For megatron
+        parser = add_custom_megatron_plugins_arguments(parser)
         try:
             parser.add_argument("--padded-vocab-size", type=int, default=None)
         except:
@@ -833,21 +868,32 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
 
 def parse_args(add_custom_arguments=None):
-    from slime.backends.megatron_utils import set_default_megatron_args
-    from slime.backends.megatron_utils import parse_args as megatron_parse_args
-    from slime.backends.megatron_utils import validate_args as megatron_validate_args
-
     add_slime_arguments = get_slime_extra_args_provider(add_custom_arguments)
-    args = megatron_parse_args(extra_args_provider=add_slime_arguments)
 
-    if args.hf_checkpoint:
-        hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
-        hf_validate_args(args, hf_config)
+    backend = os.environ.get("SLIME_BACKEND", "megatron").lower()
+    if backend == "megatron":
+        from slime.backends.megatron_utils import parse_args as megatron_parse_args
+        from slime.backends.megatron_utils import set_default_megatron_args
+        from slime.backends.megatron_utils import validate_args as megatron_validate_args
 
-    args.rank = 0
-    args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
+        args = megatron_parse_args(extra_args_provider=add_slime_arguments)
+        if getattr(args, "hf_checkpoint", None):
+            hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+            hf_validate_args(args, hf_config)
 
-    args = set_default_megatron_args(args)
+        args.rank = 0
+        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
+        args = set_default_megatron_args(args)
+    else:
+        print("⚠️ " * 50)
+        print(
+            f"⚠️  SLIME_BACKEND {backend} is experimental and not yet verified.\n"
+            "⚠️  Please avoid using it unless you are actively developing it."
+        )
+        print("⚠️ " * 50)
+        from slime.backends.fsdp_utils.arguments import load_fsdp_args
+
+        args = load_fsdp_args(extra_args_provider=add_slime_arguments)
 
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):
@@ -869,6 +915,8 @@ def parse_args(add_custom_arguments=None):
         args.no_load_rng = True
         args.finetune = True
         args.load = args.ref_load
+        if args.ref_ckpt_step is not None:
+            args.ckpt_step = args.ref_ckpt_step
         args.start_rollout_id = 0
 
     if args.eval_interval is not None:
@@ -975,16 +1023,17 @@ def parse_args(add_custom_arguments=None):
             "num_epoch is not set, but num_rollout is not set, " "please set --num-rollout or --num-epoch"
         )
 
-    megatron_validate_args(args)
+    if backend == "megatron":
+        megatron_validate_args(args)
 
-    # always use varlen
-    args.variable_seq_lengths = True
-    if getattr(args, "moe_token_dispatcher_type", None) == "allgather":
-        print(
-            "--moe-token-dispatcher-type allgather does not support variable sequence length, "
-            "please use alltoall dispatcher instead."
-        )
-        args.moe_token_dispatcher_type = "alltoall"
+        # always use varlen
+        args.variable_seq_lengths = True
+        if getattr(args, "moe_token_dispatcher_type", None) == "allgather":
+            print(
+                "--moe-token-dispatcher-type allgather does not support variable sequence length, "
+                "please use alltoall dispatcher instead."
+            )
+            args.moe_token_dispatcher_type = "alltoall"
 
     sglang_validate_args(args)
 

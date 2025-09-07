@@ -187,3 +187,6 @@ local/
 
 .idea
 *.iml
+
+glm/
+_examples_synced/

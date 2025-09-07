@@ -25,6 +25,21 @@ index 1b96ae678..3b7023c55 100644
  
              # Verify quantization configurations.
              if self.quantization is None:
+diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/entrypoints/http_server.py
+index a6bcb0b5b..1ef6abe72 100644
+--- a/python/sglang/srt/entrypoints/http_server.py
++++ b/python/sglang/srt/entrypoints/http_server.py
+@@ -264,6 +264,10 @@ async def validate_json_request(raw_request: Request):
+ 
+ 
+ @app.get("/health")
++async def health(request: Request) -> Response:
++    return Response(status_code=200)
++
++
+ @app.get("/health_generate")
+ async def health_generate(request: Request) -> Response:
+     """
 diff --git a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py b/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
 index 372717bf9..40665cc90 100644
 --- a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
@@ -57,7 +72,7 @@ index 956264fc9..7801d29d5 100644
  
          layer.weight = torch.nn.Parameter(layer.weight.data, requires_grad=False)
 diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
-index 3856bf259..dfbb9523e 100644
+index 3856bf259..5f6a6570d 100644
 --- a/python/sglang/srt/managers/scheduler.py
 +++ b/python/sglang/srt/managers/scheduler.py
 @@ -1346,7 +1346,7 @@ class Scheduler(
@@ -78,6 +93,31 @@ index 3856bf259..dfbb9523e 100644
  
          if (
              self.enable_metrics
+@@ -1817,6 +1817,7 @@ class Scheduler(
+             deepep_mode=DeepEPMode(self.server_args.deepep_mode),
+             require_mlp_tp_gather=require_mlp_tp_gather(self.server_args),
+             disable_overlap_schedule=self.server_args.disable_overlap_schedule,
++            offload_tags=self.offload_tags,
+         )
+ 
+     def handle_dp_balance_data(self, local_batch: ScheduleBatch):
+@@ -1914,6 +1915,7 @@ class Scheduler(
+         deepep_mode: DeepEPMode,
+         require_mlp_tp_gather: bool,
+         disable_overlap_schedule: bool,
++        offload_tags: set[str],
+     ):
+         # Check if other DP workers have running batches
+         if local_batch is None:
+@@ -1944,7 +1946,7 @@ class Scheduler(
+         )
+ 
+         tbo_preparer = TboDPAttentionPreparer()
+-        if disable_overlap_schedule:
++        if len(offload_tags) == 0 and disable_overlap_schedule:
+             group = tp_group.device_group
+             device = tp_group.device
+         else:
 diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
 index 50ac39f88..33782a8cd 100644
 --- a/python/sglang/srt/managers/tokenizer_manager.py
@@ -130,6 +170,33 @@ index 50ac39f88..33782a8cd 100644
  
      async def update_weights_from_tensor(
          self,
+diff --git a/python/sglang/srt/model_executor/cuda_graph_runner.py b/python/sglang/srt/model_executor/cuda_graph_runner.py
+index 303919505..df2407eb6 100644
+--- a/python/sglang/srt/model_executor/cuda_graph_runner.py
++++ b/python/sglang/srt/model_executor/cuda_graph_runner.py
+@@ -759,6 +759,22 @@ class CudaGraphRunner:
+             )
+         if forward_batch.forward_mode.is_idle() and forward_batch.spec_info is not None:
+             forward_batch.spec_info.custom_mask = self.custom_mask
++
++        if forward_batch.forward_mode.is_target_verify() and bs - raw_bs > 0:
++            # pad the spec_info custom mask
++            spec_info = forward_batch.spec_info
++            pad_len = (
++                (bs - raw_bs)
++                * spec_info.draft_token_num
++                * (spec_info.draft_token_num + self.seq_len_fill_value)
++            )
++            pad_mask = torch.full(
++                (pad_len,),
++                True,
++                device=spec_info.custom_mask.device,
++            )
++            spec_info.custom_mask = torch.cat([spec_info.custom_mask, pad_mask], dim=0)
++
+         # Attention backend
+         self.model_runner.attn_backend.init_forward_metadata_replay_cuda_graph(
+             bs,
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
 index ee83c2d9c..5145d7f78 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
@@ -152,9 +219,18 @@ index ee83c2d9c..5145d7f78 100644
                  model_config=self.model_config,
                  load_config=self.load_config,
 diff --git a/python/sglang/srt/models/glm4_moe.py b/python/sglang/srt/models/glm4_moe.py
-index 67ef6ca79..1a3db9974 100644
+index 67ef6ca79..b6ee944de 100644
 --- a/python/sglang/srt/models/glm4_moe.py
 +++ b/python/sglang/srt/models/glm4_moe.py
+@@ -695,7 +695,7 @@ class Glm4MoeDecoderLayer(DeepseekV2DecoderLayer):
+             layer_scatter_modes=self.layer_scatter_modes,
+             input_layernorm=self.input_layernorm,
+             post_attention_layernorm=self.post_attention_layernorm,
+-            allow_reduce_scatter=True,
++            allow_reduce_scatter=False,
+         )
+ 
+     def forward(
 @@ -1108,5 +1108,4 @@ class Glm4MoeForCausalLM(DeepseekV2ForCausalLM):
                          )
                          weight_loader(param, loaded_weight)

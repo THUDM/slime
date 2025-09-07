@@ -3,6 +3,7 @@ import inspect
 from contextlib import nullcontext
 from typing import Optional
 
+import torch
 from megatron.core.models.gpt import GPTModel
 from megatron.core.models.gpt.gpt_layer_specs import (
     get_gpt_decoder_block_spec,
@@ -28,6 +29,29 @@ def get_model_provider_func(args):
             Union[GPTModel, megatron.legacy.model.GPTModel]: The returned model
         """
         use_te = args.transformer_impl == "transformer_engine"
+
+        if args.record_memory_history:
+            torch.cuda.memory._record_memory_history(
+                # True,
+                # keep 100,000 alloc/free events from before the snapshot
+                max_entries=100000,
+                # record stack information for the trace events
+                # trace_alloc_record_context=True,
+                stacks="all",
+            )
+
+            def oom_observer(device, alloc, device_alloc, device_free):
+                # snapshot right after an OOM happened
+                print("saving allocated state during OOM")
+                snapshot = torch.cuda.memory._snapshot()
+                from pickle import dump
+
+                dump(
+                    snapshot,
+                    open(f"oom_rank-{torch.distributed.get_rank()}_{args.memory_snapshot_path}", "wb"),
+                )
+
+            torch._C._cuda_attach_out_of_memory_observer(oom_observer)
 
         # Experimental loading arguments from yaml
         config = core_transformer_config_from_args(args)

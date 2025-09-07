@@ -1,0 +1,52 @@
+name: Release Documentation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs/**"
+      - "version.txt"
+  workflow_dispatch:
+
+concurrency:
+  group: release-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: github.repository == 'THUDM/slime'
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+
+      - name: Install dependencies
+        run: |
+          apt-get update && apt-get install -y pandoc parallel retry
+          pip install -r docs/requirements.txt
+
+      - name: Build documentation
+        run: |
+          cd docs
+          bash ./build.sh en
+          bash ./build.sh zh
+          mv ./build/zh ./build/en/
+        env:
+          LC_ALL: "en_US.UTF-8"
+          LC_CTYPE: "en_US.UTF-8"
+
+
+      - name: Deploy
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs/build/en

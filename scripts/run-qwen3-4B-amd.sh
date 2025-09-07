@@ -1,10 +1,6 @@
 #!/bin/bash
 
-
-# bash scripts/run-qwen3-4B-amd.sh
-
-
-####clear before training
+# for rerun the task
 pkill -9 sglang
 sleep 3
 ray stop --force
@@ -134,7 +130,7 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   #--use-wandb
+   # --use-wandb
    # --wandb-project slime-dev
    # --wandb-group qwen3-4B-test
    # --wandb-key ${WANDB_KEY}
@@ -150,8 +146,6 @@ SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
    --sglang-mem-fraction-static 0.7
 )
-####################
-
 
 MISC_ARGS=(
    # default dropout in megatron is 0.1
@@ -188,7 +182,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    -- python3 train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 8 \
-   --rollout-num-gpus-per-node 8 \
    --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
@@ -201,26 +194,3 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
    ${MISC_ARGS[@]}
-
-
-
-####clear after training
-
-pkill -9 sglang
-sleep 3
-ray stop --force
-pkill -9 ray
-pkill -9 python
-sleep 3
-pkill -9 ray
-pkill -9 python
-
-
-
-
-
-
-
-
-
-
