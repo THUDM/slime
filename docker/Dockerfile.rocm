@@ -1,7 +1,8 @@
 #### Use the base image
 
 # The Docker image built with this Dockerfile:
-# Supports up to slime commit ID: 9a48ba0 (Aug 10, 2025)
+# PR: commit ID 36711aa (Aug 22, 2025) dockerfile - Supports up to slime commit ID: 9a48ba0 (Aug 10, 2025)
+
 # Start to failfrom c22f55b (Aug 10, 2025) - Need to fix the bug from here
 
 # You can find the latest pre-built Docker image from here: https://hub.docker.com/r/rlsys/slime/tags
@@ -31,12 +32,15 @@ RUN apt-get install -y pkg-config liblzma-dev
 WORKDIR /workspace/
 
 RUN rm -rf TransformerEngine 
-RUN git clone --recursive https://github.com/ROCm/TransformerEngine.git
+# RUN git clone --recursive https://github.com/ROCm/TransformerEngine.git
+RUN git clone https://github.com/ROCm/TransformerEngine.git
 WORKDIR /workspace/TransformerEngine
 
-RUN git checkout 236178e5
-# RUN git checkout bb061ade
+RUN git checkout 236178e
+# RUN git checkout bb061ad
 # RUN git checkout 864405c
+
+RUN git submodule update --init --recursive
 
 ENV NVTE_FRAMEWORK=pytorch 
 ENV NVTE_ROCM_ARCH=gfx942 
@@ -45,7 +49,7 @@ ENV NVTE_USE_ROCM=1
 
 # export CMAKE_PREFIX_PATH="/opt/rocm:/opt/rocm/hip:/usr/local:/usr:${CMAKE_PREFIX_PATH:-}"
 ENV CMAKE_PREFIX_PATH="/opt/rocm:/opt/rocm/hip:/usr/local:/usr"
-RUN MAX_JOBS=$(MAX_JOBS) pip install . -vvv 
+RUN MAX_JOBS=${MAX_JOBS} pip install . -vvv 
 WORKDIR /workspace/
 ###########################################
 ###########################################
@@ -83,14 +87,18 @@ RUN pip install setuptools==75.8.0
 ############build sgalng###################
 ###########################################
 # Set environment variables
-ENV BASE_DIR=/sgl-workspace
+ENV BASE_DIR=/workspace
+# ENV BASE_DIR=/sgl-workspace
 ENV BUILD_TYPE=all
 ENV SGL_REPO=https://github.com/sgl-project/sglang
-ENV SGL_BRANCH=v0.4.9
+# ENV SGL_BRANCH=v0.4.9
+ENV SGL_BRANCH=0.4.9.post6
+# ENV SGL_BRANCH=v0.4.10
 ENV TRITON_REPO=https://github.com/ROCm/triton.git
 ENV TRITON_COMMIT=improve_fa_decode_3.0.0
 ENV AITER_REPO=https://github.com/ROCm/aiter.git
 ENV AITER_COMMIT=v0.1.3
+# ENV AITER_COMMIT=v0.1.4
 # v0.1.2 version - commit id: 9d11f47
 # ENV AITER_COMMIT=9d11f47
 
@@ -99,7 +107,10 @@ ENV HSA_NO_SCRATCH_RECLAIM=1
 ENV SGLANG_SET_CPU_AFFINITY=1
 ENV SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN=1
 ENV NCCL_MIN_NCHANNELS=112
-ENV MOE_PADDING=1
+
+ENV SGLANG_USE_AITER=1
+ENV SGLANG_MOE_PADDING=1
+# ENV MOE_PADDING=1
 ENV VLLM_FP8_PADDING=1
 ENV VLLM_FP8_ACT_PADDING=1
 ENV VLLM_FP8_WEIGHT_PADDING=1
@@ -112,11 +123,60 @@ ENV ROCM_ARCH=gfx942
 ENV PYTORCH_ROCM_ARCH="gfx90a;gfx942"
 
 # Switch to working directory
-WORKDIR /sgl-workspace
+# WORKDIR /sgl-workspace
+WORKDIR /workspace
 
 # Clean and create directory
-RUN rm -rf /sgl-workspace && mkdir -p /sgl-workspace
+# RUN rm -rf /sgl-workspace && mkdir -p /sgl-workspace
+RUN rm -rf /workspace && mkdir -p /workspace
 
+# # Clone and build sglang
+# RUN git clone ${SGL_REPO} \
+#     && cd sglang \
+#     && git checkout ${SGL_BRANCH} || echo "Using default branch" \
+#     && cd sgl-kernel \
+#     && rm -f pyproject.toml \
+#     && mv pyproject_rocm.toml pyproject.toml \
+#     && python setup_rocm.py install \
+#     && cd .. \
+#     && if [ "$BUILD_TYPE" = "srt" ]; then \
+#          python -m pip --no-cache-dir install -e "python[srt_hip]"; \
+#        else \
+#          python -m pip --no-cache-dir install -e "python[all_hip]"; \
+#        fi \
+#     && cd /sgl-workspace \
+#     && cp -r /sgl-workspace/sglang /sglang \
+#     && python -m pip cache purge
+
+# Install common Python packages
+RUN pip install IPython orjson python-multipart torchao pybind11
+
+# Rebuild Triton
+RUN pip uninstall -y triton || true \
+    && git clone ${TRITON_REPO} \
+    && cd triton \
+    && git checkout ${TRITON_COMMIT} \
+    && cd python \
+    && python3 setup.py install \
+    && cd /workspace
+    # && cd /sgl-workspace
+
+# Build aiter
+#version: Commit 9d11f47
+    # && git checkout ${AITER_COMMIT} \
+RUN pip uninstall -y aiter || true
+RUN git clone ${AITER_REPO} \
+    && cd aiter \
+    && git checkout ${AITER_COMMIT} \
+    && git submodule sync \
+    && git submodule update --init --recursive \
+    && PREBUILD_KERNELS=1 GPU_ARCHS=gfx942 python3 setup.py develop \
+    && cd /workspace
+    # && cd /sgl-workspace
+    # && PREBUILD_KERNELS=1 GPU_ARCHS=gfx942 python3 setup.py develop \
+
+
+###########################################
 # Clone and build sglang
 RUN git clone ${SGL_REPO} \
     && cd sglang \
@@ -131,38 +191,20 @@ RUN git clone ${SGL_REPO} \
        else \
          python -m pip --no-cache-dir install -e "python[all_hip]"; \
        fi \
-    && cd /sgl-workspace \
-    && cp -r /sgl-workspace/sglang /sglang \
+    && cd /workspace \
+    && cp -r /workspace/sglang /sglang \
     && python -m pip cache purge
+    # && cd /sgl-workspace \
+    # && cp -r /sgl-workspace/sglang /sglang \
+    # && python -m pip cache purge
+###########################################
 
-# Install common Python packages
-RUN pip install IPython orjson python-multipart torchao pybind11
-
-# Rebuild Triton
-RUN pip uninstall -y triton || true \
-    && git clone ${TRITON_REPO} \
-    && cd triton \
-    && git checkout ${TRITON_COMMIT} \
-    && cd python \
-    && python3 setup.py install \
-    && cd /sgl-workspace
-
-# Build aiter
-#version: Commit 9d11f47
-    # && git checkout ${AITER_COMMIT} \
-RUN pip uninstall -y aiter || true
-RUN git clone ${AITER_REPO} \
-    && cd aiter \
-    && git checkout ${AITER_COMMIT} \
-    && git submodule sync \
-    && git submodule update --init --recursive \
-    && PREBUILD_KERNELS=1 GPU_ARCHS=gfx942 python3 setup.py install \
-    && cd /sgl-workspace
-    # && PREBUILD_KERNELS=1 GPU_ARCHS=gfx942 python3 setup.py develop \
 
 # Copy MI300X config 
-RUN find /sgl-workspace/sglang/python/sglang/srt/layers/quantization/configs/ \
-         /sgl-workspace/sglang/python/sglang/srt/layers/moe/fused_moe_triton/configs/ \
+# RUN find /sgl-workspace/sglang/python/sglang/srt/layers/quantization/configs/ \
+#          /sgl-workspace/sglang/python/sglang/srt/layers/moe/fused_moe_triton/configs/ \
+RUN find /workspace/sglang/python/sglang/srt/layers/quantization/configs/ \
+         /workspace/sglang/python/sglang/srt/layers/moe/fused_moe_triton/configs/ \
          -type f -name '*MI300X*' | \
          xargs -I {} sh -c 'vf_config=$(echo "$1" | sed "s/MI300X/MI300X_VF/"); cp "$1" "$vf_config"' -- {}
 
@@ -171,26 +213,36 @@ RUN echo "Environment setup complete."
 WORKDIR /workspace/
 
 
-# patch
-RUN git clone https://github.com/THUDM/slime.git \
-    && cd slime \
-    && cp docker/patch/sglang.patch  /sgl-workspace/sglang/
-# COPY /home/yushensu/projects/slime/docker/patch/sglang.patch /sgl-workspace/sglang/
-WORKDIR /sgl-workspace/sglang/ 
-RUN git apply sglang.patch && rm sglang.patch
-# WORKDIR /workspace/
+# # patch
+# # Date: Jul 5, 2025
+# ENV SLIME_COMMIT=9ddbdbd 
+# RUN git clone https://github.com/THUDM/slime.git \
+#     && cd slime \
+#     && git checkout ${SLIME_COMMIT} \
+#     && cp docker/patch/sglang.patch  /workspace/sglang/
+#     # && cp docker/patch/sglang.patch  /sgl-workspace/sglang/
+#     # && cp docker/patch/v0.4.10-cu126/sglang.patch  /sgl-workspace/sglang/
+#     # && cp docker/patch/latest/sglang.patch  /sgl-workspace/sglang/
+#     # && cp docker/patch/sglang.patch  /sgl-workspace/sglang/
+# # COPY /home/yushensu/projects/slime/docker/patch/sglang.patch /sgl-workspace/sglang/
+# WORKDIR /workspace/sglang/ 
+# # WORKDIR /sgl-workspace/sglang/ 
+# RUN git apply sglang.patch && rm sglang.patch
+# # WORKDIR /workspace/
 
-# sgl-router
-# WORKDIR /sgl-workspace/sglang/ 
-RUN apt-get update && apt-get install -y pkg-config libssl-dev
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-RUN pip install setuptools-rust wheel build
-RUN source $HOME/.cargo/env && \
-    mkdir -p sgl-router && \
-    cd sgl-router && \
-    cargo build -j 64 && \
-    python3 -m build && \
-    pip install dist/*.whl --force-reinstall
+# # sgl-router
+# # WORKDIR /sgl-workspace/sglang/ 
+# RUN apt-get update && apt-get install -y pkg-config libssl-dev
+# RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+# RUN pip install setuptools-rust wheel build
+# RUN source $HOME/.cargo/env && \
+#     mkdir -p sgl-router && \
+#     cd sgl-router && \
+#     cargo build -j 64 && \
+#     python3 -m build && \
+#     pip install dist/*.whl --force-reinstall
+
+RUN pip install sglang-router --force-reinstall
 
 ###########################################
 ###########################################
@@ -227,6 +279,9 @@ WORKDIR /workspace/
 #########################################
 #### Install megatron-core###############
 #########################################
+# Can be removed just the current megatron-lm dependency
+RUN pip install "numpy>=1.21.0,<2.0" --force-reinstall
+
 RUN pip uninstall -y megatron-core && \
     git clone https://github.com/yushengsu-thu/Megatron-LM-amd_version.git && \
     cd Megatron-LM-amd_version && \
@@ -292,6 +347,8 @@ RUN pip install git+https://github.com/ISEEKYAN/mbridge.git --no-deps
 ########################################
 ########################################
 
+
+
 ########################################
 ########slime agent framewrok need######
 ########################################
@@ -301,6 +358,7 @@ RUN pip install google-generativeai
 ########################################
 ########################################
 ########################################
+
 
 
 WORKDIR /workspace/
