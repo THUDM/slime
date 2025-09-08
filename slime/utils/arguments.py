@@ -867,6 +867,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
     return add_slime_arguments
 
 
+def warning_for_unfinished_backend(backend: str):
+    print("⚠️ " * 50)
+    print(
+        f"⚠️  SLIME_BACKEND {backend} is experimental and not yet verified.\n"
+        "⚠️  Please avoid using it unless you are actively developing it."
+    )
+    print("⚠️ " * 50)
+
+
 def parse_args(add_custom_arguments=None):
     add_slime_arguments = get_slime_extra_args_provider(add_custom_arguments)
 
@@ -884,13 +893,15 @@ def parse_args(add_custom_arguments=None):
         args.rank = 0
         args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
         args = set_default_megatron_args(args)
+    elif backend == "xtuner":
+        warning_for_unfinished_backend(backend)
+        from slime.backends.xtuner_utils.arguments import parse_args as xtuner_parse_args
+
+        args = xtuner_parse_args(add_slime_arguments)
+        args.rank = 0
+        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
     else:
-        print("⚠️ " * 50)
-        print(
-            f"⚠️  SLIME_BACKEND {backend} is experimental and not yet verified.\n"
-            "⚠️  Please avoid using it unless you are actively developing it."
-        )
-        print("⚠️ " * 50)
+        warning_for_unfinished_backend(backend)
         from slime.backends.fsdp_utils.arguments import load_fsdp_args
 
         args = load_fsdp_args(extra_args_provider=add_slime_arguments)
