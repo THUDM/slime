@@ -1,15 +1,17 @@
 #### Use the base image
 
 # The Docker image built with this Dockerfile:
-# Supports at least up to slime commit ID: d4a7741 (Sep 7, 2025) - supported by amd_patch/sglv0.5.0rc0 
+# Supports up to slime commit ID: 9a48ba0 (Aug 10, 2025)
+# Start to fail from c22f55b (Aug 10, 2025) - Need to fix the bug from here
 
 # You can find the latest pre-built Docker image from here: https://hub.docker.com/r/rlsys/slime/tags
 # Current latest docker img: `rlsys/slime:slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch-vim` manually add the patch to mitigate checkpoint loading issue. (vim /workspace/Megatron-LM-amd_version/megatron/training/checkpointing.py. Line: 1449 ~ 1457 - comment out if becasue of dismatch number of dist checkpoints
 
 
 # The Docker image built with this Dockerfile:
-# PR: commit ID 36711aa (Aug 22, 2025) dockerfile - Supports at least up to slime commit ID: d4a7741 (Sep 7, 2025)
+# PR: commit ID 36711aa (Aug 22, 2025) dockerfile - Supports up to slime commit ID: 9a48ba0 (Aug 10, 2025)
 
+# Start to failfrom c22f55b (Aug 10, 2025) - Need to fix the bug from here
 
 # You can find the latest pre-built Docker image from here: https://hub.docker.com/r/rlsys/slime/tags
 # Current latest docker img: `rlsys/slime:slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch-vim` manually add the patch to mitigate checkpoint loading issue. (vim /workspace/Megatron-LM-amd_version/megatron/training/checkpointing.py. Line: 1449 ~ 1457 - comment out if becasue of dismatch number of dist checkpoints
@@ -42,7 +44,6 @@ RUN rm -rf TransformerEngine
 RUN git clone https://github.com/ROCm/TransformerEngine.git
 WORKDIR /workspace/TransformerEngine
 
-
 RUN git checkout 236178e
 # RUN git checkout bb061ad
 # RUN git checkout 864405c
@@ -64,128 +65,51 @@ WORKDIR /workspace/
 
 
 
+###########################################################
+####Install vllm - sglang require vllm 0.6.7 dependency####
+# #########################################################
+#### Require vllm 0.6.7 - checkout 113274a0
+WORKDIR /workspace/
+RUN rm -rf vllm
+RUN pip uninstall -y vllm
+# Refer to here (down-grade vllm to 0.6.3): https://docs.vllm.ai/en/v0.6.3/getting_started/amd-installation.html
+RUN git clone https://github.com/ROCm/vllm.git
+# git clone https://github.com/vllm-project/vllm.git
+WORKDIR /workspace/vllm
+RUN git checkout 113274a0
+ENV PYTORCH_ROCM_ARCH="gfx90a;gfx942"
+ENV MAX_JOBS=${MAX_JOBS}
+RUN pip install "boto3>=1.26.0"
+RUN pip install setuptools_scm
+# will add src into py. You can delete the repo
+RUN python3 setup.py install
+WORKDIR /workspace/
 ###########################################
-##############Install SGLang###############
 ###########################################
 
-# This is necessary for scope purpose
-# ARG GPU_ARCH=gfx942
-ENV GPU_ARCH=gfx942
 
-# ===============================
-# Base image 942 and args
-# FROM $BASE_IMAGE_942 AS gfx942
-ENV BUILD_VLLM="0"
-ENV BUILD_TRITON="1"
-ENV BUILD_AITER_ALL="1"
-ENV AITER_COMMIT="v0.1.4"
-
-# # ===============================
-# # Base image 950 and args
-# FROM $BASE_IMAGE_950 AS gfx950
-# ENV BUILD_VLLM="0"
-# ENV BUILD_TRITON="0"
-# ENV BUILD_AITER_ALL="1"
-# ENV AITER_COMMIT="v0.1.4"
-
-# ===============================
-# Chosen arch and args
-# FROM ${GPU_ARCH}
-
-# This is necessary for scope purpose, again
-# ARG GPU_ARCH=gfx950
-ENV GPU_ARCH_LIST=${GPU_ARCH:-${PYTORCH_ROCM_ARCH}}
-
-ARG SGL_REPO="https://github.com/sgl-project/sglang.git"
-ARG SGL_DEFAULT="main"
-# ARG SGL_BRANCH=${SGL_DEFAULT}
-ARG SGL_BRANCH="8ecf6b9d2480c3f600826c7d8fef6a16ed603c3f"
-
-ARG TRITON_REPO="https://github.com/ROCm/triton.git"
-ARG TRITON_COMMIT="improve_fa_decode_3.0.0"
-
-ARG AITER_REPO="https://github.com/ROCm/aiter.git"
+RUN pip install setuptools==75.8.0
 
 
-WORKDIR /workspace
-# -----------------------
-# AITER
-RUN pip uninstall -y aiter
-RUN git clone ${AITER_REPO} \
- && cd aiter \
- && git checkout ${AITER_COMMIT} \
- && git submodule update --init --recursive
-RUN cd aiter \
-     && if [ "$BUILD_AITER_ALL" = "1" ]; then \
-          PREBUILD_KERNELS=1 GPU_ARCHS=$GPU_ARCH_LIST python setup.py develop; \
-        else \
-          GPU_ARCHS=$GPU_ARCH_LIST python setup.py develop; \
-        fi
+###########################################
+############build sgalng###################
+###########################################
+# Set environment variables
+ENV BASE_DIR=/workspace
+# ENV BASE_DIR=/sgl-workspace
+ENV BUILD_TYPE=all
+ENV SGL_REPO=https://github.com/sgl-project/sglang
+# ENV SGL_BRANCH=v0.4.9
+ENV SGL_BRANCH=0.4.9.post6
+# ENV SGL_BRANCH=v0.4.10
+ENV TRITON_REPO=https://github.com/ROCm/triton.git
+ENV TRITON_COMMIT=improve_fa_decode_3.0.0
+ENV AITER_REPO=https://github.com/ROCm/aiter.git
+ENV AITER_COMMIT=v0.1.3
+# ENV AITER_COMMIT=v0.1.4
+# v0.1.2 version - commit id: 9d11f47
+# ENV AITER_COMMIT=9d11f47
 
-# -----------------------
-# Triton
-RUN if [ "$BUILD_TRITON" = "1" ]; then \
-        pip uninstall -y triton \
-     && git clone ${TRITON_REPO} \
-     && cd triton \
-     && git checkout ${TRITON_COMMIT} \
-     && cd python \
-     && python setup.py install; \
-    fi
-
-# -----------------------
-# Build vLLM
-ARG VLLM_REPO="https://github.com/ROCm/vllm.git"
-ARG VLLM_BRANCH="9f6b92db47c3444b7a7d67451ba0c3a2d6af4c2c"
-RUN if [ "$BUILD_VLLM" = "1" ]; then \
-        git clone ${VLLM_REPO} \
-     && cd vllm \
-     && git checkout ${VLLM_BRANCH} \
-     && python -m pip install -r requirements/rocm.txt \
-     && python setup.py clean --all \
-     && python setup.py develop; \
-    fi
-
-# -----------------------
-# Build SGLang
-ARG BUILD_TYPE=all
-
-RUN pip install IPython \
-    && pip install orjson \
-    && pip install python-multipart \
-    && pip install torchao \
-    && pip install pybind11
-
-RUN pip install "setuptools<70.0.0" --force-reinstall
-RUN pip uninstall -y sgl_kernel sglang
-RUN git clone ${SGL_REPO} \
-    && cd sglang \
-    && if [ "${SGL_BRANCH}" = ${SGL_DEFAULT} ]; then \
-         echo "Using ${SGL_DEFAULT}, default branch."; \
-         git checkout ${SGL_DEFAULT}; \
-       else \
-         echo "Using ${SGL_BRANCH} branch."; \
-         git checkout ${SGL_BRANCH}; \
-       fi \
-    && cd sgl-kernel \
-    && rm -f pyproject.toml \
-    && mv pyproject_rocm.toml pyproject.toml \
-    && AMDGPU_TARGET=$GPU_ARCH_LIST python setup_rocm.py install \
-    && cd .. \
-    && if [ "$BUILD_TYPE" = "srt" ]; then \
-         python -m pip --no-cache-dir install -e "python[srt_hip]"; \
-       else \
-         python -m pip --no-cache-dir install -e "python[all_hip]"; \
-       fi
-
-RUN python -m pip cache purge
-
-# Copy config files to support MI300X in virtualized environments (MI300X_VF).  Symlinks will not be created in image build.
-RUN find /workspace/sglang/python/sglang/srt/layers/quantization/configs/ \
-         /workspace/sglang/python/sglang/srt/layers/moe/fused_moe_triton/configs/ \
-         -type f -name '*MI300X*' | xargs -I {} sh -c 'vf_config=$(echo "$1" | sed "s/MI300X/MI300X_VF/"); cp "$1" "$vf_config"' -- {}
-
-# Performance environment variable.
 ENV HIP_FORCE_DEV_KERNARG=1
 ENV HSA_NO_SCRATCH_RECLAIM=1
 ENV SGLANG_SET_CPU_AFFINITY=1
@@ -194,25 +118,137 @@ ENV NCCL_MIN_NCHANNELS=112
 
 ENV SGLANG_USE_AITER=1
 ENV SGLANG_MOE_PADDING=1
+# ENV MOE_PADDING=1
 ENV VLLM_FP8_PADDING=1
 ENV VLLM_FP8_ACT_PADDING=1
 ENV VLLM_FP8_WEIGHT_PADDING=1
 ENV VLLM_FP8_REDUCE_CONV=1
 ENV TORCHINDUCTOR_MAX_AUTOTUNE=1
 ENV TORCHINDUCTOR_MAX_AUTOTUNE_POINTWISE=1
+ENV HIPCC_COMPILE_FLAGS_APPEND="--offload-arch=gfx942"
+ENV AMDGPU_TARGETS=gfx942
+ENV ROCM_ARCH=gfx942
+ENV PYTORCH_ROCM_ARCH="gfx90a;gfx942"
+
+# Switch to working directory
+# WORKDIR /sgl-workspace
+WORKDIR /workspace
+
+# Clean and create directory
+# RUN rm -rf /sgl-workspace && mkdir -p /sgl-workspace
+RUN rm -rf /workspace && mkdir -p /workspace
+
+# # Clone and build sglang
+# RUN git clone ${SGL_REPO} \
+#     && cd sglang \
+#     && git checkout ${SGL_BRANCH} || echo "Using default branch" \
+#     && cd sgl-kernel \
+#     && rm -f pyproject.toml \
+#     && mv pyproject_rocm.toml pyproject.toml \
+#     && python setup_rocm.py install \
+#     && cd .. \
+#     && if [ "$BUILD_TYPE" = "srt" ]; then \
+#          python -m pip --no-cache-dir install -e "python[srt_hip]"; \
+#        else \
+#          python -m pip --no-cache-dir install -e "python[all_hip]"; \
+#        fi \
+#     && cd /sgl-workspace \
+#     && cp -r /sgl-workspace/sglang /sglang \
+#     && python -m pip cache purge
+
+# Install common Python packages
+RUN pip install IPython orjson python-multipart torchao pybind11
+
+# Rebuild Triton
+RUN pip uninstall -y triton || true \
+    && git clone ${TRITON_REPO} \
+    && cd triton \
+    && git checkout ${TRITON_COMMIT} \
+    && cd python \
+    && python3 setup.py install \
+    && cd /workspace
+    # && cd /sgl-workspace
+
+# Build aiter
+#version: Commit 9d11f47
+    # && git checkout ${AITER_COMMIT} \
+RUN pip uninstall -y aiter || true
+RUN git clone ${AITER_REPO} \
+    && cd aiter \
+    && git checkout ${AITER_COMMIT} \
+    && git submodule sync \
+    && git submodule update --init --recursive \
+    && PREBUILD_KERNELS=1 GPU_ARCHS=gfx942 python3 setup.py develop \
+    && cd /workspace
+    # && cd /sgl-workspace
+    # && PREBUILD_KERNELS=1 GPU_ARCHS=gfx942 python3 setup.py develop \
 
 
-# sglang patch
-# COPY patch/${SGLANG_VERSION}/sglang.patch /sgl-workspace/sglang/
-COPY amd_patch/sglv0.5.0rc0 /workspace/patch
-RUN cd /workspace/sglang && \
-  git apply /workspace/patch/sglang.patch && \
-  if grep -R -n '^<<<<<<< ' .; then \
-    echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-    exit 1; \
-  fi 
+###########################################
+# Clone and build sglang
+RUN git clone ${SGL_REPO} \
+    && cd sglang \
+    && git checkout ${SGL_BRANCH} || echo "Using default branch" \
+    && cd sgl-kernel \
+    && rm -f pyproject.toml \
+    && mv pyproject_rocm.toml pyproject.toml \
+    && python setup_rocm.py install \
+    && cd .. \
+    && if [ "$BUILD_TYPE" = "srt" ]; then \
+         python -m pip --no-cache-dir install -e "python[srt_hip]"; \
+       else \
+         python -m pip --no-cache-dir install -e "python[all_hip]"; \
+       fi \
+    && cd /workspace \
+    && cp -r /workspace/sglang /sglang \
+    && python -m pip cache purge
+    # && cd /sgl-workspace \
+    # && cp -r /sgl-workspace/sglang /sglang \
+    # && python -m pip cache purge
+###########################################
 
 
+# Copy MI300X config 
+# RUN find /sgl-workspace/sglang/python/sglang/srt/layers/quantization/configs/ \
+#          /sgl-workspace/sglang/python/sglang/srt/layers/moe/fused_moe_triton/configs/ \
+RUN find /workspace/sglang/python/sglang/srt/layers/quantization/configs/ \
+         /workspace/sglang/python/sglang/srt/layers/moe/fused_moe_triton/configs/ \
+         -type f -name '*MI300X*' | \
+         xargs -I {} sh -c 'vf_config=$(echo "$1" | sed "s/MI300X/MI300X_VF/"); cp "$1" "$vf_config"' -- {}
+
+# Environment setup complete.
+RUN echo "Environment setup complete."
+WORKDIR /workspace/
+
+
+# # patch
+# # Date: Jul 5, 2025
+# ENV SLIME_COMMIT=9ddbdbd 
+# RUN git clone https://github.com/THUDM/slime.git \
+#     && cd slime \
+#     && git checkout ${SLIME_COMMIT} \
+#     && cp docker/patch/sglang.patch  /workspace/sglang/
+#     # && cp docker/patch/sglang.patch  /sgl-workspace/sglang/
+#     # && cp docker/patch/v0.4.10-cu126/sglang.patch  /sgl-workspace/sglang/
+#     # && cp docker/patch/latest/sglang.patch  /sgl-workspace/sglang/
+#     # && cp docker/patch/sglang.patch  /sgl-workspace/sglang/
+# # COPY /home/yushensu/projects/slime/docker/patch/sglang.patch /sgl-workspace/sglang/
+# WORKDIR /workspace/sglang/ 
+# # WORKDIR /sgl-workspace/sglang/ 
+# RUN git apply sglang.patch && rm sglang.patch
+# # WORKDIR /workspace/
+
+# # sgl-router
+# # WORKDIR /sgl-workspace/sglang/ 
+# RUN apt-get update && apt-get install -y pkg-config libssl-dev
+# RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+# RUN pip install setuptools-rust wheel build
+# RUN source $HOME/.cargo/env && \
+#     mkdir -p sgl-router && \
+#     cd sgl-router && \
+#     cargo build -j 64 && \
+#     python3 -m build && \
+#     pip install dist/*.whl --force-reinstall
 
 RUN pip install sglang-router --force-reinstall
 
@@ -220,8 +256,8 @@ RUN pip install sglang-router --force-reinstall
 ###########################################
 ###########################################
 
-
 RUN pip install transformers==4.51.1
+
 
 #########################################
 #####Install vllm v0.8.5#################
@@ -235,9 +271,6 @@ ENV SETUPTOOLS_SCM_PRETEND_VERSION=0.8.5.dev
 
 RUN pip uninstall -y vllm || true
 RUN rm -rf vllm-patch
-
-# Fix importlib-metadata version conflict before vllm installation
-RUN pip install "importlib-metadata>=6.0,<=8.0.0" --force-reinstall
 
 RUN git clone https://github.com/RLFoundation/vllm-patch.git \
     && cd vllm-patch \
@@ -257,24 +290,11 @@ WORKDIR /workspace/
 # Can be removed just the current megatron-lm dependency
 RUN pip install "numpy>=1.21.0,<2.0" --force-reinstall
 
-COPY amd_patch/sglv0.5.0rc0 /workspace/patch
-
 RUN pip uninstall -y megatron-core && \
-    git clone https://github.com/NVIDIA/Megatron-LM && \
-    cd Megatron-LM && \
-    git checkout 48406695c4efcf1026a7ed70bb390793918dd97b && \
-    git apply /workspace/patch/amd_megatron_fused_kernels_init.patch && \
+    git clone https://github.com/yushengsu-thu/Megatron-LM-amd_version.git && \
+    cd Megatron-LM-amd_version && \
     pip install -vvv -e . && \
     cd /workspace/
-
-# sandwitch norm for GLM models
-RUN cd Megatron-LM && \
-    git apply /workspace/patch/megatron.patch --3way && \
-    if grep -R -n '^<<<<<<< ' .; then \
-      echo "Patch failed to apply cleanly. Please resolve conflicts." && \
-      exit 1; \
-    fi
-
 #########################################
 #########################################
 #########################################
@@ -285,10 +305,10 @@ RUN cd Megatron-LM && \
 #########################################
 ###Add torch_memory_saver################
 #########################################
-# # Set environment variables
-# ENV HIPCC_COMPILE_FLAGS_APPEND="--amdgpu-target=gfx90a;gfx942 -D__HIP_PLATFORM_AMD__"
-# ENV CFLAGS="-D__HIP_PLATFORM_AMD__"
-# ENV CXXFLAGS="-D__HIP_PLATFORM_AMD__"
+# Set environment variables
+ENV HIPCC_COMPILE_FLAGS_APPEND="--amdgpu-target=gfx90a;gfx942 -D__HIP_PLATFORM_AMD__"
+ENV CFLAGS="-D__HIP_PLATFORM_AMD__"
+ENV CXXFLAGS="-D__HIP_PLATFORM_AMD__"
 # Install torch_memory_saver
 # RUN pip install git+https://github.com/YangWang92/torch_memory_saver_numa.git --no-deps
 # RUN pip install "git+https://github.com/YangWang92/torch_memory_saver_numa.git@numa"
@@ -346,6 +366,7 @@ RUN pip install google-generativeai
 ########################################
 ########################################
 ########################################
+
 
 
 WORKDIR /workspace/
