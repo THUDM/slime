@@ -926,6 +926,9 @@ def parse_args(add_custom_arguments=None):
             args.eval_prompt_data = ["aime", args.eval_prompt_data[0]]
         assert len(args.eval_prompt_data) % 2 == 0, "eval prompt data will need to be in pairs"
 
+    if args.save_interval is not None:
+        assert args.save is not None, "'--save' is required when save_interval is set."
+
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 
     if args.advantage_estimator in ["reinforce_plus_plus", "reinforce_plus_plus_baseline"]:
