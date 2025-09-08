@@ -34,6 +34,44 @@ def get_physical_gpu_id():
     return str(props.uuid)
 
 
+def log_eval_rollout_data(rollout_id, args, data):
+    log_dict = {}
+    for key in data.keys():
+        rewards = data[key]["rewards"]
+        log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
+        if "truncated" in data[key]:
+            truncated = data[key]["truncated"]
+            log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
+
+    print(f"eval {rollout_id}: {log_dict}")
+    if args.use_wandb:
+        log_dict["eval/step"] = (
+            rollout_id
+            if not args.wandb_always_use_train_step
+            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+        )
+        wandb.log(log_dict)
+
+
+def log_rollout_data(rollout_id, args, data, rollout_time):
+    if args.load_debug_rollout_data:
+        return
+
+    log_dict = {}
+    response_lengths = [sum(loss_mask) for loss_mask in data["loss_masks"]]
+    log_dict["perf/rollout_time"] = rollout_time
+    if args.rollout_num_gpus is not None:
+        log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
+    log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+    print(f"perf {rollout_id}: {log_dict}")
+    if args.use_wandb:
+        log_dict["rollout/step"] = (
+            rollout_id
+            if not args.wandb_always_use_train_step
+            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+        )
+        wandb.log(log_dict)
+
 @ray.remote
 class Lock:
     def __init__(self):
