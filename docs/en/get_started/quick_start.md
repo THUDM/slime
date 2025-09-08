@@ -130,7 +130,8 @@ CKPT_ARGS=(
    --hf-checkpoint /root/GLM-Z1-9B-0414
    # Reference Model's Megatron format checkpoint
    --ref-load /root/GLM-Z1-9B-0414_torch_dist
-   # Actor model loading path. If empty or doesn't contain a valid checkpoint, load from --ref-load
+   # Actor model loading path. Should typically match --save for checkpoint resumption
+   # If empty or doesn't contain a valid checkpoint, loads from --ref-load instead
    --load /root/GLM-Z1-9B-0414_slime/
    # Model save path during training
    --save /root/GLM-Z1-9B-0414_slime/
