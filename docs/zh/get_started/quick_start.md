@@ -129,7 +129,7 @@ CKPT_ARGS=(
    --hf-checkpoint /root/GLM-Z1-9B-0414
    # 参考模型 (Reference Model) 的 Megatron 格式检查点
    --ref-load /root/GLM-Z1-9B-0414_torch_dist
-   # Actor 模型的加载路径。若为空，则从 --ref-load 加载
+   # Actor 模型的加载路径。若为空或不存在有效的checkpoint，则从 --ref-load 加载
    --load /root/GLM-Z1-9B-0414_slime/
    # 训练过程中模型的保存路径
    --save /root/GLM-Z1-9B-0414_slime/
@@ -143,21 +143,21 @@ CKPT_ARGS=(
 整个训练流程可视为一个 **“数据采样 → 权重更新”** 的闭环。
 
 **阶段一：数据采样 (Rollout)**
-- `--rollout-batch-size`：定义每轮采样的 **Prompt 数量**  
+- `--rollout-batch-size`：定义每轮采样的 **Prompt 数量**
 - `--n-samples-per-prompt`：定义每个 Prompt 生成的 **回复数量** (用于 GRPO 类似算法)
 
 > 两者相乘，决定了 **单轮采样产生的总样本数**。
 
 **阶段二：模型训练 (Training)**
-- `--global-batch-size`：定义 **执行一次参数更新（optimizer.step）** 所需的样本量  
+- `--global-batch-size`：定义 **执行一次参数更新（optimizer.step）** 所需的样本量
 - `--num-steps-per-rollout`：定义使用当前采样数据，**总共执行多少次参数更新**  (我们默认为 1，使用 on-policy 训练)
 
-> 两者相乘，决定了 **单轮训练消耗的总样本数**。 
+> 两者相乘，决定了 **单轮训练消耗的总样本数**。
 
 > ⚠️ 这里的 **参数更新** 指训练环节的 optimizer.step()，不同于训练引擎向推理引擎发起的权重同步(Weight Sync)。
 
 在这个过程中，每轮的“产出”与“消耗”必须相等，遵循以下约束：
-**`(rollout-batch-size × n-samples-per-prompt) = (global-batch-size × num-steps-per-rollout)`** 
+**`(rollout-batch-size × n-samples-per-prompt) = (global-batch-size × num-steps-per-rollout)`**
 
 - 在 slime 中，如果设置了 `--num-steps-per-rollout` ，`--global-batch-size` 未设置则会被自动设置，设置了则会被用上述公式校验。
 
@@ -184,7 +184,7 @@ ROLLOUT_ARGS=(
    --n-samples-per-prompt 8
    --num-steps-per-rollout 1
    --global-batch-size 128
-   
+
    # Rollout 采样参数
    --rollout-max-response-len 8192
    --rollout-temperature 0.8
@@ -497,7 +497,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             # ... tokenization and appending ...
             loss_masks += [0] * len(tool_tokens) # loss_mask = 0
             full_response += tool_output
-            
+
         elif action == "answer":
             break # 结束循环
 
