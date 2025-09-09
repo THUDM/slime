@@ -325,18 +325,17 @@ class UpdateWeightFromTensor:
     @torch.no_grad()
     def update_weights(self):
         self.weight_version += 1
-        weight_version_str = str(self.weight_version)
 
         rank = dist.get_rank()
         if rank == 0:
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
         for param_infos in tqdm(self.param_info_buckets, disable=rank != 0, desc="Update weights"):
-            self._update_bucket_weights_from_tensor(param_infos, weight_version_str)
+            self._update_bucket_weights_from_tensor(param_infos)
 
         dist.barrier(group=get_gloo_group())
 
-    def _update_bucket_weights_from_tensor(self, param_infos, weight_version):
+    def _update_bucket_weights_from_tensor(self, param_infos):
         monkey_patch_torch_reductions()
         pp_size = mpu.get_pipeline_model_parallel_world_size()
         ep_size = mpu.get_expert_model_parallel_world_size()
@@ -401,9 +400,9 @@ class UpdateWeightFromTensor:
             converted_named_tensors.extend(
                 convert_to_hf(self.args, self.model_name, info.name, param, self.quantization_config)
             )
-        self._update_converted_params_from_tensor(converted_named_tensors, weight_version)
+        self._update_converted_params_from_tensor(converted_named_tensors)
 
-    def _update_converted_params_from_tensor(self, converted_named_tensors, weight_version):
+    def _update_converted_params_from_tensor(self, converted_named_tensors):
         if use_flattened_tensor_bucket and self.quantization_config is None:
             flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=converted_named_tensors)
             metadata = flattened_tensor_bucket.get_metadata()
@@ -429,7 +428,7 @@ class UpdateWeightFromTensor:
         if dist.get_rank() == self._ipc_gather_src:
             kwargs = {
                 "serialized_named_tensors": serialized_named_tensors,
-                "weight_version": weight_version,
+                "weight_version": str(self.weight_version),
             }
             if use_flattened_tensor_bucket and self.quantization_config is None:
                 kwargs["load_format"] = "flattened_bucket"
@@ -491,7 +490,6 @@ class UpdateWeightFromDistributed:
     @torch.no_grad()
     def update_weights(self):
         self.weight_version += 1
-        weight_version_str = str(self.weight_version)
 
         if dist.get_rank() == 0:
             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
@@ -511,9 +509,7 @@ class UpdateWeightFromDistributed:
             )
 
         if converted_named_tensors:
-            self._update_bucket_weights_from_distributed(
-                converted_named_tensors, weight_version=weight_version_str, pbar=pbar
-            )
+            self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
 
         dist.barrier(group=get_gloo_group())
 
@@ -527,9 +523,7 @@ class UpdateWeightFromDistributed:
             )
 
         if named_tensors:
-            self._update_expert_bucket_weights_from_distributed(
-                named_tensors, weight_version=weight_version_str, pbar=pbar
-            )
+            self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
 
         dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
@@ -565,7 +559,7 @@ class UpdateWeightFromDistributed:
         buffer_size += param_size
         return buffer_size
 
-    def _update_expert_bucket_weights_from_distributed(self, named_tensors, pbar=None, weight_version: str = None):
+    def _update_expert_bucket_weights_from_distributed(self, named_tensors, pbar=None):
         names = [name for name, _ in named_tensors]
         all_names = [None] * mpu.get_expert_model_parallel_world_size()
         dist.all_gather_object(all_names, names, group=mpu.get_expert_model_parallel_group())
@@ -595,9 +589,9 @@ class UpdateWeightFromDistributed:
         converted_hf_tensors = []
         for name, param in all_gathered_params:
             converted_hf_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
-        self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar=pbar, weight_version=weight_version)
+        self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar=pbar)
 
-    def _update_bucket_weights_from_distributed(self, converted_named_tensors, pbar=None, weight_version: str = None):
+    def _update_bucket_weights_from_distributed(self, converted_named_tensors, pbar=None):
         # lock the rollout engines to prevent dead lock on broadcast.
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)
@@ -608,7 +602,7 @@ class UpdateWeightFromDistributed:
                 dtypes=[param.dtype for _, param in converted_named_tensors],
                 shapes=[param.shape for _, param in converted_named_tensors],
                 group_name=self._group_name,
-                weight_version=weight_version,
+                weight_version=str(self.weight_version),
             )
             for engine in self.rollout_engines
         ]
