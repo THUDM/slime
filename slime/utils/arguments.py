@@ -47,7 +47,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Number of GPUs per inference engine, just like the tp_size in sglang.",
             )
             parser.add_argument(
-                "--rollout-num-gpus-per-node",
+                "--num-gpus-per-node",
                 type=int,
                 default=8,
                 help=(

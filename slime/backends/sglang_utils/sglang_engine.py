@@ -14,12 +14,12 @@ from slime.utils.http_utils import get_host_info
 
 
 def get_base_gpu_id(args, rank):
-    num_gpus = min(args.rollout_num_gpus_per_node, args.rollout_num_gpus_per_engine)
+    num_gpus = min(args.num_gpus_per_node, args.rollout_num_gpus_per_engine)
     if args.colocate:
-        start_index = (rank * num_gpus) % args.rollout_num_gpus_per_node
+        start_index = (rank * num_gpus) % args.num_gpus_per_node
     else:
         num_actor_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
-        start_index = (num_actor_gpus + rank * num_gpus) % args.rollout_num_gpus_per_node
+        start_index = (num_actor_gpus + rank * num_gpus) % args.num_gpus_per_node
     return start_index
 
 
@@ -79,7 +79,7 @@ class SGLangEngine(RayActor):
         args = self.args
         rank = self.rank
 
-        nnodes = max(1, args.rollout_num_gpus_per_engine // args.rollout_num_gpus_per_node)
+        nnodes = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
         node_rank = rank % nnodes
         kwargs = {
             "model_path": args.hf_checkpoint,
