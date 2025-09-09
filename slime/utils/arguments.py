@@ -1,4 +1,5 @@
 import os
+from typing import Any, Dict
 
 from transformers import AutoConfig
 
@@ -92,6 +93,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "so you only need to provide a huggingface checkpoint that has the same architecture as the model you want to train. "
                     "It doesn't necessary need to contain the most up-to-date parameters."
                 ),
+            )
+            parser.add_argument(
+                "--use-hf-config-for-megatron",
+                action="store_true",
+                help="Whether to use HF config for Megatron core to define the model architecture.",
             )
             parser.add_argument(
                 "--model-name",
@@ -879,6 +885,12 @@ def parse_args(add_custom_arguments=None):
         args = megatron_parse_args(extra_args_provider=add_slime_arguments)
         if getattr(args, "hf_checkpoint", None):
             hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+            if args.use_hf_config_for_megatron:
+                from slime.backends.megatron_utils.config_mapping import get_mapper
+
+                megatron_config_from_hf = get_mapper(hf_config.model_type)(hf_config)
+                _validate_and_update_megatron_args_from_hf(args, megatron_config_from_hf.transformer_config)
+                _validate_and_update_megatron_args_from_hf(args, megatron_config_from_hf.gpt_model_args)
             hf_validate_args(args, hf_config)
 
         args.rank = 0
@@ -1056,3 +1068,12 @@ def hf_validate_args(args, hf_config):
                 f"{hf_config_name} in hf config {getattr(hf_config, hf_config_name)} is not equal to "
                 f"{megatron_config_name} {getattr(args, megatron_config_name)}, please check the config."
             )
+
+
+def _validate_and_update_megatron_args_from_hf(args, args_from_hf_config: Dict[str, Any]):
+    for key, value in args_from_hf_config.items():
+        if hasattr(args, key) and getattr(args, key) != value:
+            raise ValueError(
+                f"Argument {key} is not consistent. {key} in args is {getattr(args, key)}, but from HF config is {value}."
+            )
+        setattr(args, key, value)
