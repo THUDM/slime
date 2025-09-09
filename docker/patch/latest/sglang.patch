@@ -1,8 +1,8 @@
 diff --git a/python/sglang/srt/configs/model_config.py b/python/sglang/srt/configs/model_config.py
-index 1b96ae678..3b7023c55 100644
+index fb8c2501b..013bca177 100644
 --- a/python/sglang/srt/configs/model_config.py
 +++ b/python/sglang/srt/configs/model_config.py
-@@ -454,14 +454,14 @@ class ModelConfig:
+@@ -487,14 +487,14 @@ class ModelConfig:
              ).lower()
  
              # Detect which checkpoint is it
@@ -26,10 +26,10 @@ index 1b96ae678..3b7023c55 100644
              # Verify quantization configurations.
              if self.quantization is None:
 diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/entrypoints/http_server.py
-index a6bcb0b5b..1ef6abe72 100644
+index dc91d7e84..a43338d00 100644
 --- a/python/sglang/srt/entrypoints/http_server.py
 +++ b/python/sglang/srt/entrypoints/http_server.py
-@@ -264,6 +264,10 @@ async def validate_json_request(raw_request: Request):
+@@ -349,6 +349,10 @@ async def validate_json_request(raw_request: Request):
  
  
  @app.get("/health")
@@ -41,10 +41,10 @@ index a6bcb0b5b..1ef6abe72 100644
  async def health_generate(request: Request) -> Response:
      """
 diff --git a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py b/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
-index 372717bf9..40665cc90 100644
+index c6ea49089..e0004db78 100644
 --- a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
 +++ b/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
-@@ -190,6 +190,7 @@ class DeepEPBuffer:
+@@ -180,6 +180,7 @@ class DeepEPBuffer:
                      f"Consider using --deepep-config to change the behavior."
                  )
  
@@ -53,29 +53,25 @@ index 372717bf9..40665cc90 100644
              group,
              num_nvl_bytes,
 diff --git a/python/sglang/srt/layers/quantization/fp8.py b/python/sglang/srt/layers/quantization/fp8.py
-index 956264fc9..7801d29d5 100644
+index 4915d4d08..957fd60a8 100644
 --- a/python/sglang/srt/layers/quantization/fp8.py
 +++ b/python/sglang/srt/layers/quantization/fp8.py
-@@ -351,10 +351,10 @@ class Fp8LinearMethod(LinearMethodBase):
+@@ -348,8 +348,8 @@ class Fp8LinearMethod(LinearMethodBase):
                  return
              else:
                  weight, weight_scale = layer.weight.data, layer.weight_scale_inv.data
--            layer.weight = torch.nn.Parameter(weight, requires_grad=False)
--            layer.weight_scale_inv = torch.nn.Parameter(
--                weight_scale, requires_grad=False
--            )
-+            # layer.weight = torch.nn.Parameter(weight, requires_grad=False)
-+            # layer.weight_scale_inv = torch.nn.Parameter(
-+            #    weight_scale, requires_grad=False
-+            # )
-             return
+-            layer.weight = Parameter(weight, requires_grad=False)
+-            layer.weight_scale_inv = Parameter(weight_scale, requires_grad=False)
++            # layer.weight = Parameter(weight, requires_grad=False)
++            # layer.weight_scale_inv = Parameter(weight_scale, requires_grad=False)
+         else:
+             layer.weight = Parameter(layer.weight.data, requires_grad=False)
  
-         layer.weight = torch.nn.Parameter(layer.weight.data, requires_grad=False)
 diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
-index 3856bf259..5f6a6570d 100644
+index 91901ca8b..f34133479 100644
 --- a/python/sglang/srt/managers/scheduler.py
 +++ b/python/sglang/srt/managers/scheduler.py
-@@ -1346,7 +1346,7 @@ class Scheduler(
+@@ -1418,7 +1418,7 @@ class Scheduler(
  
          if memory_leak:
              msg = "token_to_kv_pool_allocator memory leak detected! " f"{token_msg}"
@@ -84,7 +80,7 @@ index 3856bf259..5f6a6570d 100644
  
          if self.disaggregation_mode == DisaggregationMode.DECODE:
              req_total_size = (
-@@ -1361,7 +1361,7 @@ class Scheduler(
+@@ -1433,7 +1433,7 @@ class Scheduler(
                  f"available_size={len(self.req_to_token_pool.free_slots)}, "
                  f"total_size={self.req_to_token_pool.size}\n"
              )
@@ -93,23 +89,23 @@ index 3856bf259..5f6a6570d 100644
  
          if (
              self.enable_metrics
-@@ -1817,6 +1817,7 @@ class Scheduler(
-             deepep_mode=DeepEPMode(self.server_args.deepep_mode),
+@@ -1880,6 +1880,7 @@ class Scheduler(
+             speculative_num_draft_tokens=self.server_args.speculative_num_draft_tokens,
              require_mlp_tp_gather=require_mlp_tp_gather(self.server_args),
              disable_overlap_schedule=self.server_args.disable_overlap_schedule,
 +            offload_tags=self.offload_tags,
          )
  
-     def handle_dp_balance_data(self, local_batch: ScheduleBatch):
-@@ -1914,6 +1915,7 @@ class Scheduler(
-         deepep_mode: DeepEPMode,
+     @staticmethod
+@@ -1894,6 +1895,7 @@ class Scheduler(
+         speculative_num_draft_tokens,
          require_mlp_tp_gather: bool,
          disable_overlap_schedule: bool,
 +        offload_tags: set[str],
      ):
          # Check if other DP workers have running batches
          if local_batch is None:
-@@ -1944,7 +1946,7 @@ class Scheduler(
+@@ -1924,7 +1926,7 @@ class Scheduler(
          )
  
          tbo_preparer = TboDPAttentionPreparer()
@@ -119,10 +115,10 @@ index 3856bf259..5f6a6570d 100644
              device = tp_group.device
          else:
 diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
-index 50ac39f88..33782a8cd 100644
+index d23d1a628..5242c09f1 100644
 --- a/python/sglang/srt/managers/tokenizer_manager.py
 +++ b/python/sglang/srt/managers/tokenizer_manager.py
-@@ -1045,10 +1045,15 @@ class TokenizerManager:
+@@ -1152,10 +1152,15 @@ class TokenizerManager:
          request: Optional[fastapi.Request] = None,
      ) -> Tuple[bool, str]:
          self.auto_create_handle_loop()
@@ -142,7 +138,7 @@ index 50ac39f88..33782a8cd 100644
          return result.success, result.message
  
      async def update_weights_from_distributed(
-@@ -1057,9 +1062,6 @@ class TokenizerManager:
+@@ -1164,9 +1169,6 @@ class TokenizerManager:
          request: Optional[fastapi.Request] = None,
      ) -> Tuple[bool, str]:
          self.auto_create_handle_loop()
@@ -152,7 +148,7 @@ index 50ac39f88..33782a8cd 100644
  
          if obj.abort_all_requests:
              self.abort_request(abort_all=True)
-@@ -1067,8 +1069,15 @@ class TokenizerManager:
+@@ -1174,8 +1176,15 @@ class TokenizerManager:
          # This means that weight sync
          # cannot run while requests are in progress.
          async with self.model_update_lock.writer_lock:
@@ -171,10 +167,10 @@ index 50ac39f88..33782a8cd 100644
      async def update_weights_from_tensor(
          self,
 diff --git a/python/sglang/srt/model_executor/cuda_graph_runner.py b/python/sglang/srt/model_executor/cuda_graph_runner.py
-index 303919505..df2407eb6 100644
+index 2effec9c0..4ef145c96 100644
 --- a/python/sglang/srt/model_executor/cuda_graph_runner.py
 +++ b/python/sglang/srt/model_executor/cuda_graph_runner.py
-@@ -759,6 +759,22 @@ class CudaGraphRunner:
+@@ -776,6 +776,22 @@ class CudaGraphRunner:
              )
          if forward_batch.forward_mode.is_idle() and forward_batch.spec_info is not None:
              forward_batch.spec_info.custom_mask = self.custom_mask
@@ -198,7 +194,7 @@ index 303919505..df2407eb6 100644
          self.model_runner.attn_backend.init_forward_metadata_replay_cuda_graph(
              bs,
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index ee83c2d9c..5145d7f78 100644
+index fa35fd14b..9b702e3b8 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
 @@ -22,6 +22,7 @@ import os
@@ -209,7 +205,7 @@ index ee83c2d9c..5145d7f78 100644
  
  import torch
  import torch.distributed as dist
-@@ -667,7 +668,7 @@ class ModelRunner:
+@@ -686,7 +687,7 @@ class ModelRunner:
          monkey_patch_vllm_parallel_state()
          monkey_patch_isinstance_for_vllm_base_layer()
  
@@ -219,10 +215,10 @@ index ee83c2d9c..5145d7f78 100644
                  model_config=self.model_config,
                  load_config=self.load_config,
 diff --git a/python/sglang/srt/models/glm4_moe.py b/python/sglang/srt/models/glm4_moe.py
-index 67ef6ca79..b6ee944de 100644
+index 5ae5b0af6..88be1de25 100644
 --- a/python/sglang/srt/models/glm4_moe.py
 +++ b/python/sglang/srt/models/glm4_moe.py
-@@ -695,7 +695,7 @@ class Glm4MoeDecoderLayer(DeepseekV2DecoderLayer):
+@@ -664,7 +664,7 @@ class Glm4MoeDecoderLayer(DeepseekV2DecoderLayer):
              layer_scatter_modes=self.layer_scatter_modes,
              input_layernorm=self.input_layernorm,
              post_attention_layernorm=self.post_attention_layernorm,
@@ -231,9 +227,35 @@ index 67ef6ca79..b6ee944de 100644
          )
  
      def forward(
-@@ -1108,5 +1108,4 @@ class Glm4MoeForCausalLM(DeepseekV2ForCausalLM):
+@@ -1079,5 +1079,4 @@ class Glm4MoeForCausalLM(DeepseekV2ForCausalLM):
                          )
                          weight_loader(param, loaded_weight)
  
 -
  EntryClass = [Glm4MoeForCausalLM]
+diff --git a/python/sglang/srt/speculative/eagle_utils.py b/python/sglang/srt/speculative/eagle_utils.py
+index 14450e9b1..8806163ad 100644
+--- a/python/sglang/srt/speculative/eagle_utils.py
++++ b/python/sglang/srt/speculative/eagle_utils.py
+@@ -1079,7 +1079,7 @@ def create_accept_length_filter(
+     return accept_length_filter
+ 
+ 
+-@torch.compile(dynamic=True)
++#@torch.compile(dynamic=True)
+ def select_top_k_tokens(
+     i: int,
+     topk_p: torch.Tensor,
+diff --git a/python/sglang/srt/speculative/eagle_worker.py b/python/sglang/srt/speculative/eagle_worker.py
+index 56c120a0f..13a87a284 100644
+--- a/python/sglang/srt/speculative/eagle_worker.py
++++ b/python/sglang/srt/speculative/eagle_worker.py
+@@ -370,7 +370,7 @@ class EAGLEWorker(TpModelWorker):
+         self.cuda_graph_runner = None
+         self.cuda_graph_runner_for_draft_extend = None
+ 
+-        if self.server_args.disable_cuda_graph:
++        if True or self.server_args.disable_cuda_graph:
+             return
+ 
+         # Capture draft
