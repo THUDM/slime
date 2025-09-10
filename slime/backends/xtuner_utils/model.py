@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -208,52 +208,3 @@ def sp_split(
     tensor = pad_to_multiple_of(tensor, padding_value, sp_mesh.size(), split_dim)
     tensor = split_for_sequence_parallel(tensor, dim=split_dim, sp_mesh=sp_mesh)
     return tensor
-
-
-def build_batches_loss_kwargs(
-    shifted_labels_list: List[torch.Tensor],
-    old_logprobs_list: List[torch.Tensor],
-    ref_logprobs_list: List[torch.Tensor] | None,
-    advantages_list: List[torch.Tensor],
-    loss_cfg,
-) -> list[dict]:
-    # Compute the denominator used in the global calibration of the loss
-    rank_grad_tokens = sum((labels != loss_cfg.ignore_idx).sum() for labels in shifted_labels_list)
-    rank_grad_tokens = cast(torch.Tensor, rank_grad_tokens)
-    global_grad_tokens = rank_grad_tokens
-    if dist.is_initialized():
-        dist.all_reduce(global_grad_tokens, op=dist.ReduceOp.SUM)
-
-    if global_grad_tokens == 0:
-        global_grad_tokens.add_(1)  # Avoid division by zero
-
-    batches_loss_kwargs = []
-    for i, (old_logprobs, ref_logprobs, shifted_labels, advantages) in enumerate(
-        zip(
-            old_logprobs_list,
-            ref_logprobs_list or [None] * len(old_logprobs_list),
-            shifted_labels_list,
-            advantages_list,
-        )
-    ):
-        shifted_labels = shifted_labels_list[i]
-        assert old_logprobs is not None, "old_logprobs can not be None"
-        # compute loss weight
-        policy_loss_weight = torch.ones_like(shifted_labels, dtype=torch.float32) / global_grad_tokens
-        policy_loss_weight[shifted_labels == loss_cfg.ignore_idx] = 0.0
-        if loss_cfg.use_kl_loss:
-            assert ref_logprobs is not None, "ref_logprobs can not be None when use_kl_loss=True"
-            kl_loss_weight = policy_loss_weight.clone() * loss_cfg.kl_loss_coef
-        else:
-            ref_logprobs = None
-            kl_loss_weight = None
-        loss_kwargs = dict(
-            old_logprobs=old_logprobs,
-            shifted_labels=shifted_labels,
-            advantages=advantages,
-            policy_loss_weight=policy_loss_weight,
-            ref_logprobs=ref_logprobs,
-            kl_loss_weight=kl_loss_weight,
-        )
-        batches_loss_kwargs.append(loss_kwargs)
-    return batches_loss_kwargs
