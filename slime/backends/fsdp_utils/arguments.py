@@ -28,16 +28,10 @@ class FSDPArgs:
     fsdp_forward_prefetch: bool = True
     fsdp_backward_prefetch: bool = True
     
-    # Data packing configuration (always enabled)
+    # Data packing configuration
     max_seq_len: int = 8192  # Maximum sequence length
-    
-    # Dynamic batch size adjustment
-    use_dynamic_batch_size: bool = False  # Enable dynamic micro batch size
     max_tokens_per_gpu: Optional[int] = None  # Maximum tokens per GPU
-    min_micro_batch_size: int = 1  # Minimum micro batch size
-    max_micro_batch_size: int = 64  # Maximum micro batch size  
-    target_efficiency: float = 0.85  # Target packing efficiency
-    micro_batch_size: int = 1  # Base micro batch size
+    micro_batch_size: int = 1  # Micro batch size
 
     # Logging
     wandb_project: str = "slime-fsdp"

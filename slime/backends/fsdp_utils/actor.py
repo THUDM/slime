@@ -15,7 +15,7 @@ from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.timer import Timer, timer
 
 from .update_weight_utils import UpdateWeightFromTensor
-from .data_packing import pack_sequences, compute_optimal_batch_size
+from .data_packing import pack_sequences
 
 
 class FSDPTrainRayActor(TrainRayActor):
@@ -36,8 +36,6 @@ class FSDPTrainRayActor(TrainRayActor):
         self.args = args
         torch.manual_seed(args.seed)
         
-        # Initialize dynamic batch size adjustment
-        self.use_dynamic_batch_size = getattr(args, 'use_dynamic_batch_size', False)
 
         # Serialize tokenizer/config loading across ranks to avoid HF cache race
         for i in range(dist.get_world_size()):
@@ -89,19 +87,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.weight_updator = UpdateWeightFromTensor(self.args, self.model)
         
-        # Initialize data packing parameters (always used)
-        self.packing_config = {
-            'max_seq_len': getattr(args, 'max_seq_len', 8192),
-            'max_tokens_per_gpu': getattr(args, 'max_tokens_per_gpu', None),
-        }
-        
-        if self.use_dynamic_batch_size:
-            self.batch_size_config = {
-                'max_tokens_per_gpu': getattr(args, 'max_tokens_per_gpu', 16384),
-                'min_micro_batch_size': getattr(args, 'min_micro_batch_size', 1),
-                'max_micro_batch_size': getattr(args, 'max_micro_batch_size', 64),
-                'target_efficiency': getattr(args, 'target_efficiency', 0.85),
-            }
+        # Initialize data packing parameters
+        self.max_seq_len = getattr(args, 'max_seq_len', 8192)
+        self.max_tokens_per_gpu = getattr(args, 'max_tokens_per_gpu', None)
 
         if self.args.offload:
             self.sleep(("model"))
@@ -160,56 +148,26 @@ class FSDPTrainRayActor(TrainRayActor):
         return rollout_data
 
     def pad_and_move_to_device(self, rollout_data):
-        tokens = rollout_data["tokens"]
-        loss_masks = rollout_data["loss_masks"]
-        rewards = rollout_data.get("rewards", None)
-        raw_rewards = rollout_data.get("raw_reward", None)
-        
-        # Always use efficient data packing
-        packed_data = pack_sequences(
-            tokens=tokens,
-            loss_masks=loss_masks,
-            **self.packing_config
+        # Pack sequences efficiently
+        packs = pack_sequences(
+            tokens=rollout_data["tokens"],
+            loss_masks=rollout_data["loss_masks"],
+            rewards=rollout_data["rewards"],
+            raw_rewards=rollout_data["raw_reward"],
+            max_seq_len=self.max_seq_len,
+            max_tokens_per_gpu=self.max_tokens_per_gpu,
         )
         
-        # Convert packed data to batches on device
+        # Move to device
         device = torch.cuda.current_device()
-        padded_batches = []
+        for pack in packs:
+            pack["tokens"] = pack["tokens"].to(device)
+            pack["loss_masks"] = pack["loss_masks"].to(device)
+            pack["cu_seqlens"] = pack["cu_seqlens"].to(device)
+            pack["rewards"] = pack["rewards"].to(device)
+            # raw_rewards stays on CPU
         
-        for pack in packed_data["packs"]:
-            batch = {
-                "tokens": pack["tokens"].to(device),
-                "loss_masks": pack["loss_masks"].to(device),
-                "cu_seqlens": pack["cu_seqlens"].to(device),
-                "max_seqlen": pack["max_seqlen"],
-                "num_sequences": pack["num_sequences"],
-                "total_tokens": pack["total_tokens"],
-                "efficiency": pack["efficiency"],
-            }
-            
-            # Map rewards using the stored indices
-            if rewards:
-                batch["rewards"] = torch.tensor(
-                    [rewards[i] for i in pack["indices"]], 
-                    dtype=torch.float32, 
-                    device=device
-                )
-            
-            if raw_rewards:
-                batch["raw_reward"] = [raw_rewards[i] for i in pack["indices"]]
-            
-            padded_batches.append(batch)
-        
-        # Update micro batch size dynamically if enabled
-        if self.use_dynamic_batch_size:
-            seq_lengths = [len(t) for t in tokens]
-            optimal_batch_size = compute_optimal_batch_size(
-                seq_lengths=seq_lengths,
-                **self.batch_size_config
-            )
-            self.args.micro_batch_size = optimal_batch_size
-        
-        return padded_batches
+        return packs
 
     def train(self, rollout_id, rollout_data_ref):  # type: ignore[override]
         Timer().end("train_wait")
@@ -233,13 +191,14 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.compute_log_prob("actor", padded_batches)
 
-        # TODO: compute rewards and adv for t
+        # Compute advantages
         for batch in padded_batches:
             if self.args.advantage_estimator in ["grpo", "gspo"]:
                 # For packed sequences, expand rewards per sequence
                 cu_seqlens = batch["cu_seqlens"]
+                num_sequences = len(cu_seqlens) - 1
                 rewards_expanded = []
-                for i in range(batch["num_sequences"]):
+                for i in range(num_sequences):
                     start = cu_seqlens[i].item()
                     end = cu_seqlens[i + 1].item()
                     seq_len = end - start
@@ -396,43 +355,20 @@ def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Ten
 
 
 def gather_log_probs_packed(logits: torch.Tensor, input_ids: torch.Tensor, cu_seqlens: torch.Tensor) -> torch.Tensor:
-    """Gather log probabilities for packed sequences.
+    """Gather log probabilities for packed sequences."""
+    # Create mask to exclude first token of each sequence
+    mask = torch.ones(len(input_ids), dtype=torch.bool, device=input_ids.device)
+    mask[cu_seqlens[:-1]] = False  # Exclude first token of each sequence
     
-    Args:
-        logits: [total_tokens, vocab_size]
-        input_ids: [total_tokens]
-        cu_seqlens: Cumulative sequence lengths
+    # Shift for next-token prediction: logits[:-1] predicts input_ids[1:]
+    log_probs = torch.log_softmax(logits[:-1], dim=-1)
+    targets = input_ids[1:]
     
-    Returns:
-        log_probs: [total_tokens - num_sequences]
-    """
-    # For packed sequences, we need to handle each sequence separately
-    # because we need to exclude the first token of each sequence
-    num_sequences = len(cu_seqlens) - 1
+    # Gather log probs for targets
+    gathered = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
     
-    # Compute log softmax
-    log_probs_all = torch.log_softmax(logits, dim=-1)
-    
-    # Gather log probs for each sequence
-    all_log_probs = []
-    for i in range(num_sequences):
-        start = cu_seqlens[i].item()
-        end = cu_seqlens[i + 1].item()
-        
-        if end - start > 1:  # Only process if sequence has more than 1 token
-            # Get logits for this sequence (excluding last token's logits)
-            seq_logits = log_probs_all[start:end-1]
-            # Get target tokens (excluding first token)
-            seq_targets = input_ids[start+1:end]
-            
-            # Gather log probs
-            seq_log_probs = seq_logits.gather(-1, seq_targets.unsqueeze(-1)).squeeze(-1)
-            all_log_probs.append(seq_log_probs)
-    
-    if all_log_probs:
-        return torch.cat(all_log_probs, dim=0)
-    else:
-        return torch.tensor([], device=logits.device, dtype=logits.dtype)
+    # Apply mask to exclude first tokens
+    return gathered[mask[1:]]
 
 
 def per_sample_mean(x, loss_mask):
