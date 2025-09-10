@@ -7,7 +7,7 @@ import torch
 # at the very top of test_data_packing.py
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).resolve().parent))
-from slime.backends.fsdp_utils.data_packing import pack_sequences, compute_optimal_batch_size
+from slime.backends.fsdp_utils.data_packing import pack_sequences, compute_optimal_batch_size, get_packing_indices
 
 
 def _lens_from_cu(cu):
@@ -151,31 +151,23 @@ def test_zero_length_sequences():
 
 
 def test_rewards_preserved():
-    """Test that rewards are correctly preserved through packing."""
+    """Test that indices are correctly preserved through packing."""
     lengths = [5, 3, 7, 1]
     tokens = [_build_tokens(i, L) for i, L in enumerate(lengths)]
     masks = [_build_mask_same_length(t) for t in tokens]
-    rewards = [0.1, 0.2, 0.3, 0.4]
-    raw_rewards = [{"foo": i} for i in range(len(tokens))]
 
     packed = pack_sequences(
         tokens=tokens,
         loss_masks=masks,
-        rewards=rewards,
-        raw_rewards=raw_rewards,
     )
 
-    # Check rewards are preserved
-    all_rewards = []
-    all_raw_rewards = []
+    # Check that all indices are preserved
+    all_indices = []
     for pack in packed["packs"]:
-        if "rewards" in pack:
-            all_rewards.extend(pack["rewards"].tolist())
-        if "raw_rewards" in pack:
-            all_raw_rewards.extend(pack["raw_rewards"])
+        all_indices.extend(pack["indices"])
     
-    assert len(all_rewards) == len(rewards)
-    assert len(all_raw_rewards) == len(raw_rewards)
+    # All original sequences should be accounted for
+    assert sorted(all_indices) == list(range(len(tokens)))
 
 
 def test_padding_to_multiple():
@@ -265,35 +257,70 @@ def test_efficiency_calculation():
         assert math.isclose(pack["efficiency"], expected_eff, rel_tol=1e-6)
 
 
-def test_balanced_partitioning():
-    """Test balanced partitioning using seqlen_balancing."""
-    lengths = [100, 200, 150, 300, 250, 120]
-    tokens = [_build_tokens(i, L) for i, L in enumerate(lengths)]
-    masks = [_build_mask_same_length(t) for t in tokens]
+def test_get_packing_indices():
+    """Test get_packing_indices function."""
+    lengths = [10, 20, 15, 30, 25, 12]
     
-    # Test with specified number of packs
-    packed = pack_sequences(
-        tokens=tokens,
-        loss_masks=masks,
+    # Test with max_tokens_per_gpu
+    indices = get_packing_indices(
+        seq_lengths=lengths,
+        max_tokens_per_gpu=40
+    )
+    
+    # Check all sequences are included
+    all_indices = []
+    for pack in indices:
+        all_indices.extend(pack)
+    assert sorted(all_indices) == list(range(len(lengths)))
+    
+    # Check token budget is respected
+    for pack in indices:
+        total_tokens = sum(lengths[i] for i in pack)
+        assert total_tokens <= 40
+    
+    # Test with num_packs
+    indices_2 = get_packing_indices(
+        seq_lengths=lengths,
+        num_packs=3
+    )
+    assert len(indices_2) == 3
+    
+    # Test with no constraints (single pack)
+    indices_3 = get_packing_indices(seq_lengths=lengths)
+    assert len(indices_3) == 1
+    assert len(indices_3[0]) == len(lengths)
+
+
+def test_balanced_partitioning():
+    """Test balanced partitioning using get_packing_indices."""
+    lengths = [100, 200, 150, 300, 250, 120]
+    
+    # Test with specified number of packs using get_packing_indices
+    packing_indices = get_packing_indices(
+        seq_lengths=lengths,
         num_packs=2  # Create exactly 2 balanced packs
     )
     
     # Should create exactly 2 packs
-    assert len(packed["packs"]) == 2
+    assert len(packing_indices) == 2
     
     # Check that all sequences are accounted for
-    total_sequences = sum(pack["num_sequences"] for pack in packed["packs"])
-    assert total_sequences == len(tokens)
+    all_indices = []
+    for pack in packing_indices:
+        all_indices.extend(pack)
+    assert sorted(all_indices) == list(range(len(lengths)))
     
     # Verify load balancing - calculate total tokens per pack
-    pack_loads = [pack["total_tokens"] for pack in packed["packs"]]
+    pack_loads = []
+    for pack in packing_indices:
+        pack_loads.append(sum(lengths[i] for i in pack))
     
     # Balanced partitioning should minimize variance
     max_load = max(pack_loads)
     min_load = min(pack_loads)
     avg_load = sum(pack_loads) / len(pack_loads)
     
-    # Check that the load imbalance is reasonable (within 20% of average)
+    # Check that the load imbalance is reasonable (within 40% of average)
     assert (max_load - min_load) / avg_load < 0.4
 
     

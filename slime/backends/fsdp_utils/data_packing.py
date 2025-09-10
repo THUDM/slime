@@ -3,14 +3,43 @@ import torch
 from typing import List, Dict, Optional, Any
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 
+
+def get_packing_indices(
+    seq_lengths: List[int],
+    max_tokens_per_gpu: Optional[int] = None,
+    num_packs: Optional[int] = None,
+) -> List[List[int]]:
+    """
+    Calculate optimal packing indices for sequences.
+    
+    Args:
+        seq_lengths: List of sequence lengths
+        max_tokens_per_gpu: Maximum tokens per GPU (creates packs respecting this limit)
+        num_packs: If specified, create exactly this many balanced packs
+        
+    Returns:
+        List of lists, where each inner list contains indices for one pack
+    """
+    if not seq_lengths:
+        return []
+    
+    # Determine packing strategy
+    if num_packs:
+        # Use balanced partitioning for specified number of packs
+        equal_size = len(seq_lengths) % num_packs == 0
+        return get_seqlen_balanced_partitions(seq_lengths, num_packs, equal_size)
+    elif max_tokens_per_gpu:
+        # Create packs respecting token budget
+        return _create_token_limited_packs(seq_lengths, max_tokens_per_gpu)
+    else:
+        # Single pack with all sequences
+        return [[i for i in range(len(seq_lengths))]]
+
 def pack_sequences(
     tokens: List[List[int]],
     loss_masks: List[List[int]],
-    rewards: Optional[List[float]] = None,
-    raw_rewards: Optional[List[Any]] = None,
     max_seq_len: Optional[int] = None,
     max_tokens_per_gpu: Optional[int] = None,
-    num_packs: Optional[int] = None,
     pad_to_multiple: int = 128,
 ) -> Dict[str, Any]:
     """
@@ -19,11 +48,8 @@ def pack_sequences(
     Args:
         tokens: List of token sequences
         loss_masks: List of loss masks  
-        rewards: Optional list of rewards
-        raw_rewards: Optional list of raw rewards
         max_seq_len: Maximum sequence length (will truncate if exceeded)
         max_tokens_per_gpu: Maximum tokens per GPU (creates packs respecting this limit)
-        num_packs: If specified, create exactly this many balanced packs
         pad_to_multiple: Pad total tokens to multiple of this (for memory efficiency)
         
     Returns:
@@ -40,11 +66,7 @@ def pack_sequences(
     seq_lengths = [len(t) for t in tokens]
     
     # Determine packing strategy
-    if num_packs:
-        # Use balanced partitioning for specified number of packs
-        equal_size = len(tokens) % num_packs == 0
-        packs = get_seqlen_balanced_partitions(seq_lengths, num_packs, equal_size)
-    elif max_tokens_per_gpu:
+    if max_tokens_per_gpu:
         # Create packs respecting token budget
         packs = _create_token_limited_packs(seq_lengths, max_tokens_per_gpu)
     else:
@@ -56,7 +78,7 @@ def pack_sequences(
     for pack_indices in packs:
         pack = _pack_single_batch(
             pack_indices, tokens, loss_masks, 
-            rewards, raw_rewards, pad_to_multiple
+            pad_to_multiple
         )
         packed_data["packs"].append(pack)
     
@@ -94,8 +116,6 @@ def _pack_single_batch(
     indices: List[int],
     tokens: List[List[int]],
     loss_masks: List[List[int]],
-    rewards: Optional[List[float]],
-    raw_rewards: Optional[List[Any]],
     pad_to_multiple: int = 128,
 ) -> Dict[str, torch.Tensor]:
     """Pack a single batch into dense tensors."""
@@ -146,13 +166,8 @@ def _pack_single_batch(
         "num_sequences": len(indices),
         "total_tokens": total_tokens,  # Actual tokens (without padding)
         "efficiency": total_tokens / (max_seqlen * len(indices)) if indices else 1.0,
+        "indices": indices,  # Store original indices for mapping rewards later
     }
-    
-    # Add rewards if provided
-    if rewards:
-        result["rewards"] = torch.tensor([rewards[i] for i in indices], dtype=torch.float32)
-    if raw_rewards:
-        result["raw_rewards"] = [raw_rewards[i] for i in indices]
     
     return result
 
