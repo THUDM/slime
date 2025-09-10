@@ -132,7 +132,7 @@ def _pack_single_batch(
         if pad:
             flat_tokens.extend([0] * pad)  # Use 0 as pad token
             flat_masks.extend([0] * pad)
-            cu_seqlens.append(cu_seqlens[-1] + pad)
+            # Don't add extra cu_seqlens entry - padding is just extra tokens at the end
     
     # Convert to tensors
     cu_seqlens_tensor = torch.tensor(cu_seqlens, dtype=torch.int32)

@@ -262,7 +262,22 @@ class FSDPTrainRayActor(TrainRayActor):
         # TODO: compute rewards and adv for t
         for batch in padded_batches:
             if self.args.advantage_estimator in ["grpo", "gspo"]:
-                batch["advantages"] = batch["returns"] = batch["rewards"].expand_as(batch["log_probs"])
+                if "cu_seqlens" in batch:
+                    # For packed sequences, expand rewards per sequence
+                    cu_seqlens = batch["cu_seqlens"]
+                    rewards_expanded = []
+                    for i in range(batch["num_sequences"]):
+                        start = cu_seqlens[i].item()
+                        end = cu_seqlens[i + 1].item()
+                        seq_len = end - start
+                        if seq_len > 1:  # Only sequences with >1 token contribute to log_probs
+                            rewards_expanded.extend([batch["rewards"][i]] * (seq_len - 1))
+                    batch["advantages"] = batch["returns"] = torch.tensor(
+                        rewards_expanded, device=batch["rewards"].device, dtype=batch["rewards"].dtype
+                    )
+                else:
+                    # Regular padded sequences
+                    batch["advantages"] = batch["returns"] = batch["rewards"].expand_as(batch["log_probs"])
             else:
                 raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
 

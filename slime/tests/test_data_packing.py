@@ -58,10 +58,10 @@ def test_cu_seqlens_and_shapes_consistent():
         
         assert toks.dtype == torch.long
         assert cu.dtype in (torch.int32, torch.int64)
-        assert len(toks) >= len(loss), "tokens should be >= loss_masks due to padding"
+        assert len(toks) == len(loss), "tokens and loss_masks should have same length"
         assert cu[0].item() == 0
-        # cu_seqlens includes padding
-        assert cu[-1].item() == len(toks)
+        # cu_seqlens should have num_sequences + 1 entries
+        assert len(cu) == pack["num_sequences"] + 1
         
         # Check that each segment's last token has no loss
         seg_lens = _lens_from_cu(cu[:pack["num_sequences"]+1])
@@ -195,8 +195,8 @@ def test_padding_to_multiple():
     for pack in packed["packs"]:
         # Check that token tensor length is multiple of 128
         assert len(pack["tokens"]) % 128 == 0
-        # But total_tokens should reflect actual tokens
-        assert pack["total_tokens"] == sum(len(t) for t in tokens)
+        # But total_tokens should reflect actual tokens (without padding)
+        assert pack["total_tokens"] == 80  # 50 + 30 = 80 actual tokens
 
 
 def test_compute_optimal_batch_size():
