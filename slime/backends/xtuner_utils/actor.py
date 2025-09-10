@@ -40,7 +40,13 @@ class XTunerTrainRayActor(TrainRayActor):
         self.model = model.fully_shard(self.fsdp_cfg)
         self.model.from_hf(args.load, strict=True)
 
-        self.optim_cfg = AdamWConfig(lr=1e-6, foreach=False if args.optimizer_disable_foreach else None)
+        self.optim_cfg = AdamWConfig(
+            lr=1e-6,
+            betas=(0.9, 0.98),
+            weight_decay=0.1,
+            eps=1e-8,
+            foreach=False if args.optimizer_disable_foreach else None,
+        )
         self.optimizer = self.optim_cfg.build([p for p in self.model.parameters() if p.requires_grad])
 
         # init sp mesh
@@ -177,13 +183,15 @@ class XTunerTrainRayActor(TrainRayActor):
 
         # old logprobs are inplaced updated in compute_actor_logprobs
         old_logprobs_list = self.compute_logprobs(self.model, seq_ctx_list, shifted_labels_list)
-        sum_entropy: torch.Tensor | None = None
+        sum_old_logprobs: torch.Tensor | None = None
         for old_logprobs, mask in zip(old_logprobs_list, masks):
-            entropy = -(old_logprobs * mask).sum()
-            sum_entropy = entropy if sum_entropy is None else sum_entropy + entropy
-        dist.all_reduce(sum_entropy, op=dist.ReduceOp.SUM)
-        avg_gen_entropy = sum_entropy / global_grad_tokens if global_grad_tokens > 0 else 0
-        print(f"Rollout {rollout_id}: avg generation entropy: {avg_gen_entropy:.4f}")
+            old_logprobs = -(old_logprobs * mask).sum()
+            sum_old_logprobs = old_logprobs if sum_old_logprobs is None else sum_old_logprobs + old_logprobs
+        dist.all_reduce(sum_old_logprobs, op=dist.ReduceOp.SUM)
+        avg_logprobs = sum_old_logprobs / global_grad_tokens if global_grad_tokens > 0 else 0
+
+        if dist.get_rank() == 0:
+            print(f"Rollout {rollout_id}: avg generation entropy: {avg_logprobs:.4f}")
 
         if self.with_ref:
             self.ref_model.to_device(torch.cuda.current_device())
@@ -202,7 +210,8 @@ class XTunerTrainRayActor(TrainRayActor):
             kl_div_sum = cast(torch.Tensor, kl_div_sum)
             dist.all_reduce(kl_div_sum, op=dist.ReduceOp.SUM)
             avg_kl_div = kl_div_sum / global_grad_tokens if global_grad_tokens > 0 else 0
-            print(f"Rollout {rollout_id}: avg KL divergence: {avg_kl_div:.4f}")
+            if dist.get_rank() == 0:
+                print(f"Rollout {rollout_id}: avg KL divergence: {avg_kl_div:.4f}")
 
         iters_per_step = len(seq_ctx_list) // 1
         for i in range(0, len(seq_ctx_list), iters_per_step):
@@ -238,7 +247,8 @@ class XTunerTrainRayActor(TrainRayActor):
                 for key, value in log_info.items()
             )
             log_str = f"Rollout {rollout_id} Step {i}: " + log_str
-            print(log_str)
+            if dist.get_rank() == 0:
+                print(log_str)
 
         return
 
