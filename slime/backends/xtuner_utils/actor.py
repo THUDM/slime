@@ -8,15 +8,13 @@ from torch_memory_saver import torch_memory_saver
 from xtuner.v1.config import AdamWConfig, FSDPConfig
 from xtuner.v1.data_proto.sequence_context import SequenceContext
 from xtuner.v1.model import get_model_config_from_hf
-from xtuner.v1.rl.base import TrainingController as _RayTrainingController
-from xtuner.v1.rl.grpo import GRPOLossConfig
 
 from slime.backends.utils.data import process_rollout_data
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.ppo_utils import compute_approx_kl
 
-from .model import clip_grad_norm, gather_logprobs, sp_split, train_step
+from .model import clip_grad_norm, gather_logprobs, train_step
 from .update_weight_utils import UpdateWeightFromDistributed
 
 
@@ -40,7 +38,6 @@ class XTunerTrainRayActor(TrainRayActor):
         with torch.device("meta"):
             model = self.model_cfg.build()
         self.model = model.fully_shard(self.fsdp_cfg)
-        print(f"load from: {args.load}")
         self.model.from_hf(args.load, strict=True)
 
         self.optim_cfg = AdamWConfig(lr=1e-6, foreach=False if args.optimizer_disable_foreach else None)
@@ -57,28 +54,6 @@ class XTunerTrainRayActor(TrainRayActor):
             mesh_dim_names=("dp", "sp"),
         )
         self.sp_mesh = self.data_mesh["sp"]
-
-        # loss cfg
-        self.loss_cfg = GRPOLossConfig(
-            policy_loss_cfg=dict(
-                cliprange_high=args.eps_clip_high,
-                cliprange_low=args.eps_clip,
-                loss_type=args.policy_loss_type,
-            ),
-            ignore_idx=-100,
-            use_kl_loss=self.with_ref,
-            kl_loss_coef=0.001,
-            kl_loss_type="low_var_kl",
-            mode="chunk",
-            chunk_size=512,
-        )
-
-        # only for its utils
-        TrainingController = _unwrap_ray_actor(_RayTrainingController)
-        self.controller = TrainingController([])
-        # borrow utility methods if present
-        if hasattr(self.controller, "_packing"):
-            self._packing = self.controller._packing
 
         self.weight_updator = UpdateWeightFromDistributed(args, self.model)
 
@@ -114,49 +89,63 @@ class XTunerTrainRayActor(TrainRayActor):
         dp_rank = dist.get_rank() // self.args.sp_size
         dp_size = dist.get_world_size() // self.args.sp_size
         rollout_data = process_rollout_data(self.args, rollout_data_ref, dp_rank, dp_size)
-        rollout_data["tokens"] = [
-            torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device()) for t in rollout_data["tokens"]
-        ]
         rollout_data["loss_masks"] = [
-            torch.tensor([0] * (len(t) - len(l)) + l, dtype=torch.int, device=torch.cuda.current_device())
+            torch.tensor([0] * (len(t) - len(l)) + l, dtype=torch.int, device=torch.cuda.current_device()).unsqueeze(0)
             for t, l in zip(rollout_data["tokens"], rollout_data["loss_masks"])
         ]
+        rollout_data["tokens"] = [
+            torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device()).unsqueeze(0)
+            for t in rollout_data["tokens"]
+        ]
+        rollout_data["shifted_labels"] = [
+            torch.where(l.bool(), t, -100).roll(-1) for t, l in zip(rollout_data["tokens"], rollout_data["loss_masks"])
+        ]
 
-        data_batches = []
-        for tokens, reward, loss_mask in zip(
-            rollout_data["tokens"],
-            rollout_data["rewards"],
-            rollout_data["loss_masks"],
-        ):
-            # TODO: set pack max length in xtuner
-            data_batches.append(
-                dict(
-                    seq_ctx=SequenceContext.from_input_ids((tokens.unsqueeze(0),), device="cpu"),
-                    shifted_labels=torch.where(loss_mask.bool(), tokens, -100).roll(-1).unsqueeze(0),
-                    advantage=reward,
-                )
-            )
+        # pack data
+        buffer_size = 0
+        pack_infos = [[]]
+        for i, tokens in enumerate(rollout_data["tokens"]):
+            num_token = tokens.numel()
+            if num_token + buffer_size > self.args.max_tokens_per_gpu and len(pack_infos[-1]) > 0:
+                pack_infos.append([i])
+                buffer_size = 0
 
-        packed_data_batches = self._packing(data_batches, self.args.pack_max_length)
-        packed_data_batches = sorted(packed_data_batches, key=lambda x: x["seq_ctx"].max_length_q, reverse=True)
+            pack_infos[-1].append(i)
+            buffer_size += num_token
 
-        seq_ctx_list: list[SequenceContext] = []
+        seq_ctx_list = []
         shifted_labels_list = []
         advantages_list = []
-        for data in packed_data_batches:
-            if self.sp_mesh.size() > 1:
-                data["seq_ctx"] = data["seq_ctx"].split(self.sp_mesh)
-                data["shifted_labels"] = sp_split(
-                    data["shifted_labels"], sp_mesh=self.sp_mesh, split_dim=1, padding_value=-100
+        for indices in pack_infos:
+            seq_ctx = [rollout_data["tokens"][i] for i in indices]
+            total_len = sum([t.numel() for t in seq_ctx])
+            pad_len = self.args.max_tokens_per_gpu - total_len
+            label = [rollout_data["shifted_labels"][i] for i in indices]
+            advantages = [rollout_data["rewards"][i] for i in indices]
+            if pad_len > 0:
+                pad_labels = torch.full(
+                    (1, pad_len),
+                    -100,
+                    dtype=rollout_data["shifted_labels"][0].dtype,
+                    device=torch.cuda.current_device(),
                 )
-                data["advantages"] = sp_split(data["advantages"], sp_mesh=self.sp_mesh, split_dim=1, padding_value=0.0)
+                seq_ctx.append(
+                    torch.zeros(1, pad_len, dtype=rollout_data["tokens"][0].dtype, device=torch.cuda.current_device())
+                )
+                label.append(pad_labels)
+                advantages.append(0.0)
 
-            seq_ctx_list.append(data["seq_ctx"].to(torch.cuda.current_device()))
-            shifted_labels_list.append(data["shifted_labels"].to(torch.cuda.current_device()))
-            advantages_list.append(
-                torch.tensor(data["advantages"], dtype=torch.float, device=torch.cuda.current_device())
-            )
+            seq_ctx = SequenceContext.from_input_ids(seq_ctx)
+            seq_ctx.num_padding = pad_len
+            shifted_labels = torch.cat(label, dim=1)
+            advantages = torch.tensor(advantages, device=torch.cuda.current_device()).float().unsqueeze(0)
+            cu_seq_lens_q = seq_ctx.cu_seq_lens_q
+            num_tokens = cu_seq_lens_q[1:] - cu_seq_lens_q[:-1]
+            advantages = torch.repeat_interleave(advantages, num_tokens, dim=1)
 
+            seq_ctx_list.append(seq_ctx)
+            shifted_labels_list.append(shifted_labels)
+            advantages_list.append(advantages)
         return seq_ctx_list, shifted_labels_list, advantages_list
 
     def compute_logprobs(
@@ -267,13 +256,3 @@ class XTunerTrainRayActor(TrainRayActor):
         if self.args.offload:
             # TODO: don't wake up here
             self.sleep(("model"))
-
-
-# Unwrap Ray actor to get the original (non-remote) TrainingController class
-def _unwrap_ray_actor(actor_cls):
-    # Ray >= 2.x exposes metadata with the original class
-    orig = getattr(actor_cls, "__ray_metadata__", None)
-    if orig is not None and getattr(orig, "cls", None) is not None:
-        return orig.cls
-    # Older Ray versions sometimes expose __ray_actor_class__
-    return getattr(actor_cls, "__ray_actor_class__", actor_cls)
