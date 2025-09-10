@@ -24,13 +24,13 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "/root/slime/scripts/models/qwen3-4B.sh"
+source "/root/slime/scripts/models/qwen3-14B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/font-info/qwen3-4b-sft
-   --ref-load /root/font-info/qwen3-4b-sft_torch_dist
-   # --load /root/Qwen3-4B_slime/
-   --save /root/font-info/qwen3-4b-sft/qwen3-4b-sft-multi-turn/
+   --hf-checkpoint /root/font-info/qwen3-14b-sft
+   --ref-load /root/font-info/qwen3-14b-sft_torch_dist
+   # --load /root/Qwen3-14B_slime/
+   --save /root/font-info/qwen3-14b-sft/qwen3-14b-sft-multi-turn/
    --save-interval 20
    # --rotary-base 5000000
 )
@@ -61,7 +61,7 @@ EVAL_ARGS=(
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 2
+   --tensor-model-parallel-size 8
    --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
@@ -99,12 +99,12 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=(
    --use-wandb
    --wandb-project slime-dapo
-   --wandb-group qwen3-4B-test-multi-turn
+   --wandb-group qwen3-14B-test-multi-turn
    --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 2
+   --rollout-num-gpus-per-engine 8
    --sglang-mem-fraction-static 0.7
 )
 
@@ -126,7 +126,7 @@ CUSTOM_ARGS=(
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 # Build the runtime environment JSON with proper variable substitution
 RUNTIME_ENV_JSON="{
@@ -141,7 +141,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 4 \
+   --actor-num-gpus-per-node 8 \
    --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
