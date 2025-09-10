@@ -95,8 +95,6 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.use_data_packing:
             self.packing_config = {
                 'max_seq_len': getattr(args, 'max_seq_len', 8192),
-                'pack_efficiency_threshold': getattr(args, 'pack_efficiency_threshold', 0.8),
-                'use_dynamic_batch_size': self.use_dynamic_batch_size,
                 'max_tokens_per_gpu': getattr(args, 'max_tokens_per_gpu', None),
             }
         
@@ -107,7 +105,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 'max_micro_batch_size': getattr(args, 'max_micro_batch_size', 64),
                 'target_efficiency': getattr(args, 'target_efficiency', 0.85),
             }
-            self.efficiency_history = []
 
         if self.args.offload:
             self.sleep(("model"))
@@ -210,18 +207,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 seq_lengths = [len(t) for t in tokens]
                 optimal_batch_size = compute_optimal_batch_size(
                     seq_lengths=seq_lengths,
-                    current_batch_size=self.args.micro_batch_size,
-                    efficiency_history=self.efficiency_history,
                     **self.batch_size_config
                 )
                 self.args.micro_batch_size = optimal_batch_size
-                
-                # Update statistics
-                avg_efficiency = sum(b["efficiency"] for b in padded_batches) / len(padded_batches)
-                self.efficiency_history.append(avg_efficiency)
-                # Keep only recent history
-                if len(self.efficiency_history) > 20:
-                    self.efficiency_history = self.efficiency_history[-20:]
         else:
             # Original padding logic
             padded_batches = []

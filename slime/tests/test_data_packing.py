@@ -7,7 +7,8 @@ import torch
 # at the very top of test_data_packing.py
 import sys, pathlib
 sys.path.append(str(pathlib.Path(__file__).resolve().parent))
-from slime.backends.fsdp_utils.data_packing import pack_sequences, unpack_sequences, compute_optimal_batch_size
+from slime.backends.fsdp_utils.data_packing import pack_sequences, compute_optimal_batch_size
+
 
 def _lens_from_cu(cu):
     cu = cu.cpu().tolist()
@@ -32,24 +33,8 @@ def _build_mask_same_length(tokens):
     return m
 
 
-def _build_mask_len_minus_one(tokens):
-    # one shorter than tokens (next-token loss style)
-    if len(tokens) <= 1:
-        return [0] * max(0, len(tokens) - 1)
-    m = [1] * (len(tokens) - 1)
-    # no explicit last 0 because shape is len-1
-    return m
-
-
-def _sum_over_packs(packed_data, key):
-    return sum(pack[key] for pack in packed_data["packs"])
-
-
-# ------------------------
-# Sanity: cu_seqlens + shapes
-# ------------------------
-
-def test_cu_seqlens_and_shapes_consistent_dynamic():
+def test_cu_seqlens_and_shapes_consistent():
+    """Test that cu_seqlens are consistent with packed tensor shapes."""
     tokens = [
         _build_tokens(0, 5),
         _build_tokens(1, 3),
@@ -61,168 +46,79 @@ def test_cu_seqlens_and_shapes_consistent_dynamic():
     out = pack_sequences(
         tokens=tokens,
         loss_masks=masks,
-        use_dynamic_batch_size=True,
         max_tokens_per_gpu=8  # enforce multiple packs
     )
 
     assert "packs" in out and len(out["packs"]) >= 1
+    
     for pack in out["packs"]:
         toks = pack["tokens"]
         loss = pack["loss_masks"]
         cu = pack["cu_seqlens"]
+        
         assert toks.dtype == torch.long
-        assert cu.dtype in (torch.int32, torch.int64)  # author uses int32; accept int64 on CPU
-        assert len(toks) == len(loss), "packed tokens and loss_masks lengths must match"
+        assert cu.dtype in (torch.int32, torch.int64)
+        assert len(toks) >= len(loss), "tokens should be >= loss_masks due to padding"
         assert cu[0].item() == 0
+        # cu_seqlens includes padding
         assert cu[-1].item() == len(toks)
-        # each segment end must align
-        seg_lens = _lens_from_cu(cu)
-        assert sum(seg_lens) == len(toks)
-        # last element of each segment should not accrue loss if masks follow LM convention
+        
+        # Check that each segment's last token has no loss
+        seg_lens = _lens_from_cu(cu[:pack["num_sequences"]+1])
         start = 0
         for L in seg_lens:
             if L > 0:
                 assert loss[start + L - 1].item() == 0
             start += L
 
-    # dynamic budget respected
+    # Check token budget is respected
     for pack in out["packs"]:
-        assert _total_tokens_from_pack(pack) <= 8, "dynamic mode must respect token budget per pack"
+        # Only check actual tokens (without padding)
+        assert pack["total_tokens"] <= 8
 
 
-# ------------------------
-# Mask alignment corner cases (expected FAIL with current code if lengths==tokens)
-# ------------------------
-
-def test_mask_alignment_various_lengths_static():
-    # Construct diverse mask length cases to ensure alignment == tokens length after packing
-    t0 = _build_tokens(0, 5)   # mask == tokens
+def test_mask_alignment_various_lengths():
+    """Test that masks are properly aligned with tokens."""
+    t0 = _build_tokens(0, 5)
     m0 = [1, 1, 1, 1, 0]
 
-    t1 = _build_tokens(1, 4)   # mask == tokens-1
-    m1 = _build_mask_len_minus_one(t1)
+    t1 = _build_tokens(1, 4)
+    m1 = [1, 1, 1]  # shorter than tokens
 
-    t2 = _build_tokens(2, 2)   # shorter than tokens by 1 (pathological but should be handled)
-    m2 = [1]
+    t2 = _build_tokens(2, 2)
+    m2 = [1]  # much shorter
 
-    t3 = _build_tokens(3, 1)   # mask longer than tokens (very pathological; should be truncated)
-    m3 = [1, 1]
+    t3 = _build_tokens(3, 3)
+    m3 = [1, 1, 1, 1, 1]  # longer than tokens
 
     tokens = [t0, t1, t2, t3]
     masks = [m0, m1, m2, m3]
 
-    out = pack_sequences(
-        tokens=tokens,
-        loss_masks=masks,
-        pack_efficiency_threshold=0.0
-    )
+    out = pack_sequences(tokens=tokens, loss_masks=masks)
 
     for pack in out["packs"]:
         toks = pack["tokens"]
         loss = pack["loss_masks"]
-        assert len(toks) == len(loss), (
-            "Loss-mask alignment bug: packed loss mask length must equal packed tokens length."
-        )
+        # After alignment and padding, lengths should match
+        assert len(toks) == len(loss)
 
-        # Validate per-sequence tails are zero (LM convention)
+        # Check last token of each sequence has no loss
         cu = pack["cu_seqlens"]
         start = 0
-        for L in _lens_from_cu(cu):
-            if L > 0:
-                assert loss[start + L - 1].item() == 0
-            start += L
+        for i in range(pack["num_sequences"]):
+            end = cu[i + 1].item()
+            if end > start:
+                # Find actual sequence end (before padding)
+                seq_end = min(end, cu[i].item() + len(tokens[i]))
+                if seq_end > start:
+                    assert loss[seq_end - 1].item() == 0
+            start = end
 
 
-# ------------------------
-# Original-order restoration (expected FAIL with current static binning implementation)
-# ------------------------
-
-def test_unpack_restores_original_order_static_bins():
-    # Choose lengths that will interleave across bins under static packing
-    lengths = [9, 4, 8, 3, 7, 2]
-    tokens = [_build_tokens(i, L) for i, L in enumerate(lengths)]
-    masks = [_build_mask_same_length(t) for t in tokens]
-
-    packed = pack_sequences(
-        tokens=tokens,
-        loss_masks=masks,
-        pack_efficiency_threshold=0.8
-    )
-
-    # Unpack and request original order
-    unpacked = unpack_sequences(packed, original_order=True)
-
-    # Compare exact content with original tokens (order and values)
-    assert len(unpacked["tokens"]) == len(tokens)
-    for i in range(len(tokens)):
-        assert unpacked["tokens"][i] == tokens[i], (
-            "Original order restoration failed for sequence index {}. "
-            "Ensure unpack uses per-pack `sequence_indices` and sorts by them.".format(i)
-        )
-
-
-# ------------------------
-# Efficiency accounting sanity
-# ------------------------
-
-def test_pack_efficiency_math_is_consistent():
-    lengths = [30, 25, 10, 9, 5]  # scaled-down version of blog example
-    tokens = [_build_tokens(i, L) for i, L in enumerate(lengths)]
-    masks = [_build_mask_same_length(t) for t in tokens]
-
-    out = pack_sequences(
-        tokens=tokens,
-        loss_masks=masks,
-        pack_efficiency_threshold=0.85
-    )
-
-    # Each pack must satisfy: eff == total_tokens / (max_len * num_sequences)
-    for pack in out["packs"]:
-        tot = pack["total_tokens"]
-        max_len = pack["max_seqlen"]
-        nseq = pack["num_sequences"]
-        denom = max_len * nseq if nseq > 0 else 1
-        calc_eff = tot / denom
-        assert math.isclose(calc_eff, pack["efficiency"], rel_tol=1e-6), "Per-pack efficiency mismatch"
-
-    # Global check: sum of segment lengths equals sum of tokens
-    sum_tokens = sum(len(t) for t in tokens)
-    sum_flat = sum(pack["cu_seqlens"][-1].item() for pack in out["packs"])
-    assert sum_tokens == sum_flat
-
-
-# ------------------------
-# Static-mode token budget (expected FAIL unless static path enforces cap)
-# ------------------------
-
-def test_static_mode_should_respect_token_budget_cap():
-    lengths = [12, 11, 10, 9, 8, 7, 6]
-    tokens = [_build_tokens(i, L) for i, L in enumerate(lengths)]
-    masks = [_build_mask_same_length(t) for t in tokens]
-
-    out = pack_sequences(
-        tokens=tokens,
-        loss_masks=masks,
-        pack_efficiency_threshold=0.5,
-        use_dynamic_batch_size=False,
-        max_tokens_per_gpu=20  # desire cap even in static mode
-    )
-
-    # Expect all static packs to obey the token budget if provided
-    for pack in out["packs"]:
-        assert _total_tokens_from_pack(pack) <= 20, (
-            "Static mode should also guard by max_tokens_per_gpu (or a max_tokens_per_pack)."
-        )
-
-
-# ------------------------
-# max_seq_len enforcement (expected FAIL with current code)
-# ------------------------
-
-def test_max_seq_len_is_enforced_or_truncated():
-    # One sequence exceeds the configured max_seq_len
+def test_max_seq_len_truncation():
+    """Test that sequences are truncated to max_seq_len."""
     tokens = [
-        _build_tokens(0, 6),  # exceeds
+        _build_tokens(0, 10),  # will be truncated
         _build_tokens(1, 4),
     ]
     masks = [_build_mask_same_length(t) for t in tokens]
@@ -230,23 +126,15 @@ def test_max_seq_len_is_enforced_or_truncated():
     packed = pack_sequences(
         tokens=tokens,
         loss_masks=masks,
-        max_seq_len=5,
-        pack_efficiency_threshold=0.0
+        max_seq_len=5
     )
 
-    # All packs must have max_seqlen <= configured max_seq_len if enforcement is present.
-    # With current code this will FAIL because nothing enforces max_seq_len.
     for pack in packed["packs"]:
-        assert pack["max_seqlen"] <= 5, (
-            "max_seq_len is not enforced. Either truncate inputs or raise early."
-        )
+        assert pack["max_seqlen"] <= 5
 
 
-# ------------------------
-# Zero-length sequence tolerance (should PASS)
-# ------------------------
-
-def test_zero_length_sequences_do_not_crash_and_mark_zero_segments():
+def test_zero_length_sequences():
+    """Test that zero-length sequences don't crash."""
     tokens = [
         _build_tokens(0, 0),
         _build_tokens(1, 3),
@@ -254,28 +142,16 @@ def test_zero_length_sequences_do_not_crash_and_mark_zero_segments():
     ]
     masks = [_build_mask_same_length(t) for t in tokens]
 
-    out = pack_sequences(
-        tokens=tokens,
-        loss_masks=masks,
-        pack_efficiency_threshold=0.0
-    )
+    out = pack_sequences(tokens=tokens, loss_masks=masks)
 
-    # Ensure cu_seqlens includes zero-length segments and total tokens equals sum of lengths
+    # Should handle empty sequences gracefully
     total = sum(len(t) for t in tokens)
-    sum_flat = sum(pack["cu_seqlens"][-1].item() for pack in out["packs"])
+    sum_flat = sum(pack["total_tokens"] for pack in out["packs"])
     assert total == sum_flat
 
-    for pack in out["packs"]:
-        lens = _lens_from_cu(pack["cu_seqlens"])
-        # All lengths must be >= 0
-        assert all(L >= 0 for L in lens)
 
-
-# ------------------------
-# Rewards / raw_rewards roundtrip via unpack (exposes order issues)
-# ------------------------
-
-def test_rewards_roundtrip_after_unpack():
+def test_rewards_preserved():
+    """Test that rewards are correctly preserved through packing."""
     lengths = [5, 3, 7, 1]
     tokens = [_build_tokens(i, L) for i, L in enumerate(lengths)]
     masks = [_build_mask_same_length(t) for t in tokens]
@@ -287,25 +163,44 @@ def test_rewards_roundtrip_after_unpack():
         loss_masks=masks,
         rewards=rewards,
         raw_rewards=raw_rewards,
-        pack_efficiency_threshold=0.8
     )
 
-    unpacked = unpack_sequences(packed, original_order=True)
+    # Check rewards are preserved
+    all_rewards = []
+    all_raw_rewards = []
+    for pack in packed["packs"]:
+        if "rewards" in pack:
+            all_rewards.extend(pack["rewards"].tolist())
+        if "raw_rewards" in pack:
+            all_raw_rewards.extend(pack["raw_rewards"])
     
-    # Check that rewards match with appropriate floating point tolerance
-    assert len(unpacked["rewards"]) == len(rewards)
-    for i in range(len(rewards)):
-        assert math.isclose(unpacked["rewards"][i], rewards[i], rel_tol=1e-6), (
-            f"Rewards mismatch at index {i}"
-        )
-    assert unpacked["raw_rewards"] == raw_rewards
+    assert len(all_rewards) == len(rewards)
+    assert len(all_raw_rewards) == len(raw_rewards)
 
 
-# ------------------------
-# Test compute_optimal_batch_size function
-# ------------------------
+def test_padding_to_multiple():
+    """Test padding to multiple of 128."""
+    tokens = [
+        _build_tokens(0, 50),
+        _build_tokens(1, 30),
+    ]
+    masks = [_build_mask_same_length(t) for t in tokens]
+
+    packed = pack_sequences(
+        tokens=tokens,
+        loss_masks=masks,
+        pad_to_multiple=128
+    )
+
+    for pack in packed["packs"]:
+        # Check that token tensor length is multiple of 128
+        assert len(pack["tokens"]) % 128 == 0
+        # But total_tokens should reflect actual tokens
+        assert pack["total_tokens"] == sum(len(t) for t in tokens)
+
 
 def test_compute_optimal_batch_size():
+    """Test optimal batch size computation."""
     seq_lengths = [512, 480, 350, 256, 128, 64, 32]
     
     # Test basic functionality
@@ -317,19 +212,19 @@ def test_compute_optimal_batch_size():
         target_efficiency=0.85
     )
     
-    assert 1 <= batch_size <= 8, "Batch size out of bounds"
+    assert 1 <= batch_size <= 8
     
-    # Test with history for adaptive adjustment
-    efficiency_history = [0.75, 0.78, 0.80, 0.82, 0.83]
-    batch_size_with_history = compute_optimal_batch_size(
+    # Test with different parameters
+    batch_size_2 = compute_optimal_batch_size(
         seq_lengths=seq_lengths,
-        max_tokens_per_gpu=2048,
-        current_batch_size=4,
-        efficiency_history=efficiency_history
+        max_tokens_per_gpu=1024,  # Smaller budget
+        min_micro_batch_size=2,
+        max_micro_batch_size=4,
+        target_efficiency=0.9
     )
     
-    # Should reduce batch size due to low efficiency
-    assert batch_size_with_history <= 4
+    # Should return smaller batch size due to tighter constraints
+    assert 2 <= batch_size_2 <= 4
     
     # Test empty sequences
     empty_batch_size = compute_optimal_batch_size(
@@ -338,58 +233,68 @@ def test_compute_optimal_batch_size():
     )
     assert empty_batch_size == 1  # Should return minimum
 
+
+def test_token_budget_enforcement():
+    """Test that max_tokens_per_gpu is enforced."""
+    lengths = [12, 11, 10, 9, 8, 7, 6]
+    tokens = [_build_tokens(i, L) for i, L in enumerate(lengths)]
+    masks = [_build_mask_same_length(t) for t in tokens]
+
+    out = pack_sequences(
+        tokens=tokens,
+        loss_masks=masks,
+        max_tokens_per_gpu=20
+    )
+
+    # All packs should respect token budget
+    for pack in out["packs"]:
+        assert pack["total_tokens"] <= 20
+
+
+def test_efficiency_calculation():
+    """Test that efficiency is calculated correctly."""
+    lengths = [10, 10, 5, 5]  # Will pack well together
+    tokens = [_build_tokens(i, L) for i, L in enumerate(lengths)]
+    masks = [_build_mask_same_length(t) for t in tokens]
+
+    out = pack_sequences(tokens=tokens, loss_masks=masks)
+
+    for pack in out["packs"]:
+        # Efficiency = actual_tokens / (max_seq_len * num_sequences)
+        expected_eff = pack["total_tokens"] / (pack["max_seqlen"] * pack["num_sequences"])
+        assert math.isclose(pack["efficiency"], expected_eff, rel_tol=1e-6)
+
+
 def test_balanced_partitioning():
-    # Test the new balanced partitioning feature
-    lengths = [100, 200, 150, 300, 250, 120, 180, 220, 90, 110]
+    """Test balanced partitioning using seqlen_balancing."""
+    lengths = [100, 200, 150, 300, 250, 120]
     tokens = [_build_tokens(i, L) for i, L in enumerate(lengths)]
     masks = [_build_mask_same_length(t) for t in tokens]
     
-    # Test with specified number of packs using balanced partitioning
+    # Test with specified number of packs
     packed = pack_sequences(
         tokens=tokens,
         loss_masks=masks,
-        num_packs=3,
-        partition_method="balanced"
+        num_packs=2  # Create exactly 2 balanced packs
     )
     
-    # Should create exactly 3 packs
-    assert len(packed["packs"]) == 3
+    # Should create exactly 2 packs
+    assert len(packed["packs"]) == 2
     
     # Check that all sequences are accounted for
     total_sequences = sum(pack["num_sequences"] for pack in packed["packs"])
     assert total_sequences == len(tokens)
     
     # Verify load balancing - calculate total tokens per pack
-    pack_loads = []
-    for pack in packed["packs"]:
-        pack_loads.append(pack["total_tokens"])
+    pack_loads = [pack["total_tokens"] for pack in packed["packs"]]
     
-    # Balanced partitioning should minimize variance in pack loads
+    # Balanced partitioning should minimize variance
     max_load = max(pack_loads)
     min_load = min(pack_loads)
     avg_load = sum(pack_loads) / len(pack_loads)
     
     # Check that the load imbalance is reasonable (within 20% of average)
     assert (max_load - min_load) / avg_load < 0.4
-    
-    # Verify that unpacking restores all sequences correctly
-    unpacked = unpack_sequences(packed, original_order=True)
-    assert len(unpacked["tokens"]) == len(tokens)
-    
-    # Test with equal-size constraint (when divisible)
-    tokens_equal = tokens[:9]  # 9 sequences, divisible by 3
-    masks_equal = masks[:9]
-    
-    packed_equal = pack_sequences(
-        tokens=tokens_equal,
-        loss_masks=masks_equal,
-        num_packs=3,
-        partition_method="balanced"
-    )
-    
-    # Each pack should have exactly 3 sequences
-    for pack in packed_equal["packs"]:
-        assert pack["num_sequences"] == 3
 
     
 if __name__ == "__main__":

@@ -30,7 +30,6 @@ class FSDPArgs:
     
     # Data packing configuration
     use_data_packing: bool = False  # Enable efficient data packing
-    pack_efficiency_threshold: float = 0.8  # Minimum packing efficiency
     max_seq_len: int = 8192  # Maximum sequence length
     
     # Dynamic batch size adjustment
