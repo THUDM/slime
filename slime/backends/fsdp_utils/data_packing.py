@@ -44,7 +44,7 @@ def pack_sequences(
         k_partitions = num_packs
     elif max_tokens_per_gpu:
         total_tokens = sum(seq_lengths)
-        k_partitions = math.ceil(total_tokens / max_tokens_per_gpu)
+        k_partitions = max(1, math.ceil(total_tokens / max_tokens_per_gpu))
     else:
         k_partitions = 1
     

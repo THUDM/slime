@@ -89,7 +89,7 @@ class FSDPTrainRayActor(TrainRayActor):
         
         # Initialize data packing parameters
         self.max_seq_len = getattr(args, 'max_seq_len', 8192)
-        self.max_tokens_per_gpu = getattr(args, 'max_tokens_per_gpu', None)
+        self.max_tokens_per_gpu = args.max_tokens_per_gpu  # From main arguments
 
         if self.args.offload:
             self.sleep(("model"))
