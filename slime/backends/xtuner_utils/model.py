@@ -1,0 +1,259 @@
+from typing import Any, Dict, List, Optional, Tuple, cast
+
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
+from torch.distributed._tensor import DTensor, Replicate, Shard
+from torch.distributed.device_mesh import DeviceMesh
+from torch.distributed.tensor.placement_types import Placement
+from torch.utils._foreach_utils import _device_has_foreach_support, _has_foreach_support
+from xtuner.v1.data_proto.utils import pad_to_multiple_of, split_for_sequence_parallel
+from xtuner.v1.module.router import NoAuxRouterConfig
+
+from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
+
+
+def train_step(args, model, model_cfg, data_batches: list[dict]):
+    """Perform a training step with the given data batches and mesh.
+
+    Args:
+        data_batches (List[Dict]): The input data batches for the training step.
+    """
+
+    loss_log = {}
+    other_log = {}
+
+    iters_per_step = len(data_batches)
+
+    moe_need_update_bias = (
+        isinstance(getattr(model_cfg, "router", None), NoAuxRouterConfig)
+        and model_cfg.router.router_bias_update_speed > 0
+    )
+
+    if moe_need_update_bias:
+        tokens_per_expert_global_for_bias = torch.zeros(
+            model_cfg.num_hidden_layers - model_cfg.first_k_dense_replace,
+            model_cfg.n_routed_experts,
+            dtype=torch.int64,
+            device=torch.cuda.current_device(),
+        )
+
+    step_loss = torch.tensor(0.0, device=torch.cuda.current_device())
+    step_llm_loss = torch.tensor(0.0, device=torch.cuda.current_device())
+    step_balancing_loss: torch.Tensor | None = None
+    step_z_loss: torch.Tensor | None = None
+
+    for data_batch in data_batches:
+        seq_ctx = data_batch["seq_ctx"]
+        shifted_labels = data_batch["shifted_labels"]
+        old_logprobs = data_batch["old_logprobs"]
+        advantages = data_batch["advantages"]
+        mask = data_batch["mask"]
+
+        # TODO: check what xtuner does with intra_layer_micro_batch > 1
+        output = model(seq_ctx=seq_ctx, loss_ctx=None)
+
+        # llm loss has been global averaged
+        logits = output["logits"]
+        logprobs = gather_logprobs(logits, shifted_labels)
+        ppo_kl = logprobs - old_logprobs
+
+        pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
+        pg_loss = (pg_loss * mask).sum() / mask.sum().clamp_min(1)
+        loss = pg_loss
+
+        if args.use_kl_loss:
+            ref_log_probs = data_batch["ref_logprobs"]
+            kl = compute_approx_kl(
+                logprobs,
+                ref_log_probs,
+                kl_loss_type=args.kl_loss_type,
+            )
+            kl_loss = (kl * mask).sum() / mask.sum().clamp_min(1)
+            loss = loss + args.kl_loss_coef * kl_loss
+
+        loss = loss / iters_per_step
+
+        if "balancing_loss" in output:
+            loss = loss + output["balancing_loss"] / iters_per_step
+            step_balancing_loss = (
+                output["balancing_loss"]
+                if step_balancing_loss is None
+                else step_balancing_loss + output["balancing_loss"]
+            )
+        if "z_loss" in output:
+            loss = loss + output["z_loss"] / iters_per_step
+            step_z_loss = output["z_loss"] if step_z_loss is None else step_z_loss + output["z_loss"]
+
+        if moe_need_update_bias:
+            assert "tokens_per_expert_global" in output, "tokens_per_expert_global is required for bias update."
+            tokens_per_expert_global_for_bias += output["tokens_per_expert_global"]
+
+        del output
+        loss.backward()
+        step_loss += loss.detach().clone()
+
+    if moe_need_update_bias:
+        avg_count_load = tokens_per_expert_global_for_bias.float().mean(1)
+        max_load_i, _ = torch.max(tokens_per_expert_global_for_bias, dim=1)
+        maxvio_all_layers = (max_load_i - avg_count_load) / avg_count_load
+        maxvio = maxvio_all_layers.mean()
+        model.update_bias(tokens_per_expert_global_for_bias, avg_count_load)  # type: ignore
+        other_log["maxvio"] = maxvio.item()
+
+    reduced_llm_loss = step_llm_loss
+    dist.all_reduce(reduced_llm_loss)
+    reduced_llm_loss.div_(dist.get_world_size())
+
+    loss_log["total_loss"] = step_loss.item()
+    loss_log["reduced_llm_loss"] = reduced_llm_loss.item()
+    if step_balancing_loss is not None:
+        reduced_balancing_loss = step_balancing_loss
+        dist.all_reduce(reduced_balancing_loss.div_(dist.get_world_size()))
+        loss_log["reduced_balancing_loss"] = reduced_balancing_loss.item()
+    if step_z_loss is not None:
+        reduced_z_loss = step_z_loss
+        dist.all_reduce(reduced_z_loss.div_(dist.get_world_size()))
+        loss_log["reduced_z_loss"] = reduced_z_loss.item()
+    return loss_log, other_log
+
+
+def clip_grad_norm(model, max_grad_norm):
+    model.scale_and_reduce_grad()
+    params = model.trainable_parameters()
+    grads = [p.grad for _, p in params if p.grad is not None]
+    grouped_grads = group_tensors_by_device_mesh_and_placements(grads)
+    total_norms = []
+    for grads in grouped_grads.values():
+        total_norm = cal_total_norm(grads, norm_type=2.0, foreach=True)
+        total_norms.append(total_norm)
+    grad_norm = torch.linalg.vector_norm(torch.stack(total_norms), ord=2.0, dtype=torch.float32)
+    clip_coef = max_grad_norm / (grad_norm + 1e-6)
+    clip_coef_clamped = torch.clamp(clip_coef, max=1.0)
+    for grads in grouped_grads.values():
+        device = grads[0].device
+        if _device_has_foreach_support(device):
+            torch._foreach_mul_(grads, clip_coef_clamped.to(device))
+        else:
+            clip_coef_clamped_device = clip_coef_clamped.to(device)
+            for g in grads:
+                g.mul_(clip_coef_clamped_device)
+    return grad_norm
+
+
+def group_tensors_by_device_mesh_and_placements(tensors: List[torch.Tensor]):
+    grouped_tensors: Dict[Tuple[DeviceMesh, Tuple[Placement, ...]], List[torch.Tensor]] = {}
+    for tensor in tensors:
+        assert isinstance(tensor, DTensor)
+        key = (tensor.device_mesh, tensor.placements)
+        if key in grouped_tensors:
+            grouped_tensors[key].append(tensor)
+        else:
+            grouped_tensors[key] = [tensor]
+    return grouped_tensors
+
+
+def cal_total_norm(tensors: List[DTensor], norm_type: float = 2.0, foreach: Optional[bool] = None):
+    norm_type = float(norm_type)
+    if len(tensors) == 0:
+        return torch.tensor(0.0)
+
+    device_mesh: DeviceMesh = tensors[0].device_mesh
+    placements = tensors[0].placements
+    device = tensors[0].device
+    norms: Tuple[DTensor, ...]
+    if (foreach is None and _has_foreach_support(tensors, device)) or (  # type: ignore
+        foreach and _device_has_foreach_support(device)
+    ):
+        norms = torch._foreach_norm(tensors, norm_type)  # type: ignore
+    elif foreach:
+        raise RuntimeError(f"foreach=True was passed, but can't use the foreach API on {device.type} tensors")
+    else:
+        norms = tuple(torch.linalg.vector_norm(g, norm_type) for g in tensors)
+
+    local_norm = torch.linalg.vector_norm(
+        torch.stack([norm.to_local() for norm in norms]), norm_type, dtype=torch.float32
+    )
+    if norm_type == 2:
+        local_norm_squared = local_norm**2
+        for i, placement in enumerate(placements):
+            if isinstance(placement, Shard):
+                # When using ep + fsdp, the placement corresponding to fsdp mesh is _StridedShard
+                # isinstance(_StridedShard, Shard) is True
+                dist.all_reduce(local_norm_squared, group=device_mesh.get_group(i))
+            elif isinstance(placement, Replicate):
+                pass
+            else:
+                raise ValueError(f"Unsupported placement type {placement} in clip_grad_norm")
+        global_norm = local_norm_squared**0.5
+    else:
+        raise NotImplementedError
+    return global_norm
+
+
+def gather_logprobs(logits, shifted_labels):
+    logprobs = F.log_softmax(logits, dim=-1)
+    logprobs = logprobs.gather(dim=-1, index=shifted_labels.clip(min=0).unsqueeze(-1)).squeeze(-1)
+    return logprobs
+
+
+def sp_split(
+    tensor,
+    sp_mesh: DeviceMesh,
+    split_dim: int,
+    padding_value: Any,
+):
+    if sp_mesh.size() == 1:
+        return tensor
+    tensor = pad_to_multiple_of(tensor, padding_value, sp_mesh.size(), split_dim)
+    tensor = split_for_sequence_parallel(tensor, dim=split_dim, sp_mesh=sp_mesh)
+    return tensor
+
+
+def build_batches_loss_kwargs(
+    shifted_labels_list: List[torch.Tensor],
+    old_logprobs_list: List[torch.Tensor],
+    ref_logprobs_list: List[torch.Tensor] | None,
+    advantages_list: List[torch.Tensor],
+    loss_cfg,
+) -> list[dict]:
+    # Compute the denominator used in the global calibration of the loss
+    rank_grad_tokens = sum((labels != loss_cfg.ignore_idx).sum() for labels in shifted_labels_list)
+    rank_grad_tokens = cast(torch.Tensor, rank_grad_tokens)
+    global_grad_tokens = rank_grad_tokens
+    if dist.is_initialized():
+        dist.all_reduce(global_grad_tokens, op=dist.ReduceOp.SUM)
+
+    if global_grad_tokens == 0:
+        global_grad_tokens.add_(1)  # Avoid division by zero
+
+    batches_loss_kwargs = []
+    for i, (old_logprobs, ref_logprobs, shifted_labels, advantages) in enumerate(
+        zip(
+            old_logprobs_list,
+            ref_logprobs_list or [None] * len(old_logprobs_list),
+            shifted_labels_list,
+            advantages_list,
+        )
+    ):
+        shifted_labels = shifted_labels_list[i]
+        assert old_logprobs is not None, "old_logprobs can not be None"
+        # compute loss weight
+        policy_loss_weight = torch.ones_like(shifted_labels, dtype=torch.float32) / global_grad_tokens
+        policy_loss_weight[shifted_labels == loss_cfg.ignore_idx] = 0.0
+        if loss_cfg.use_kl_loss:
+            assert ref_logprobs is not None, "ref_logprobs can not be None when use_kl_loss=True"
+            kl_loss_weight = policy_loss_weight.clone() * loss_cfg.kl_loss_coef
+        else:
+            ref_logprobs = None
+            kl_loss_weight = None
+        loss_kwargs = dict(
+            old_logprobs=old_logprobs,
+            shifted_labels=shifted_labels,
+            advantages=advantages,
+            policy_loss_weight=policy_loss_weight,
+            ref_logprobs=ref_logprobs,
+            kl_loss_weight=kl_loss_weight,
+        )
+        batches_loss_kwargs.append(loss_kwargs)
+    return batches_loss_kwargs

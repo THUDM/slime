@@ -494,6 +494,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             reset_megatron_args(parser, "--save", str, None)
             reset_megatron_args(parser, "--save-interval", int, None)
             reset_megatron_args(parser, "--seed", int, 1234)
+            reset_megatron_args(parser, "--clip-grad", type=float, default=1.0)
 
             parser.add_argument("--eps-clip", type=float, default=0.2, help="PPO clip range")
             parser.add_argument("--eps-clip-high", type=float, default=None, help="PPO clip upper range")
