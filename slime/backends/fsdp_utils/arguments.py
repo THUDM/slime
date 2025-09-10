@@ -27,6 +27,23 @@ class FSDPArgs:
     fsdp_sync_module_states: bool = True
     fsdp_forward_prefetch: bool = True
     fsdp_backward_prefetch: bool = True
+    
+    # Data packing configuration
+    use_data_packing: bool = False  # Enable efficient data packing
+    pack_efficiency_threshold: float = 0.8  # Minimum packing efficiency
+    max_seq_len: int = 8192  # Maximum sequence length
+    
+    # Dynamic batch size adjustment
+    use_dynamic_batch_size: bool = False  # Enable dynamic micro batch size
+    max_tokens_per_gpu: Optional[int] = None  # Maximum tokens per GPU
+    min_micro_batch_size: int = 1  # Minimum micro batch size
+    max_micro_batch_size: int = 64  # Maximum micro batch size  
+    target_efficiency: float = 0.85  # Target packing efficiency
+    micro_batch_size: int = 1  # Base micro batch size
+    
+    # Ring attention configuration  
+    use_ring_attention: bool = False  # Enable ring flash attention
+    ring_attn_group_size: Optional[int] = None  # Ring attention group size
 
     # Logging
     wandb_project: str = "slime-fsdp"
