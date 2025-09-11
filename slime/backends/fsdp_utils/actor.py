@@ -126,44 +126,64 @@ class FSDPTrainRayActor(TrainRayActor):
         self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
         dist.barrier(group=get_gloo_group())
 
-    def _unpack_and_process_sequences(self, packed_tokens, cu_seqlens):
-        """Unpack sequences and process them in a batch with proper padding."""
-        sequences = []
-        max_len = 0
+    def _process_packed_sequences_micro_batch(self, packed_tokens, cu_seqlens, micro_batch_size=4):
+        """Process packed sequences in micro-batches to reduce memory usage."""
+        num_sequences = len(cu_seqlens) - 1
+        total_tokens = len(packed_tokens)
         
-        # Extract individual sequences
-        for i in range(len(cu_seqlens) - 1):
-            start = cu_seqlens[i].item()
-            end = cu_seqlens[i + 1].item()
-            seq = packed_tokens[start:end]
-            sequences.append(seq)
-            max_len = max(max_len, len(seq))
+        # Pre-allocate output tensor to ensure exact size match
+        # Get vocab size from the model (handling FSDP wrapper)
+        if hasattr(self.model, '_fsdp_wrapped_module'):
+            vocab_size = self.model._fsdp_wrapped_module.config.vocab_size
+        elif hasattr(self.model, 'module'):
+            vocab_size = self.model.module.config.vocab_size
+        else:
+            vocab_size = self.model.config.vocab_size
+        all_logits = torch.zeros(total_tokens, vocab_size, dtype=torch.float16, device=packed_tokens.device)
         
-        # Pad sequences to create a batch
-        batch_size = len(sequences)
-        padded_input_ids = torch.zeros(batch_size, max_len, dtype=packed_tokens.dtype, device=packed_tokens.device)
-        attention_mask = torch.zeros(batch_size, max_len, dtype=torch.long, device=packed_tokens.device)
+        # Process in micro-batches
+        for mb_start in range(0, num_sequences, micro_batch_size):
+            mb_end = min(mb_start + micro_batch_size, num_sequences)
+            
+            # Extract sequences for this micro-batch
+            sequences = []
+            seq_positions = []  # Track where each sequence goes in the output
+            max_len = 0
+            
+            for i in range(mb_start, mb_end):
+                start = cu_seqlens[i].item()
+                end = cu_seqlens[i + 1].item()
+                seq = packed_tokens[start:end]
+                sequences.append(seq)
+                seq_positions.append((start, end))
+                max_len = max(max_len, len(seq))
+            
+            # Create padded batch
+            batch_size = len(sequences)
+            padded_input_ids = torch.zeros(batch_size, max_len, dtype=packed_tokens.dtype, device=packed_tokens.device)
+            attention_mask = torch.zeros(batch_size, max_len, dtype=torch.long, device=packed_tokens.device)
+            
+            for i, seq in enumerate(sequences):
+                seq_len = len(seq)
+                padded_input_ids[i, :seq_len] = seq
+                attention_mask[i, :seq_len] = 1
+            
+            # Process this micro-batch
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                logits = self.model(
+                    input_ids=padded_input_ids,
+                    attention_mask=attention_mask
+                ).logits
+            
+            # Place logits in the correct positions in the output tensor
+            for i, (start, end) in enumerate(seq_positions):
+                seq_len = end - start
+                all_logits[start:end] = logits[i, :seq_len].float()
+            
+            # Clear intermediate tensors to save memory
+            del padded_input_ids, attention_mask, logits
         
-        for i, seq in enumerate(sequences):
-            seq_len = len(seq)
-            padded_input_ids[i, :seq_len] = seq
-            attention_mask[i, :seq_len] = 1
-        
-        return padded_input_ids, attention_mask
-    
-    def _repack_logits(self, logits, cu_seqlens):
-        """Repack 2D logits back to packed format."""
-        packed_logits = []
-        
-        # Extract valid logits for each sequence and concatenate
-        for i in range(len(cu_seqlens) - 1):
-            start = cu_seqlens[i].item()
-            end = cu_seqlens[i + 1].item()
-            seq_len = end - start
-            packed_logits.append(logits[i, :seq_len])
-        
-        # Concatenate all sequences
-        return torch.cat(packed_logits, dim=0)
+        return all_logits
 
     def compute_log_prob(
         self,
@@ -174,21 +194,15 @@ class FSDPTrainRayActor(TrainRayActor):
         rollout_data = {f"{store_prefix}log_probs": []}
         with timer(f"{store_prefix}log_probs") and torch.no_grad():
             for batch in padded_batches:
-                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    # Unpack and process sequences with proper batching
-                    input_ids, attention_mask = self._unpack_and_process_sequences(
-                        batch["tokens"],
-                        batch["cu_seqlens"]
-                    )
-                    logits = self.model(
-                        input_ids=input_ids,
-                        attention_mask=attention_mask
-                    ).logits
-                    # Repack logits to match original packed format
-                    logits = self._repack_logits(logits, batch["cu_seqlens"])
-                    batch[f"{store_prefix}log_probs"] = gather_log_probs_packed(
-                        logits, batch["tokens"], batch["cu_seqlens"]
-                    )
+                # Process packed sequences in micro-batches to save memory
+                logits = self._process_packed_sequences_micro_batch(
+                    batch["tokens"],
+                    batch["cu_seqlens"],
+                    micro_batch_size=2  # Reduced for lower memory usage
+                )
+                batch[f"{store_prefix}log_probs"] = gather_log_probs_packed(
+                    logits, batch["tokens"], batch["cu_seqlens"]
+                )
         return rollout_data
 
     def pad_and_move_to_device(self, rollout_data):
@@ -262,7 +276,14 @@ class FSDPTrainRayActor(TrainRayActor):
             val = torch.tensor([0.0], device=torch.cuda.current_device())
             for batch in padded_batches:
                 if isinstance(batch[key], torch.Tensor):
-                    val += per_sample_mean(batch[key], batch["loss_masks"]).item()
+                    # Adjust loss_masks for values that are N-1 in length (next-token prediction)
+                    # log_probs, ref_log_probs, advantages, and returns are all N-1 sized
+                    if key in ["log_probs", "ref_log_probs", "advantages", "returns"]:
+                        adjusted_masks = adjust_loss_masks_for_packed(batch["loss_masks"], batch["cu_seqlens"])
+                        val += per_sample_mean(batch[key], adjusted_masks).item()
+                    else:
+                        # raw_reward and other per-sequence values use original masks
+                        val += per_sample_mean(batch[key], batch["loss_masks"]).item()
                 else:
                     val += sum(batch[key])
             dist.all_reduce(val, op=dist.ReduceOp.SUM)
@@ -283,21 +304,19 @@ class FSDPTrainRayActor(TrainRayActor):
         reported_accum: dict[str, list[torch.Tensor]] = {}
         self.optimizer.zero_grad(set_to_none=True)
         for mbs_id, batch in enumerate(padded_batches):
+            # Process packed sequences in micro-batches to save memory
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                # Unpack and process sequences with proper batching
-                input_ids, attention_mask = self._unpack_and_process_sequences(
+                logits = self._process_packed_sequences_micro_batch(
                     batch["tokens"],
-                    batch["cu_seqlens"]
+                    batch["cu_seqlens"],
+                    micro_batch_size=2  # Reduced for lower memory usage
                 )
-                logits = self.model(
-                    input_ids=input_ids,
-                    attention_mask=attention_mask
-                ).logits
-                # Repack logits to match original packed format
-                logits = self._repack_logits(logits, batch["cu_seqlens"])
             
             # Handle packed sequences
             log_probs = gather_log_probs_packed(logits, batch["tokens"], batch["cu_seqlens"])
+            
+            # Adjust loss_masks to match log_probs dimensions (N-1 due to next-token prediction)
+            adjusted_loss_masks = adjust_loss_masks_for_packed(batch["loss_masks"], batch["cu_seqlens"])
 
             if self.args.advantage_estimator == "gspo":
                 raise NotImplementedError("implement GSPO")
@@ -307,9 +326,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 ppo_kl, batch["advantages"], self.args.eps_clip, self.args.eps_clip_high
             )
 
-            pg_loss = per_sample_mean(pg_loss, batch["loss_masks"])
-            pg_clipfrac = per_sample_mean(pg_clipfrac, batch["loss_masks"])
-            ppo_kl = per_sample_mean(ppo_kl.abs(), batch["loss_masks"])
+            pg_loss = per_sample_mean(pg_loss, adjusted_loss_masks)
+            pg_clipfrac = per_sample_mean(pg_clipfrac, adjusted_loss_masks)
+            ppo_kl = per_sample_mean(ppo_kl.abs(), adjusted_loss_masks)
 
             loss = pg_loss
 
@@ -325,7 +344,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     batch["ref_log_probs"],
                     kl_loss_type=self.args.kl_loss_type,
                 )
-                kl_loss = per_sample_mean(kl, batch["loss_masks"])
+                kl_loss = per_sample_mean(kl, adjusted_loss_masks)
 
                 loss = loss + self.args.kl_loss_coef * kl_loss
 
@@ -401,6 +420,16 @@ def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Ten
     tgt = input_ids[:, 1:].contiguous()
     log_probs = log_probs_all.gather(-1, tgt.unsqueeze(-1)).squeeze(-1)
     return log_probs
+
+
+def adjust_loss_masks_for_packed(loss_masks: torch.Tensor, cu_seqlens: torch.Tensor) -> torch.Tensor:
+    """Adjust loss masks to match log_probs dimensions (N-1 for next-token prediction)."""
+    # Create mask to exclude first token of each sequence
+    mask = torch.ones(len(loss_masks), dtype=torch.bool, device=loss_masks.device)
+    mask[cu_seqlens[:-1]] = False  # Exclude first token of each sequence
+    
+    # Return loss_masks without first tokens (matching log_probs dimensions)
+    return loss_masks[mask]
 
 
 def gather_log_probs_packed(logits: torch.Tensor, input_ids: torch.Tensor, cu_seqlens: torch.Tensor) -> torch.Tensor:
