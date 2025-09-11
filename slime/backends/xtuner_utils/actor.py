@@ -10,8 +10,8 @@ from xtuner.v1.data_proto.sequence_context import SequenceContext
 from xtuner.v1.model import get_model_config_from_hf
 
 import wandb
-from slime.backends.utils.data import process_rollout_data
 from slime.ray.train_actor import TrainRayActor
+from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.ppo_utils import compute_approx_kl
 from slime.utils.wandb_utils import init_wandb_secondary

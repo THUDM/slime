@@ -909,6 +909,26 @@ def parse_args(add_custom_arguments=None):
 
         args = load_fsdp_args(extra_args_provider=add_slime_arguments)
 
+    slime_validate_args(args)
+
+    if backend == "megatron":
+        megatron_validate_args(args)
+
+        # always use varlen
+        args.variable_seq_lengths = True
+        if getattr(args, "moe_token_dispatcher_type", None) == "allgather":
+            print(
+                "--moe-token-dispatcher-type allgather does not support variable sequence length, "
+                "please use alltoall dispatcher instead."
+            )
+            args.moe_token_dispatcher_type = "alltoall"
+
+    sglang_validate_args(args)
+
+    return args
+
+
+def slime_validate_args(args):
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):
             raise FileNotFoundError(f"ref_load {args.ref_load} does not exist, please check the path.")
@@ -1039,22 +1059,6 @@ def parse_args(add_custom_arguments=None):
         assert args.num_rollout is not None, (
             "num_epoch is not set, but num_rollout is not set, " "please set --num-rollout or --num-epoch"
         )
-
-    if backend == "megatron":
-        megatron_validate_args(args)
-
-        # always use varlen
-        args.variable_seq_lengths = True
-        if getattr(args, "moe_token_dispatcher_type", None) == "allgather":
-            print(
-                "--moe-token-dispatcher-type allgather does not support variable sequence length, "
-                "please use alltoall dispatcher instead."
-            )
-            args.moe_token_dispatcher_type = "alltoall"
-
-    sglang_validate_args(args)
-
-    return args
 
 
 def hf_validate_args(args, hf_config):
