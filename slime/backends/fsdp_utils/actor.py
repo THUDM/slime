@@ -126,6 +126,45 @@ class FSDPTrainRayActor(TrainRayActor):
         self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
         dist.barrier(group=get_gloo_group())
 
+    def _unpack_and_process_sequences(self, packed_tokens, cu_seqlens):
+        """Unpack sequences and process them in a batch with proper padding."""
+        sequences = []
+        max_len = 0
+        
+        # Extract individual sequences
+        for i in range(len(cu_seqlens) - 1):
+            start = cu_seqlens[i].item()
+            end = cu_seqlens[i + 1].item()
+            seq = packed_tokens[start:end]
+            sequences.append(seq)
+            max_len = max(max_len, len(seq))
+        
+        # Pad sequences to create a batch
+        batch_size = len(sequences)
+        padded_input_ids = torch.zeros(batch_size, max_len, dtype=packed_tokens.dtype, device=packed_tokens.device)
+        attention_mask = torch.zeros(batch_size, max_len, dtype=torch.long, device=packed_tokens.device)
+        
+        for i, seq in enumerate(sequences):
+            seq_len = len(seq)
+            padded_input_ids[i, :seq_len] = seq
+            attention_mask[i, :seq_len] = 1
+        
+        return padded_input_ids, attention_mask
+    
+    def _repack_logits(self, logits, cu_seqlens):
+        """Repack 2D logits back to packed format."""
+        packed_logits = []
+        
+        # Extract valid logits for each sequence and concatenate
+        for i in range(len(cu_seqlens) - 1):
+            start = cu_seqlens[i].item()
+            end = cu_seqlens[i + 1].item()
+            seq_len = end - start
+            packed_logits.append(logits[i, :seq_len])
+        
+        # Concatenate all sequences
+        return torch.cat(packed_logits, dim=0)
+
     def compute_log_prob(
         self,
         model_tag,
@@ -136,12 +175,17 @@ class FSDPTrainRayActor(TrainRayActor):
         with timer(f"{store_prefix}log_probs") and torch.no_grad():
             for batch in padded_batches:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    # Pass cu_seqlens for proper attention computation with packed sequences
+                    # Unpack and process sequences with proper batching
+                    input_ids, attention_mask = self._unpack_and_process_sequences(
+                        batch["tokens"],
+                        batch["cu_seqlens"]
+                    )
                     logits = self.model(
-                        input_ids=batch["tokens"],
-                        cu_seqlens=batch["cu_seqlens"],
-                        max_seqlen=batch["max_seqlen"]
+                        input_ids=input_ids,
+                        attention_mask=attention_mask
                     ).logits
+                    # Repack logits to match original packed format
+                    logits = self._repack_logits(logits, batch["cu_seqlens"])
                     batch[f"{store_prefix}log_probs"] = gather_log_probs_packed(
                         logits, batch["tokens"], batch["cu_seqlens"]
                     )
@@ -240,12 +284,17 @@ class FSDPTrainRayActor(TrainRayActor):
         self.optimizer.zero_grad(set_to_none=True)
         for mbs_id, batch in enumerate(padded_batches):
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                # Pass cu_seqlens for proper attention computation with packed sequences
+                # Unpack and process sequences with proper batching
+                input_ids, attention_mask = self._unpack_and_process_sequences(
+                    batch["tokens"],
+                    batch["cu_seqlens"]
+                )
                 logits = self.model(
-                    input_ids=batch["tokens"],
-                    cu_seqlens=batch["cu_seqlens"],
-                    max_seqlen=batch["max_seqlen"]
+                    input_ids=input_ids,
+                    attention_mask=attention_mask
                 ).logits
+                # Repack logits to match original packed format
+                logits = self._repack_logits(logits, batch["cu_seqlens"])
             
             # Handle packed sequences
             log_probs = gather_log_probs_packed(logits, batch["tokens"], batch["cu_seqlens"])
