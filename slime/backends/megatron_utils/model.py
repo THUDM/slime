@@ -24,6 +24,7 @@ from .checkpoint import load_checkpoint, save_checkpoint
 from .data import get_batch
 from .loss import get_log_probs_and_entropy, loss_function
 from .model_provider import get_model_provider_func
+from .mtp_utils import generate_position_ids_for_mtp
 
 if torch.version.hip:
     from vllm.device_allocator.cumem import CuMemAllocator
@@ -295,12 +296,36 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
             ],
         )
 
+        # Default: no labels, standard RL/SFT training path
+        labels = None
+        position_ids = None
+        loss_mask = None
+        extra_block_kwargs = None
+
+        # If enabling MTP training: trigger MTP loss inside Megatron while returning logits
+        # for the target model's loss. Detach base hidden states for MTP so MTP gradients 
+        # do not update the main model.
+        if getattr(args, "enable_mtp_training", False):
+            labels = batch["tokens"]
+            # For MTP LM training we do not need external loss_mask; use internal all-ones
+            # mask so that MTP path works with both packed and non-packed batches.
+            loss_mask = None
+            # Position IDs are not required for RoPE; to avoid shape issues in packed cases,
+            # keep position_ids=None unless you explicitly use learned absolute embeddings.
+            position_ids = None
+            extra_block_kwargs = {
+                "return_logits_when_labels": True,
+                "mtp_detach_hidden_states": True,
+            }
+
         output_tensor = model(
             input_ids=batch["tokens"],
-            position_ids=None,
+            position_ids=position_ids,
             attention_mask=None,
-            labels=None,
+            labels=labels,
             packed_seq_params=batch["packed_seq_params"],
+            loss_mask=loss_mask,
+            extra_block_kwargs=extra_block_kwargs,
         )
 
         return output_tensor, partial(loss_function, args, batch, num_microbatches)

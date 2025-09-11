@@ -17,5 +17,4 @@ MODEL_ARGS=(
     --max-position-embeddings 32768
     # Notice: Currently, MTP + sequence packing is not supported in megatron yet.
     --mtp-num-layers 1
-    --mtp-loss-scaling-factor 0.1
 )
