@@ -63,6 +63,110 @@ class GenerateState(metaclass=SingletonMeta):
 
 
 async def generate(args, sample: Sample, sampling_params) -> Sample:
+    """
+    Main generate function - routes between SlimeRouter and SGLang based on configuration.
+    
+    Uses SlimeRouter (text-based) by default when available, falls back to SGLang (token-based).
+    """
+    # Check if SlimeRouter should be used
+    if getattr(args, 'use_slime_router', False):
+        return await generate_with_slime_router(args, sample, sampling_params)
+    else:
+        return await generate_with_sglang(args, sample, sampling_params)
+
+
+async def generate_with_slime_router(args, sample: Sample, sampling_params) -> Sample:
+    """Generate using SlimeRouter with text-based workflow"""
+    
+    assert (
+        sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
+    ), f"Sample status is {sample.status}"
+
+    # SlimeRouter URL - get from args 
+    slime_router_host = getattr(args, 'slime_router_host', '0.0.0.0')
+    slime_router_port = getattr(args, 'slime_router_port', 30000)
+    url = f"http://{slime_router_host}:{slime_router_port}/generate"
+    
+    # Build full text (prompt + existing response)
+    if isinstance(sample.prompt, str):
+        full_text = sample.prompt + sample.response
+    else:
+        # Handle list of dicts format (chat format)
+        # For now, just convert to simple string - this might need refinement
+        full_text = str(sample.prompt) + sample.response
+    
+    # Adjust max_new_tokens based on existing response length
+    if len(sample.response) > 0:
+        sampling_params["max_new_tokens"] -= sample.response_length
+
+    assert (
+        sampling_params["max_new_tokens"] >= 0
+    ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
+    if sampling_params["max_new_tokens"] == 0:
+        sample.status = Sample.Status.TRUNCATED
+        return sample
+
+    # Prepare payload for SlimeRouter (text-based)
+    payload = {
+        "text": full_text,
+        "sampling_params": sampling_params,
+        "return_logprob": True,
+    }
+
+    # Call SlimeRouter /generate endpoint
+    output = await post(url, payload, use_http2=getattr(args, 'use_http2', False))
+
+    # Extract generated text and update sample
+    generated_text = output.get("text", "")
+    sample.response += generated_text
+    sample.response_length += len(generated_text.split())  # Approximate token count
+
+    # Get token IDs and logprobs using SlimeRouter's /retrieve_from_text
+    retrieve_url = f"http://{slime_router_host}:{slime_router_port}/retrieve_from_text"
+    retrieve_payload = {
+        "text": sample.prompt + sample.response,
+        "return_logp": True
+    }
+    
+    retrieve_output = await post(retrieve_url, retrieve_payload, use_http2=getattr(args, 'use_http2', False))
+    
+    # Update sample with retrieved token information
+    if "tokens" in retrieve_output:
+        sample.tokens = retrieve_output["tokens"]
+    if "logp" in retrieve_output:
+        # For SlimeRouter, we get the full logprobs - need to extract only new ones
+        full_logprobs = retrieve_output["logp"]
+        if sample.rollout_log_probs is None:
+            sample.rollout_log_probs = []
+        
+        # Calculate how many logprobs we had before
+        prev_logprob_count = len(sample.rollout_log_probs)
+        # Add new logprobs (this is a simplification - may need refinement)
+        new_logprobs = full_logprobs[prev_logprob_count:] if len(full_logprobs) > prev_logprob_count else []
+        sample.rollout_log_probs.extend(new_logprobs)
+
+    # Handle weight version if available
+    if "meta_info" in output and "weight_version" in output["meta_info"]:
+        sample.weight_versions.append(output["meta_info"]["weight_version"])
+    
+    # Set finish reason based on output
+    if "meta_info" in output and "finish_reason" in output["meta_info"]:
+        match output["meta_info"]["finish_reason"]["type"]:
+            case "length":
+                sample.status = Sample.Status.TRUNCATED
+            case "abort":
+                sample.status = Sample.Status.ABORTED
+            case "stop":
+                sample.status = Sample.Status.COMPLETED
+    else:
+        # Default to completed if no finish_reason provided
+        sample.status = Sample.Status.COMPLETED
+
+    return sample
+
+
+async def generate_with_sglang(args, sample: Sample, sampling_params) -> Sample:
+    """Generate using traditional SGLang router with token-based workflow"""
     state = GenerateState(args)
 
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
