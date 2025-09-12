@@ -18,7 +18,7 @@ from slime.utils.ray_utils import Box
 from slime.utils.types import Sample
 from slime.utils.wandb_utils import init_wandb_secondary
 
-from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
+from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -204,7 +204,7 @@ def log_rollout_data(rollout_id, args, samples, rollout_time):
         wandb.log(log_dict)
 
 
-@ray.remote(num_cpus=1)
+@ray.remote
 class RolloutManager:
     """The class to run rollout and convert rollout data to training data."""
 
@@ -227,9 +227,13 @@ class RolloutManager:
         nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
         # when doing multi-node serving, we will only send request to node-0 for each engine.
         self.rollout_engines = self.all_rollout_engines[::nodes_per_engine]
+        self.rollout_engine_lock = Lock.options(
+            num_cpus=1,
+            num_gpus=0,
+        ).remote()
 
-    def get_rollout_engines(self):
-        return self.rollout_engines, self.all_rollout_engines
+    def get_rollout_engines_and_lock(self):
+        return self.rollout_engines, self.rollout_engine_lock
 
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset
