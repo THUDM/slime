@@ -129,11 +129,11 @@ class RayTrainGroup:
         to update weights after each training stage.
         """
         self.rollout = rollout
-        rollout_engines, all_rollout_engines = ray.get(rollout.get_rollout_engines.remote())
+        rollout_engines, rollout_engine_lock = ray.get(rollout.get_rollout_engines_and_lock.remote())
         return [
             actor.connect_rollout_engines.remote(
                 rollout_engines,
-                all_rollout_engines,
+                rollout_engine_lock
             )
             for actor in self._actor_handlers
         ]
