@@ -18,7 +18,7 @@ from slime.utils.ray_utils import Box
 from slime.utils.types import Sample
 from slime.utils.wandb_utils import init_wandb_secondary
 
-from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock, log_rollout_data, log_eval_rollout_data
+from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -64,7 +64,7 @@ class RolloutManager:
         start_time = time.time()
         data = self._get_rollout_data()
         self._save_debug_rollout_data(data)
-        log_rollout_data(rollout_id, self.args, data, time.time() - start_time)
+        _log_rollout_data(rollout_id, self.args, data, time.time() - start_time)
         data = self._convert_samples_to_train_data(data)
         return Box(ray.put(data))
 
@@ -74,7 +74,7 @@ class RolloutManager:
             return
 
         data = self.eval_generate_rollout(self.args, rollout_id, self.data_source, evaluation=True)
-        log_eval_rollout_data(rollout_id, self.args, data)
+        _log_eval_rollout_data(rollout_id, self.args, data)
     
     def save(self, rollout_id):
         self.data_source.save(rollout_id)
@@ -331,3 +331,42 @@ def _start_router(args):
     assert process.is_alive()
     # If router ip is specified, use the specified launched router
     print(f"SGLang router launched at {args.sglang_router_ip}:{args.sglang_router_port}")
+
+
+def _log_eval_rollout_data(rollout_id, args, data):
+    log_dict = {}
+    for key in data.keys():
+        rewards = data[key]["rewards"]
+        log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
+        if "truncated" in data[key]:
+            truncated = data[key]["truncated"]
+            log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
+
+    print(f"eval {rollout_id}: {log_dict}")
+    if args.use_wandb:
+        log_dict["eval/step"] = (
+            rollout_id
+            if not args.wandb_always_use_train_step
+            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+        )
+        wandb.log(log_dict)
+
+
+def _log_rollout_data(rollout_id, args, data, rollout_time):
+    if args.load_debug_rollout_data:
+        return
+
+    log_dict = {}
+    response_lengths = [sum(loss_mask) for loss_mask in data["loss_masks"]]
+    log_dict["perf/rollout_time"] = rollout_time
+    if args.rollout_num_gpus is not None:
+        log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
+    log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+    print(f"perf {rollout_id}: {log_dict}")
+    if args.use_wandb:
+        log_dict["rollout/step"] = (
+            rollout_id
+            if not args.wandb_always_use_train_step
+            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+        )
+        wandb.log(log_dict)
