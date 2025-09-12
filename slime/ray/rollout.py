@@ -24,7 +24,7 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 
-def create_rollout_engines(args, pg):
+def _create_rollout_engines(args, pg):
     if args.debug_train_only:
         return []
 
@@ -181,7 +181,7 @@ class RolloutManager:
         print(f"import {self.args.rollout_function_path} as generate_rollout function.")
         print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
-        self.all_rollout_engines = create_rollout_engines(args, pg)
+        self.all_rollout_engines = _create_rollout_engines(args, pg)
         nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
         # when doing multi-node serving, we will only send request to node-0 for each engine.
         self.rollout_engines = self.all_rollout_engines[::nodes_per_engine]
@@ -201,6 +201,33 @@ class RolloutManager:
         self.rollout_id = rollout_id
 
         start_time = time.time()
+        data = self._get_rollout_data()
+        self._save_debug_rollout_data(data)
+        log_rollout_data(rollout_id, self.args, data, time.time() - start_time)
+        data = self._convert_samples_to_train_data(data)
+        return Box(ray.put(data))
+
+    def eval(self, rollout_id):
+        if self.args.debug_train_only:
+            # if debug train only, we don't generate evaluation data
+            return
+
+        data = self.eval_generate_rollout(self.args, rollout_id, self.data_source, evaluation=True)
+        log_eval_rollout_data(rollout_id, self.args, data)
+    
+    def save(self, rollout_id):
+        self.data_source.save(rollout_id)
+
+    def load(self, rollout_id=None):
+        self.data_source.load(rollout_id)
+
+    def offload(self):
+        return [engine.release_memory_occupation.remote() for engine in self.rollout_engines]
+
+    def onload(self, tags: List[str] = None):
+        return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines]
+
+    def _get_rollout_data(self):
         if self.args.load_debug_rollout_data:
             data = torch.load(
                 open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
@@ -218,32 +245,17 @@ class RolloutManager:
                 data = data[:trim_len]
                 print(f"trim number of samples from {origin_data_length} to {trim_len}")
 
+        return data
+    
+    def _save_debug_rollout_data(self, data):
         # TODO to be refactored (originally Buffer._set_data)
-        # TODO extract to a function during refactor
         if (path_template := self.args.save_debug_rollout_data) is not None:
             path = Path(path_template.format(rollout_id=self.rollout_id))
             print(f"Save debug rollout data to {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(
-                dict(
-                    rollout_id=self.rollout_id,
-                    samples=[sample.to_dict() for sample in data],
-                ),
-                path,
-            )
-        log_rollout_data(rollout_id, self.args, data, time.time() - start_time)
-        data = self._convert_samples_to_train_data(data)
-        return Box(ray.put(data))
+            torch.save(data, path)
 
-    def eval(self, rollout_id):
-        if self.args.debug_train_only:
-            # if debug train only, we don't generate evaluation data
-            return
-
-        data = self.eval_generate_rollout(self.args, rollout_id, self.data_source, evaluation=True)
-        log_eval_rollout_data(rollout_id, self.args, data)
-
-    def post_process_rewards(self, samples: Union[list[Sample], list[list[Sample]]]):
+    def _post_process_rewards(self, samples: Union[list[Sample], list[list[Sample]]]):
         if self.custom_reward_post_process_func is not None:
             return self.custom_reward_post_process_func(self.args, samples)
 
@@ -274,7 +286,7 @@ class RolloutManager:
         """
         Convert inference generated samples to training data.
         """
-        raw_rewards, rewards = self.post_process_rewards(samples)
+        raw_rewards, rewards = self._post_process_rewards(samples)
 
         assert len(raw_rewards) == len(samples)
         assert len(rewards) == len(samples)
@@ -319,15 +331,3 @@ class RolloutManager:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
 
         return train_data
-
-    def save(self, rollout_id):
-        self.data_source.save(rollout_id)
-
-    def load(self, rollout_id=None):
-        self.data_source.load(rollout_id)
-
-    def offload(self):
-        return [engine.release_memory_occupation.remote() for engine in self.rollout_engines]
-
-    def onload(self, tags: List[str] = None):
-        return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines]
