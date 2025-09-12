@@ -114,7 +114,13 @@ class RolloutManager:
             path = Path(path_template.format(rollout_id=self.rollout_id))
             print(f"Save debug rollout data to {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(data, path)
+            torch.save(
+                dict(
+                    rollout_id=self.rollout_id,
+                    samples=[sample.to_dict() for sample in data],
+                ),
+                path,
+            )
 
     def _post_process_rewards(self, samples: Union[list[Sample], list[list[Sample]]]):
         if self.custom_reward_post_process_func is not None:
