@@ -1,7 +1,10 @@
 """Data packing utilities for FSDP backend to reduce padding overhead."""
+
 import math
+from typing import Dict, List, Optional
+
 import torch
-from typing import List, Dict, Optional
+
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 
 
@@ -16,7 +19,7 @@ def pack_sequences(
 ) -> List[Dict]:
     """
     Pack sequences into dense batches with cumulative sequence lengths.
-    
+
     Args:
         tokens: List of token sequences
         loss_masks: List of loss masks
@@ -25,20 +28,22 @@ def pack_sequences(
         max_seq_len: Maximum sequence length (will truncate if exceeded)
         max_tokens_per_gpu: Maximum tokens per GPU pack
         num_packs: Explicit number of packs to create
-        
+
     Returns:
         List of packed batches with tokens, masks, cu_seqlens, and rewards
     """
     if not tokens:
         return []
-    
+
+    for i, t in enumerate(tokens):
+        loss_masks[i] = [0] * (len(t) - len(loss_masks[i])) + loss_masks[i]
     # Truncate sequences if needed
     if max_seq_len:
         tokens = [t[:max_seq_len] for t in tokens]
         loss_masks = [m[:max_seq_len] for m in loss_masks]
-    
+
     seq_lengths = [len(t) for t in tokens]
-    
+
     # Determine number of packs and use balanced partitioning
     if num_packs:
         k_partitions = num_packs
@@ -47,14 +52,12 @@ def pack_sequences(
         k_partitions = max(1, math.ceil(total_tokens / max_tokens_per_gpu))
     else:
         k_partitions = 1
-    
+
     # Use balanced partitioning for optimal load distribution
     partitions = get_seqlen_balanced_partitions(
-        seq_lengths, 
-        k_partitions=k_partitions,
-        equal_size=False  # Allow variable sizes for better balance
+        seq_lengths, k_partitions=k_partitions, equal_size=False  # Allow variable sizes for better balance
     )
-    
+
     # Pack each partition
     result = []
     for indices in partitions:
@@ -62,29 +65,32 @@ def pack_sequences(
         cu_seqlens = [0]
         flat_tokens = []
         flat_masks = []
-        
+        flat_positionids = []
+
         for i in indices:
             seq_tokens = tokens[i]
             seq_mask = loss_masks[i]
-            
+            seq_positionids = list(range(len(seq_tokens)))
+
             flat_tokens.extend(seq_tokens)
-            
+            flat_positionids.extend(seq_positionids)
             # Align mask with tokens and set last token to 0 (LM convention)
-            mask = seq_mask[:len(seq_tokens)]
-            mask.extend([0] * (len(seq_tokens) - len(mask)))
-            if mask:
-                mask[-1] = 0
+            mask = seq_mask[1:]
             flat_masks.extend(mask)
-            
+
             cu_seqlens.append(cu_seqlens[-1] + len(seq_tokens))
-        
-        result.append({
-            "tokens": torch.tensor(flat_tokens, dtype=torch.long),
-            "loss_masks": torch.tensor(flat_masks, dtype=torch.int),
-            "cu_seqlens": torch.tensor(cu_seqlens, dtype=torch.int32),
-            "max_seqlen": max(cu_seqlens[i+1] - cu_seqlens[i] for i in range(len(indices))),
-            "rewards": torch.tensor([rewards[i] for i in indices], dtype=torch.float32),
-            "raw_rewards": [raw_rewards[i] for i in indices],
-        })
-    
+
+        result.append(
+            {
+                "tokens": torch.tensor(flat_tokens, dtype=torch.long),
+                "loss_masks": torch.tensor(flat_masks, dtype=torch.int),
+                "attention_masks": torch.ones(len(flat_tokens), dtype=torch.int),
+                "position_ids": torch.tensor(flat_positionids, dtype=torch.int),
+                "cu_seqlens": torch.tensor(cu_seqlens, dtype=torch.int32),
+                "max_seqlen": max(cu_seqlens[i + 1] - cu_seqlens[i] for i in range(len(indices))),
+                "rewards": torch.tensor([rewards[i] for i in indices], dtype=torch.float32),
+                "raw_rewards": [raw_rewards[i] for i in indices],
+            }
+        )
+
     return result
