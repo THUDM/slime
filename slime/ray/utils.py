@@ -3,7 +3,6 @@ import os
 
 import ray
 import torch
-import wandb
 
 # Refer to
 # https://github.com/ray-project/ray/blob/161849364a784442cc659fb9780f1a6adee85fce/python/ray/_private/accelerators/nvidia_gpu.py#L95-L96
@@ -32,6 +31,7 @@ def get_physical_gpu_id():
     device = torch.cuda.current_device()
     props = torch.cuda.get_device_properties(device)
     return str(props.uuid)
+
 
 @ray.remote
 class Lock:
