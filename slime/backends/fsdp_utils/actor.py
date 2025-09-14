@@ -125,62 +125,6 @@ class FSDPTrainRayActor(TrainRayActor):
         self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
         dist.barrier(group=get_gloo_group())
 
-    def _process_packed_sequences_micro_batch(self, packed_tokens, cu_seqlens, micro_batch_size=4):
-        """Process packed sequences in micro-batches to reduce memory usage."""
-        num_sequences = len(cu_seqlens) - 1
-        total_tokens = len(packed_tokens)
-
-        # Pre-allocate output tensor to ensure exact size match
-        # Get vocab size from the model (handling FSDP wrapper)
-        if hasattr(self.model, "_fsdp_wrapped_module"):
-            vocab_size = self.model._fsdp_wrapped_module.config.vocab_size
-        elif hasattr(self.model, "module"):
-            vocab_size = self.model.module.config.vocab_size
-        else:
-            vocab_size = self.model.config.vocab_size
-        all_logits = torch.zeros(total_tokens, vocab_size, dtype=torch.float16, device=packed_tokens.device)
-
-        # Process in micro-batches
-        for mb_start in range(0, num_sequences, micro_batch_size):
-            mb_end = min(mb_start + micro_batch_size, num_sequences)
-
-            # Extract sequences for this micro-batch
-            sequences = []
-            seq_positions = []  # Track where each sequence goes in the output
-            max_len = 0
-
-            for i in range(mb_start, mb_end):
-                start = cu_seqlens[i].item()
-                end = cu_seqlens[i + 1].item()
-                seq = packed_tokens[start:end]
-                sequences.append(seq)
-                seq_positions.append((start, end))
-                max_len = max(max_len, len(seq))
-
-            # Create padded batch
-            batch_size = len(sequences)
-            padded_input_ids = torch.zeros(batch_size, max_len, dtype=packed_tokens.dtype, device=packed_tokens.device)
-            attention_mask = torch.zeros(batch_size, max_len, dtype=torch.long, device=packed_tokens.device)
-
-            for i, seq in enumerate(sequences):
-                seq_len = len(seq)
-                padded_input_ids[i, :seq_len] = seq
-                attention_mask[i, :seq_len] = 1
-
-            # Process this micro-batch
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = self.model(input_ids=padded_input_ids, attention_mask=attention_mask).logits
-
-            # Place logits in the correct positions in the output tensor
-            for i, (start, end) in enumerate(seq_positions):
-                seq_len = end - start
-                all_logits[start:end] = logits[i, :seq_len].float()
-
-            # Clear intermediate tensors to save memory
-            del padded_input_ids, attention_mask, logits
-
-        return all_logits
-
     def compute_log_prob(
         self,
         model_tag,
