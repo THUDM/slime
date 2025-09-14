@@ -133,12 +133,6 @@ class FSDPTrainRayActor(TrainRayActor):
     ):
         with timer(f"{store_prefix}log_probs") and torch.no_grad():
             for batches in padded_batches:
-                # Process packed sequences in micro-batches to save memory
-                # logits = self._process_packed_sequences_micro_batch(
-                #     batch["tokens"],
-                #     batch["cu_seqlens"],
-                #     micro_batch_size=2  # Reduced for lower memory usage
-                # )
                 for batch in batches:
                     logits = self.model(
                         input_ids=batch["tokens"].unsqueeze(0),
@@ -160,13 +154,6 @@ class FSDPTrainRayActor(TrainRayActor):
         for i in range(0, len(tokens), self.args.micro_batch_size):
             batch_tokens = tokens[i : i + self.args.micro_batch_size]
             batch_loss_masks = loss_masks[i : i + self.args.micro_batch_size]
-            # max_len = max(len(t) for t in batch_tokens)
-            # padded_tokens = [t + [self.tokenizer.pad_token_id] * (max_len - len(t)) for t in batch_tokens]
-            # padded_loss_masks = [
-            #     # -1 because its the loss mask for logprob
-            #     [0] * (len(t) - len(l) - 1) + l + [0] * (max_len - len(t))
-            #     for l, t in zip(batch_loss_masks, batch_tokens)
-            # ]
             padded_batches.append(
                 pack_sequences(
                     batch_tokens,
@@ -254,11 +241,6 @@ class FSDPTrainRayActor(TrainRayActor):
             # Process packed sequences in micro-batches to save memory
             for batch in batches:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    # logits = self._process_packed_sequences_micro_batch(
-                    #     batch["tokens"],
-                    #     batch["cu_seqlens"],
-                    #     micro_batch_size=2  # Reduced for lower memory usage
-                    # )
                     logits = self.model(
                         input_ids=batch["tokens"].unsqueeze(0),
                         attention_mask=batch["attention_masks"].unsqueeze(0),
