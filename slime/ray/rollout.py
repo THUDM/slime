@@ -91,11 +91,11 @@ class RolloutManager:
     def _get_rollout_data(self):
         if self.args.load_debug_rollout_data:
             data = torch.load(
-                open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
+                open(self.args.load_debug_rollout_data.format(rollout_id=self.rollout_id), "rb"),
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
         else:
-            data = self.generate_rollout(self.args, rollout_id, self.data_source, evaluation=False)
+            data = self.generate_rollout(self.args, self.rollout_id, self.data_source, evaluation=False)
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
                 data = sum(data, [])
@@ -338,7 +338,6 @@ def _start_router(args):
     # If router ip is specified, use the specified launched router
     print(f"SGLang router launched at {args.sglang_router_ip}:{args.sglang_router_port}")
 
-
 def _log_eval_rollout_data(rollout_id, args, data):
     log_dict = {}
     for key in data.keys():
@@ -358,12 +357,14 @@ def _log_eval_rollout_data(rollout_id, args, data):
         wandb.log(log_dict)
 
 
-def _log_rollout_data(rollout_id, args, data, rollout_time):
+def _log_rollout_data(rollout_id, args, samples, rollout_time):
     if args.load_debug_rollout_data:
         return
 
     log_dict = {}
-    response_lengths = [sum(loss_mask) for loss_mask in data["loss_masks"]]
+    response_lengths = [
+        sum(sample.loss_mask) if sample.loss_mask is not None else sample.response_length for sample in samples
+    ]
     log_dict["perf/rollout_time"] = rollout_time
     if args.rollout_num_gpus is not None:
         log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
