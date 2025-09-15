@@ -134,13 +134,13 @@ class FSDPTrainRayActor(TrainRayActor):
         with timer(f"{store_prefix}log_probs") and torch.no_grad():
             for batches in padded_batches:
                 for batch in batches:
-                    logits = self.model(
-                        input_ids=batch["tokens"].unsqueeze(0),
-                        attention_mask=batch["attention_masks"].unsqueeze(0),
-                        position_ids=batch["position_ids"].unsqueeze(0),
-                    ).logits
-                    if f"{store_prefix}log_probs" not in batch:
-                        batch[f"{store_prefix}log_probs"] = []
+                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                        logits = self.model(
+                            input_ids=batch["tokens"].unsqueeze(0),
+                            attention_mask=batch["attention_masks"].unsqueeze(0),
+                            position_ids=batch["position_ids"].unsqueeze(0),
+                        ).logits
+
                     batch[f"{store_prefix}log_probs"] = gather_log_probs_packed(
                         logits, batch["tokens"], batch["cu_seqlens"]
                     )
@@ -209,7 +209,7 @@ class FSDPTrainRayActor(TrainRayActor):
         # TODO: finish log rollout_data
         log_dict = {}
         for key in ["log_probs", "ref_log_probs", "advantages", "returns", "raw_reward"]:
-            if key not in padded_batches[0]:
+            if key not in padded_batches[0][0]:
                 continue
             val = torch.tensor([0.0], device=torch.cuda.current_device())
             count = 0
@@ -217,7 +217,10 @@ class FSDPTrainRayActor(TrainRayActor):
                 for batch in batches:
                     count += 1
                     if isinstance(batch[key], torch.Tensor):
-                        val += per_sample_mean(batch[key], batch["loss_masks"]).item()
+                        val += per_sample_mean(
+                            batch[key].to(device=torch.cuda.current_device()),
+                            batch["loss_masks"].to(device=torch.cuda.current_device()),
+                        ).item()
                     else:
                         val += sum(batch[key])
             dist.all_reduce(val, op=dist.ReduceOp.SUM)
@@ -254,7 +257,6 @@ class FSDPTrainRayActor(TrainRayActor):
                     raise NotImplementedError("implement GSPO")
 
                 # Ensure device consistency
-                # print(batch["log_probs"].device, log_probs.device)
                 ppo_kl = batch["log_probs"].to(device=log_probs.device) - log_probs
                 # Move advantages to the same device as ppo_kl
                 advantages = batch["advantages"].to(device=ppo_kl.device)
