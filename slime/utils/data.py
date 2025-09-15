@@ -1,6 +1,5 @@
 import json
 import random
-from PIL import Image 
 import numpy as np
 import pandas as pd
 import ray
@@ -47,8 +46,7 @@ class Dataset:
                 prompt_content.append({"type":"text","text":data[prompt_key]})
             if image_key and image_key in data:
                 image_path=data[image_key] 
-                image=Image.open(image_path)
-                prompt_content.append({"type":"image","image":image})   
+                prompt_content.append({"type":"image","image":image_path})   
 
             if apply_chat_template:
                 if tool_key is not None:
