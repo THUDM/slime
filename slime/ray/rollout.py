@@ -106,7 +106,6 @@ class RolloutManager:
                 origin_data_length = len(data)
                 data = data[:trim_len]
                 print(f"trim number of samples from {origin_data_length} to {trim_len}")
-
         return data
 
     def _save_debug_rollout_data(self, data):
