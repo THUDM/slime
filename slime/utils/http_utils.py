@@ -37,10 +37,10 @@ def is_port_available(port):
 def get_host_info():
     hostname = socket.gethostname()
 
-    local_ip = socket.gethostbyname(hostname)
-
-    if SLIME_HOST_IP_ENV in os.environ:
-        local_ip = os.environ[SLIME_HOST_IP_ENV]
+    if env_overwrite_local_ip := os.getenv(SLIME_HOST_IP_ENV, None):
+        local_ip = env_overwrite_local_ip
+    else:
+        local_ip = socket.gethostbyname(hostname)
 
     return hostname, local_ip
 
