@@ -12,7 +12,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 import wandb
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
-from slime.utils.http_utils import find_available_port, get_host_info, run_router
+from slime.utils.http_utils import find_available_port, get_host_info, init_http_client, run_router
 from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
 from slime.utils.types import Sample
@@ -32,6 +32,7 @@ class RolloutManager:
         self.args = args
         _start_router(args)
         init_wandb_secondary(args, wandb_run_id)
+        init_http_client(args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine)
 
         self.data_source = RolloutDataSourceWithBuffer(args)
 
