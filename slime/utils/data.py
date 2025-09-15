@@ -1,5 +1,6 @@
 import json
 import random
+from PIL import Image 
 import numpy as np
 import pandas as pd
 import ray
@@ -32,6 +33,7 @@ class Dataset:
         max_length,
         *,
         prompt_key="text",
+        image_key=None,
         label_key=None,
         tool_key=None,
         metadata_key="metadata",
@@ -40,7 +42,14 @@ class Dataset:
     ):
         self.origin_samples = []
         for data in read_file(path):
-            prompt = data[prompt_key]
+            prompt_content = []
+            if prompt_key in data:
+                prompt_content.append({"type":"text","text":data[prompt_key]})
+            if image_key and image_key in data:
+                image_path=data[image_key] 
+                image=Image.open(image_path)
+                prompt_content.append({"type":"image","image":image})   
+
             if apply_chat_template:
                 if tool_key is not None:
                     tools = data[tool_key]
@@ -51,12 +60,15 @@ class Dataset:
                     assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
                 else:
                     tools = None
-                prompt = tokenizer.apply_chat_template(prompt, tools, tokenize=False, add_generation_prompt=True)
+                prompt = tokenizer.apply_chat_template(prompt_content, tools, tokenize=False, add_generation_prompt=True)
+            else:
+                prompt=prompt_content
 
             # TODO: this is slow.
             if max_length is not None:
-                if len(tokenizer(prompt)["input_ids"]) > max_length:
-                    continue
+                if not image_key in data:
+                    if len(tokenizer(data[prompt_key])["input_ids"]) > max_length:
+                        continue
 
             self.origin_samples.append(
                 Sample(

@@ -348,6 +348,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--apply-chat-template", action="store_true", default=False)
             parser.add_argument("--input-key", type=str, default="input", help="JSON dataset key")
             parser.add_argument("--label-key", type=str, default=None, help="JSON dataset key")
+            parser.add_argument("--image_key", type=str, default=None, help="Key for the image file path in the data")
             parser.add_argument("--metadata-key", type=str, default="metadata", help="JSON dataset key")
             parser.add_argument(
                 "--tool-key",

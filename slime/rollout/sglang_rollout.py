@@ -82,6 +82,10 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     if sampling_params["max_new_tokens"] == 0:
         sample.status = Sample.Status.TRUNCATED
         return sample
+    payload={
+        "sampling_parameters":sampling_params,
+        "return_logprob":True,
+    }
 
     # Token-based mode: use tokens directly
     if len(sample.response) > 0:
@@ -343,6 +347,7 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
             tokenizer=tokenizer,
             max_length=args.rollout_max_prompt_len,
             prompt_key=args.input_key if args.eval_input_key is None else args.eval_input_key,
+            image_key=args.image_key,
             label_key=args.label_key if args.eval_label_key is None else args.eval_label_key,
             metadata_key=args.metadata_key,
             tool_key=args.tool_key if args.eval_tool_key is None else args.eval_tool_key,
@@ -388,7 +393,7 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
     for coro in asyncio.as_completed(tasks):
         sample = await coro
         if do_print:
-            print([sample.prompt + sample.response], sample.reward, flush=True)
+            print(f"Prompt: {str(sample.prompt)}, Response: {sample.response}, Reward: {sample.reward}", flush=True)
             do_print = False
         if isinstance(sample, list):
             data.extend(sample)

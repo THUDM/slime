@@ -182,6 +182,11 @@ class MegatronTrainRayActor(TrainRayActor):
         rollout_data["loss_masks"] = [
             torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
         ]
+        if "pixel_values" in rollout_data and rollout_data["pixel_values"] is not None:
+            rollout_data["pixel_values"]=[
+                torch.tensor(pv,dtype=torch.bfloat16, device=torch.cuda.current_device()) if pv is not None else None
+                for pv in rollout_data["pixel_values"]
+            ]
         if "rollout_log_probs" in rollout_data:
             rollout_data["rollout_log_probs"] = [
                 torch.tensor(
@@ -205,12 +210,14 @@ class MegatronTrainRayActor(TrainRayActor):
         self.update_gpu_params_dict(self.weights[model_tag])
 
         with timer(f"{store_prefix}log_probs"):
+            forward_keys = ["tokens", "pixel_values"] if self.args.image_key else ["tokens"]
             return forward_only(
                 self.args,
                 self.model,
                 data_iterator,
                 num_microbatches,
                 store_prefix=store_prefix,
+                forward_keys=forward_keys,
             )
 
     def train(self, rollout_id, rollout_data_ref):
@@ -271,6 +278,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
             # Train
             with timer("actor_train"):
+                forward_keys = ["tokens", "pixel_values"] if self.args.image_key else ["tokens"]
                 train(
                     rollout_id,
                     self.model,
@@ -278,6 +286,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     self.opt_param_scheduler,
                     data_iterator,
                     num_microbatches,
+                    forward_keys=forward_keys
                 )
 
             # Profiling.

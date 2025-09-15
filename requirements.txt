@@ -1,4 +1,5 @@
 accelerate
+pillow
 datasets
 httpx[http2]
 mcp[cli]
