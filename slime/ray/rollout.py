@@ -62,7 +62,6 @@ class RolloutManager:
 
     def generate(self, rollout_id):
         self.rollout_id = rollout_id
-
         start_time = time.time()
         data = self._get_rollout_data()
         self._save_debug_rollout_data(data)
