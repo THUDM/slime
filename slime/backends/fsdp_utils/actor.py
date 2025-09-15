@@ -362,16 +362,6 @@ def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Ten
     return log_probs
 
 
-def adjust_loss_masks_for_packed(loss_masks: torch.Tensor, cu_seqlens: torch.Tensor) -> torch.Tensor:
-    """Adjust loss masks to match log_probs dimensions (N-1 for next-token prediction)."""
-    # Create mask to exclude first token of each sequence
-    mask = torch.ones(len(loss_masks), dtype=torch.bool, device=loss_masks.device)
-    mask[cu_seqlens[:-1]] = False  # Exclude first token of each sequence
-
-    # Return loss_masks without first tokens (matching log_probs dimensions)
-    return loss_masks[mask]
-
-
 def gather_log_probs_packed(logits: torch.Tensor, input_ids: torch.Tensor, cu_seqlens: torch.Tensor) -> torch.Tensor:
     """Gather log probabilities for packed sequences."""
     # Handle batch dimension - logits should be [batch_size, seq_len, vocab_size]
