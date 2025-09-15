@@ -1,5 +1,6 @@
 import pytest
 
+
 def test_fsdp_import():
     try:
         from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
