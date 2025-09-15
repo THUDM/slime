@@ -34,8 +34,6 @@ def _map_common_configs(hf_config: PretrainedConfig) -> MegatronModelConfig:
             "num_attention_heads": hf_config.num_attention_heads,
             "num_query_groups": hf_config.num_key_value_heads,
             "ffn_hidden_size": hf_config.intermediate_size,
-            "attention_dropout": hf_config.attention_dropout,
-            "hidden_dropout": getattr(hf_config, "hidden_dropout", 0.0),
             "kv_channels": getattr(hf_config, "head_dim", None),
             "layernorm_epsilon": hf_config.rms_norm_eps,
             # Activation and normalization
@@ -45,9 +43,8 @@ def _map_common_configs(hf_config: PretrainedConfig) -> MegatronModelConfig:
         },
         gpt_model_args={
             "vocab_size": hf_config.vocab_size,
-            "max_sequence_length": hf_config.max_position_embeddings,
             "rotary_base": hf_config.rope_theta,
-            "position_embedding_type": "rope" if "rope_scaling" in hf_config or "rope_theta" in hf_config else "none",
+            "position_embedding_type": "rope",
             "untie_embeddings_and_output_weights": not hf_config.tie_word_embeddings,
         },
     )

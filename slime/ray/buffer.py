@@ -8,6 +8,7 @@ import torch
 
 import wandb
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
+from slime.utils.http_utils import init_http_client
 from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
 from slime.utils.types import Sample
@@ -24,6 +25,7 @@ class RolloutController:
     def __init__(self, args, wandb_run_id):
         self.args = args
         init_wandb_secondary(args, wandb_run_id)
+        init_http_client(args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine)
 
         self.data_source = RolloutDataSourceWithBuffer(args)
 

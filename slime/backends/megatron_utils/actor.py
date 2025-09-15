@@ -311,14 +311,11 @@ class MegatronTrainRayActor(TrainRayActor):
         log_perf_data(rollout_id, self.args)
         Timer().start("train_wait")
 
-    def save_model(self, iteration, with_optimizer=True):
+    def save_model(self, iteration):
         if self.args.debug_rollout_only:
             return
 
-        if with_optimizer:
-            save(iteration, self.model, self.optimizer, self.opt_param_scheduler)
-        else:
-            save(iteration, self.model, None, None)
+        save(iteration, self.model, self.optimizer, self.opt_param_scheduler)
 
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines

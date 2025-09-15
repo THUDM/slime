@@ -101,7 +101,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         "return_logprob": True,
     }
 
-    output = await post(url, payload, use_http2=args.use_http2)
+    output = await post(url, payload)
 
     # Extract new response tokens
     if "output_token_logprobs" in output["meta_info"]:
@@ -205,14 +205,12 @@ async def abort(args, rollout_id: int):
     state = GenerateState(args)
     assert not state.aborted
     state.aborted = True
-    response = await get(
-        f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers", use_http2=args.use_http2
-    )
+    response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers")
 
     # abort all the requests
     for url in response["urls"]:
         print(f"Abort request for {url}", flush=True)
-        await post(f"{url}/abort_request", {"abort_all": True}, use_http2=False)
+        await post(f"{url}/abort_request", {"abort_all": True})
 
     # make sure all the pending tasks are finished
     count = 0
