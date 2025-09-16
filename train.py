@@ -1,7 +1,7 @@
 import ray
 from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
-from slime.ray.placement_group import create_actor_group, create_placement_groups, create_rollout_manager
+from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_group
 from slime.utils.arguments import parse_args
 from slime.utils.wandb_utils import init_wandb_primary
 
@@ -11,7 +11,9 @@ def train(args):
     pgs = create_placement_groups(args)
     wandb_run_id = init_wandb_primary(args)
 
-    actor_model = create_actor_group(args, pgs["actor"], wandb_run_id=wandb_run_id)
+    actor_model = create_training_group(args, pgs["actor"], wandb_run_id=wandb_run_id)
+    if args.use_critic:
+        critic_model = create_training_group(args, pgs["critic"], wandb_run_id=wandb_run_id)
 
     # create the rollout manager, with sglang engines inside.
     rollout_manager = create_rollout_manager(args, pgs["rollout"], wandb_run_id=wandb_run_id)
@@ -24,9 +26,13 @@ def train(args):
     assert args.num_rollout > 0
 
     # sync the initialization (model initalization, load checkpoint, etc.)
+    if args.use_critic:
+        ray.get(critic_model.async_init(args, role="critic", with_ref=False))
+
     start_rollout_ids = ray.get(
         actor_model.async_init(args, role="actor", with_ref=args.kl_coef != 0 or args.use_kl_loss)
     )
+
     assert len(set(start_rollout_ids)) == 1
     if args.start_rollout_id is None:
         args.start_rollout_id = start_rollout_ids[0]
@@ -58,7 +64,13 @@ def train(args):
         if args.offload:
             ray.get(rollout_manager.offload.remote())
 
+        if args.use_critic:
+            critic_train_handle = critic_model.async_train(rollout_id, rollout_data_ref)
+
         ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
+
+        if args.use_critic:
+            ray.get(critic_train_handle)
 
         if args.save_interval is not None and (
             (rollout_id + 1) % args.save_interval == 0
@@ -70,6 +82,9 @@ def train(args):
 
         if args.offload:
             ray.get(actor_model.async_offload())
+            if args.use_critic:
+                ray.get(critic_model.async_offload())
+
             ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
 
         ray.get(actor_model.async_update_weights())

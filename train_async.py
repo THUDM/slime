@@ -1,6 +1,6 @@
 import ray
 
-from slime.ray.placement_group import create_actor_group, create_placement_groups, create_rollout_manager
+from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_group
 from slime.utils.arguments import parse_args
 from slime.utils.wandb_utils import init_wandb_primary
 
@@ -11,7 +11,9 @@ def train(args):
     pgs = create_placement_groups(args)
     wandb_run_id = init_wandb_primary(args)
 
-    actor_model = create_actor_group(args, pgs["actor"], wandb_run_id=wandb_run_id)
+    actor_model = create_training_group(args, pgs["actor"], wandb_run_id=wandb_run_id)
+    if args.use_critic:
+        critic_model = create_training_group(args, pgs["critic"], wandb_run_id=wandb_run_id)
 
     # create the rollout manager, with sglang engines inside.
     rollout_manager = create_rollout_manager(args, pgs["rollout"], wandb_run_id=wandb_run_id)

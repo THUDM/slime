@@ -4,6 +4,7 @@ from contextlib import nullcontext
 from typing import Optional
 
 import torch
+from megatron.core import tensor_parallel
 from megatron.core.models.gpt import GPTModel
 from megatron.core.models.gpt.gpt_layer_specs import (
     get_gpt_decoder_block_spec,
@@ -14,7 +15,35 @@ from megatron.core.transformer.spec_utils import import_module
 from megatron.training.arguments import core_transformer_config_from_args
 
 
-def get_model_provider_func(args):
+# Adapt from https://github.com/volcengine/verl/blob/c3b20575d2bc815fcccd84bddb4c0401fc4b632b/verl/models/llama/megatron/layers/parallel_linear.py#L82
+class LinearForLastLayer(torch.nn.Linear):
+    def __init__(
+        self,
+        input_size,
+        output_size,
+        *,
+        config,
+        bias=True,
+    ):
+        super().__init__(in_features=input_size, out_features=output_size, bias=bias)
+        self.sequence_parallel = config.sequence_parallel
+        if self.sequence_parallel:
+            self.weight.sequence_parallel = True
+
+    def forward(
+        self,
+        input_,
+        weight=None,
+        runtime_gather_output=None,
+    ):
+        logits = super().forward(input_)
+        logits = logits.float()
+        if self.sequence_parallel:
+            logits = tensor_parallel.gather_from_sequence_parallel_region(logits, tensor_parallel_output_grad=False)
+        return logits, None
+
+
+def get_model_provider_func(args, role: str = "actor"):
     def model_provider(pre_process=True, post_process=True, vp_stage: Optional[int] = None) -> GPTModel:
         """Builds the model.
 
@@ -139,6 +168,9 @@ def get_model_provider_func(args):
 
         with build_model_context(**build_model_context_args):
             model = GPTModel(**kwargs)
+
+        if post_process and role == "critic":
+            model.output_layer = LinearForLastLayer(input_size=config.hidden_size, output_size=1, config=config)
 
         return model
 

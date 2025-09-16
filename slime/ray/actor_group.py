@@ -1,5 +1,5 @@
 import os
-from typing import Dict, Optional
+from typing import Optional
 
 import ray
 import torch
@@ -37,17 +37,11 @@ class RayTrainGroup:
         pg: tuple[PlacementGroup, list[int]],
         wandb_run_id: Optional[str] = None,
         num_gpus_per_actor: float = 1,
-        resources: Optional[Dict[str, float] | None] = None,
-        num_resources_per_node: Optional[int | None] = None,
     ) -> None:
         self.args = args
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self._wandb_run_id = wandb_run_id
-
-        # custom resources, see https://docs.ray.io/en/latest/ray-core/scheduling/resources.html
-        self._resources = resources
-        self._num_resources_per_node = num_resources_per_node
 
         # Allocate the GPUs for actors w/o instantiating them
         self._allocate_gpus_for_actor(pg, num_gpus_per_actor, wandb_run_id=wandb_run_id)
@@ -94,10 +88,7 @@ class RayTrainGroup:
 
             actor_impl = FSDPTrainRayActor
 
-        TrainRayActor = ray.remote(
-            num_gpus=1,
-            runtime_env={"env_vars": env_vars},
-        )(actor_impl)
+        TrainRayActor = ray.remote(num_gpus=1, runtime_env={"env_vars": env_vars})(actor_impl)
 
         # Create worker actors
         self._actor_handlers = []
@@ -106,7 +97,6 @@ class RayTrainGroup:
             actor = TrainRayActor.options(
                 num_cpus=num_gpus_per_actor,
                 num_gpus=num_gpus_per_actor,
-                resources=self._resources,
                 scheduling_strategy=PlacementGroupSchedulingStrategy(
                     placement_group=pg,
                     placement_group_bundle_index=reordered_bundle_indices[rank],

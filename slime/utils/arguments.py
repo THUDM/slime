@@ -31,6 +31,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--actor-num-gpus-per-node", type=int, default=8, help="Number of gpus per node for training actor"
             )
+            parser.add_argument(
+                "--critic-num-nodes", type=int, default=None, help="Number of nodes for training actor"
+            )
+            parser.add_argument(
+                "--critic-num-gpus-per-node", type=int, default=None, help="Number of gpus per node for training actor"
+            )
 
             parser.add_argument(
                 "--rollout-num-gpus",
@@ -504,6 +510,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             reset_arg(parser, "--clip-grad", type=float, default=1.0)
             reset_arg(parser, "--calculate-per-token-loss", action="store_true")
 
+            parser.add_argument("--critic-load", type=str, default=None, help="The checkpoint for critic model.")
+            parser.add_argument("--critic-save", type=str, default=None, help="The checkpoint for critic model.")
+
             parser.add_argument("--eps-clip", type=float, default=0.2, help="PPO clip range")
             parser.add_argument("--eps-clip-high", type=float, default=None, help="PPO clip upper range")
             parser.add_argument(
@@ -512,6 +521,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help="lower bound of the value for Dual-clip PPO from https://arxiv.org/pdf/1912.09729",
             )
+            parser.add_argument("--value-clip", type=float, default=0.2, help="the clip for value loss")
             parser.add_argument(
                 "--kl-coef",
                 type=float,
@@ -547,7 +557,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--advantage-estimator",
                 type=str,
-                choices=["grpo", "gspo", "reinforce_plus_plus", "reinforce_plus_plus_baseline"],
+                choices=["grpo", "gspo", "reinforce_plus_plus", "reinforce_plus_plus_baseline", "ppo"],
                 default="grpo",
             )
             parser.add_argument(
@@ -570,7 +580,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="KL penalty coefficient for the loss function. This is added to the final PPO loss.",
             )
             parser.add_argument("--entropy-coef", type=float, default=0.0, help="Entropy loss coef")
-            parser.add_argument("--gamma", type=float, default=1.0, help="Discount factor for rewards in REINFORCE++.")
+            parser.add_argument("--gamma", type=float, default=1.0, help="PPO GAE gamma")
+            parser.add_argument("--lambd", type=float, default=1.0, help="PPO GAE lambd")
             parser.add_argument("--normalize-advantages", action="store_true", default=False)
             parser.add_argument(
                 "--disable-grpo-std-normalization",
@@ -964,6 +975,9 @@ def slime_validate_args(args):
             args.ckpt_step = args.ref_ckpt_step
         args.start_rollout_id = 0
 
+    if args.critic_load is None:
+        args.critic_load = args.load
+
     if args.eval_interval is not None:
         assert args.eval_prompt_data is not None, "eval_prompt_data must be set when eval_interval is set"
         if len(args.eval_prompt_data) == 1:
@@ -1003,6 +1017,12 @@ def slime_validate_args(args):
             "will not instantiate sglang servers and will only run the rollout generation."
         )
         args.debug_train_only = True
+
+    args.use_critic = args.advantage_estimator == "ppo"
+    if args.critic_num_gpus_per_node is None:
+        args.critic_num_gpus_per_node = args.actor_num_gpus_per_node
+    if args.critic_num_nodes is None:
+        args.critic_num_nodes = args.actor_num_nodes
 
     if args.debug_rollout_only:
         if args.colocate and args.rollout_num_gpus is None:

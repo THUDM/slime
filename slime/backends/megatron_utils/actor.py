@@ -23,7 +23,7 @@ from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp
 from .data import get_data_iterator, log_perf_data, log_rollout_data
 from .initialize import init, is_megatron_main_rank
-from .loss import compute_advantages_and_returns
+from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor, named_parameters
 
@@ -48,9 +48,19 @@ class MegatronTrainRayActor(TrainRayActor):
             Timer().start("train_wait")
             return 0
 
+        if role == "critic":
+            self.args.load = self.args.critic_load
+            self.args.save = self.args.critic_save
+
         (self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id) = initialize_model_and_optimizer(
-            args
+            args, role
         )
+
+        if role == "critic":
+            if self.args.offload:
+                self.sleep(("model"))
+            return
+
         start_rollout_id = loaded_rollout_id + 1
         self.weights = {"actor": {}}
         self.update_cpu_params_dict(self.weights["actor"])
@@ -206,6 +216,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         with timer(f"{store_prefix}log_probs"):
             return forward_only(
+                get_log_probs_and_entropy,
                 self.args,
                 self.model,
                 data_iterator,
@@ -219,21 +230,49 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.offload:
             self.wake_up(("model"))
 
-        if self.args.debug_rollout_only:
-            # For debug rollout, we just log the data and return.
+        with timer("data_preprocess"):
             rollout_data = self._get_rollout_data(rollout_data_ref)
-            log_rollout_data(rollout_id, self.args, rollout_data)
-            log_perf_data(rollout_id, self.args)
-            Timer().start("train_wait")
-            return
+            if self.args.debug_rollout_only:
+                log_rollout_data(rollout_id, self.args, rollout_data)
+                Timer().start("train_wait")
+                return
+
+        if self.role == "critic":
+            return self.train_critic(rollout_id, rollout_data)
+        else:
+            return self.train_actor(rollout_id, rollout_data)
+
+    def train_critic(self, rollout_id, rollout_data):
+        # Create data iterator for log_probs and train.
+        data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
+
+        rollout_data.update(
+            forward_only(
+                get_values,
+                self.args,
+                self.model,
+                data_iterator,
+                num_microbatches,
+            )
+        )
+
+        compute_advantages_and_returns(self.args, rollout_data)
+
+        self.args.loss_type = "value_loss"
+        train(
+            rollout_id,
+            self.model,
+            self.optimizer,
+            self.opt_param_scheduler,
+            data_iterator,
+            num_microbatches,
+        )
+
+    def train_actor(self, rollout_id, rollout_data):
+        # Create data iterator for log_probs and train.
+        data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
 
         with timer("train"):
-            with timer("data_preprocess"):
-                rollout_data = self._get_rollout_data(rollout_data_ref)
-
-                # Create data iterator for log_probs and train.
-                data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
-
             if self.args.compute_advantages_and_returns:
                 if "ref" in self.weights:
                     rollout_data.update(
