@@ -32,7 +32,7 @@ class Dataset:
         max_length,
         *,
         prompt_key="text",
-        image_key=None,
+        multimodal_keys=None,
         label_key=None,
         tool_key=None,
         metadata_key="metadata",
@@ -44,9 +44,11 @@ class Dataset:
             prompt_content = []
             if prompt_key in data:
                 prompt_content.append({"type":"text","text":data[prompt_key]})
-            if image_key and image_key in data:
-                image_path=data[image_key] 
-                prompt_content.append({"type":"image","image":image_path})   
+            if multimodal_keys:
+                for media_type, data_key in multimodal_keys.items():
+                    if data_key in data:
+                        media_path = data[data_key]
+                        prompt_content.append({"type": media_type, "path": media_path}) 
 
             if apply_chat_template:
                 if tool_key is not None:
@@ -64,7 +66,7 @@ class Dataset:
 
             # TODO: this is slow.
             if max_length is not None:
-                if not image_key in data:
+                if not multimodal_keys:
                     if len(tokenizer(data[prompt_key])["input_ids"]) > max_length:
                         continue
 
@@ -126,6 +128,9 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
     # save the unprocessed reward for logging
     rollout_data["raw_reward"] = data["raw_reward"]
 
+    if "prompt" in data:
+        rollout_data["prompt"]=data["prompt"]
+
     total_lengths = [len(t) for t in data["tokens"]]
     data["total_lengths"] = total_lengths
 
@@ -174,6 +179,7 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         "round_number",
         "sample_indices",
         "rollout_log_probs",
+        "prompt"
     ]:
         if key not in data:
             continue

@@ -1,6 +1,6 @@
 from contextlib import nullcontext
 from pathlib import Path
-from PIL import Image
+
 import torch
 import torch.distributed as dist
 
@@ -10,7 +10,7 @@ else:
     from torch_memory_saver import torch_memory_saver
 
 from megatron.core import mpu
-from transformers import AutoConfig, AutoTokenizer, AutoProcessor
+from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
@@ -43,8 +43,6 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
                 self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
-        if self.args.image_key:
-            self.vlm_processor = AutoProcessor.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
 
         if self.args.debug_rollout_only:
             Timer().start("train_wait")
@@ -184,19 +182,6 @@ class MegatronTrainRayActor(TrainRayActor):
         rollout_data["loss_masks"] = [
             torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
         ]
-        if self.args.image_key and "image_paths" in rollout_data:
-            pixel_values_list = []
-            for path in rollout_data["image_paths"]:
-                if path:
-                    image=Image.open(path).convert("RGB")
-                    inputs=self.vlm_processor(images=image, return_tensors="pt")
-                    pixel_values=inputs.pixel_values.to(
-                        device=torch.cuda.current_device(), dtype=torch.bfloat16
-                    )
-                    pixel_values_list.append(pixel_values)
-                else:
-                    pixel_values_list.append(None)
-            rollout_data["pixel_values"] = pixel_values_list     
         if "rollout_log_probs" in rollout_data:
             rollout_data["rollout_log_probs"] = [
                 torch.tensor(
@@ -220,14 +205,12 @@ class MegatronTrainRayActor(TrainRayActor):
         self.update_gpu_params_dict(self.weights[model_tag])
 
         with timer(f"{store_prefix}log_probs"):
-            forward_keys = ["tokens", "pixel_values"] if self.args.image_key else ["tokens"]
             return forward_only(
                 self.args,
                 self.model,
                 data_iterator,
                 num_microbatches,
                 store_prefix=store_prefix,
-                forward_keys=forward_keys,
             )
 
     def train(self, rollout_id, rollout_data_ref):
@@ -288,7 +271,6 @@ class MegatronTrainRayActor(TrainRayActor):
 
             # Train
             with timer("actor_train"):
-                forward_keys = ["tokens", "pixel_values"] if self.args.image_key else ["tokens"]
                 train(
                     rollout_id,
                     self.model,
@@ -296,7 +278,6 @@ class MegatronTrainRayActor(TrainRayActor):
                     self.opt_param_scheduler,
                     data_iterator,
                     num_microbatches,
-                    forward_keys=forward_keys
                 )
 
             # Profiling.

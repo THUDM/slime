@@ -20,12 +20,7 @@ from .cp_utils import get_sum_of_sample_mean, slice_with_cp
 def get_batch(data_iterator, keys):
     """Generate a batch."""
 
-    if "pixel_values" in keys:
-        required_keys=["tokens","pixel_values"]
-    else:
-        required_keys=["tokens"]
-
-    assert all(key in required_keys for key in keys), "A required key is missing from the request"
+    assert "tokens" in keys
     batch = data_iterator.get_next(keys)
 
     packed_seq_params = None
@@ -67,12 +62,6 @@ def get_batch(data_iterator, keys):
     tokens = tokens.unsqueeze(0)
     batch["tokens"] = tokens
     batch["packed_seq_params"] = packed_seq_params
-    if "pixel_values" in batch and batch["pixel_values"] is not None:
-        pixel_values_list=[pv for pv in batch["pixel_values"] if pv is not None]
-        if pixel_values_list:
-            batch["pixel_values"]=torch.cat(pixel_values_list,dim=0)
-        else:
-            pixel_values_list=None
     return batch
 
 
@@ -244,7 +233,7 @@ def log_rollout_data(rollout_id, args, rollout_data):
         total_lengths = rollout_data["total_lengths"]
 
         for key, val in rollout_data.items():
-            if key in ["tokens", "loss_masks", "sample_indices", "pixel_values"]:
+            if key == "tokens" or key == "loss_masks" or key == "sample_indices":
                 continue
             # Upload per sample mean for each rollout value
             # There are the following assumptions:

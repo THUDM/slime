@@ -2,10 +2,11 @@ from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
+from PIL import Image
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import ShardingStrategy
 from torch_memory_saver import torch_memory_saver
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, AutoProcessor
 
 import wandb
 from slime.ray.train_actor import TrainRayActor
@@ -41,6 +42,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 self.hf_config = AutoConfig.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
                 self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
+
+        if self.args.multimodal_keys:
+            self.vlm_processor=AutoProcessor.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)    
 
         # Load model
         with torch.device(f"cuda:{torch.cuda.current_device()}"):
@@ -130,18 +134,23 @@ class FSDPTrainRayActor(TrainRayActor):
         with timer(f"{store_prefix}log_probs") and torch.no_grad():
             for batch in padded_batches:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    logits = self.model(input_ids=batch["tokens"]).logits
+                    model_args = {"input_ids": batch["tokens"]}
+                    if "pixel_values" in batch:
+                        model_args["pixel_values"] = batch["pixel_values"]
+                    logits = self.model(**model_args).logits
                 batch[f"{store_prefix}log_probs"] = gather_log_probs(logits, batch["tokens"])
         return rollout_data
 
     def pad_and_move_to_device(self, rollout_data):
         tokens = rollout_data["tokens"]
         loss_masks = rollout_data["loss_masks"]
+        prompts = rollout_data.get("prompt", [[] for _ in range(len(tokens))])
 
         padded_batches = []
         for i in range(0, len(tokens), self.args.micro_batch_size):
             batch_tokens = tokens[i : i + self.args.micro_batch_size]
             batch_loss_masks = loss_masks[i : i + self.args.micro_batch_size]
+            batch_prompts = prompts[i : i + self.args.micro_batch_size]
             max_len = max(len(t) for t in batch_tokens)
             padded_tokens = [t + [self.tokenizer.pad_token_id] * (max_len - len(t)) for t in batch_tokens]
             padded_loss_masks = [
@@ -149,18 +158,40 @@ class FSDPTrainRayActor(TrainRayActor):
                 [0] * (len(t) - len(l) - 1) + l + [0] * (max_len - len(t))
                 for l, t in zip(batch_loss_masks, batch_tokens)
             ]
-            padded_batches.append(
-                {
-                    "tokens": torch.tensor(padded_tokens, dtype=torch.long, device=torch.cuda.current_device()),
-                    "loss_masks": torch.tensor(padded_loss_masks, dtype=torch.int, device=torch.cuda.current_device()),
-                    "rewards": torch.tensor(
-                        rollout_data["rewards"][i : i + self.args.micro_batch_size],
-                        dtype=torch.float,
-                        device=torch.cuda.current_device(),
-                    ),
-                    "raw_reward": rollout_data["raw_reward"][i : i + self.args.micro_batch_size],
-                }
-            )
+            batch = {
+                "tokens": torch.tensor(padded_tokens, dtype=torch.long, device=torch.cuda.current_device()),
+                "loss_masks": torch.tensor(padded_loss_masks, dtype=torch.int, device=torch.cuda.current_device()),
+                "rewards": torch.tensor(
+                    rollout_data["rewards"][i : i + self.args.micro_batch_size],
+                    dtype=torch.float,
+                    device=torch.cuda.current_device(),
+                ),
+                "raw_reward": rollout_data["raw_reward"][i : i + self.args.micro_batch_size],
+            }
+
+            if self.args.multimodal_keys:
+                processed_media = {}
+                for sample_prompt in batch_prompts:
+                    for media_part in sample_prompt:
+                        media_type = media_part.get("type")
+
+                        if media_type == "image":
+                            path = media_part.get("path")
+                            if path:
+                                if "pixel_values" not in processed_media:
+                                    processed_media["pixel_values"] = []
+                                image = Image.open(path).convert("RGB")
+                                inputs = self.vlm_processor(images=image, return_tensors="pt")
+                                processed_media["pixel_values"].append(inputs.pixel_values)
+
+                # Stack and move all processed media to the GPU for the batch
+                for key, tensor_list in processed_media.items():
+                    if tensor_list:
+                        batch[key] = torch.cat(tensor_list).to(
+                            device=torch.cuda.current_device(), dtype=torch.bfloat16
+                        )
+
+            padded_batches.append(batch)
         return padded_batches
 
     def train(self, rollout_id, rollout_data_ref):  # type: ignore[override]

@@ -184,16 +184,13 @@ def forward_only(args, model, data_iterator, num_microbatches, store_prefix=""):
         packed_seq_params = batch["packed_seq_params"]
         total_lengths = batch["total_lengths"]
         response_lengths = batch["response_lengths"]
-        model_args={
-            "input_ids": tokens,
-            "position_ids": None,
-            "attention_mask": None,
-            "labels": None,
-            "packed_seq_params": packed_seq_params,
-        }
-        if "pixel_values" in batch and batch["pixel_values"] is not None:
-            model_args["pixel_values"]=batch["pixel_values"]
-        output_tensor=model(**model_args)
+        output_tensor = model(
+            input_ids=tokens,
+            position_ids=None,
+            attention_mask=None,
+            labels=None,
+            packed_seq_params=packed_seq_params,
+        )
 
         return output_tensor, partial(
             get_log_probs_and_entropy,
@@ -298,17 +295,13 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
             ],
         )
 
-        model_args = {
-            "input_ids": batch["tokens"],
-            "position_ids": None,
-            "attention_mask": None,
-            "labels": None,
-            "packed_seq_params": batch["packed_seq_params"],
-        }
-        if "pixel_values" in batch and batch["pixel_values"] is not None:
-            model_args["pixel_values"] = batch["pixel_values"]
-
-        output_tensor = model(**model_args)
+        output_tensor = model(
+            input_ids=batch["tokens"],
+            position_ids=None,
+            attention_mask=None,
+            labels=None,
+            packed_seq_params=batch["packed_seq_params"],
+        )
 
         return output_tensor, partial(loss_function, args, batch, num_microbatches)
 
