@@ -37,10 +37,6 @@ def pack_sequences(
 
     for i, t in enumerate(tokens):
         loss_masks[i] = [0] * (len(t) - len(loss_masks[i])) + loss_masks[i]
-    # Truncate sequences if needed
-    if max_seq_len:
-        tokens = [t[:max_seq_len] for t in tokens]
-        loss_masks = [m[:max_seq_len] for m in loss_masks]
 
     seq_lengths = [len(t) for t in tokens]
 
