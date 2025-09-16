@@ -1,12 +1,11 @@
-from typing import Dict, Optional
 import os
+from typing import Dict, Optional
+
 import ray
 import torch
-
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-from slime.backends.megatron_utils import MegatronTrainRayActor
 from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
 
 
@@ -37,9 +36,9 @@ class RayTrainGroup:
         num_gpus_per_node,
         pg: tuple[PlacementGroup, list[int]],
         wandb_run_id: Optional[str] = None,
-        num_gpus_per_actor=1,
-        resources: Dict[str, float] = None,
-        num_resources_per_node: int = None,
+        num_gpus_per_actor: float = 1,
+        resources: Optional[Dict[str, float] | None] = None,
+        num_resources_per_node: Optional[int | None] = None,
     ) -> None:
         self.args = args
         self._num_nodes = num_nodes
@@ -80,10 +79,25 @@ class RayTrainGroup:
             env_vars["TMS_INIT_ENABLE"] = "1"
             env_vars["TMS_INIT_ENABLE_CPU_BACKUP"] = "1"
 
+        backend = os.environ.get("SLIME_BACKEND", "megatron").lower()
+        if backend == "megatron":
+            from slime.backends.megatron_utils import MegatronTrainRayActor
+
+            actor_impl = MegatronTrainRayActor
+
+        elif backend == "xtuner":
+            from slime.backends.xtuner_utils.actor import XTunerTrainRayActor
+
+            actor_impl = XTunerTrainRayActor
+        else:
+            from slime.backends.fsdp_utils import FSDPTrainRayActor
+
+            actor_impl = FSDPTrainRayActor
+
         TrainRayActor = ray.remote(
             num_gpus=1,
             runtime_env={"env_vars": env_vars},
-        )(MegatronTrainRayActor)
+        )(actor_impl)
 
         # Create worker actors
         self._actor_handlers = []
@@ -115,16 +129,11 @@ class RayTrainGroup:
         to update weights after each training stage.
         """
         self.rollout = rollout
+        rollout_engines, rollout_engine_lock = ray.get(rollout.get_rollout_engines_and_lock.remote())
         return [
-            actor.connect_rollout_engines.remote(
-                rollout.rollout_engines,
-                rollout.rollout_engine_lock,
-            )
+            actor.connect_rollout_engines.remote(rollout_engines, rollout_engine_lock)
             for actor in self._actor_handlers
         ]
-
-    def get_rollout_data(self, rollout_id):
-        ray.get([actor.get_rollout_data.remote(rollout_id) for actor in self._actor_handlers])
 
     def async_train(self, rollout_id, rollout_data_ref):
         """Do one rollout training"""

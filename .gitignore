@@ -189,3 +189,5 @@ local/
 *.iml
 
 glm/
+_examples_synced/
+.env

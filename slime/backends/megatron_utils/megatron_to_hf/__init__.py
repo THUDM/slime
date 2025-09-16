@@ -1,5 +1,8 @@
 import re
+
 import torch
+
+from slime.utils.fp8_kernel import blockwise_cast_to_fp8_triton
 
 from .deepseekv3 import convert_deepseekv3_to_hf
 from .glm4 import convert_glm4_to_hf
@@ -8,8 +11,6 @@ from .llama import convert_llama_to_hf
 from .mimo import convert_mimo_to_hf
 from .qwen2 import convert_qwen2_to_hf
 from .qwen3moe import convert_qwen3moe_to_hf
-
-from slime.utils.fp8_kernel import blockwise_cast_to_fp8_triton
 
 
 def ceildiv(a, b):

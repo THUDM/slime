@@ -5,10 +5,11 @@ from contextlib import nullcontext
 from functools import partial
 
 import torch
+import wandb
 from megatron.core import mpu
-from megatron.core.enums import ModelType
 from megatron.core.distributed import DistributedDataParallel as DDP
 from megatron.core.distributed import DistributedDataParallelConfig, finalize_model_grads
+from megatron.core.enums import ModelType
 from megatron.core.models.gpt import GPTModel
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
@@ -17,7 +18,6 @@ from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
-import wandb
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
@@ -215,7 +215,7 @@ def forward_only(args, model, data_iterator, num_microbatches, store_prefix=""):
     # Don't care about timing during evaluation
     config.timers = None
     forward_data_store = []
-    num_steps_per_rollout = args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    num_steps_per_rollout = len(num_microbatches)
     for step_id in range(num_steps_per_rollout):
         # collect_non_loss_data
         forward_data_store += forward_backward_func(
@@ -422,7 +422,7 @@ def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_
         config.param_sync_func = None
         pre_hook_enabled = False
 
-    num_steps_per_rollout = args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    num_steps_per_rollout = len(num_microbatches)
 
     # Run training iterations till done.
     for step_id in range(num_steps_per_rollout):

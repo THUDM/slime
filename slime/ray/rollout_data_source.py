@@ -3,9 +3,10 @@ import os
 from pathlib import Path
 
 import torch
-from slime.utils.misc import load_function
-from slime.utils.data import Dataset
 from transformers import AutoTokenizer
+
+from slime.utils.data import Dataset
+from slime.utils.misc import load_function
 from slime.utils.types import Sample
 
 

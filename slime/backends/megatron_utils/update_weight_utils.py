@@ -1,20 +1,21 @@
+import inspect
 import re
 import socket
 import time
-from tqdm import tqdm
-from sglang.srt.utils import MultiprocessingSerializer
-import inspect
 
 import ray
 import torch
 import torch.distributed as dist
 from megatron.core import mpu
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
-from slime.utils.types import ParamInfo
-from .initialize import get_gloo_group
-from .megatron_to_hf import convert_to_hf  # noqa: F401
-from slime.utils.distributed_utils import init_process_group
 from sglang.srt.patch_torch import monkey_patch_torch_reductions
+from sglang.srt.utils import MultiprocessingSerializer
+from tqdm import tqdm
+
+from slime.utils.distributed_utils import get_gloo_group, init_process_group
+from slime.utils.types import ParamInfo
+
+from .megatron_to_hf import convert_to_hf  # noqa: F401
 
 try:
     from sglang.srt.model_executor.model_runner import FlattenedTensorBucket
@@ -285,7 +286,7 @@ def get_param_info_buckets(args, model) -> list[list[ParamInfo]]:
             tp_size = mpu.get_tensor_model_parallel_world_size()
         param_size = info.size * tp_size
 
-        if buffer_size + param_size > args.update_weight_buffer_size:
+        if buffer_size + param_size > args.update_weight_buffer_size and len(param_info_buckets[-1]) > 0:
             param_info_buckets.append([])
             buffer_size = 0
         param_info_buckets[-1].append(info)
@@ -302,6 +303,7 @@ class UpdateWeightFromTensor:
         self.vocab_size = vocab_size
         self.quantization_config = quantization_config
         self.param_info_buckets = get_param_info_buckets(self.args, self.model)
+        self.weight_version = 0
 
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines
@@ -322,6 +324,8 @@ class UpdateWeightFromTensor:
 
     @torch.no_grad()
     def update_weights(self):
+        self.weight_version += 1
+
         rank = dist.get_rank()
         if rank == 0:
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
@@ -424,6 +428,7 @@ class UpdateWeightFromTensor:
         if dist.get_rank() == self._ipc_gather_src:
             kwargs = {
                 "serialized_named_tensors": serialized_named_tensors,
+                "weight_version": str(self.weight_version),
             }
             if use_flattened_tensor_bucket and self.quantization_config is None:
                 kwargs["load_format"] = "flattened_bucket"
@@ -439,6 +444,7 @@ class UpdateWeightFromDistributed:
         self.model_name = model_name
         self.vocab_size = vocab_size
         self.quantization_config = quantization_config
+        self.weight_version = 0
 
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines
@@ -483,6 +489,8 @@ class UpdateWeightFromDistributed:
 
     @torch.no_grad()
     def update_weights(self):
+        self.weight_version += 1
+
         if dist.get_rank() == 0:
             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
@@ -594,6 +602,7 @@ class UpdateWeightFromDistributed:
                 dtypes=[param.dtype for _, param in converted_named_tensors],
                 shapes=[param.shape for _, param in converted_named_tensors],
                 group_name=self._group_name,
+                weight_version=str(self.weight_version),
             )
             for engine in self.rollout_engines
         ]

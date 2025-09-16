@@ -9,7 +9,7 @@ MODEL_ARGS=(
    --add-qkv-bias
    --normalization "RMSNorm"
    --norm-epsilon 1e-6
-   --rotary-base 10000
+   --rotary-base 1000000
    --group-query-attention
    --num-query-groups 2
    --vocab-size 151936

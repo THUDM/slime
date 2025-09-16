@@ -49,7 +49,7 @@ CKPT_ARGS=(
 )
 
 ROLLOUT_ARGS=(
-   --rollout-function-path slime_plugin.rollout_buffer.rollout_buffer_example.generate_rollout
+   --rollout-function-path slime_plugins.rollout_buffer.rollout_buffer_example.generate_rollout
    --rm-type deepscaler
    --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt

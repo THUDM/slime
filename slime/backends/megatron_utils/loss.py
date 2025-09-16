@@ -5,36 +5,16 @@ from megatron.core import mpu
 
 from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
-from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
 from slime.utils.ppo_utils import (
+    calculate_log_probs_and_entropy,
     compute_approx_kl,
-    compute_entropy_from_logits,
-    compute_log_probs,
     compute_policy_loss,
     get_grpo_returns,
     get_reinforce_plus_plus_baseline_advantages,
     get_reinforce_plus_plus_returns,
 )
 
-
-def calculate_log_probs_and_entropy(logits, tokens, with_entropy: bool = False):
-    logits = logits.contiguous()
-    # TODO: not sure why we need to clone the logits here.
-    # Without the clone, the backward will trigger inplace edit error.
-    # It seems that the function with tp will modify the logits inplace.
-    if logits.size(0) != 0:
-        log_prob = compute_log_probs(logits.clone(), tokens, mpu.get_tensor_model_parallel_group())
-    else:
-        log_prob = logits.new_zeros((0,))
-
-    if with_entropy:
-        if logits.size(0) != 0:
-            entropy = compute_entropy_from_logits(logits.clone(), mpu.get_tensor_model_parallel_group())
-        else:
-            entropy = logits.new_zeros((0,))
-    else:
-        entropy = None
-    return log_prob, entropy
+from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
 
 
 def get_log_probs_and_entropy(
@@ -66,7 +46,9 @@ def get_log_probs_and_entropy(
             logits_chunk = logits[start - 1 : end - 1]
             tokens_chunk = tokens[-response_length:]
 
-            log_prob, entropy = calculate_log_probs_and_entropy(logits_chunk, tokens_chunk, with_entropy=with_entropy)
+            log_prob, entropy = calculate_log_probs_and_entropy(
+                logits_chunk, tokens_chunk, mpu.get_tensor_model_parallel_group(), with_entropy=with_entropy
+            )
         else:
             # TODO: this is super ugly... do better abstraction.
             chunk_size, chunks_offset, logits_offset, tokens_offset = get_logits_and_tokens_offset_with_cp(
@@ -87,11 +69,13 @@ def get_log_probs_and_entropy(
             log_prob_0, entropy_0 = calculate_log_probs_and_entropy(
                 logits_0,
                 tokens_0,
+                mpu.get_tensor_model_parallel_group(),
                 with_entropy=with_entropy,
             )
             log_prob_1, entropy_1 = calculate_log_probs_and_entropy(
                 logits_1,
                 tokens_1,
+                mpu.get_tensor_model_parallel_group(),
                 with_entropy=with_entropy,
             )
             log_prob = torch.cat([log_prob_0, log_prob_1], dim=0)
@@ -303,8 +287,6 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
         kl_loss = sum_of_sample_mean(kl)
 
         loss = loss + args.kl_loss_coef * kl_loss
-    else:
-        kl_loss = torch.tensor(0.0, device=log_probs.device)
 
     # make sure the gradient could backprop correctly.
     if log_probs.numel() == 0:

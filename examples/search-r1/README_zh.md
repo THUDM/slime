@@ -1,4 +1,4 @@
-# 示例：Search-R1 lite
+# Search-R1 lite
 
 [English](./README.md)
 

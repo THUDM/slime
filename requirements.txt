@@ -1,8 +1,11 @@
 accelerate
+datasets
 httpx[http2]
 mcp[cli]
 pylatexenc
+pyyaml
 ray[default]
 sglang
 torch
+transformers
 wandb

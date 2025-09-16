@@ -1,14 +1,14 @@
 # Adapt from https://github.com/alibaba/Pai-Megatron-Patch/blob/2b201af08336dea0403df7c6b497c964cf5a2e75/toolkits/model_checkpoints_convertor/deepseek/fp8_cast_bf16.py
-import os
 import json
+import os
 from argparse import ArgumentParser
 from glob import glob
-from tqdm import tqdm
 
 import torch
-from safetensors.torch import load_file, save_file
 import triton
 import triton.language as tl
+from safetensors.torch import load_file, save_file
+from tqdm import tqdm
 
 
 @triton.jit

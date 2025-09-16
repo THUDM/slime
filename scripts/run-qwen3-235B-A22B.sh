@@ -38,8 +38,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/qwen3-235B-A22B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint ${BASE_FOLDER}/Qwen3-235B-A22B
-   #--hf-checkpoint ${BASE_FOLDER}/Qwen3-235B-A22B-FP8
+   --hf-checkpoint ${BASE_FOLDER}/Qwen3-235B-A22B-FP8
    --ref-load ${BASE_FOLDER}/Qwen3-235B-A22B_torch_dist
    --load ${BASE_FOLDER}/Qwen3-235B-A22B_slime/
    --save ${BASE_FOLDER}/Qwen3-235B-A22B_slime/
@@ -78,7 +77,7 @@ PERF_ARGS=(
    --sequence-parallel
    --pipeline-model-parallel-size 4
    --context-parallel-size 2
-   --expert-model-parallel-size 8
+   --expert-model-parallel-size 16
    --expert-tensor-parallel-size 1
    --decoder-last-pipeline-num-layers 22
 
@@ -88,17 +87,16 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 4096
+   --max-tokens-per-gpu 16384
 )
 
 GRPO_ARGS=(
-   --advantage-estimator grpo
+   --advantage-estimator gspo
    #--use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    --entropy-coef 0.00
-   --eps-clip 0.2
-   --eps-clip-high 0.28
+   --eps-clip 4e-4
 )
 
 OPTIMIZER_ARGS=(
@@ -117,16 +115,21 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=(
    # --use-wandb
    # --wandb-project slime-dev
-   # --wandb-group qwen3-235B-sft
+   # --wandb-group qwen3-235B-A22B
 )
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 32
    --sglang-mem-fraction-static 0.7
-   --sglang-enable-ep-moe
    --sglang-enable-dp-attention
    --sglang-dp-size 4
+   --sglang-ep-size 32
+   --sglang-enable-dp-lm-head
    --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
+   --sglang-disable-radix-cache
+
+   --sglang-moe-a2a-backend deepep
+   --sglang-deepep-mode auto
 )
 
 MISC_ARGS=(
@@ -168,9 +171,10 @@ RUNTIME_ENV_JSON="{
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
-   --actor-num-nodes 4 \
+   --actor-num-nodes 8 \
    --actor-num-gpus-per-node 8 \
-   --colocate \
+   --rollout-num-gpus 64 \
+   --update-weight-buffer-size $(( 1024 * 1024 * 1024 * 4 )) \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \

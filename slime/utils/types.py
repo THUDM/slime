@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional, Union, Any
+from typing import Any, Optional, Union
 
 import torch
 
@@ -19,6 +19,7 @@ class Sample:
     label: Optional[str] = None
     reward: Optional[Union[float, dict[str, Any]]] = None
     loss_mask: Optional[list[int]] = None
+    weight_versions: list[str] = field(default_factory=list)
     rollout_log_probs: Optional[list[float]] = None  # Log probabilities from rollout engine
 
     class Status(Enum):
@@ -29,6 +30,8 @@ class Sample:
 
     status: Status = Status.PENDING
     metadata: dict = field(default_factory=dict)
+    # metadata used during training, e.g., what loss to use for this sample.
+    train_metadata: Optional[dict] = None
 
     def to_dict(self):
         value = self.__dict__.copy()

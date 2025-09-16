@@ -2,6 +2,9 @@
 
 [English](./README.md)
 
+[![Documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg?style=flat)](https://thudm.github.io/slime/)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/THUDM/slime)
+
 **slime** 是为 RL scaling 设计的 LLM post‑training 框架，提供两大核心能力：
 
 1. **高性能训练**：通过连接 Megatron 与 SGLang，支持各种模式的高效训练；
@@ -31,7 +34,9 @@
 
 有关环境配置、数据准备、训练启动和关键代码分析的完整快速开始指南，请参考：
 
-- [快速开始指南](./docs/zh/quick_start.md)
+- [快速开始指南](./docs/zh/get_started/quick_start.md)
+
+我还还额外提供了一些使用样例，请参考样例目录：[examples](examples/)。
 
 ## 参数说明
 
@@ -41,7 +46,7 @@
 2. **sglang 参数**：支持环境中安装的 sglang 的所有参数，这些参数需要以 `--sglang` 起始，例如 `--mem-fraction-static` 需要通过 `--sglang-mem-fraction-static` 传入。
 3. **slime 自身的参数**：请见：[slime/utils/arguments.py](slime/utils/arguments.py)
 
-完整使用说明请查阅 [使用文档](docs/zh/usage.md)。
+完整使用说明请查阅 [使用文档](docs/zh/get_started/usage.md)。
 
 ## 开发指南
 
@@ -54,9 +59,9 @@
   pre-commit install
   ```
 
-- 调试技巧请参考 [debug 指南](docs/zh/debug.md)
+- 调试技巧请参考 [debug 指南](docs/zh/developer_guide/debug.md)
 
 ## 常见 Q&A 与致谢
 
-- 常见问题请见 [Q&A](docs/zh/qa.md)
+- 常见问题请见 [Q&A](docs/zh/get_started/qa.md)
 - 特别感谢以下项目 & 社区：SGLang、Megatron‑LM、mbridge、OpenRLHF、veRL、Pai-Megatron-Patch 等。

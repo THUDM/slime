@@ -1,23 +1,27 @@
+import json
 import random
-
-from datasets import Dataset as hf_ds
+import numpy as np
+import pandas as pd
+import ray
+import torch.distributed as dist
 
 from slime.utils.types import Sample
+from .seqlen_balancing import get_seqlen_balanced_partitions
+from .timer import Timer
 
 __all__ = ["Dataset"]
 
 
 # TODO: don't read the whole file into memory.
 def read_file(path):
-    if path.endswith(".jsonl") or path.endswith(".json"):
-        ds = hf_ds.from_json(path)
+    if path.endswith(".jsonl"):
+        df = pd.read_json(path, lines=True)
     elif path.endswith(".parquet"):
-        ds = hf_ds.from_parquet(path)
+        df = pd.read_parquet(path, dtype_backend="pyarrow")
     else:
         raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
-
-    for data in ds:
-        yield data
+    for _, row in df.iterrows():
+        yield row.to_dict()
 
 
 class Dataset:
@@ -40,6 +44,11 @@ class Dataset:
             if apply_chat_template:
                 if tool_key is not None:
                     tools = data[tool_key]
+                    if isinstance(tools, str):
+                        tools = json.loads(tools)
+                    elif isinstance(tools, np.ndarray):
+                        tools = tools.tolist()
+                    assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
                 else:
                     tools = None
                 prompt = tokenizer.apply_chat_template(prompt, tools, tokenize=False, add_generation_prompt=True)
@@ -76,3 +85,89 @@ class Dataset:
 
     def __len__(self):
         return len(self.samples)
+
+
+def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu):
+    # use first fit to get the number of micro batches
+    batches = []
+    for l in total_lengths:
+        for i in range(len(batches)):
+            if batches[i] + l <= max_tokens_per_gpu:
+                batches[i] += l
+                break
+        else:
+            batches.append(l)
+
+    return len(batches)
+
+
+def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
+    rollout_data = {}
+
+    rank = dist.get_rank()
+    if rank == 0:
+        data = ray.get(rollout_data_ref.inner)
+        dist.broadcast_object_list([data], src=0)
+    else:
+        data = [None]
+        dist.broadcast_object_list(data, src=0)
+        data = data[0]
+
+    # save the unprocessed reward for logging
+    rollout_data["raw_reward"] = data["raw_reward"]
+
+    total_lengths = [len(t) for t in data["tokens"]]
+    data["total_lengths"] = total_lengths
+
+    # save the seqlen of the whole rollout batch
+    Timer().seq_lens = total_lengths
+
+    if args.balance_data:
+        # Group-aware partitioning to keep each group together
+        n_samples_per_prompt = getattr(args, "n_samples_per_prompt", 1)
+        # Calculate group-level lengths (sum of lengths for each group)
+        num_groups = len(total_lengths) // n_samples_per_prompt
+        group_lengths = []
+        for i in range(num_groups):
+            start_idx = i * n_samples_per_prompt
+            end_idx = start_idx + n_samples_per_prompt
+            group_total_length = sum(total_lengths[start_idx:end_idx])
+            group_lengths.append(group_total_length)
+
+        # Get partitions at group level
+        group_partitions = get_seqlen_balanced_partitions(group_lengths, dp_size, equal_size=True)
+
+        # Expand group partitions to trajectory level
+        parititions = []
+        for dp_rank_groups in group_partitions:
+            trajectory_indices = []
+            for group_idx in dp_rank_groups:
+                # Add all trajectories in this group
+                start_idx = group_idx * n_samples_per_prompt
+                end_idx = start_idx + n_samples_per_prompt
+                trajectory_indices.extend(range(start_idx, end_idx))
+            parititions.append(trajectory_indices)
+
+    def get_partition(val):
+        if args.balance_data:
+            return [val[i] for i in parititions[dp_rank]]
+        else:
+            return val[dp_rank::dp_size]
+
+    for key in [
+        "tokens",
+        "total_lengths",
+        "response_lengths",
+        "rewards",
+        "truncated",
+        "loss_masks",
+        "round_number",
+        "sample_indices",
+        "rollout_log_probs",
+    ]:
+        if key not in data:
+            continue
+        val = get_partition(data[key])
+        rollout_data[key] = val
+
+    return rollout_data

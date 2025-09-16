@@ -1,9 +1,9 @@
 import ray
+from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
 from slime.ray.placement_group import create_actor_group, create_placement_groups, create_rollout_manager
 from slime.utils.arguments import parse_args
 from slime.utils.wandb_utils import init_wandb_primary
-from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
 
 def train(args):
@@ -19,7 +19,7 @@ def train(args):
     # calculate num_rollout from num_epoch
     num_rollout_per_epoch = None
     if args.num_rollout is None:
-        num_rollout_per_epoch = ray.get(rollout_manager.controller.get_num_rollout_per_epoch.remote())
+        num_rollout_per_epoch = ray.get(rollout_manager.get_num_rollout_per_epoch.remote())
         args.num_rollout = num_rollout_per_epoch * args.num_epoch
     assert args.num_rollout > 0
 
@@ -32,31 +32,31 @@ def train(args):
         args.start_rollout_id = start_rollout_ids[0]
 
     if args.rollout_global_dataset:
-        ray.get(rollout_manager.controller.load.remote(args.start_rollout_id - 1))
+        ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
 
     # initialize the connection for weight update during training
     ray.get(actor_model.async_init_weight_update_connections(rollout_manager))
 
     if args.offload:
-        ray.get(rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
+        ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
 
     # always update weight first so that sglang has the loaded weights from training.
     ray.get(actor_model.async_update_weights())
 
     if args.offload:
-        ray.get(rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
+        ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
 
     # train loop.
     # note that for async training, one can change the position of the sync operation(ray.get).
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
         # TODO extract the duplicated eval logic
         if args.eval_interval is not None and rollout_id == 0:
-            ray.get(rollout_manager.async_eval(rollout_id))
+            ray.get(rollout_manager.eval.remote(rollout_id))
 
-        rollout_data_ref = ray.get(rollout_manager.async_generate(rollout_id))
+        rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
 
         if args.offload:
-            ray.get(rollout_manager.async_offload())
+            ray.get(rollout_manager.offload.remote())
 
         ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
@@ -66,22 +66,22 @@ def train(args):
         ):
             ray.get(actor_model.async_save_model(rollout_id))
             if args.rollout_global_dataset:
-                ray.get(rollout_manager.controller.save.remote(rollout_id))
+                ray.get(rollout_manager.save.remote(rollout_id))
 
         if args.offload:
             ray.get(actor_model.async_offload())
-            ray.get(rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
+            ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
 
         ray.get(actor_model.async_update_weights())
 
         if args.offload:
-            ray.get(rollout_manager.async_onload(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
+            ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
 
         if args.eval_interval is not None and (
             (rollout_id + 1) % args.eval_interval == 0
             or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
         ):
-            ray.get(rollout_manager.async_eval(rollout_id))
+            ray.get(rollout_manager.eval.remote(rollout_id))
 
 
 if __name__ == "__main__":

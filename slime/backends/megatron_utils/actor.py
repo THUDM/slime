@@ -1,9 +1,8 @@
-from pathlib import Path
 from contextlib import nullcontext
+from pathlib import Path
 
 import torch
 import torch.distributed as dist
-
 
 if torch.version.hip:
     from vllm.device_allocator.cumem import CuMemAllocator
@@ -11,30 +10,27 @@ else:
     from torch_memory_saver import torch_memory_saver
 
 from megatron.core import mpu
-
 from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
+from slime.utils.data import process_rollout_data
+from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
-from ..utils.data import process_rollout_data
 from .checkpoint import load_checkpoint
+from .cp_utils import slice_log_prob_with_cp
 from .data import get_data_iterator, log_perf_data, log_rollout_data
-from .initialize import get_gloo_group, init, is_megatron_main_rank
+from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns
 from .model import forward_only, initialize_model_and_optimizer, save, train
-from .update_weight_utils import (
-    named_parameters,
-    UpdateWeightFromTensor,
-    UpdateWeightFromDistributed,
-)
+from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor, named_parameters
 
 
 class MegatronTrainRayActor(TrainRayActor):
     def init(self, args, role, wandb_run_id, with_ref=False):
-        super().init(args, role, with_ref)
+        super().init(args, role, wandb_run_id, with_ref)
 
         init(args)
 
@@ -172,12 +168,32 @@ class MegatronTrainRayActor(TrainRayActor):
     def _get_rollout_data(self, rollout_data_ref):
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
         # Both first pp stage and the last pp stage will recieve the data.
-        return process_rollout_data(
+        rollout_data = process_rollout_data(
             self.args,
             rollout_data_ref,
             mpu.get_data_parallel_rank(with_context_parallel=False),
             mpu.get_data_parallel_world_size(with_context_parallel=False),
         )
+        # TODO: this is ugly, move to somewhere else?
+        # move tokens to GPU in advance
+        rollout_data["tokens"] = [
+            torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device()) for t in rollout_data["tokens"]
+        ]
+        rollout_data["loss_masks"] = [
+            torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
+        ]
+        if "rollout_log_probs" in rollout_data:
+            rollout_data["rollout_log_probs"] = [
+                torch.tensor(
+                    slice_log_prob_with_cp(log_prob, total_length, response_length),
+                    device=torch.cuda.current_device(),
+                    dtype=torch.float32,
+                )
+                for log_prob, total_length, response_length in zip(
+                    rollout_data["rollout_log_probs"], rollout_data["total_lengths"], rollout_data["response_lengths"]
+                )
+            ]
+        return rollout_data
 
     def compute_log_prob(
         self,
@@ -295,14 +311,11 @@ class MegatronTrainRayActor(TrainRayActor):
         log_perf_data(rollout_id, self.args)
         Timer().start("train_wait")
 
-    def save_model(self, iteration, with_optimizer=True):
+    def save_model(self, iteration):
         if self.args.debug_rollout_only:
             return
 
-        if with_optimizer:
-            save(iteration, self.model, self.optimizer, self.opt_param_scheduler)
-        else:
-            save(iteration, self.model, None, None)
+        save(iteration, self.model, self.optimizer, self.opt_param_scheduler)
 
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines

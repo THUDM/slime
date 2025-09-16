@@ -1,6 +1,4 @@
-# Example: Search-R1 lite
-
-[中文版](./README_zh.md)
+# Search-R1 lite
 
 This is a minimal reproduction of [Search-R1](https://github.com/PeterGriffinJin/Search-R1) and an example of using multi-turn conversation and tool-calling in slime.
 

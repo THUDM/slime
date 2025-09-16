@@ -101,7 +101,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         "return_logprob": True,
     }
 
-    output = await post(url, payload, use_http2=args.use_http2)
+    output = await post(url, payload)
 
     # Extract new response tokens
     if "output_token_logprobs" in output["meta_info"]:
@@ -116,6 +116,8 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     sample.tokens = sample.tokens + new_response_tokens
     sample.response_length += len(new_response_tokens)
     sample.response += output["text"]
+    if "weight_version" in output["meta_info"]:
+        sample.weight_versions.append(output["meta_info"]["weight_version"])
     if sample.rollout_log_probs is None:
         sample.rollout_log_probs = []
     sample.rollout_log_probs += new_response_log_probs
@@ -163,9 +165,12 @@ async def generate_and_rm(args, sample: Sample, sampling_params: dict, evaluatio
         if any([sample.status == Sample.Status.ABORTED for sample in samples]):
             return samples
 
-        rewards = await async_rm(args, samples)
-        for sample, reward in zip(samples, rewards):
+        # for multi agent system, the reward of some sample is calculated during generation.
+        samples_need_reward = [sample for sample in samples if sample.reward is None]
+        rewards = await batched_async_rm(args, samples_need_reward)
+        for sample, reward in zip(samples_need_reward, rewards):
             sample.reward = reward
+        return samples
     else:
         if sample.status == Sample.Status.ABORTED:
             return sample
@@ -200,14 +205,12 @@ async def abort(args, rollout_id: int):
     state = GenerateState(args)
     assert not state.aborted
     state.aborted = True
-    response = await get(
-        f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers", use_http2=args.use_http2
-    )
+    response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers")
 
     # abort all the requests
     for url in response["urls"]:
         print(f"Abort request for {url}", flush=True)
-        await post(f"{url}/abort_request", {"abort_all": True}, use_http2=False)
+        await post(f"{url}/abort_request", {"abort_all": True})
 
     # make sure all the pending tasks are finished
     count = 0
@@ -251,12 +254,9 @@ async def generate_rollout_async(args, rollout_id: int, data_source) -> list[lis
     dynamic_filter = (
         load_function(args.dynamic_sampling_filter_path) if args.dynamic_sampling_filter_path is not None else None
     )
-    over_sampling_filter = (
-        load_function(args.over_sampling_filter_path) if args.over_sampling_filter_path is not None else None
-    )
 
     # target_data_size is the total number of valid samples to get
-    target_data_size = args.over_sampling_batch_size if over_sampling_filter is not None else args.rollout_batch_size
+    target_data_size = args.rollout_batch_size
 
     data = []
     do_print = True
@@ -273,8 +273,9 @@ async def generate_rollout_async(args, rollout_id: int, data_source) -> list[lis
             group: list[Sample] = task.result()
 
             if do_print:
+                sample = group[0][0] if isinstance(group[0], list) else group[0]
                 print(
-                    f"First rollout sample: {[group[0].prompt + group[0].response]}, label: {group[0].label}, reward: {group[0].reward}",
+                    f"First rollout sample: {[sample.prompt + sample.response]}, label: {sample.label}, reward: {sample.reward}",
                     flush=True,
                 )
                 do_print = False
@@ -291,19 +292,17 @@ async def generate_rollout_async(args, rollout_id: int, data_source) -> list[lis
                 pbar.update(args.n_samples_per_prompt)
 
     pbar.close()
+    sample = data[-1][0][0] if isinstance(data[-1][0], list) else data[-1][0]
     print(
-        f"Finish rollout: {[data[-1][0].prompt + data[-1][0].response]}, label: {data[-1][0].label}, reward: {data[-1][0].reward}",
+        f"Finish rollout: {[sample.prompt + sample.response]}, label: {sample.label}, reward: {sample.reward}",
         flush=True,
     )
 
     # there are still some unfinished requests, abort them
     aborted_samples = await abort(args, rollout_id)
 
-    if over_sampling_filter is not None:
-        data = over_sampling_filter(args, data)[: args.rollout_batch_size]
-
     assert len(data) == args.rollout_batch_size, f"Got {len(data)} samples, expected {args.rollout_batch_size}"
-    data = sorted(data, key=lambda group: group[0].index)
+    data = sorted(data, key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)
 
     # reset the global state to prevent effects on the next rollout or eval.
     state.reset()
@@ -389,7 +388,10 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
         if do_print:
             print([sample.prompt + sample.response], sample.reward, flush=True)
             do_print = False
-        data.append(sample)
+        if isinstance(sample, list):
+            data.extend(sample)
+        else:
+            data.append(sample)
         pbar.update(1)
     pbar.close()
 

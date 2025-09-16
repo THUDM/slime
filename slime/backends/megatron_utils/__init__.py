@@ -1,9 +1,10 @@
 import logging
+
 import torch
 
 try:
-    from torch_memory_saver import torch_memory_saver
     import deep_ep
+    from torch_memory_saver import torch_memory_saver
 
     old_init = deep_ep.Buffer.__init__
 
@@ -21,7 +22,7 @@ except ImportError:
 
 
 from .actor import MegatronTrainRayActor
-from .arguments import parse_args, validate_args, set_default_megatron_args
+from .arguments import parse_args, set_default_megatron_args, validate_args
 from .checkpoint import load_checkpoint, save_checkpoint
 from .initialize import init
 from .model import initialize_model_and_optimizer
