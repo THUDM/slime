@@ -3,13 +3,13 @@ from typing import cast
 
 import torch
 import torch.distributed as dist
+import wandb
 from torch.distributed.device_mesh import init_device_mesh
 from torch_memory_saver import torch_memory_saver
 from xtuner.v1.config import AdamWConfig, FSDPConfig
 from xtuner.v1.data_proto.sequence_context import SequenceContext
 from xtuner.v1.model import get_model_config_from_hf
 
-import wandb
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group

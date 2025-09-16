@@ -2,13 +2,16 @@ from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
+
 from PIL import Image
+
+import wandb
+
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import ShardingStrategy
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer, AutoProcessor
 
-import wandb
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
