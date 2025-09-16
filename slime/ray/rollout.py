@@ -73,7 +73,6 @@ class RolloutManager:
         if self.args.debug_train_only:
             # if debug train only, we don't generate evaluation data
             return
-
         data = self.eval_generate_rollout(self.args, rollout_id, self.data_source, evaluation=True)
         _log_eval_rollout_data(rollout_id, self.args, data)
 
