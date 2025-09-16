@@ -151,18 +151,44 @@ class FSDPTrainRayActor(TrainRayActor):
         loss_masks = rollout_data["loss_masks"]
 
         padded_batches = []
-        for i in range(0, len(tokens), self.args.micro_batch_size):
-            batch_tokens = tokens[i : i + self.args.micro_batch_size]
-            batch_loss_masks = loss_masks[i : i + self.args.micro_batch_size]
-            padded_batches.append(
-                pack_sequences(
-                    batch_tokens,
-                    batch_loss_masks,
-                    rollout_data["rewards"][i : i + self.args.micro_batch_size],
-                    rollout_data["raw_reward"][i : i + self.args.micro_batch_size],
+
+        # Use global_batch_size for splitting when max_tokens_per_gpu is enabled
+        if (
+            hasattr(self.args, "max_tokens_per_gpu")
+            and self.args.max_tokens_per_gpu is not None
+            and self.args.use_dynamic_batch_size
+        ):
+            print("beginning to pack sequences in dynamic setting")
+            for i in range(0, len(tokens), self.args.global_batch_size):
+                batch_tokens = tokens[i : i + self.args.global_batch_size]
+                batch_loss_masks = loss_masks[i : i + self.args.global_batch_size]
+                batch_rewards = rollout_data["rewards"][i : i + self.args.global_batch_size]
+                batch_raw_rewards = rollout_data["raw_reward"][i : i + self.args.global_batch_size]
+                padded_batches.append(
+                    pack_sequences(
+                        batch_tokens,
+                        batch_loss_masks,
+                        batch_rewards,
+                        batch_raw_rewards,
+                        max_tokens_per_gpu=self.args.max_tokens_per_gpu,
+                    )
                 )
-            )
-        return padded_batches
+            grad_accum = 1
+        else:
+            # Original logic for backward compatibility
+            for i in range(0, len(tokens), self.args.micro_batch_size):
+                batch_tokens = tokens[i : i + self.args.micro_batch_size]
+                batch_loss_masks = loss_masks[i : i + self.args.micro_batch_size]
+                padded_batches.append(
+                    pack_sequences(
+                        batch_tokens,
+                        batch_loss_masks,
+                        rollout_data["rewards"][i : i + self.args.micro_batch_size],
+                        rollout_data["raw_reward"][i : i + self.args.micro_batch_size],
+                    )
+                )
+            grad_accum = self.args.global_batch_size // (self.args.micro_batch_size * dist.get_world_size())
+        return padded_batches, grad_accum
 
     def train(self, rollout_id, rollout_data_ref):  # type: ignore[override]
         Timer().end("train_wait")
@@ -174,9 +200,8 @@ class FSDPTrainRayActor(TrainRayActor):
         rank = dist.get_rank()
 
         rollout_data = process_rollout_data(self.args, rollout_data_ref, rank, world_size)
-        padded_batches = self.pad_and_move_to_device(rollout_data)
+        padded_batches, grad_accum = self.pad_and_move_to_device(rollout_data)
 
-        grad_accum = self.args.global_batch_size // (self.args.micro_batch_size * world_size)
         assert (
             grad_accum > 0
         ), f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
@@ -249,6 +274,7 @@ class FSDPTrainRayActor(TrainRayActor):
                         attention_mask=batch["attention_masks"].unsqueeze(0),
                         position_ids=batch["position_ids"].unsqueeze(0),
                     ).logits
+                print("after forward")
 
                 # Handle packed sequences
                 log_probs = gather_log_probs_packed(logits, batch["tokens"], batch["cu_seqlens"])
