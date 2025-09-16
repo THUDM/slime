@@ -1,5 +1,8 @@
 import asyncio
 import copy
+import base64
+import io
+from PIL import Image
 
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -64,17 +67,42 @@ class GenerateState(metaclass=SingletonMeta):
 
 async def generate(args, sample: Sample, sampling_params) -> Sample:
     state = GenerateState(args)
-
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
     assert (
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
     ), f"Sample status is {sample.status}"
 
+    # Process prompt to create text and image payload
+    image_data = []
+    if isinstance(sample.prompt, str):
+        text_prompt = sample.prompt
+    else:  # Multimodal prompt (list of dicts)
+        text_prompt = ""
+        # sglang uses a placeholder to insert image features
+        image_token = state.tokenizer.special_tokens_map.get("image_token", "<image>")
+        for part in sample.prompt:
+            if part["type"] == "text":
+                text_prompt += part["text"]
+            elif part["type"] == "image":
+                text_prompt += image_token
+                try:
+                    with Image.open(part["path"]) as image:
+                        buffer = io.BytesIO()
+                        if image.mode != "RGB":
+                            image = image.convert("RGB")
+                        image.save(buffer, format="JPEG")
+                        img_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+                        image_data.append(img_b64)
+                except Exception as e:
+                    print(f"Error processing image {part['path']}: {e}")
+                    sample.status = Sample.Status.ABORTED
+                    return sample
+
     if len(sample.response) > 0:
-        sampling_params["max_new_tokens"] -= len(sample.tokens) - len(
-            state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
-        )
+        # Adjust max_new_tokens for subsequent generation turns
+        prompt_len = len(state.tokenizer(text_prompt, add_special_tokens=False)["input_ids"])
+        sampling_params["max_new_tokens"] -= len(sample.tokens) - prompt_len
 
     assert (
         sampling_params["max_new_tokens"] >= 0
@@ -82,29 +110,24 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     if sampling_params["max_new_tokens"] == 0:
         sample.status = Sample.Status.TRUNCATED
         return sample
-    payload={
-        "sampling_parameters":sampling_params,
-        "return_logprob":True,
-    }
 
-    # Token-based mode: use tokens directly
-    if len(sample.response) > 0:
-        input_token_ids = sample.tokens
-    else:
-        # First turn: initialize with prompt tokens
-        prompt_token_ids = state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
-        input_token_ids = prompt_token_ids
-        # Initialize sample.tokens with prompt for subsequent turns
-        if not sample.tokens:  # Only set if empty
-            sample.tokens = prompt_token_ids
-
-    # Prepare payload - shared structure
+    # Prepare payload for sglang server
     payload = {
-        "input_ids": input_token_ids,
         "sampling_params": sampling_params,
         "return_logprob": True,
     }
+    if image_data:
+        payload["image_data"] = image_data
 
+    # Use existing tokens for multi-turn or tokenize the new prompt
+    if len(sample.response) > 0:
+        payload["input_ids"] = sample.tokens
+    else:
+        prompt_token_ids = state.tokenizer(text_prompt, add_special_tokens=False)["input_ids"]
+        payload["input_ids"] = prompt_token_ids
+        if not sample.tokens:  # Initialize sample.tokens for the first turn
+            sample.tokens = prompt_token_ids
+    
     output = await post(url, payload)
 
     # Extract new response tokens
@@ -112,9 +135,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
         new_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
     else:
-        # abort
-        new_response_tokens = []
-        new_response_log_probs = []
+        new_response_tokens, new_response_log_probs = [], []
 
     # Update sample with tokens directly - avoiding re-tokenization
     sample.tokens = sample.tokens + new_response_tokens
@@ -345,8 +366,8 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
             tokenizer=tokenizer,
             max_length=args.rollout_max_prompt_len,
             prompt_key=args.input_key if args.eval_input_key is None else args.eval_input_key,
-            image_key=args.image_key,
             label_key=args.label_key if args.eval_label_key is None else args.eval_label_key,
+            multimodal_keys=args.multimodal_keys,
             metadata_key=args.metadata_key,
             tool_key=args.tool_key if args.eval_tool_key is None else args.eval_tool_key,
             apply_chat_template=args.apply_chat_template,
@@ -391,7 +412,7 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
     for coro in asyncio.as_completed(tasks):
         sample = await coro
         if do_print:
-            print(f"Prompt: {str(sample.prompt)}, Response: {sample.response}, Reward: {sample.reward}", flush=True)
+            print([sample.prompt + sample.response], sample.reward, flush=True)
             do_print = False
         if isinstance(sample, list):
             data.extend(sample)
