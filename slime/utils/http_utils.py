@@ -37,10 +37,10 @@ def is_port_available(port):
 def get_host_info():
     hostname = socket.gethostname()
 
-    local_ip = socket.gethostbyname(hostname)
-
-    if SLIME_HOST_IP_ENV in os.environ:
-        local_ip = os.environ[SLIME_HOST_IP_ENV]
+    if env_overwrite_local_ip := os.getenv(SLIME_HOST_IP_ENV, None):
+        local_ip = env_overwrite_local_ip
+    else:
+        local_ip = socket.gethostbyname(hostname)
 
     return hostname, local_ip
 
@@ -75,20 +75,30 @@ def terminate_process(process: multiprocessing.Process, timeout: float = 1.0) ->
         process.join()
 
 
-async def post(url, payload, use_http2=False, max_retries=60):
+_http_client: httpx.AsyncClient = None
+
+
+def init_http_client(concurrency: int):
+    global _http_client
+    if _http_client is None:
+        _http_client = httpx.AsyncClient(
+            limits=httpx.Limits(max_connections=concurrency),
+            timeout=httpx.Timeout(None),
+        )
+
+
+async def post(url, payload, max_retries=60):
     # never timeout
-    timeout = httpx.Timeout(None)
     max_retries = 60
     retry_count = 0
     while retry_count < max_retries:
         try:
-            async with httpx.AsyncClient(http1=not use_http2, http2=use_http2, timeout=timeout) as client:
-                response = await client.post(url, json=payload or {})
-                response.raise_for_status()
-                try:
-                    output = response.json()
-                except:
-                    output = response.text
+            response = await _http_client.post(url, json=payload or {})
+            response.raise_for_status()
+            try:
+                output = response.json()
+            except:
+                output = response.text
         except Exception as e:
             retry_count += 1
             print(f"Error: {e}, retrying... (attempt {retry_count}/{max_retries})")
@@ -102,11 +112,9 @@ async def post(url, payload, use_http2=False, max_retries=60):
     return output
 
 
-async def get(url, use_http2=False):
+async def get(url):
     # never timeout
-    timeout = httpx.Timeout(None)
-    async with httpx.AsyncClient(http1=not use_http2, http2=use_http2, timeout=timeout) as client:
-        response = await client.get(url)
-        response.raise_for_status()
-        output = response.json()
+    response = await _http_client.get(url)
+    response.raise_for_status()
+    output = response.json()
     return output

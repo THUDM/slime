@@ -119,4 +119,7 @@ def create_actor_group(args, pg, wandb_run_id):
 
 
 def create_rollout_manager(args, pg, wandb_run_id):
-    return RolloutManager(args, pg, wandb_run_id=wandb_run_id)
+    return RolloutManager.options(
+        num_cpus=1,
+        num_gpus=0,
+    ).remote(args, pg, wandb_run_id=wandb_run_id)

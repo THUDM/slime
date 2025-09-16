@@ -38,7 +38,7 @@ setup(
     install_requires=_fetch_requirements("requirements.txt"),
     extras_require={
         "fsdp": [
-            "torch>=2.0", 
+            "torch>=2.0",
         ]
     },
     python_requires=">=3.10",

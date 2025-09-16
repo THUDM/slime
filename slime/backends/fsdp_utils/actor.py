@@ -105,7 +105,7 @@ class FSDPTrainRayActor(TrainRayActor):
         if torch_memory_saver is not None:
             torch_memory_saver.resume()
 
-    def save_model(self, iteration, with_optimizer=True):
+    def save_model(self, iteration):
         if self.args.debug_rollout_only:
             return
 
