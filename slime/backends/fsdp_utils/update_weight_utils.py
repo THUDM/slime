@@ -75,6 +75,7 @@ class UpdateWeightFromTensor:
             ray.get(ref)
 
 
+## reference from megatron_utils.update_weight_utils.UpdateWeightFromDistributed
 class UpdateWeightFromTensorDistributed:
     def __init__(self, args, model):
         pass
