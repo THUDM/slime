@@ -73,3 +73,8 @@ class UpdateWeightFromTensor:
 
             ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
             ray.get(ref)
+
+
+class UpdateWeightFromTensorDistributed:
+    def __init__(self, args, model):
+        pass
