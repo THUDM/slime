@@ -13,7 +13,6 @@ def pack_sequences(
     loss_masks: List[List[int]],
     rewards: List[float],
     raw_rewards: List,
-    max_seq_len: Optional[int] = None,
     max_tokens_per_gpu: Optional[int] = None,
     num_packs: Optional[int] = None,
 ) -> List[Dict]:
@@ -25,7 +24,6 @@ def pack_sequences(
         loss_masks: List of loss masks
         rewards: List of rewards per sequence
         raw_rewards: List of raw rewards per sequence
-        max_seq_len: Maximum sequence length (will truncate if exceeded)
         max_tokens_per_gpu: Maximum tokens per GPU pack
         num_packs: Explicit number of packs to create
 
@@ -70,22 +68,20 @@ def pack_sequences(
 
             flat_tokens.extend(seq_tokens)
             flat_positionids.extend(seq_positionids)
-            # Align mask with tokens and set last token to 0 (LM convention)
-            mask = seq_mask[1:]
-            flat_masks.extend(mask)
+            flat_masks.extend(seq_mask)
 
             cu_seqlens.append(cu_seqlens[-1] + len(seq_tokens))
-
+        assert len(flat_masks) == len(flat_tokens), "mask and tokens length mismatch"
         result.append(
             {
                 "tokens": torch.tensor(flat_tokens, dtype=torch.long),
-                "loss_masks": torch.tensor(flat_masks, dtype=torch.int),
+                "loss_masks": torch.tensor(flat_masks[1:], dtype=torch.int),
                 "attention_masks": torch.ones(len(flat_tokens), dtype=torch.int),
                 "position_ids": torch.tensor(flat_positionids, dtype=torch.int),
                 "cu_seqlens": torch.tensor(cu_seqlens, dtype=torch.int32),
-                "max_seqlen": max(cu_seqlens[i + 1] - cu_seqlens[i] for i in range(len(indices))),
                 "rewards": torch.tensor([rewards[i] for i in indices], dtype=torch.float32),
                 "raw_rewards": [raw_rewards[i] for i in indices],
+                "data_length": len(indices),
             }
         )
 

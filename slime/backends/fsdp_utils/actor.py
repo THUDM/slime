@@ -250,9 +250,9 @@ class FSDPTrainRayActor(TrainRayActor):
                         end = cu_seqlens[i + 1].item()
                         seq_len = end - start
                         if seq_len > 1:  # Only sequences with >1 token contribute to log_probs
-                            rewards_expanded.extend([batch["rewards"][i]] * (seq_len - 1))
+                            rewards_expanded.extend([batch["rewards"][i]] * seq_len)
                     batch["advantages"] = batch["returns"] = torch.tensor(
-                        rewards_expanded, device=batch["tokens"].device, dtype=batch["rewards"].dtype
+                        rewards_expanded[1:], device=batch["tokens"].device, dtype=batch["rewards"].dtype
                     )
                 else:
                     raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
@@ -293,8 +293,6 @@ class FSDPTrainRayActor(TrainRayActor):
         self.optimizer.zero_grad(set_to_none=True)
         for mbs_id, batches in enumerate(packed_batches):
             # Process packed sequences in micro-batches to save memory
-            loss_divisor = grad_accum if not self.args.use_dynamic_batch_size else len(batches)
-            print("loss divisor", loss_divisor)
             for batch in batches:
                 with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                     logits = self.model(
@@ -335,12 +333,12 @@ class FSDPTrainRayActor(TrainRayActor):
                         batch["ref_log_probs"],
                         kl_loss_type=self.args.kl_loss_type,
                     )
-                    kl_loss = per_sample_mean(kl, batch["loss_masks"])
+                    kl_loss = per_sample_mean(kl, loss_masks)
 
                     loss = loss + self.args.kl_loss_coef * kl_loss
 
                 reported = {
-                    "loss": pg_loss.detach(),
+                    "loss": loss.detach(),
                     "pg_loss": pg_loss.detach(),
                     "pg_clipfrac": pg_clipfrac.detach(),
                     "ppo_kl": ppo_kl.detach(),
@@ -348,7 +346,12 @@ class FSDPTrainRayActor(TrainRayActor):
                 if self.args.use_kl_loss:
                     reported["kl_loss"] = kl_loss.detach()
                 # Scale loss for gradient accumulation
-                loss = loss / loss_divisor
+
+                loss = (
+                    loss / grad_accum
+                    if not self.args.use_dynamic_batch_size
+                    else loss / (batch["data_length"] * dist.get_world_size())
+                )
                 loss.backward()
                 # Accumulate reported metrics (store tensors for later mean)
                 for k, v in reported.items():
@@ -419,10 +422,6 @@ def gather_log_probs_packed(logits: torch.Tensor, input_ids: torch.Tensor, cu_se
         logits = logits.squeeze(0)
         input_ids = input_ids.squeeze(0)
 
-    # Create mask to exclude first token of each sequence
-    mask = torch.ones(len(input_ids), dtype=torch.bool, device=input_ids.device)
-    mask[cu_seqlens[:-1]] = False  # Exclude first token of each sequence
-
     # Shift for next-token prediction: logits[:-1] predicts input_ids[1:]
     log_probs = torch.log_softmax(logits[:-1], dim=-1)
     targets = input_ids[1:].to(device=log_probs.device)
@@ -431,7 +430,7 @@ def gather_log_probs_packed(logits: torch.Tensor, input_ids: torch.Tensor, cu_se
     gathered = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
 
     # Apply mask to exclude first tokens
-    return gathered[mask[1:]]
+    return gathered
 
 
 def per_sample_mean(x, loss_mask):
