@@ -82,11 +82,12 @@ class FSDPTrainRayActor(TrainRayActor):
         # TODO: load
 
         self.weights = {"actor": {}}
-        self.update_cpu_params_dict(self.weights["actor"])
-
+        
         self.ref_model = None
         if with_ref:
             self.load_ref_model(args.ref_load)
+        
+        self.update_cpu_params_dict(self.weights["actor"])
 
         self.weight_updator = UpdateWeightFromTensor(self.args, self.model)
 
@@ -139,16 +140,12 @@ class FSDPTrainRayActor(TrainRayActor):
             padded_batches: Input batches
             store_prefix: Prefix for storing results (e.g., "ref_")
         """
-        current_params = None
+        need_restore = False
         if model_tag != "actor" and model_tag in self.weights:
-            current_params = {}
-            with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
-                current_state_dict = self.model.state_dict()
-                for name, param in current_state_dict.items():
-                    current_params[name] = param.clone()
-            
+            self.update_cpu_params_dict(self.weights["actor"])
             self.update_gpu_params_dict(self.weights[model_tag])
             self.model.eval()
+            need_restore = True
         
         try:
             rollout_data = {f"{store_prefix}log_probs": []}
@@ -156,13 +153,12 @@ class FSDPTrainRayActor(TrainRayActor):
                 for batch in padded_batches:
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                         logits = self.model(input_ids=batch["tokens"]).logits
-                    batch[f"{store_prefix}log_probs"] = gather_log_probs(logits, batch["tokens"])
+                    batch[f"{store_prefix}log_probs"] = gather_log_probs(logits, batch["tokens"], self.args.rollout_temperature)
             return rollout_data
             
         finally:
-            if current_params is not None:
-                with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
-                    self.model.load_state_dict(current_params, strict=True)
+            if need_restore:
+                self.update_gpu_params_dict(self.weights["actor"])
                 self.model.train()
                 torch.cuda.synchronize()
 
@@ -237,28 +233,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     val += sum(batch[key])
             dist.all_reduce(val, op=dist.ReduceOp.SUM)
             log_dict[f"rollout/{key}"] = (val / len(padded_batches) / world_size).item()
-        
-        if "ref" in self.weights and "ref_log_probs" in padded_batches[0]:
-            kl_div_sum = torch.tensor([0.0], device=torch.cuda.current_device())
-            total_tokens = 0
-            
-            for batch in padded_batches:
-                kl_div = compute_approx_kl(
-                    batch["log_probs"],
-                    batch["ref_log_probs"], 
-                    kl_loss_type=getattr(self.args, 'kl_loss_type', 'kl')
-                )
-                masked_kl = kl_div * batch["loss_masks"]
-                kl_div_sum += masked_kl.sum().item()
-                total_tokens += batch["loss_masks"].sum().item()
-            
-            dist.all_reduce(kl_div_sum, op=dist.ReduceOp.SUM) 
-            total_tokens_tensor = torch.tensor([total_tokens], dtype=torch.float, device=torch.cuda.current_device())
-            dist.all_reduce(total_tokens_tensor, op=dist.ReduceOp.SUM)
-            
-            avg_kl_div = kl_div_sum / total_tokens_tensor.clamp_min(1)
-            log_dict["rollout/kl_divergence"] = avg_kl_div.item()
-            
+
         if dist.get_rank() == 0:
             print(f"rollout {rollout_id}: {log_dict}")
             if self.args.use_wandb:
@@ -277,7 +252,7 @@ class FSDPTrainRayActor(TrainRayActor):
         for mbs_id, batch in enumerate(padded_batches):
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logits = self.model(input_ids=batch["tokens"]).logits
-            log_probs = gather_log_probs(logits, batch["tokens"])
+            log_probs = gather_log_probs(logits, batch["tokens"], self.args.rollout_temperature)
 
             if self.args.advantage_estimator == "gspo":
                 raise NotImplementedError("implement GSPO")
@@ -300,11 +275,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 raise NotImplementedError("implement entropy bonus")
 
             if self.args.use_kl_loss:
-                ref_log_probs = batch["ref_log_probs"]
-                ref_log_probs = torch.cat(ref_log_probs, dim=0)
                 kl = compute_approx_kl(
                     log_probs,
-                    ref_log_probs,
+                    batch["ref_log_probs"],
                     kl_loss_type=self.args.kl_loss_type,
                 )
                 kl_loss = per_sample_mean(kl, batch["loss_masks"])
@@ -334,26 +307,30 @@ class FSDPTrainRayActor(TrainRayActor):
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
-                aggregated = {k: torch.stack(v).mean().item() for k, v in reported_accum.items()}
+                aggregated = {}
+                for k, v in reported_accum.items():
+                    if k in ["kl_loss"]:  
+                        kl_values = torch.stack(v)
+                        aggregated[k] = (kl_values * self.args.micro_batch_size).sum().item()
+                    else:
+                        aggregated[k] = torch.stack(v).mean().item()
                 # TODO: change this, this is slow.
                 reduced_aggregated = [None] * world_size
                 dist.all_gather_object(reduced_aggregated, aggregated)
                 aggregated = {}
                 for k in reported_accum.keys():
-                    aggregated[k] = sum([r[k] for r in reduced_aggregated]) / world_size
+                    if k in ["kl_loss"]:
+                        total_kl = sum([r[k] for r in reduced_aggregated])
+                        aggregated[k] = total_kl / self.args.global_batch_size
+                    else:
+                        aggregated[k] = sum([r[k] for r in reduced_aggregated]) / world_size
                 reported_accum = {}
                 if dist.get_rank() == 0:
                     log_dict = {
                         f"train/{k}": (val.item() if torch.is_tensor(val) else val) for k, val in aggregated.items()
                     }
                     log_dict["train/grad_norm"] = grad_norm.item() if not isinstance(grad_norm, float) else grad_norm
-                    
-                    if self.args.use_kl_loss and "kl_loss" in aggregated:
-                        if "loss" in aggregated and aggregated["loss"] > 0:
-                            kl_percentage = (aggregated["kl_loss"] * self.args.kl_loss_coef) / aggregated["loss"] * 100
-                            log_dict["train/kl_loss_percentage"] = kl_percentage
-                        log_dict["train/kl_penalty"] = aggregated["kl_loss"] * self.args.kl_loss_coef
-                    
+
                     for gid, group in enumerate(self.optimizer.param_groups):
                         if "lr" in group:
                             log_dict[f"train/lr-pg_{gid}"] = group["lr"]
@@ -406,11 +383,8 @@ class FSDPTrainRayActor(TrainRayActor):
     def update_gpu_params_dict(self, params_dict):
         """Load parameters from CPU storage dictionary to GPU model"""
         with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
-            state_dict = {}
-            for name, param in params_dict.items():
-                state_dict[name] = param.cuda(non_blocking=True)
-            
-            self.model.load_state_dict(state_dict, strict=True)
+            gpu_state_dict = {name: param.cuda(non_blocking=True) for name, param in params_dict.items()}
+            self.model.load_state_dict(gpu_state_dict, strict=True)
         torch.cuda.synchronize()
 
     def load_ref_model(self, ref_load_path):
@@ -421,10 +395,7 @@ class FSDPTrainRayActor(TrainRayActor):
         print(f"Loading reference model from {ref_load_path}")
         
         current_weights = {}
-        with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
-            current_state_dict = self.model.state_dict()
-            for name, param in current_state_dict.items():
-                current_weights[name] = param.clone()
+        self.update_cpu_params_dict(current_weights)
         
         try:
             import os
@@ -449,13 +420,14 @@ class FSDPTrainRayActor(TrainRayActor):
             print(f"Reference model parameters loaded and stored in CPU memory")
             
         finally:
-            with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
-                self.model.load_state_dict(current_weights, strict=True)
-            torch.cuda.synchronize()
+            self.update_gpu_params_dict(current_weights)
 
-def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
+def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temperature: float = 1.0) -> torch.Tensor:
     # log_probs: [B, T-1, V]; input_ids: [B, T]
     pred_logits = logits[:, :-1]
+    # haoran: whether to apply temperature shifting here?
+    if rollout_temperature != 1.0:
+        pred_logits = pred_logits / rollout_temperature
     log_probs_all = torch.log_softmax(pred_logits, dim=-1)
     tgt = input_ids[:, 1:].contiguous()
     log_probs = log_probs_all.gather(-1, tgt.unsqueeze(-1)).squeeze(-1)
@@ -463,5 +435,4 @@ def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Ten
 
 
 def per_sample_mean(x, loss_mask):
-    # TODO: impl per token loss
     return ((x * loss_mask).sum(dim=1) / loss_mask.sum(dim=1).clamp_min(1)).mean()
