@@ -40,14 +40,12 @@ class FSDPTrainRayActor(TrainRayActor):
         self.args = args
         torch.manual_seed(args.seed)
 
-        # Serialize tokenizer/config loading across ranks to avoid HF cache race
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
                 self.hf_config = AutoConfig.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
                 self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
 
-        # Load model
         with torch.device(f"cuda:{torch.cuda.current_device()}"):
             model = AutoModelForCausalLM.from_pretrained(
                 self.args.hf_checkpoint,
@@ -141,7 +139,6 @@ class FSDPTrainRayActor(TrainRayActor):
             padded_batches: Input batches
             store_prefix: Prefix for storing results (e.g., "ref_")
         """
-        # Save current model parameters if switching to different model
         current_params = None
         if model_tag != "actor" and model_tag in self.weights:
             current_params = {}
@@ -150,9 +147,8 @@ class FSDPTrainRayActor(TrainRayActor):
                 for name, param in current_state_dict.items():
                     current_params[name] = param.clone()
             
-            # Load the specified model parameters
             self.update_gpu_params_dict(self.weights[model_tag])
-            self.model.eval()  # Set to eval mode for ref model
+            self.model.eval()
         
         try:
             rollout_data = {f"{store_prefix}log_probs": []}
@@ -164,11 +160,10 @@ class FSDPTrainRayActor(TrainRayActor):
             return rollout_data
             
         finally:
-            # Restore original model parameters if we switched
             if current_params is not None:
                 with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
                     self.model.load_state_dict(current_params, strict=True)
-                self.model.train()  # Restore training mode
+                self.model.train()
                 torch.cuda.synchronize()
 
     def pad_and_move_to_device(self, rollout_data):
@@ -324,11 +319,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 reported["kl_loss"] = kl_loss.detach()
                 reported["kl_loss_coef"] = torch.tensor(self.args.kl_loss_coef, device=kl_loss.device)
 
-            # Scale loss for gradient accumulation
             loss = loss / grad_accum
             loss.backward()
 
-            # Accumulate reported metrics (store tensors for later mean)
             for k, v in reported.items():
                 reported_accum.setdefault(k, []).append(v)
 
@@ -337,12 +330,10 @@ class FSDPTrainRayActor(TrainRayActor):
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
-                # Aggregate logs
                 aggregated = {k: torch.stack(v).mean().item() for k, v in reported_accum.items()}
                 # TODO: change this, this is slow.
                 reduced_aggregated = [None] * world_size
                 dist.all_gather_object(reduced_aggregated, aggregated)
-                # Mean across dp ranks
                 aggregated = {}
                 for k in reported_accum.keys():
                     aggregated[k] = sum([r[k] for r in reduced_aggregated]) / world_size
