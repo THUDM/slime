@@ -15,7 +15,7 @@ from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.timer import Timer, timer
 
-from .update_weight_utils import UpdateWeightFromTensor
+from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
 
 class FSDPTrainRayActor(TrainRayActor):
