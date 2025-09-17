@@ -300,14 +300,18 @@ class FSDPTrainRayActor(TrainRayActor):
                 raise NotImplementedError("implement entropy bonus")
 
             if self.args.use_kl_loss:
+                ref_log_probs = batch["ref_log_probs"]
+                ref_log_probs = torch.cat(ref_log_probs, dim=0)
                 kl = compute_approx_kl(
                     log_probs,
-                    batch["ref_log_probs"],
+                    ref_log_probs,
                     kl_loss_type=self.args.kl_loss_type,
                 )
                 kl_loss = per_sample_mean(kl, batch["loss_masks"])
 
                 loss = loss + self.args.kl_loss_coef * kl_loss
+
+            # TODO: report entropy
 
             reported = {
                 "loss": loss.detach(),
@@ -315,9 +319,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 "pg_clipfrac": pg_clipfrac.detach(),
                 "ppo_kl": ppo_kl.detach(),
             }
+
             if self.args.use_kl_loss:
                 reported["kl_loss"] = kl_loss.detach()
-                reported["kl_loss_coef"] = torch.tensor(self.args.kl_loss_coef, device=kl_loss.device)
 
             loss = loss / grad_accum
             loss.backward()
