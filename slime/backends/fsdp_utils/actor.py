@@ -133,13 +133,43 @@ class FSDPTrainRayActor(TrainRayActor):
         padded_batches,
         store_prefix="",
     ):
-        rollout_data = {f"{store_prefix}log_probs": []}
-        with timer(f"{store_prefix}log_probs") and torch.no_grad():
-            for batch in padded_batches:
-                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    logits = self.model(input_ids=batch["tokens"]).logits
-                batch[f"{store_prefix}log_probs"] = gather_log_probs(logits, batch["tokens"])
-        return rollout_data
+        """
+        Compute log probabilities using specified model.
+        
+        Args:
+            model_tag: "actor" for current model, "ref" for reference model
+            padded_batches: Input batches
+            store_prefix: Prefix for storing results (e.g., "ref_")
+        """
+        # Save current model parameters if switching to different model
+        current_params = None
+        if model_tag != "actor" and model_tag in self.weights:
+            current_params = {}
+            with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
+                current_state_dict = self.model.state_dict()
+                for name, param in current_state_dict.items():
+                    current_params[name] = param.clone()
+            
+            # Load the specified model parameters
+            self.update_gpu_params_dict(self.weights[model_tag])
+            self.model.eval()  # Set to eval mode for ref model
+        
+        try:
+            rollout_data = {f"{store_prefix}log_probs": []}
+            with timer(f"{store_prefix}log_probs") and torch.no_grad():
+                for batch in padded_batches:
+                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                        logits = self.model(input_ids=batch["tokens"]).logits
+                    batch[f"{store_prefix}log_probs"] = gather_log_probs(logits, batch["tokens"])
+            return rollout_data
+            
+        finally:
+            # Restore original model parameters if we switched
+            if current_params is not None:
+                with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
+                    self.model.load_state_dict(current_params, strict=True)
+                self.model.train()  # Restore training mode
+                torch.cuda.synchronize()
 
     def pad_and_move_to_device(self, rollout_data):
         tokens = rollout_data["tokens"]
@@ -188,7 +218,7 @@ class FSDPTrainRayActor(TrainRayActor):
         ), f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
 
         if "ref" in self.weights:
-            self.compute_ref_log_probs(padded_batches)
+            self.compute_log_prob("ref", padded_batches, store_prefix="ref_")
 
         self.compute_log_prob("actor", padded_batches)
 
@@ -347,8 +377,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.update_cpu_params_dict(self.weights["actor"])
 
-        self._save_debug_train_data(rollout_id, rollout_data, padded_batches)
-
         Timer().start("train_wait")
         return
 
@@ -429,71 +457,6 @@ class FSDPTrainRayActor(TrainRayActor):
             with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
                 self.model.load_state_dict(current_weights, strict=True)
             torch.cuda.synchronize()
-
-    def compute_ref_log_probs(self, padded_batches):
-        """
-        Compute log probabilities using reference model parameters.
-        
-        This method temporarily loads ref model parameters from CPU memory 
-        (loaded once during initialization) to GPU, computes forward pass,
-        then restores original model parameters. No disk I/O involved.
-        """
-        if "ref" not in self.weights:
-            raise RuntimeError("Reference model weights not loaded")
-        
-        current_params = {}
-        with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
-            current_state_dict = self.model.state_dict()
-            for name, param in current_state_dict.items():
-                current_params[name] = param.clone()
-        
-        try:
-            self.update_gpu_params_dict(self.weights["ref"])
-            self.model.eval()
-            for batch in padded_batches:
-                with torch.no_grad():
-                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                        logits = self.model(input_ids=batch["tokens"]).logits
-                    batch["ref_log_probs"] = gather_log_probs(logits, batch["tokens"])
-                
-        finally:
-            with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
-                self.model.load_state_dict(current_params, strict=True)
-            self.model.train()
-            torch.cuda.synchronize()
-
-    def _log_debug_rollout_data(self, rollout_id, rollout_data):
-        """Log rollout data for debugging (similar to Megatron backend)"""
-        print(f"Debug rollout {rollout_id}: logging rollout data")
-
-    def _save_debug_train_data(self, rollout_id, rollout_data, padded_batches):
-        """Save debug train data if requested"""
-        from pathlib import Path
-        
-        if (path_template := getattr(self.args, 'save_debug_train_data', None)) is not None:
-            rank = dist.get_rank()
-            path = Path(path_template.format(rollout_id=rollout_id, rank=rank))
-            print(f"Save debug train data to {path}")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            
-            debug_data = {
-                'rollout_id': rollout_id,
-                'rank': rank,
-                'rollout_data': rollout_data,
-                'batch_info': []
-            }
-            
-            for i, batch in enumerate(padded_batches):
-                batch_info = {}
-                for key, value in batch.items():
-                    if isinstance(value, torch.Tensor):
-                        batch_info[key] = value.cpu().detach()
-                    else:
-                        batch_info[key] = value
-                debug_data['batch_info'].append(batch_info)
-            
-            torch.save(debug_data, path)
-
 
 def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
     # log_probs: [B, T-1, V]; input_ids: [B, T]
