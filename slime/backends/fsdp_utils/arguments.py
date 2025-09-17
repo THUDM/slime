@@ -26,6 +26,11 @@ class FSDPArgs:
     fsdp_sync_module_states: bool = True
     fsdp_forward_prefetch: bool = True
     fsdp_backward_prefetch: bool = True
+    
+    # Data packing configuration
+    max_seq_len: int = 8192  # Maximum sequence length
+    # max_tokens_per_gpu is defined in main arguments (slime/utils/arguments.py)
+    micro_batch_size: int = 1  # Micro batch size
 
     # Logging
     wandb_project: str = "slime-fsdp"
