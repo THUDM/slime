@@ -91,12 +91,11 @@ class UpdateWeightFromDistributed:
         self._is_src_rank = dist.get_rank() == 0
         if self._is_src_rank:
             self._group_name = f"slime"
-
-        if self._is_src_rank:
             master_address = ray._private.services.get_node_ip_address()
             with socket.socket() as sock:
                 sock.bind(("", 0))
                 master_port = sock.getsockname()[1]
+            ## TODO: why +1?
             world_size = self.args.rollout_num_gpus + 1
 
             refs = [
@@ -176,6 +175,7 @@ class UpdateWeightFromDistributed:
             state_dict = dict(zip(name_list, fsdp_unshard_tensor_list))
             self.request_update_params(state_dict)
 
+        ## TODO: why adding this?
         self.request_update_params({}, finished=True)
 
         dist.barrier()
