@@ -41,14 +41,16 @@ class Dataset:
     ):
         self.origin_samples = []
         for data in read_file(path):
-            prompt_content = []
-            if prompt_key in data:
-                prompt_content.append({"type":"text","text":data[prompt_key]})
             if multimodal_keys:
-                for media_type, data_key in multimodal_keys.items():
-                    if data_key in data:
-                        media_path = data[data_key]
-                        prompt_content.append({"type": media_type, "path": media_path}) 
+                 prompt_content = []
+                 if prompt_key in data:
+                     prompt_content.append({"type": "text", "text": data[prompt_key]})
+                 for media_type, data_key in multimodal_keys.items():
+                     if data_key in data:
+                         media_path=data[data_key]
+                         prompt_content.append({"type": media_type, "path": media_path})
+            else:
+                prompt_content = data.get(prompt_key)
 
             if apply_chat_template:
                 if tool_key is not None:
@@ -60,7 +62,9 @@ class Dataset:
                     assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
                 else:
                     tools = None
-                prompt = tokenizer.apply_chat_template(prompt_content, tools, tokenize=False, add_generation_prompt=True)
+                template_input = [{"role": "user", "content": prompt_content}] if multimodal_keys else prompt_content
+                prompt = tokenizer.apply_chat_template(template_input, tools, tokenize=False, add_generation_prompt=True)
+
             else:
                 prompt=prompt_content
 
