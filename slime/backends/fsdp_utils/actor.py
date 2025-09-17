@@ -12,6 +12,7 @@ from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
+from slime.utils.wandb_utils import init_wandb_secondary
 from slime.utils.timer import Timer, timer
 
 from .update_weight_utils import UpdateWeightFromTensor
@@ -32,6 +33,10 @@ class FSDPTrainRayActor(TrainRayActor):
 
     def init(self, args, role, wandb_run_id, with_ref: bool = False):  # type: ignore[override]
         super().init(args, role, wandb_run_id, with_ref)
+
+        if dist.get_rank() == 0:
+            init_wandb_secondary(args, wandb_run_id)
+
         self.args = args
         torch.manual_seed(args.seed)
 
