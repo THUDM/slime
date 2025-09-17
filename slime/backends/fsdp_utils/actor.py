@@ -87,7 +87,11 @@ class FSDPTrainRayActor(TrainRayActor):
         if with_ref:
             raise NotImplementedError()
 
-        self.weight_updator = UpdateWeightFromTensor(self.args, self.model)
+        self.weight_updator = (
+            UpdateWeightFromTensor(self.args, self.model)
+            if self.args.colocate
+            else UpdateWeightFromDistributed(self.args, self.model)
+        )
 
         if self.args.offload:
             self.sleep(("model"))
