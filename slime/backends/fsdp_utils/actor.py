@@ -19,7 +19,7 @@ from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
 from .data_packing import pack_sequences, unpack_sequences
-from .update_weight_utils import UpdateWeightFromTensor
+from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
 
 class FSDPTrainRayActor(TrainRayActor):
