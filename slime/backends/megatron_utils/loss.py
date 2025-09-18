@@ -164,15 +164,14 @@ def compute_advantages_and_returns(args, rollout_data):
         for reward, k in zip(old_rewards, kl):
             k[-1] += reward
             rewards.append(k)
-        advantages, returns = [
-            list(x)
-            for x in zip(
+        advantages, returns = list(
+            zip(
                 *[
                     get_advantages_and_returns(value, reward, args.gamma, args.lambd)
                     for value, reward in zip(values, rewards)
                 ]
             )
-        ]
+        )
 
     elif args.advantage_estimator == "reinforce_plus_plus":
         rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
