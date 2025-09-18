@@ -42,7 +42,12 @@ class TrainRayActor(RayActor):
         self.with_ref = with_ref
 
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
-        torch.cuda.set_device(f"cuda:{local_rank}")
+
+        if role == "actor":
+            gpu_rank = local_rank
+        else:  # critic
+            gpu_rank = (local_rank + (args.actor_num_gpus_per_node * args.actor_num_nodes)) % args.num_gpus_per_node
+        torch.cuda.set_device(f"cuda:{gpu_rank}")
 
         dist.init_process_group(
             backend=args.distributed_backend,

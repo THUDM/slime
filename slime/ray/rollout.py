@@ -7,9 +7,9 @@ from typing import List, Union
 
 import ray
 import torch
-import wandb
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
+import wandb
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client, run_router
