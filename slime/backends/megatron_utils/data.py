@@ -5,10 +5,10 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+import wandb
 from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 
-import wandb
 from slime.utils.data import get_minimum_num_micro_batch_size
 from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
@@ -238,7 +238,7 @@ def log_rollout_data(rollout_id, args, rollout_data):
             # Upload per sample mean for each rollout value
             # There are the following assumptions:
             # - Each dp rank has the same number of samples
-            if isinstance(val, list):
+            if isinstance(val, (list, tuple)):
                 if isinstance(val[0], torch.Tensor):
                     # NOTE: Here we have to do the clone().detach(), otherwise the tensor will be
                     # modified in place and will cause problem for the next rollout.
@@ -386,3 +386,30 @@ def log_perf_data(rollout_id, args):
             )
             wandb.log(log_dict)
     timer_instance.reset()
+
+
+def sync_actor_critic_data(
+    args,
+    values: Optional[list[torch.Tensor]] = None,
+    log_probs: Optional[list[torch.Tensor]] = None,
+    ref_log_probs: Optional[list[torch.Tensor]] = None,
+    group: Optional[dist.ProcessGroup] = None,
+):
+    handles = []
+
+    if values is None:
+        values = [torch.empty_like(log_prob) for log_prob in log_probs]
+    for value in values:
+        handles.append(dist.broadcast(value, src=1, group=group, async_op=True))
+
+    if args.kl_coef != 0 or args.use_kl_loss:
+        if values is not None:
+            ref_log_probs = [torch.empty_like(value) for value in values]
+            log_probs = [torch.empty_like(value) for value in values]
+        for ref_log_prob, log_prob in zip(ref_log_probs, log_probs):
+            handles.append(dist.broadcast(ref_log_prob, src=0, group=group, async_op=True))
+            handles.append(dist.broadcast(log_prob, src=0, group=group, async_op=True))
+
+    for handle in handles:
+        handle.wait()
+    return values, log_probs, ref_log_probs

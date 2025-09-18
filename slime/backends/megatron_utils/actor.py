@@ -1,6 +1,6 @@
+import socket
 from contextlib import nullcontext
 from pathlib import Path
-import socket
 
 import ray
 import torch
@@ -16,15 +16,14 @@ from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
-from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
-from slime.utils.distributed_utils import init_process_group
 
 from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp
-from .data import get_data_iterator, log_perf_data, log_rollout_data
+from .data import get_data_iterator, log_perf_data, log_rollout_data, sync_actor_critic_data
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
@@ -251,35 +250,26 @@ class MegatronTrainRayActor(TrainRayActor):
     def train_critic(self, rollout_id, rollout_data):
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
-        values =forward_only(
-                get_values,
-                self.args,
-                self.model,
-                data_iterator,
-                num_microbatches,
-            )
-        values['values'] = [value.squeeze(-1) for value in values['values']]
+        values = forward_only(
+            get_values,
+            self.args,
+            self.model,
+            data_iterator,
+            num_microbatches,
+        )
+        values = [value.squeeze(-1) for value in values["values"]]
 
-        handles = []
-        log_probs_list = []
-        ref_log_probs_list = []
-        for i, value in enumerate(values['values']):
-            log_prob = torch.empty_like(value)
-            ref_log_prob = torch.empty_like(value)
-            log_probs_list.append(log_prob)
-            ref_log_probs_list.append(ref_log_prob)
-            handles.append(dist.broadcast(value, src=1, group=self._actor_critic_groups, async_op=True))
-            handles.append(dist.broadcast(log_prob, src=0, group=self._actor_critic_groups, async_op=True))
-            handles.append(dist.broadcast(ref_log_prob, src=0, group=self._actor_critic_groups, async_op=True))
+        values, log_probs, ref_log_probs = sync_actor_critic_data(
+            self.args, values, None, None, self._actor_critic_groups
+        )
 
-        for handle in handles:
-            handle.wait()
-
-        rollout_data.update({
-            **values,
-            'log_probs': log_probs_list,
-            'ref_log_probs': ref_log_probs_list,
-        })
+        rollout_data.update(
+            {
+                "values": values,
+                "log_probs": log_probs,
+                "ref_log_probs": ref_log_probs,
+            }
+        )
 
         compute_advantages_and_returns(self.args, rollout_data)
 
@@ -302,42 +292,26 @@ class MegatronTrainRayActor(TrainRayActor):
             if self.args.compute_advantages_and_returns:
                 if "ref" in self.weights:
                     ref_log_probs = self.compute_log_prob(
-                            "ref",
-                            data_iterator,
-                            num_microbatches,
-                            store_prefix="ref_",
-                        )
-                    rollout_data.update(
-                        ref_log_probs
+                        "ref",
+                        data_iterator,
+                        num_microbatches,
+                        store_prefix="ref_",
                     )
 
                 log_probs = self.compute_log_prob(
-                        "old_actor" if self.args.keep_old_actor else "actor",
-                        data_iterator,
-                        num_microbatches,
-                        store_prefix="",
-                    )
-                rollout_data.update(
-                    log_probs
+                    "old_actor" if self.args.keep_old_actor else "actor",
+                    data_iterator,
+                    num_microbatches,
+                    store_prefix="",
                 )
+                rollout_data.update(log_probs)
 
                 if self.args.use_critic:
-                    values_list = []
-                    handles = []
-                    for i,log_prob in enumerate(rollout_data['log_probs']):
-                        value = torch.empty_like(log_prob)
-                        values_list.append(value)
-                        handles.append(dist.broadcast(value, src=1, group=self._actor_critic_groups, async_op=True))
-                        handles.append(dist.broadcast(log_prob, src=0, group=self._actor_critic_groups, async_op=True))
-                        handles.append(dist.broadcast(rollout_data['ref_log_probs'][i], src=0, group=self._actor_critic_groups, async_op=True))
-
-                    for handle in handles:
-                        handle.wait()
-
-                    rollout_data.update(
-                        {'values': values_list}
+                    valuse, log_probs, ref_log_probs = sync_actor_critic_data(
+                        self.args, None, log_probs["log_probs"], ref_log_probs["ref_log_probs"]
                     )
-                    
+                    rollout_data.update({"values": valuse})
+
                 # when there is old actor, we need to update the model params to actor manually
                 if "old_actor" in self.weights:
                     self.update_gpu_params_dict(self.weights["actor"])
@@ -461,21 +435,21 @@ class MegatronTrainRayActor(TrainRayActor):
 
         self.weights[model_tag] = {}
         self.update_cpu_params_dict(self.weights[model_tag])
-    
+
     def connect_actor_critic(self, actor_handle=None, master_address=None, master_port=None):
-        if self.role == 'actor':
+        if self.role == "actor":
             master_address = ray.util.get_node_ip_address()
             with socket.socket() as sock:
                 sock.bind(("", 0))
                 master_port = sock.getsockname()[1]
-            ref = actor_handle.connect_actor_critic.remote(master_address=master_address, master_port=master_port)
+            actor_handle.connect_actor_critic.remote(master_address=master_address, master_port=master_port)
 
-        group_name = 'actor_critic'
+        group_name = "actor_critic"
         world_size = 2
         self._actor_critic_groups = init_process_group(
             backend="nccl",
             init_method=f"tcp://{master_address}:{master_port}",
             world_size=world_size,
-            rank=0 if self.role == 'actor' else 1,
+            rank=0 if self.role == "actor" else 1,
             group_name=group_name,
         )
