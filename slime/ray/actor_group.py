@@ -1,5 +1,4 @@
 import os
-import random
 from typing import Optional
 
 import ray
@@ -93,7 +92,7 @@ class RayTrainGroup:
 
         # Create worker actors
         self._actor_handlers = []
-        master_addr, master_port = None, random.randint(20000, 21000)
+        master_addr, master_port = None, None
         for rank in range(world_size):
             actor = TrainRayActor.options(
                 num_cpus=num_gpus_per_actor,
