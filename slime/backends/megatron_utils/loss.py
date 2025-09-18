@@ -15,7 +15,12 @@ from slime.utils.ppo_utils import (
     get_reinforce_plus_plus_returns,
 )
 
-from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
+from .cp_utils import (
+    all_gather_with_cp, 
+    get_logits_and_tokens_offset_with_cp, 
+    get_sum_of_sample_mean,
+    get_sum_of_sample_max,
+)
 
 
 def get_responses(
@@ -250,7 +255,7 @@ def compute_advantages_and_returns(args, rollout_data):
     rollout_data["returns"] = returns
 
 
-def policy_loss_function(args, batch, logits, sum_of_sample_mean):
+def policy_loss_function(args, batch, logits, sum_of_sample_mean, sum_of_sample_max):
     advantages = torch.cat(batch["advantages"], dim=0)
     old_log_probs = batch["log_probs"]
 
@@ -293,13 +298,23 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
 
     pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
 
+    # record verbose log on sampler & learner gap, do this first to minimize mem peak
+    if 'rollout_log_probs' in batch:    
+        with torch.no_grad():
+            rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
+            old_log_probs = torch.cat(batch["log_probs"], dim=0)
+            sampler_learner_gap = rollout_log_probs - old_log_probs
+            sampler_learner_kl = sum_of_sample_mean(sampler_learner_gap)
+            
+            sampler_learner_prob_diff = rollout_log_probs.exp() - old_log_probs.exp()
+            sampler_learner_prob_diff_mean = sum_of_sample_mean(sampler_learner_prob_diff)
+            sampler_learner_prob_diff_max = sum_of_sample_max(sampler_learner_prob_diff)
+            sampler_learner_prob_diff_min = -sum_of_sample_max(-sampler_learner_prob_diff)
+            
     # Apply TIS off-policy correction using importance sampling if enabled
     if args.use_tis:
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
-        rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
-        old_log_probs = torch.cat(batch["log_probs"], dim=0)
-
-        tis = torch.exp(old_log_probs - rollout_log_probs)
+        tis = torch.exp(-sampler_learner_gap)
         ois = (-ppo_kl).exp()
         tis_clip = torch.clamp(tis, min=args.tis_clip_low, max=args.tis_clip)
         tis_clipfrac = tis_clip != tis
@@ -339,6 +354,10 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
         "entropy_loss": entropy_loss.clone().detach(),
         "pg_clipfrac": pg_clipfrac.clone().detach(),
         "ppo_kl": ppo_kl.clone().detach(),
+        "sampler_learner_kl": sampler_learner_kl.detach(),
+        "sampler_learner_prob_max": sampler_learner_prob_diff_max.detach(),
+        "sampler_learner_prob_min": sampler_learner_prob_diff_min.detach(),
+        "sampler_learner_prob_mean": sampler_learner_prob_diff_mean.detach(),
     }
 
     if args.use_kl_loss:
@@ -352,7 +371,7 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
     return loss, reported_loss
 
 
-def value_loss_function(args, batch, logits, sum_of_sample_mean):
+def value_loss_function(args, batch, logits, sum_of_sample_mean, sum_of_sample_max):
     old_values = torch.cat(batch["values"], dim=0)
 
     values = get_values(
@@ -384,7 +403,7 @@ def value_loss_function(args, batch, logits, sum_of_sample_mean):
     return loss, reported_loss
 
 
-def sft_loss_function(args, batch, logits, sum_of_sample_mean):
+def sft_loss_function(args, batch, logits, sum_of_sample_mean, sum_of_sample_max):
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
 
@@ -424,11 +443,18 @@ def loss_function(args, batch, num_microbatches, logits):
         args.calculate_per_token_loss,
     )
 
+    sum_of_sample_max = get_sum_of_sample_max(
+        batch["total_lengths"],
+        batch["response_lengths"],
+        batch["loss_masks"],
+        args.calculate_per_token_loss,
+    )
     loss_function_kwargs = {
         "args": args,
         "batch": batch,
         "logits": logits,
         "sum_of_sample_mean": sum_of_sample_mean,
+        "sum_of_sample_max": sum_of_sample_max,
     }
 
     match args.loss_type:
