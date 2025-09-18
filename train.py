@@ -43,6 +43,9 @@ def train(args):
     # initialize the connection for weight update during training
     ray.get(actor_model.async_init_weight_update_connections(rollout_manager))
 
+    if args.use_critic:
+        ray.get(actor_model.async_connect(critic_model))
+
     if args.offload:
         ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
 
