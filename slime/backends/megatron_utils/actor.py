@@ -68,8 +68,6 @@ class MegatronTrainRayActor(TrainRayActor):
         self.weights = {"actor": {}}
         self.update_cpu_params_dict(self.weights["actor"])
 
-        if args.use_critic:
-            with_ref = True
         if with_ref:
             self.load_other_checkpoint("ref", args.ref_load)
 
