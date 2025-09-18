@@ -15,6 +15,7 @@ from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.ppo_utils import (
     compute_approx_kl,
     compute_policy_loss,
+    get_gspo_token_ratio,
     get_sequence_level_ratio,
     normalize_advantages_in_groups,
 )
@@ -254,7 +255,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         # TODO: compute rewards and adv for t
         for batch in padded_batches:
-            if self.args.advantage_estimator in ["grpo", "gspo"]:
+            if self.args.advantage_estimator in ["grpo", "gspo", "gspo-token"]:
                 advantages = normalize_advantages_in_groups(batch["rewards"], self.args.n_samples_per_prompt)
                 batch["advantages"] = advantages.expand_as(batch["log_probs"])
                 batch["returns"] = batch["rewards"].expand_as(batch["log_probs"])
@@ -297,7 +298,10 @@ class FSDPTrainRayActor(TrainRayActor):
 
             if self.args.advantage_estimator == "gspo":
                 ratio = get_sequence_level_ratio(log_probs, batch["log_probs"], batch["loss_masks"])
-                ppo_kl = -ratio.unsqueeze(-1)
+                ppo_kl = -torch.log(ratio.unsqueeze(-1) + 1e-8)
+            elif self.args.advantage_estimator == "gspo-token":
+                ratio = get_gspo_token_ratio(log_probs, batch["log_probs"], batch["loss_masks"])
+                ppo_kl = -torch.log(ratio + 1e-8)
             else:
                 ppo_kl = batch["log_probs"] - log_probs
             pg_loss, pg_clipfrac = compute_policy_loss(

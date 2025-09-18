@@ -40,6 +40,19 @@ def normalize_advantages_in_groups(
     return normalized_rewards.view(-1)
 
 
+def get_gspo_token_ratio(log_probs: torch.Tensor, old_log_probs: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
+    """
+    Calculates the token-level importance ratio for GSPO-token.
+    """
+    # Calculate the sequence-level ratio and detach it from the graph
+    seq_level_ratio = get_sequence_level_ratio(log_probs, old_log_probs, masks)
+    detached_seq_ratio = seq_level_ratio.detach()
+
+    # Now we calc the token level ratio
+    token_level_ratio = torch.exp(log_probs - old_log_probs)
+    return detached_seq_ratio.unsqueeze(-1) * token_level_ratio
+
+
 @torch.compile(dynamic=True)
 def compute_approx_kl(
     log_probs: torch.Tensor,
