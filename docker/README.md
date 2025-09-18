@@ -19,7 +19,7 @@ docker build --no-cache \
     --build-arg NO_PROXY="localhost,127.0.0.1" \
     --build-arg SGLANG_VERSION=${SGLANG_VERSION:-latest} \
     --build-arg MEGATRON_COMMIT=${MEGATRON_COMMIT:-main} \
-    . -t zhuzilin/slime:${SGLANG_VERSION:-latest}
+    . -t slimerl/slime:${SGLANG_VERSION:-latest}
 ```
 
 Before each update, we will test the following models with 64xH100:

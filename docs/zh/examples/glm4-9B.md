@@ -2,7 +2,7 @@
 
 ## 环境准备
 
-拉取 `zhuzilin/slime:latest` 镜像后，用如下方式初始化镜像环境：
+拉取 `slimerl/slime:latest` 镜像后，用如下方式初始化镜像环境：
 
 ```bash
 cd /root/
