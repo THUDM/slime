@@ -258,7 +258,6 @@ class MegatronTrainRayActor(TrainRayActor):
             num_microbatches,
         )
         values = [value.squeeze(-1) for value in values["values"]]
-
         values, log_probs, ref_log_probs = sync_actor_critic_data(
             self.args, values, None, None, self._actor_critic_groups
         )
@@ -308,7 +307,11 @@ class MegatronTrainRayActor(TrainRayActor):
 
                 if self.args.use_critic:
                     valuse, log_probs, ref_log_probs = sync_actor_critic_data(
-                        self.args, None, log_probs["log_probs"], ref_log_probs["ref_log_probs"]
+                        self.args,
+                        None,
+                        log_probs["log_probs"],
+                        ref_log_probs["ref_log_probs"],
+                        self._actor_critic_groups,
                     )
                     rollout_data.update({"values": valuse})
 
