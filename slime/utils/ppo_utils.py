@@ -6,6 +6,40 @@ import torch
 import torch.distributed as dist
 
 
+def get_sequence_level_ratio(
+    log_probs: torch.Tensor,
+    old_log_probs: torch.Tensor,
+    masks: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Calculates the sequence-level importance ratio for GSPO.
+    """
+    token_ratios = torch.exp(log_probs - old_log_probs) * masks
+    seq_ratios = torch.exp(torch.sum(torch.log(token_ratios + 1e-8) * masks, dim=-1) / torch.sum(masks, dim=-1))
+    return seq_ratios
+
+
+def normalize_advantages_in_groups(
+    rewards: torch.Tensor,
+    n_samples_per_prompt: int,
+) -> torch.Tensor:
+    """
+    Normalizes rewards within groups of samples for the same prompt.
+    This is the advantage calculation described in the GSPO paper.
+    """
+    # Need to reshape the rewards tensor into groups
+    grouped_rewards = rewards.view(-1, n_samples_per_prompt)
+
+    # Now we calc the mean and std_deviation for each group
+    mean_rewards = torch.mean(grouped_rewards, dim=1, keepdim=True)
+    std_rewards = torch.std(grouped_rewards, dim=1, keepdim=True)
+
+    # Now we can normalize the rewards and add a small epsilon to avoid div by zero
+    normalized_rewards = (grouped_rewards - mean_rewards) / (std_rewards + 1e-8)
+
+    return normalized_rewards.view(-1)
+
+
 @torch.compile(dynamic=True)
 def compute_approx_kl(
     log_probs: torch.Tensor,

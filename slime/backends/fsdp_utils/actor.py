@@ -2,19 +2,24 @@ from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
+import wandb
 from PIL import Image
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import ShardingStrategy, StateDictType
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 
-import wandb
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
-from slime.utils.wandb_utils import init_wandb_secondary
+from slime.utils.ppo_utils import (
+    compute_approx_kl,
+    compute_policy_loss,
+    get_sequence_level_ratio,
+    normalize_advantages_in_groups,
+)
 from slime.utils.timer import Timer, timer
+from slime.utils.wandb_utils import init_wandb_secondary
 
 from .update_weight_utils import UpdateWeightFromTensor
 
@@ -87,11 +92,11 @@ class FSDPTrainRayActor(TrainRayActor):
         # TODO: load
 
         self.weights = {"actor": {}}
-        
+
         self.ref_model = None
         if with_ref:
             self.load_ref_model(args.ref_load)
-        
+
         self.update_cpu_params_dict(self.weights["actor"])
 
         self.weight_updator = UpdateWeightFromTensor(self.args, self.model)
@@ -139,7 +144,7 @@ class FSDPTrainRayActor(TrainRayActor):
     ):
         """
         Compute log probabilities using specified model.
-        
+
         Args:
             model_tag: "actor" for current model, "ref" for reference model
             padded_batches: Input batches
@@ -151,7 +156,7 @@ class FSDPTrainRayActor(TrainRayActor):
             self.update_gpu_params_dict(self.weights[model_tag])
             self.model.eval()
             need_restore = True
-        
+
         try:
             rollout_data = {f"{store_prefix}log_probs": []}
             with timer(f"{store_prefix}log_probs") and torch.no_grad():
@@ -161,9 +166,11 @@ class FSDPTrainRayActor(TrainRayActor):
                         if "pixel_values" in batch:
                             model_args["pixel_values"] = batch["pixel_values"]
                     logits = self.model(**model_args).logits
-                    batch[f"{store_prefix}log_probs"] = gather_log_probs(logits, batch["tokens"], self.args.rollout_temperature)
+                    batch[f"{store_prefix}log_probs"] = gather_log_probs(
+                        logits, batch["tokens"], self.args.rollout_temperature
+                    )
             return rollout_data
-            
+
         finally:
             if need_restore:
                 self.update_gpu_params_dict(self.weights["actor"])
@@ -248,12 +255,14 @@ class FSDPTrainRayActor(TrainRayActor):
         # TODO: compute rewards and adv for t
         for batch in padded_batches:
             if self.args.advantage_estimator in ["grpo", "gspo"]:
-                batch["advantages"] = batch["returns"] = batch["rewards"].expand_as(batch["log_probs"])
+                advantages = normalize_advantages_in_groups(batch["rewards"], self.args.n_samples_per_prompt)
+                batch["advantages"] = advantages.expand_as(batch["log_probs"])
+                batch["returns"] = batch["rewards"].expand_as(batch["log_probs"])
             else:
                 raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
 
         log_dict = {}
-        
+
         for key in ["log_probs", "ref_log_probs", "advantages", "returns", "raw_reward"]:
             if key not in padded_batches[0]:
                 continue
@@ -287,9 +296,10 @@ class FSDPTrainRayActor(TrainRayActor):
             log_probs = gather_log_probs(logits, batch["tokens"], self.args.rollout_temperature)
 
             if self.args.advantage_estimator == "gspo":
-                raise NotImplementedError("implement GSPO")
-
-            ppo_kl = batch["log_probs"] - log_probs
+                ratio = get_sequence_level_ratio(log_probs, batch["log_probs"], batch["loss_masks"])
+                ppo_kl = -ratio.unsqueeze(-1)
+            else:
+                ppo_kl = batch["log_probs"] - log_probs
             pg_loss, pg_clipfrac = compute_policy_loss(
                 ppo_kl, batch["advantages"], self.args.eps_clip, self.args.eps_clip_high
             )
@@ -341,7 +351,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 self.optimizer.zero_grad(set_to_none=True)
                 aggregated = {}
                 for k, v in reported_accum.items():
-                    if k in ["kl_loss"]:  
+                    if k in ["kl_loss"]:
                         kl_values = torch.stack(v)
                         aggregated[k] = (kl_values * self.args.micro_batch_size).sum().item()
                     else:
@@ -366,14 +376,16 @@ class FSDPTrainRayActor(TrainRayActor):
                     for gid, group in enumerate(self.optimizer.param_groups):
                         if "lr" in group:
                             log_dict[f"train/lr-pg_{gid}"] = group["lr"]
-                    
+
                     kl_info = ""
                     if self.args.use_kl_loss and "kl_loss" in aggregated:
                         kl_info = f", kl_loss: {aggregated['kl_loss']:.4f}, kl_penalty: {aggregated['kl_loss'] * self.args.kl_loss_coef:.4f}"
-                    
-                    print(f"step {self.global_step}: loss: {aggregated.get('loss', 0):.4f}, pg_loss: {aggregated.get('pg_loss', 0):.4f}{kl_info}")
+
+                    print(
+                        f"step {self.global_step}: loss: {aggregated.get('loss', 0):.4f}, pg_loss: {aggregated.get('pg_loss', 0):.4f}{kl_info}"
+                    )
                     print(f"step {self.global_step} full: {log_dict}")
-                    
+
                     if self.args.use_wandb:
                         log_dict["train/step"] = self.global_step
                         wandb.log(log_dict)
@@ -404,7 +416,7 @@ class FSDPTrainRayActor(TrainRayActor):
         """Copy model parameters from GPU to CPU storage dictionary"""
         with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
             state_dict = self.model.state_dict()
-            
+
         for name, param in state_dict.items():
             if name not in params_dict:
                 params_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
@@ -423,36 +435,38 @@ class FSDPTrainRayActor(TrainRayActor):
         """Load reference model parameters once and store in CPU memory (like Megatron backend)"""
         if ref_load_path is None:
             raise ValueError("ref_load_path must be provided when loading reference model")
-        
+
         print(f"Loading reference model from {ref_load_path}")
-        
+
         current_weights = {}
         self.update_cpu_params_dict(current_weights)
-        
+
         try:
             import os
+
             if os.path.isdir(ref_load_path):
                 temp_ref_model = AutoModelForCausalLM.from_pretrained(
                     ref_load_path,
                     trust_remote_code=True,
                     torch_dtype=torch.bfloat16,
                 )
-                
+
                 with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
                     self.model.load_state_dict(temp_ref_model.state_dict(), strict=True)
-                
+
                 del temp_ref_model
                 torch.cuda.empty_cache()
             else:
                 raise NotImplementedError(f"Loading from checkpoint file {ref_load_path} not yet implemented")
-            
+
             self.weights["ref"] = {}
             self.update_cpu_params_dict(self.weights["ref"])
-            
+
             print(f"Reference model parameters loaded and stored in CPU memory")
-            
+
         finally:
             self.update_gpu_params_dict(current_weights)
+
 
 def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temperature: float = 1.0) -> torch.Tensor:
     # log_probs: [B, T-1, V]; input_ids: [B, T]
