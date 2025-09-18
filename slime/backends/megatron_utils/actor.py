@@ -296,6 +296,7 @@ class MegatronTrainRayActor(TrainRayActor):
                         num_microbatches,
                         store_prefix="ref_",
                     )
+                    rollout_data.update(ref_log_probs)
 
                 log_probs = self.compute_log_prob(
                     "old_actor" if self.args.keep_old_actor else "actor",
@@ -306,14 +307,14 @@ class MegatronTrainRayActor(TrainRayActor):
                 rollout_data.update(log_probs)
 
                 if self.args.use_critic:
-                    valuse, log_probs, ref_log_probs = sync_actor_critic_data(
+                    values, log_probs, ref_log_probs = sync_actor_critic_data(
                         self.args,
                         None,
                         log_probs["log_probs"],
-                        ref_log_probs["ref_log_probs"],
+                        ref_log_probs["ref_log_probs"] if (self.args.kl_coef != 0 or self.args.use_kl_loss) else None,
                         self._actor_critic_groups,
                     )
-                    rollout_data.update({"values": valuse})
+                    rollout_data.update({"values": values})
 
                 # when there is old actor, we need to update the model params to actor manually
                 if "old_actor" in self.weights:

@@ -27,7 +27,7 @@ def train(args):
 
     # sync the initialization (model initalization, load checkpoint, etc.)
     if args.use_critic:
-        ray.get(critic_model.async_init(args, role="critic", with_ref=False))
+        critic_init_handle = critic_model.async_init(args, role="critic", with_ref=False)
 
     start_rollout_ids = ray.get(
         actor_model.async_init(args, role="actor", with_ref=args.kl_coef != 0 or args.use_kl_loss)
@@ -44,6 +44,7 @@ def train(args):
     ray.get(actor_model.async_init_weight_update_connections(rollout_manager))
 
     if args.use_critic:
+        ray.get(critic_init_handle)
         ray.get(actor_model.async_connect(critic_model))
 
     if args.offload:
