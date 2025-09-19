@@ -10,6 +10,7 @@ from xtuner.v1.data_proto.sequence_context import SequenceContext
 from xtuner.v1.model import get_model_config_from_hf
 
 import wandb
+from slime.ray.registry import get_actors
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
@@ -67,6 +68,7 @@ class XTunerTrainRayActor(TrainRayActor):
         self.sp_mesh = self.data_mesh["sp"]
 
         self.weight_updator = UpdateWeightFromDistributed(args, self.model)
+        self.connected = False
 
     def sleep(self, tags):
         if not getattr(self.args, "offload", False):
@@ -86,15 +88,6 @@ class XTunerTrainRayActor(TrainRayActor):
 
         path = f"{self.args.save}/iter_{iteration:07}/hf"
         self.model.save_hf(path, save_dtype=torch.bfloat16)
-
-    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
-        self.rollout_engines = rollout_engines
-
-        if self.args.debug_train_only or self.args.debug_rollout_only:
-            return
-
-        self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
-        dist.barrier(group=get_gloo_group())
 
     def get_rollout_data(self, rollout_data_ref):
         dp_rank = dist.get_rank() // self.args.sp_size
@@ -266,6 +259,13 @@ class XTunerTrainRayActor(TrainRayActor):
     def update_weights(self):  # type: ignore[override]
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
+
+        if not self.connected:
+            self.connected = True
+            rollout_engines = get_actors("rollout")
+            rollout_engine_lock = get_actors("rollout_lock", 0)
+            self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
+            dist.barrier(group=get_gloo_group())
 
         if self.args.offload:
             # TODO: don't wake up here

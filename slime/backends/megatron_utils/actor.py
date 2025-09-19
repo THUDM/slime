@@ -14,6 +14,7 @@ else:
 from megatron.core import mpu
 from transformers import AutoConfig, AutoTokenizer
 
+from slime.ray.registry import get_actors
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
@@ -88,6 +89,7 @@ class MegatronTrainRayActor(TrainRayActor):
             quantization_config=getattr(self.hf_config, "quantization_config", None),
             vocab_size=self.tokenizer.vocab_size if self.args.vocab_size is None else self.args.vocab_size,
         )
+        self.connected = False
 
         # empty cache after initialization
         clear_memory()
@@ -384,15 +386,6 @@ class MegatronTrainRayActor(TrainRayActor):
 
         save(iteration, self.model, self.optimizer, self.opt_param_scheduler)
 
-    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
-        self.rollout_engines = rollout_engines
-
-        if self.args.debug_train_only or self.args.debug_rollout_only:
-            return
-
-        self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
-        dist.barrier(group=get_gloo_group())
-
     @timer
     def update_weights(self):
         if self.args.debug_train_only or self.args.debug_rollout_only:
@@ -400,6 +393,13 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.offload and hasattr(mpu, "reload_process_groups"):
             mpu.reload_process_groups()
+
+        if not self.connected:
+            self.connected = True
+            rollout_engines = get_actors("rollout")
+            rollout_engine_lock = get_actors("rollout_lock", 0)
+            self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
+            dist.barrier(group=get_gloo_group())
 
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
             print_memory("before update_weights")
