@@ -139,3 +139,9 @@ class RayTrainGroup:
 
     def async_offload(self):
         return [actor.sleep.remote(("model")) for actor in self._actor_handlers]
+
+    def async_connect(self, critic_group):
+        return [
+            actor.connect_actor_critic.remote((critic))
+            for actor, critic in zip(self._actor_handlers, critic_group._actor_handlers)
+        ]

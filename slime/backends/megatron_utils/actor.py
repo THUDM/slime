@@ -1,6 +1,8 @@
+import socket
 from contextlib import nullcontext
 from pathlib import Path
 
+import ray
 import torch
 import torch.distributed as dist
 
@@ -14,14 +16,14 @@ from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
-from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
 from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp
-from .data import get_data_iterator, log_perf_data, log_rollout_data
+from .data import get_data_iterator, log_perf_data, log_rollout_data, sync_actor_critic_data
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
@@ -51,6 +53,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if role == "critic":
             self.args.load = self.args.critic_load
             self.args.save = self.args.critic_save
+            self.args.lr = self.args.critic_lr
 
         (self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id) = initialize_model_and_optimizer(
             args, role
@@ -59,6 +62,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if role == "critic":
             if self.args.offload:
                 self.sleep(("model"))
+            Timer().start("train_wait")
             return
 
         start_rollout_id = loaded_rollout_id + 1
@@ -245,15 +249,29 @@ class MegatronTrainRayActor(TrainRayActor):
     def train_critic(self, rollout_id, rollout_data):
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
+        values = forward_only(
+            get_values,
+            self.args,
+            self.model,
+            data_iterator,
+            num_microbatches,
+        )["values"]
+
+        if rollout_id < self.args.num_critic_only_steps:
+            # we will only use the shape of log_probs in this situation
+            log_probs = values
+            ref_log_probs = values
+        else:
+            values, log_probs, ref_log_probs = sync_actor_critic_data(
+                self.args, values, None, None, self._actor_critic_groups
+            )
 
         rollout_data.update(
-            forward_only(
-                get_values,
-                self.args,
-                self.model,
-                data_iterator,
-                num_microbatches,
-            )
+            {
+                "values": values,
+                "log_probs": log_probs,
+                "ref_log_probs": ref_log_probs,
+            }
         )
 
         compute_advantages_and_returns(self.args, rollout_data)
@@ -267,6 +285,7 @@ class MegatronTrainRayActor(TrainRayActor):
             data_iterator,
             num_microbatches,
         )
+        Timer().start("train_wait")
 
     def train_actor(self, rollout_id, rollout_data):
         # Create data iterator for log_probs and train.
@@ -275,23 +294,32 @@ class MegatronTrainRayActor(TrainRayActor):
         with timer("train"):
             if self.args.compute_advantages_and_returns:
                 if "ref" in self.weights:
-                    rollout_data.update(
-                        self.compute_log_prob(
-                            "ref",
-                            data_iterator,
-                            num_microbatches,
-                            store_prefix="ref_",
-                        )
-                    )
-
-                rollout_data.update(
-                    self.compute_log_prob(
-                        "old_actor" if self.args.keep_old_actor else "actor",
+                    ref_log_probs = self.compute_log_prob(
+                        "ref",
                         data_iterator,
                         num_microbatches,
-                        store_prefix="",
+                        store_prefix="ref_",
                     )
+                    rollout_data.update(ref_log_probs)
+
+                log_probs = self.compute_log_prob(
+                    "old_actor" if self.args.keep_old_actor else "actor",
+                    data_iterator,
+                    num_microbatches,
+                    store_prefix="",
                 )
+                rollout_data.update(log_probs)
+
+                if self.args.use_critic:
+                    values, log_probs, ref_log_probs = sync_actor_critic_data(
+                        self.args,
+                        None,
+                        log_probs["log_probs"],
+                        ref_log_probs["ref_log_probs"] if (self.args.kl_coef != 0 or self.args.use_kl_loss) else None,
+                        self._actor_critic_groups,
+                    )
+                    rollout_data.update({"values": values})
+
                 # when there is old actor, we need to update the model params to actor manually
                 if "old_actor" in self.weights:
                     self.update_gpu_params_dict(self.weights["actor"])
@@ -415,3 +443,21 @@ class MegatronTrainRayActor(TrainRayActor):
 
         self.weights[model_tag] = {}
         self.update_cpu_params_dict(self.weights[model_tag])
+
+    def connect_actor_critic(self, actor_handle=None, master_address=None, master_port=None):
+        if self.role == "actor":
+            master_address = ray.util.get_node_ip_address()
+            with socket.socket() as sock:
+                sock.bind(("", 0))
+                master_port = sock.getsockname()[1]
+            actor_handle.connect_actor_critic.remote(master_address=master_address, master_port=master_port)
+
+        group_name = "actor_critic"
+        world_size = 2
+        self._actor_critic_groups = init_process_group(
+            backend="nccl",
+            init_method=f"tcp://{master_address}:{master_port}",
+            world_size=world_size,
+            rank=0 if self.role == "actor" else 1,
+            group_name=group_name,
+        )

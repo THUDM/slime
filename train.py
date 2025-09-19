@@ -27,7 +27,7 @@ def train(args):
 
     # sync the initialization (model initalization, load checkpoint, etc.)
     if args.use_critic:
-        ray.get(critic_model.async_init(args, role="critic", with_ref=False))
+        critic_init_handle = critic_model.async_init(args, role="critic", with_ref=False)
 
     start_rollout_ids = ray.get(
         actor_model.async_init(args, role="actor", with_ref=args.kl_coef != 0 or args.use_kl_loss)
@@ -42,6 +42,10 @@ def train(args):
 
     # initialize the connection for weight update during training
     ray.get(actor_model.async_init_weight_update_connections(rollout_manager))
+
+    if args.use_critic:
+        ray.get(critic_init_handle)
+        ray.get(actor_model.async_connect(critic_model))
 
     if args.offload:
         ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
@@ -66,11 +70,11 @@ def train(args):
 
         if args.use_critic:
             critic_train_handle = critic_model.async_train(rollout_id, rollout_data_ref)
-
-        ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
-
-        if args.use_critic:
+            if rollout_id >= args.num_critic_only_steps:
+                ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
             ray.get(critic_train_handle)
+        else:
+            ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
         if args.save_interval is not None and (
             (rollout_id + 1) % args.save_interval == 0
@@ -81,9 +85,12 @@ def train(args):
                 ray.get(rollout_manager.save.remote(rollout_id))
 
         if args.offload:
-            ray.get(actor_model.async_offload())
             if args.use_critic:
                 ray.get(critic_model.async_offload())
+                if rollout_id >= args.num_critic_only_steps:
+                    ray.get(actor_model.async_offload())
+            else:
+                ray.get(actor_model.async_offload())
 
             ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
 

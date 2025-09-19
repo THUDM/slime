@@ -15,12 +15,12 @@
 
 ```shell
 # 拉取最新镜像
-docker pull zhuzilin/slime:latest
+docker pull slimerl/slime:latest
 
 # 启动容器
 docker run --rm --gpus all --ipc=host --shm-size=16g \
   --ulimit memlock=-1 --ulimit stack=67108864 \
-  -it zhuzilin/slime:latest /bin/bash
+  -it slimerl/slime:latest /bin/bash
 ```
 
 ### 安装 slime

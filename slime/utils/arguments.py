@@ -518,9 +518,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             reset_arg(parser, "--seed", type=int, default=1234)
             reset_arg(parser, "--clip-grad", type=float, default=1.0)
             reset_arg(parser, "--calculate-per-token-loss", action="store_true")
+            reset_arg(parser, "--lr", type=float, default=1e-6)
 
+            parser.add_argument("--num-critic-only-steps", type=int, default=0, help="Number of critic only steps")
             parser.add_argument("--critic-load", type=str, default=None, help="The checkpoint for critic model.")
             parser.add_argument("--critic-save", type=str, default=None, help="The checkpoint for critic model.")
+            parser.add_argument("--critic-lr", type=float, default=None, help="The lr for critic model")
 
             parser.add_argument("--eps-clip", type=float, default=0.2, help="PPO clip range")
             parser.add_argument("--eps-clip-high", type=float, default=None, help="PPO clip upper range")
@@ -984,9 +987,6 @@ def slime_validate_args(args):
             args.ckpt_step = args.ref_ckpt_step
         args.start_rollout_id = 0
 
-    if args.critic_load is None:
-        args.critic_load = args.load
-
     if args.eval_interval is not None:
         assert args.eval_prompt_data is not None, "eval_prompt_data must be set when eval_interval is set"
         if len(args.eval_prompt_data) == 1:
@@ -1032,6 +1032,10 @@ def slime_validate_args(args):
         args.critic_num_gpus_per_node = args.actor_num_gpus_per_node
     if args.critic_num_nodes is None:
         args.critic_num_nodes = args.actor_num_nodes
+    if args.critic_load is None:
+        args.critic_load = args.load
+    if args.critic_lr is None:
+        args.critic_lr = args.lr
 
     if args.debug_rollout_only:
         if args.colocate and args.rollout_num_gpus is None:
