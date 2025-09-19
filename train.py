@@ -1,5 +1,6 @@
 import ray
 from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
+from tqdm import tqdm
 
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_group
 from slime.utils.arguments import parse_args
@@ -58,7 +59,7 @@ def train(args):
 
     # train loop.
     # note that for async training, one can change the position of the sync operation(ray.get).
-    for rollout_id in range(args.start_rollout_id, args.num_rollout):
+    for rollout_id in tqdm(range(args.start_rollout_id, args.num_rollout), desc="Total Progress"):
         # TODO extract the duplicated eval logic
         if args.eval_interval is not None and rollout_id == 0:
             ray.get(rollout_manager.eval.remote(rollout_id))

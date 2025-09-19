@@ -1,4 +1,5 @@
 import ray
+from tqdm import tqdm
 
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_group
 from slime.utils.arguments import parse_args
@@ -47,7 +48,7 @@ def train(args):
 
     # async train loop.
     rollout_data_next_future = rollout_manager.generate.remote(args.start_rollout_id)
-    for rollout_id in range(args.start_rollout_id, args.num_rollout):
+    for rollout_id in tqdm(range(args.start_rollout_id, args.num_rollout), desc="Total Progress"):
         # Sync the last generation
         if rollout_data_next_future is not None:
             rollout_data_curr_ref = ray.get(rollout_data_next_future)
