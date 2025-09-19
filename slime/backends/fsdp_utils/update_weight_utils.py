@@ -1,11 +1,14 @@
 import socket
+
 import ray
 import torch
 import torch.distributed as dist
+import tqdm
 from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import StateDictType
+
 from slime.utils.distributed_utils import init_process_group
 
 try:
@@ -125,22 +128,15 @@ class UpdateWeightFromDistributed:
         model = self.model
         torch.cuda.empty_cache()
 
-        if (model.config.float8_cfg is not None) and (model.config.float8_cfg.enable_float8):
-            dtype = torch.float8_e4m3fn
-        else:
-            dtype = torch.bfloat16
+        dtype = torch.bfloat16
 
         def get_params(tensor_list, name_list, save_dtype):
             _tensor_list, _spec_list = list(zip(*tensor_list))
             fsdp_unshard_tensor_list = model._fsdp_foreach_allgather(_tensor_list, _spec_list)
-            if save_dtype == torch.float8_e4m3fn:
-                fsdp_unshard_tensor_list, name_list = model._to_float8(
-                    fsdp_unshard_tensor_list, name_list, _tensor_list, save_dtype
-                )
             return fsdp_unshard_tensor_list, name_list
 
         saved_list = []
-        for i, layer in tqdm(model.layers.items(), desc="[gather weight]"):
+        for i, layer in enumerate(tqdm(model.model.layers, desc="[gather weight]")):
             tensor_list = []
             name_list = []
             for sub_name, param in layer.state_dict().items():
