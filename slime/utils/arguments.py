@@ -637,6 +637,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             return parser
 
+        def add_router_arguments(parser):
+            parser.add_argument(
+                "--use-slime-router",
+                action="store_true",
+                default=False,
+                help="Whether to use SlimeRouter for text-based routing instead of SGLang token-based routing"
+            )
+            return parser
+
         # wandb
         def add_wandb_arguments(parser):
             # wandb parameters
@@ -879,6 +888,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_eval_arguments(parser)
         parser = add_algo_arguments(parser)
         parser = add_wandb_arguments(parser)
+        parser = add_router_arguments(parser)
         parser = add_debug_arguments(parser)
         parser = add_sglang_arguments(parser)
         parser = add_network_arguments(parser)

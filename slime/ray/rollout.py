@@ -305,6 +305,7 @@ def _create_rollout_engines(args, pg):
 
 
 def _start_router(args):
+    """start sgl router and slime router"""
     if args.sglang_router_ip is not None:
         return
 
@@ -337,6 +338,36 @@ def _start_router(args):
     assert process.is_alive()
     # If router ip is specified, use the specified launched router
     print(f"SGLang router launched at {args.sglang_router_ip}:{args.sglang_router_port}")
+    
+    if getattr(args, 'use_slime_router', False):
+        from slime_plugins.slime_router.slime_router import run_slime_router
+        import argparse
+
+        slime_router_args = argparse.Namespace()
+        slime_router_args.host = get_host_info()[1]                        # slime router ip - same as sgl router
+        slime_router_args.port = find_available_port(random.randint(5000, 6000))  # slime router port - auto find
+
+        args.slime_router_host = slime_router_args.host
+        args.slime_router_port = slime_router_args.port
+
+        print(f"Slime router host and port {slime_router_args.host}: {slime_router_args.port}")
+        slime_router_args.sglang_host = args.sglang_router_ip                   # SGLang router ip
+        slime_router_args.sglang_port = args.sglang_router_port                 # SGLang router router
+        slime_router_args.tokenizer_name = args.hf_checkpoint
+
+        # TODO: verbose always = True for debug @ changyi
+        slime_router_args.verbose = False  # full log to debug
+        slime_router_args.enable_weight_version = True  # re-enable weight version
+
+        slime_process = multiprocessing.Process(
+            target=run_slime_router,
+            args=(slime_router_args,),
+        )
+        slime_process.daemon = True
+        slime_process.start()
+        time.sleep(3)
+        assert slime_process.is_alive()
+        print(f"Slime router launched at {slime_router_args.host}:{slime_router_args.port}")
 
 
 def _log_eval_rollout_data(rollout_id, args, data):
