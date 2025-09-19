@@ -57,6 +57,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             parser.add_argument(
                 "--num-gpus-per-node",
+                "--rollout-num-gpus-per-node", # deprecated, for backward compatibility
                 type=int,
                 default=8,
                 help=(
