@@ -3,11 +3,11 @@ import socket
 import ray
 import torch
 import torch.distributed as dist
-import tqdm
 from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import StateDictType
+from tqdm import tqdm
 
 from slime.utils.distributed_utils import init_process_group
 
@@ -128,60 +128,44 @@ class UpdateWeightFromDistributed:
         model = self.model
         torch.cuda.empty_cache()
 
-        dtype = torch.bfloat16
+        # Use standard FSDP method to get full state dict
+        with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT):
+            state_dict = model.state_dict()
 
-        def get_params(tensor_list, name_list, save_dtype):
-            _tensor_list, _spec_list = list(zip(*tensor_list))
-            fsdp_unshard_tensor_list = model._fsdp_foreach_allgather(_tensor_list, _spec_list)
-            return fsdp_unshard_tensor_list, name_list
+        # Send weights one by one to minimize memory usage
+        param_names = list(state_dict.keys())
 
-        saved_list = []
-        for i, layer in enumerate(tqdm(model.model.layers, desc="[gather weight]")):
-            tensor_list = []
-            name_list = []
-            for sub_name, param in layer.state_dict().items():
-                saved_list.append(f"layers.{i}.{sub_name}")
-                local_tensor = param._local_tensor if isinstance(param, DTensor) else param
-                local_tensor = local_tensor.bfloat16()
-                load_spec = model.load_spec_mapping.get(f"layers.{i}.{sub_name}")
-                name = f"model.layers.{i}.{sub_name}"
-                if ".experts." in name and ".mlp.experts." not in name:
-                    name = name.replace(".experts.", ".mlp.experts.")
-                if ".gate." in name and ".mlp.gate." not in name:
-                    name = name.replace(".gate.", ".mlp.gate.")
-                name_list.append(name)
-                tensor_list.append((local_tensor, load_spec))
-            fsdp_unshard_tensor_list, name_list = get_params(tensor_list, name_list, dtype)
-            state_dict = dict(zip(name_list, fsdp_unshard_tensor_list))
-            self.request_update_params(state_dict)
+        for i, name in enumerate(tqdm(param_names, desc="[broadcast weight]")):
+            # Process one parameter at a time to minimize memory usage
+            param = state_dict[name].to(torch.bfloat16)
+            single_param_dict = {name: param}
 
-        tensor_list = []
-        name_list = []
-        for name, param in model.state_dict().items():
-            if name in saved_list:
-                continue
-            local_tensor = param._local_tensor if isinstance(param, DTensor) else param
-            local_tensor = local_tensor.bfloat16()
-            load_spec = model.load_spec_mapping.get(name)
-            if name == "norm.weight":
-                name = "model.norm.weight"
-            elif name == "embed_tokens.weight":
-                name = "model.embed_tokens.weight"
-            tensor_list = [(local_tensor, load_spec)]
-            name_list = [name]
-            fsdp_unshard_tensor_list, name_list = get_params(tensor_list, name_list, dtype)
-            state_dict = dict(zip(name_list, fsdp_unshard_tensor_list))
-            self.request_update_params(state_dict)
+            # Send this single parameter
+            self.request_update_params(single_param_dict)
 
-        ## TODO: why adding this?
+            # Clear the reference to help with memory management
+            del param
+            del single_param_dict
+
+            # Periodic memory cleanup
+            if (i + 1) % 5 == 0:
+                torch.cuda.empty_cache()
+
+        # Signal completion
         self.request_update_params({}, finished=True)
 
+        # Final cleanup
+        del state_dict
         dist.barrier()
         torch.cuda.empty_cache()
         return
 
     def request_update_params(self, state_dict, finished=False):
         if not self._is_src_rank:
+            return
+
+        # Skip if empty dict and not finished signal
+        if not state_dict and not finished:
             return
 
         refs = [
@@ -194,10 +178,28 @@ class UpdateWeightFromDistributed:
             for engine in self.rollout_engines
         ]
 
-        handles = []
-        for _, param in state_dict.items():
-            handles.append(dist.broadcast(param.data, 0, group=self._model_update_groups, async_op=True))
-        for handle in handles:
-            handle.wait()
+        # Broadcast parameters one by one with memory management
+        for name, param in state_dict.items():
+            try:
+                # Ensure tensor is contiguous and on the right device
+                param_data = param.data.contiguous()
+
+                # Synchronous broadcast to avoid memory buildup
+                dist.broadcast(param_data, 0, group=self._model_update_groups, async_op=False)
+
+                # Clean up immediately after broadcast
+                del param_data
+
+            except Exception as e:
+                print(f"Failed to broadcast parameter {name}: {e}")
+                # Force memory cleanup and retry once
+                torch.cuda.empty_cache()
+                try:
+                    param_data = param.data.contiguous()
+                    dist.broadcast(param_data, 0, group=self._model_update_groups, async_op=False)
+                    del param_data
+                except Exception as e2:
+                    print(f"Retry failed for parameter {name}: {e2}")
+                    raise e2
 
         ray.get(refs)
