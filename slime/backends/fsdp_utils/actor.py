@@ -18,7 +18,6 @@ from slime.utils.ppo_utils import (
     compute_policy_loss,
     get_gspo_token_ratio,
     get_sequence_level_ratio,
-    normalize_advantages_in_groups,
 )
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
@@ -249,9 +248,8 @@ class FSDPTrainRayActor(TrainRayActor):
         # TODO: compute rewards and adv for t
         for batch in padded_batches:
             if self.args.advantage_estimator in ["grpo", "gspo", "gspo-token"]:
-                advantages = normalize_advantages_in_groups(batch["rewards"], self.args.n_samples_per_prompt)
-                batch["advantages"] = advantages.expand_as(batch["log_probs"])
-                batch["returns"] = batch["rewards"].expand_as(batch["log_probs"])
+                batch["advantages"] = batch["rewards"].expand_as(batch["log_probs"])
+                batch["returns"] = batch["raw_reward"].expand_as(batch["log_probs"])
             else:
                 raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
 

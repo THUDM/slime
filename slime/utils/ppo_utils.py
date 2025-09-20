@@ -26,6 +26,7 @@ def get_sequence_level_ratio(
 def normalize_advantages_in_groups(
     rewards: torch.Tensor,
     n_samples_per_prompt: int,
+    std_normalization: bool = True,
 ) -> torch.Tensor:
     """
     Normalizes rewards within groups of samples for the same prompt.
@@ -36,14 +37,16 @@ def normalize_advantages_in_groups(
     # Need to reshape the rewards tensor into groups
     grouped_rewards = rewards.view(-1, n_samples_per_prompt)
 
-    # Now we calc the mean and std_deviation for each group
-    mean_rewards = torch.mean(grouped_rewards, dim=1, keepdim=True)
-    std_rewards = torch.std(grouped_rewards, dim=1, keepdim=True)
+    # Calculate mean and subtract it.
+    advantages = grouped_rewards - grouped_rewards.mean(dim=-1, keepdim=True)
 
-    # Now we can normalize the rewards and add a small epsilon to avoid div by zero
-    normalized_rewards = (grouped_rewards - mean_rewards) / (std_rewards + 1e-8)
+    # Optionally, divide by the standard deviation for full normalization.
+    if std_normalization:
+        std = advantages.std(dim=-1, keepdim=True)
+        advantages = advantages / (std + 1e-8)
 
-    return normalized_rewards.view(-1)
+    # Flatten the tensor back to its original shape.
+    return advantages.view(-1)
 
 
 def get_gspo_token_ratio(log_probs: torch.Tensor, old_log_probs: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
