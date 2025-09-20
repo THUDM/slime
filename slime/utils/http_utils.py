@@ -83,7 +83,7 @@ def init_http_client(concurrency: int):
     if _http_client is None:
         _http_client = httpx.AsyncClient(
             limits=httpx.Limits(max_connections=concurrency),
-            timeout=httpx.Timeout(None),
+            timeout=httpx.Timeout(None, connect=5.0),
         )
 
 
@@ -113,7 +113,6 @@ async def post(url, payload, max_retries=60):
 
 
 async def get(url):
-    # never timeout
     response = await _http_client.get(url)
     response.raise_for_status()
     output = response.json()

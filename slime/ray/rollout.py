@@ -230,6 +230,7 @@ def _create_rollout_engines(args, pg):
                     "env_vars": {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST}
                     | {
                         "SGL_JIT_DEEPGEMM_PRECOMPILE": "false",
+                        "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                     }
                 },
             ).remote(args, rank=i)

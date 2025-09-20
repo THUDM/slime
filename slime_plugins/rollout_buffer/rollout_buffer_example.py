@@ -4,9 +4,9 @@ from typing import Any, Dict, List
 
 import aiohttp
 import requests
-import wandb
 from transformers import AutoTokenizer
 
+import wandb
 from slime.utils.async_utils import run
 from slime.utils.mask_utils import MultiTurnLossMaskGenerator
 from slime.utils.types import Sample

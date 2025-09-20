@@ -62,6 +62,30 @@ class MultiTurnLossMaskGenerator:
 
         return all_token_ids, all_loss_masks
 
+    def gen_multi_turn_loss_mask_qwen3(self, messages: List[Dict]) -> Tuple[List[int], List[int]]:
+        all_loss_masks = []
+        all_token_ids = []
+
+        prefix_message = {"role": "user", "content": "FOR CALCULATING LOSS MASK ONLY"}
+        prefix_token_ids = self.tokenizer.apply_chat_template([prefix_message], tokenize=True)
+
+        for i, message in enumerate(messages):
+            prefixed_message_ids = self.tokenizer.apply_chat_template([prefix_message, message], tokenize=True)
+            message_ids = prefixed_message_ids[len(prefix_token_ids) :]
+
+            if message["role"] != "system" and i > 0:
+                message_ids = message_ids[self.system_message_length :]
+
+            if message["role"] == "assistant":
+                loss_mask = [0] * self.gen_token_length + [1] * (len(message_ids) - self.gen_token_length)
+            else:
+                loss_mask = [0] * len(message_ids)
+
+            all_loss_masks.extend(loss_mask)
+            all_token_ids.extend(message_ids)
+
+        return all_token_ids, all_loss_masks
+
     def gen_multi_turn_loss_mask_distill_qwen(self, messages: List[Dict]) -> Tuple[List[int], List[int]]:
         prompt = self.tokenizer.apply_chat_template(messages[:1], tokenize=False, add_generation_prompt=True)
         response = messages[-1]["content"]
@@ -79,6 +103,8 @@ class MultiTurnLossMaskGenerator:
                 return self.gen_multi_turn_loss_mask_distill_qwen(messages)
 
             return self.gen_multi_turn_loss_mask_qwen(messages)
+        elif self.tokenizer_type == "qwen3":
+            return self.gen_multi_turn_loss_mask_qwen3(messages)
         elif self.tokenizer_type == "distill_qwen":
             return self.gen_multi_turn_loss_mask_distill_qwen(messages)
         else:

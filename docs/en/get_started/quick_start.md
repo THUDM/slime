@@ -16,12 +16,12 @@ Please execute the following commands to pull the latest image and start an inte
 
 ```shell
 # Pull the latest image
-docker pull zhuzilin/slime:latest
+docker pull slimerl/slime:latest
 
 # Start the container
 docker run --rm --gpus all --ipc=host --shm-size=16g \
   --ulimit memlock=-1 --ulimit stack=67108864 \
-  -it zhuzilin/slime:latest /bin/bash
+  -it slimerl/slime:latest /bin/bash
 ```
 
 ### Install slime
