@@ -7,13 +7,14 @@ from typing import List, Union
 
 import ray
 import torch
+import wandb
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-import wandb
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client, run_router
 from slime.utils.misc import load_function
+from slime.utils.ppo_utils import normalize_advantages_in_groups
 from slime.utils.ray_utils import Box
 from slime.utils.types import Sample
 from slime.utils.wandb_utils import init_wandb_secondary
@@ -127,24 +128,23 @@ class RolloutManager:
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
         if (
-            self.args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
+            self.args.advantage_estimator in ["grpo", "gspo", "gspo-token", "reinforce_plus_plus_baseline"]
             and self.args.rewards_normalization
         ):
-            # group norm
-            rewards = torch.tensor(raw_rewards, dtype=torch.float)
-            if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
-                rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
-            else:
-                # when samples count are not equal in each group
-                rewards = rewards.view(-1, rewards.shape[-1])
-            mean = rewards.mean(dim=-1, keepdim=True)
-            rewards = rewards - mean
+            # REFACTORED: Replaced manual normalization with a clean function call. As i have made a func in ppo_utils.py
+            rewards_tensor = torch.tensor(raw_rewards, dtype=torch.float)
 
-            if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
-                std = rewards.std(dim=-1, keepdim=True)
-                rewards = rewards / (std + 1e-6)
+            # Determine if standard deviation normalization should be applied based on the algorithm.
+            use_std_norm = (
+                self.args.advantage_estimator in ["grpo", "gspo", "gspo-token"] and self.args.grpo_std_normalization
+            )
 
-            return raw_rewards, rewards.flatten().tolist()
+            # Call the central utility function to get the normalized advantages.
+            advantages = normalize_advantages_in_groups(
+                rewards_tensor, self.args.n_samples_per_prompt, std_normalization=use_std_norm
+            )
+
+            return raw_rewards, advantages.tolist()
 
         return raw_rewards, raw_rewards
 
@@ -160,8 +160,6 @@ class RolloutManager:
         train_data = {
             "tokens": [sample.tokens for sample in samples],
             "response_lengths": [sample.response_length for sample in samples],
-            # some reward model, e.g. remote rm, may return multiple rewards,
-            # we could use key to select the reward.
             "rewards": rewards,
             "raw_reward": raw_rewards,
             "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],

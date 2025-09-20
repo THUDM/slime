@@ -2,18 +2,23 @@ from contextlib import nullcontext
 
 import torch
 import torch.distributed as dist
+import wandb
 from PIL import Image
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import ShardingStrategy, StateDictType
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 
-import wandb
 from slime.ray.registry import get_actors
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
+from slime.utils.ppo_utils import (
+    compute_approx_kl,
+    compute_policy_loss,
+    get_gspo_token_ratio,
+    get_sequence_level_ratio,
+)
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
@@ -242,8 +247,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
         # TODO: compute rewards and adv for t
         for batch in padded_batches:
-            if self.args.advantage_estimator in ["grpo", "gspo"]:
-                batch["advantages"] = batch["returns"] = batch["rewards"].expand_as(batch["log_probs"])
+            if self.args.advantage_estimator in ["grpo", "gspo", "gspo-token"]:
+                batch["advantages"] = batch["rewards"].expand_as(batch["log_probs"])
+                batch["returns"] = batch["raw_reward"].expand_as(batch["log_probs"])
             else:
                 raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
 
@@ -282,9 +288,13 @@ class FSDPTrainRayActor(TrainRayActor):
             log_probs = gather_log_probs(logits, batch["tokens"], self.args.rollout_temperature)
 
             if self.args.advantage_estimator == "gspo":
-                raise NotImplementedError("implement GSPO")
-
-            ppo_kl = batch["log_probs"] - log_probs
+                ratio = get_sequence_level_ratio(log_probs, batch["log_probs"], batch["loss_masks"])
+                ppo_kl = -torch.log(ratio.unsqueeze(-1) + 1e-8)
+            elif self.args.advantage_estimator == "gspo-token":
+                ratio = get_gspo_token_ratio(log_probs, batch["log_probs"], batch["loss_masks"])
+                ppo_kl = -torch.log(ratio + 1e-8)
+            else:
+                ppo_kl = batch["log_probs"] - log_probs
             pg_loss, pg_clipfrac = compute_policy_loss(
                 ppo_kl, batch["advantages"], self.args.eps_clip, self.args.eps_clip_high
             )
