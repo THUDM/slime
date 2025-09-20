@@ -1,0 +1,255 @@
+diff --git a/python/sglang/srt/configs/model_config.py b/python/sglang/srt/configs/model_config.py
+index fb8c250..6caa637 100644
+--- a/python/sglang/srt/configs/model_config.py
++++ b/python/sglang/srt/configs/model_config.py
+@@ -487,14 +487,14 @@ class ModelConfig:
+             ).lower()
+ 
+             # Detect which checkpoint is it
+-            for _, method in QUANTIZATION_METHODS.items():
+-                quantization_override = method.override_quantization_method(
+-                    quant_cfg, self.quantization
+-                )
+-                if quantization_override:
+-                    quant_method = quantization_override
+-                    self.quantization = quantization_override
+-                    break
++            # for _, method in QUANTIZATION_METHODS.items():
++            #     quantization_override = method.override_quantization_method(
++            #         quant_cfg, self.quantization
++            #     )
++            #     if quantization_override:
++            #         quant_method = quantization_override
++            #         self.quantization = quantization_override
++            #         break
+ 
+             # Verify quantization configurations.
+             if self.quantization is None:
+diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/entrypoints/http_server.py
+index dc91d7e..a43338d 100644
+--- a/python/sglang/srt/entrypoints/http_server.py
++++ b/python/sglang/srt/entrypoints/http_server.py
+@@ -349,6 +349,10 @@ async def validate_json_request(raw_request: Request):
+ 
+ 
+ @app.get("/health")
++async def health(request: Request) -> Response:
++    return Response(status_code=200)
++
++
+ @app.get("/health_generate")
+ async def health_generate(request: Request) -> Response:
+     """
+diff --git a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py b/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
+index c6ea490..e0004db 100644
+--- a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
++++ b/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
+@@ -180,6 +180,7 @@ class DeepEPBuffer:
+                     f"Consider using --deepep-config to change the behavior."
+                 )
+ 
++        num_qps_per_rank = 20
+         cls._buffer = Buffer(
+             group,
+             num_nvl_bytes,
+diff --git a/python/sglang/srt/layers/quantization/fp8.py b/python/sglang/srt/layers/quantization/fp8.py
+index 4915d4d..957fd60 100644
+--- a/python/sglang/srt/layers/quantization/fp8.py
++++ b/python/sglang/srt/layers/quantization/fp8.py
+@@ -348,8 +348,8 @@ class Fp8LinearMethod(LinearMethodBase):
+                 return
+             else:
+                 weight, weight_scale = layer.weight.data, layer.weight_scale_inv.data
+-            layer.weight = Parameter(weight, requires_grad=False)
+-            layer.weight_scale_inv = Parameter(weight_scale, requires_grad=False)
++            # layer.weight = Parameter(weight, requires_grad=False)
++            # layer.weight_scale_inv = Parameter(weight_scale, requires_grad=False)
+         else:
+             layer.weight = Parameter(layer.weight.data, requires_grad=False)
+ 
+diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
+index 91901ca..f341334 100644
+--- a/python/sglang/srt/managers/scheduler.py
++++ b/python/sglang/srt/managers/scheduler.py
+@@ -1418,7 +1418,7 @@ class Scheduler(
+ 
+         if memory_leak:
+             msg = "token_to_kv_pool_allocator memory leak detected! " f"{token_msg}"
+-            raise ValueError(msg)
++            # raise ValueError(msg)
+ 
+         if self.disaggregation_mode == DisaggregationMode.DECODE:
+             req_total_size = (
+@@ -1433,7 +1433,7 @@ class Scheduler(
+                 f"available_size={len(self.req_to_token_pool.free_slots)}, "
+                 f"total_size={self.req_to_token_pool.size}\n"
+             )
+-            raise ValueError(msg)
++            # raise ValueError(msg)
+ 
+         if (
+             self.enable_metrics
+@@ -1880,6 +1880,7 @@ class Scheduler(
+             speculative_num_draft_tokens=self.server_args.speculative_num_draft_tokens,
+             require_mlp_tp_gather=require_mlp_tp_gather(self.server_args),
+             disable_overlap_schedule=self.server_args.disable_overlap_schedule,
++            offload_tags=self.offload_tags,
+         )
+ 
+     @staticmethod
+@@ -1894,6 +1895,7 @@ class Scheduler(
+         speculative_num_draft_tokens,
+         require_mlp_tp_gather: bool,
+         disable_overlap_schedule: bool,
++        offload_tags: set[str],
+     ):
+         # Check if other DP workers have running batches
+         if local_batch is None:
+@@ -1924,7 +1926,7 @@ class Scheduler(
+         )
+ 
+         tbo_preparer = TboDPAttentionPreparer()
+-        if disable_overlap_schedule:
++        if len(offload_tags) == 0 and disable_overlap_schedule:
+             group = tp_group.device_group
+             device = tp_group.device
+         else:
+diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
+index d23d1a6..0735ef8 100644
+--- a/python/sglang/srt/managers/tokenizer_manager.py
++++ b/python/sglang/srt/managers/tokenizer_manager.py
+@@ -1155,8 +1155,16 @@ class TokenizerManager:
+         assert (
+             self.server_args.dp_size == 1
+         ), "dp_size must be 1 for init parameter update group"
+-        result = (await self.init_weights_update_group_communicator(obj))[0]
+-        return result.success, result.message
++        results = await self.init_weights_update_group_communicator(obj)
++        if self.server_args.dp_size == 1:
++            result = results[0]
++            return result.success, result.message
++        else:
++            all_success = all([r.success for r in results])
++            all_message = [r.message for r in results]
++            all_message = " | ".join(all_message)
++            return all_success, all_message
++
+ 
+     async def update_weights_from_distributed(
+         self,
+@@ -1164,18 +1172,22 @@ class TokenizerManager:
+         request: Optional[fastapi.Request] = None,
+     ) -> Tuple[bool, str]:
+         self.auto_create_handle_loop()
+-        assert (
+-            self.server_args.dp_size == 1 or self.server_args.enable_dp_attention
+-        ), "dp_size must be 1 or dp attention must be enabled for update weights from distributed"
+-
++        
+         if obj.abort_all_requests:
+             self.abort_request(abort_all=True)
+ 
+         # This means that weight sync
+         # cannot run while requests are in progress.
+         async with self.model_update_lock.writer_lock:
+-            result = (await self.update_weights_from_distributed_communicator(obj))[0]
+-            return result.success, result.message
++            results = await self.update_weights_from_distributed_communicator(obj)
++            if self.server_args.dp_size == 1:
++                result = results[0]
++                return result.success, result.message
++            else:
++                all_success = all([r.success for r in results])
++                all_message = [r.message for r in results]
++                all_message = " | ".join(all_message)
++                return all_success, all_message
+ 
+     async def update_weights_from_tensor(
+         self,
+diff --git a/python/sglang/srt/model_executor/cuda_graph_runner.py b/python/sglang/srt/model_executor/cuda_graph_runner.py
+index 2effec9..942f993 100644
+--- a/python/sglang/srt/model_executor/cuda_graph_runner.py
++++ b/python/sglang/srt/model_executor/cuda_graph_runner.py
+@@ -776,6 +776,22 @@ class CudaGraphRunner:
+             )
+         if forward_batch.forward_mode.is_idle() and forward_batch.spec_info is not None:
+             forward_batch.spec_info.custom_mask = self.custom_mask
++        
++        if forward_batch.forward_mode.is_target_verify() and bs - raw_bs > 0:
++            # pad the spec_info custom mask
++            spec_info = forward_batch.spec_info
++            pad_len = (
++                (bs - raw_bs)
++                * spec_info.draft_token_num
++                * (spec_info.draft_token_num + self.seq_len_fill_value)
++            )
++            pad_mask = torch.full(
++                (pad_len,),
++                True,
++                device=spec_info.custom_mask.device,
++            )
++            spec_info.custom_mask = torch.cat([spec_info.custom_mask, pad_mask], dim=0)
++
+         # Attention backend
+         self.model_runner.attn_backend.init_forward_metadata_replay_cuda_graph(
+             bs,
+diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
+index fa35fd1..9b702e3 100644
+--- a/python/sglang/srt/model_executor/model_runner.py
++++ b/python/sglang/srt/model_executor/model_runner.py
+@@ -22,6 +22,7 @@ import os
+ import time
+ from dataclasses import dataclass
+ from typing import List, Optional, Tuple, Union
++from contextlib import nullcontext
+ 
+ import torch
+ import torch.distributed as dist
+@@ -686,7 +687,7 @@ class ModelRunner:
+         monkey_patch_vllm_parallel_state()
+         monkey_patch_isinstance_for_vllm_base_layer()
+ 
+-        with self.memory_saver_adapter.region(GPU_MEMORY_TYPE_WEIGHTS):
++        with self.memory_saver_adapter.region(GPU_MEMORY_TYPE_WEIGHTS) if not self.is_draft_worker else nullcontext():
+             self.model = get_model(
+                 model_config=self.model_config,
+                 load_config=self.load_config,
+diff --git a/python/sglang/srt/models/glm4_moe.py b/python/sglang/srt/models/glm4_moe.py
+index 5ae5b0a..f6fdf9c 100644
+--- a/python/sglang/srt/models/glm4_moe.py
++++ b/python/sglang/srt/models/glm4_moe.py
+@@ -664,7 +664,7 @@ class Glm4MoeDecoderLayer(DeepseekV2DecoderLayer):
+             layer_scatter_modes=self.layer_scatter_modes,
+             input_layernorm=self.input_layernorm,
+             post_attention_layernorm=self.post_attention_layernorm,
+-            allow_reduce_scatter=True,
++            allow_reduce_scatter=False,
+         )
+ 
+     def forward(
+diff --git a/python/sglang/srt/speculative/eagle_utils.py b/python/sglang/srt/speculative/eagle_utils.py
+index 14450e9..f661fa6 100644
+--- a/python/sglang/srt/speculative/eagle_utils.py
++++ b/python/sglang/srt/speculative/eagle_utils.py
+@@ -1079,7 +1079,7 @@ def create_accept_length_filter(
+     return accept_length_filter
+ 
+ 
+-@torch.compile(dynamic=True)
++# @torch.compile(dynamic=True)
+ def select_top_k_tokens(
+     i: int,
+     topk_p: torch.Tensor,
+diff --git a/python/sglang/srt/speculative/eagle_worker.py b/python/sglang/srt/speculative/eagle_worker.py
+index 56c120a..13a87a2 100644
+--- a/python/sglang/srt/speculative/eagle_worker.py
++++ b/python/sglang/srt/speculative/eagle_worker.py
+@@ -370,7 +370,7 @@ class EAGLEWorker(TpModelWorker):
+         self.cuda_graph_runner = None
+         self.cuda_graph_runner_for_draft_extend = None
+ 
+-        if self.server_args.disable_cuda_graph:
++        if True or self.server_args.disable_cuda_graph:
+             return
+ 
+         # Capture draft

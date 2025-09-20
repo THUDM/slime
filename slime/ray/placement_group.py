@@ -75,23 +75,35 @@ def create_placement_groups(args):
     if args.debug_train_only:
         num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
         rollout_offset = 0
+        if args.use_critic:
+            num_gpus += args.critic_num_nodes * args.critic_num_gpus_per_node
+            critic_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
     elif args.debug_rollout_only:
         num_gpus = args.rollout_num_gpus
         rollout_offset = 0
     elif args.colocate:
         num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node
         rollout_offset = 0
+        if args.use_critic:
+            num_gpus += args.critic_num_nodes * args.critic_num_gpus_per_node
+            critic_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
     else:
         num_gpus = args.actor_num_nodes * args.actor_num_gpus_per_node + args.rollout_num_gpus
         rollout_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
+        if args.use_critic:
+            num_gpus += args.critic_num_nodes * args.critic_num_gpus_per_node
+            critic_offset = args.actor_num_nodes * args.actor_num_gpus_per_node + args.rollout_num_gpus
 
     print(f"Creating placement group with {num_gpus} GPUs...")
     pg, actor_pg_reordered_bundle_indices = _create_placement_group(num_gpus)
 
     rollout_pg_reordered_bundle_indices = actor_pg_reordered_bundle_indices[rollout_offset:]
+    if args.use_critic:
+        critic_pg_reordered_bundle_indices = actor_pg_reordered_bundle_indices[critic_offset:]
 
     return {
         "actor": (pg, actor_pg_reordered_bundle_indices),
+        "critic": (pg, critic_pg_reordered_bundle_indices) if args.use_critic else None,
         "rollout": (pg, rollout_pg_reordered_bundle_indices),
     }
 
@@ -103,11 +115,11 @@ def allocate_train_group(args, num_nodes, num_gpus_per_node, pg, wandb_run_id):
         num_gpus_per_node=num_gpus_per_node,
         pg=pg,
         wandb_run_id=wandb_run_id,
-        num_gpus_per_actor=0.8,
+        num_gpus_per_actor=0.4,
     )
 
 
-def create_actor_group(args, pg, wandb_run_id):
+def create_training_group(args, pg, wandb_run_id):
     actor_model = allocate_train_group(
         args=args,
         num_nodes=args.actor_num_nodes,
@@ -119,4 +131,7 @@ def create_actor_group(args, pg, wandb_run_id):
 
 
 def create_rollout_manager(args, pg, wandb_run_id):
-    return RolloutManager(args, pg, wandb_run_id=wandb_run_id)
+    return RolloutManager.options(
+        num_cpus=1,
+        num_gpus=0,
+    ).remote(args, pg, wandb_run_id=wandb_run_id)

@@ -19,6 +19,7 @@ class Sample:
     label: Optional[str] = None
     reward: Optional[Union[float, dict[str, Any]]] = None
     loss_mask: Optional[list[int]] = None
+    weight_versions: list[str] = field(default_factory=list)
     rollout_log_probs: Optional[list[float]] = None  # Log probabilities from rollout engine
 
     class Status(Enum):

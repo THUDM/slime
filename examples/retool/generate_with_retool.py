@@ -257,7 +257,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         except ImportError:
             pass  # wandb not available
 
-        output = await post(url, payload, use_http2=args.use_http2)
+        output = await post(url, payload)
 
         # Handle abort
         if output["meta_info"]["finish_reason"]["type"] == "abort":

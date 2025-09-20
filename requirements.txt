@@ -2,6 +2,7 @@ accelerate
 datasets
 httpx[http2]
 mcp[cli]
+pillow
 pylatexenc
 pyyaml
 ray[default]

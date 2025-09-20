@@ -14,7 +14,7 @@ jobs:
   test-disaggregate-glm4-9B:
     runs-on: self-hosted
     container:
-      image: zhuzilin/slime:latest
+      image: slimerl/slime:latest
       options: --gpus all --ipc=host --shm-size=16g --ulimit memlock=-1 --ulimit stack=67108864 --memory=0 --memory-swap=0 -v /data/models:/root/models -v /data/datasets:/root/datasets
 
     defaults:
@@ -86,7 +86,7 @@ jobs:
     needs: test-disaggregate-glm4-9B
     runs-on: self-hosted
     container:
-      image: zhuzilin/slime:latest
+      image: slimerl/slime:latest
       options: --gpus all --ipc=host --shm-size=16g --ulimit memlock=-1 --ulimit stack=67108864 --memory=0 --memory-swap=0 -v /data/models:/root/models -v /data/datasets:/root/datasets
 
     defaults:

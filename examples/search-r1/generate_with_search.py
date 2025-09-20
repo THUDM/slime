@@ -107,7 +107,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             "text": prompt + response,
             "sampling_params": sampling_params,
         }
-        output = await post(url, payload, use_http2=args.use_http2)
+        output = await post(url, payload)
 
         # abort
         if output["meta_info"]["finish_reason"]["type"] == "abort":

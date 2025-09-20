@@ -16,12 +16,12 @@ Please execute the following commands to pull the latest image and start an inte
 
 ```shell
 # Pull the latest image
-docker pull zhuzilin/slime:latest
+docker pull slimerl/slime:latest
 
 # Start the container
 docker run --rm --gpus all --ipc=host --shm-size=16g \
   --ulimit memlock=-1 --ulimit stack=67108864 \
-  -it zhuzilin/slime:latest /bin/bash
+  -it slimerl/slime:latest /bin/bash
 ```
 
 ### Install slime
@@ -130,7 +130,8 @@ CKPT_ARGS=(
    --hf-checkpoint /root/GLM-Z1-9B-0414
    # Reference Model's Megatron format checkpoint
    --ref-load /root/GLM-Z1-9B-0414_torch_dist
-   # Actor model loading path. If empty, load from --ref-load
+   # Actor model loading path. Should typically match --save for checkpoint resumption
+   # If empty or doesn't contain a valid checkpoint, loads from --ref-load instead
    --load /root/GLM-Z1-9B-0414_slime/
    # Model save path during training
    --save /root/GLM-Z1-9B-0414_slime/
@@ -185,7 +186,7 @@ ROLLOUT_ARGS=(
    --n-samples-per-prompt 8
    --num-steps-per-rollout 1
    --global-batch-size 128
-   
+
    # Rollout sampling parameters
    --rollout-max-response-len 8192
    --rollout-temperature 0.8
@@ -490,7 +491,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             # ... tokenization and appending ...
             loss_masks += [0] * len(tool_tokens) # loss_mask = 0
             full_response += tool_output
-            
+
         elif action == "answer":
             break # end loop
 
@@ -553,4 +554,4 @@ ray job submit --address="http://127.0.0.1:8265" \
 slime has been deeply optimized for distributed training of large-scale Mixture of Experts (MoE) models. We provide some end-to-end training cases for reference:
 
 - [Example: 64xH100 Training GLM-4.5](models/glm4.5-355B-A32B.md)
-- [Example: 128xH100 Training DeepSeek-R1](models/deepseek-r1.md) 
+- [Example: 128xH100 Training DeepSeek-R1](models/deepseek-r1.md)

@@ -303,6 +303,7 @@ class UpdateWeightFromTensor:
         self.vocab_size = vocab_size
         self.quantization_config = quantization_config
         self.param_info_buckets = get_param_info_buckets(self.args, self.model)
+        self.weight_version = 0
 
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines
@@ -323,6 +324,8 @@ class UpdateWeightFromTensor:
 
     @torch.no_grad()
     def update_weights(self):
+        self.weight_version += 1
+
         rank = dist.get_rank()
         if rank == 0:
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
@@ -425,6 +428,7 @@ class UpdateWeightFromTensor:
         if dist.get_rank() == self._ipc_gather_src:
             kwargs = {
                 "serialized_named_tensors": serialized_named_tensors,
+                "weight_version": str(self.weight_version),
             }
             if use_flattened_tensor_bucket and self.quantization_config is None:
                 kwargs["load_format"] = "flattened_bucket"
@@ -440,6 +444,7 @@ class UpdateWeightFromDistributed:
         self.model_name = model_name
         self.vocab_size = vocab_size
         self.quantization_config = quantization_config
+        self.weight_version = 0
 
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines
@@ -484,6 +489,8 @@ class UpdateWeightFromDistributed:
 
     @torch.no_grad()
     def update_weights(self):
+        self.weight_version += 1
+
         if dist.get_rank() == 0:
             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
@@ -595,6 +602,7 @@ class UpdateWeightFromDistributed:
                 dtypes=[param.dtype for _, param in converted_named_tensors],
                 shapes=[param.shape for _, param in converted_named_tensors],
                 group_name=self._group_name,
+                weight_version=str(self.weight_version),
             )
             for engine in self.rollout_engines
         ]

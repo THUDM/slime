@@ -14,12 +14,12 @@ from slime.utils.http_utils import get_host_info
 
 
 def get_base_gpu_id(args, rank):
-    num_gpus = min(args.rollout_num_gpus_per_node, args.rollout_num_gpus_per_engine)
+    num_gpus = min(args.num_gpus_per_node, args.rollout_num_gpus_per_engine)
     if args.colocate:
-        start_index = (rank * num_gpus) % args.rollout_num_gpus_per_node
+        start_index = (rank * num_gpus) % args.num_gpus_per_node
     else:
         num_actor_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
-        start_index = (num_actor_gpus + rank * num_gpus) % args.rollout_num_gpus_per_node
+        start_index = (num_actor_gpus + rank * num_gpus) % args.num_gpus_per_node
     return start_index
 
 
@@ -79,7 +79,7 @@ class SGLangEngine(RayActor):
         args = self.args
         rank = self.rank
 
-        nnodes = max(1, args.rollout_num_gpus_per_engine // args.rollout_num_gpus_per_node)
+        nnodes = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
         node_rank = rank % nnodes
         kwargs = {
             "model_path": args.hf_checkpoint,
@@ -151,6 +151,7 @@ class SGLangEngine(RayActor):
         serialized_named_tensors: List[str],
         load_format: Optional[str] = None,
         flush_cache: bool = False,
+        weight_version: Optional[str] = None,
     ):
         """
         Update model weights from tensor data. The HTTP server will only post meta data, and the real weights will be copied directly from GPUs.
@@ -158,14 +159,16 @@ class SGLangEngine(RayActor):
         Note: The model should be on GPUs rather than CPU for this functionality to work properly.
         If you encounter issues, ensure your model is loaded on GPU devices rather than CPU.
         """
-
+        payload = {
+            "serialized_named_tensors": serialized_named_tensors,
+            "load_format": load_format,
+            "flush_cache": flush_cache,
+        }
+        if weight_version is not None:
+            payload["weight_version"] = weight_version
         return self._make_request(
             "update_weights_from_tensor",
-            {
-                "serialized_named_tensors": serialized_named_tensors,
-                "load_format": load_format,
-                "flush_cache": flush_cache,
-            },
+            payload,
         )
 
     def flush_cache(self):
@@ -189,6 +192,14 @@ class SGLangEngine(RayActor):
             f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_args.host}:{self.server_args.port}"
         )
         kill_process_tree(self.process.pid)
+
+    def get_weight_version(self):
+        if self.node_rank != 0:
+            return
+        url = f"http://{self.server_args.host}:{self.server_args.port}/get_weight_version"
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.json()["weight_version"]
 
     def release_memory_occupation(self):
         self.flush_cache()
@@ -216,16 +227,21 @@ class SGLangEngine(RayActor):
             },
         )
 
-    def update_weights_from_distributed(self, names, dtypes, shapes, group_name, flush_cache=False):
+    def update_weights_from_distributed(
+        self, names, dtypes, shapes, group_name, flush_cache=False, weight_version: Optional[str] = None
+    ):
+        payload = {
+            "names": names,
+            "dtypes": [str(dtype).replace("torch.", "") for dtype in dtypes],
+            "shapes": shapes,
+            "group_name": group_name,
+            "flush_cache": flush_cache,
+        }
+        if weight_version is not None:
+            payload["weight_version"] = weight_version
         return self._make_request(
             "update_weights_from_distributed",
-            {
-                "names": names,
-                "dtypes": [str(dtype).replace("torch.", "") for dtype in dtypes],
-                "shapes": shapes,
-                "group_name": group_name,
-                "flush_cache": flush_cache,
-            },
+            payload,
         )
 
     def pause_generation(self):

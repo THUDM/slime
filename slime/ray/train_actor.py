@@ -1,5 +1,6 @@
 import abc
 import os
+import random
 from datetime import timedelta
 
 import ray
@@ -25,7 +26,9 @@ class TrainRayActor(RayActor):
         if master_addr:
             self.master_addr, self.master_port = master_addr, master_port
         else:
-            self.master_addr, self.master_port = self._get_current_node_ip_and_free_port(start_port=20000)
+            self.master_addr, self.master_port = self._get_current_node_ip_and_free_port(
+                start_port=random.randint(20000, 21000)
+            )
 
         os.environ["MASTER_ADDR"] = self.master_addr
         os.environ["MASTER_PORT"] = str(self.master_port)
@@ -53,9 +56,23 @@ class TrainRayActor(RayActor):
         args.rank = dist.get_rank()
         args.world_size = dist.get_world_size()
 
-        # set current device
-        args.local_rank = args.rank % torch.cuda.device_count()
-        torch.cuda.set_device(f"cuda:{args.local_rank}")
+        try:
+            import pynvml
+
+            pynvml.nvmlInit()
+
+            local_rank = int(os.environ["RANK"]) % args.num_gpus_per_node
+
+            handle = pynvml.nvmlDeviceGetHandleByIndex(local_rank)
+            pynvml.nvmlDeviceSetCpuAffinity(handle)
+
+            print(f"Set NUMA affinity for GPU {local_rank}")
+            pynvml.nvmlShutdown()
+
+        except ImportError:
+            print(f"Warning: pynvml not available, skipping NUMA affinity setup")
+        except Exception as e:
+            print(f"Warning: Failed to set NUMA affinity: {e}")
 
     @abc.abstractmethod
     def sleep(self, tags):
@@ -66,15 +83,11 @@ class TrainRayActor(RayActor):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
-        raise NotImplementedError
-
-    @abc.abstractmethod
     def train(self, rollout_id, rollout_data_ref):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def save_model(self, iteration, with_optimizer=True):
+    def save_model(self, iteration):
         raise NotImplementedError
 
     @abc.abstractmethod

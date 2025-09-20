@@ -2,6 +2,9 @@
 
 [English](./README.md)
 
+[![Documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg?style=flat)](https://thudm.github.io/slime/)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/THUDM/slime)
+
 **slime** 是为 RL scaling 设计的 LLM post‑training 框架，提供两大核心能力：
 
 1. **高性能训练**：通过连接 Megatron 与 SGLang，支持各种模式的高效训练；

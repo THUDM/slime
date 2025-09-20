@@ -61,5 +61,5 @@ slime is an LLM post-training framework for RL scaling, providing two core capab
    :maxdepth: 1
    :caption: Blogs
 
-   blogs/introducing_slime.md
    blogs/release_v0.1.0.md
+   blogs/introducing_slime.md

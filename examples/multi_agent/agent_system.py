@@ -36,7 +36,7 @@ async def generate_response(args, prompt, key):
 
         payload = {"input_ids": input_token_ids, "sampling_params": current_sampling_params, "return_logprob": True}
 
-        output = await post(url, payload, use_http2=args.use_http2)
+        output = await post(url, payload)
 
         # Extract new response tokens
         if "output_token_logprobs" in output["meta_info"]:
