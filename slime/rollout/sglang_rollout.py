@@ -42,6 +42,10 @@ class GenerateState(metaclass=SingletonMeta):
             spaces_between_special_tokens=False,
         )
 
+        sampling_seed_base = args.rollout_seed or 0
+        print(f"!!!!!!!!!!!DEBUG: Using rollout seed: {sampling_seed_base}")
+        self.group_sampling_seeds = [sampling_seed_base + i for i in range(args.n_samples_per_prompt)]
+
         self.reset()
 
     def reset(self):
@@ -128,6 +132,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         if not sample.tokens:  # Initialize sample.tokens for the first turn
             sample.tokens = prompt_token_ids
 
+    print(f"!!!!!!!!!!DEBUG: generate payload: {payload}")
     output = await post(url, payload)
 
     # Extract new response tokens
@@ -211,9 +216,24 @@ async def generate_and_rm_group(args, group: list[Sample], sampling_params: dict
     if state.aborted:
         return group
 
-    group = await asyncio.gather(
-        *[generate_and_rm(args, sample, sampling_params.copy(), evaluation=evaluation) for sample in group]
-    )
+    seeds = state.group_sampling_seeds
+    assert seeds, "group_sampling_seeds should not be empty"
+    if len(group) > len(seeds):
+        raise ValueError(
+            f"The rollout group contains {len(group)} samples but only {len(seeds)} sampling seeds are available."
+        )
+
+    tasks = []
+    print(f"!!!!!!!!!!DEBUG: generate_and_rm_group: Generating group of size {len(group)} with seeds")
+    for idx, sample in enumerate(group):
+        seed = seeds[idx]
+        current_sampling_params = sampling_params.copy()
+        current_sampling_params["sampling_seed"] = seed
+        sample.metadata["sampling_seed"] = seed
+        print(f"!!!!!!!!!!DEBUG: generate_and_rm_group: Sample idx {idx} using seed {seed}, {current_sampling_params=}")
+        tasks.append(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
+
+    group = await asyncio.gather(*tasks)
 
     # for the rm that need the whole group, we will not do the rm here
     if not state.aborted and args.group_rm:
@@ -386,6 +406,7 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
         skip_special_tokens=args.rollout_skip_special_tokens,
         no_stop_trim=True,
         spaces_between_special_tokens=False,
+        sampling_seed=args.rollout_seed
     )
 
     tasks = []
