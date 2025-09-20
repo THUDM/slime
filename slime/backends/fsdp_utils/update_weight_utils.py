@@ -1,75 +1,112 @@
 import ray
 import torch
 import torch.distributed as dist
-from sglang.srt.patch_torch import monkey_patch_torch_reductions
-from sglang.srt.utils import MultiprocessingSerializer
+from sglang.srt.weight_sync.utils import update_weights as sgl_update_weights
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
-from torch.distributed.fsdp import StateDictType
-
-try:
-    from sglang.srt.model_executor.model_runner import FlattenedTensorBucket
-
-    use_flattened_tensor_bucket = True
-except:
-    use_flattened_tensor_bucket = False
+from torch.distributed.fsdp import StateDictType, ShardedStateDictConfig
+from torch.distributed.device_mesh import init_device_mesh
 
 
 class UpdateWeightFromTensor:
+    """
+    FSDP weight update implementation following VERL's exact pattern.
+    
+    This implementation:
+    1. Uses SHARDED_STATE_DICT for memory efficiency (like VERL)
+    2. Calls SGLang's sgl_update_weights directly (like VERL)
+    3. Handles bucketing for large models (like VERL)
+    
+    The key insight: SGLang's sgl_update_weights is a utility function that should be
+    called directly, not through Ray. Ray is only used for managing rollout engines,
+    not for the weight synchronization logic itself.
+    """
+    
     def __init__(self, args, model):
         self.args = args
         self.model = model
+        # Set FSDP to use SHARDED_STATE_DICT for memory efficiency (VERL approach)
+        FSDP.set_state_dict_type(
+            self.model,
+            state_dict_type=StateDictType.SHARDED_STATE_DICT,
+            state_dict_config=ShardedStateDictConfig(),
+        )
 
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines
-
-        # Here we assume the gpu id of rollout engines and train actors are the same.
-        for i, engine in enumerate(self.rollout_engines):
-            start_rank = i * self.args.rollout_num_gpus_per_engine
-            end_rank = (i + 1) * self.args.rollout_num_gpus_per_engine
-            group_ranks = list(range(start_rank, end_rank))
-            new_group = dist.new_group(
-                ranks=group_ranks,
-                backend="gloo",
-            )
-            if dist.get_rank() in group_ranks:
-                self._ipc_gather_src = start_rank
-                self._ipc_gather_group = new_group
-                self._ipc_engine = engine
+        
+        # Create device mesh for SGLang weight sync (following VERL pattern)
+        world_size = dist.get_world_size()
+        device_mesh = init_device_mesh("cuda", (world_size,), mesh_dim_names=("tp",))
+        self.device_mesh = {"infer_tp": device_mesh}
 
     @torch.no_grad()
-    def update_weights(self):
-        monkey_patch_torch_reductions()
-        with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
-            named_tensors = [(name, param) for name, param in self.model.state_dict().items()]
+    async def update_weights(self):
+        """
+        Weight update implementation following VERL's exact pattern.
+        
+        This calls sgl_update_weights directly like VERL does - no Ray involved
+        in the weight sync logic itself. Ray engines are just the target destinations.
+        """
+        
+        # Step 1: Get sharded state dict (VERL approach - returns DTensors)
+        params = self.model.state_dict()
+        
+        # Step 2: Convert to named_tensors format (VERL pattern)
+        named_tensors = [(k, v) for k, v in params.items()]
+        
+        # Step 3: Bucket parameters for memory efficiency (VERL approach)
+        # Convert megabytes to bytes using bit shift : MB << 20 = MB * 1024 * 1024
+        update_weights_bucket_bytes = int(
+            getattr(self.args, 'update_weights_bucket_megabytes', 512)
+        ) << 20
+        
+        param_buckets = self._get_named_tensor_buckets(named_tensors, update_weights_bucket_bytes)
+        
+        # Step 4: Call sgl_update_weights for each bucket (exactly like VERL)
+        # SGLang handles all the complex logic internally:
+        # - DTensor.full_tensor() conversion
+        # - Serialization with MultiprocessingSerializer  
+        # - Gathering to rank 0
+        # - LocalSerializedTensor creation
+        # - Transmission to rollout engine
+        for params_batch in param_buckets:
+            for engine in self.rollout_engines:
+                await sgl_update_weights(
+                    engine=engine,
+                    params_batch=params_batch,
+                    device_mesh_key="infer_tp", 
+                    device_mesh=self.device_mesh,
+                )
+        
+        # Step 5: Flush cache (VERL pattern)
+        if self.device_mesh["infer_tp"].get_local_rank() == 0:
+            for engine in self.rollout_engines:
+                await engine.flush_cache()
 
-        if use_flattened_tensor_bucket:
-            flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
-            metadata = flattened_tensor_bucket.get_metadata()
+    def _get_named_tensor_buckets(self, named_tensors, fsdp_update_weights_bucket_megabytes):
+        """
+        Create parameter buckets for memory efficiency.
+        Simplified version of VERL's get_named_tensor_buckets logic.
+        """
+        buckets = []
+        current_bucket = []
+        current_size = 0
 
-            flattened_tensor_data = {
-                "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
-                "metadata": metadata,
-            }
-            serialized_tensors = MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True)
-        else:
-            serialized_tensors = MultiprocessingSerializer.serialize(named_tensors, output_str=True)
+        for name, tensor in named_tensors:
+            # Estimate tensor size
+            tensor_size = tensor.numel() * tensor.element_size() if hasattr(tensor, 'element_size') else tensor.numel() * 4
+            
+            # If adding this tensor would exceed bucket size, start new bucket
+            if current_size + tensor_size > fsdp_update_weights_bucket_megabytes and current_bucket:
+                buckets.append(current_bucket)
+                current_bucket = []
+                current_size = 0
 
-        serialized_named_tensors = (
-            [None] * dist.get_world_size(self._ipc_gather_group) if self._ipc_gather_src == dist.get_rank() else None
-        )
-        dist.gather_object(
-            serialized_tensors,
-            object_gather_list=serialized_named_tensors,
-            dst=self._ipc_gather_src,
-            group=self._ipc_gather_group,
-        )
+            current_bucket.append((name, tensor))
+            current_size += tensor_size
 
-        if dist.get_rank() == self._ipc_gather_src:
-            kwargs = {
-                "serialized_named_tensors": serialized_named_tensors,
-            }
-            if use_flattened_tensor_bucket:
-                kwargs["load_format"] = "flattened_bucket"
+        # Add the last bucket if it has any parameters
+        if current_bucket:
+            buckets.append(current_bucket)
 
-            ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
-            ray.get(ref)
+        return buckets

@@ -26,6 +26,7 @@ class FSDPArgs:
     fsdp_sync_module_states: bool = True
     fsdp_forward_prefetch: bool = True
     fsdp_backward_prefetch: bool = True
+    fsdp_update_weights_bucket_megabytes: int = 512
 
     # Logging
     wandb_project: str = "slime-fsdp"
