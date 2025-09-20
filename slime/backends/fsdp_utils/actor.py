@@ -17,7 +17,7 @@ from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
-from .update_weight_utils import UpdateWeightFromTensor
+from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
 
 class FSDPTrainRayActor(TrainRayActor):
@@ -95,7 +95,11 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.update_cpu_params_dict(self.weights["actor"])
 
-        self.weight_updator = UpdateWeightFromTensor(self.args, self.model)
+        self.weight_updator = (
+            UpdateWeightFromTensor(self.args, self.model)
+            if self.args.colocate
+            else UpdateWeightFromDistributed(self.args, self.model)
+        )
         self.connected = False
 
         if self.args.offload:
