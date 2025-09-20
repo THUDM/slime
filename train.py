@@ -1,5 +1,5 @@
 import ray
-from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
+from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS, GPU_MEMORY_TYPE_CUDA_GRAPH
 
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_group
 from slime.ray.registry import register_actor
@@ -56,6 +56,7 @@ def train(args):
         ray.get(actor_model.async_connect(critic_model))
 
     if args.offload:
+        ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
         ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
 
     # always update weight first so that sglang has the loaded weights from training.
@@ -106,6 +107,7 @@ def train(args):
 
         if args.offload:
             ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
+            ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
 
         if args.eval_interval is not None and (
             (rollout_id + 1) % args.eval_interval == 0
