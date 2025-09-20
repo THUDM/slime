@@ -59,11 +59,13 @@ class FSDPTrainRayActor(TrainRayActor):
             dist.barrier(group=get_gloo_group())
 
         # Load model
-        with torch.device(f"cuda:{torch.cuda.current_device()}"):
+        with torch.autocast(device_type=f"cuda:{torch.cuda.current_device()}"):
             model = AutoModelForCausalLM.from_pretrained(
                 self.args.hf_checkpoint,
                 trust_remote_code=True,
+                attn_implementation=self.args.attn_implementation,
             )
+            print(f"Model attn implementation: {model.config._attn_implementation}")
         model.train()
 
         if args.gradient_checkpointing:
@@ -91,8 +93,6 @@ class FSDPTrainRayActor(TrainRayActor):
             eps=args.adam_eps,
             weight_decay=args.weight_decay,
         )
-
-        # TODO: load
 
         self.ref_model = None
         # TODO: support ref model
@@ -148,11 +148,11 @@ class FSDPTrainRayActor(TrainRayActor):
     ):
         with timer(f"{store_prefix}log_probs") and torch.no_grad():
             for batches in packed_batches:
-                for batch in batches:
+                for batch_idx, batch in enumerate(batches):
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                         logits = self.model(
                             input_ids=batch["tokens"].unsqueeze(0),
-                            attention_mask=batch["attention_masks"].unsqueeze(0),
+                            attention_mask=None,
                             position_ids=batch["position_ids"].unsqueeze(0),
                         ).logits
 
