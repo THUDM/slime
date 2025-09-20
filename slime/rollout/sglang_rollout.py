@@ -199,8 +199,9 @@ async def generate_and_rm(args, sample: Sample, sampling_params: dict, evaluatio
     else:
         if sample.status == Sample.Status.ABORTED:
             return sample
-
-        sample.reward = await async_rm(args, sample)
+        # for multi-turn environment, a reward could be assigned to the agent.
+        if sample.reward is None:
+            sample.reward = await async_rm(args, sample)
 
     return sample
 
