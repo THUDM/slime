@@ -74,6 +74,7 @@ GRPO_ARGS=(
    --eps-clip-high 0.28
 
    --use-tis
+   --calculate-per-token-loss
 )
 
 OPTIMIZER_ARGS=(
@@ -87,6 +88,8 @@ OPTIMIZER_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
+
+   --use-slime-router
 )
 
 MISC_ARGS=(

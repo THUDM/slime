@@ -66,6 +66,7 @@ class GenerateState(metaclass=SingletonMeta):
 
 
 async def generate(args, sample: Sample, sampling_params) -> Sample:
+    """Generate using traditional SGLang router with token-based workflow"""
     state = GenerateState(args)
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
