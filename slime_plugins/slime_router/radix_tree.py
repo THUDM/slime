@@ -87,7 +87,6 @@ class StringTreeNode:
 class StringRadixTrie:
     """
     String-based Radix Trie for efficient prefix matching and token caching.
-
     Features:
     - Efficient string prefix matching
     - Token ID caching for matched prefixes
@@ -99,7 +98,6 @@ class StringRadixTrie:
     def __init__(self, max_cache_size: int = 10000, gc_threshold_k: int = 5, tokenizer=None, verbose: bool = False):
         """
         Initialize the String Radix Trie.
-
         Args:
             max_cache_size: Maximum number of cached token IDs (triggers GC when exceeded)
             gc_threshold_k: GC threshold - nodes with weight_version < (current_version - k) will be removed
@@ -128,10 +126,8 @@ class StringRadixTrie:
     def find_longest_prefix(self, text: str) -> MatchResult:
         """
         Find the longest cached prefix for the given text.
-
         Args:
             text: Input string to find prefix for
-
         Returns:
             MatchResult containing matched prefix, token IDs, logp, and remaining string
         """
@@ -194,13 +190,11 @@ class StringRadixTrie:
     ) -> bool:
         """
         Insert a string and its corresponding token IDs and log probabilities into the trie.
-
         Args:
             text: String to insert
             token_ids: Corresponding token IDs
             logp: Corresponding log probabilities (must match token_ids length)
             weight_version: Optional weight version for this insertion
-
         Returns:
             True if insertion was successful
         """
@@ -317,10 +311,8 @@ class StringRadixTrie:
     def remove(self, text: str) -> bool:
         """
         Remove a string and all nodes with this text as prefix from the trie.
-
         Args:
             text: String to remove (will also remove all strings starting with this text)
-
         Returns:
             True if any removal was performed
         """
@@ -340,10 +332,8 @@ class StringRadixTrie:
     def _find_node_by_text(self, text: str) -> Optional[StringTreeNode]:
         """
         Find node by exact text match.
-
         Args:
             text: Text to find
-
         Returns:
             Node if found, None otherwise
         """
@@ -356,10 +346,8 @@ class StringRadixTrie:
         """
         Clean a node and all its descendants.
         This is the core cleanup function.
-
         Args:
             node: Node to clean (including all descendants)
-
         Returns:
             Number of nodes removed
         """
@@ -370,10 +358,8 @@ class StringRadixTrie:
     def _remove_node_and_descendants(self, node: StringTreeNode) -> int:
         """
         Remove a node and all its descendants from the trie.
-
         Args:
             node: The node to remove along with all its descendants
-
         Returns:
             Number of nodes removed
         """
@@ -412,10 +398,8 @@ class StringRadixTrie:
         """
         Perform garbage collection based on weight version.
         Remove nodes with weight_version < (current_weight_version - gc_threshold_k).
-
         Args:
             current_weight_version: Current weight version to use for GC threshold
-
         Returns:
             Number of nodes removed
         """
@@ -448,10 +432,8 @@ class StringRadixTrie:
         """
         Find nodes that should be removed based on weight version threshold.
         Uses layer-by-layer traversal - if parent is outdated, children are not checked.
-
         Args:
             gc_threshold: Weight version threshold (nodes < this value will be removed)
-
         Returns:
             List of nodes to remove
         """
@@ -479,7 +461,6 @@ class StringRadixTrie:
     def _validate_subtree_weight_versions(self, node: StringTreeNode):
         """
         Validate that all nodes in subtree have weight_version <= parent weight_version.
-
         Args:
             node: Root node of subtree to validate
         """
@@ -555,11 +536,9 @@ class StringRadixTrie:
         """
         Get tokens from text by looking up in radix tree or using tokenizer.
         Also fetches weight version from worker during this operation.
-
         Args:
             text: Input text to get tokens for
             return_logp: If True, also return log probabilities
-
         Returns:
             List of token IDs corresponding to the input text if return_logp is False.
             Tuple of (token_ids, logp) if return_logp is True.
