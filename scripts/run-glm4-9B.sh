@@ -98,17 +98,14 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   --use-wandb
-   --wandb-project slime-dev
-   --wandb-group qwen3-4B-test
-   --wandb-key ${WANDB_API_KEY}
+   #--use-wandb
+   # --wandb-project slime-dev
+   # --wandb-group qwen3-4B-test
+   # --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 1
-   --sglang-mem-fraction-static 0.8
-   --sglang-enable-deterministic-inference
-   --sglang-attention-backend fa3
+   --rollout-num-gpus-per-engine 2
 )
 
 MISC_ARGS=(
