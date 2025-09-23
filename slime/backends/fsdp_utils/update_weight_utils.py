@@ -147,9 +147,7 @@ class UpdateWeightFromDistributed:
             del param
             del single_param_dict
 
-            # Periodic memory cleanup
-            if (i + 1) % 5 == 0:
-                torch.cuda.empty_cache()
+            torch.cuda.empty_cache()
 
         # Signal completion
         self.request_update_params({}, finished=True)
@@ -180,26 +178,14 @@ class UpdateWeightFromDistributed:
 
         # Broadcast parameters one by one with memory management
         for name, param in state_dict.items():
-            try:
-                # Ensure tensor is contiguous and on the right device
-                param_data = param.data.contiguous()
+            torch.cuda.empty_cache()
+            # Ensure tensor is contiguous and on the right device
+            param_data = param.data.contiguous()
 
-                # Synchronous broadcast to avoid memory buildup
-                dist.broadcast(param_data, 0, group=self._model_update_groups, async_op=False)
+            # Synchronous broadcast to avoid memory buildup
+            dist.broadcast(param_data, 0, group=self._model_update_groups, async_op=False)
 
-                # Clean up immediately after broadcast
-                del param_data
-
-            except Exception as e:
-                print(f"Failed to broadcast parameter {name}: {e}")
-                # Force memory cleanup and retry once
-                torch.cuda.empty_cache()
-                try:
-                    param_data = param.data.contiguous()
-                    dist.broadcast(param_data, 0, group=self._model_update_groups, async_op=False)
-                    del param_data
-                except Exception as e2:
-                    print(f"Retry failed for parameter {name}: {e2}")
-                    raise e2
+            # Clean up immediately after broadcast
+            del param_data
 
         ray.get(refs)
