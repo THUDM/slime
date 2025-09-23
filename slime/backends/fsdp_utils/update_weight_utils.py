@@ -10,6 +10,7 @@ from torch.distributed.fsdp import StateDictType
 from tqdm import tqdm
 
 from slime.utils.distributed_utils import init_process_group
+from slime.utils.memory_utils import clear_memory
 
 try:
     from sglang.srt.model_executor.model_runner import FlattenedTensorBucket
@@ -127,6 +128,7 @@ class UpdateWeightFromDistributed:
     def update_weights(self):
         model = self.model
         torch.cuda.empty_cache()
+        clear_memory()
 
         # Use standard FSDP method to get full state dict
         with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT):
@@ -143,27 +145,12 @@ class UpdateWeightFromDistributed:
             # Send this single parameter
             self.request_update_params(single_param_dict)
 
-            # Clear the reference to help with memory management
-            del param
-            del single_param_dict
-
-            torch.cuda.empty_cache()
-
-        # Signal completion
-        self.request_update_params({}, finished=True)
-
-        # Final cleanup
-        del state_dict
         dist.barrier()
         torch.cuda.empty_cache()
         return
 
-    def request_update_params(self, state_dict, finished=False):
-        if not self._is_src_rank:
-            return
-
-        # Skip if empty dict and not finished signal
-        if not state_dict and not finished:
+    def request_update_params(self, state_dict):
+        if not self._is_src_rank or not state_dict:
             return
 
         refs = [
