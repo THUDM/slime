@@ -13,6 +13,9 @@ def pack_sequences(
     loss_masks: List[List[int]],
     rewards: List[float],
     raw_rewards: List,
+    response_lengths: List[int],
+    advantages: List[float],
+    returns: List[float],
     max_tokens_per_gpu: Optional[int] = None,
     num_packs: Optional[int] = None,
 ) -> List[Dict]:
@@ -32,9 +35,6 @@ def pack_sequences(
     """
     if not tokens:
         return []
-
-    for i, t in enumerate(tokens):
-        loss_masks[i] = [0] * (len(t) - len(loss_masks[i])) + loss_masks[i]
 
     seq_lengths = [len(t) for t in tokens]
 
@@ -60,7 +60,8 @@ def pack_sequences(
         flat_tokens = []
         flat_masks = []
         flat_positionids = []
-
+        flat_advantages = []
+        flat_returns = []
         for i in indices:
             seq_tokens = tokens[i]
             seq_mask = loss_masks[i]
@@ -69,20 +70,58 @@ def pack_sequences(
             flat_tokens.extend(seq_tokens)
             flat_positionids.extend(seq_positionids)
             flat_masks.extend(seq_mask)
-
+            flat_advantages.extend(advantages[i])
+            flat_returns.extend(returns[i])
             cu_seqlens.append(cu_seqlens[-1] + len(seq_tokens))
-        assert len(flat_masks) == len(flat_tokens), "mask and tokens length mismatch"
         result.append(
             {
                 "tokens": torch.tensor(flat_tokens, dtype=torch.long),
-                "loss_masks": torch.tensor(flat_masks[1:], dtype=torch.int),
-                "attention_masks": torch.ones(len(flat_tokens), dtype=torch.int),
+                "loss_masks": torch.tensor(flat_masks, dtype=torch.int),
                 "position_ids": torch.tensor(flat_positionids, dtype=torch.int),
                 "cu_seqlens": torch.tensor(cu_seqlens, dtype=torch.int32),
                 "rewards": torch.tensor([rewards[i] for i in indices], dtype=torch.float32),
                 "raw_rewards": [raw_rewards[i] for i in indices],
-                "data_length": len(indices),
+                "response_lengths": [response_lengths[i] for i in indices],
+                "advantages": torch.tensor(flat_advantages, dtype=torch.float32),
+                "returns": torch.tensor(flat_returns, dtype=torch.float32),
             }
         )
 
     return result
+
+
+def unpack_sequences(packed_batch: Dict) -> List[Dict]:
+    cu_seqlens = packed_batch["cu_seqlens"]
+    num_sequences = len(cu_seqlens) - 1
+    response_lengths = packed_batch["response_lengths"]
+
+    instances = []
+
+    for i in range(num_sequences):
+        start_idx = cu_seqlens[i].item()
+        end_idx = cu_seqlens[i + 1].item()
+        instance = {}
+
+        # Copy any additional attributes that might exist in the packed batch
+        for key, value in packed_batch.items():
+            if key not in instance:
+                # For tensor attributes, we need to slice them appropriately
+                if isinstance(value, torch.Tensor):
+                    if key in ["log_probs", "ref_log_probs", "cur_log_probs"]:
+                        instance[key] = value[end_idx - 1 - response_lengths[i] : end_idx - 1]
+                    elif key in ["tokens", "position_ids"]:
+                        # For other tensor attributes, try to slice them
+                        if len(value) > start_idx:
+                            instance[key] = value[start_idx:end_idx]
+                        else:
+                            raise ValueError(f"Attribute {key} is not found in the packed batch")
+                    elif key in ["loss_masks", "advantages", "returns"]:
+                        instance[key] = value[sum(response_lengths[:i]) : sum(response_lengths[: i + 1])]
+                elif isinstance(value, list):
+                    instance[key] = value[i]
+                else:
+                    raise ValueError(f"Attribute {key} is not found in the packed batch")
+
+        instances.append(instance)
+
+    return instances
