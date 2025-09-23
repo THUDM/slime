@@ -11,6 +11,7 @@ import wandb
 from slime.backends.utils.data import process_rollout_data
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.memory_utils import clear_memory
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.timer import Timer, timer
 
@@ -259,14 +260,32 @@ class FSDPTrainRayActor(TrainRayActor):
                 unpacked_batches = []
                 for batch in batches:
                     unpacked_batches.extend(unpack_sequences(batch))
+                del batches
+                # Clear GPU cache after unpacking to reduce memory pressure
+                torch.cuda.empty_cache()
                 for unpacked_batch in unpacked_batches:
                     if isinstance(unpacked_batch[metric_key], torch.Tensor):
-                        val += per_sample_mean(
-                            unpacked_batch[metric_key].to(device=torch.cuda.current_device()),
-                            torch.tensor(unpacked_batch["loss_masks"]).to(device=torch.cuda.current_device()),
-                        ).item()
+                        # Use detach().clone() to avoid memory duplication
+                        loss_masks_tensor = unpacked_batch["loss_masks"]
+                        if not isinstance(loss_masks_tensor, torch.Tensor):
+                            loss_masks_tensor = torch.tensor(loss_masks_tensor, device=torch.cuda.current_device())
+                        elif loss_masks_tensor.device != torch.cuda.current_device():
+                            loss_masks_tensor = (
+                                loss_masks_tensor.detach().clone().to(device=torch.cuda.current_device())
+                            )
+
+                        metric_tensor = unpacked_batch[metric_key]
+                        if metric_tensor.device != torch.cuda.current_device():
+                            metric_tensor = metric_tensor.to(device=torch.cuda.current_device())
+
+                        val += per_sample_mean(metric_tensor, loss_masks_tensor).item()
+                        # Clear intermediate tensors to free memory
+                        del metric_tensor, loss_masks_tensor
                     else:
                         val += unpacked_batch[metric_key]
+                del unpacked_batches
+                # Force garbage collection and cache clearing
+                torch.cuda.empty_cache()
             dist.all_reduce(val, op=dist.ReduceOp.SUM)
             log_dict[f"rollout/{metric_key}"] = (
                 val / (self.args.n_samples_per_prompt * self.args.rollout_batch_size)
@@ -307,6 +326,12 @@ class FSDPTrainRayActor(TrainRayActor):
             advantages = torch.cat([batch["advantages"] for batch in micro_batches], dim=0)
             loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in micro_batches]
             response_lengths = [batch["response_lengths"] for batch in micro_batches]
+            ref_log_probs = (
+                torch.cat([batch["ref_log_probs"] for batch in micro_batches], dim=0)
+                if self.args.use_kl_loss
+                else None
+            )
+            del micro_batches
 
             # Ensure device consistency
             ppo_kl = old_log_probs.to(device=log_probs.device) - log_probs
@@ -326,7 +351,7 @@ class FSDPTrainRayActor(TrainRayActor):
             if self.args.use_kl_loss:
                 kl = compute_approx_kl(
                     log_probs,
-                    torch.cat([batch["ref_log_probs"] for batch in micro_batches], dim=0).to(device=log_probs.device),
+                    ref_log_probs.to(device=log_probs.device),
                     kl_loss_type=self.args.kl_loss_type,
                 )
                 kl_loss = sum_of_sample_mean(kl, response_lengths, loss_masks)
@@ -345,6 +370,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
             loss = loss / grad_accum
             loss.backward()
+            clear_memory()
             # Accumulate reported metrics (store tensors for later mean)
             for k, v in reported.items():
                 reported_accum.setdefault(k, []).append(v)
