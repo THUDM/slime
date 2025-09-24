@@ -1,3 +1,4 @@
+import json
 import os
 from typing import Any, Dict
 
@@ -30,6 +31,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--actor-num-nodes", type=int, default=1, help="Number of nodes for training actor")
             parser.add_argument(
                 "--actor-num-gpus-per-node", type=int, default=8, help="Number of gpus per node for training actor"
+            )
+            parser.add_argument(
+                "--critic-num-nodes", type=int, default=None, help="Number of nodes for training actor"
+            )
+            parser.add_argument(
+                "--critic-num-gpus-per-node", type=int, default=None, help="Number of gpus per node for training actor"
             )
 
             parser.add_argument(
@@ -348,6 +355,14 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--apply-chat-template", action="store_true", default=False)
             parser.add_argument("--input-key", type=str, default="input", help="JSON dataset key")
             parser.add_argument("--label-key", type=str, default=None, help="JSON dataset key")
+            parser.add_argument(
+                "--multimodal-keys",
+                type=json.loads,
+                default=None,
+                help=(
+                    'JSON string for multimodal data mapping media types to data keys. Example: \'{"image": "image_file"}\''
+                ),
+            )
             parser.add_argument("--metadata-key", type=str, default="metadata", help="JSON dataset key")
             parser.add_argument(
                 "--tool-key",
@@ -503,6 +518,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             reset_arg(parser, "--seed", type=int, default=1234)
             reset_arg(parser, "--clip-grad", type=float, default=1.0)
             reset_arg(parser, "--calculate-per-token-loss", action="store_true")
+            reset_arg(parser, "--lr", type=float, default=1e-6)
+
+            parser.add_argument("--num-critic-only-steps", type=int, default=0, help="Number of critic only steps")
+            parser.add_argument("--critic-load", type=str, default=None, help="The checkpoint for critic model.")
+            parser.add_argument("--critic-save", type=str, default=None, help="The checkpoint for critic model.")
+            parser.add_argument("--critic-lr", type=float, default=None, help="The lr for critic model")
 
             parser.add_argument("--eps-clip", type=float, default=0.2, help="PPO clip range")
             parser.add_argument("--eps-clip-high", type=float, default=None, help="PPO clip upper range")
@@ -512,6 +533,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help="lower bound of the value for Dual-clip PPO from https://arxiv.org/pdf/1912.09729",
             )
+            parser.add_argument("--value-clip", type=float, default=0.2, help="the clip for value loss")
             parser.add_argument(
                 "--kl-coef",
                 type=float,
@@ -547,7 +569,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--advantage-estimator",
                 type=str,
-                choices=["grpo", "gspo", "reinforce_plus_plus", "reinforce_plus_plus_baseline"],
+                choices=["grpo", "gspo", "reinforce_plus_plus", "reinforce_plus_plus_baseline", "ppo"],
                 default="grpo",
             )
             parser.add_argument(
@@ -570,7 +592,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="KL penalty coefficient for the loss function. This is added to the final PPO loss.",
             )
             parser.add_argument("--entropy-coef", type=float, default=0.0, help="Entropy loss coef")
-            parser.add_argument("--gamma", type=float, default=1.0, help="Discount factor for rewards in REINFORCE++.")
+            parser.add_argument("--gamma", type=float, default=1.0, help="PPO GAE gamma")
+            parser.add_argument("--lambd", type=float, default=1.0, help="PPO GAE lambd")
             parser.add_argument("--normalize-advantages", action="store_true", default=False)
             parser.add_argument(
                 "--disable-grpo-std-normalization",
@@ -611,6 +634,21 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=float,
                 default=0,
                 help="Lower bound clipping threshold C for importance sampling ratios to control variance.",
+            )
+            return parser
+
+        def add_router_arguments(parser):
+            parser.add_argument(
+                "--use-slime-router",
+                action="store_true",
+                default=False,
+                help="Whether to use SlimeRouter for text-based routing instead of SGLang token-based routing",
+            )
+            parser.add_argument(
+                "--slime-router-middleware-paths",
+                type=str,
+                nargs="+",
+                default=None,
             )
             return parser
 
@@ -729,6 +767,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
         def add_network_arguments(parser):
             parser.add_argument("--http-proxy", type=str, default=None)
+            parser.add_argument("--use-distributed-post", action="store_true", default=False)
             return parser
 
         def add_reward_model_arguments(parser):
@@ -811,7 +850,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--loss-mask-type",
                 type=str,
                 default="qwen",
-                choices=["qwen", "distill_qwen"],
+                choices=["qwen", "qwen3", "distill_qwen"],
                 help="Loss mask type",
             )
             return parser
@@ -856,6 +895,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_eval_arguments(parser)
         parser = add_algo_arguments(parser)
         parser = add_wandb_arguments(parser)
+        parser = add_router_arguments(parser)
         parser = add_debug_arguments(parser)
         parser = add_sglang_arguments(parser)
         parser = add_network_arguments(parser)
@@ -1003,6 +1043,16 @@ def slime_validate_args(args):
             "will not instantiate sglang servers and will only run the rollout generation."
         )
         args.debug_train_only = True
+
+    args.use_critic = args.advantage_estimator == "ppo"
+    if args.critic_num_gpus_per_node is None:
+        args.critic_num_gpus_per_node = args.actor_num_gpus_per_node
+    if args.critic_num_nodes is None:
+        args.critic_num_nodes = args.actor_num_nodes
+    if args.critic_load is None:
+        args.critic_load = args.load
+    if args.critic_lr is None:
+        args.critic_lr = args.lr
 
     if args.debug_rollout_only:
         if args.colocate and args.rollout_num_gpus is None:

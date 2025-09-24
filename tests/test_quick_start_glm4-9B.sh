@@ -5,7 +5,7 @@ set -e
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
 
-NVLINK_COUNT=$(nvidia-smi | grep -o "NVLink" | wc -l)
+NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
 if [ "$NVLINK_COUNT" -gt 0 ]; then
     HAS_NVLINK=1
 else
@@ -74,6 +74,7 @@ GRPO_ARGS=(
    --eps-clip-high 0.28
 
    --use-tis
+   --calculate-per-token-loss
 )
 
 OPTIMIZER_ARGS=(
@@ -87,6 +88,8 @@ OPTIMIZER_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
+
+   --use-slime-router
 )
 
 MISC_ARGS=(

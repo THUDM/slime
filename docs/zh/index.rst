@@ -31,6 +31,13 @@ slime 是一个面向 RL Scaling 的 LLM 后训练框架，提供两大核心能
 
 .. toctree::
    :maxdepth: 1
+   :caption: 高级特性
+
+   _examples_synced/reproducibility/README.md
+   advanced/speculative-decoding.md
+
+.. toctree::
+   :maxdepth: 1
    :caption: 其他用法
 
    examples/qwen3-4b-base-openhermes.md
@@ -38,12 +45,6 @@ slime 是一个面向 RL Scaling 的 LLM 后训练框架，提供两大核心能
    _examples_synced/fully_async/README.md
    _examples_synced/retool/README.md
    _examples_synced/multi_agent/README.md
-
-.. toctree::
-   :maxdepth: 1
-   :caption: 高级特性
-
-   advanced/speculative-decoding.md
 
 .. toctree::
    :maxdepth: 1

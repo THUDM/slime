@@ -1,6 +1,6 @@
 # Adapt from https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/models/utils.py
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -273,6 +273,46 @@ def get_reinforce_plus_plus_baseline_advantages(
     ]
 
     return unwhitened_advantages
+
+
+def get_advantages_and_returns(
+    values: torch.Tensor,
+    rewards: torch.Tensor,
+    gamma: float,
+    lambd: float,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Function that computes advantages and returns from rewards and values.
+    Calculated as in the original PPO paper: https://arxiv.org/abs/1707.06347
+    Note that rewards may include a KL divergence loss term.
+
+    Advantages looks like this:
+    Adv1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
+            - V1 + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
+
+    Returns looks like this:
+    Ret1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
+                + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
+
+    Input:
+    - values: Tensor of shape (response_size,)
+    - rewards: Tensor of shape (response_size,)
+
+    Output:
+    - advantages: Tensor of shape (response_size,)
+    - returns: Tensor of shape (response_size,)
+    """
+    lastgaelam = 0
+    advantages_reversed = []
+    response_length = rewards.size(0)
+
+    for t in reversed(range(response_length)):
+        nextvalues = values[t + 1] if t < response_length - 1 else 0.0
+        delta = rewards[t] + gamma * nextvalues - values[t]
+        lastgaelam = delta + gamma * lambd * lastgaelam
+        advantages_reversed.append(lastgaelam)
+    advantages = torch.tensor(advantages_reversed[::-1], dtype=values.dtype, device=values.device)
+    returns = advantages + values
+    return advantages.detach(), returns
 
 
 def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool = False):

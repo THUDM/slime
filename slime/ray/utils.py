@@ -3,6 +3,8 @@ import os
 
 import ray
 import torch
+from slime.ray.ray_actor import RayActor
+
 
 # Refer to
 # https://github.com/ray-project/ray/blob/161849364a784442cc659fb9780f1a6adee85fce/python/ray/_private/accelerators/nvidia_gpu.py#L95-L96
@@ -34,7 +36,7 @@ def get_physical_gpu_id():
 
 
 @ray.remote
-class Lock:
+class Lock(RayActor):
     def __init__(self):
         self._locked = False  # False: unlocked, True: locked
 

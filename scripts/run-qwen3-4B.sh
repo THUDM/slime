@@ -16,7 +16,7 @@ set -ex
 export PYTHONBUFFERED=16
 SGLANG_MEMORY_SAVER_CUDA_GRAPH=1
 
-NVLINK_COUNT=$(nvidia-smi | grep -o "NVLink" | wc -l)
+NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
 if [ "$NVLINK_COUNT" -gt 0 ]; then
     HAS_NVLINK=1
 else

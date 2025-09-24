@@ -5,7 +5,6 @@ from contextlib import nullcontext
 from functools import partial
 
 import torch
-import wandb
 from megatron.core import mpu
 from megatron.core.distributed import DistributedDataParallel as DDP
 from megatron.core.distributed import DistributedDataParallelConfig, finalize_model_grads
@@ -18,11 +17,12 @@ from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
+import wandb
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
 from .data import get_batch
-from .loss import get_log_probs_and_entropy, loss_function
+from .loss import loss_function
 from .model_provider import get_model_provider_func
 
 if torch.version.hip:
@@ -68,6 +68,7 @@ def get_optimizer_param_scheduler(args, optimizer):
 
 def setup_model_and_optimizer(
     args,
+    role: str = "actor",
     no_wd_decay_cond=None,
     scale_lr_cond=None,
     lr_mult=1.0,
@@ -76,7 +77,7 @@ def setup_model_and_optimizer(
     assert not args.moe_use_upcycling
     assert args.load is not None or args.pretrained_checkpoint is not None
 
-    model = get_model(get_model_provider_func(args), ModelType.encoder_or_decoder, wrap_with_ddp=False)
+    model = get_model(get_model_provider_func(args, role), ModelType.encoder_or_decoder, wrap_with_ddp=False)
 
     with (
         CuMemAllocator.get_instance().use_memory_pool(tag="model")
@@ -160,7 +161,7 @@ def disable_forward_pre_hook(model_chunks, param_sync=True):
 
 
 @torch.no_grad()
-def forward_only(args, model, data_iterator, num_microbatches, store_prefix=""):
+def forward_only(f, args, model, data_iterator, num_microbatches, store_prefix=""):
     """Only do the forward pass and calculate the logprob."""
 
     # reset data iterator
@@ -193,7 +194,7 @@ def forward_only(args, model, data_iterator, num_microbatches, store_prefix=""):
         )
 
         return output_tensor, partial(
-            get_log_probs_and_entropy,
+            f,
             args=args,
             unconcat_tokens=unconcat_tokens,
             total_lengths=total_lengths,
@@ -291,6 +292,7 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
                 "ref_log_probs",
                 "values",
                 "advantages",
+                "returns",
                 "rollout_log_probs",
             ],
         )
@@ -455,13 +457,16 @@ def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_
             and mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1
         ):
             accumulated_step_id = rollout_id * num_steps_per_rollout + step_id
+            role = getattr(model[0], "role", "actor")
+            role_tag = "" if role == "actor" else f"{role}-"
             log_dict = {
-                f"train/{key}": val.mean().item() if isinstance(val, torch.Tensor) else val
+                f"train/{role_tag}{key}": val.mean().item() if isinstance(val, torch.Tensor) else val
                 for key, val in loss_dict.items()
             }
-            log_dict["train/grad_norm"] = grad_norm
+            log_dict[f"train/{role_tag}grad_norm"] = grad_norm
+
             for param_group_id, param_group in enumerate(optimizer.param_groups):
-                log_dict[f"train/lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
+                log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
 
             if args.use_wandb:
                 log_dict["train/step"] = accumulated_step_id
@@ -473,7 +478,7 @@ def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_
                 if accumulated_step_id == 0 and "train/kl_loss" in log_dict:
                     assert log_dict["train/kl_loss"] == 0.0
 
-            print(f"step {accumulated_step_id}: {log_dict}")
+            print(f"{role_tag}step {accumulated_step_id}: {log_dict}")
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
     if pre_hook_enabled:
         disable_forward_pre_hook(model)
@@ -497,8 +502,9 @@ def save(iteration, model, optimizer, opt_param_scheduler):
         enable_forward_pre_hook(model)
 
 
-def initialize_model_and_optimizer(args):
-    model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args)
+def initialize_model_and_optimizer(args, role: str = "actor"):
+    model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args, role)
+    setattr(model[0], "role", role)
     clear_memory()
     iteration, _ = load_checkpoint(
         model,
