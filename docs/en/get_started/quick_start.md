@@ -20,8 +20,6 @@ Since slime may contain temporary patches for sglang/megatron, to avoid potentia
 - B-series basic functionality is stable and suitable for development/testing, but currently lacks CI protection
 - Both hardware platforms use identical installation and startup procedures
 
-### Alternative Environment Options
-
 - For scenarios where Docker is not convenient, please refer to [build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh);
 - For AMD support, please refer to [AMD Usage Tutorial](../platform_support/amd_tutorial.md).
 
