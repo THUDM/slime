@@ -200,7 +200,6 @@ class FSDPTrainRayActor(TrainRayActor):
                     get_minimum_num_micro_batch_size(
                         [len(t) for t in rollout_data["tokens"][i : i + local_batch_size]],
                         self.args.max_tokens_per_gpu,
-                        1,
                     )
                 )
             num_microbatches = torch.tensor(mbs_size_list, dtype=torch.int, device=torch.cuda.current_device())
@@ -241,7 +240,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     * (self.args.rollout_batch_size * self.args.n_samples_per_prompt // self.args.global_batch_size)
                 )
             )
-            return packed_batches, grad_accum
+        return packed_batches, grad_accum
 
     def train(self, rollout_id, rollout_data_ref):
         Timer().end("train_wait")
