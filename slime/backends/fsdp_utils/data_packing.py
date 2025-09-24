@@ -27,11 +27,14 @@ def pack_sequences(
         loss_masks: List of loss masks
         rewards: List of rewards per sequence
         raw_rewards: List of raw rewards per sequence
+        response_lengths: List of response lengths per sequence
+        advantages: List of advantages per sequence
+        returns: List of returns per sequence
         max_tokens_per_gpu: Maximum tokens per GPU pack
         num_packs: Explicit number of packs to create
 
     Returns:
-        List of packed batches with tokens, masks, cu_seqlens, and rewards
+        List of packed batches with tokens, masks, cu_seqlens, rewards, raw_rewards, response_lengths, advantages, returns
     """
     if not tokens:
         return []
@@ -91,6 +94,16 @@ def pack_sequences(
 
 
 def unpack_sequences(packed_batch: Dict) -> List[Dict]:
+    """
+    Unpack sequences from a packed batch.
+
+    Args:
+        packed_batch: Packed batch
+
+    Returns:
+        List of unpacked batches
+    """
+
     cu_seqlens = packed_batch["cu_seqlens"]
     num_sequences = len(cu_seqlens) - 1
     response_lengths = packed_batch["response_lengths"]

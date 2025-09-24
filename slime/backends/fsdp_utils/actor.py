@@ -89,7 +89,6 @@ class FSDPTrainRayActor(TrainRayActor):
         self.weight_updator = UpdateWeightFromTensor(self.args, self.model)
 
         # Initialize data packing parameters
-        self.max_seq_len = getattr(args, "max_seq_len", 8192)
         self.max_tokens_per_gpu = args.max_tokens_per_gpu  # From main arguments
 
         if self.args.offload:
@@ -211,8 +210,6 @@ class FSDPTrainRayActor(TrainRayActor):
                     * (self.args.rollout_batch_size * self.args.n_samples_per_prompt // self.args.global_batch_size)
                 )
             )
-        if dist.get_rank() == 0:
-            print(f"grad_accum: {grad_accum}")
         return packed_batches, grad_accum
 
     def train(self, rollout_id, rollout_data_ref):

@@ -29,8 +29,6 @@ class FSDPArgs:
     fsdp_backward_prefetch: bool = True
     attn_implementation: str = "flash_attention_2"
 
-    # Data packing configuration
-    max_seq_len: int = 9192  # Maximum sequence length
     # max_tokens_per_gpu is defined in main arguments (slime/utils/arguments.py)
     micro_batch_size: int = 1  # Micro batch size
 
