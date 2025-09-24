@@ -20,8 +20,6 @@ Since slime may contain temporary patches for sglang/megatron, to avoid potentia
 - B-series basic functionality is stable and suitable for development/testing, but currently lacks CI protection
 - Both hardware platforms use identical installation and startup procedures
 
-> **Note**: slime is an open-source project, and we continuously improve support for different hardware platforms. If you encounter any issues on B200 GPUs, please feel free to submit an Issue for feedback.
-
 ### Alternative Environment Options
 
 - For scenarios where Docker is not convenient, please refer to [build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh);
