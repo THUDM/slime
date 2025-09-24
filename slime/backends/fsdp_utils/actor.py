@@ -315,7 +315,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 if self.args.use_kl_loss
                 else None
             )
-            n_sample = len(unpacked_batches)
 
             # Ensure device consistency
             ppo_kl = old_log_probs.to(device=log_probs.device) - log_probs
@@ -343,15 +342,16 @@ class FSDPTrainRayActor(TrainRayActor):
                 loss = loss + self.args.kl_loss_coef * kl_loss
 
             reported = {
-                "loss": loss.detach() / n_sample,
-                "pg_loss": pg_loss.detach() / n_sample,
-                "pg_clipfrac": pg_clipfrac.detach() / n_sample,
-                "ppo_kl": ppo_kl.detach() / n_sample,
+                "loss": loss.detach(),
+                "pg_loss": pg_loss.detach(),
+                "pg_clipfrac": pg_clipfrac.detach(),
+                "ppo_kl": ppo_kl.detach(),
             }
             if self.args.use_kl_loss:
-                reported["kl_loss"] = (kl_loss.detach() / n_sample,)
+                reported["kl_loss"] = kl_loss.detach()
+
             # Scale loss for gradient accumulation
-            loss = loss * dist.get_world_size() / (self.args.global_batch_size)
+            loss = loss * dist.get_world_size() / self.args.global_batch_size
             loss.backward()
             clear_memory()
             # Accumulate reported metrics (store tensors for later mean)
@@ -364,16 +364,14 @@ class FSDPTrainRayActor(TrainRayActor):
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
                 # Aggregate logs
-                if dist.get_rank() == 0:
-                    print(f"reported_accum: {reported_accum}")
-                aggregated = {k: torch.stack(v).mean().item() for k, v in reported_accum.items()}
+                aggregated = {k: torch.stack(v).sum().item() for k, v in reported_accum.items()}
                 # TODO: change this, this is slow.
                 reduced_aggregated = [None] * world_size
                 dist.all_gather_object(reduced_aggregated, aggregated)
                 # Mean across dp ranks
                 aggregated = {}
                 for k in reported_accum.keys():
-                    aggregated[k] = sum([r[k] for r in reduced_aggregated]) / world_size
+                    aggregated[k] = sum([r[k] for r in reduced_aggregated]) / (self.args.global_batch_size)
                 reported_accum = {}
                 if dist.get_rank() == 0:
                     log_dict = {
