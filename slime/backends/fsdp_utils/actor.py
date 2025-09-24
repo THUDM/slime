@@ -1,4 +1,5 @@
 from contextlib import nullcontext
+from itertools import accumulate
 
 import torch
 import torch.distributed as dist
@@ -148,18 +149,17 @@ class FSDPTrainRayActor(TrainRayActor):
         store_prefix="",
     ):
         with timer(f"{store_prefix}log_probs") and torch.no_grad():
-            for batches in packed_batches:
-                for batch_idx, batch in enumerate(batches):
-                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                        logits = self.model(
-                            input_ids=batch["tokens"].unsqueeze(0),
-                            attention_mask=None,
-                            position_ids=batch["position_ids"].unsqueeze(0),
-                        ).logits
+            for batch in packed_batches:
+                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                    logits = self.model(
+                        input_ids=batch["tokens"].unsqueeze(0),
+                        attention_mask=None,
+                        position_ids=batch["position_ids"].unsqueeze(0),
+                    ).logits
 
-                    batch[f"{store_prefix}log_probs"] = gather_log_probs_packed(
-                        logits, batch["tokens"], batch["cu_seqlens"]
-                    )
+                batch[f"{store_prefix}log_probs"] = gather_log_probs_packed(
+                    logits, batch["tokens"], batch["cu_seqlens"]
+                )
 
     def pad_and_move_to_device(self, rollout_data):
         # Pack sequences efficiently
@@ -192,7 +192,7 @@ class FSDPTrainRayActor(TrainRayActor):
             dist.all_reduce(num_microbatches, op=dist.ReduceOp.MAX)
             num_microbatches = num_microbatches.tolist()
             for i in range(0, len(tokens), local_batch_size):
-                packed_batches.append(
+                packed_batches.extend(
                     pack_sequences(
                         rollout_data["tokens"][i : i + local_batch_size],
                         rollout_data["loss_masks"][i : i + local_batch_size],
@@ -201,14 +201,15 @@ class FSDPTrainRayActor(TrainRayActor):
                         rollout_data["response_lengths"][i : i + local_batch_size],
                         rollout_data["advantages"][i : i + local_batch_size],
                         rollout_data["returns"][i : i + local_batch_size],
-                        max_tokens_per_gpu=self.args.max_tokens_per_gpu,
-                        # num_packs=num_microbatches[i // local_batch_size],
+                        num_packs=num_microbatches[i // local_batch_size],
                     )
                 )
+
+            grad_accum = list(accumulate(num_microbatches))
         else:
             # Original logic for backward compatibility
             for i in range(0, len(tokens), self.args.micro_batch_size):
-                packed_batches.append(
+                packed_batches.extend(
                     pack_sequences(
                         rollout_data["tokens"][i : i + self.args.micro_batch_size],
                         rollout_data["loss_masks"][i : i + self.args.micro_batch_size],
@@ -219,7 +220,14 @@ class FSDPTrainRayActor(TrainRayActor):
                         rollout_data["returns"][i : i + self.args.micro_batch_size],
                     )
                 )
-        grad_accum = self.args.global_batch_size // (dist.get_world_size())
+            grad_accum = list(
+                accumulate(
+                    [self.args.global_batch_size // (self.args.micro_batch_size * dist.get_world_size())]
+                    * (self.args.rollout_batch_size * self.args.n_samples_per_prompt // self.args.global_batch_size)
+                )
+            )
+        if dist.get_rank() == 0:
+            print(f"grad_accum: {grad_accum}")
         return packed_batches, grad_accum
 
     def train(self, rollout_id, rollout_data_ref):
@@ -244,7 +252,7 @@ class FSDPTrainRayActor(TrainRayActor):
         log_dict = {}
 
         assert (
-            grad_accum > 0
+            len(grad_accum) > 0
         ), f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
 
         if self.ref_model is not None:
@@ -253,39 +261,18 @@ class FSDPTrainRayActor(TrainRayActor):
         self.compute_log_prob("actor", packed_batches)
 
         for metric_key in ["log_probs", "ref_log_probs", "advantages", "returns", "raw_rewards"]:
-            if metric_key not in packed_batches[0][0]:
+            if metric_key not in packed_batches[0]:
                 continue
             val = torch.tensor([0.0], device=torch.cuda.current_device())
             for mbs_id, batches in enumerate(packed_batches):
-                unpacked_batches = []
-                for batch in batches:
-                    unpacked_batches.extend(unpack_sequences(batch))
-                del batches
-                # Clear GPU cache after unpacking to reduce memory pressure
-                torch.cuda.empty_cache()
+                unpacked_batches = unpack_sequences(batches)
                 for unpacked_batch in unpacked_batches:
                     if isinstance(unpacked_batch[metric_key], torch.Tensor):
-                        # Use detach().clone() to avoid memory duplication
-                        loss_masks_tensor = unpacked_batch["loss_masks"]
-                        if not isinstance(loss_masks_tensor, torch.Tensor):
-                            loss_masks_tensor = torch.tensor(loss_masks_tensor, device=torch.cuda.current_device())
-                        elif loss_masks_tensor.device != torch.cuda.current_device():
-                            loss_masks_tensor = (
-                                loss_masks_tensor.detach().clone().to(device=torch.cuda.current_device())
-                            )
-
-                        metric_tensor = unpacked_batch[metric_key]
-                        if metric_tensor.device != torch.cuda.current_device():
-                            metric_tensor = metric_tensor.to(device=torch.cuda.current_device())
-
+                        loss_masks_tensor = unpacked_batch["loss_masks"].to(device=torch.cuda.current_device())
+                        metric_tensor = unpacked_batch[metric_key].to(device=torch.cuda.current_device())
                         val += per_sample_mean(metric_tensor, loss_masks_tensor).item()
-                        # Clear intermediate tensors to free memory
-                        del metric_tensor, loss_masks_tensor
                     else:
                         val += unpacked_batch[metric_key]
-                del unpacked_batches
-                # Force garbage collection and cache clearing
-                torch.cuda.empty_cache()
             dist.all_reduce(val, op=dist.ReduceOp.SUM)
             log_dict[f"rollout/{metric_key}"] = (
                 val / (self.args.n_samples_per_prompt * self.args.rollout_batch_size)
@@ -305,33 +292,30 @@ class FSDPTrainRayActor(TrainRayActor):
 
         reported_accum: dict[str, list[torch.Tensor]] = {}
         self.optimizer.zero_grad(set_to_none=True)
-        for mbs_id, batches in enumerate(packed_batches):
-            # Process packed sequences in micro-batches to save memory
-            micro_batches = []
-            for batch in batches:
-                with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                    logits = self.model(
-                        input_ids=batch["tokens"].unsqueeze(0),
-                        attention_mask=None,
-                        position_ids=batch["position_ids"].unsqueeze(0),
-                    ).logits
+        for mbs_id, packed_batch in enumerate(packed_batches):
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+                logits = self.model(
+                    input_ids=packed_batch["tokens"].unsqueeze(0),
+                    attention_mask=None,
+                    position_ids=packed_batch["position_ids"].unsqueeze(0),
+                ).logits
 
-                # Handle packed sequences
-                log_probs = gather_log_probs_packed(logits, batch["tokens"], batch["cu_seqlens"])
-                batch["cur_log_probs"] = log_probs
-                micro_batches.extend(unpack_sequences(batch))
+            # Handle packed sequences
+            log_probs = gather_log_probs_packed(logits, packed_batch["tokens"], packed_batch["cu_seqlens"])
+            packed_batch["cur_log_probs"] = log_probs
+            unpacked_batches = unpack_sequences(packed_batch)
 
-            old_log_probs = torch.cat([batch["log_probs"] for batch in micro_batches], dim=0)
-            log_probs = torch.cat([batch["cur_log_probs"] for batch in micro_batches], dim=0)
-            advantages = torch.cat([batch["advantages"] for batch in micro_batches], dim=0)
-            loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in micro_batches]
-            response_lengths = [batch["response_lengths"] for batch in micro_batches]
+            old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
+            log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
+            advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
+            loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
+            response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
             ref_log_probs = (
-                torch.cat([batch["ref_log_probs"] for batch in micro_batches], dim=0)
+                torch.cat([batch["ref_log_probs"] for batch in unpacked_batches], dim=0)
                 if self.args.use_kl_loss
                 else None
             )
-            del micro_batches
+            n_sample = len(unpacked_batches)
 
             # Ensure device consistency
             ppo_kl = old_log_probs.to(device=log_probs.device) - log_probs
@@ -359,28 +343,29 @@ class FSDPTrainRayActor(TrainRayActor):
                 loss = loss + self.args.kl_loss_coef * kl_loss
 
             reported = {
-                "loss": loss.detach(),
-                "pg_loss": pg_loss.detach(),
-                "pg_clipfrac": pg_clipfrac.detach(),
-                "ppo_kl": ppo_kl.detach(),
+                "loss": loss.detach() / n_sample,
+                "pg_loss": pg_loss.detach() / n_sample,
+                "pg_clipfrac": pg_clipfrac.detach() / n_sample,
+                "ppo_kl": ppo_kl.detach() / n_sample,
             }
             if self.args.use_kl_loss:
-                reported["kl_loss"] = kl_loss.detach()
+                reported["kl_loss"] = (kl_loss.detach() / n_sample,)
             # Scale loss for gradient accumulation
-
-            loss = loss / grad_accum
+            loss = loss * dist.get_world_size() / (self.args.global_batch_size)
             loss.backward()
             clear_memory()
             # Accumulate reported metrics (store tensors for later mean)
             for k, v in reported.items():
                 reported_accum.setdefault(k, []).append(v)
 
-            if (mbs_id + 1) % grad_accum == 0:
+            if (mbs_id + 1) in grad_accum:
                 # TODO: check if the grad norm is global grad norm.
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
                 # Aggregate logs
+                if dist.get_rank() == 0:
+                    print(f"reported_accum: {reported_accum}")
                 aggregated = {k: torch.stack(v).mean().item() for k, v in reported_accum.items()}
                 # TODO: change this, this is slow.
                 reduced_aggregated = [None] * world_size
