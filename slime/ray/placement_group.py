@@ -92,7 +92,8 @@ def create_placement_groups(args):
         rollout_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
         if args.use_critic:
             num_gpus += args.critic_num_nodes * args.critic_num_gpus_per_node
-            critic_offset = args.actor_num_nodes * args.actor_num_gpus_per_node + args.rollout_num_gpus
+            critic_offset = args.actor_num_nodes * args.actor_num_gpus_per_node
+            rollout_offset += args.critic_num_nodes * args.critic_num_gpus_per_node
 
     print(f"Creating placement group with {num_gpus} GPUs...")
     pg, actor_pg_reordered_bundle_indices = _create_placement_group(num_gpus)
