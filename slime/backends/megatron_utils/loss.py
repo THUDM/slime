@@ -161,8 +161,8 @@ def compute_advantages_and_returns(args, rollout_data):
         # TODO: optimize this
         old_rewards = rewards
         rewards = []
-        kl *= args.kl_coef
         for reward, k in zip(old_rewards, kl):
+            k *= -args.kl_coef
             k[-1] += reward
             rewards.append(k)
         advantages, returns = list(

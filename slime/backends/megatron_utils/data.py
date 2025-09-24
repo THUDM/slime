@@ -403,7 +403,7 @@ def sync_actor_critic_data(
         handles.append(dist.broadcast(value, src=1, group=group, async_op=True))
 
     if args.kl_coef != 0 or args.use_kl_loss:
-        if values is not None:
+        if log_probs is None:
             ref_log_probs = [torch.empty_like(value) for value in values]
             log_probs = [torch.empty_like(value) for value in values]
         for ref_log_prob, log_prob in zip(ref_log_probs, log_probs):
