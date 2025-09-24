@@ -9,7 +9,7 @@ from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
 import wandb
-from slime.backends.utils.data import process_rollout_data
+from slime.backends.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory
@@ -18,21 +18,6 @@ from slime.utils.timer import Timer, timer
 
 from .data_packing import pack_sequences, unpack_sequences
 from .update_weight_utils import UpdateWeightFromTensor
-
-
-def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu, cp_size):
-    # use first fit to get the number of micro batches
-    max_tokens_per_gpu *= cp_size
-    batches = []
-    for l in total_lengths:
-        for i in range(len(batches)):
-            if batches[i] + l <= max_tokens_per_gpu:
-                batches[i] += l
-                break
-        else:
-            batches.append(l)
-
-    return len(batches)
 
 
 class FSDPTrainRayActor(TrainRayActor):
@@ -161,7 +146,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     logits, batch["tokens"], batch["cu_seqlens"]
                 )
 
-    def pad_and_move_to_device(self, rollout_data):
+    def packed_data(self, rollout_data):
         # Pack sequences efficiently
         tokens = rollout_data["tokens"]
 
@@ -248,7 +233,7 @@ class FSDPTrainRayActor(TrainRayActor):
         else:
             raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
 
-        packed_batches, grad_accum = self.pad_and_move_to_device(rollout_data)
+        packed_batches, grad_accum = self.packed_data(rollout_data)
         log_dict = {}
 
         assert (
@@ -270,7 +255,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     if isinstance(unpacked_batch[metric_key], torch.Tensor):
                         loss_masks_tensor = unpacked_batch["loss_masks"].to(device=torch.cuda.current_device())
                         metric_tensor = unpacked_batch[metric_key].to(device=torch.cuda.current_device())
-                        val += per_sample_mean(metric_tensor, loss_masks_tensor).item()
+                        val += (metric_tensor * loss_masks_tensor).sum() / loss_masks_tensor.sum().clamp_min(1)
                     else:
                         val += unpacked_batch[metric_key]
             dist.all_reduce(val, op=dist.ReduceOp.SUM)
@@ -406,15 +391,6 @@ class FSDPTrainRayActor(TrainRayActor):
             self.sleep(("model"))
 
 
-def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
-    # log_probs: [B, T-1, V]; input_ids: [B, T]
-    pred_logits = logits[:, :-1]
-    log_probs_all = torch.log_softmax(pred_logits, dim=-1)
-    tgt = input_ids[:, 1:].contiguous()
-    log_probs = log_probs_all.gather(-1, tgt.unsqueeze(-1)).squeeze(-1)
-    return log_probs
-
-
 def gather_log_probs_packed(logits: torch.Tensor, input_ids: torch.Tensor, cu_seqlens: torch.Tensor) -> torch.Tensor:
     """Gather log probabilities for packed sequences."""
     # Handle batch dimension - logits should be [batch_size, seq_len, vocab_size]
@@ -434,14 +410,11 @@ def gather_log_probs_packed(logits: torch.Tensor, input_ids: torch.Tensor, cu_se
     return gathered
 
 
-def per_sample_mean(x, loss_mask):
-    # TODO: impl per token loss
-    # For packed sequences, x is already flattened
-    return (x * loss_mask).sum() / loss_mask.sum().clamp_min(1)
-
-
 def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks: list[torch.Tensor]):
-    res = []
-    for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks):
-        res.append((x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1))
-    return sum(res)
+
+    return sum(
+        [
+            (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)
+            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks)
+        ]
+    )
