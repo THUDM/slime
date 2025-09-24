@@ -1,0 +1,71 @@
+from argparse import Namespace
+import ray
+from sglang.srt.constants import GPU_MEMORY_TYPE_WEIGHTS
+from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_group
+from slime.ray.registry import register_actor
+from slime.utils.wandb_utils import init_wandb_primary
+
+# TODO: Temporary workaround: Hard-code the args instead of calling parser
+# The parameters here is from test_fsdp.sh with the following changes:
+# * Added "--sglang-load-format dummy" under SGLANG_ARGS
+# * Deleted "--colocate" flag for train.py
+# * Changed "--actor-num-gpus-per-node" for train.py from 4 to 2
+# * Added "--rollout-num-gpus 2" for train.py
+train_args=Namespace(config=None, optimizer='adam', lr=1e-06, lr_decay_style='constant', weight_decay=0.1, adam_beta1=0.9, adam_beta2=0.98, adam_eps=1e-08, warmup_ratio=0.03, fsdp_wrap='transformer_blocks', fsdp_sharding_strategy='FULL_SHARD', fsdp_cpu_offload=False, fsdp_limit_all_gathers=False, fsdp_sync_module_states=False, fsdp_forward_prefetch=False, fsdp_backward_prefetch=False, wandb_project=None, wandb_run_name=None, gradient_checkpointing=False, actor_num_nodes=1, actor_num_gpus_per_node=2, critic_num_nodes=1, critic_num_gpus_per_node=4, rollout_num_gpus=2, rollout_num_gpus_per_engine=1, num_gpus_per_node=8, colocate=False, offload=False, distributed_backend='nccl', distributed_timeout_minutes=10, hf_checkpoint='/root/Qwen3-0.6B', use_hf_config_for_megatron=False, model_name=None, rollout_function_path='slime.rollout.sglang_rollout.generate_rollout', rollout_temperature=0.8, rollout_top_p=1.0, rollout_top_k=-1, rollout_max_context_len=None, rollout_max_prompt_len=None, rollout_max_response_len=8192, rollout_skip_special_tokens=False, rollout_stop=None, rollout_stop_token_ids=None, rollout_shuffle=True, rollout_seed=42, over_sampling_batch_size=16, dynamic_sampling_filter_path=None, partial_rollout=False, custom_generate_function_path=None, buffer_filter_path=None, update_weight_buffer_size=536870912, update_weights_interval=1, keep_old_actor=False, rollout_data_postprocess_path=None, num_rollout=3000, num_epoch=None, rollout_global_dataset=True, prompt_data='/root/dapo-math-17k/dapo-math-17k.jsonl', apply_chat_template=True, input_key='prompt', label_key='label', multimodal_keys=None, metadata_key='metadata', tool_key=None, start_rollout_id=0, rollout_batch_size=16, n_samples_per_prompt=16, global_batch_size=128, num_steps_per_rollout=None, micro_batch_size=1, balance_data=False, use_dynamic_batch_size=False, max_tokens_per_gpu=None, log_probs_max_tokens_per_gpu=None, eval_function_path='slime.rollout.sglang_rollout.generate_rollout', eval_interval=None, eval_prompt_data=None, eval_input_key=None, eval_label_key=None, eval_tool_key=None, n_samples_per_eval_prompt=1, eval_temperature=None, eval_top_p=None, eval_top_k=None, eval_max_response_len=None, eval_min_new_tokens=None, ref_load=None, ref_ckpt_step=None, load=None, save=None, save_interval=None, seed=1234, clip_grad=1.0, calculate_per_token_loss=False, num_critic_only_steps=0, critic_load=None, critic_save=None, critic_lr=1e-06, eps_clip=0.2, eps_clip_high=0.28, eps_clip_c=None, value_clip=0.2, kl_coef=0.0, loss_type='policy_loss', custom_loss_function_path=None, kl_loss_type='low_var_kl', advantage_estimator='grpo', compute_advantages_and_returns=True, use_kl_loss=False, kl_loss_coef=0.0, entropy_coef=0.0, gamma=1.0, lambd=1.0, normalize_advantages=False, grpo_std_normalization=True, rewards_normalization=True, use_rollout_entropy=False, use_tis=False, tis_clip=2.0, tis_clip_low=0, use_wandb=False, wandb_mode=None, wandb_dir=None, wandb_key=None, wandb_host=None, wandb_team=None, wandb_group=None, wandb_random_suffix=True, wandb_always_use_train_step=False, log_multi_turn=False, log_passrate=False, wandb_run_id=None, use_slime_router=False, slime_router_middleware_paths=None, save_debug_rollout_data=None, load_debug_rollout_data=None, debug_rollout_only=False, debug_train_only=False, save_debug_train_data=None, dump_details=None, sglang_router_ip=None, sglang_router_port=None, sglang_router_request_timeout_secs=3600, sglang_server_concurrency=512, sglang_tokenizer_path=None, sglang_tokenizer_worker_num=1, sglang_tokenizer_mode='auto', sglang_skip_tokenizer_init=False, sglang_load_format='dummy', sglang_model_loader_extra_config='{}', sglang_context_length=None, sglang_is_embedding=False, sglang_enable_multimodal=None, sglang_revision=None, sglang_model_impl='auto', sglang_host='127.0.0.1', sglang_warmups=None, sglang_quantization=None, sglang_quantization_param_path=None, sglang_kv_cache_dtype='auto', sglang_mem_fraction_static=None, sglang_max_running_requests=None, sglang_max_queued_requests=9223372036854775807, sglang_max_total_tokens=None, sglang_chunked_prefill_size=None, sglang_max_prefill_tokens=16384, sglang_schedule_policy='fcfs', sglang_schedule_conservativeness=1.0, sglang_page_size=None, sglang_hybrid_kvcache_ratio=None, sglang_swa_full_tokens_ratio=0.8, sglang_disable_hybrid_swa_memory=False, sglang_device=None, sglang_tensor_parallel_size=1, sglang_pipeline_parallel_size=1, sglang_max_micro_batch_size=None, sglang_stream_interval=1, sglang_stream_output=False, sglang_constrained_json_whitespace_pattern=None, sglang_watchdog_timeout=300, sglang_dist_timeout=None, sglang_download_dir=None, sglang_sleep_on_idle=False, sglang_log_level='info', sglang_log_level_http=None, sglang_log_requests=False, sglang_log_requests_level=2, sglang_crash_dump_folder=None, sglang_show_time_cost=False, sglang_enable_metrics=False, sglang_enable_metrics_for_all_schedulers=False, sglang_bucket_time_to_first_token=None, sglang_bucket_inter_token_latency=None, sglang_bucket_e2e_request_latency=None, sglang_collect_tokens_histogram=False, sglang_prompt_tokens_buckets=None, sglang_generation_tokens_buckets=None, sglang_gc_warning_threshold_secs=0.0, sglang_decode_log_interval=40, sglang_enable_request_time_stats_logging=False, sglang_kv_events_config=None, sglang_api_key=None, sglang_served_model_name=None, sglang_weight_version='default', sglang_chat_template=None, sglang_completion_template=None, sglang_file_storage_path='sglang_storage', sglang_enable_cache_report=False, sglang_reasoning_parser=None, sglang_tool_call_parser=None, sglang_tool_server=None, sglang_data_parallel_size=1, sglang_load_balance_method='round_robin', sglang_json_model_override_args='{}', sglang_preferred_sampling_params=None, sglang_enable_lora=None, sglang_max_lora_rank=None, sglang_lora_target_modules=None, sglang_lora_paths=None, sglang_max_loras_per_batch=8, sglang_max_loaded_loras=None, sglang_lora_backend='triton', sglang_attention_backend=None, sglang_prefill_attention_backend=None, sglang_decode_attention_backend=None, sglang_sampling_backend=None, sglang_grammar_backend=None, sglang_mm_attention_backend=None, sglang_speculative_algorithm=None, sglang_speculative_draft_model_path=None, sglang_speculative_draft_model_revision=None, sglang_speculative_num_steps=None, sglang_speculative_eagle_topk=None, sglang_speculative_num_draft_tokens=None, sglang_speculative_accept_threshold_single=1.0, sglang_speculative_accept_threshold_acc=1.0, sglang_speculative_token_map=None, sglang_expert_parallel_size=1, sglang_moe_a2a_backend='none', sglang_moe_runner_backend='auto', sglang_flashinfer_mxfp4_moe_precision='default', sglang_enable_flashinfer_allreduce_fusion=False, sglang_deepep_mode='auto', sglang_ep_num_redundant_experts=0, sglang_ep_dispatch_algorithm=None, sglang_init_expert_location='trivial', sglang_enable_eplb=False, sglang_eplb_algorithm='auto', sglang_eplb_rebalance_num_iterations=1000, sglang_eplb_rebalance_layers_per_chunk=None, sglang_eplb_min_rebalancing_utilization_threshold=1.0, sglang_expert_distribution_recorder_mode=None, sglang_expert_distribution_recorder_buffer_size=None, sglang_enable_expert_distribution_metrics=False, sglang_deepep_config=None, sglang_moe_dense_tp_size=None, sglang_enable_hierarchical_cache=False, sglang_hicache_ratio=2.0, sglang_hicache_size=0, sglang_hicache_write_policy='write_through', sglang_hicache_io_backend='kernel', sglang_hicache_mem_layout='layer_first', sglang_hicache_storage_backend=None, sglang_hicache_storage_prefetch_policy='best_effort', sglang_hicache_storage_backend_extra_config=None, sglang_enable_double_sparsity=False, sglang_ds_channel_config_path=None, sglang_ds_heavy_channel_num=32, sglang_ds_heavy_token_num=256, sglang_ds_heavy_channel_type='qk', sglang_ds_sparse_decode_threshold=4096, sglang_cpu_offload_gb=0, sglang_offload_group_size=-1, sglang_offload_num_in_group=1, sglang_offload_prefetch_step=1, sglang_offload_mode='cpu', sglang_disable_radix_cache=False, sglang_cuda_graph_max_bs=None, sglang_cuda_graph_bs=None, sglang_disable_cuda_graph=False, sglang_disable_cuda_graph_padding=False, sglang_enable_profile_cuda_graph=False, sglang_enable_cudagraph_gc=False, sglang_enable_nccl_nvls=False, sglang_enable_symm_mem=False, sglang_disable_flashinfer_cutlass_moe_fp4_allgather=False, sglang_enable_tokenizer_batch_encode=False, sglang_disable_outlines_disk_cache=False, sglang_disable_custom_all_reduce=False, sglang_enable_mscclpp=False, sglang_disable_overlap_schedule=False, sglang_enable_mixed_chunk=False, sglang_enable_dp_attention=False, sglang_enable_dp_lm_head=False, sglang_enable_two_batch_overlap=False, sglang_tbo_token_distribution_threshold=0.48, sglang_enable_torch_compile=False, sglang_torch_compile_max_bs=32, sglang_torchao_config='', sglang_enable_nan_detection=False, sglang_enable_p2p_check=False, sglang_triton_attention_reduce_in_fp32=False, sglang_triton_attention_num_kv_splits=8, sglang_num_continuous_decode_steps=1, sglang_delete_ckpt_after_loading=False, sglang_allow_auto_truncate=False, sglang_enable_custom_logit_processor=False, sglang_flashinfer_mla_disable_ragged=False, sglang_disable_shared_experts_fusion=False, sglang_disable_chunked_prefix_cache=False, sglang_disable_fast_image_processor=False, sglang_enable_return_hidden_states=False, sglang_scheduler_recv_interval=1, sglang_numa_node=None, sglang_debug_tensor_dump_output_folder=None, sglang_debug_tensor_dump_input_file=None, sglang_debug_tensor_dump_inject=False, sglang_debug_tensor_dump_prefill_only=False, sglang_disaggregation_mode='null', sglang_disaggregation_transfer_backend='mooncake', sglang_disaggregation_bootstrap_port=8998, sglang_disaggregation_decode_tp=None, sglang_disaggregation_decode_dp=None, sglang_disaggregation_prefill_pp=1, sglang_disaggregation_ib_device=None, sglang_num_reserved_decode_tokens=512, sglang_custom_weight_loader=None, sglang_weight_loader_disable_mmap=False, sglang_enable_pdmux=False, sglang_sm_group_num=3, sglang_enable_ep_moe=False, sglang_enable_deepep_moe=False, sglang_enable_flashinfer_cutlass_moe=False, sglang_enable_flashinfer_trtllm_moe=False, sglang_enable_triton_kernel_moe=False, sglang_enable_flashinfer_mxfp4_moe=False, http_proxy=None, use_distributed_post=False, rm_type='deepscaler', reward_key=None, eval_reward_key=None, group_rm=False, rm_url=None, custom_rm_path=None, custom_reward_post_process_path=None, rollout_buffer_url=None, fetch_trajectory_retry_times=-1, min_batch_collection_ratio=1, rollout_task_type='math', loss_mask_type='qwen', ci_test=False, custom_megatron_init_path=None, custom_megatron_before_log_prob_hook_path=None, custom_megatron_before_train_step_hook_path=None, padded_vocab_size=None, no_load_optim=True, no_load_rng=True, finetune=True, use_critic=False, sglang_tp_size=1, sglang_dp_size=1, sglang_pp_size=1, sglang_ep_size=1)
+
+class TestUpdateWeightFromDistributed:
+    def test_update_weight(self, ray_start_4_gpus_unlimited_cpus):
+        args = train_args
+
+        # allocate the GPUs
+        pgs = create_placement_groups(args)
+        wandb_run_id = init_wandb_primary(args)
+
+        actor_model = create_training_group(args, pgs["actor"], wandb_run_id=wandb_run_id)
+        if args.use_critic:
+            critic_model = create_training_group(args, pgs["critic"], wandb_run_id=wandb_run_id)
+
+        # create the rollout manager, with sglang engines inside.
+        rollout_manager = create_rollout_manager(args, pgs["rollout"], wandb_run_id=wandb_run_id)
+
+        # TODO: extract this to single function
+        rollout_engines, rollout_engine_lock = ray.get(rollout_manager.get_rollout_engines_and_lock.remote())
+        for i, rollout_engine in enumerate(rollout_engines):
+            register_actor("rollout", i, rollout_engine)
+        register_actor("rollout_lock", 0, rollout_engine_lock)
+        for i, actor in enumerate(actor_model._actor_handlers):
+            register_actor("actor", i, actor)
+        if args.use_critic:
+            for i, critic in enumerate(critic_model._actor_handlers):
+                register_actor("critic", i, critic)
+
+        # calculate num_rollout from num_epoch
+        num_rollout_per_epoch = None
+        if args.num_rollout is None:
+            num_rollout_per_epoch = ray.get(rollout_manager.get_num_rollout_per_epoch.remote())
+            args.num_rollout = num_rollout_per_epoch * args.num_epoch
+        assert args.num_rollout > 0
+
+        # sync the initialization (model initalization, load checkpoint, etc.)
+        if args.use_critic:
+            critic_init_handle = critic_model.async_init(args, role="critic", with_ref=False)
+
+        start_rollout_ids = ray.get(
+            actor_model.async_init(args, role="actor", with_ref=args.kl_coef != 0 or args.use_kl_loss)
+        )
+        assert len(set(start_rollout_ids)) == 1
+        if args.start_rollout_id is None:
+            args.start_rollout_id = start_rollout_ids[0]
+
+        if args.rollout_global_dataset:
+            ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
+
+        if args.use_critic:
+            ray.get(critic_init_handle)
+            ray.get(actor_model.async_connect(critic_model))
+
+        if args.offload:
+            ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
+
+        # always update weight first so that sglang has the loaded weights from training.
+        ray.get(actor_model.async_update_weights())
