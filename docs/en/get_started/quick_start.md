@@ -12,7 +12,7 @@ Since slime may contain temporary patches for sglang/megatron, to avoid potentia
 **slime** supports multiple NVIDIA GPU hardware platforms:
 
 - **B200 Series**: Fully supported with identical setup steps as H-series GPUs
-- **H-Series (H100/H800)**: Official support with comprehensive CI testing and stable performance
+- **H-Series (H100/H200)**: Official support with comprehensive CI testing and stable performance
 
 **Important Notes**:
 - Latest Docker images are compatible with both B-series and H-series GPUs without additional configuration
