@@ -38,6 +38,7 @@ slime 是一个面向 RL Scaling 的 LLM 后训练框架，提供两大核心能
    _examples_synced/fully_async/README.md
    _examples_synced/retool/README.md
    _examples_synced/multi_agent/README.md
+   _examples_synced/reproducibility/README.md
 
 .. toctree::
    :maxdepth: 1

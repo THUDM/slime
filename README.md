@@ -14,7 +14,7 @@
 
 - Our vision: [slime: An SGLang-Native Post-Training Framework for RL Scaling](https://lmsys.org/blog/2025-07-09-slime/).
 - Our ideas on agentic training: [Agent-Oriented Design: An Asynchronous and Decoupled Framework for Agentic RL](https://www.notion.so/Agent-Oriented-Design-An-Asynchronous-and-Decoupled-Framework-for-Agentic-RL-2278e692d081802cbdd5d37cef76a547).
-- slime has served as the RL framework for GLM-4.5: [GLM-4.5: Reasoning, Coding, and Agentic Abililties](https://z.ai/blog/glm-4.5)
+- slime has served as the RL framework for GLM-4.5: [GLM-4.5: Reasoning, Coding, and Agentic Abilities](https://z.ai/blog/glm-4.5)
 
 ## Table of Contents
 
@@ -41,7 +41,7 @@
 For a comprehensive quick start guide covering environment setup, data preparation, training startup, and key code analysis, please refer to:
 - [Quick Start Guide](./docs/en/get_started/quick_start.md)
 
-We also provides examples for some usecases not covered in the quick start guide, please check [examples](examples/).
+We also provide examples for some usecases not covered in the quick start guide, please check [examples](examples/).
 
 ## Arguments Walk Through
 
@@ -70,3 +70,14 @@ For complete usage instructions, please refer to the [Usage Documentation](docs/
 
   - For frequently asked questions, please see the [Q\&A](docs/en/get_started/qa.md)
   - Special thanks to the following projects & communities: SGLang, Megatron‑LM, mbridge, OpenRLHF, veRL, Pai-Megatron-Patch and others.
+  - To quote slime, please use:
+  ```bibtext
+  @misc{slime_github,
+    author       = {Zilin Zhu and Chengxing Xie and Xin Lv and slime Contributors},
+    title        = {slime: An LLM post-training framework for RL Scaling},
+    year         = {2025},
+    howpublished = {\url{https://github.com/THUDM/slime}},
+    note         = {GitHub repository. Corresponding author: Xin Lv},
+    urldate      = {2025-06-19}
+  }
+  ```

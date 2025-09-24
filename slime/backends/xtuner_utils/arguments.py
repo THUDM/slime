@@ -22,7 +22,21 @@ def parse_args(add_custom_arguments=None):
     parser.add_argument("--evaluate-step", type=int, default=1)
     parser.add_argument("--evaluate-ratio", type=float, default=1)
 
+    parser.add_argument("--sp-size", type=int, default=1)
+    parser.add_argument("--ep-size", type=int, default=1)
+
     if add_custom_arguments:
         add_custom_arguments(parser)
     args = parser.parse_args()
+
+    if args.load is None:
+        args.load = args.hf_checkpoint
+
+    # TODO: mbs=1 for now
+    args.max_tokens_per_gpu = 0
+    # TODO: only support per token loss now
+    args.calculate_per_token_loss = True
+
+    assert args.sp_size == 1, f"sequence parallel not supported yet."
+
     return args

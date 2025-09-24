@@ -1,4 +1,5 @@
 import math
+from typing import Optional
 
 import numpy as np
 import torch
@@ -8,7 +9,9 @@ from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 
 import wandb
+from slime.utils.data import get_minimum_num_micro_batch_size
 from slime.utils.flops_utils import calculate_fwd_flops
+from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.timer import Timer
 
 from .cp_utils import get_sum_of_sample_mean, slice_with_cp
@@ -95,6 +98,132 @@ def gather_log_data(metic_name, args, rollout_id, log_dict):
         return None
 
 
+class DataIterator:
+    def __init__(
+        self,
+        rollout_data,
+        micro_batch_size: Optional[int] = None,
+        micro_batch_indices: Optional[list[list[int]]] = None,
+    ):
+        self.rollout_data = rollout_data
+        self.micro_batch_size = micro_batch_size
+        self.micro_batch_indices = micro_batch_indices
+        assert micro_batch_size is None or micro_batch_indices is None
+        self.offset = 0
+
+    def get_next(self, keys):
+        batch = {}
+        for key in keys:
+            vals = self.rollout_data.get(key, None)
+            if vals is None:
+                batch[key] = None
+            else:
+                if self.micro_batch_indices is not None:
+                    indices = self.micro_batch_indices[self.offset]
+                    batch[key] = [vals[i] for i in indices]
+                else:
+                    assert self.offset + self.micro_batch_size <= len(
+                        vals
+                    ), f"offset: {self.offset}, micro_batch_size: {self.micro_batch_size}, len(vals): {len(vals)}"
+                    batch[key] = vals[self.offset : self.offset + self.micro_batch_size]
+
+        if self.micro_batch_indices is not None:
+            self.offset += 1
+        else:
+            self.offset += self.micro_batch_size
+        return batch
+
+    def reset(self):
+        self.offset = 0
+        return self
+
+
+def get_data_iterator(args, model, rollout_data):
+    """
+    Creates data iterators for training and log probability evaluation, supporting both static and dynamic batch sizes,
+    with optional virtual pipeline parallelism and sequence length balancing.
+    Args:
+        args: An object containing configuration parameters, including batch sizes, micro batch sizes,
+              dynamic batch size usage, and maximum tokens per GPU et.al.
+        model: The model or list of model stages, used to extract configuration for parallelism.
+        rollout_data: A dictionary containing rollout data, including 'total_lengths' for each sample.
+    Returns:
+        tuple: A tuple containing:
+            - data_iterator: List of DataIterator objects for log probability evaluation.
+            - num_microbatches: Number of microbatches for log probability evaluation.
+    """
+    dp_size = mpu.get_data_parallel_world_size(with_context_parallel=False)
+    dp_group = mpu.get_data_parallel_group()
+    vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size()
+    if vpp_size is None:
+        vpp_size = 1
+    if vpp_size > 1:
+        from megatron.core.utils import get_model_config
+
+        config = get_model_config(model[0])
+        microbatch_group_size_per_vp_stage = config.microbatch_group_size_per_vp_stage
+    cp_size = mpu.get_context_parallel_world_size()
+
+    num_local_samples = len(rollout_data["total_lengths"])
+    num_local_gbs = args.global_batch_size // dp_size
+    num_steps_per_rollout = num_local_samples // num_local_gbs
+
+    def _generate_data_iterator(rollout_data, micro_batch_size, micro_batch_indices=None):
+        data_iterator = []
+        for _ in range(vpp_size):
+            data_iterator.append(DataIterator(rollout_data, micro_batch_size, micro_batch_indices))
+        return data_iterator
+
+    if not args.use_dynamic_batch_size:
+        num_microbatches = [num_local_gbs // args.micro_batch_size for _ in range(num_steps_per_rollout)]
+        data_iterator = _generate_data_iterator(rollout_data, args.micro_batch_size)
+    else:
+        assert args.max_tokens_per_gpu is not None
+        # calculate the number of mirobatches for each step
+        samples = rollout_data["total_lengths"]
+        assert len(samples) == num_local_samples
+        num_microbatches = []
+        for i in range(num_steps_per_rollout):
+            start, end = i * num_local_gbs, (i + 1) * num_local_gbs
+            num_microbatches.append(
+                get_minimum_num_micro_batch_size(samples[start:end], args.max_tokens_per_gpu * cp_size)
+            )
+
+        num_microbatches = torch.tensor(num_microbatches, dtype=torch.int, device=torch.cuda.current_device())
+        dist.all_reduce(num_microbatches, op=dist.ReduceOp.MAX, group=dp_group)
+
+        if vpp_size > 1:
+            # vpp requies the number of microbatches to be divisible by vpp_size
+            num_microbatches = torch.clamp(
+                num_microbatches // microbatch_group_size_per_vp_stage * microbatch_group_size_per_vp_stage,
+                min=1,
+            )
+
+        num_microbatches = num_microbatches.tolist()
+
+        # balance the each micro batch
+        samples = rollout_data["total_lengths"]
+        # balance the number of mirobatches across steps
+        micro_batch_indices = []
+        for i, num_mbs in enumerate(num_microbatches):
+            start, end = i * num_local_gbs, (i + 1) * num_local_gbs
+            samples = rollout_data["total_lengths"][start:end]
+            partitions = get_seqlen_balanced_partitions(samples, num_mbs, equal_size=False)
+            for j in range(num_mbs):
+                for k in range(len(partitions[j])):
+                    partitions[j][k] += start
+            micro_batch_indices.extend(partitions)
+
+        assert len(set(sum(micro_batch_indices, []))) == num_local_samples
+
+        data_iterator = _generate_data_iterator(rollout_data, None, micro_batch_indices)
+
+    return (
+        data_iterator,
+        num_microbatches,
+    )
+
+
 def log_rollout_data(rollout_id, args, rollout_data):
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
         cp_size = mpu.get_context_parallel_world_size()
@@ -109,12 +238,12 @@ def log_rollout_data(rollout_id, args, rollout_data):
             # Upload per sample mean for each rollout value
             # There are the following assumptions:
             # - Each dp rank has the same number of samples
-            if isinstance(val, list):
+            if isinstance(val, (list, tuple)):
                 if isinstance(val[0], torch.Tensor):
                     # NOTE: Here we have to do the clone().detach(), otherwise the tensor will be
                     # modified in place and will cause problem for the next rollout.
                     val = torch.cat(val).clone().detach()
-                    if key in ["log_probs", "ref_log_probs", "rollout_log_probs", "returns", "advantages"]:
+                    if key in ["log_probs", "ref_log_probs", "rollout_log_probs", "returns", "advantages", "values"]:
                         sum_of_sample_mean = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks)
                         val = cp_size * sum_of_sample_mean(val) / len(loss_masks)
                     else:
@@ -257,3 +386,30 @@ def log_perf_data(rollout_id, args):
             )
             wandb.log(log_dict)
     timer_instance.reset()
+
+
+def sync_actor_critic_data(
+    args,
+    values: Optional[list[torch.Tensor]] = None,
+    log_probs: Optional[list[torch.Tensor]] = None,
+    ref_log_probs: Optional[list[torch.Tensor]] = None,
+    group: Optional[dist.ProcessGroup] = None,
+):
+    handles = []
+
+    if values is None:
+        values = [torch.empty_like(log_prob) for log_prob in log_probs]
+    for value in values:
+        handles.append(dist.broadcast(value, src=1, group=group, async_op=True))
+
+    if args.kl_coef != 0 or args.use_kl_loss:
+        if values is not None:
+            ref_log_probs = [torch.empty_like(value) for value in values]
+            log_probs = [torch.empty_like(value) for value in values]
+        for ref_log_prob, log_prob in zip(ref_log_probs, log_probs):
+            handles.append(dist.broadcast(ref_log_prob, src=0, group=group, async_op=True))
+            handles.append(dist.broadcast(log_prob, src=0, group=group, async_op=True))
+
+    for handle in handles:
+        handle.wait()
+    return values, log_probs, ref_log_probs

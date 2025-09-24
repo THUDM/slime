@@ -1,6 +1,9 @@
 import asyncio
+import base64
 import copy
+import io
 
+from PIL import Image
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
@@ -39,6 +42,10 @@ class GenerateState(metaclass=SingletonMeta):
             spaces_between_special_tokens=False,
         )
 
+        if getattr(args, "sglang_enable_deterministic_inference", False):
+            sampling_seed_base = args.rollout_seed
+            self.group_sampling_seeds = [sampling_seed_base + i for i in range(args.n_samples_per_prompt)]
+
         self.reset()
 
     def reset(self):
@@ -63,18 +70,44 @@ class GenerateState(metaclass=SingletonMeta):
 
 
 async def generate(args, sample: Sample, sampling_params) -> Sample:
+    """Generate using traditional SGLang router with token-based workflow"""
     state = GenerateState(args)
-
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
     assert (
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
     ), f"Sample status is {sample.status}"
 
+    # Process prompt to create text and image payload
+    image_data = []
+    if isinstance(sample.prompt, str):
+        text_prompt = sample.prompt
+    else:  # Multimodal prompt (list of dicts)
+        text_prompt = ""
+        # sglang uses a placeholder to insert image features
+        image_token = state.tokenizer.special_tokens_map.get("image_token", "<image>")
+        for part in sample.prompt:
+            if part["type"] == "text":
+                text_prompt += part["text"]
+            elif part["type"] == "image":
+                text_prompt += image_token
+                try:
+                    with Image.open(part["path"]) as image:
+                        buffer = io.BytesIO()
+                        if image.mode != "RGB":
+                            image = image.convert("RGB")
+                        image.save(buffer, format="JPEG")
+                        img_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+                        image_data.append(img_b64)
+                except Exception as e:
+                    print(f"Error processing image {part['path']}: {e}")
+                    sample.status = Sample.Status.ABORTED
+                    return sample
+
     if len(sample.response) > 0:
-        sampling_params["max_new_tokens"] -= len(sample.tokens) - len(
-            state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
-        )
+        # Adjust max_new_tokens for subsequent generation turns
+        prompt_len = len(state.tokenizer(text_prompt, add_special_tokens=False)["input_ids"])
+        sampling_params["max_new_tokens"] -= len(sample.tokens) - prompt_len
 
     assert (
         sampling_params["max_new_tokens"] >= 0
@@ -83,40 +116,38 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         sample.status = Sample.Status.TRUNCATED
         return sample
 
-    # Token-based mode: use tokens directly
-    if len(sample.response) > 0:
-        input_token_ids = sample.tokens
-    else:
-        # First turn: initialize with prompt tokens
-        prompt_token_ids = state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
-        input_token_ids = prompt_token_ids
-        # Initialize sample.tokens with prompt for subsequent turns
-        if not sample.tokens:  # Only set if empty
-            sample.tokens = prompt_token_ids
-
-    # Prepare payload - shared structure
+    # Prepare payload for sglang server
     payload = {
-        "input_ids": input_token_ids,
         "sampling_params": sampling_params,
         "return_logprob": True,
     }
+    if image_data:
+        payload["image_data"] = image_data
 
-    output = await post(url, payload, use_http2=args.use_http2)
+    # Use existing tokens for multi-turn or tokenize the new prompt
+    if len(sample.response) > 0:
+        payload["input_ids"] = sample.tokens
+    else:
+        prompt_token_ids = state.tokenizer(text_prompt, add_special_tokens=False)["input_ids"]
+        payload["input_ids"] = prompt_token_ids
+        if not sample.tokens:  # Initialize sample.tokens for the first turn
+            sample.tokens = prompt_token_ids
+
+    output = await post(url, payload)
 
     # Extract new response tokens
     if "output_token_logprobs" in output["meta_info"]:
         new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
         new_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
     else:
-        # abort
-        new_response_tokens = []
-        new_response_log_probs = []
+        new_response_tokens, new_response_log_probs = [], []
 
     # Update sample with tokens directly - avoiding re-tokenization
     sample.tokens = sample.tokens + new_response_tokens
     sample.response_length += len(new_response_tokens)
     sample.response += output["text"]
-    sample.weight_versions.append(output["meta_info"]["weight_version"])
+    if "weight_version" in output["meta_info"]:
+        sample.weight_versions.append(output["meta_info"]["weight_version"])
     if sample.rollout_log_probs is None:
         sample.rollout_log_probs = []
     sample.rollout_log_probs += new_response_log_probs
@@ -185,9 +216,15 @@ async def generate_and_rm_group(args, group: list[Sample], sampling_params: dict
     if state.aborted:
         return group
 
-    group = await asyncio.gather(
-        *[generate_and_rm(args, sample, sampling_params.copy(), evaluation=evaluation) for sample in group]
-    )
+    tasks = []
+    for idx, sample in enumerate(group):
+        current_sampling_params = sampling_params.copy()
+        if getattr(args, "sglang_enable_deterministic_inference", False):
+            seed = state.group_sampling_seeds[idx]
+            current_sampling_params["sampling_seed"] = seed
+        tasks.append(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
+
+    group = await asyncio.gather(*tasks)
 
     # for the rm that need the whole group, we will not do the rm here
     if not state.aborted and args.group_rm:
@@ -204,14 +241,12 @@ async def abort(args, rollout_id: int):
     state = GenerateState(args)
     assert not state.aborted
     state.aborted = True
-    response = await get(
-        f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers", use_http2=args.use_http2
-    )
+    response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers")
 
     # abort all the requests
     for url in response["urls"]:
         print(f"Abort request for {url}", flush=True)
-        await post(f"{url}/abort_request", {"abort_all": True}, use_http2=False)
+        await post(f"{url}/abort_request", {"abort_all": True})
 
     # make sure all the pending tasks are finished
     count = 0
@@ -343,6 +378,7 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
             max_length=args.rollout_max_prompt_len,
             prompt_key=args.input_key if args.eval_input_key is None else args.eval_input_key,
             label_key=args.label_key if args.eval_label_key is None else args.eval_label_key,
+            multimodal_keys=args.multimodal_keys,
             metadata_key=args.metadata_key,
             tool_key=args.tool_key if args.eval_tool_key is None else args.eval_tool_key,
             apply_chat_template=args.apply_chat_template,
@@ -372,6 +408,9 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
             sample = copy.deepcopy(prompt_sample)
             sample.index = sample_index
             sample_index += 1
+            if getattr(args, "sglang_enable_deterministic_inference", False):
+                sampling_params = sampling_params.copy()
+                sampling_params["sampling_seed"] = args.rollout_seed + j
             tasks.append(
                 generate_and_rm(
                     args,
@@ -398,7 +437,7 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
 
     data.sort(key=lambda sample: sample.index)
 
-    reward_key = args.reward_key or args.eval_reward_key
+    reward_key = args.eval_reward_key or args.reward_key
     return {
         name: {
             "rewards": [sample.reward if not reward_key else sample.reward[reward_key] for sample in data],

@@ -1,6 +1,8 @@
+import socket
 from contextlib import nullcontext
 from pathlib import Path
 
+import ray
 import torch
 import torch.distributed as dist
 
@@ -12,18 +14,19 @@ else:
 from megatron.core import mpu
 from transformers import AutoConfig, AutoTokenizer
 
+from slime.ray.registry import get_actors
 from slime.ray.train_actor import TrainRayActor
-from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.data import process_rollout_data
+from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
-from ..utils.data import get_data_iterator, process_rollout_data
 from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp
-from .data import log_perf_data, log_rollout_data
+from .data import get_data_iterator, log_perf_data, log_rollout_data, sync_actor_critic_data
 from .initialize import init, is_megatron_main_rank
-from .loss import compute_advantages_and_returns
+from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor, named_parameters
 
@@ -48,9 +51,21 @@ class MegatronTrainRayActor(TrainRayActor):
             Timer().start("train_wait")
             return 0
 
+        if role == "critic":
+            self.args.load = self.args.critic_load
+            self.args.save = self.args.critic_save
+            self.args.lr = self.args.critic_lr
+
         (self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id) = initialize_model_and_optimizer(
-            args
+            args, role
         )
+
+        if role == "critic":
+            if self.args.offload:
+                self.sleep(("model"))
+            Timer().start("train_wait")
+            return
+
         start_rollout_id = loaded_rollout_id + 1
         self.weights = {"actor": {}}
         self.update_cpu_params_dict(self.weights["actor"])
@@ -74,6 +89,7 @@ class MegatronTrainRayActor(TrainRayActor):
             quantization_config=getattr(self.hf_config, "quantization_config", None),
             vocab_size=self.tokenizer.vocab_size if self.args.vocab_size is None else self.args.vocab_size,
         )
+        self.connected = False
 
         # empty cache after initialization
         clear_memory()
@@ -206,6 +222,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         with timer(f"{store_prefix}log_probs"):
             return forward_only(
+                get_log_probs_and_entropy,
                 self.args,
                 self.model,
                 data_iterator,
@@ -219,40 +236,92 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.offload:
             self.wake_up(("model"))
 
-        if self.args.debug_rollout_only:
-            # For debug rollout, we just log the data and return.
+        with timer("data_preprocess"):
             rollout_data = self._get_rollout_data(rollout_data_ref)
-            log_rollout_data(rollout_id, self.args, rollout_data)
-            log_perf_data(rollout_id, self.args)
-            Timer().start("train_wait")
-            return
+            if self.args.debug_rollout_only:
+                log_rollout_data(rollout_id, self.args, rollout_data)
+                Timer().start("train_wait")
+                return
+
+        if self.role == "critic":
+            return self.train_critic(rollout_id, rollout_data)
+        else:
+            return self.train_actor(rollout_id, rollout_data)
+
+    def train_critic(self, rollout_id, rollout_data):
+        # Create data iterator for log_probs and train.
+        data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
+        values = forward_only(
+            get_values,
+            self.args,
+            self.model,
+            data_iterator,
+            num_microbatches,
+        )["values"]
+
+        if rollout_id < self.args.num_critic_only_steps:
+            # we will only use the shape of log_probs in this situation
+            log_probs = values
+            ref_log_probs = values
+        else:
+            values, log_probs, ref_log_probs = sync_actor_critic_data(
+                self.args, values, None, None, self._actor_critic_groups
+            )
+
+        rollout_data.update(
+            {
+                "values": values,
+                "log_probs": log_probs,
+                "ref_log_probs": ref_log_probs,
+            }
+        )
+
+        compute_advantages_and_returns(self.args, rollout_data)
+
+        self.args.loss_type = "value_loss"
+        train(
+            rollout_id,
+            self.model,
+            self.optimizer,
+            self.opt_param_scheduler,
+            data_iterator,
+            num_microbatches,
+        )
+        Timer().start("train_wait")
+
+    def train_actor(self, rollout_id, rollout_data):
+        # Create data iterator for log_probs and train.
+        data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
 
         with timer("train"):
-            with timer("data_preprocess"):
-                rollout_data = self._get_rollout_data(rollout_data_ref)
-
-                # Create data iterator for log_probs and train.
-                data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
-
             if self.args.compute_advantages_and_returns:
                 if "ref" in self.weights:
-                    rollout_data.update(
-                        self.compute_log_prob(
-                            "ref",
-                            data_iterator,
-                            num_microbatches,
-                            store_prefix="ref_",
-                        )
-                    )
-
-                rollout_data.update(
-                    self.compute_log_prob(
-                        "old_actor" if self.args.keep_old_actor else "actor",
+                    ref_log_probs = self.compute_log_prob(
+                        "ref",
                         data_iterator,
                         num_microbatches,
-                        store_prefix="",
+                        store_prefix="ref_",
                     )
+                    rollout_data.update(ref_log_probs)
+
+                log_probs = self.compute_log_prob(
+                    "old_actor" if self.args.keep_old_actor else "actor",
+                    data_iterator,
+                    num_microbatches,
+                    store_prefix="",
                 )
+                rollout_data.update(log_probs)
+
+                if self.args.use_critic:
+                    values, log_probs, ref_log_probs = sync_actor_critic_data(
+                        self.args,
+                        None,
+                        log_probs["log_probs"],
+                        ref_log_probs["ref_log_probs"] if (self.args.kl_coef != 0 or self.args.use_kl_loss) else None,
+                        self._actor_critic_groups,
+                    )
+                    rollout_data.update({"values": values})
+
                 # when there is old actor, we need to update the model params to actor manually
                 if "old_actor" in self.weights:
                     self.update_gpu_params_dict(self.weights["actor"])
@@ -311,23 +380,11 @@ class MegatronTrainRayActor(TrainRayActor):
         log_perf_data(rollout_id, self.args)
         Timer().start("train_wait")
 
-    def save_model(self, iteration, with_optimizer=True):
+    def save_model(self, iteration):
         if self.args.debug_rollout_only:
             return
 
-        if with_optimizer:
-            save(iteration, self.model, self.optimizer, self.opt_param_scheduler)
-        else:
-            save(iteration, self.model, None, None)
-
-    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
-        self.rollout_engines = rollout_engines
-
-        if self.args.debug_train_only or self.args.debug_rollout_only:
-            return
-
-        self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
-        dist.barrier(group=get_gloo_group())
+        save(iteration, self.model, self.optimizer, self.opt_param_scheduler)
 
     @timer
     def update_weights(self):
@@ -336,6 +393,13 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.offload and hasattr(mpu, "reload_process_groups"):
             mpu.reload_process_groups()
+
+        if not self.connected:
+            self.connected = True
+            rollout_engines = get_actors("rollout")
+            rollout_engine_lock = get_actors("rollout_lock", 0)
+            self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
+            dist.barrier(group=get_gloo_group())
 
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
             print_memory("before update_weights")
@@ -379,3 +443,21 @@ class MegatronTrainRayActor(TrainRayActor):
 
         self.weights[model_tag] = {}
         self.update_cpu_params_dict(self.weights[model_tag])
+
+    def connect_actor_critic(self, actor_handle=None, master_address=None, master_port=None):
+        if self.role == "actor":
+            master_address = ray.util.get_node_ip_address()
+            with socket.socket() as sock:
+                sock.bind(("", 0))
+                master_port = sock.getsockname()[1]
+            actor_handle.connect_actor_critic.remote(master_address=master_address, master_port=master_port)
+
+        group_name = "actor_critic"
+        world_size = 2
+        self._actor_critic_groups = init_process_group(
+            backend="nccl",
+            init_method=f"tcp://{master_address}:{master_port}",
+            world_size=world_size,
+            rank=0 if self.role == "actor" else 1,
+            group_name=group_name,
+        )

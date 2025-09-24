@@ -17,7 +17,6 @@ class FSDPArgs:
     adam_beta2: float = 0.95
     adam_eps: float = 1e-8
     warmup_ratio: float = 0.03
-    clip_grad: float = 1.0
 
     # FSDP specific
     fsdp_wrap: str = "transformer_blocks"  # future use: auto wrap policy

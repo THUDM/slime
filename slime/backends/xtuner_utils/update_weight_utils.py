@@ -1,25 +1,18 @@
 import socket
-from typing import Dict, List, TypeAlias
 
 import ray
 import torch
 import torch.distributed as dist
 from torch.distributed.tensor import DTensor
 from tqdm import tqdm
-from xtuner.v1.utils import get_device, get_torch_device_module
 
 from slime.utils.distributed_utils import init_process_group
 
-DeviceMeshRaw: TypeAlias = List[List[int]]  # A list of lists representing device mesh indices
-ServiceUrlMap: TypeAlias = Dict[int, str]  # A dictionary mapping service names to their URLs
-DEVICE = get_device()
-DEVICE_MODULE = get_torch_device_module()
-
 
 class UpdateWeightFromDistributed:
-    def __init__(self, args, worker):
+    def __init__(self, args, model):
         self.args = args
-        self.worker = worker
+        self.model = model
 
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines
@@ -61,8 +54,8 @@ class UpdateWeightFromDistributed:
 
     @torch.no_grad()
     def update_weights(self):
-        model = self.worker._engine.model
-        DEVICE_MODULE.empty_cache()
+        model = self.model
+        torch.cuda.empty_cache()
 
         if (model.config.float8_cfg is not None) and (model.config.float8_cfg.enable_float8):
             dtype = torch.float8_e4m3fn
@@ -119,7 +112,7 @@ class UpdateWeightFromDistributed:
         self.request_update_params({}, finished=True)
 
         dist.barrier()
-        DEVICE_MODULE.empty_cache()
+        torch.cuda.empty_cache()
         return
 
     def request_update_params(self, state_dict, finished=False):
