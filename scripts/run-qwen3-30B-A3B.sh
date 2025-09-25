@@ -30,8 +30,8 @@ CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-30B-A3B
    #--hf-checkpoint /root/Qwen3-30B-A3B-FP8
    --ref-load /root/Qwen3-30B-A3B_torch_dist
-   --load /root/Qwen3-4B_slime/
-   --save /root/Qwen3-4B_slime/
+   --load /root/Qwen3-30B-A3B_slime/
+   --save /root/Qwen3-30B-A3B_slime/
    --save-interval 20
 )
 
