@@ -304,9 +304,16 @@ class UpdateWeightFromTensor:
         self.quantization_config = quantization_config
         self.param_info_buckets = get_param_info_buckets(self.args, self.model)
         self.weight_version = 0
+        self.use_distribute = self.args.use_critic  # TODO
 
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines
+        if self.use_distribute:
+            colocate_engine_nums = (
+                self.args.actor_num_nodes * self.args.actor_num_gpus_per_node // self.args.rollout_num_gpus_per_engine
+            )  # TODO
+            self.connect_rollout_engines_distribute(rollout_engines[colocate_engine_nums:], rollout_engine_lock)
+            self.rollout_engines = rollout_engines[:colocate_engine_nums]
 
         # Here we assume the gpu id of rollout engines and train actors are the same.
         for i, engine in enumerate(self.rollout_engines):
@@ -321,6 +328,46 @@ class UpdateWeightFromTensor:
                 self._ipc_gather_src = start_rank
                 self._ipc_gather_group = new_group
                 self._ipc_engine = engine
+
+    def connect_rollout_engines_distribute(self, rollout_engines, rollout_engine_lock):
+        self.rollout_engines_distribute = rollout_engines
+        self.rollout_engine_lock = rollout_engine_lock
+
+        self._is_distribute_src_rank = (
+            mpu.get_data_parallel_rank(with_context_parallel=True) == 0
+            and mpu.get_tensor_model_parallel_rank() == 0
+            and mpu.get_pipeline_model_parallel_rank() == 0
+        )
+
+        if self._is_distribute_src_rank:
+            self._group_name = "slime_distribute"
+
+        if self._is_distribute_src_rank:
+            master_address = ray._private.services.get_node_ip_address()
+            with socket.socket() as sock:
+                sock.bind(("", 0))
+                master_port = sock.getsockname()[1]
+            world_size = len(rollout_engines) * self.args.rollout_num_gpus_per_engine + 1
+
+            refs = [
+                engine.init_weights_update_group.remote(
+                    master_address,
+                    master_port,
+                    i * self.args.rollout_num_gpus_per_engine + 1,
+                    world_size,
+                    self._group_name,
+                    backend="nccl",
+                )
+                for i, engine in enumerate(self.rollout_engines_distribute)
+            ]
+            self._model_update_groups = init_process_group(
+                backend="nccl",
+                init_method=f"tcp://{master_address}:{master_port}",
+                world_size=world_size,
+                rank=0,
+                group_name=self._group_name,
+            )
+            ray.get(refs)
 
     @torch.no_grad()
     def update_weights(self):
@@ -400,7 +447,22 @@ class UpdateWeightFromTensor:
             converted_named_tensors.extend(
                 convert_to_hf(self.args, self.model_name, info.name, param, self.quantization_config)
             )
-        self._update_converted_params_from_tensor(converted_named_tensors)
+
+        refs = []
+        if dist.get_rank() == self._ipc_gather_src:
+            refs.extend(self._update_converted_params_from_tensor(converted_named_tensors))
+        else:
+            self._update_converted_params_from_tensor(converted_named_tensors)
+
+        if self.use_distribute:
+            if self._is_distribute_src_rank:
+                refs.extend(self._update_bucket_weights_from_distributed(converted_named_tensors))
+        ray.get(refs)
+
+        if self.use_distribute:
+            if self._is_distribute_src_rank:
+                converted_named_tensors.clear()
+                ray.get(self.rollout_engine_lock.release.remote())
 
     def _update_converted_params_from_tensor(self, converted_named_tensors):
         if use_flattened_tensor_bucket:
@@ -451,7 +513,32 @@ class UpdateWeightFromTensor:
                     "weight_version": str(self.weight_version),
                 }
                 refs.append(self._ipc_engine.update_weights_from_tensor.remote(**kwargs))
-            ray.get(refs)
+            return refs
+        return None
+
+    def _update_bucket_weights_from_distributed(self, converted_named_tensors, pbar=None):
+        # lock the rollout engines to prevent dead lock on broadcast.
+        while not ray.get(self.rollout_engine_lock.acquire.remote()):
+            time.sleep(0.1)
+
+        refs = [
+            engine.update_weights_from_distributed.remote(
+                names=[name for name, _ in converted_named_tensors],
+                dtypes=[param.dtype for _, param in converted_named_tensors],
+                shapes=[param.shape for _, param in converted_named_tensors],
+                group_name=self._group_name,
+                weight_version=str(self.weight_version),
+            )
+            for engine in self.rollout_engines_distribute
+        ]
+
+        handles = []
+        for _, param in converted_named_tensors:
+            handles.append(dist.broadcast(param.data, 0, group=self._model_update_groups, async_op=True))
+        for handle in handles:
+            handle.wait()
+
+        return refs
 
 
 class UpdateWeightFromDistributed:
