@@ -27,10 +27,6 @@ class FSDPArgs:
     fsdp_forward_prefetch: bool = True
     fsdp_backward_prefetch: bool = True
     attn_implementation: str = "flash_attention_2"
-
-    # max_tokens_per_gpu is defined in main arguments (slime/utils/arguments.py)
-    micro_batch_size: int = 1  # Micro batch size
-
     # Logging
     wandb_project: str = "slime-fsdp"
     wandb_run_name: Optional[str] = None

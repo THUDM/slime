@@ -184,17 +184,11 @@ class FSDPTrainRayActor(TrainRayActor):
         mbs_size_list = []
         dp_size = dist.get_world_size()
         local_batch_size = self.args.global_batch_size // dp_size
-
         assert (
             self.args.global_batch_size % dp_size == 0
         ), f"global_batch_size {self.args.global_batch_size} is not divisible by dp_world_size {dp_size}"
         # Use global_batch_size for splitting when max_tokens_per_gpu is enabled
-        if (
-            hasattr(self.args, "max_tokens_per_gpu")
-            and self.args.max_tokens_per_gpu is not None
-            and self.args.use_dynamic_batch_size
-        ):
-
+        if self.args.use_dynamic_batch_size:
             for i in range(0, len(tokens), local_batch_size):
                 mbs_size_list.append(
                     get_minimum_num_micro_batch_size(
@@ -205,41 +199,32 @@ class FSDPTrainRayActor(TrainRayActor):
             num_microbatches = torch.tensor(mbs_size_list, dtype=torch.int, device=torch.cuda.current_device())
             dist.all_reduce(num_microbatches, op=dist.ReduceOp.MAX)
             num_microbatches = num_microbatches.tolist()
-            for i in range(0, len(tokens), local_batch_size):
-                packed_batches.extend(
-                    pack_sequences(
-                        rollout_data["tokens"][i : i + local_batch_size],
-                        rollout_data["loss_masks"][i : i + local_batch_size],
-                        rollout_data["rewards"][i : i + local_batch_size],
-                        rollout_data["raw_reward"][i : i + local_batch_size],
-                        rollout_data["response_lengths"][i : i + local_batch_size],
-                        rollout_data["advantages"][i : i + local_batch_size],
-                        rollout_data["returns"][i : i + local_batch_size],
-                        num_packs=num_microbatches[i // local_batch_size],
-                    )
-                )
-
-            grad_accum = list(accumulate(num_microbatches))
         else:
-            # Original logic for backward compatibility
-            for i in range(0, len(tokens), self.args.micro_batch_size):
-                packed_batches.extend(
-                    pack_sequences(
-                        rollout_data["tokens"][i : i + self.args.micro_batch_size],
-                        rollout_data["loss_masks"][i : i + self.args.micro_batch_size],
-                        rollout_data["rewards"][i : i + self.args.micro_batch_size],
-                        rollout_data["raw_reward"][i : i + self.args.micro_batch_size],
-                        rollout_data["response_lengths"][i : i + self.args.micro_batch_size],
-                        rollout_data["advantages"][i : i + self.args.micro_batch_size],
-                        rollout_data["returns"][i : i + self.args.micro_batch_size],
-                    )
-                )
-            grad_accum = list(
-                accumulate(
-                    [self.args.global_batch_size // (self.args.micro_batch_size * dist.get_world_size())]
-                    * (self.args.rollout_batch_size * self.args.n_samples_per_prompt // self.args.global_batch_size)
+            num_microbatches = [
+                self.args.global_batch_size // (self.args.micro_batch_size * dist.get_world_size())
+            ] * (len(tokens) // local_batch_size)
+
+        start = 0
+        for mbs_size in num_microbatches:
+            end = start + local_batch_size
+            packed_batches.extend(
+                pack_sequences(
+                    rollout_data["tokens"][start:end],
+                    rollout_data["loss_masks"][start:end],
+                    rollout_data["rewards"][start:end],
+                    rollout_data["raw_reward"][start:end],
+                    rollout_data["response_lengths"][start:end],
+                    rollout_data["advantages"][start:end],
+                    rollout_data["returns"][start:end],
+                    num_packs=mbs_size,
                 )
             )
+            start = end
+        if dist.get_rank() == 0:
+            print("*" * 100)
+            print("length of packed_batches: ", len(packed_batches))
+        grad_accum = list(accumulate(num_microbatches))
+
         return packed_batches, grad_accum
 
     def train(self, rollout_id, rollout_data_ref):
@@ -322,11 +307,6 @@ class FSDPTrainRayActor(TrainRayActor):
             advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
             loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
             response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
-            ref_log_probs = (
-                torch.cat([batch["ref_log_probs"] for batch in unpacked_batches], dim=0)
-                if self.args.use_kl_loss
-                else None
-            )
 
             # Ensure device consistency
             ppo_kl = old_log_probs.to(device=log_probs.device) - log_probs
@@ -344,9 +324,10 @@ class FSDPTrainRayActor(TrainRayActor):
                 raise NotImplementedError("implement entropy bonus")
 
             if self.args.use_kl_loss:
+                ref_log_probs = torch.cat([batch["ref_log_probs"] for batch in unpacked_batches], dim=0)
                 kl = compute_approx_kl(
                     log_probs,
-                    ref_log_probs.to(device=log_probs.device),
+                    ref_log_probs,
                     kl_loss_type=self.args.kl_loss_type,
                 )
                 kl_loss = sum_of_sample_mean(kl, response_lengths, loss_masks)
