@@ -297,12 +297,35 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
             ],
         )
 
+        # Default: no labels, standard RL/SFT training path
+        labels = None
+        position_ids = None
+        loss_mask = None
+        extra_block_kwargs = None
+
+        # If enabling MTP training: trigger MTP loss inside Megatron while returning logits
+        # for the target model's loss. Detach base hidden states for MTP so MTP gradients
+        # do not update the main model.
+        if getattr(args, "enable_mtp_training", False):
+            # We have to set labels to tokens for MTP training, to point out samples to train.
+            labels = batch["tokens"]
+            # Temporary disable loss_mask settings for MTP training.
+            loss_mask = None
+            # Keep position_ids=None to make RoPE work with sequence packing.
+            position_ids = None
+            extra_block_kwargs = {
+                "mtp_return_logits_when_labels": True,
+                "mtp_detach_hidden_states": True,
+            }
+
         output_tensor = model(
             input_ids=batch["tokens"],
-            position_ids=None,
+            position_ids=position_ids,
             attention_mask=None,
-            labels=None,
+            labels=labels,
             packed_seq_params=batch["packed_seq_params"],
+            loss_mask=loss_mask,
+            extra_block_kwargs=extra_block_kwargs,
         )
 
         return output_tensor, partial(loss_function, args, batch, num_microbatches)

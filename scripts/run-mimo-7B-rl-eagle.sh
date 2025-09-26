@@ -44,21 +44,21 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 3000
-   --rollout-batch-size 32
-   --n-samples-per-prompt 8
-   --rollout-max-response-len 8192
+   --rollout-batch-size 8
+   --n-samples-per-prompt 2
+   --rollout-max-response-len 4096
    --rollout-temperature 0.8
 
-   --global-batch-size 256
+   --global-batch-size 16
    --balance-data
 )
 
 EVAL_ARGS=(
-   --eval-interval 20
-   --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
-   --n-samples-per-eval-prompt 1
-   --eval-max-response-len 8192
-   --eval-top-p 0.7
+   # --eval-interval 20
+   # --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
+   # --n-samples-per-eval-prompt 1
+   # --eval-max-response-len 8192
+   # --eval-top-p 0.7
 )
 
 PERF_ARGS=(
@@ -98,10 +98,10 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   # --use-wandb
-   # --wandb-project slime-dev
-   # --wandb-group mimo-7B-rl-test
-   # --wandb-key ${WANDB_API_KEY}
+   --use-wandb
+   --wandb-project slime-dev
+   --wandb-group mimo-7B-rl-test
+   --wandb-key ${WANDB_API_KEY}
 )
 
 SGLANG_ARGS=(
@@ -113,6 +113,11 @@ SGLANG_ARGS=(
    --sglang-speculative-num-steps 3
    --sglang-speculative-eagle-topk 1
    --sglang-speculative-num-draft-tokens 4
+)
+
+MTP_TRAINING_ARGS=(
+   --enable-mtp-training
+   --mtp-loss-scaling-factor 0.1
 )
 
 MISC_ARGS=(
@@ -128,7 +133,7 @@ MISC_ARGS=(
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 --disable-usage-stats
 
 # Build the runtime environment JSON with proper variable substitution
 RUNTIME_ENV_JSON="{
@@ -143,7 +148,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 8 \
+   --actor-num-gpus-per-node 4 \
    --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
@@ -155,4 +160,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
+   ${MTP_TRAINING_ARGS[@]} \
    ${MISC_ARGS[@]}
