@@ -70,3 +70,14 @@ For complete usage instructions, please refer to the [Usage Documentation](docs/
 
   - For frequently asked questions, please see the [Q\&A](docs/en/get_started/qa.md)
   - Special thanks to the following projects & communities: SGLang, Megatron‑LM, mbridge, OpenRLHF, veRL, Pai-Megatron-Patch and others.
+  - To quote slime, please use:
+  ```bibtext
+  @misc{slime_github,
+    author       = {Zilin Zhu and Chengxing Xie and Xin Lv and slime Contributors},
+    title        = {slime: An LLM post-training framework for RL Scaling},
+    year         = {2025},
+    howpublished = {\url{https://github.com/THUDM/slime}},
+    note         = {GitHub repository. Corresponding author: Xin Lv},
+    urldate      = {2025-06-19}
+  }
+  ```

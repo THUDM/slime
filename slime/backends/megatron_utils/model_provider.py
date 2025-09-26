@@ -30,6 +30,10 @@ class LinearForLastLayer(torch.nn.Linear):
         if self.sequence_parallel:
             self.weight.sequence_parallel = True
 
+        self.weight.data.normal_(mean=0.0, std=0.02)
+        if bias:
+            self.bias.data.zero_()
+
     def forward(
         self,
         input_,

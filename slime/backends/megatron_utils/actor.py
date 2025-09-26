@@ -1,4 +1,5 @@
 import socket
+import time
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -14,6 +15,7 @@ else:
 from megatron.core import mpu
 from transformers import AutoConfig, AutoTokenizer
 
+from slime.ray.registry import get_actors
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
@@ -53,6 +55,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if role == "critic":
             self.args.load = self.args.critic_load
             self.args.save = self.args.critic_save
+            self.args.lr = self.args.critic_lr
 
         (self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id) = initialize_model_and_optimizer(
             args, role
@@ -87,6 +90,7 @@ class MegatronTrainRayActor(TrainRayActor):
             quantization_config=getattr(self.hf_config, "quantization_config", None),
             vocab_size=self.tokenizer.vocab_size if self.args.vocab_size is None else self.args.vocab_size,
         )
+        self.connected = False
 
         # empty cache after initialization
         clear_memory()
@@ -162,7 +166,15 @@ class MegatronTrainRayActor(TrainRayActor):
     @timer
     def wake_up(self, tags):
         assert self.args.offload
-        print_memory("before wake_up model")
+
+        # there are weird times when sglang is not offloaded immediately, so we wait here.
+        mem_fraction_static = self.args.sglang_mem_fraction_static or 0.8
+        for _ in range(60):
+            memory_info = print_memory("before wake_up model")
+            if memory_info["used_GB"] >= mem_fraction_static * memory_info["total_GB"]:
+                time.sleep(1)
+                continue
+            break
 
         if isinstance(tags, str):
             tags = (tags,)
@@ -254,11 +266,16 @@ class MegatronTrainRayActor(TrainRayActor):
             self.model,
             data_iterator,
             num_microbatches,
-        )
-        values = [value.squeeze(-1) for value in values["values"]]
-        values, log_probs, ref_log_probs = sync_actor_critic_data(
-            self.args, values, None, None, self._actor_critic_groups
-        )
+        )["values"]
+
+        if rollout_id < self.args.num_critic_only_steps:
+            # we will only use the shape of log_probs in this situation
+            log_probs = values
+            ref_log_probs = values
+        else:
+            values, log_probs, ref_log_probs = sync_actor_critic_data(
+                self.args, values, None, None, self._actor_critic_groups
+            )
 
         rollout_data.update(
             {
@@ -378,15 +395,6 @@ class MegatronTrainRayActor(TrainRayActor):
 
         save(iteration, self.model, self.optimizer, self.opt_param_scheduler)
 
-    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
-        self.rollout_engines = rollout_engines
-
-        if self.args.debug_train_only or self.args.debug_rollout_only:
-            return
-
-        self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
-        dist.barrier(group=get_gloo_group())
-
     @timer
     def update_weights(self):
         if self.args.debug_train_only or self.args.debug_rollout_only:
@@ -394,6 +402,13 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.offload and hasattr(mpu, "reload_process_groups"):
             mpu.reload_process_groups()
+
+        if not self.connected:
+            self.connected = True
+            rollout_engines = get_actors("rollout")
+            rollout_engine_lock = get_actors("rollout_lock", 0)
+            self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
+            dist.barrier(group=get_gloo_group())
 
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
             print_memory("before update_weights")

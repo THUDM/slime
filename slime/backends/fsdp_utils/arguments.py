@@ -26,7 +26,7 @@ class FSDPArgs:
     fsdp_sync_module_states: bool = True
     fsdp_forward_prefetch: bool = True
     fsdp_backward_prefetch: bool = True
-
+    attn_implementation: str = "flash_attention_2"
     # Logging
     wandb_project: str = "slime-fsdp"
     wandb_run_name: Optional[str] = None

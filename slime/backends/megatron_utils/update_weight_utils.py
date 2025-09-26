@@ -403,15 +403,23 @@ class UpdateWeightFromTensor:
         self._update_converted_params_from_tensor(converted_named_tensors)
 
     def _update_converted_params_from_tensor(self, converted_named_tensors):
-        if use_flattened_tensor_bucket and self.quantization_config is None:
-            flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=converted_named_tensors)
-            metadata = flattened_tensor_bucket.get_metadata()
+        if use_flattened_tensor_bucket:
+            converted_named_tensors_by_dtypes = {}
+            for name, tensor in converted_named_tensors:
+                dtype = tensor.dtype
+                if dtype not in converted_named_tensors_by_dtypes:
+                    converted_named_tensors_by_dtypes[dtype] = []
+                converted_named_tensors_by_dtypes[dtype].append((name, tensor))
 
-            flattened_tensor_data = {
-                "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
-                "metadata": metadata,
-            }
-            serialized_tensors = MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True)
+            serialized_tensors = []
+            for dtype, named_tensors in converted_named_tensors_by_dtypes.items():
+                flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
+                metadata = flattened_tensor_bucket.get_metadata()
+                flattened_tensor_data = {
+                    "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
+                    "metadata": metadata,
+                }
+                serialized_tensors.append(MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True))
         else:
             serialized_tensors = MultiprocessingSerializer.serialize(converted_named_tensors, output_str=True)
 
@@ -426,15 +434,24 @@ class UpdateWeightFromTensor:
         )
 
         if dist.get_rank() == self._ipc_gather_src:
-            kwargs = {
-                "serialized_named_tensors": serialized_named_tensors,
-                "weight_version": str(self.weight_version),
-            }
-            if use_flattened_tensor_bucket and self.quantization_config is None:
-                kwargs["load_format"] = "flattened_bucket"
-
-            ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
-            ray.get(ref)
+            refs = []
+            if use_flattened_tensor_bucket:
+                # TODO: here we assume all ranks have the same number of dtypes, not sure if that is correct.
+                num_dtypes = len(serialized_named_tensors[0])
+                for i in range(num_dtypes):
+                    kwargs = {
+                        "serialized_named_tensors": [tensors[i] for tensors in serialized_named_tensors],
+                        "load_format": "flattened_bucket",
+                        "weight_version": str(self.weight_version),
+                    }
+                    refs.append(self._ipc_engine.update_weights_from_tensor.remote(**kwargs))
+            else:
+                kwargs = {
+                    "serialized_named_tensors": serialized_named_tensors,
+                    "weight_version": str(self.weight_version),
+                }
+                refs.append(self._ipc_engine.update_weights_from_tensor.remote(**kwargs))
+            ray.get(refs)
 
 
 class UpdateWeightFromDistributed:

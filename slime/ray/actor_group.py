@@ -37,11 +37,13 @@ class RayTrainGroup:
         pg: tuple[PlacementGroup, list[int]],
         wandb_run_id: Optional[str] = None,
         num_gpus_per_actor: float = 1,
+        role: str = "actor",
     ) -> None:
         self.args = args
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
         self._wandb_run_id = wandb_run_id
+        self.role = role
 
         # Allocate the GPUs for actors w/o instantiating them
         self._allocate_gpus_for_actor(pg, num_gpus_per_actor, wandb_run_id=wandb_run_id)
@@ -112,18 +114,6 @@ class RayTrainGroup:
         """
         self.args = args
         return [actor.init.remote(args, role, self._wandb_run_id, with_ref=with_ref) for actor in self._actor_handlers]
-
-    def async_init_weight_update_connections(self, rollout):
-        """
-        Connect rollout engines and actors, e.g. initialize the process group between them
-        to update weights after each training stage.
-        """
-        self.rollout = rollout
-        rollout_engines, rollout_engine_lock = ray.get(rollout.get_rollout_engines_and_lock.remote())
-        return [
-            actor.connect_rollout_engines.remote(rollout_engines, rollout_engine_lock)
-            for actor in self._actor_handlers
-        ]
 
     def async_train(self, rollout_id, rollout_data_ref):
         """Do one rollout training"""

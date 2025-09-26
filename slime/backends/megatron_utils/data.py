@@ -5,10 +5,10 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-import wandb
 from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 
+import wandb
 from slime.utils.data import get_minimum_num_micro_batch_size
 from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
@@ -243,7 +243,7 @@ def log_rollout_data(rollout_id, args, rollout_data):
                     # NOTE: Here we have to do the clone().detach(), otherwise the tensor will be
                     # modified in place and will cause problem for the next rollout.
                     val = torch.cat(val).clone().detach()
-                    if key in ["log_probs", "ref_log_probs", "rollout_log_probs", "returns", "advantages"]:
+                    if key in ["log_probs", "ref_log_probs", "rollout_log_probs", "returns", "advantages", "values"]:
                         sum_of_sample_mean = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks)
                         val = cp_size * sum_of_sample_mean(val) / len(loss_masks)
                     else:
@@ -403,7 +403,7 @@ def sync_actor_critic_data(
         handles.append(dist.broadcast(value, src=1, group=group, async_op=True))
 
     if args.kl_coef != 0 or args.use_kl_loss:
-        if values is not None:
+        if log_probs is None:
             ref_log_probs = [torch.empty_like(value) for value in values]
             log_probs = [torch.empty_like(value) for value in values]
         for ref_log_prob, log_prob in zip(ref_log_probs, log_probs):

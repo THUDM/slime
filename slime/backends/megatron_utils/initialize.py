@@ -77,6 +77,13 @@ def init(args):
         args.decrease_batch_size_if_needed,
     )
 
+    if args.deterministic_mode:
+        if args.rank == 0:
+            print("> running in deterministic mode")
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.use_deterministic_algorithms(True, warn_only=False)
+
     if getattr(args, "custom_megatron_init_path", None):
         from slime.utils.misc import load_function
 

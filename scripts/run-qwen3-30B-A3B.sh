@@ -15,7 +15,7 @@ set -ex
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
 
-NVLINK_COUNT=$(nvidia-smi | grep -o "NVLink" | wc -l)
+NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
 if [ "$NVLINK_COUNT" -gt 0 ]; then
     HAS_NVLINK=1
 else
@@ -30,8 +30,8 @@ CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-30B-A3B
    #--hf-checkpoint /root/Qwen3-30B-A3B-FP8
    --ref-load /root/Qwen3-30B-A3B_torch_dist
-   --load /root/Qwen3-4B_slime/
-   --save /root/Qwen3-4B_slime/
+   --load /root/Qwen3-30B-A3B_slime/
+   --save /root/Qwen3-30B-A3B_slime/
    --save-interval 20
 )
 
