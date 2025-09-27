@@ -2,6 +2,7 @@ global_profiler:
   tool: torch_memory
   save_path: ./mem_snapshots
   interval_sec: 0  # 0=manual only, >0=periodic sampling interval in seconds
+  enabled: false  # Set to true to enable memory profiling (may cause OOM)
   torch_memory:
     trace_alloc_max_entries: 100000
     stack_depth: 32

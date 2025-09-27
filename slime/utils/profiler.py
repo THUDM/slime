@@ -21,6 +21,10 @@ class MemoryProfiler:
         
     def setup(self):
         """Setup memory profiling."""
+        if not self.config.enabled:
+            logger.info("Memory profiler disabled by configuration")
+            return
+            
         enable_memory_visualize(self.config)
         
         if self.config.interval_sec > 0:
@@ -32,6 +36,9 @@ class MemoryProfiler:
     
     def snapshot(self, prefix: str = "manual"):
         """Take a manual memory snapshot."""
+        if not self.config.enabled:
+            logger.debug("Memory profiler disabled, skipping snapshot")
+            return
         dump_memory_snapshot(self.config.save_path, prefix)
     
     def shutdown(self):
