@@ -1,3 +1,5 @@
+import socket
+
 import ray
 import torch
 import torch.distributed as dist
@@ -5,6 +7,10 @@ from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
 from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import StateDictType
+from tqdm import tqdm
+
+from slime.utils.distributed_utils import init_process_group
+from slime.utils.memory_utils import clear_memory
 
 try:
     from sglang.srt.model_executor.model_runner import FlattenedTensorBucket
@@ -73,3 +79,100 @@ class UpdateWeightFromTensor:
 
             ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
             ray.get(ref)
+
+
+## reference from xtuner_utils.update_weight_utils.UpdateWeightFromDistributed
+class UpdateWeightFromDistributed:
+    def __init__(self, args, model):
+        self.args = args
+        self.model = model
+
+    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
+        self.rollout_engines = rollout_engines
+        self.rollout_engine_lock = rollout_engine_lock
+
+        # For TP:
+        #   1. AllGather paramters to rank 0
+        #   2. Broadcast parameters from rank 0 to all sglang engines
+        self._is_src_rank = dist.get_rank() == 0
+        if self._is_src_rank:
+            self._group_name = f"slime"
+            master_address = ray._private.services.get_node_ip_address()
+            with socket.socket() as sock:
+                sock.bind(("", 0))
+                master_port = sock.getsockname()[1]
+            ## TODO: why +1?
+            world_size = self.args.rollout_num_gpus + 1
+
+            refs = [
+                engine.init_weights_update_group.remote(
+                    master_address,
+                    master_port,
+                    i * self.args.rollout_num_gpus_per_engine + 1,
+                    world_size,
+                    self._group_name,
+                    backend="nccl",
+                )
+                for i, engine in enumerate(self.rollout_engines)
+            ]
+            self._model_update_groups = init_process_group(
+                backend="nccl",
+                init_method=f"tcp://{master_address}:{master_port}",
+                world_size=world_size,
+                rank=0,
+                group_name=self._group_name,
+            )
+            ray.get(refs)
+
+    @torch.no_grad()
+    def update_weights(self):
+        model = self.model
+        torch.cuda.empty_cache()
+        clear_memory()
+
+        # Use standard FSDP method to get full state dict
+        with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT):
+            state_dict = model.state_dict()
+
+        # Send weights one by one to minimize memory usage
+        param_names = list(state_dict.keys())
+
+        for i, name in enumerate(tqdm(param_names, desc="[broadcast weight]")):
+            # Process one parameter at a time to minimize memory usage
+            param = state_dict[name].to(torch.bfloat16)
+            single_param_dict = {name: param}
+
+            # Send this single parameter
+            self.request_update_params(single_param_dict)
+
+        dist.barrier()
+        torch.cuda.empty_cache()
+        return
+
+    def request_update_params(self, state_dict):
+        if not self._is_src_rank or not state_dict:
+            return
+
+        refs = [
+            engine.update_weights_from_distributed.remote(
+                names=[name for name, _ in state_dict.items()],
+                dtypes=[param.dtype for _, param in state_dict.items()],
+                shapes=[param.shape for _, param in state_dict.items()],
+                group_name=self._group_name,
+            )
+            for engine in self.rollout_engines
+        ]
+
+        # Broadcast parameters one by one with memory management
+        for name, param in state_dict.items():
+            torch.cuda.empty_cache()
+            # Ensure tensor is contiguous and on the right device
+            param_data = param.data.contiguous()
+
+            # Synchronous broadcast to avoid memory buildup
+            dist.broadcast(param_data, 0, group=self._model_update_groups, async_op=False)
+
+            # Clean up immediately after broadcast
+            del param_data
+
+        ray.get(refs)

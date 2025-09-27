@@ -75,6 +75,9 @@ class RayTrainGroup:
             env_vars["TMS_INIT_ENABLE"] = "1"
             env_vars["TMS_INIT_ENABLE_CPU_BACKUP"] = "1"
 
+        if self.args.use_routing_replay:
+            env_vars["ENABLE_ROUTING_REPLAY"] = "1"
+
         backend = os.environ.get("SLIME_BACKEND", "megatron").lower()
         if backend == "megatron":
             from slime.backends.megatron_utils import MegatronTrainRayActor
