@@ -171,10 +171,27 @@ class RolloutManager:
         # loss mask
         # TODO: compress the loss mask
         loss_masks = []
-        for sample in samples:
+        for i, sample in enumerate(samples):
+            # Add detailed logging for debugging
+            print(f"[DEBUG] Sample {i}: loss_mask={sample.loss_mask is not None}, "
+                  f"loss_mask_len={len(sample.loss_mask) if sample.loss_mask else 'None'}, "
+                  f"response_length={sample.response_length}, "
+                  f"response='{sample.response[:100]}...' if sample.response else 'empty'")
+            
             # always instantiate loss_mask if not provided
             if sample.loss_mask is None:
                 sample.loss_mask = [1] * sample.response_length
+                print(f"[DEBUG] Sample {i}: Created loss_mask with length {len(sample.loss_mask)}")
+            
+            # Add more detailed error information
+            if len(sample.loss_mask) != sample.response_length:
+                print(f"[ERROR] Sample {i} mismatch details:")
+                print(f"  - loss_mask length: {len(sample.loss_mask)}")
+                print(f"  - response_length: {sample.response_length}")
+                print(f"  - response content: '{sample.response}'")
+                print(f"  - tokens length: {len(sample.tokens) if sample.tokens else 'None'}")
+                print(f"  - loss_mask content: {sample.loss_mask[:10]}..." if len(sample.loss_mask) > 10 else f"  - loss_mask content: {sample.loss_mask}")
+            
             assert (
                 len(sample.loss_mask) == sample.response_length
             ), f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
