@@ -6,6 +6,66 @@ import torch
 import torch.distributed as dist
 
 
+def get_sequence_level_ratio(
+    log_probs: torch.Tensor,
+    old_log_probs: torch.Tensor,
+    masks: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Calculates the sequence-level importance ratio for GSPO.
+    This implements Equation 7 from the GSPO paper, which defines the importance
+    ratio s_i(θ) as the length-normalized sequence likelihood ratio.
+    s_i(θ) = (π_θ(y_i|x) / π_θ_old(y_i|x))^(1/|y_i|)
+    This is equivalent to the geometric mean of the token-level ratios.
+    """
+    token_ratios = torch.exp(log_probs - old_log_probs) * masks
+    seq_ratios = torch.exp(torch.sum(torch.log(token_ratios + 1e-8) * masks, dim=-1) / torch.sum(masks, dim=-1))
+    return seq_ratios
+
+
+def normalize_advantages_in_groups(
+    rewards: torch.Tensor,
+    n_samples_per_prompt: int,
+    std_normalization: bool = True,
+) -> torch.Tensor:
+    """
+    Normalizes rewards within groups of samples for the same prompt.
+    This is the advantage calculation described in the GSPO paper.
+    This implements the advantage calculation from Equation 6 of the GSPO paper.
+    Â_i = (reward_i - mean(rewards_in_group)) / std(rewards_in_group)
+    """
+    # Need to reshape the rewards tensor into groups
+    grouped_rewards = rewards.view(-1, n_samples_per_prompt)
+
+    # Calculate mean and subtract it.
+    advantages = grouped_rewards - grouped_rewards.mean(dim=-1, keepdim=True)
+
+    # Optionally, divide by the standard deviation for full normalization.
+    if std_normalization:
+        std = advantages.std(dim=-1, keepdim=True)
+        advantages = advantages / (std + 1e-8)
+
+    # Flatten the tensor back to its original shape.
+    return advantages.view(-1)
+
+
+def get_gspo_token_ratio(log_probs: torch.Tensor, old_log_probs: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
+    """
+    Calculates the token-level importance ratio for GSPO-token.
+    This implements Equation 14 from the paper, which uses a detached sequence-level
+    ratio to guide the update, allowing for token-level advantage customization.
+    s_i,t(θ) = sg[s_i(θ)] * (π_θ(y_i,t|...) / sg[π_θ(y_i,t|...)])
+    The second term simplifies to the standard token-level ratio.
+    """
+    # Calculate the sequence-level ratio and detach it from the graph
+    seq_level_ratio = get_sequence_level_ratio(log_probs, old_log_probs, masks)
+    detached_seq_ratio = seq_level_ratio.detach()
+
+    # Now we calc the token level ratio
+    token_level_ratio = torch.exp(log_probs - old_log_probs)
+    return detached_seq_ratio.unsqueeze(-1) * token_level_ratio
+
+
 @torch.compile(dynamic=True)
 def compute_approx_kl(
     log_probs: torch.Tensor,
