@@ -10,6 +10,11 @@ sleep 3
 pkill -9 ray
 pkill -9 python
 
+# Clean up Ray temporary files to avoid disk space issues
+echo "Cleaning up Ray temporary files..."
+rm -rf /tmp/ray/*
+sudo rm -rf /tmp/ray/* 2>/dev/null || true
+
 set -ex
 
 # will prevent ray from buffering stdout/stderr
@@ -18,6 +23,11 @@ export CUDA_VISIBLE_DEVICES=3,4
 
 # Enable basic logging for OOM debugging
 export PYTHONPATH=/root/william_slime:$PYTHONPATH
+
+# Set Ray temporary directory to avoid disk space issues
+export RAY_TMPDIR=/dev/shm/ray_tmp
+mkdir -p $RAY_TMPDIR
+
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-0.6B
 )
@@ -57,7 +67,6 @@ OPTIMIZER_ARGS=(
    --adam-beta1 0.9
    --adam-beta2 0.98
 )
-
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
 )
@@ -75,7 +84,8 @@ PROFILER_ARGS=(
 )
 
 # launch the master node of ray in container
-ray start --head --node-ip-address 127.0.0.1 --num-gpus 2 --disable-usage-stats
+ray start --head --node-ip-address 127.0.0.1 --num-gpus 2 --disable-usage-stats \
+  --temp-dir=$RAY_TMPDIR \
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
@@ -96,3 +106,10 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${SGLANG_ARGS[@]} \
    ${MISC_ARGS[@]} \
    ${PROFILER_ARGS[@]}
+
+
+
+# Cleanup after job completion
+echo "Job completed, cleaning up Ray temporary files..."
+ray stop --force
+rm -rf $RAY_TMPDIR/* 2>/dev/null || true

@@ -26,6 +26,7 @@ class GlobalProfilerConfig:
     """Global profiler configuration."""
     tool: str = "torch_memory"
     save_path: str = "./mem_snapshots"
+    interval_sec: int = 0 # Default: disable periodic sampling
     torch_memory: TorchMemoryConfig = None
     
     def __post_init__(self):

@@ -58,11 +58,30 @@ def dump_memory_snapshot(out_dir: str, prefix: str = "memory_snapshot"):
         logger.warning("Memory snapshot not supported in this PyTorch version")
         return
     
-    # Ensure memory recording is enabled in this process
+    # Force enable memory recording in this process with max entries
     try:
-        torch.cuda.memory._record_memory_history(enabled=True)
-    except Exception as e:
-        logger.warning(f"Failed to enable memory recording in this process: {e}")
+        # First try to enable with specific parameters
+        torch.cuda.memory._record_memory_history(
+            enabled=True,
+            alloc_trace_max_entries=100000,
+            alloc_trace_record_input_shapes=True
+        )
+        logger.info("Memory recording enabled with full features")
+    except TypeError:
+        # Fallback to basic API
+        try:
+            torch.cuda.memory._record_memory_history(enabled=True)
+            logger.info("Memory recording enabled with basic API")
+        except Exception as e:
+            logger.warning(f"Failed to enable memory recording: {e}")
+            # Continue anyway, might still work
+    
+    # Force allocate a small tensor to ensure there's some history
+    try:
+        dummy = torch.randn(10, 10, device='cuda')
+        del dummy
+    except Exception:
+        pass
         
     os.makedirs(out_dir, exist_ok=True)
     rank = dist.get_rank() if dist.is_initialized() else 0
@@ -72,11 +91,33 @@ def dump_memory_snapshot(out_dir: str, prefix: str = "memory_snapshot"):
     
     try:
         torch.cuda.memory._dump_snapshot(filepath)
-        logger.info(f"Memory snapshot saved to {filepath}")
+        
+        # Check if snapshot file has content
+        file_size = os.path.getsize(filepath)
+        if file_size > 1000:  # More than 1KB
+            logger.info(f"Memory snapshot saved to {filepath} ({file_size} bytes)")
+        else:
+            logger.warning(f"Memory snapshot saved but file is small ({file_size} bytes) - may be empty")
         
         # Also log current memory usage for immediate feedback
         mem_info = available_memory()
         logger.info(f"Current memory at {prefix}: {mem_info}")
+        
+        # Try to validate snapshot content
+        try:
+            with open(filepath, 'rb') as f:
+                import pickle
+                snapshot = pickle.load(f)
+                if hasattr(snapshot, 'device_traces'):
+                    trace_count = sum(len(traces) for traces in snapshot.device_traces.values())
+                    logger.info(f"Snapshot contains {trace_count} memory traces")
+                elif hasattr(snapshot, 'segments'):
+                    logger.info(f"Snapshot contains {len(snapshot.segments)} memory segments")
+                else:
+                    logger.warning("Snapshot format unknown - might be empty")
+        except Exception as e:
+            logger.warning(f"Failed to validate snapshot content: {e}")
+            
     except Exception as e:
         # If snapshot fails, just log memory usage instead
         logger.warning(f"Failed to dump memory snapshot: {e}")

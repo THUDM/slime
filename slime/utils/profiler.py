@@ -22,9 +22,13 @@ class MemoryProfiler:
     def setup(self):
         """Setup memory profiling."""
         enable_memory_visualize(self.config)
-        self.sampler = MemorySnapshotSampler(self.config.save_path)
-        self.sampler.start()
-        logger.info(f"Memory profiler setup (save_path={self.config.save_path})")
+        
+        if self.config.interval_sec > 0:
+            self.sampler = MemorySnapshotSampler(self.config.save_path, self.config.interval_sec)
+            self.sampler.start()
+            logger.info(f"Memory profiler setup with periodic sampling (save_path={self.config.save_path}, interval={self.config.interval_sec}s)")
+        else:
+            logger.info(f"Memory profiler setup with manual snapshots only (save_path={self.config.save_path})")
     
     def snapshot(self, prefix: str = "manual"):
         """Take a manual memory snapshot."""
