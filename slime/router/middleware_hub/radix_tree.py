@@ -18,6 +18,7 @@ class MatchResult:
     matched_prefix: str
     token_ids: List[int]
     logp: List[float]
+    loss_mask: List[int]  # Added loss mask for model generation parts
     remaining_string: str
     last_node: "StringTreeNode"
 
@@ -36,6 +37,7 @@ class StringTreeNode:
         self.string_key: str = ""  # The string fragment this node represents
         self.token_ids: Optional[List[int]] = None  # Token IDs for this node only (not cumulative)
         self.logp: Optional[List[float]] = None  # Log probabilities for this node's tokens
+        self.loss_mask: Optional[List[int]] = None  # Loss mask for model generation parts
 
         # Access tracking
         self.last_access_time = time.monotonic()
@@ -62,12 +64,19 @@ class StringTreeNode:
         return self.token_ids is not None
 
     def validate_token_logp_consistency(self) -> bool:
-        """Validate that token_ids and logp have consistent lengths."""
-        if self.token_ids is None and self.logp is None:
+        """Validate that token_ids, logp, and loss_mask have consistent lengths."""
+        if self.token_ids is None and self.logp is None and self.loss_mask is None:
             return True
-        if self.token_ids is None or self.logp is None:
-            return False
-        return len(self.token_ids) == len(self.logp)
+
+        # Check if at least one is not None
+        if self.token_ids is not None and len(self.token_ids) > 0:
+            token_len = len(self.token_ids)
+            if self.logp is not None and len(self.logp) != token_len:
+                return False
+            if self.loss_mask is not None and len(self.loss_mask) != token_len:
+                return False
+
+        return True
 
     @property
     def is_evictable(self) -> bool:
@@ -133,10 +142,11 @@ class StringRadixTrie:
         """
         with self._lock:
             if not text:
-                return MatchResult("", [], [], text, self.root)
+                return MatchResult("", [], [], [], text, self.root)
 
             matched_tokens = []
             matched_logp = []
+            matched_loss_mask = []
             matched_prefix = ""
             current_node = self.root
             remaining_text = text
@@ -163,16 +173,23 @@ class StringRadixTrie:
                 matched_prefix += best_child.string_key
                 remaining_text = remaining_text[best_key_len:]
 
-                # Accumulate tokens and logp from this node
+                # Accumulate tokens, logp, and loss_mask from this node
                 if best_child.has_value:
                     matched_tokens.extend(best_child.token_ids)
                     matched_logp.extend(best_child.logp)
+                    if best_child.loss_mask is not None:
+                        matched_loss_mask.extend(best_child.loss_mask)
+                    else:
+                        # If no loss_mask is stored, create default mask same as logp
+                        matched_loss_mask.extend([1] * len(best_child.token_ids))
                     self.cache_hits += 1
 
             if not matched_tokens:
                 self.cache_misses += 1
 
-            result = MatchResult(matched_prefix, matched_tokens, matched_logp, remaining_text, current_node)
+            result = MatchResult(
+                matched_prefix, matched_tokens, matched_logp, matched_loss_mask, remaining_text, current_node
+            )
 
             # Print tree structure if verbose is enabled
             if self.verbose:
@@ -186,14 +203,16 @@ class StringRadixTrie:
         text: str,
         token_ids: List[int],
         logp: Optional[List[float]] = None,
+        loss_mask: Optional[List[int]] = None,
         weight_version: Optional[int] = None,
     ) -> bool:
         """
-        Insert a string and its corresponding token IDs and log probabilities into the trie.
+        Insert a string and its corresponding token IDs, log probabilities, and loss mask into the trie.
         Args:
             text: String to insert
             token_ids: Corresponding token IDs
             logp: Corresponding log probabilities (must match token_ids length)
+            loss_mask: Corresponding loss mask for model generation parts (must match token_ids length)
             weight_version: Optional weight version for this insertion
         Returns:
             True if insertion was successful
@@ -217,11 +236,25 @@ class StringRadixTrie:
                     print(f"[WARNING] Token IDs: {token_ids}")
                 return False
 
+            # Validate loss_mask consistency
+            if loss_mask is not None and len(loss_mask) != len(token_ids):
+                if self.verbose:
+                    print(
+                        f"[WARNING] Loss mask length {len(loss_mask)} does not match token length {len(token_ids)} for text: {text}"
+                    )
+                    print(f"[WARNING] Loss mask: {loss_mask}")
+                    print(f"[WARNING] Token IDs: {token_ids}")
+                return False
+
             # If logp is not provided, create default values (0.0)
             if logp is None:
                 logp = [0.0] * len(token_ids)
 
-            result = self._insert(text, token_ids, logp, current_weight_version)
+            # If loss_mask is not provided, create default values (1 for model generation parts)
+            if loss_mask is None:
+                loss_mask = [0] * len(token_ids)
+
+            result = self._insert(text, token_ids, logp, loss_mask, current_weight_version)
 
             # Check if GC should be triggered after insert
             if self.cur_cache_size > self.max_cache_size and weight_version is not None:
@@ -241,7 +274,12 @@ class StringRadixTrie:
             return result
 
     def _insert(
-        self, text: str, token_ids: List[int], logp: List[float], weight_version: Optional[int] = None
+        self,
+        text: str,
+        token_ids: List[int],
+        logp: List[float],
+        loss_mask: List[int],
+        weight_version: Optional[int] = None,
     ) -> bool:
         """Insert tokens - skip tokens for existing nodes just like we skip text."""
 
@@ -249,6 +287,7 @@ class StringRadixTrie:
         remaining_text = text
         remaining_tokens = token_ids[:]  # Copy the tokens list
         remaining_logp = logp[:]  # Copy the logp list
+        remaining_loss_mask = loss_mask[:]  # Copy the loss_mask list
 
         # Track all nodes traversed during insert for weight version update
         traversed_nodes = [current_node]
@@ -274,6 +313,7 @@ class StringRadixTrie:
                     tokens_to_skip = len(best_child.token_ids)
                     remaining_tokens = remaining_tokens[tokens_to_skip:]
                     remaining_logp = remaining_logp[tokens_to_skip:]
+                    remaining_loss_mask = remaining_loss_mask[tokens_to_skip:]
             else:
                 # Create new node for remaining text with remaining tokens
                 new_node = StringTreeNode()
@@ -283,6 +323,7 @@ class StringRadixTrie:
                 if remaining_tokens:  # Only assign if there are tokens left
                     new_node.token_ids = remaining_tokens
                     new_node.logp = remaining_logp
+                    new_node.loss_mask = remaining_loss_mask
                     new_node.touch()
                     # Increment cache size by number of tokens added
                     self.cur_cache_size += len(remaining_tokens)
@@ -298,6 +339,7 @@ class StringRadixTrie:
             if remaining_tokens:  # Only assign if there are tokens left
                 current_node.token_ids = remaining_tokens
                 current_node.logp = remaining_logp
+                current_node.loss_mask = remaining_loss_mask
                 current_node.touch()
                 self.cur_cache_size += len(remaining_tokens)
 
@@ -525,6 +567,8 @@ class StringRadixTrie:
             token_info = f" -> tokens: {node.token_ids}"
             if node.logp:
                 token_info += f", logp: {[round(p, 3) for p in node.logp]}"
+            if node.loss_mask:
+                token_info += f", loss_mask: {node.loss_mask}"
         access_info = f" (accessed: {node.access_count}, ref: {node.ref_count})"
 
         print(f"{indent}{key_repr}{token_info}{access_info}")
@@ -549,7 +593,7 @@ class StringRadixTrie:
         # If we have a match and it covers the entire text, return the tokens
         if result.matched_prefix and result.token_ids:
             if return_logprob:
-                return (result.token_ids, result.logp)
+                return (result.token_ids, result.logp, result.loss_mask)
             else:
                 return result.token_ids
 
@@ -564,13 +608,14 @@ class StringRadixTrie:
             # Return the tokens
             if return_logprob:
                 # Return default logp values (0.0) when using tokenizer
-                return (tokens, [0.0] * len(tokens))
+                return (tokens, [0.0] * len(tokens), [1] * len(tokens))
             else:
                 return tokens
 
         # If no tokenizer or other cases, return the matched tokens (could be empty)
         result_tokens = result.token_ids if result else []
         result_logp = result.logp if result else []
+        result_loss_mask = result.loss_mask if result else []
 
         # Print tree structure if verbose is enabled
         if self.verbose:
@@ -578,7 +623,7 @@ class StringRadixTrie:
             self.pretty_print()
 
         if return_logprob:
-            return (result_tokens, result_logp)
+            return (result_tokens, result_logp, result_loss_mask)
         else:
             return result_tokens
 
@@ -600,10 +645,12 @@ if __name__ == "__main__":
         ("Hi there", [4, 5, 6], [-0.4, -0.5, -0.6]),
     ]
 
-    # Insert test data with weight version
+    # Insert test data with weight version and loss masks
     print("Inserting test data...")
     for text, tokens, logp in test_cases:
-        success = trie.insert(text, tokens, logp, weight_version=1)
+        # Create loss_mask to match tokens length, 1 for model generation parts
+        loss_mask = [1] * len(tokens)
+        success = trie.insert(text, tokens, logp, loss_mask, weight_version=1)
         print(f"Inserted '{text}' -> {tokens}: {success}")
 
     print("\nTrie structure:")
@@ -623,7 +670,9 @@ if __name__ == "__main__":
     for query in test_queries:
         result = trie.find_longest_prefix(query)
         print(f"Query: '{query}'")
-        print(f"  Matched: '{result.matched_prefix}' -> tokens: {result.token_ids}, logp: {result.logp}")
+        print(
+            f"  Matched: '{result.matched_prefix}' -> tokens: {result.token_ids}, logp: {result.logp}, loss_mask: {result.loss_mask}"
+        )
         print(f"  Remaining: '{result.remaining_string}'")
         print()
 
@@ -634,7 +683,7 @@ if __name__ == "__main__":
 
     result = trie.find_longest_prefix("Hello world")
     print(
-        f"After removal - 'Hello world' -> matched: '{result.matched_prefix}', tokens: {result.token_ids}, logp: {result.logp}"
+        f"After removal - 'Hello world' -> matched: '{result.matched_prefix}', tokens: {result.token_ids}, logp: {result.logp}, loss_mask: {result.loss_mask}"
     )
 
     # Show final stats
