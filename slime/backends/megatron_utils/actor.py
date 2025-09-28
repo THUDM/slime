@@ -261,19 +261,18 @@ class MegatronTrainRayActor(TrainRayActor):
     def train_critic(self, rollout_id, rollout_data):
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
-        values = forward_only(
-            get_values,
-            self.args,
-            self.model,
-            data_iterator,
-            num_microbatches,
+        rollout_data.update(
+            forward_only(
+                get_values,
+                self.args,
+                self.model,
+                data_iterator,
+                num_microbatches,
+            )
         )
 
         if rollout_id >= self.args.num_critic_only_steps:
-            sync_data = sync_actor_critic_data(self.args, values, self._actor_critic_groups)
-            rollout_data.update(sync_data)
-
-        rollout_data.update(values)
+            sync_actor_critic_data(self.args, rollout_data, self._actor_critic_groups)
 
         compute_advantages_and_returns(self.args, rollout_data)
 
@@ -297,32 +296,32 @@ class MegatronTrainRayActor(TrainRayActor):
                 if "ref" in self.weights:
                     if self.args.use_routing_replay:
                         os.environ["ROUTING_REPLAY_STAGE"] = "fallthrough"
-                    ref_log_probs = self.compute_log_prob(
-                        "ref",
-                        data_iterator,
-                        num_microbatches,
-                        store_prefix="ref_",
+                    rollout_data.update(
+                        self.compute_log_prob(
+                            "ref",
+                            data_iterator,
+                            num_microbatches,
+                            store_prefix="ref_",
+                        )
                     )
-                    rollout_data.update(ref_log_probs)
 
                 if self.args.use_routing_replay:
                     os.environ["ROUTING_REPLAY_STAGE"] = "record"
-                log_probs = self.compute_log_prob(
-                    "old_actor" if self.args.keep_old_actor else "actor",
-                    data_iterator,
-                    num_microbatches,
-                    store_prefix="",
+                rollout_data.update(
+                    self.compute_log_prob(
+                        "old_actor" if self.args.keep_old_actor else "actor",
+                        data_iterator,
+                        num_microbatches,
+                        store_prefix="",
+                    )
                 )
-                rollout_data.update(log_probs)
+
                 if self.args.use_critic:
-                    if self.args.kl_coef != 0 or self.args.use_kl_loss:
-                        log_probs.update(ref_log_probs)
-                    sync_data = sync_actor_critic_data(
+                    sync_actor_critic_data(
                         self.args,
-                        log_probs,
+                        rollout_data,
                         self._actor_critic_groups,
                     )
-                    rollout_data.update(sync_data)
 
                 # when there is old actor, we need to update the model params to actor manually
                 if "old_actor" in self.weights:

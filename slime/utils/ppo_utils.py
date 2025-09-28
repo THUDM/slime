@@ -164,13 +164,13 @@ def get_reinforce_plus_plus_returns(
     final_returns_chunks = []
     for i in range(len(rewards)):
         local_kl_chunk = kl[i]
-        device, dtype = local_kl_chunk.device, local_kl_chunk.dtype
         total_len, response_len = total_lengths[i], response_lengths[i]
-        prompt_len = total_len - response_len
 
         if cp_size > 1:
             # Step 1,2:Gather all chunks and token_offsets from all ranks and reconstruct the full response tensor by splitting and placing each part
-            full_kl_response = all_gather_with_cp(local_kl_chunk, total_len, response_len, prompt_len, device, dtype)
+            from slime.backends.megatron_utils.cp_utils import all_gather_with_cp
+
+            full_kl_response = all_gather_with_cp(local_kl_chunk, total_len, response_len)
         else:
             full_kl_response = local_kl_chunk
 
@@ -190,9 +190,9 @@ def get_reinforce_plus_plus_returns(
 
         # Step 4: Pick up the results corresponding to our local chunk's parts.
         if cp_size > 1:
-            local_returns_chunk = get_local_chunk_with_cp(
-                returns_for_seq, total_len, response_len, prompt_len, device, dtype
-            )
+            from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
+
+            local_returns_chunk = slice_log_prob_with_cp(returns_for_seq, total_len, response_len)
         else:
             local_returns_chunk = returns_for_seq
 
@@ -261,11 +261,11 @@ def get_advantages_and_returns(
     from megatron.core import mpu
 
     cp_size = mpu.get_context_parallel_world_size()
-    if cp_size > 0:
-        device, dtype = rewards.device, rewards.dtype
-        prompt_len = total_len - response_len
-        full_rewards = all_gather_with_cp(rewards, total_len, response_len, prompt_len, device, dtype)
-        full_values = all_gather_with_cp(values, total_len, response_len, prompt_len, device, dtype)
+    if cp_size > 1:
+        from slime.backends.megatron_utils.cp_utils import all_gather_with_cp
+
+        full_rewards = all_gather_with_cp(rewards, total_len, response_len)
+        full_values = all_gather_with_cp(values, total_len, response_len)
     else:
         full_rewards = rewards
         full_values = values
@@ -282,8 +282,10 @@ def get_advantages_and_returns(
     full_returns = full_advantages + full_values
 
     if cp_size > 0:
-        advantages = get_local_chunk_with_cp(full_advantages, total_len, response_len, prompt_len, device, dtype)
-        returns = get_local_chunk_with_cp(full_returns, total_len, response_len, prompt_len, device, dtype)
+        from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
+
+        advantages = slice_log_prob_with_cp(full_advantages, total_len, response_len)
+        returns = slice_log_prob_with_cp(full_returns, total_len, response_len)
     else:
         advantages = full_advantages
         returns = full_returns
@@ -309,67 +311,3 @@ def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool
     else:
         entropy = None
     return log_prob, entropy
-
-
-def all_gather_with_cp(local_chunk, total_len, response_len, prompt_len, device, dtype):
-    from megatron.core import mpu
-
-    from slime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
-
-    cp_size = mpu.get_context_parallel_world_size()
-
-    # Step 1: Gather all chunks and token_offsets from all ranks
-    _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(total_len, response_len)
-
-    object_to_gather = {"chunk": local_chunk.cpu(), "offsets": token_offsets}
-    gathered_objects = [None] * cp_size
-    dist.all_gather_object(gathered_objects, object_to_gather, group=mpu.get_context_parallel_group())
-
-    # Step 2: Reconstruct the full response tensor by splitting and placing each part.
-    full_response = torch.zeros(response_len, device=device, dtype=dtype)
-    for obj in gathered_objects:
-        chunk = obj["chunk"].to(device)
-        global_offsets = obj["offsets"]
-
-        # Calculate the lengths of part_0 and part_1 for this specific chunk.
-        s0, e0 = global_offsets[0]
-        s1, e1 = global_offsets[1]
-        res_s0, res_e0 = max(0, s0 - prompt_len), max(0, e0 - prompt_len)
-        res_s1, res_e1 = max(0, s1 - prompt_len), max(0, e1 - prompt_len)
-        len0 = res_e0 - res_s0
-        len1 = res_e1 - res_s1
-        if chunk.numel() > 0:
-            # Split the received contiguous chunk back into its zigzag parts.
-            part_0, part_1 = torch.split(chunk, [len0, len1])
-
-            # Place each part in its own correct location.
-            if part_0.numel() > 0:
-                full_response[res_s0:res_e0] = part_0
-            if part_1.numel() > 0:
-                full_response[res_s1:res_e1] = part_1
-
-    return full_response
-
-
-def get_local_chunk_with_cp(full_response, total_len, response_len, prompt_len, device, dtype):
-    from slime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
-
-    _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(total_len, response_len)
-
-    local_returns_chunk_parts = []
-    local_s0, local_e0 = token_offsets[0]
-    local_s1, local_e1 = token_offsets[1]
-    local_res_s0, local_res_e0 = max(0, local_s0 - prompt_len), max(0, local_e0 - prompt_len)
-    local_res_s1, local_res_e1 = max(0, local_s1 - prompt_len), max(0, local_e1 - prompt_len)
-
-    if local_res_e0 > local_res_s0:
-        local_returns_chunk_parts.append(full_response[local_res_s0:local_res_e0])
-    if local_res_e1 > local_res_s1:
-        local_returns_chunk_parts.append(full_response[local_res_s1:local_res_e1])
-
-    local_chunk = (
-        torch.cat(local_returns_chunk_parts)
-        if local_returns_chunk_parts
-        else torch.tensor([], device=device, dtype=dtype)
-    )
-    return local_chunk

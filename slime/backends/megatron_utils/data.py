@@ -390,10 +390,10 @@ def log_perf_data(rollout_id, args):
 
 def sync_actor_critic_data(
     args,
-    data: Optional[dict[str, list[torch.Tensor]]] = None,
+    rollout_data: Optional[dict[str, list[torch.Tensor]]] = None,
     group: Optional[dist.ProcessGroup] = None,
 ):
-    values, log_probs, ref_log_probs = map(data.get, ("values", "log_probs", "ref_log_probs"))
+    values, log_probs, ref_log_probs = map(rollout_data.get, ("values", "log_probs", "ref_log_probs"))
 
     # return None when not pp last stage
     if not values and not log_probs:
@@ -403,7 +403,6 @@ def sync_actor_critic_data(
 
     if not values:
         values = [torch.empty_like(log_prob) for log_prob in log_probs]
-
     for value in values:
         handles.append(dist.broadcast(value, src=1, group=group, async_op=True))
 
@@ -411,13 +410,11 @@ def sync_actor_critic_data(
         if not log_probs:
             ref_log_probs = [torch.empty_like(value) for value in values]
             log_probs = [torch.empty_like(value) for value in values]
-        else:
-            ref_log_probs = ref_log_probs
-            log_probs = log_probs
         for ref_log_prob, log_prob in zip(ref_log_probs, log_probs):
             handles.append(dist.broadcast(ref_log_prob, src=0, group=group, async_op=True))
             handles.append(dist.broadcast(log_prob, src=0, group=group, async_op=True))
 
     for handle in handles:
         handle.wait()
-    return {"values": values, "log_probs": log_probs, "ref_log_probs": ref_log_probs}
+
+    rollout_data.update({"values": values, "log_probs": log_probs, "ref_log_probs": ref_log_probs})
