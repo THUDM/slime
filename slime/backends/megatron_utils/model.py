@@ -477,7 +477,7 @@ def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_
                 log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
 
             if args.use_wandb:
-                log_dict["train/step"] = accumulated_step_id
+                log_dict[f"train/{role_tag}step"] = accumulated_step_id
                 wandb.log(log_dict)
 
             if args.ci_test:
