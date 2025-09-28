@@ -242,8 +242,14 @@ def compute_advantages_and_returns(args, rollout_data):
             assert (
                 all_advs.size() == all_masks.size()
             ), f"Shape mismatch before whitening: advantages {all_advs.size()}, masks {all_masks.size()}"
+            dp_group = mpu.get_data_parallel_group()
 
-            whitened_advs_flat = distributed_masked_whiten(all_advs, all_masks, shift_mean=True)
+            whitened_advs_flat = distributed_masked_whiten(
+                all_advs,
+                all_masks,
+                process_group=dp_group,
+                shift_mean=True,
+            )
             chunk_lengths = [chunk.size(0) for chunk in advantages]
             advantages = list(torch.split(whitened_advs_flat, chunk_lengths))
 
