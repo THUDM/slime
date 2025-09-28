@@ -390,22 +390,30 @@ def log_perf_data(rollout_id, args):
 
 def sync_actor_critic_data(
     args,
-    values: Optional[list[torch.Tensor]] = None,
-    log_probs: Optional[list[torch.Tensor]] = None,
-    ref_log_probs: Optional[list[torch.Tensor]] = None,
+    values: Optional[dict[str, list[torch.Tensor]]],
+    log_probs: Optional[dict[str, list[torch.Tensor]]],
+    ref_log_probs: Optional[dict[str, list[torch.Tensor]]],
     group: Optional[dist.ProcessGroup] = None,
 ):
+    # return None when not pp last stage
+    if not values and not log_probs:
+        return None, None, None
     handles = []
 
-    if values is None:
+    if not values:
         values = [torch.empty_like(log_prob) for log_prob in log_probs]
+    else:
+        values = values["values"]
     for value in values:
         handles.append(dist.broadcast(value, src=1, group=group, async_op=True))
 
     if args.kl_coef != 0 or args.use_kl_loss:
-        if log_probs is None:
+        if not log_probs:
             ref_log_probs = [torch.empty_like(value) for value in values]
             log_probs = [torch.empty_like(value) for value in values]
+        else:
+            ref_log_probs = ref_log_probs["ref_log_probs"]
+            log_probs = log_probs["log_probs"]
         for ref_log_prob, log_prob in zip(ref_log_probs, log_probs):
             handles.append(dist.broadcast(ref_log_prob, src=0, group=group, async_op=True))
             handles.append(dist.broadcast(log_prob, src=0, group=group, async_op=True))

@@ -364,7 +364,7 @@ def value_loss_function(args, batch, logits, sum_of_sample_mean):
         total_lengths=batch["total_lengths"],
         response_lengths=batch["response_lengths"],
     )
-    values = torch.cat([value.squeeze(-1) for value in values["values"]], dim=0)
+    values = torch.cat([value.flatten() for value in values["values"]], dim=0)
 
     returns = torch.cat(batch["returns"], dim=0)
 
