@@ -390,9 +390,9 @@ def log_perf_data(rollout_id, args):
 
 def sync_actor_critic_data(
     args,
-    values: Optional[dict[str, list[torch.Tensor]]],
-    log_probs: Optional[dict[str, list[torch.Tensor]]],
-    ref_log_probs: Optional[dict[str, list[torch.Tensor]]],
+    values: Optional[dict[str, list[torch.Tensor]]] = None,
+    log_probs: Optional[dict[str, list[torch.Tensor]]] = None,
+    ref_log_probs: Optional[dict[str, list[torch.Tensor]]] = None,
     group: Optional[dist.ProcessGroup] = None,
 ):
     # return None when not pp last stage
