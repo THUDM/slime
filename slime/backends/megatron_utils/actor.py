@@ -267,7 +267,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.model,
             data_iterator,
             num_microbatches,
-        )["values"]
+        )
 
         if rollout_id < self.args.num_critic_only_steps:
             # we will only use the shape of log_probs in this situation
@@ -330,8 +330,8 @@ class MegatronTrainRayActor(TrainRayActor):
                     values, log_probs, ref_log_probs = sync_actor_critic_data(
                         self.args,
                         None,
-                        log_probs["log_probs"],
-                        ref_log_probs["ref_log_probs"] if (self.args.kl_coef != 0 or self.args.use_kl_loss) else None,
+                        log_probs,
+                        ref_log_probs if (self.args.kl_coef != 0 or self.args.use_kl_loss) else None,
                         self._actor_critic_groups,
                     )
                     rollout_data.update({"values": values})
