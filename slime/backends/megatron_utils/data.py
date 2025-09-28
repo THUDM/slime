@@ -401,7 +401,7 @@ def sync_actor_critic_data(
     handles = []
 
     if not values:
-        values = [torch.empty_like(log_prob) for log_prob in log_probs]
+        values = [torch.empty_like(log_prob) for log_prob in log_probs["log_probs"]]
     else:
         values = values["values"]
     for value in values:
