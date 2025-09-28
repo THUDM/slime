@@ -153,7 +153,7 @@ def compute_advantages_and_returns(args, rollout_data):
 
     if args.advantage_estimator in ["grpo", "gspo"]:
         rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
-        returns = get_grpo_returns(rewards, kl)
+        returns = get_grpo_returns(rewards, kl, args.kl_coef)
         # TODO: is the copy necessary?
         advantages = [r for r in returns]
 
