@@ -619,7 +619,7 @@ class UpdateWeightFromDistributed:
         for name, param in all_gathered_params:
             converted_hf_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
 
-        self._update_bucket_weights_from_distributed(converted_hf_tensors)
+        self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar)
 
     def _update_bucket_weights_from_distributed(self, converted_named_tensors, pbar=None):
         # lock the rollout engines to prevent dead lock on broadcast.
