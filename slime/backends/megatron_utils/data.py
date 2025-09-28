@@ -395,9 +395,9 @@ def sync_actor_critic_data(
 ):
     values, log_probs, ref_log_probs = map(rollout_data.get, ("values", "log_probs", "ref_log_probs"))
 
-    # return None when not pp last stage
+    # return when not the pp last stage
     if not values and not log_probs:
-        return {}
+        return
 
     handles = []
 

@@ -428,7 +428,7 @@ class UpdateWeightFromTensor:
                     self._group_name,
                     self._model_update_groups,
                     self.weight_version,
-                    self.distributee_rollout_engines,
+                    self.distributed_rollout_engines,
                     converted_named_tensors,
                 )
             )
@@ -641,7 +641,7 @@ class UpdateWeightFromDistributed:
         pbar.update(1)
 
 
-def connect_rollout_engines_from_distributed(args, group_name: str, rollout_engines):
+def connect_rollout_engines_from_distributed(args, group_name, rollout_engines):
     master_address = ray._private.services.get_node_ip_address()
     with socket.socket() as sock:
         sock.bind(("", 0))
@@ -670,9 +670,7 @@ def connect_rollout_engines_from_distributed(args, group_name: str, rollout_engi
     return model_update_groups
 
 
-def update_weights_from_distributed(
-    args, group_name: str, group, weight_version, rollout_engines, converted_named_tensors
-):
+def update_weights_from_distributed(args, group_name, group, weight_version, rollout_engines, converted_named_tensors):
     refs = [
         engine.update_weights_from_distributed.remote(
             names=[name for name, _ in converted_named_tensors],
