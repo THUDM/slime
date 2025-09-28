@@ -1081,8 +1081,9 @@ def slime_validate_args(args):
                 f"rollout_num_gpus {args.rollout_num_gpus} != actor_num_gpus_per_node {args.actor_num_gpus_per_node} "
                 f"* actor_num_nodes {args.actor_num_nodes}, overriding rollout_num_gpus to match actor_num_gpus_per_node * actor_num_nodes."
             )
-            if not args.use_critic:
-                args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
+            args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
+            if args.use_critic:
+                args.rollout_num_gpus += args.critic_num_gpus_per_node * args.critic_num_nodes
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path

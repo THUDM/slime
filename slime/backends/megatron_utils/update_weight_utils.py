@@ -304,14 +304,15 @@ class UpdateWeightFromTensor:
         self.quantization_config = quantization_config
         self.param_info_buckets = get_param_info_buckets(self.args, self.model)
         self.weight_version = 0
-        self.use_distribute = self.args.use_critic
 
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines
+        colocate_engine_nums = (
+            self.args.actor_num_nodes * self.args.actor_num_gpus_per_node // self.args.rollout_num_gpus_per_engine
+        )
+        self.use_distribute = len(rollout_engines) > colocate_engine_nums
+
         if self.use_distribute:
-            colocate_engine_nums = (
-                self.args.actor_num_nodes * self.args.actor_num_gpus_per_node // self.args.rollout_num_gpus_per_engine
-            )
             self.connect_rollout_engines_distribute(rollout_engines[colocate_engine_nums:], rollout_engine_lock)
             self.rollout_engines = rollout_engines[:colocate_engine_nums]
 
@@ -448,11 +449,7 @@ class UpdateWeightFromTensor:
                 convert_to_hf(self.args, self.model_name, info.name, param, self.quantization_config)
             )
 
-        refs = []
-        if dist.get_rank() == self._ipc_gather_src:
-            refs.extend(self._update_converted_params_from_tensor(converted_named_tensors))
-        else:
-            self._update_converted_params_from_tensor(converted_named_tensors)
+        refs = self._update_converted_params_from_tensor(converted_named_tensors)
 
         if self.use_distribute:
             if self._is_distribute_src_rank:
@@ -514,7 +511,7 @@ class UpdateWeightFromTensor:
                 }
                 refs.append(self._ipc_engine.update_weights_from_tensor.remote(**kwargs))
             return refs
-        return None
+        return []
 
     def _update_bucket_weights_from_distributed(self, converted_named_tensors, pbar=None):
         # lock the rollout engines to prevent dead lock on broadcast.

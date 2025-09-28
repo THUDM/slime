@@ -269,22 +269,11 @@ class MegatronTrainRayActor(TrainRayActor):
             num_microbatches,
         )
 
-        if rollout_id < self.args.num_critic_only_steps:
-            # we will only use the shape of log_probs in this situation
-            log_probs = values
-            ref_log_probs = values
-        else:
-            values, log_probs, ref_log_probs = sync_actor_critic_data(
-                self.args, values, None, None, self._actor_critic_groups
-            )
+        if rollout_id >= self.args.num_critic_only_steps:
+            sync_data = sync_actor_critic_data(self.args, values, self._actor_critic_groups)
+            rollout_data.update(sync_data)
 
-        rollout_data.update(
-            {
-                "values": values,
-                "log_probs": log_probs,
-                "ref_log_probs": ref_log_probs,
-            }
-        )
+        rollout_data.update(values)
 
         compute_advantages_and_returns(self.args, rollout_data)
 
@@ -325,16 +314,15 @@ class MegatronTrainRayActor(TrainRayActor):
                     store_prefix="",
                 )
                 rollout_data.update(log_probs)
-
                 if self.args.use_critic:
-                    values, log_probs, ref_log_probs = sync_actor_critic_data(
+                    if self.args.kl_coef != 0 or self.args.use_kl_loss:
+                        log_probs.update(ref_log_probs)
+                    sync_data = sync_actor_critic_data(
                         self.args,
-                        None,
                         log_probs,
-                        ref_log_probs if (self.args.kl_coef != 0 or self.args.use_kl_loss) else None,
                         self._actor_critic_groups,
                     )
-                    rollout_data.update({"values": values})
+                    rollout_data.update(sync_data)
 
                 # when there is old actor, we need to update the model params to actor manually
                 if "old_actor" in self.weights:

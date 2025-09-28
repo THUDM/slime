@@ -137,7 +137,7 @@ def compute_advantages_and_returns(args, rollout_data):
     if log_probs is None and values is None:
         return
 
-    if args.kl_coef == 0:
+    if args.kl_coef == 0 or not log_probs:
         # when kl_coef is 0, we won't compute ref_log_prob
         xs = log_probs if log_probs is not None else values
         kl = [torch.zeros_like(x, dtype=torch.float32, device=x.device) for x in xs]
@@ -163,14 +163,17 @@ def compute_advantages_and_returns(args, rollout_data):
         rewards = []
         for reward, k in zip(old_rewards, kl):
             k *= -args.kl_coef
-            if k.numel() > 0:
+            cp_rank = mpu.get_context_parallel_rank()
+            if cp_rank == 0:
                 k[-1] += reward
             rewards.append(k)
         advantages, returns = list(
             zip(
                 *[
-                    get_advantages_and_returns(value, reward, args.gamma, args.lambd)
-                    for value, reward in zip(values, rewards)
+                    get_advantages_and_returns(total_length, response_length, value, reward, args.gamma, args.lambd)
+                    for total_length, response_length, value, reward in zip(
+                        total_lengths, response_lengths, values, rewards
+                    )
                 ]
             )
         )

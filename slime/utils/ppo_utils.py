@@ -169,39 +169,8 @@ def get_reinforce_plus_plus_returns(
         prompt_len = total_len - response_len
 
         if cp_size > 1:
-            from slime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
-
-            # Step 1: Gather all KL chunks and token_offsets from all ranks
-            _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(total_len, response_len)
-
-            object_to_gather = {"kl_chunk": local_kl_chunk.cpu(), "offsets": token_offsets}
-            gathered_objects = [None] * cp_size
-            dist.all_gather_object(gathered_objects, object_to_gather, group=mpu.get_context_parallel_group())
-
-            # Step 2: Reconstruct the full response tensor by splitting and placing each part.
-            full_kl_response = torch.zeros(response_len, device=device, dtype=dtype)
-            for obj in gathered_objects:
-                kl_chunk = obj["kl_chunk"].to(device)
-                global_offsets = obj["offsets"]
-
-                # Calculate the lengths of part_0 and part_1 for this specific chunk.
-                s0, e0 = global_offsets[0]
-                s1, e1 = global_offsets[1]
-                res_s0, res_e0 = max(0, s0 - prompt_len), max(0, e0 - prompt_len)
-                res_s1, res_e1 = max(0, s1 - prompt_len), max(0, e1 - prompt_len)
-                len0 = res_e0 - res_s0
-                len1 = res_e1 - res_s1
-
-                if kl_chunk.numel() > 0:
-                    # Split the received contiguous chunk back into its zigzag parts.
-                    kl_part_0, kl_part_1 = torch.split(kl_chunk, [len0, len1])
-
-                    # Place each part in its own correct location.
-                    if kl_part_0.numel() > 0:
-                        full_kl_response[res_s0:res_e0] = kl_part_0
-                    if kl_part_1.numel() > 0:
-                        full_kl_response[res_s1:res_e1] = kl_part_1
-
+            # Step 1,2:Gather all chunks and token_offsets from all ranks and reconstruct the full response tensor by splitting and placing each part
+            full_kl_response = all_gather_with_cp(local_kl_chunk, total_len, response_len, prompt_len, device, dtype)
         else:
             full_kl_response = local_kl_chunk
 
@@ -221,23 +190,9 @@ def get_reinforce_plus_plus_returns(
 
         # Step 4: Pick up the results corresponding to our local chunk's parts.
         if cp_size > 1:
-            local_returns_chunk_parts = []
-            local_s0, local_e0 = token_offsets[0]
-            local_s1, local_e1 = token_offsets[1]
-            local_res_s0, local_res_e0 = max(0, local_s0 - prompt_len), max(0, local_e0 - prompt_len)
-            local_res_s1, local_res_e1 = max(0, local_s1 - prompt_len), max(0, local_e1 - prompt_len)
-
-            if local_res_e0 > local_res_s0:
-                local_returns_chunk_parts.append(returns_for_seq[local_res_s0:local_res_e0])
-            if local_res_e1 > local_res_s1:
-                local_returns_chunk_parts.append(returns_for_seq[local_res_s1:local_res_e1])
-
-            local_returns_chunk = (
-                torch.cat(local_returns_chunk_parts)
-                if local_returns_chunk_parts
-                else torch.tensor([], device=device, dtype=dtype)
+            local_returns_chunk = get_local_chunk_with_cp(
+                returns_for_seq, total_len, response_len, prompt_len, device, dtype
             )
-
         else:
             local_returns_chunk = returns_for_seq
 
@@ -276,6 +231,8 @@ def get_reinforce_plus_plus_baseline_advantages(
 
 
 def get_advantages_and_returns(
+    total_len: int,
+    response_len: int,
     values: torch.Tensor,
     rewards: torch.Tensor,
     gamma: float,
@@ -301,17 +258,36 @@ def get_advantages_and_returns(
     - advantages: Tensor of shape (response_size,)
     - returns: Tensor of shape (response_size,)
     """
+    from megatron.core import mpu
+
+    cp_size = mpu.get_context_parallel_world_size()
+    if cp_size > 0:
+        device, dtype = rewards.device, rewards.dtype
+        prompt_len = total_len - response_len
+        full_rewards = all_gather_with_cp(rewards, total_len, response_len, prompt_len, device, dtype)
+        full_values = all_gather_with_cp(values, total_len, response_len, prompt_len, device, dtype)
+    else:
+        full_rewards = rewards
+        full_values = values
+
     lastgaelam = 0
     advantages_reversed = []
-    response_length = rewards.size(0)
 
-    for t in reversed(range(response_length)):
-        nextvalues = values[t + 1] if t < response_length - 1 else 0.0
-        delta = rewards[t] + gamma * nextvalues - values[t]
+    for t in reversed(range(response_len)):
+        nextvalues = full_values[t + 1] if t < response_len - 1 else 0.0
+        delta = full_rewards[t] + gamma * nextvalues - full_values[t]
         lastgaelam = delta + gamma * lambd * lastgaelam
         advantages_reversed.append(lastgaelam)
-    advantages = torch.tensor(advantages_reversed[::-1], dtype=values.dtype, device=values.device)
-    returns = advantages + values
+    full_advantages = torch.tensor(advantages_reversed[::-1], dtype=full_values.dtype, device=full_values.device)
+    full_returns = full_advantages + full_values
+
+    if cp_size > 0:
+        advantages = get_local_chunk_with_cp(full_advantages, total_len, response_len, prompt_len, device, dtype)
+        returns = get_local_chunk_with_cp(full_returns, total_len, response_len, prompt_len, device, dtype)
+    else:
+        advantages = full_advantages
+        returns = full_returns
+
     return advantages.detach(), returns
 
 
@@ -333,3 +309,67 @@ def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool
     else:
         entropy = None
     return log_prob, entropy
+
+
+def all_gather_with_cp(local_chunk, total_len, response_len, prompt_len, device, dtype):
+    from megatron.core import mpu
+
+    from slime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
+
+    cp_size = mpu.get_context_parallel_world_size()
+
+    # Step 1: Gather all chunks and token_offsets from all ranks
+    _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(total_len, response_len)
+
+    object_to_gather = {"chunk": local_chunk.cpu(), "offsets": token_offsets}
+    gathered_objects = [None] * cp_size
+    dist.all_gather_object(gathered_objects, object_to_gather, group=mpu.get_context_parallel_group())
+
+    # Step 2: Reconstruct the full response tensor by splitting and placing each part.
+    full_response = torch.zeros(response_len, device=device, dtype=dtype)
+    for obj in gathered_objects:
+        chunk = obj["chunk"].to(device)
+        global_offsets = obj["offsets"]
+
+        # Calculate the lengths of part_0 and part_1 for this specific chunk.
+        s0, e0 = global_offsets[0]
+        s1, e1 = global_offsets[1]
+        res_s0, res_e0 = max(0, s0 - prompt_len), max(0, e0 - prompt_len)
+        res_s1, res_e1 = max(0, s1 - prompt_len), max(0, e1 - prompt_len)
+        len0 = res_e0 - res_s0
+        len1 = res_e1 - res_s1
+        if chunk.numel() > 0:
+            # Split the received contiguous chunk back into its zigzag parts.
+            part_0, part_1 = torch.split(chunk, [len0, len1])
+
+            # Place each part in its own correct location.
+            if part_0.numel() > 0:
+                full_response[res_s0:res_e0] = part_0
+            if part_1.numel() > 0:
+                full_response[res_s1:res_e1] = part_1
+
+    return full_response
+
+
+def get_local_chunk_with_cp(full_response, total_len, response_len, prompt_len, device, dtype):
+    from slime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
+
+    _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(total_len, response_len)
+
+    local_returns_chunk_parts = []
+    local_s0, local_e0 = token_offsets[0]
+    local_s1, local_e1 = token_offsets[1]
+    local_res_s0, local_res_e0 = max(0, local_s0 - prompt_len), max(0, local_e0 - prompt_len)
+    local_res_s1, local_res_e1 = max(0, local_s1 - prompt_len), max(0, local_e1 - prompt_len)
+
+    if local_res_e0 > local_res_s0:
+        local_returns_chunk_parts.append(full_response[local_res_s0:local_res_e0])
+    if local_res_e1 > local_res_s1:
+        local_returns_chunk_parts.append(full_response[local_res_s1:local_res_e1])
+
+    local_chunk = (
+        torch.cat(local_returns_chunk_parts)
+        if local_returns_chunk_parts
+        else torch.tensor([], device=device, dtype=dtype)
+    )
+    return local_chunk
