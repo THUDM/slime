@@ -304,14 +304,14 @@ class UpdateWeightFromTensor:
         self.quantization_config = quantization_config
         self.param_info_buckets = get_param_info_buckets(self.args, self.model)
         self.weight_version = 0
-        self.use_distribute = self.args.use_critic  # TODO
+        self.use_distribute = self.args.use_critic
 
     def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
         self.rollout_engines = rollout_engines
         if self.use_distribute:
             colocate_engine_nums = (
                 self.args.actor_num_nodes * self.args.actor_num_gpus_per_node // self.args.rollout_num_gpus_per_engine
-            )  # TODO
+            )
             self.connect_rollout_engines_distribute(rollout_engines[colocate_engine_nums:], rollout_engine_lock)
             self.rollout_engines = rollout_engines[:colocate_engine_nums]
 
@@ -340,7 +340,7 @@ class UpdateWeightFromTensor:
         )
 
         if self._is_distribute_src_rank:
-            self._group_name = "slime_distribute"
+            self._group_name = "slime_ppo_distribute"
 
         if self._is_distribute_src_rank:
             master_address = ray._private.services.get_node_ip_address()

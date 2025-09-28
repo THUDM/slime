@@ -163,7 +163,8 @@ def compute_advantages_and_returns(args, rollout_data):
         rewards = []
         for reward, k in zip(old_rewards, kl):
             k *= -args.kl_coef
-            k[-1] += reward
+            if k.numel() > 0:
+                k[-1] += reward
             rewards.append(k)
         advantages, returns = list(
             zip(
