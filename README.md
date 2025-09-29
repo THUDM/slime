@@ -20,9 +20,7 @@
 
   - [Architecture Overview](#architecture-overview)
   - [Quick Start](#quick-start)
-  - [Checkpoint Format Conversion](#checkpoint-format-conversion)
-  - [Starting the Training Process](#starting-the-training-process)
-  - [Argument Descriptions](#argument-descriptions)
+  - [Arguments Walkthrough](#arguments-walkthrough)
   - [Developer Guide](#developer-guide)
   - [FAQ & Acknowledgements](#faq--acknowledgements)
 
@@ -41,9 +39,9 @@
 For a comprehensive quick start guide covering environment setup, data preparation, training startup, and key code analysis, please refer to:
 - [Quick Start Guide](./docs/en/get_started/quick_start.md)
 
-We also provide examples for some usecases not covered in the quick start guide, please check [examples](examples/).
+We also provide examples for some use cases not covered in the quick start guide; please check [examples](examples/).
 
-## Arguments Walk Through
+## Arguments Walkthrough
 
 Arguments in slime are divided into three categories:
 
