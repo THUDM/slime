@@ -318,12 +318,12 @@ class FSDPTrainRayActor(TrainRayActor):
             advantages = advantages.to(device=ppo_kl.device)
             pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, self.args.eps_clip, self.args.eps_clip_high)
             
-            # Initialize TIS variables
-            tis = None
-            tis_clipfrac = None
-            
             # Apply TIS before sample mean calculation
             if self.args.use_tis:
+                # Initialize TIS variables
+                tis = None
+                tis_clipfrac = None
+                ois = None
                 # Apply TIS off-policy correction using importance sampling
                 assert all(
                     "rollout_log_probs" in batch and 
@@ -336,7 +336,8 @@ class FSDPTrainRayActor(TrainRayActor):
                 rollout_log_probs = rollout_log_probs.to(device=log_probs.device)
                 
                 tis = torch.exp(old_log_probs - rollout_log_probs)
-                tis_clip = torch.clamp(tis, min=getattr(self.args, 'tis_clip_low', 0.1), max=getattr(self.args, 'tis_clip', 5.0))
+                ois = (-ppo_kl).exp()
+                tis_clip = torch.clamp(tis, min=getattr(self.args, 'tis_clip_low', 0.1), max=getattr(self.args, 'tis_clip', 2.0))
                 tis_clipfrac = tis_clip != tis
                 
                 pg_loss = pg_loss * tis_clip
@@ -375,6 +376,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 
             if self.args.use_tis and tis is not None:
                 reported["tis"] = sum_of_sample_mean(tis, response_lengths, loss_masks).detach()
+                reported["ois"] = sum_of_sample_mean(ois, response_lengths, loss_masks).detach()
                 reported["tis_clipfrac"] = sum_of_sample_mean(tis_clipfrac.float(), response_lengths, loss_masks).detach()
 
             # Scale loss for gradient accumulation
