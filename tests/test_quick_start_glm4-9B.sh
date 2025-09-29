@@ -19,6 +19,9 @@ source "${SCRIPT_DIR}/../scripts/models/glm4-9B.sh"
 CKPT_ARGS=(
    --hf-checkpoint /root/models/GLM-Z1-9B-0414/
    --ref-load /root/GLM-Z1-9B-0414_torch_dist
+
+   --fp8-format e4m3
+   --fp8-recipe blockwise
 )
 
 ROLLOUT_ARGS=(

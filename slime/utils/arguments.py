@@ -635,6 +635,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=0,
                 help="Lower bound clipping threshold C for importance sampling ratios to control variance.",
             )
+
+            parser.add_argument(
+                "--use-routing-replay",
+                action="store_true",
+                default=False,
+            )
             return parser
 
         def add_router_arguments(parser):
@@ -1076,6 +1082,8 @@ def slime_validate_args(args):
                 f"* actor_num_nodes {args.actor_num_nodes}, overriding rollout_num_gpus to match actor_num_gpus_per_node * actor_num_nodes."
             )
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
+            if args.use_critic:
+                args.rollout_num_gpus += args.critic_num_gpus_per_node * args.critic_num_nodes
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path

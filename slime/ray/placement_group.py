@@ -131,8 +131,58 @@ def create_training_group(args, pg, wandb_run_id):
     return actor_model
 
 
+def create_training_models(args, pgs, wandb_run_id):
+    actor_model = allocate_train_group(
+        args=args,
+        num_nodes=args.actor_num_nodes,
+        num_gpus_per_node=args.actor_num_gpus_per_node,
+        pg=pgs["actor"],
+        wandb_run_id=wandb_run_id,
+    )
+    if args.use_critic:
+        critic_model = allocate_train_group(
+            args=args,
+            num_nodes=args.critic_num_nodes,
+            num_gpus_per_node=args.critic_num_gpus_per_node,
+            pg=pgs["critic"],
+            wandb_run_id=wandb_run_id,
+        )
+        critic_init_handle = critic_model.async_init(args, role="critic", with_ref=False)
+    else:
+        critic_model = None
+
+    start_rollout_ids = ray.get(
+        actor_model.async_init(args, role="actor", with_ref=args.kl_coef != 0 or args.use_kl_loss)
+    )
+
+    assert len(set(start_rollout_ids)) == 1
+    if args.start_rollout_id is None:
+        args.start_rollout_id = start_rollout_ids[0]
+
+    if args.use_critic:
+        ray.get(critic_init_handle)
+        actor_model.connect(critic_model)
+
+    return actor_model, critic_model
+
+
 def create_rollout_manager(args, pg, wandb_run_id):
-    return RolloutManager.options(
+    rollout_manager = RolloutManager.options(
         num_cpus=1,
         num_gpus=0,
     ).remote(args, pg, wandb_run_id=wandb_run_id)
+
+    if args.rollout_global_dataset:
+        ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
+
+    # TODO: extract this to single function
+    rollout_engines, rollout_engine_lock = ray.get(rollout_manager.get_rollout_engines_and_lock.remote())
+
+    # calculate num_rollout from num_epoch
+    num_rollout_per_epoch = None
+    if args.num_rollout is None:
+        num_rollout_per_epoch = ray.get(rollout_manager.get_num_rollout_per_epoch.remote())
+        args.num_rollout = num_rollout_per_epoch * args.num_epoch
+    assert args.num_rollout > 0
+
+    return rollout_manager, num_rollout_per_epoch

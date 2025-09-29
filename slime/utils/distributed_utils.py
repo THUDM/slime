@@ -92,7 +92,11 @@ def init_process_group(
 
 
 def distributed_masked_whiten(
-    values: torch.Tensor, mask: torch.Tensor, shift_mean: bool = True, epsilon: float = 1e-8
+    values: torch.Tensor,
+    mask: torch.Tensor,
+    process_group: Optional[dist.ProcessGroup] = None,
+    shift_mean: bool = True,
+    epsilon: float = 1e-8,
 ):
     """
     Performs whitening on a tensor using global statistics from all participating GPUs.
@@ -104,6 +108,8 @@ def distributed_masked_whiten(
     Args:
         values (torch.Tensor): The local tensor of values to whiten.
         mask (torch.Tensor): The local mask corresponding to the values.
+        process_group: The process group for all_reduce. 
+                      If None, uses the default world group.
         shift_mean (bool): If True, the output is zero-mean. Defaults to True.
         epsilon (float): A small value for numerical stability.
 
@@ -122,7 +128,7 @@ def distributed_masked_whiten(
     )
 
     # Aggregate via all_reduce within the DP group
-    dist.all_reduce(stats_tensor)
+    dist.all_reduce(stats_tensor, group=process_group)
 
     # Calculate global stats from aggregated results
     global_sum, global_sum_sq, global_mask_sum = stats_tensor

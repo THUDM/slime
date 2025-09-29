@@ -248,8 +248,25 @@ index 867ffe91b..708d69075 100644
  
 -
  EntryClass = [Glm4MoeForCausalLM]
+diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
+index 845baff56..f04c50787 100644
+--- a/python/sglang/srt/server_args.py
++++ b/python/sglang/srt/server_args.py
+@@ -1002,8 +1002,10 @@ class ServerArgs:
+ 
+             # Check TP size
+             if self.tp_size > 1:
+-                raise ValueError(
+-                    "Currently only TP size 1 is supported for deterministic inference."
++                os.environ["NCCL_ALGO"] = "allreduce:tree"
++                self.disable_custom_all_reduce = True
++                logger.warning(
++                    "NCCL_ALGO is set to 'allreduce:tree' and custom all reduce is disabled for deterministic inference when TP size > 1."
+                 )
+ 
+             # Warnings on MoE models
 diff --git a/python/sglang/srt/speculative/eagle_utils.py b/python/sglang/srt/speculative/eagle_utils.py
-index e6c55df18..263845736 100644
+index e6c55df18..2b0df0f37 100644
 --- a/python/sglang/srt/speculative/eagle_utils.py
 +++ b/python/sglang/srt/speculative/eagle_utils.py
 @@ -189,6 +189,10 @@ class EagleDraftInput:
@@ -263,7 +280,25 @@ index e6c55df18..263845736 100644
          else:
              # in some cases(e.g draft_extend), we have not filtered the batch by `unfinished_index`
              self.topk_p = self.topk_p[new_indices]
-@@ -1077,7 +1081,7 @@ def create_accept_length_filter(
+@@ -211,6 +215,17 @@ class EagleDraftInput:
+         self.verified_id = torch.cat([self.verified_id, spec_info.verified_id], axis=0)
+         self.topk_p = torch.cat([self.topk_p, spec_info.topk_p])
+         self.topk_index = torch.cat([self.topk_index, spec_info.topk_index])
++        if self.accept_length is not None and spec_info.accept_length is not None:
++            self.accept_length = torch.cat([self.accept_length, spec_info.accept_length])
++            self.accept_length_cpu = self.accept_length.tolist()
++        elif self.accept_length is not None:
++            zeros = torch.zeros([spec_info.verified_id.shape[0]],dtype=self.accept_length.dtype,device=self.accept_length.device)
++            self.accept_length = torch.cat([self.accept_length, zeros])
++            self.accept_length_cpu = self.accept_length.tolist()
++        elif spec_info.accept_length is not None:
++            zeros = torch.zeros([self.verified_id.shape[0]],dtype=self.accept_length.dtype,device=self.accept_length.device)
++            self.accept_length = torch.cat([zeros, spec_info.accept_length])
++            self.accept_length_cpu = self.accept_length.tolist()
+ 
+ 
+ @dataclass
+@@ -1077,7 +1092,7 @@ def create_accept_length_filter(
      return accept_length_filter
  
  

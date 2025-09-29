@@ -1,4 +1,18 @@
 # qwen3-235B-a22B
+NLAYERS=94
+FIRST_K_DENSE_REPLACE=0
+
+arr=()
+for ((i=0; i<NLAYERS; i++)); do
+  if (( i < FIRST_K_DENSE_REPLACE )); then
+    arr+=(0)
+  else
+    arr+=(1)
+  fi
+done
+
+printf -v MOE_LAYER_FREQ "[%s]" "$(IFS=', '; echo "${arr[*]}")"
+
 MODEL_ARGS=(
    --disable-bias-linear
    --qk-layernorm
@@ -25,7 +39,7 @@ MODEL_ARGS=(
    --moe-router-score-function softmax
    --moe-token-dispatcher-type alltoall
    --moe-router-topk 8
-   --moe-layer-freq "'([1]*94)'"
+   --moe-layer-freq $MOE_LAYER_FREQ
    --num-experts 128
    --moe-grouped-gemm
    --moe-token-drop-policy probs

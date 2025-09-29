@@ -93,3 +93,10 @@ class TrainRayActor(RayActor):
     @abc.abstractmethod
     def update_weights(self):
         raise NotImplementedError
+
+    @abc.abstractmethod
+    def connect_actor_critic(self, critic_group):
+        raise NotImplementedError
+
+    def set_rollout_manager(self, rollout_manager):
+        self.rollout_manager = rollout_manager

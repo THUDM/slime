@@ -1,3 +1,4 @@
+import os
 import socket
 import time
 from contextlib import nullcontext
@@ -15,7 +16,6 @@ else:
 from megatron.core import mpu
 from transformers import AutoConfig, AutoTokenizer
 
-from slime.ray.registry import get_actors
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
@@ -260,30 +260,18 @@ class MegatronTrainRayActor(TrainRayActor):
     def train_critic(self, rollout_id, rollout_data):
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
-        values = forward_only(
-            get_values,
-            self.args,
-            self.model,
-            data_iterator,
-            num_microbatches,
-        )["values"]
-
-        if rollout_id < self.args.num_critic_only_steps:
-            # we will only use the shape of log_probs in this situation
-            log_probs = values
-            ref_log_probs = values
-        else:
-            values, log_probs, ref_log_probs = sync_actor_critic_data(
-                self.args, values, None, None, self._actor_critic_groups
-            )
-
         rollout_data.update(
-            {
-                "values": values,
-                "log_probs": log_probs,
-                "ref_log_probs": ref_log_probs,
-            }
+            forward_only(
+                get_values,
+                self.args,
+                self.model,
+                data_iterator,
+                num_microbatches,
+            )
         )
+
+        if rollout_id >= self.args.num_critic_only_steps:
+            sync_actor_critic_data(self.args, rollout_data, self._actor_critic_groups)
 
         compute_advantages_and_returns(self.args, rollout_data)
 
@@ -305,31 +293,34 @@ class MegatronTrainRayActor(TrainRayActor):
         with timer("train"):
             if self.args.compute_advantages_and_returns:
                 if "ref" in self.weights:
-                    ref_log_probs = self.compute_log_prob(
-                        "ref",
+                    if self.args.use_routing_replay:
+                        os.environ["ROUTING_REPLAY_STAGE"] = "fallthrough"
+                    rollout_data.update(
+                        self.compute_log_prob(
+                            "ref",
+                            data_iterator,
+                            num_microbatches,
+                            store_prefix="ref_",
+                        )
+                    )
+
+                if self.args.use_routing_replay:
+                    os.environ["ROUTING_REPLAY_STAGE"] = "record"
+                rollout_data.update(
+                    self.compute_log_prob(
+                        "old_actor" if self.args.keep_old_actor else "actor",
                         data_iterator,
                         num_microbatches,
-                        store_prefix="ref_",
+                        store_prefix="",
                     )
-                    rollout_data.update(ref_log_probs)
-
-                log_probs = self.compute_log_prob(
-                    "old_actor" if self.args.keep_old_actor else "actor",
-                    data_iterator,
-                    num_microbatches,
-                    store_prefix="",
                 )
-                rollout_data.update(log_probs)
 
                 if self.args.use_critic:
-                    values, log_probs, ref_log_probs = sync_actor_critic_data(
+                    sync_actor_critic_data(
                         self.args,
-                        None,
-                        log_probs["log_probs"],
-                        ref_log_probs["ref_log_probs"] if (self.args.kl_coef != 0 or self.args.use_kl_loss) else None,
+                        rollout_data,
                         self._actor_critic_groups,
                     )
-                    rollout_data.update({"values": values})
 
                 # when there is old actor, we need to update the model params to actor manually
                 if "old_actor" in self.weights:
@@ -348,6 +339,8 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.prof.step()
 
             # Train
+            if self.args.use_routing_replay:
+                os.environ["ROUTING_REPLAY_STAGE"] = "replay_backward"
             with timer("actor_train"):
                 train(
                     rollout_id,
@@ -383,6 +376,11 @@ class MegatronTrainRayActor(TrainRayActor):
                 path,
             )
 
+        if self.args.use_routing_replay:
+            from megatron.core.transformer.moe.moe_utils import RoutingReplay
+
+            RoutingReplay.clear_all()
+
         # update the cpu actor weight to the latest model
         self.update_cpu_params_dict(self.weights["actor"])
 
@@ -405,8 +403,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if not self.connected:
             self.connected = True
-            rollout_engines = get_actors("rollout")
-            rollout_engine_lock = get_actors("rollout_lock", 0)
+            rollout_engines, rollout_engine_lock = ray.get(self.rollout_manager.get_rollout_engines_and_lock.remote())
             self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 

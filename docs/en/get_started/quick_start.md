@@ -7,6 +7,19 @@ This document will guide you through setting up the environment and getting star
 
 Since slime may contain temporary patches for sglang/megatron, to avoid potential environment configuration issues, we strongly recommend **users to use our latest Docker image**, which comes pre-configured with all dependencies.
 
+### Hardware Support
+
+**slime** supports multiple NVIDIA GPU hardware platforms:
+
+- **B200 Series**: Fully supported with identical setup steps as H-series GPUs
+- **H-Series (H100/H200)**: Official support with comprehensive CI testing and stable performance
+
+**Important Notes**:
+- Latest Docker images are compatible with both B-series and H-series GPUs without additional configuration
+- Megatron backend on H-series GPUs has CI protection, thoroughly validated, recommended for production environments
+- B-series basic functionality is stable and suitable for development/testing, but currently lacks CI protection
+- Both hardware platforms use identical installation and startup procedures
+
 - For scenarios where Docker is not convenient, please refer to [build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh);
 - For AMD support, please refer to [AMD Usage Tutorial](../platform_support/amd_tutorial.md).
 
