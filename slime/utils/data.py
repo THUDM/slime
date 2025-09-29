@@ -1,11 +1,16 @@
+import concurrent.futures
 import json
+import os
 import random
+
 import numpy as np
 import pandas as pd
 import ray
 import torch.distributed as dist
+import tqdm
 
 from slime.utils.types import Sample
+
 from .seqlen_balancing import get_seqlen_balanced_partitions
 from .timer import Timer
 
@@ -38,8 +43,13 @@ class Dataset:
         metadata_key="metadata",
         seed=42,
         apply_chat_template=False,
+        max_workers=None,  # Add max_workers parameter
     ):
         self.origin_samples = []
+
+        origin_prompts = []
+        origin_data = []  # Store original data for later use
+
         for data in read_file(path):
             if multimodal_keys:
                 prompt_content = []
@@ -70,20 +80,60 @@ class Dataset:
             else:
                 prompt = prompt_content
 
-            # TODO: this is slow.
-            if max_length is not None:
-                if not multimodal_keys:
-                    if len(prompt) > max_length:
-                        continue
+            origin_prompts.append(prompt)
+            origin_data.append(data)  # Store original data
 
-            self.origin_samples.append(
-                Sample(
-                    prompt=prompt,
-                    label=data[label_key] if label_key is not None else None,
-                    metadata=data.get(metadata_key) or {},
+        if max_length is None or multimodal_keys:
+            # TODO need to process multimodal inputs...
+            for prompt, data in zip(origin_prompts, origin_data):
+                self.origin_samples.append(
+                    Sample(
+                        prompt=prompt,
+                        label=data[label_key] if label_key is not None else None,
+                        metadata=data.get(metadata_key) or {},
+                    )
                 )
-            )
+        else:
+            if max_workers is None:
+                max_workers = max(1, os.cpu_count() // 4)
+            else:
+                assert max_workers > 0, f"max_workers must be positive, but got {max_workers} instead"
+                max_workers = min(max_workers, os.cpu_count())
 
+            def _process_sample_length(prompt, index):
+                """Helper function to process a single sample and check its length"""
+                prompt_tokens = tokenizer(prompt, add_special_tokens=False)["input_ids"]
+                if len(prompt_tokens) > max_length:
+                    return None, index
+                return prompt_tokens, index
+
+            # Parallel processing with length filtering
+            results = []
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                future_to_item = {
+                    executor.submit(_process_sample_length, prompt, index): (prompt, index)
+                    for index, prompt in enumerate(origin_prompts)
+                }
+                for future in tqdm.tqdm(concurrent.futures.as_completed(future_to_item), total=len(future_to_item)):
+                    results.append(future.result())
+
+            # Sort results by original index to maintain order
+            results = sorted(results, key=lambda x: x[-1], reverse=False)
+
+            # Create Sample objects only for valid results
+            for result in results:
+                prompt_tokens, index = result
+                if prompt_tokens is not None:
+                    data = origin_data[index]  # Get corresponding original data
+                    prompt = origin_prompts[index]  # Get corresponding prompt
+                    self.origin_samples.append(
+                        Sample(
+                            prompt=prompt,
+                            label=data[label_key] if label_key is not None else None,
+                            prompt_tokens=prompt_tokens,
+                            metadata=data.get(metadata_key) or {},
+                        )
+                    )
         self.epoch_id = -1
         self.seed = seed
         self.samples = self.origin_samples
