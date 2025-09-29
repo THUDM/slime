@@ -1,6 +1,7 @@
 from contextlib import nullcontext
 from typing import cast
 
+import ray
 import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import init_device_mesh
@@ -10,7 +11,6 @@ from xtuner.v1.data_proto.sequence_context import SequenceContext
 from xtuner.v1.model import get_model_config_from_hf
 
 import wandb
-from slime.ray.registry import get_actors
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
@@ -262,8 +262,7 @@ class XTunerTrainRayActor(TrainRayActor):
 
         if not self.connected:
             self.connected = True
-            rollout_engines = get_actors("rollout")
-            rollout_engine_lock = get_actors("rollout_lock", 0)
+            rollout_engines, rollout_engine_lock = ray.get(self.rollout_manager.get_rollout_engines_and_lock.remote())
             self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 

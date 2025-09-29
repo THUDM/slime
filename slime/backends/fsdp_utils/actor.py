@@ -1,6 +1,7 @@
 from contextlib import nullcontext
 from itertools import accumulate
 
+import ray
 import torch
 import torch.distributed as dist
 
@@ -10,6 +11,7 @@ from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
 from torch.distributed.fsdp import ShardingStrategy, StateDictType
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+
 
 from slime.ray.registry import get_actors
 from slime.ray.train_actor import TrainRayActor
@@ -423,8 +425,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if not self.connected:
             self.connected = True
-            rollout_engines = get_actors("rollout")
-            rollout_engine_lock = get_actors("rollout_lock", 0)
+            rollout_engines, rollout_engine_lock = ray.get(self.rollout_manager.get_rollout_engines_and_lock.remote())
             self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
