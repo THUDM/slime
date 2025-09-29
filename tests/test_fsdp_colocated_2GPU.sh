@@ -1,5 +1,14 @@
 #!/bin/bash
 
+# FSDP Colocated 2GPU Training Script with Weights & Biases Support
+# 
+# This script runs FSDP training with wandb logging enabled.
+# To customize wandb settings:
+# 1. Set your wandb team name in WANDB_ARGS
+# 2. Set your wandb API key if needed (or use 'wandb login' beforehand)
+# 3. Modify project name and group as needed
+# 4. Change wandb mode to 'offline' for local logging only
+
 # for rerun the task
 pkill -9 sglang
 sleep 3
@@ -14,7 +23,7 @@ set -ex
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
-export CUDA_VISIBLE_DEVICES=3,4
+export CUDA_VISIBLE_DEVICES=6,7
 
 # Enable basic logging for OOM debugging
 export PYTHONPATH=/root/william_slime:$PYTHONPATH
@@ -60,7 +69,9 @@ OPTIMIZER_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
+   --sglang-decode-log-interval 1000
 )
+
 
 MISC_ARGS=(
    # FSDP-specific arguments

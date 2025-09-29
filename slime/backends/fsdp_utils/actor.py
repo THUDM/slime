@@ -108,7 +108,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.connected = False
         self.weight_updator = (
-            UpdateWeightFromTensor(self.args, self.model)
+            UpdateWeightFromTensor(self.args, self.model, self.weights)
             if self.args.colocate
             else UpdateWeightFromDistributed(self.args, self.model)
         )
@@ -410,31 +410,61 @@ class FSDPTrainRayActor(TrainRayActor):
 
     def update_weights(self):  # type: ignore[override]
         if self.args.debug_train_only or self.args.debug_rollout_only:
+            print(f"[WEIGHT_UPDATE_DEBUG] Skipping weight update due to debug flags: debug_train_only={self.args.debug_train_only}, debug_rollout_only={self.args.debug_rollout_only}")
             return
 
+        print(f"[WEIGHT_UPDATE_DEBUG] Actor update_weights called on rank {dist.get_rank()}")
+        print(f"[WEIGHT_UPDATE_DEBUG] Weight updator type: {type(self.weight_updator).__name__}")
+        print(f"[WEIGHT_UPDATE_DEBUG] Colocate mode: {self.args.colocate}")
+        print(f"[WEIGHT_UPDATE_DEBUG] Full params mode: {getattr(self.weight_updator, 'full_params', 'N/A')}")
+
         if not self.connected:
+            print(f"[WEIGHT_UPDATE_DEBUG] First connection - connecting to rollout engines")
             self.connected = True
             rollout_engines, rollout_engine_lock = ray.get(self.rollout_manager.get_rollout_engines_and_lock.remote())
+            print(f"[WEIGHT_UPDATE_DEBUG] Got {len(rollout_engines)} rollout engines")
             self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
+            print(f"[WEIGHT_UPDATE_DEBUG] Connection completed")
 
-        if self.args.offload:
-            # TODO: don't wake up here
+        # For colocated mode with sharded updates (full_params=False), 
+        # we don't need to wake up the entire model
+        # The bucket-based approach will load parameters selectively from CPU storage
+        use_bucket_optimization = (
+            self.args.colocate and 
+            not getattr(self.weight_updator, 'full_params', False)
+        )
+        
+        print(f"[WEIGHT_UPDATE_DEBUG] Bucket optimization enabled: {use_bucket_optimization}")
+        
+        if self.args.offload and not use_bucket_optimization:
+            # Wake up for distributed mode or full_params mode
+            print(f"[WEIGHT_UPDATE_DEBUG] Waking up model for weight update")
             self.wake_up(("model"))
 
+        print(f"[WEIGHT_UPDATE_DEBUG] Calling weight_updator.update_weights()")
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
             self.weight_updator.update_weights()
+        print(f"[WEIGHT_UPDATE_DEBUG] Weight update completed")
 
-        if self.args.offload:
-            # TODO: don't wake up here
+        if self.args.offload and not use_bucket_optimization:
+            # Sleep for distributed mode or full_params mode
+            print(f"[WEIGHT_UPDATE_DEBUG] Putting model back to sleep")
             self.sleep(("model"))
 
     @torch.no_grad()
     def update_cpu_params_dict(self, params_dict):
         """Copy model parameters from GPU to CPU storage dictionary"""
+        print(f"[WEIGHT_UPDATE_DEBUG] Updating CPU params dict on rank {dist.get_rank()}")
+        
         # FSDP v2 doesn't need context managers - get state dict directly
         state_dict = self.model.state_dict()
+        print(f"[WEIGHT_UPDATE_DEBUG] Got state dict with {len(state_dict)} parameters")
 
+        param_count = 0
+        total_elements = 0
+        sample_param_info = None
+        
         for name, param in state_dict.items():
             # Handle different tensor types - convert DTensor to full tensor if needed
             if isinstance(param, DTensor):
@@ -444,7 +474,20 @@ class FSDPTrainRayActor(TrainRayActor):
             if name not in params_dict:
                 params_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
             params_dict[name].copy_(param.detach(), non_blocking=True)
+            
+            param_count += 1
+            total_elements += param.numel()
+            
+            # Log info for first parameter as sample
+            if sample_param_info is None:
+                sample_param_info = (name, param.shape, param.dtype, param.norm().item())
+        
         torch.cuda.synchronize()
+        
+        print(f"[WEIGHT_UPDATE_DEBUG] Updated {param_count} parameters to CPU, total elements: {total_elements}")
+        if sample_param_info:
+            name, shape, dtype, norm = sample_param_info
+            print(f"[WEIGHT_UPDATE_DEBUG] Sample param '{name}': shape={shape}, dtype={dtype}, norm={norm:.6f}")
 
     @torch.no_grad()
     def update_gpu_params_dict(self, params_dict):
