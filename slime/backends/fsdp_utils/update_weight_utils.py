@@ -246,7 +246,7 @@ class UpdateWeightFromTensor:
             clear_memory()
             
         logger.info("Sharded weight update completed")
-        
+
     def _get_named_tensor_buckets(self, iterable, bucket_bytes):
         """
         Group tensors into buckets based on a specified size in bytes.
@@ -373,34 +373,3 @@ class UpdateWeightFromDistributed:
             del param_data
 
         ray.get(refs)
-    
-    def _get_named_tensor_buckets(self, iterable, bucket_bytes):
-        """
-        Group tensors into buckets based on a specified size in bytes.
-        Similar to the implementation in fsdp_sglang.py.
-        
-        Args:
-            iterable: An iterator of tuples containing tensor names and tensors.
-            bucket_bytes: The maximum size of each bucket in bytes.
-
-        Yields:
-            Lists of tuples, where each tuple contains a tensor name and its corresponding tensor.
-        """
-        if bucket_bytes <= 0:
-            raise ValueError(f"bucket_bytes must be greater than 0, got {bucket_bytes}")
-
-        current_bucket = []
-        current_size = 0
-        for name, tensor in iterable:
-            tensor_size = tensor.element_size() * tensor.numel()
-            if current_size + tensor_size > bucket_bytes:
-                if current_bucket:
-                    yield current_bucket
-                current_bucket = [(name, tensor)]
-                current_size = tensor_size
-            else:
-                current_bucket.append((name, tensor))
-                current_size += tensor_size
-
-        if current_bucket:
-            yield current_bucket
