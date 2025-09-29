@@ -1,4 +1,5 @@
 import socket
+import time
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -165,7 +166,15 @@ class MegatronTrainRayActor(TrainRayActor):
     @timer
     def wake_up(self, tags):
         assert self.args.offload
-        print_memory("before wake_up model")
+
+        # there are weird times when sglang is not offloaded immediately, so we wait here.
+        mem_fraction_static = self.args.sglang_mem_fraction_static or 0.8
+        for _ in range(60):
+            memory_info = print_memory("before wake_up model")
+            if memory_info["used_GB"] >= mem_fraction_static * memory_info["total_GB"]:
+                time.sleep(1)
+                continue
+            break
 
         if isinstance(tags, str):
             tags = (tags,)
