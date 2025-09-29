@@ -20,11 +20,8 @@ except ImportError:
     use_flattened_tensor_bucket = False
 # Note: FSDP v1 imports removed - we only support FSDP v2
 
-# Import FSDP version utilities
-from .fsdp_version_utils import (
-    preprocess_tensor_for_update_weights as _preprocess_tensor_for_update_weights,
-    verify_model_is_fsdp_v2,
-)
+# FSDP v2 imports
+from torch.distributed.tensor import DTensor
 from slime.utils.memory_utils import clear_memory
 
 # Set up logger for FSDP weight updates
@@ -50,9 +47,7 @@ class UpdateWeightFromTensor:
         self.model = model
         self.full_params = full_params
         
-        # Verify FSDP v2 (will raise error if not FSDP v2)
-        verify_model_is_fsdp_v2(model)
-        logger.info("Detected FSDP version: 2")
+        # FSDP v2 model expected
         logger.info(f"Full params mode: {self.full_params}")
             
         # Set up tensor parallel configuration for SGLang
@@ -92,7 +87,12 @@ class UpdateWeightFromTensor:
             state_dict = self.model.state_dict()
             
             # Preprocess tensors to handle DTensor -> full tensor conversion
-            named_tensors = [(name, _preprocess_tensor_for_update_weights(param)) for name, param in state_dict.items()]
+            named_tensors = []
+            for name, param in state_dict.items():
+                # Convert DTensor to full tensor if needed
+                if isinstance(param, DTensor):
+                    param = param.full_tensor()
+                named_tensors.append((name, param))
             del state_dict
             clear_memory()
 
@@ -137,8 +137,13 @@ class UpdateWeightFromTensor:
             # Use SHARDED_STATE_DICT following veRL pattern
             params = self.model.state_dict()
             
-            # Preprocess tensors to handle DTensor/ShardedTensor -> full tensor conversion
-            named_tensors = [(k, _preprocess_tensor_for_update_weights(v)) for k, v in params.items()]
+            # Preprocess tensors to handle DTensor -> full tensor conversion
+            named_tensors = []
+            for k, v in params.items():
+                # Convert DTensor to full tensor if needed
+                if isinstance(v, DTensor):
+                    v = v.full_tensor()
+                named_tensors.append((k, v))
             del params
             clear_memory()
             
@@ -160,10 +165,12 @@ class UpdateWeightFromTensor:
             # On each rank, serialize a batch of (name, tensor) tuples.
             # named_tensors_batch will be a list like:
             # [(name0, serialized_tensor0_tp0), (name1, serialized_tensor1_tp0), ...]
-            named_tensors_batch = [
-                (name, MultiprocessingSerializer.serialize(_preprocess_tensor_for_update_weights(tensor)))
-                for name, tensor in batch
-            ]
+            named_tensors_batch = []
+            for name, tensor in batch:
+                # Convert DTensor to full tensor if needed
+                if isinstance(tensor, DTensor):
+                    tensor = tensor.full_tensor()
+                named_tensors_batch.append((name, MultiprocessingSerializer.serialize(tensor)))
             del batch
             clear_memory()
 
@@ -239,6 +246,37 @@ class UpdateWeightFromTensor:
             clear_memory()
             
         logger.info("Sharded weight update completed")
+        
+    def _get_named_tensor_buckets(self, iterable, bucket_bytes):
+        """
+        Group tensors into buckets based on a specified size in bytes.
+        Similar to the implementation in fsdp_sglang.py.
+        
+        Args:
+            iterable: An iterator of tuples containing tensor names and tensors.
+            bucket_bytes: The maximum size of each bucket in bytes.
+
+        Yields:
+            Lists of tuples, where each tuple contains a tensor name and its corresponding tensor.
+        """
+        if bucket_bytes <= 0:
+            raise ValueError(f"bucket_bytes must be greater than 0, got {bucket_bytes}")
+
+        current_bucket = []
+        current_size = 0
+        for name, tensor in iterable:
+            tensor_size = tensor.element_size() * tensor.numel()
+            if current_size + tensor_size > bucket_bytes:
+                if current_bucket:
+                    yield current_bucket
+                current_bucket = [(name, tensor)]
+                current_size = tensor_size
+            else:
+                current_bucket.append((name, tensor))
+                current_size += tensor_size
+
+        if current_bucket:
+            yield current_bucket
 
 
 ## reference from xtuner_utils.update_weight_utils.UpdateWeightFromDistributed
@@ -290,9 +328,8 @@ class UpdateWeightFromDistributed:
         torch.cuda.empty_cache()
         clear_memory()
 
-        # Use standard FSDP method to get full state dict
-        with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT):
-            state_dict = model.state_dict()
+        # FSDP v2 doesn't need context managers - get state dict directly
+        state_dict = model.state_dict()
 
         # Send weights one by one to minimize memory usage
         param_names = list(state_dict.keys())
@@ -336,114 +373,6 @@ class UpdateWeightFromDistributed:
             del param_data
 
         ray.get(refs)
-                clear_memory()
-        else:
-            logger.info("Using SHARDED_STATE_DICT path")
-            # Use SHARDED_STATE_DICT following veRL pattern
-            params = self.model.state_dict()
-            
-            # Preprocess tensors to handle DTensor/ShardedTensor -> full tensor conversion
-            named_tensors = [(k, _preprocess_tensor_for_update_weights(v)) for k, v in params.items()]
-            del params
-            clear_memory()
-            
-            # Use veRL-style batched weight update approach
-            self._update_weights_sharded(named_tensors)
-        
-        logger.info("Weight update completed")
-    
-    def _update_weights_sharded(self, named_tensors):
-        """Update weights using sharded approach similar to veRL's implementation."""
-        logger.info("Starting sharded weight update")
-        
-        load_format = None
-        update_weights_bucket_megabytes = getattr(self.args, 'update_weights_bucket_megabytes', 100)
-        update_weights_bucket_bytes = int(update_weights_bucket_megabytes) << 20
-        
-        # Use batched approach similar to fsdp_sglang.py
-        for batch in self._get_named_tensor_buckets(named_tensors, update_weights_bucket_bytes):
-            # On each rank, serialize a batch of (name, tensor) tuples.
-            # named_tensors_batch will be a list like:
-            # [(name0, serialized_tensor0_tp0), (name1, serialized_tensor1_tp0), ...]
-            named_tensors_batch = [
-                (name, MultiprocessingSerializer.serialize(_preprocess_tensor_for_update_weights(tensor)))
-                for name, tensor in batch
-            ]
-            del batch
-            clear_memory()
-
-            if self._ipc_gather_src == dist.get_rank():
-                # On rank 0, prepare a list to hold the gathered batches from all ranks.
-                gathered_serialized_batches = [None for _ in range(dist.get_world_size(self._ipc_gather_group))]
-            else:
-                gathered_serialized_batches = None
-
-            # Gather the named_tensors_batch from all ranks to rank 0.
-            # After this, on rank 0, gathered_serialized_batches will be a list of lists:
-            # [ [ (name0, s_t0_tp0), (name1, s_t1_tp0), ... ],  # batch from TP rank 0
-            #   [ (name0, s_t0_tp1), (name1, s_t1_tp1), ... ],  # batch from TP rank 1
-            #   ... ]
-            # On other ranks, gathered_serialized_batches will be None.
-            dist.gather_object(
-                obj=named_tensors_batch,
-                object_gather_list=gathered_serialized_batches,
-                dst=self._ipc_gather_src,
-                group=self._ipc_gather_group,
-            )
-            del named_tensors_batch
-            clear_memory()
-
-            if dist.get_rank() == self._ipc_gather_src:
-                # Use zip(*) to "transpose" the data structure.
-                # This groups the serialized parts for each individual tensor across all TP ranks.
-                # Example: from [[(n0, t0_tp0), (n1, t1_tp0)], [(n0, t0_tp1), (n1, t1_tp1)]]
-                # to [ ( (n0, t0_tp0), (n0, t0_tp1) ), ( (n1, t1_tp0), (n1, t1_tp1) ) ]
-                logical_tensors = zip(*gathered_serialized_batches, strict=True)
-                del gathered_serialized_batches
-                clear_memory()
-
-                # Create LocalSerializedTensor objects for each logical tensor
-                update_tensors = [
-                    (
-                        tensor_group[0][0],  # Get the name from the first rank's data.
-                        LocalSerializedTensor(
-                            # 'rank_part' is the (name, serialized_tensor) tuple from one specific rank.
-                            values=[rank_part[1] for rank_part in tensor_group]
-                        ),
-                    )
-                    for tensor_group in logical_tensors
-                    # each tensor_group is like ( (n0, t0_tp0), (n0, t0_tp1) )
-                ]
-
-                # Serialize once and reuse for all TP ranks to avoid memory explosion
-                serialized_update_tensors = MultiprocessingSerializer.serialize(update_tensors, output_str=True)
-                
-                logger.info(f"Sending batch of {len(update_tensors)} parameters to SGLang")
-                
-                # Clear intermediate data to free memory
-                del update_tensors
-                clear_memory()
-                
-                kwargs = {
-                    "serialized_named_tensors": [serialized_update_tensors for _ in range(self.tp_size)],
-                    "load_format": load_format,
-                    "flush_cache": False,
-                }
-                ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
-                ray.get(ref)
-                clear_memory()
-                
-                # Clear serialized data
-                del serialized_update_tensors, kwargs
-                clear_memory()
-        
-        # Flush cache after all updates
-        if dist.get_rank() == self._ipc_gather_src:
-            ref = self._ipc_engine.flush_cache.remote()
-            ray.get(ref)
-            clear_memory()
-            
-        logger.info("Sharded weight update completed")
     
     def _get_named_tensor_buckets(self, iterable, bucket_bytes):
         """

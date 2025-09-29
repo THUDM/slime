@@ -8,15 +8,19 @@ from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 import logging
 
-# FSDP imports
-from torch.distributed.fsdp.api import ShardingStrategy, StateDictType
-from torch.distributed.fsdp.fully_sharded_data_parallel import FullyShardedDataParallel as FSDP
+# FSDP v2 only - no FSDP v1 imports allowed
 
-# Import FSDP version utilities
-from .fsdp_version_utils import (
-    create_fsdp_v2_model,
-    preprocess_tensor_for_update_weights
-)
+# FSDP v2 imports
+from torch.distributed.tensor import DTensor
+from packaging import version
+
+# Import FSDP v2 components based on PyTorch version
+if version.parse(torch.__version__) >= version.parse("2.6"):
+    from torch.distributed.fsdp import fully_shard
+elif version.parse(torch.__version__) >= version.parse("2.4"):
+    from torch.distributed._composable.fsdp import fully_shard
+else:
+    raise ImportError("FSDP v2 not available")
 
 import wandb
 from slime.ray.train_actor import TrainRayActor
@@ -79,7 +83,8 @@ class FSDPTrainRayActor(TrainRayActor):
         auto_wrap_policy = None
 
         # Create FSDP v2 model using fully_shard
-        self.model = create_fsdp_v2_model(model)
+        logging.info(f"Creating FSDP v2 model with PyTorch {torch.__version__}")
+        self.model = fully_shard(model)
 
 
 
@@ -431,8 +436,10 @@ class FSDPTrainRayActor(TrainRayActor):
         state_dict = self.model.state_dict()
 
         for name, param in state_dict.items():
-            # Handle different tensor types using utils
-            param = preprocess_tensor_for_update_weights(param)
+            # Handle different tensor types - convert DTensor to full tensor if needed
+            if isinstance(param, DTensor):
+                # FSDP v2 case - convert DTensor to full tensor
+                param = param.full_tensor()
                 
             if name not in params_dict:
                 params_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
@@ -442,9 +449,9 @@ class FSDPTrainRayActor(TrainRayActor):
     @torch.no_grad()
     def update_gpu_params_dict(self, params_dict):
         """Load parameters from CPU storage dictionary to GPU model"""
-        with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
-            gpu_state_dict = {name: param.cuda(non_blocking=True) for name, param in params_dict.items()}
-            self.model.load_state_dict(gpu_state_dict, strict=True)
+        # FSDP v2 doesn't need context managers - load state dict directly
+        gpu_state_dict = {name: param.cuda(non_blocking=True) for name, param in params_dict.items()}
+        self.model.load_state_dict(gpu_state_dict, strict=True)
         torch.cuda.synchronize()
 
     def load_ref_model(self, ref_load_path):
@@ -467,8 +474,8 @@ class FSDPTrainRayActor(TrainRayActor):
                     torch_dtype=torch.bfloat16,
                 )
 
-                with FSDP.state_dict_type(self.model, StateDictType.FULL_STATE_DICT):
-                    self.model.load_state_dict(temp_ref_model.state_dict(), strict=True)
+                # FSDP v2 doesn't need context managers - load state dict directly
+                self.model.load_state_dict(temp_ref_model.state_dict(), strict=True)
 
                 del temp_ref_model
                 torch.cuda.empty_cache()
