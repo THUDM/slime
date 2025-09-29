@@ -31,6 +31,12 @@ class FSDPArgs:
     wandb_project: str = "slime-fsdp"
     wandb_run_name: Optional[str] = None
 
+    # Checkpoint
+    save: Optional[str] = None
+    load: Optional[str] = None
+    save_safe_serialization: bool = True
+    overwrite_checkpoints: bool = False
+
     # Precision
     gradient_checkpointing: bool = False
 
