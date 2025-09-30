@@ -116,20 +116,12 @@ class UpdateWeightFromTensor:
         
         monkey_patch_torch_reductions()
         
-        # Get state dict based on configuration
         if self.full_params:
             print("Using FULL_STATE_DICT path")
-            # FSDP v2 doesn't need context managers - get state dict directly
             state_dict = self.model.state_dict()
             
             # Preprocess tensors to handle DTensor -> full tensor conversion
-            named_tensors = []
-            for name, param in state_dict.items():
-                # Convert DTensor to full tensor if needed
-                if isinstance(param, DTensor):
-                    param = param.full_tensor()
-                named_tensors.append((name, param))
-            del state_dict
+            named_tensors = [(name, param) for name, param in self.model.state_dict().items()]
             clear_memory()
 
             if use_flattened_tensor_bucket:
@@ -144,7 +136,6 @@ class UpdateWeightFromTensor:
             else:
                 serialized_tensors = MultiprocessingSerializer.serialize(named_tensors, output_str=True)
             
-            # Clear memory after serialization
             clear_memory()
 
             serialized_named_tensors = (
@@ -170,21 +161,17 @@ class UpdateWeightFromTensor:
                 clear_memory()
         else:
             # For sharded mode (full_params=False), automatically use bucket-based loading
-            # This provides Megatron-style memory optimization
             print("Using SHARDED_STATE_DICT path with bucket-based loading from CPU storage")
-            # Use pre-computed buckets (like Megatron)
             if self.param_info_buckets is None:
                 raise RuntimeError("Parameter info buckets not initialized for sharded mode")
             
             for param_infos in self.param_info_buckets:
-                # Load only the parameters in this bucket from CPU to GPU (Megatron-style)
+                # Load only the parameters in this bucket from CPU to GPU
                 named_tensors_batch = []
                 for param_info in param_infos:
-                    # Load parameter from CPU storage to GPU (similar to Megatron approach)
                     cpu_param = self.weights["actor"][param_info.name]
                     gpu_param = cpu_param.to(device=torch.cuda.current_device(), non_blocking=True)
                     named_tensors_batch.append((param_info.name, MultiprocessingSerializer.serialize(gpu_param)))
-                    # Clear GPU memory immediately after serialization
                     del gpu_param
                 
                 torch.cuda.synchronize()
@@ -207,7 +194,6 @@ class UpdateWeightFromTensor:
                 clear_memory()
 
                 if dist.get_rank() == self._ipc_gather_src:
-                    # Use zip(*) to "transpose" the data structure.
                     logical_tensors = zip(*gathered_serialized_batches, strict=True)
                     del gathered_serialized_batches
                     clear_memory()
@@ -224,9 +210,9 @@ class UpdateWeightFromTensor:
                     ]
 
                     # Serialize once and reuse for all TP ranks to avoid memory explosion
+                    # TODO: Add flattened tensor support
                     serialized_update_tensors = MultiprocessingSerializer.serialize(update_tensors, output_str=True)
                     
-                    # Clear intermediate data to free memory
                     del update_tensors
                     clear_memory()
                     
@@ -239,11 +225,9 @@ class UpdateWeightFromTensor:
                     ray.get(ref)
                     clear_memory()
                     
-                    # Clear serialized data
                     del serialized_update_tensors, kwargs
                     clear_memory()
             
-            # Flush cache after all updates
             if dist.get_rank() == self._ipc_gather_src:
                 ref = self._ipc_engine.flush_cache.remote()
                 ray.get(ref)
@@ -309,7 +293,7 @@ class UpdateWeightFromDistributed:
         # Send weights one by one to minimize memory usage
         param_names = list(state_dict.keys())
 
-        for i, name in tqdm(param_names, desc="[broadcast weight]"):
+        for i, name in enumerate(tqdm(param_names, desc="[broadcast weight]")):
             # Process one parameter at a time to minimize memory usage
             param = state_dict[name].to(torch.bfloat16)
             single_param_dict = {name: param}
