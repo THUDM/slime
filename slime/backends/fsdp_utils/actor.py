@@ -8,9 +8,7 @@ from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 import logging
 
-# FSDP v2 only - no FSDP v1 imports allowed
 
-# FSDP v2 imports
 from torch.distributed.tensor import DTensor
 from packaging import version
 
@@ -410,7 +408,6 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
-
         if not self.connected:
             self.connected = True
             rollout_engines, rollout_engine_lock = ray.get(self.rollout_manager.get_rollout_engines_and_lock.remote())
@@ -442,13 +439,10 @@ class FSDPTrainRayActor(TrainRayActor):
     def update_cpu_params_dict(self, params_dict):
         """Copy model parameters from GPU to CPU storage dictionary"""
         
-        # FSDP v2 doesn't need context managers - get state dict directly
         state_dict = self.model.state_dict()
 
         for name, param in state_dict.items():
-            # Handle different tensor types - convert DTensor to full tensor if needed
             if isinstance(param, DTensor):
-                # FSDP v2 case - convert DTensor to full tensor
                 param = param.full_tensor()
                 
             if name not in params_dict:
@@ -495,7 +489,6 @@ class FSDPTrainRayActor(TrainRayActor):
             self.update_cpu_params_dict(self.weights["ref"])
 
             print(f"Reference model parameters loaded and stored in CPU memory")
-
 
         finally:
             self.update_gpu_params_dict(current_weights)

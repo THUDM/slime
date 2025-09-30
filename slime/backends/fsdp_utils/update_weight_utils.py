@@ -3,8 +3,6 @@ import socket
 import ray
 import torch
 import torch.distributed as dist
-import gc
-import os
 from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
 from tqdm import tqdm
@@ -18,9 +16,7 @@ try:
     use_flattened_tensor_bucket = True
 except ImportError:
     use_flattened_tensor_bucket = False
-# Note: FSDP v1 imports removed - we only support FSDP v2
 
-# FSDP v2 imports
 from torch.distributed.tensor import DTensor
 from slime.utils.memory_utils import clear_memory
 

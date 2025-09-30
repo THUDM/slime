@@ -60,5 +60,4 @@ def load_fsdp_args(extra_args_provider=None):
         for k, v in data.items():
             if not hasattr(args, k):
                 setattr(args, k, v)
-    
     return args
