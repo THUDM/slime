@@ -185,25 +185,12 @@ class UpdateWeightFromTensor:
             # For sharded mode (full_params=False), automatically use bucket-based loading
             # This provides Megatron-style memory optimization
             logger.info("Using SHARDED_STATE_DICT path with bucket-based loading from CPU storage")
-            logger.info(f"[WEIGHT_UPDATE_DEBUG] Starting sharded weight update from CPU storage")
-            logger.info(f"[WEIGHT_UPDATE_DEBUG] Rank: {dist.get_rank()}, IPC gather src: {self._ipc_gather_src}, TP size: {self.tp_size}")
             
             # Use pre-computed buckets (like Megatron)
             if self.param_info_buckets is None:
                 raise RuntimeError("Parameter info buckets not initialized for sharded mode")
             
-            logger.info(f"[WEIGHT_UPDATE_DEBUG] Total buckets: {len(self.param_info_buckets)}")
-            logger.info(f"[WEIGHT_UPDATE_DEBUG] CPU weights dict has {len(self.weights['actor'])} parameters")
-            
-            # Log some sample parameter info for debugging
-            if len(self.param_info_buckets) > 0 and len(self.param_info_buckets[0]) > 0:
-                sample_param = self.param_info_buckets[0][0]
-                sample_cpu_param = self.weights["actor"][sample_param.name]
-                logger.info(f"[WEIGHT_UPDATE_DEBUG] Sample param '{sample_param.name}': shape={sample_cpu_param.shape}, dtype={sample_cpu_param.dtype}, norm={sample_cpu_param.norm().item():.6f}")
-            
             for bucket_idx, param_infos in enumerate(self.param_info_buckets):
-                logger.info(f"[WEIGHT_UPDATE_DEBUG] Processing bucket {bucket_idx + 1}/{len(self.param_info_buckets)} with {len(param_infos)} parameters")
-                
                 # Load only the parameters in this bucket from CPU to GPU (Megatron-style)
                 named_tensors_batch = []
                 total_params_size = 0
@@ -216,18 +203,14 @@ class UpdateWeightFromTensor:
                     # Clear GPU memory immediately after serialization
                     del gpu_param
                 
-                logger.info(f"[WEIGHT_UPDATE_DEBUG] Bucket {bucket_idx + 1}: loaded {len(named_tensors_batch)} params, total elements: {total_params_size}")
-                
                 torch.cuda.synchronize()
                 clear_memory()
 
                 if self._ipc_gather_src == dist.get_rank():
                     # On rank 0, prepare a list to hold the gathered batches from all ranks.
                     gathered_serialized_batches = [None for _ in range(dist.get_world_size(self._ipc_gather_group))]
-                    logger.info(f"[WEIGHT_UPDATE_DEBUG] Rank {dist.get_rank()} is gather source, waiting for {dist.get_world_size(self._ipc_gather_group)} ranks")
                 else:
                     gathered_serialized_batches = None
-                    logger.info(f"[WEIGHT_UPDATE_DEBUG] Rank {dist.get_rank()} is not gather source, sending to rank {self._ipc_gather_src}")
 
                 # Gather the named_tensors_batch from all ranks to rank 0.
                 dist.gather_object(
@@ -240,8 +223,6 @@ class UpdateWeightFromTensor:
                 clear_memory()
 
                 if dist.get_rank() == self._ipc_gather_src:
-                    logger.info(f"[WEIGHT_UPDATE_DEBUG] Gather completed, received batches from {len(gathered_serialized_batches)} ranks")
-                    
                     # Use zip(*) to "transpose" the data structure.
                     logical_tensors = zip(*gathered_serialized_batches, strict=True)
                     del gathered_serialized_batches
@@ -258,16 +239,8 @@ class UpdateWeightFromTensor:
                         for tensor_group in logical_tensors
                     ]
 
-                    logger.info(f"[WEIGHT_UPDATE_DEBUG] Created {len(update_tensors)} LocalSerializedTensor objects")
-                    if len(update_tensors) > 0:
-                        sample_name = update_tensors[0][0]
-                        sample_lst = update_tensors[0][1]
-                        logger.info(f"[WEIGHT_UPDATE_DEBUG] Sample tensor '{sample_name}': LocalSerializedTensor with {len(sample_lst.values)} values")
-
                     # Serialize once and reuse for all TP ranks to avoid memory explosion
                     serialized_update_tensors = MultiprocessingSerializer.serialize(update_tensors, output_str=True)
-                    
-                    logger.info(f"[WEIGHT_UPDATE_DEBUG] Sending bucket {bucket_idx + 1} with {len(update_tensors)} parameters to SGLang engine")
                     
                     # Clear intermediate data to free memory
                     del update_tensors
@@ -278,10 +251,8 @@ class UpdateWeightFromTensor:
                         "flush_cache": False,
                     }
                     
-                    logger.info(f"[WEIGHT_UPDATE_DEBUG] Calling update_weights_from_tensor.remote() for bucket {bucket_idx + 1}")
                     ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
                     ray.get(ref)
-                    logger.info(f"[WEIGHT_UPDATE_DEBUG] Successfully updated weights for bucket {bucket_idx + 1}")
                     clear_memory()
                     
                     # Clear serialized data
@@ -290,13 +261,9 @@ class UpdateWeightFromTensor:
             
             # Flush cache after all updates
             if dist.get_rank() == self._ipc_gather_src:
-                logger.info(f"[WEIGHT_UPDATE_DEBUG] Flushing SGLang cache after all bucket updates")
                 ref = self._ipc_engine.flush_cache.remote()
                 ray.get(ref)
-                logger.info(f"[WEIGHT_UPDATE_DEBUG] Cache flush completed")
                 clear_memory()
-                
-            logger.info("[WEIGHT_UPDATE_DEBUG] Sharded weight update from CPU storage completed")
         
         logger.info("Weight update completed")
 

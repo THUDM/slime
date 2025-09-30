@@ -3,11 +3,18 @@
 # FSDP Colocated 2GPU Training Script with Weights & Biases Support
 # 
 # This script runs FSDP training with wandb logging enabled.
+# 
+# Wandb Configuration:
+# - Rank and world size are automatically detected from distributed context
+# - Only rank 0 will log to wandb to avoid duplicate entries
+# - Distributed coordination handled by torch.distributed in FSDP actors
+# 
 # To customize wandb settings:
-# 1. Set your wandb team name in WANDB_ARGS
+# 1. Uncomment and set --wandb-team if you're using a team/organization (optional for personal accounts)
 # 2. Set your wandb API key if needed (or use 'wandb login' beforehand)
 # 3. Modify project name and group as needed
 # 4. Change wandb mode to 'offline' for local logging only
+# 5. Uncomment --wandb-dir to specify custom log directory
 
 # for rerun the task
 pkill -9 sglang
@@ -23,7 +30,7 @@ set -ex
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
-export CUDA_VISIBLE_DEVICES=6,7
+export CUDA_VISIBLE_DEVICES=4,5
 
 # Enable basic logging for OOM debugging
 export PYTHONPATH=/root/william_slime:$PYTHONPATH
@@ -73,10 +80,20 @@ SGLANG_ARGS=(
 )
 
 
+WANDB_ARGS=(
+   --use-wandb
+   # --wandb-team "your-team-name"  # Uncomment and replace with your wandb team name if using a team
+   --wandb-project "gsm8k_async_rl"
+   --wandb-group "fsdp-2gpu-colocated"
+   --wandb-mode "online"  # Change to "offline" for local logging only
+   # --wandb-key "your-api-key"  # Uncomment and set if needed (or use 'wandb login' beforehand)
+   # --wandb-dir "./wandb_logs"  # Uncomment to specify custom wandb directory
+)
+
 MISC_ARGS=(
    # FSDP-specific arguments
    # Set to true for FULL_STATE_DICT mode, false for SHARDED_STATE_DICT mode (default)
-   # --fsdp-full-params  # Uncomment this line to enable full params mode
+   --fsdp-full-params  # Uncomment this line to enable full params mode
    # Comment out the above line to use sharded mode (default)
 )
 
@@ -100,4 +117,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${GRPO_ARGS[@]} \
    ${DISTRIBUTED_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
+   ${WANDB_ARGS[@]} \
    ${MISC_ARGS[@]}

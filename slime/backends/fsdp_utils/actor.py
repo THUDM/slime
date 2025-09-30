@@ -51,6 +51,10 @@ class FSDPTrainRayActor(TrainRayActor):
     def init(self, args, role, wandb_run_id, with_ref: bool = False):  # type: ignore[override]
         super().init(args, role, wandb_run_id, with_ref)
 
+        # Update rank and world_size for wandb secondary initialization (using actual distributed values)
+        args.rank = dist.get_rank()
+        args.world_size = dist.get_world_size()
+
         if dist.get_rank() == 0:
             init_wandb_secondary(args, wandb_run_id)
 
@@ -410,22 +414,14 @@ class FSDPTrainRayActor(TrainRayActor):
 
     def update_weights(self):  # type: ignore[override]
         if self.args.debug_train_only or self.args.debug_rollout_only:
-            print(f"[WEIGHT_UPDATE_DEBUG] Skipping weight update due to debug flags: debug_train_only={self.args.debug_train_only}, debug_rollout_only={self.args.debug_rollout_only}")
             return
 
-        print(f"[WEIGHT_UPDATE_DEBUG] Actor update_weights called on rank {dist.get_rank()}")
-        print(f"[WEIGHT_UPDATE_DEBUG] Weight updator type: {type(self.weight_updator).__name__}")
-        print(f"[WEIGHT_UPDATE_DEBUG] Colocate mode: {self.args.colocate}")
-        print(f"[WEIGHT_UPDATE_DEBUG] Full params mode: {getattr(self.weight_updator, 'full_params', 'N/A')}")
 
         if not self.connected:
-            print(f"[WEIGHT_UPDATE_DEBUG] First connection - connecting to rollout engines")
             self.connected = True
             rollout_engines, rollout_engine_lock = ray.get(self.rollout_manager.get_rollout_engines_and_lock.remote())
-            print(f"[WEIGHT_UPDATE_DEBUG] Got {len(rollout_engines)} rollout engines")
             self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
-            print(f"[WEIGHT_UPDATE_DEBUG] Connection completed")
 
         # For colocated mode with sharded updates (full_params=False), 
         # we don't need to wake up the entire model
@@ -435,31 +431,24 @@ class FSDPTrainRayActor(TrainRayActor):
             not getattr(self.weight_updator, 'full_params', False)
         )
         
-        print(f"[WEIGHT_UPDATE_DEBUG] Bucket optimization enabled: {use_bucket_optimization}")
         
         if self.args.offload and not use_bucket_optimization:
             # Wake up for distributed mode or full_params mode
-            print(f"[WEIGHT_UPDATE_DEBUG] Waking up model for weight update")
             self.wake_up(("model"))
 
-        print(f"[WEIGHT_UPDATE_DEBUG] Calling weight_updator.update_weights()")
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
             self.weight_updator.update_weights()
-        print(f"[WEIGHT_UPDATE_DEBUG] Weight update completed")
 
         if self.args.offload and not use_bucket_optimization:
             # Sleep for distributed mode or full_params mode
-            print(f"[WEIGHT_UPDATE_DEBUG] Putting model back to sleep")
             self.sleep(("model"))
 
     @torch.no_grad()
     def update_cpu_params_dict(self, params_dict):
         """Copy model parameters from GPU to CPU storage dictionary"""
-        print(f"[WEIGHT_UPDATE_DEBUG] Updating CPU params dict on rank {dist.get_rank()}")
         
         # FSDP v2 doesn't need context managers - get state dict directly
         state_dict = self.model.state_dict()
-        print(f"[WEIGHT_UPDATE_DEBUG] Got state dict with {len(state_dict)} parameters")
 
         param_count = 0
         total_elements = 0
@@ -483,11 +472,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 sample_param_info = (name, param.shape, param.dtype, param.norm().item())
         
         torch.cuda.synchronize()
-        
-        print(f"[WEIGHT_UPDATE_DEBUG] Updated {param_count} parameters to CPU, total elements: {total_elements}")
-        if sample_param_info:
-            name, shape, dtype, norm = sample_param_info
-            print(f"[WEIGHT_UPDATE_DEBUG] Sample param '{name}': shape={shape}, dtype={dtype}, norm={norm:.6f}")
 
     @torch.no_grad()
     def update_gpu_params_dict(self, params_dict):
