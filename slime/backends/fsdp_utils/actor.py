@@ -231,6 +231,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 )
             )
             start = end
+        if dist.get_rank() == 0:
+            print("*" * 100)
+            print("length of packed_batches: ", len(packed_batches))
         grad_accum = list(accumulate(num_microbatches))
 
         return packed_batches, grad_accum
@@ -282,6 +285,8 @@ class FSDPTrainRayActor(TrainRayActor):
             log_dict[f"rollout/{metric_key}"] = (
                 val / (self.args.n_samples_per_prompt * self.args.rollout_batch_size)
             ).item()
+        if dist.get_rank() == 0:
+            print(f"rollout {rollout_id}: {log_dict}")
             if self.args.use_wandb:
                 log_dict["rollout/step"] = (
                     rollout_id
@@ -388,6 +393,10 @@ class FSDPTrainRayActor(TrainRayActor):
                     if self.args.use_kl_loss and "kl_loss" in aggregated:
                         kl_info = f", kl_loss: {aggregated['kl_loss']:.4f}, kl_penalty: {aggregated['kl_loss'] * self.args.kl_loss_coef:.4f}"
 
+                    print(
+                        f"step {self.global_step}: loss: {aggregated.get('loss', 0):.4f}, pg_loss: {aggregated.get('pg_loss', 0):.4f}{kl_info}"
+                    )
+                    print(f"step {self.global_step} full: {log_dict}")
 
                     if self.args.use_wandb:
                         log_dict["train/step"] = self.global_step
@@ -437,10 +446,6 @@ class FSDPTrainRayActor(TrainRayActor):
         # FSDP v2 doesn't need context managers - get state dict directly
         state_dict = self.model.state_dict()
 
-        param_count = 0
-        total_elements = 0
-        sample_param_info = None
-        
         for name, param in state_dict.items():
             # Handle different tensor types - convert DTensor to full tensor if needed
             if isinstance(param, DTensor):
@@ -450,13 +455,6 @@ class FSDPTrainRayActor(TrainRayActor):
             if name not in params_dict:
                 params_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
             params_dict[name].copy_(param.detach(), non_blocking=True)
-            
-            param_count += 1
-            total_elements += param.numel()
-            
-            # Log info for first parameter as sample
-            if sample_param_info is None:
-                sample_param_info = (name, param.shape, param.dtype, param.norm().item())
         
         torch.cuda.synchronize()
 
