@@ -51,7 +51,7 @@ def parse_fsdp_cli(extra_args_provider=None):
     parser = argparse.ArgumentParser("FSDP SFT Training (slime)")
     parser.add_argument("--config", type=str, default=None, help="YAML config path")
     for f in dataclasses.fields(FSDPArgs):
-        if f.name == "config" or f.name == "update_weights_bucket_size":
+        if f.name == "config":
             continue
         arg_type = f.type if f.type != Optional[str] else str
         if arg_type is bool:
@@ -73,9 +73,5 @@ def load_fsdp_args(extra_args_provider=None):
         for k, v in data.items():
             if not hasattr(args, k):
                 setattr(args, k, v)
-    
-    # Set default value for update_weights_bucket_size if not provided by main args
-    if not hasattr(args, 'update_weights_bucket_size'):
-        args.update_weights_bucket_size = 512 * 1024 * 1024  # 512MB default
     
     return args

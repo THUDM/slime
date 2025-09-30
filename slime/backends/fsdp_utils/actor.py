@@ -77,13 +77,11 @@ class FSDPTrainRayActor(TrainRayActor):
                 trust_remote_code=True,
                 attn_implementation=self.args.attn_implementation,
             )
+            print(f"Model attn implementation: {model.config._attn_implementation}")
         model.train()
 
         if args.gradient_checkpointing:
             model.gradient_checkpointing_enable()
-
-        # TODO: set correct auto_wrap_policy
-        auto_wrap_policy = None
 
         # Create FSDP v2 model using FSDP
         self.model = FSDP(model)
@@ -455,7 +453,6 @@ class FSDPTrainRayActor(TrainRayActor):
             if name not in params_dict:
                 params_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
             params_dict[name].copy_(param.detach(), non_blocking=True)
-        
         torch.cuda.synchronize()
 
     @torch.no_grad()
