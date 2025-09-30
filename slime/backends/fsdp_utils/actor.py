@@ -16,9 +16,9 @@ from packaging import version
 
 # Import FSDP v2 components based on PyTorch version
 if version.parse(torch.__version__) >= version.parse("2.6"):
-    from torch.distributed.fsdp import fully_shard
+    from torch.distributed.fsdp import fully_shard as FSDP
 elif version.parse(torch.__version__) >= version.parse("2.4"):
-    from torch.distributed._composable.fsdp import fully_shard
+    from torch.distributed._composable.fsdp import fully_shard as FSDP
 else:
     raise ImportError("FSDP v2 not available")
 
@@ -77,7 +77,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 trust_remote_code=True,
                 attn_implementation=self.args.attn_implementation,
             )
-            print(f"Model attn implementation: {model.config._attn_implementation}")
         model.train()
 
         if args.gradient_checkpointing:
@@ -86,11 +85,8 @@ class FSDPTrainRayActor(TrainRayActor):
         # TODO: set correct auto_wrap_policy
         auto_wrap_policy = None
 
-        # Create FSDP v2 model using fully_shard
-        logging.info(f"Creating FSDP v2 model with PyTorch {torch.__version__}")
-        self.model = fully_shard(model)
-
-
+        # Create FSDP v2 model using FSDP
+        self.model = FSDP(model)
 
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
@@ -235,9 +231,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 )
             )
             start = end
-        if dist.get_rank() == 0:
-            print("*" * 100)
-            print("length of packed_batches: ", len(packed_batches))
         grad_accum = list(accumulate(num_microbatches))
 
         return packed_batches, grad_accum
@@ -289,8 +282,6 @@ class FSDPTrainRayActor(TrainRayActor):
             log_dict[f"rollout/{metric_key}"] = (
                 val / (self.args.n_samples_per_prompt * self.args.rollout_batch_size)
             ).item()
-        if dist.get_rank() == 0:
-            print(f"rollout {rollout_id}: {log_dict}")
             if self.args.use_wandb:
                 log_dict["rollout/step"] = (
                     rollout_id
@@ -397,10 +388,6 @@ class FSDPTrainRayActor(TrainRayActor):
                     if self.args.use_kl_loss and "kl_loss" in aggregated:
                         kl_info = f", kl_loss: {aggregated['kl_loss']:.4f}, kl_penalty: {aggregated['kl_loss'] * self.args.kl_loss_coef:.4f}"
 
-                    print(
-                        f"step {self.global_step}: loss: {aggregated.get('loss', 0):.4f}, pg_loss: {aggregated.get('pg_loss', 0):.4f}{kl_info}"
-                    )
-                    print(f"step {self.global_step} full: {log_dict}")
 
                     if self.args.use_wandb:
                         log_dict["train/step"] = self.global_step
@@ -486,7 +473,6 @@ class FSDPTrainRayActor(TrainRayActor):
         if ref_load_path is None:
             raise ValueError("ref_load_path must be provided when loading reference model")
 
-        print(f"Loading reference model from {ref_load_path}")
 
         current_weights = {}
         self.update_cpu_params_dict(current_weights)
@@ -512,7 +498,6 @@ class FSDPTrainRayActor(TrainRayActor):
             self.weights["ref"] = {}
             self.update_cpu_params_dict(self.weights["ref"])
 
-            print(f"Reference model parameters loaded and stored in CPU memory")
 
         finally:
             self.update_gpu_params_dict(current_weights)

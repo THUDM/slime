@@ -3,7 +3,6 @@ import socket
 import ray
 import torch
 import torch.distributed as dist
-import logging
 import gc
 import os
 from sglang.srt.patch_torch import monkey_patch_torch_reductions
@@ -24,11 +23,6 @@ except ImportError:
 # FSDP v2 imports
 from torch.distributed.tensor import DTensor
 from slime.utils.memory_utils import clear_memory
-
-# Set up logger for FSDP weight updates
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
 
 try:
     from sglang.srt.model_executor.model_runner import FlattenedTensorBucket, LocalSerializedTensor
@@ -91,13 +85,10 @@ class UpdateWeightFromTensor:
         # Create parameter info buckets once during initialization (like Megatron)
         if not self.full_params and self.weights is not None:
             self.param_info_buckets = get_fsdp_param_info_buckets(self.args, self.weights)
-            logger.info(f"Created {len(self.param_info_buckets)} parameter buckets for sharded mode")
         else:
             self.param_info_buckets = None
         
         # FSDP v2 model expected
-        logger.info(f"Full params mode: {self.full_params}")
-        logger.info(f"Bucket-based loading: {not self.full_params} (automatic when full_params=False)")
             
         # Set up tensor parallel configuration for SGLang
         self.tp_size = args.rollout_num_gpus_per_engine
@@ -125,7 +116,6 @@ class UpdateWeightFromTensor:
 
     @torch.no_grad()
     def update_weights(self):
-        logger.info("Starting weight update")
         
         monkey_patch_torch_reductions()
         
@@ -184,7 +174,6 @@ class UpdateWeightFromTensor:
         else:
             # For sharded mode (full_params=False), automatically use bucket-based loading
             # This provides Megatron-style memory optimization
-            logger.info("Using SHARDED_STATE_DICT path with bucket-based loading from CPU storage")
             
             # Use pre-computed buckets (like Megatron)
             if self.param_info_buckets is None:
@@ -265,7 +254,6 @@ class UpdateWeightFromTensor:
                 ray.get(ref)
                 clear_memory()
         
-        logger.info("Weight update completed")
 
 
 
