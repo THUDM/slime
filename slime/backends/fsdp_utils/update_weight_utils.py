@@ -32,11 +32,8 @@ except:
     use_flattened_tensor_bucket = False
 
 
-# Use the preprocessing function from utils
-# (keeping the same name for backward compatibility)
 
-
-def get_fsdp_param_info_buckets(args, weights) -> list[list[ParamInfo]]:
+def get_param_info_buckets(args, weights) -> list[list[ParamInfo]]:
     """Create parameter info buckets similar to Megatron's approach."""
     # Create ParamInfo objects for each parameter
     param_infos = []
@@ -84,7 +81,7 @@ class UpdateWeightFromTensor:
         
         # Create parameter info buckets once during initialization (like Megatron)
         if not self.full_params and self.weights is not None:
-            self.param_info_buckets = get_fsdp_param_info_buckets(self.args, self.weights)
+            self.param_info_buckets = get_param_info_buckets(self.args, self.weights)
         else:
             self.param_info_buckets = None
         
@@ -312,7 +309,7 @@ class UpdateWeightFromDistributed:
         # Send weights one by one to minimize memory usage
         param_names = list(state_dict.keys())
 
-        for name in tqdm(param_names, desc="[broadcast weight]"):
+        for i, name in tqdm(param_names, desc="[broadcast weight]"):
             # Process one parameter at a time to minimize memory usage
             param = state_dict[name].to(torch.bfloat16)
             single_param_dict = {name: param}

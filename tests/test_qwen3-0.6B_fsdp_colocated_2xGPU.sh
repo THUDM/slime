@@ -30,10 +30,7 @@ set -ex
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
-export CUDA_VISIBLE_DEVICES=4,5
 
-# Enable basic logging for OOM debugging
-export PYTHONPATH=/root/william_slime:$PYTHONPATH
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-0.6B
 )
@@ -75,6 +72,7 @@ OPTIMIZER_ARGS=(
 )
 
 SGLANG_ARGS=(
+   # Set equal to the number of GPUs per node for colocated mode
    --rollout-num-gpus-per-engine 2
    --sglang-decode-log-interval 1000
 )
@@ -82,19 +80,17 @@ SGLANG_ARGS=(
 
 WANDB_ARGS=(
    --use-wandb
-   # --wandb-team "your-team-name"  # Uncomment and replace with your wandb team name if using a team
    --wandb-project "gsm8k_async_rl"
    --wandb-group "fsdp-2gpu-colocated"
    --wandb-mode "online"  # Change to "offline" for local logging only
-   # --wandb-key "your-api-key"  # Uncomment and set if needed (or use 'wandb login' beforehand)
-   # --wandb-dir "./wandb_logs"  # Uncomment to specify custom wandb directory
 )
 
 FSDP_ARGS=(
-   # FSDP-specific arguments
    # Set to true for FULL_STATE_DICT mode, false for SHARDED_STATE_DICT mode (default)
    # --fsdp-full-params  # Uncomment this line to enable full params mode
-   # Comment out the above line to use sharded mode (default)
+
+   # Set the bucket size for weight update
+   -- update-weights-bucket-size 512 * 1024 * 1024 # 512MB
 )
 
 # launch the master node of ray in container
@@ -117,5 +113,4 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${GRPO_ARGS[@]} \
    ${DISTRIBUTED_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
-   ${WANDB_ARGS[@]} \
-   ${MISC_ARGS[@]}
+   ${WANDB_ARGS[@]} 

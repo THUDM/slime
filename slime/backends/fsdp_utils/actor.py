@@ -420,6 +420,7 @@ class FSDPTrainRayActor(TrainRayActor):
         # For colocated mode with sharded updates (full_params=False), 
         # we don't need to wake up the entire model
         # The bucket-based approach will load parameters selectively from CPU storage
+        # TODO:  Add bucket optimization for from distributed mode
         use_bucket_optimization = (
             self.args.colocate and 
             not getattr(self.weight_updator, 'full_params', False)
