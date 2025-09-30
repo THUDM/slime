@@ -34,7 +34,7 @@ Refer to the following {num_solutions} solutions and solve the problem.
 
 
 def generate_select_template(num_solutions: int) -> str:
-    """Dynamically generate rewrite templates based on the number of solutions."""
+    """Dynamically generate select templates based on the number of solutions."""
     solution_sections = []
     for i in range(num_solutions):
         solution_sections.append(f"#### Solution {i+1}\n{{solution{i+1}}}\n\n---")
