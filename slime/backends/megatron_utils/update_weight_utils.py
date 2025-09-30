@@ -320,6 +320,17 @@ class UpdateWeightFromTensor:
         self.param_info_buckets = get_param_info_buckets(self.args, self.model)
         self.weight_version = 0
 
+        # create the group within megatron.
+        for start_rank in range(0, dist.get_world_size(), self.args.rollout_num_gpus_per_engine):
+            end_rank = start_rank + self.args.rollout_num_gpus_per_engine
+            group_ranks = list(range(start_rank, end_rank))
+            new_group = dist.new_group(ranks=group_ranks, backend="gloo")
+            if dist.get_rank() in group_ranks:
+                self._ipc_gather_group = new_group
+                self._ipc_gather_src = start_rank
+
+        self._model_update_groups = None
+
     def connect_rollout_engines(
         self, rollout_engines: Sequence[ActorHandle], rollout_engine_lock: ActorHandle
     ) -> None:
@@ -339,6 +350,11 @@ class UpdateWeightFromTensor:
             )
             self._group_name = "slime"
             if self._is_distributed_src_rank:
+                if self._model_update_groups is not None:
+                    disconnect_rollout_engines_from_distributed(
+                        self.args, self._group_name, self._model_update_groups, self.distributed_rollout_engines
+                    )
+
                 self._model_update_groups = connect_rollout_engines_from_distributed(
                     self.args, self._group_name, self.distributed_rollout_engines
                 )
@@ -348,13 +364,7 @@ class UpdateWeightFromTensor:
             start_rank = i * self.args.rollout_num_gpus_per_engine
             end_rank = (i + 1) * self.args.rollout_num_gpus_per_engine
             group_ranks = list(range(start_rank, end_rank))
-            new_group = dist.new_group(
-                ranks=group_ranks,
-                backend="gloo",
-            )
             if dist.get_rank() in group_ranks:
-                self._ipc_gather_src = start_rank
-                self._ipc_gather_group = new_group
                 self._ipc_engine = engine
 
     @torch.no_grad()
@@ -524,6 +534,7 @@ class UpdateWeightFromDistributed:
         self.vocab_size = vocab_size
         self.quantization_config = quantization_config
         self.weight_version = 0
+        self._model_update_groups = None
 
     def connect_rollout_engines(
         self, rollout_engines: Sequence[ActorHandle], rollout_engine_lock: ActorHandle
@@ -542,6 +553,10 @@ class UpdateWeightFromDistributed:
             self._group_name = f"slime-pp_{pp_rank}"
 
         if self._is_pp_src_rank:
+            if self._model_update_groups is not None:
+                disconnect_rollout_engines_from_distributed(
+                    self.args, self._group_name, self._model_update_groups, self.rollout_engines
+                )
             self._model_update_groups = connect_rollout_engines_from_distributed(
                 self.args, self._group_name, rollout_engines
             )
@@ -718,6 +733,12 @@ def connect_rollout_engines_from_distributed(
     )
     ray.get(refs)
     return model_update_groups
+
+
+def disconnect_rollout_engines_from_distributed(args, group_name, model_update_groups, rollout_engines):
+    refs = [engine.destroy_weights_update_group.remote(group_name) for engine in rollout_engines]
+    dist.destroy_process_group(model_update_groups)
+    ray.get(refs)
 
 
 def update_weights_from_distributed(
