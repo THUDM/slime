@@ -24,16 +24,17 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
         os.makedirs(checkpoint_dir, exist_ok=True)
 
         with FSDP.state_dict_type(model, StateDictType.FULL_STATE_DICT):
-            state_dict = model.state_dict()
+            model_state_dict = model.state_dict()
+        optimizer_state_dict = FSDP.optim_state_dict(model, optimizer)
 
         model.save_pretrained(
             checkpoint_dir,
-            state_dict=state_dict,
+            state_dict=model_state_dict,
             safe_serialization=args.save_safe_serialization,
         )
         tokenizer.save_pretrained(checkpoint_dir)
 
-        torch.save(optimizer.state_dict(), os.path.join(checkpoint_dir, "optimizer.pt"))
+        torch.save(optimizer_state_dict, os.path.join(checkpoint_dir, "optimizer.pt"))
 
         training_state = {
             "iteration": iteration,
@@ -55,10 +56,14 @@ def load_checkpoint(args, model, optimizer):
 
     print(f"Loading checkpoint from {checkpoint_path}")
 
+    # Load the full optimizer state dict
     optimizer_path = os.path.join(checkpoint_path, "optimizer.pt")
     if os.path.exists(optimizer_path):
-        optimizer_state = torch.load(optimizer_path, map_location="cpu")
-        optimizer.load_state_dict(optimizer_state)
+        full_optim_state_dict = torch.load(optimizer_path, map_location="cpu")
+
+        sharded_optim_state_dict = FSDP.scatter_full_optim_state_dict(full_optim_state_dict, model)
+        optimizer.load_state_dict(sharded_optim_state_dict)
+
         print("Loaded optimizer state.")
     else:
         print("Optimizer state not found, skipping.")
