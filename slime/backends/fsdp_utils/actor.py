@@ -493,6 +493,8 @@ class FSDPTrainRayActor(TrainRayActor):
             self.weights["ref"] = {}
             self.update_cpu_params_dict(self.weights["ref"])
 
+            print(f"Reference model parameters loaded and stored in CPU memory")
+
 
         finally:
             self.update_gpu_params_dict(current_weights)

@@ -121,7 +121,7 @@ class UpdateWeightFromTensor:
         
         # Get state dict based on configuration
         if self.full_params:
-            logger.info("Using FULL_STATE_DICT path")
+            print("Using FULL_STATE_DICT path")
             # FSDP v2 doesn't need context managers - get state dict directly
             state_dict = self.model.state_dict()
             
@@ -174,21 +174,19 @@ class UpdateWeightFromTensor:
         else:
             # For sharded mode (full_params=False), automatically use bucket-based loading
             # This provides Megatron-style memory optimization
-            
+            print("Using SHARDED_STATE_DICT path with bucket-based loading from CPU storage")
             # Use pre-computed buckets (like Megatron)
             if self.param_info_buckets is None:
                 raise RuntimeError("Parameter info buckets not initialized for sharded mode")
             
-            for bucket_idx, param_infos in enumerate(self.param_info_buckets):
+            for param_infos in self.param_info_buckets:
                 # Load only the parameters in this bucket from CPU to GPU (Megatron-style)
                 named_tensors_batch = []
-                total_params_size = 0
                 for param_info in param_infos:
                     # Load parameter from CPU storage to GPU (similar to Megatron approach)
                     cpu_param = self.weights["actor"][param_info.name]
                     gpu_param = cpu_param.to(device=torch.cuda.current_device(), non_blocking=True)
                     named_tensors_batch.append((param_info.name, MultiprocessingSerializer.serialize(gpu_param)))
-                    total_params_size += cpu_param.numel()
                     # Clear GPU memory immediately after serialization
                     del gpu_param
                 
@@ -314,7 +312,7 @@ class UpdateWeightFromDistributed:
         # Send weights one by one to minimize memory usage
         param_names = list(state_dict.keys())
 
-        for i, name in enumerate(tqdm(param_names, desc="[broadcast weight]")):
+        for name in tqdm(param_names, desc="[broadcast weight]"):
             # Process one parameter at a time to minimize memory usage
             param = state_dict[name].to(torch.bfloat16)
             single_param_dict = {name: param}
