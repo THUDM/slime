@@ -5,7 +5,9 @@
       "Bash(git restore:*)",
       "Bash(git commit:*)",
       "Bash(git fetch:*)",
-      "Bash(git reset:*)"
+      "Bash(git reset:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []
