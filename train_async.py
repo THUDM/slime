@@ -1,6 +1,6 @@
 import ray
 
-from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_train_models
+from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.wandb_utils import init_wandb_primary
 
