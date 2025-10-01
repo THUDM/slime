@@ -14,7 +14,7 @@ set -ex
 
 export PYTHONBUFFERED=16
 
-#  Define a temporary directory for checkpoints and ensure it's clean.
+# Define a temporary directory for checkpoints and ensure it's clean.
 CHECKPOINT_DIR="/tmp/slime_fsdp_test_checkpoint"
 rm -rf ${CHECKPOINT_DIR}
 echo "--- Using checkpoint directory: ${CHECKPOINT_DIR} ---"
@@ -97,7 +97,6 @@ echo "--- Save run finished. Stopping Ray to simulate a restart ---"
 ray stop --force
 sleep 3
 
-<<<<<<< HEAD
 echo "--- Restarting Ray Head Node for Load Test ---"
 ray start --head --node-ip-address 127.0.0.1 --num-gpus 4 --disable-usage-stats
 
@@ -129,6 +128,3 @@ ray stop --force
 rm -rf ${CHECKPOINT_DIR}
 
 echo "--- Save/Load test completed successfully! ---"
-=======
-echo "--- FSDP Save and Resume Test Completed Successfully ---"
->>>>>>> 91c9d66122c3d0096afef1a57d0d32c0d537b32c
