@@ -24,7 +24,7 @@ import wandb
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.memory_utils import clear_memory
+from slime.utils.memory_utils import clear_memory, MemorySnapshotSampler, dump_memory_snapshot
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
@@ -111,12 +111,23 @@ class FSDPTrainRayActor(TrainRayActor):
         # Initialize data packing parameters
         self.max_tokens_per_gpu = args.max_tokens_per_gpu  # From main arguments
 
+        # Initialize memory snapshot sampler for debugging
+        self.memory_sampler = MemorySnapshotSampler(
+            out_dir=getattr(args, 'memory_snapshot_out_dir', './mem_snapshots'),
+            interval=getattr(args, 'memory_snapshot_interval', 100),
+            enabled=getattr(args, 'enable_memory_visualize', False)
+        )
+
         if self.args.offload:
             self.sleep(("model"))
 
         Timer().start("train_wait")
         self.global_step = 0
         self.micro_step = 0
+        
+        # Dump initial memory snapshot
+        self.memory_sampler.dump_at_key_points("model_init")
+        
         return 0
 
     def sleep(self, tags):
@@ -235,6 +246,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
     def train(self, rollout_id, rollout_data_ref):
         Timer().end("train_wait")
+        
+        # Memory snapshot at train start
+        self.memory_sampler.dump_at_key_points(f"train_start_rollout{rollout_id}")
 
         if self.args.offload:
             self.wake_up(("model"))
@@ -399,6 +413,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 self.global_step += 1
 
         self.update_cpu_params_dict(self.weights["actor"])
+        
+        # Memory snapshot at train end and periodic sampling
+        self.memory_sampler.maybe_dump_snapshot(f"train_end_rollout{rollout_id}")
 
         Timer().start("train_wait")
         return
@@ -428,8 +445,14 @@ class FSDPTrainRayActor(TrainRayActor):
             # Wake up for distributed mode or full_params mode
             self.wake_up(("model"))
 
+        # Memory snapshot before weight update
+        self.memory_sampler.dump_at_key_points("before_weight_update")
+
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
             self.weight_updator.update_weights()
+
+        # Memory snapshot after weight update
+        self.memory_sampler.dump_at_key_points("after_weight_update")
 
         if self.args.offload and not use_bucket_optimization:
             # Sleep for distributed mode or full_params mode

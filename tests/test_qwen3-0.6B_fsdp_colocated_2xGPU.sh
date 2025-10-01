@@ -26,6 +26,11 @@ sleep 3
 pkill -9 ray
 pkill -9 python
 
+# Clean up Ray temporary files
+export RAY_TMPDIR="/tmp/ray_$(whoami)"
+rm -rf $RAY_TMPDIR
+mkdir -p $RAY_TMPDIR
+
 set -ex
 
 # will prevent ray from buffering stdout/stderr
@@ -90,11 +95,17 @@ FSDP_ARGS=(
    # --fsdp-full-params  # Uncomment this line to enable full params mode
 
    # Set the bucket size for weight update
-   -- update-weights-bucket-size 512 * 1024 * 1024 # 512MB
+   --update-weights-bucket-size 536870912 # 512MB
 )
 
-# launch the master node of ray in container
-ray start --head --node-ip-address 127.0.0.1 --num-gpus 2 --disable-usage-stats
+MEMORY_DEBUG_ARGS=(
+   --enable-memory-visualize
+   --memory-snapshot-out-dir ./mem_snapshots_2gpu
+   --memory-snapshot-interval 50
+)
+
+# launch the master node of ray in container with temp directory setting
+ray start --head --node-ip-address 127.0.0.1 --num-gpus 2 --disable-usage-stats --temp-dir="$RAY_TMPDIR"
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
@@ -113,4 +124,17 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${GRPO_ARGS[@]} \
    ${DISTRIBUTED_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
-   ${WANDB_ARGS[@]} 
+   ${WANDB_ARGS[@]} \
+   ${FSDP_ARGS[@]} \
+   ${MEMORY_DEBUG_ARGS[@]}
+
+# Cleanup function to run on script exit
+cleanup() {
+    echo "Cleaning up Ray temporary files..."
+    ray stop --force 2>/dev/null || true
+    rm -rf "$RAY_TMPDIR" 2>/dev/null || true
+    echo "Cleanup completed."
+}
+
+# Set trap to run cleanup on script exit
+trap cleanup EXIT
