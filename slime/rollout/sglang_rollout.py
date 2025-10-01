@@ -3,7 +3,7 @@ import base64
 import copy
 import io
 from argparse import Namespace
-from typing import Any, Awaitable, Callable, Union
+from typing import Any, Callable, Union
 
 from PIL import Image
 from tqdm import tqdm
@@ -51,9 +51,9 @@ class GenerateState(metaclass=SingletonMeta):
         self.reset()
 
     def reset(self) -> None:
-        self.remaining_batch_size: int = 0
-        self.pendings: set[asyncio.Task] = set()
-        self.aborted: bool = False
+        self.remaining_batch_size = 0
+        self.pendings = set()
+        self.aborted = False
 
     def submit_generate_tasks(self, samples: list[list[Sample]]) -> None:
         for group in samples:
@@ -187,9 +187,7 @@ async def generate_and_rm(
             return sample
 
         if args.custom_generate_function_path is not None:
-            custom_generate_func: Callable[[Namespace, Sample, dict[str, Any]], Awaitable[Sample]] = load_function(
-                args.custom_generate_function_path
-            )
+            custom_generate_func = load_function(args.custom_generate_function_path)
             sample = await custom_generate_func(args, sample, sampling_params)
         else:
             sample = await generate(args, sample, sampling_params)
@@ -247,7 +245,7 @@ async def generate_and_rm_group(
 
 
 async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
-    aborted_samples: list[list[Sample]] = []
+    aborted_samples = []
 
     state = GenerateState(args)
     assert not state.aborted
@@ -360,7 +358,7 @@ async def generate_rollout_async(
     return data, aborted_samples
 
 
-EVAL_PROMPT_DATASET: dict[str, Dataset] = {}
+EVAL_PROMPT_DATASET = {}
 
 
 async def eval_rollout(args: Namespace, rollout_id: int) -> tuple[dict[str, dict[str, list[Any]]], list[list[Sample]]]:
