@@ -14,7 +14,7 @@ set -ex
 
 export PYTHONBUFFERED=16
 
-# Define a temporary directory for checkpoints and ensure it's clean.
+#  Define a temporary directory for checkpoints and ensure it's clean.
 CHECKPOINT_DIR="/tmp/slime_fsdp_test_checkpoint"
 rm -rf ${CHECKPOINT_DIR}
 echo "--- Using checkpoint directory: ${CHECKPOINT_DIR} ---"
