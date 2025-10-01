@@ -75,6 +75,9 @@ class RayTrainGroup:
             env_vars["TMS_INIT_ENABLE"] = "1"
             env_vars["TMS_INIT_ENABLE_CPU_BACKUP"] = "1"
 
+        if self.args.use_routing_replay:
+            env_vars["ENABLE_ROUTING_REPLAY"] = "1"
+
         backend = os.environ.get("SLIME_BACKEND", "megatron").lower()
         if backend == "megatron":
             from slime.backends.megatron_utils import MegatronTrainRayActor
@@ -119,19 +122,24 @@ class RayTrainGroup:
         """Do one rollout training"""
         return [actor.train.remote(rollout_id, rollout_data_ref) for actor in self._actor_handlers]
 
-    def async_save_model(self, step_id):
+    def save_model(self, step_id):
         """Save actor model on rank 0."""
-        return [actor.save_model.remote(step_id) for actor in self._actor_handlers]
+        return ray.get([actor.save_model.remote(step_id) for actor in self._actor_handlers])
 
-    def async_update_weights(self):
+    def update_weights(self):
         """Broadcast weights from rank 0 to all other ranks."""
-        return [actor.update_weights.remote() for actor in self._actor_handlers]
+        return ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
 
-    def async_offload(self):
-        return [actor.sleep.remote(("model")) for actor in self._actor_handlers]
+    def offload(self):
+        return ray.get([actor.sleep.remote(("model")) for actor in self._actor_handlers])
 
-    def async_connect(self, critic_group):
-        return [
-            actor.connect_actor_critic.remote((critic))
-            for actor, critic in zip(self._actor_handlers, critic_group._actor_handlers)
-        ]
+    def connect(self, critic_group):
+        return ray.get(
+            [
+                actor.connect_actor_critic.remote((critic))
+                for actor, critic in zip(self._actor_handlers, critic_group._actor_handlers)
+            ]
+        )
+
+    def set_rollout_manager(self, rollout_manager):
+        return ray.get([actor.set_rollout_manager.remote(rollout_manager) for actor in self._actor_handlers])

@@ -390,20 +390,24 @@ def log_perf_data(rollout_id, args):
 
 def sync_actor_critic_data(
     args,
-    values: Optional[list[torch.Tensor]] = None,
-    log_probs: Optional[list[torch.Tensor]] = None,
-    ref_log_probs: Optional[list[torch.Tensor]] = None,
+    rollout_data: Optional[dict[str, list[torch.Tensor]]] = None,
     group: Optional[dist.ProcessGroup] = None,
 ):
+    values, log_probs, ref_log_probs = map(rollout_data.get, ("values", "log_probs", "ref_log_probs"))
+
+    # return when not the pp last stage
+    if not values and not log_probs:
+        return
+
     handles = []
 
-    if values is None:
+    if not values:
         values = [torch.empty_like(log_prob) for log_prob in log_probs]
     for value in values:
         handles.append(dist.broadcast(value, src=1, group=group, async_op=True))
 
     if args.kl_coef != 0 or args.use_kl_loss:
-        if log_probs is None:
+        if not log_probs:
             ref_log_probs = [torch.empty_like(value) for value in values]
             log_probs = [torch.empty_like(value) for value in values]
         for ref_log_prob, log_prob in zip(ref_log_probs, log_probs):
@@ -412,4 +416,5 @@ def sync_actor_critic_data(
 
     for handle in handles:
         handle.wait()
-    return values, log_probs, ref_log_probs
+
+    rollout_data.update({"values": values, "log_probs": log_probs, "ref_log_probs": ref_log_probs})

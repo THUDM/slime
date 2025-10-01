@@ -1,6 +1,7 @@
 import logging
 import multiprocessing
 import random
+import threading
 import time
 from pathlib import Path
 from typing import List, Union
@@ -30,6 +31,7 @@ class RolloutManager:
 
     def __init__(self, args, pg, wandb_run_id):
         self.args = args
+        self.pg = pg
         _start_router(args)
         init_wandb_secondary(args, wandb_run_id)
         init_http_client(args)
@@ -44,17 +46,25 @@ class RolloutManager:
         print(f"import {self.args.rollout_function_path} as generate_rollout function.")
         print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
-        self.all_rollout_engines = _create_rollout_engines(args, pg)
-        nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
+        num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
+        num_engines = args.rollout_num_gpus // num_gpu_per_engine
+        self.all_rollout_engines = [None] * num_engines
+        self.num_new_engines = init_rollout_engines(args, pg, self.all_rollout_engines)
+        self.nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
         # when doing multi-node serving, we will only send request to node-0 for each engine.
-        self.rollout_engines = self.all_rollout_engines[::nodes_per_engine]
-        self.rollout_engine_lock = Lock.options(
-            num_cpus=1,
-            num_gpus=0,
-        ).remote()
+        self.rollout_engines = self.all_rollout_engines[:: self.nodes_per_engine]
+        self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
+
+        # fault tolerance
+        self._health_monitor_thread = None
+        self._health_monitor_stop_event = None
+        self._health_check_interval = args.rollout_health_check_interval
+        self._health_check_timeout = args.rollout_health_check_timeout
+        self._health_check_is_first = True
+        self._health_check_first_wait = args.rollout_health_check_first_wait
 
     def get_rollout_engines_and_lock(self):
-        return self.rollout_engines, self.rollout_engine_lock
+        return self.rollout_engines, self.rollout_engine_lock, self.num_new_engines
 
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset
@@ -62,17 +72,25 @@ class RolloutManager:
 
     def generate(self, rollout_id):
         self.rollout_id = rollout_id
+        monitor_started = self._start_health_monitor()
         start_time = time.time()
-        data = self._get_rollout_data()
-        self._save_debug_rollout_data(data)
-        _log_rollout_data(rollout_id, self.args, data, time.time() - start_time)
-        data = self._convert_samples_to_train_data(data)
-        return Box(ray.put(data))
+        try:
+            data = self._get_rollout_data()
+            self._save_debug_rollout_data(data)
+            _log_rollout_data(rollout_id, self.args, data, time.time() - start_time)
+            data = self._convert_samples_to_train_data(data)
+            return Box(ray.put(data))
+        finally:
+            if monitor_started:
+                self._stop_health_monitor()
+                self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
+                self.rollout_engines = self.all_rollout_engines[:: self.nodes_per_engine]
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
             # if debug train only, we don't generate evaluation data
             return
+        # TODO: add fault tolerance to eval
         data = self.eval_generate_rollout(self.args, rollout_id, self.data_source, evaluation=True)
         _log_eval_rollout_data(rollout_id, self.args, data)
 
@@ -87,6 +105,70 @@ class RolloutManager:
 
     def onload(self, tags: List[str] = None):
         return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines]
+
+    def _start_health_monitor(self) -> bool:
+        if not self.rollout_engines:
+            return False
+
+        assert self._health_monitor_thread is None, "Health monitor thread is already running."
+
+        self._health_monitor_stop_event = threading.Event()
+        self._health_monitor_thread = threading.Thread(
+            target=self._health_monitor_loop,
+            name="RolloutHealthMonitor",
+            daemon=True,
+        )
+        self._health_monitor_thread.start()
+        return True
+
+    def _stop_health_monitor(self) -> None:
+        if not self._health_monitor_thread:
+            return
+
+        assert self._health_monitor_stop_event is not None
+        self._health_monitor_stop_event.set()
+        timeout = self._health_check_timeout + self._health_check_interval + 5
+        self._health_monitor_thread.join(timeout=timeout)
+        if self._health_monitor_thread.is_alive():
+            logging.warning("Rollout health monitor thread did not terminate within %.1fs", timeout)
+
+        self._health_monitor_thread = None
+        self._health_monitor_stop_event = None
+
+    def _health_monitor_loop(self) -> None:
+        assert self._health_monitor_stop_event is not None
+        # TODO: need to be waiting for the large moe to be ready. this is hacky.
+        if self._health_check_is_first:
+            if self._health_monitor_stop_event.wait(self._health_check_first_wait):
+                return
+            self._health_check_is_first = False
+        while not self._health_monitor_stop_event.is_set():
+            self._run_health_checks()
+            if self._health_monitor_stop_event.wait(self._health_check_interval):
+                break
+
+    def _run_health_checks(self) -> None:
+        for rollout_engine_id, engine in enumerate(self.rollout_engines):
+            if self._health_monitor_stop_event is not None and self._health_monitor_stop_event.is_set():
+                break
+            self._check_engine_health(rollout_engine_id, engine)
+
+    def _check_engine_health(self, rollout_engine_id, engine) -> None:
+        if engine is None:
+            return
+
+        try:
+            ray.get(engine.health_generate.remote(timeout=self._health_check_timeout))
+        except Exception as e:
+            print(f"Health check timed out for rollout engine {rollout_engine_id} (ray timeout). Killing actor.")
+            for i in range(rollout_engine_id * self.nodes_per_engine, (rollout_engine_id + 1) * self.nodes_per_engine):
+                engine = self.all_rollout_engines[i]
+                try:
+                    ray.kill(engine)
+                except Exception:
+                    pass
+                self.all_rollout_engines[i] = None
+            self.rollout_engines[rollout_engine_id] = None
 
     def _get_rollout_data(self):
         if self.args.load_debug_rollout_data:
@@ -199,12 +281,13 @@ class RolloutManager:
         return train_data
 
 
-def _create_rollout_engines(args, pg):
+def init_rollout_engines(args, pg, all_rollout_engines):
     if args.debug_train_only:
         return []
 
     num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
     num_engines = args.rollout_num_gpus // num_gpu_per_engine
+    assert len(all_rollout_engines) == num_engines
 
     pg, reordered_bundle_indices = pg
 
@@ -212,6 +295,9 @@ def _create_rollout_engines(args, pg):
 
     rollout_engines = []
     for i in range(num_engines):
+        if all_rollout_engines[i] is not None:
+            continue
+
         num_gpus = 0.2
         num_cpus = num_gpus
 
@@ -221,20 +307,26 @@ def _create_rollout_engines(args, pg):
             placement_group_bundle_index=reordered_bundle_indices[i * num_gpu_per_engine],
         )
 
-        rollout_engines.append(
-            RolloutRayActor.options(
-                num_cpus=num_cpus,
-                num_gpus=num_gpus,
-                scheduling_strategy=scheduling_strategy,
-                runtime_env={
-                    "env_vars": {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST}
-                    | {
-                        "SGL_JIT_DEEPGEMM_PRECOMPILE": "false",
-                        "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
-                    }
-                },
-            ).remote(args, rank=i)
-        )
+        rollout_engine = RolloutRayActor.options(
+            num_cpus=num_cpus,
+            num_gpus=num_gpus,
+            scheduling_strategy=scheduling_strategy,
+            runtime_env={
+                "env_vars": {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST}
+                | {
+                    "SGL_JIT_DEEPGEMM_PRECOMPILE": "false",
+                    "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                }
+            },
+        ).remote(args, rank=i)
+
+        rollout_engines.append((i, rollout_engine))
+        all_rollout_engines[i] = rollout_engine
+
+    num_new_engines = len(rollout_engines)
+
+    if num_new_engines == 0:
+        return num_new_engines
 
     # get ports
     # there are 4 ports we need to allocate
@@ -246,9 +338,15 @@ def _create_rollout_engines(args, pg):
         1, min(args.num_gpus_per_node, args.rollout_num_gpus) // args.rollout_num_gpus_per_engine
     )
     addr_and_ports = [{} for _ in range(num_engines)]
-    for rank, engine in enumerate(rollout_engines):
-        if rank % num_engines_per_node != 0:
+
+    visited_nodes = set()
+    for rank, engine in rollout_engines:
+        if rank // num_engines_per_node in visited_nodes:
             continue
+        visited_nodes.add(rank // num_engines_per_node)
+        # TODO: currently when restarting engines, we will set port for all engines on this node starting with this rank.
+        # e.g. for 8 gpus, if we are restarting engine on gpu 3, we will set port for engine 3,4,5,6,7 on this node.
+        num_engines_on_this_node = num_engines_per_node - (rank % num_engines_per_node)
 
         def get_addr_and_ports():
             # use small ports to prevent ephemeral port between 32768 and 65536.
@@ -273,7 +371,7 @@ def _create_rollout_engines(args, pg):
 
         get_addr, get_port = get_addr_and_ports()
 
-        for i in range(num_engines_per_node):
+        for i in range(num_engines_on_this_node):
             addr_and_ports[rank + i]["port"] = get_port()
             addr_and_ports[rank + i]["nccl_port"] = get_port()
 
@@ -285,23 +383,19 @@ def _create_rollout_engines(args, pg):
                 for i in range(num_node_per_engine):
                     addr_and_ports[rank + i]["dist_init_addr"] = dist_init_addr
         else:
-            for i in range(num_engines_per_node):
+            for i in range(num_engines_on_this_node):
                 addr_and_ports[rank + i]["dist_init_addr"] = f"{get_addr()}:{get_port(6 + args.sglang_dp_size)}"
 
-    for i in range(num_engines):
+    for i, _ in rollout_engines:
         for key in ["port", "nccl_port", "dist_init_addr"]:
             assert key in addr_and_ports[i], f"Engine {i} {key} is not set."
         print(f"Ports for engine {i}: {addr_and_ports[i]}")
 
     # TODO: don't ray.get here to overlap train actor init with rollout engine init.
     # somehow if we don't sync here, the --debug-rollout-only mode will crash.
-    init_handles = [engine.init.remote(**ports) for engine, ports in zip(rollout_engines, addr_and_ports)]
+    init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in rollout_engines]
     ray.get(init_handles)
-
-    if args.offload:
-        ray.get([engine.release_memory_occupation.remote() for engine in rollout_engines])
-
-    return rollout_engines
+    return num_new_engines
 
 
 def _start_router(args):

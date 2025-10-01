@@ -74,6 +74,7 @@ GRPO_ARGS=(
    --eps-clip 4e-4
 
    --use-tis
+   --use-routing-replay
 )
 
 OPTIMIZER_ARGS=(

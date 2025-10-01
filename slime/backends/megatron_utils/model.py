@@ -1,6 +1,7 @@
 import dataclasses
 import gc
 import math
+import os
 from contextlib import nullcontext
 from functools import partial
 
@@ -297,6 +298,10 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
             ],
         )
 
+        if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
+            old_stage = os.environ["ROUTING_REPLAY_STAGE"]
+            os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
+
         output_tensor = model(
             input_ids=batch["tokens"],
             position_ids=None,
@@ -304,6 +309,9 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
             labels=None,
             packed_seq_params=batch["packed_seq_params"],
         )
+
+        if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
+            os.environ["ROUTING_REPLAY_STAGE"] = old_stage
 
         return output_tensor, partial(loss_function, args, batch, num_microbatches)
 
