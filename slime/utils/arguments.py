@@ -216,6 +216,24 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This is used to shuffle the prompts and also for the random sampling of the prompts."
                 ),
             )
+            parser.add_argument(
+                "--rollout-health-check-interval",
+                type=float,
+                default=10.0,
+                help="Interval in seconds between rollout engine /health_generate checks during generate/eval.",
+            )
+            parser.add_argument(
+                "--rollout-health-check-timeout",
+                type=float,
+                default=5.0,
+                help="Timeout in seconds to wait for a rollout engine /health_generate response before killing it.",
+            )
+            parser.add_argument(
+                "--rollout-health-check-first-wait",
+                type=float,
+                default=300.0,
+                help="Time to wait for the compilation before the actual health check.",
+            )
 
             # sampling
             parser.add_argument(
@@ -635,6 +653,27 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=0,
                 help="Lower bound clipping threshold C for importance sampling ratios to control variance.",
             )
+
+            parser.add_argument(
+                "--use-routing-replay",
+                action="store_true",
+                default=False,
+            )
+            return parser
+
+        def add_router_arguments(parser):
+            parser.add_argument(
+                "--use-slime-router",
+                action="store_true",
+                default=False,
+                help="Whether to use SlimeRouter for text-based routing instead of SGLang token-based routing",
+            )
+            parser.add_argument(
+                "--slime-router-middleware-paths",
+                type=str,
+                nargs="+",
+                default=None,
+            )
             return parser
 
         # wandb
@@ -758,6 +797,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
         def add_network_arguments(parser):
             parser.add_argument("--http-proxy", type=str, default=None)
+            parser.add_argument("--use-distributed-post", action="store_true", default=False)
             return parser
 
         def add_reward_model_arguments(parser):
@@ -885,6 +925,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_eval_arguments(parser)
         parser = add_algo_arguments(parser)
         parser = add_wandb_arguments(parser)
+        parser = add_router_arguments(parser)
         parser = add_debug_arguments(parser)
         parser = add_sglang_arguments(parser)
         parser = add_network_arguments(parser)
@@ -948,6 +989,8 @@ def parse_args(add_custom_arguments=None):
         from slime.backends.fsdp_utils.arguments import load_fsdp_args
 
         args = load_fsdp_args(extra_args_provider=add_slime_arguments)
+        args.rank = 0  # Primary process rank for wandb initialization
+        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
 
     slime_validate_args(args)
 
@@ -1065,6 +1108,8 @@ def slime_validate_args(args):
                 f"* actor_num_nodes {args.actor_num_nodes}, overriding rollout_num_gpus to match actor_num_gpus_per_node * actor_num_nodes."
             )
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
+            if args.use_critic:
+                args.rollout_num_gpus += args.critic_num_gpus_per_node * args.critic_num_nodes
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path

@@ -2,12 +2,16 @@ import inspect
 import re
 import socket
 import time
+from argparse import Namespace
+from typing import Any, Iterator, Mapping, Optional, Sequence
 
 import ray
 import torch
 import torch.distributed as dist
 from megatron.core import mpu
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
+from ray import ObjectRef
+from ray.actor import ActorHandle
 from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
 from tqdm import tqdm
@@ -21,11 +25,11 @@ try:
     from sglang.srt.model_executor.model_runner import FlattenedTensorBucket
 
     use_flattened_tensor_bucket = True
-except:
+except Exception:
     use_flattened_tensor_bucket = False
 
 
-def all_gather_param(name, param):
+def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     if "expert_bias" in name:
         return param
 
@@ -57,7 +61,9 @@ def all_gather_param(name, param):
     return param
 
 
-def all_gather_params_async(param_infos_and_params):
+def all_gather_params_async(
+    param_infos_and_params: list[tuple[ParamInfo, torch.nn.Parameter]],
+) -> list[torch.Tensor]:
     """
     Perform async all_gather for a batch of parameters to improve performance.
 
@@ -124,13 +130,13 @@ def all_gather_params_async(param_infos_and_params):
     return gathered_params
 
 
-def remove_padding(name, param, vocab_size):
+def remove_padding(name: str, param: torch.Tensor, vocab_size: int) -> torch.Tensor:
     if name == "module.module.embedding.word_embeddings.weight" or name == "module.module.output_layer.weight":
         return param[:vocab_size]
     return param
 
 
-def named_parameters(args, model):
+def named_parameters(args: Namespace, model: Sequence[torch.nn.Module]) -> Iterator[tuple[str, torch.nn.Parameter]]:
     ep_size = mpu.get_expert_model_parallel_world_size()
     ep_rank = mpu.get_expert_model_parallel_rank()
     if args.num_experts:
@@ -202,7 +208,7 @@ def named_parameters(args, model):
                 yield f"module.module.decoder.layers.{layer_idx}.{rest}", buffer
 
 
-def get_param_infos(args, model) -> list[ParamInfo]:
+def get_param_infos(args: Namespace, model: Sequence[torch.nn.Module]) -> list[ParamInfo]:
     pp_size = mpu.get_pipeline_model_parallel_world_size()
     ep_size = mpu.get_expert_model_parallel_world_size()
 
@@ -275,7 +281,7 @@ def get_param_infos(args, model) -> list[ParamInfo]:
     return param_infos
 
 
-def get_param_info_buckets(args, model) -> list[list[ParamInfo]]:
+def get_param_info_buckets(args: Namespace, model: Sequence[torch.nn.Module]) -> list[list[ParamInfo]]:
     param_infos = get_param_infos(args, model)
     param_info_buckets = [[]]
     buffer_size = 0
@@ -295,7 +301,16 @@ def get_param_info_buckets(args, model) -> list[list[ParamInfo]]:
 
 
 class UpdateWeightFromTensor:
-    def __init__(self, args, model, weights, *, model_name, quantization_config, vocab_size):
+    def __init__(
+        self,
+        args: Namespace,
+        model: Sequence[torch.nn.Module],
+        weights: Mapping[str, Mapping[str, torch.Tensor]],
+        *,
+        model_name: str,
+        quantization_config: Optional[dict[str, Any]],
+        vocab_size: int,
+    ) -> None:
         self.args = args
         self.model = model
         self.weights = weights
@@ -305,25 +320,55 @@ class UpdateWeightFromTensor:
         self.param_info_buckets = get_param_info_buckets(self.args, self.model)
         self.weight_version = 0
 
-    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
+        # create the group within megatron.
+        for start_rank in range(0, dist.get_world_size(), self.args.rollout_num_gpus_per_engine):
+            end_rank = start_rank + self.args.rollout_num_gpus_per_engine
+            group_ranks = list(range(start_rank, end_rank))
+            new_group = dist.new_group(ranks=group_ranks, backend="gloo")
+            if dist.get_rank() in group_ranks:
+                self._ipc_gather_group = new_group
+                self._ipc_gather_src = start_rank
+
+        self._model_update_groups = None
+
+    def connect_rollout_engines(
+        self, rollout_engines: Sequence[ActorHandle], rollout_engine_lock: ActorHandle
+    ) -> None:
         self.rollout_engines = rollout_engines
+        colocate_engine_nums = (
+            self.args.actor_num_nodes * self.args.actor_num_gpus_per_node // self.args.rollout_num_gpus_per_engine
+        )
+        self.use_distribute = len(rollout_engines) > colocate_engine_nums
+
+        if self.use_distribute:
+            self.rollout_engines = rollout_engines[:colocate_engine_nums]
+            self.distributed_rollout_engines = rollout_engines[colocate_engine_nums:]
+            self._is_distributed_src_rank = (
+                mpu.get_data_parallel_rank(with_context_parallel=True) == 0
+                and mpu.get_tensor_model_parallel_rank() == 0
+                and mpu.get_pipeline_model_parallel_rank() == 0
+            )
+            self._group_name = "slime"
+            if self._is_distributed_src_rank:
+                if self._model_update_groups is not None:
+                    disconnect_rollout_engines_from_distributed(
+                        self.args, self._group_name, self._model_update_groups, self.distributed_rollout_engines
+                    )
+
+                self._model_update_groups = connect_rollout_engines_from_distributed(
+                    self.args, self._group_name, self.distributed_rollout_engines
+                )
 
         # Here we assume the gpu id of rollout engines and train actors are the same.
         for i, engine in enumerate(self.rollout_engines):
             start_rank = i * self.args.rollout_num_gpus_per_engine
             end_rank = (i + 1) * self.args.rollout_num_gpus_per_engine
             group_ranks = list(range(start_rank, end_rank))
-            new_group = dist.new_group(
-                ranks=group_ranks,
-                backend="gloo",
-            )
             if dist.get_rank() in group_ranks:
-                self._ipc_gather_src = start_rank
-                self._ipc_gather_group = new_group
                 self._ipc_engine = engine
 
     @torch.no_grad()
-    def update_weights(self):
+    def update_weights(self) -> None:
         self.weight_version += 1
 
         rank = dist.get_rank()
@@ -335,7 +380,7 @@ class UpdateWeightFromTensor:
 
         dist.barrier(group=get_gloo_group())
 
-    def _update_bucket_weights_from_tensor(self, param_infos):
+    def _update_bucket_weights_from_tensor(self, param_infos: Sequence[ParamInfo]) -> None:
         monkey_patch_torch_reductions()
         pp_size = mpu.get_pipeline_model_parallel_world_size()
         ep_size = mpu.get_expert_model_parallel_world_size()
@@ -400,18 +445,43 @@ class UpdateWeightFromTensor:
             converted_named_tensors.extend(
                 convert_to_hf(self.args, self.model_name, info.name, param, self.quantization_config)
             )
-        self._update_converted_params_from_tensor(converted_named_tensors)
 
-    def _update_converted_params_from_tensor(self, converted_named_tensors):
-        if use_flattened_tensor_bucket and self.quantization_config is None:
-            flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=converted_named_tensors)
-            metadata = flattened_tensor_bucket.get_metadata()
+        refs = self._update_converted_params_from_tensor(converted_named_tensors)
 
-            flattened_tensor_data = {
-                "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
-                "metadata": metadata,
-            }
-            serialized_tensors = MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True)
+        if self.use_distribute and self._is_distributed_src_rank:
+            refs.extend(
+                update_weights_from_distributed(
+                    self.args,
+                    self._group_name,
+                    self._model_update_groups,
+                    self.weight_version,
+                    self.distributed_rollout_engines,
+                    converted_named_tensors,
+                )
+            )
+
+        ray.get(refs)
+
+    def _update_converted_params_from_tensor(
+        self, converted_named_tensors: Sequence[tuple[str, torch.Tensor]]
+    ) -> list[ObjectRef]:
+        if use_flattened_tensor_bucket:
+            converted_named_tensors_by_dtypes = {}
+            for name, tensor in converted_named_tensors:
+                dtype = tensor.dtype
+                if dtype not in converted_named_tensors_by_dtypes:
+                    converted_named_tensors_by_dtypes[dtype] = []
+                converted_named_tensors_by_dtypes[dtype].append((name, tensor))
+
+            serialized_tensors = []
+            for dtype, named_tensors in converted_named_tensors_by_dtypes.items():
+                flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
+                metadata = flattened_tensor_bucket.get_metadata()
+                flattened_tensor_data = {
+                    "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
+                    "metadata": metadata,
+                }
+                serialized_tensors.append(MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True))
         else:
             serialized_tensors = MultiprocessingSerializer.serialize(converted_named_tensors, output_str=True)
 
@@ -426,27 +496,49 @@ class UpdateWeightFromTensor:
         )
 
         if dist.get_rank() == self._ipc_gather_src:
-            kwargs = {
-                "serialized_named_tensors": serialized_named_tensors,
-                "weight_version": str(self.weight_version),
-            }
-            if use_flattened_tensor_bucket and self.quantization_config is None:
-                kwargs["load_format"] = "flattened_bucket"
-
-            ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
-            ray.get(ref)
+            refs = []
+            if use_flattened_tensor_bucket:
+                # TODO: here we assume all ranks have the same number of dtypes, not sure if that is correct.
+                num_dtypes = len(serialized_named_tensors[0])
+                for i in range(num_dtypes):
+                    kwargs = {
+                        "serialized_named_tensors": [tensors[i] for tensors in serialized_named_tensors],
+                        "load_format": "flattened_bucket",
+                        "weight_version": str(self.weight_version),
+                    }
+                    refs.append(self._ipc_engine.update_weights_from_tensor.remote(**kwargs))
+            else:
+                kwargs = {
+                    "serialized_named_tensors": serialized_named_tensors,
+                    "weight_version": str(self.weight_version),
+                }
+                refs.append(self._ipc_engine.update_weights_from_tensor.remote(**kwargs))
+            return refs
+        return []
 
 
 class UpdateWeightFromDistributed:
-    def __init__(self, args, model, weights, *, model_name, quantization_config, vocab_size):
+    def __init__(
+        self,
+        args: Namespace,
+        model: Sequence[torch.nn.Module],
+        weights: Mapping[str, Mapping[str, torch.Tensor]],
+        *,
+        model_name: str,
+        quantization_config: Optional[dict[str, Any]],
+        vocab_size: int,
+    ) -> None:
         self.args = args
         self.model = model
         self.model_name = model_name
         self.vocab_size = vocab_size
         self.quantization_config = quantization_config
         self.weight_version = 0
+        self._model_update_groups = None
 
-    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
+    def connect_rollout_engines(
+        self, rollout_engines: Sequence[ActorHandle], rollout_engine_lock: ActorHandle
+    ) -> None:
         self.rollout_engines = rollout_engines
         self.rollout_engine_lock = rollout_engine_lock
 
@@ -461,34 +553,16 @@ class UpdateWeightFromDistributed:
             self._group_name = f"slime-pp_{pp_rank}"
 
         if self._is_pp_src_rank:
-            master_address = ray._private.services.get_node_ip_address()
-            with socket.socket() as sock:
-                sock.bind(("", 0))
-                master_port = sock.getsockname()[1]
-            world_size = self.args.rollout_num_gpus + 1
-
-            refs = [
-                engine.init_weights_update_group.remote(
-                    master_address,
-                    master_port,
-                    i * self.args.rollout_num_gpus_per_engine + 1,
-                    world_size,
-                    self._group_name,
-                    backend="nccl",
+            if self._model_update_groups is not None:
+                disconnect_rollout_engines_from_distributed(
+                    self.args, self._group_name, self._model_update_groups, self.rollout_engines
                 )
-                for i, engine in enumerate(self.rollout_engines)
-            ]
-            self._model_update_groups = init_process_group(
-                backend="nccl",
-                init_method=f"tcp://{master_address}:{master_port}",
-                world_size=world_size,
-                rank=0,
-                group_name=self._group_name,
+            self._model_update_groups = connect_rollout_engines_from_distributed(
+                self.args, self._group_name, rollout_engines
             )
-            ray.get(refs)
 
     @torch.no_grad()
-    def update_weights(self):
+    def update_weights(self) -> None:
         self.weight_version += 1
 
         if dist.get_rank() == 0:
@@ -530,7 +604,14 @@ class UpdateWeightFromDistributed:
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
-    def _update_weight_from_distributed(self, name, param, converted_named_tensors, buffer_size, pbar=None):
+    def _update_weight_from_distributed(
+        self,
+        name: str,
+        param: torch.nn.Parameter,
+        converted_named_tensors: list[tuple[str, torch.Tensor]],
+        buffer_size: int,
+        pbar: Optional[Any] = None,
+    ) -> Optional[int]:
         param = all_gather_param(name, param)
         param = remove_padding(name, param, self.vocab_size)
         if not self._is_pp_src_rank:
@@ -544,7 +625,14 @@ class UpdateWeightFromDistributed:
         buffer_size += param_size
         return buffer_size
 
-    def _update_expert_weight_from_distributed(self, name, param, named_tensors, buffer_size, pbar=None):
+    def _update_expert_weight_from_distributed(
+        self,
+        name: str,
+        param: torch.nn.Parameter,
+        named_tensors: list[tuple[str, torch.Tensor]],
+        buffer_size: int,
+        pbar: Optional[Any] = None,
+    ) -> int:
         param = all_gather_param(name, param)
         param = remove_padding(name, param, self.vocab_size)
 
@@ -559,7 +647,9 @@ class UpdateWeightFromDistributed:
         buffer_size += param_size
         return buffer_size
 
-    def _update_expert_bucket_weights_from_distributed(self, named_tensors, pbar=None):
+    def _update_expert_bucket_weights_from_distributed(
+        self, named_tensors: list[tuple[str, torch.Tensor]], pbar: Optional[Any] = None
+    ) -> None:
         names = [name for name, _ in named_tensors]
         all_names = [None] * mpu.get_expert_model_parallel_world_size()
         dist.all_gather_object(all_names, names, group=mpu.get_expert_model_parallel_group())
@@ -589,31 +679,91 @@ class UpdateWeightFromDistributed:
         converted_hf_tensors = []
         for name, param in all_gathered_params:
             converted_hf_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
-        self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar=pbar)
 
-    def _update_bucket_weights_from_distributed(self, converted_named_tensors, pbar=None):
+        self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar)
+
+    def _update_bucket_weights_from_distributed(
+        self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: Optional[Any] = None
+    ) -> None:
         # lock the rollout engines to prevent dead lock on broadcast.
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)
 
-        refs = [
-            engine.update_weights_from_distributed.remote(
-                names=[name for name, _ in converted_named_tensors],
-                dtypes=[param.dtype for _, param in converted_named_tensors],
-                shapes=[param.shape for _, param in converted_named_tensors],
-                group_name=self._group_name,
-                weight_version=str(self.weight_version),
-            )
-            for engine in self.rollout_engines
-        ]
-
-        handles = []
-        for _, param in converted_named_tensors:
-            handles.append(dist.broadcast(param.data, 0, group=self._model_update_groups, async_op=True))
-        for handle in handles:
-            handle.wait()
+        refs = update_weights_from_distributed(
+            self.args,
+            self._group_name,
+            self._model_update_groups,
+            self.weight_version,
+            self.rollout_engines,
+            converted_named_tensors,
+        )
 
         ray.get(refs)
         converted_named_tensors.clear()
         ray.get(self.rollout_engine_lock.release.remote())
         pbar.update(1)
+
+
+def connect_rollout_engines_from_distributed(
+    args: Namespace, group_name: str, rollout_engines: Sequence[ActorHandle]
+) -> dist.ProcessGroup:
+    master_address = ray._private.services.get_node_ip_address()
+    with socket.socket() as sock:
+        sock.bind(("", 0))
+        master_port = sock.getsockname()[1]
+    world_size = len(rollout_engines) * args.rollout_num_gpus_per_engine + 1
+
+    refs = [
+        engine.init_weights_update_group.remote(
+            master_address,
+            master_port,
+            i * args.rollout_num_gpus_per_engine + 1,
+            world_size,
+            group_name,
+            backend="nccl",
+        )
+        for i, engine in enumerate(rollout_engines)
+    ]
+    model_update_groups = init_process_group(
+        backend="nccl",
+        init_method=f"tcp://{master_address}:{master_port}",
+        world_size=world_size,
+        rank=0,
+        group_name=group_name,
+    )
+    ray.get(refs)
+    return model_update_groups
+
+
+def disconnect_rollout_engines_from_distributed(args, group_name, model_update_groups, rollout_engines):
+    refs = [engine.destroy_weights_update_group.remote(group_name) for engine in rollout_engines]
+    dist.destroy_process_group(model_update_groups)
+    ray.get(refs)
+
+
+def update_weights_from_distributed(
+    args: Namespace,
+    group_name: str,
+    group: dist.ProcessGroup,
+    weight_version: int,
+    rollout_engines: Sequence[ActorHandle],
+    converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
+) -> list[ObjectRef]:
+    refs = [
+        engine.update_weights_from_distributed.remote(
+            names=[name for name, _ in converted_named_tensors],
+            dtypes=[param.dtype for _, param in converted_named_tensors],
+            shapes=[param.shape for _, param in converted_named_tensors],
+            group_name=group_name,
+            weight_version=str(weight_version),
+        )
+        for engine in rollout_engines
+    ]
+
+    handles = []
+    for _, param in converted_named_tensors:
+        handles.append(dist.broadcast(param.data, 0, group=group, async_op=True))
+    for handle in handles:
+        handle.wait()
+
+    return refs

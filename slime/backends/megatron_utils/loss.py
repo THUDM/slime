@@ -137,7 +137,7 @@ def compute_advantages_and_returns(args, rollout_data):
     if log_probs is None and values is None:
         return
 
-    if args.kl_coef == 0:
+    if args.kl_coef == 0 or not log_probs:
         # when kl_coef is 0, we won't compute ref_log_prob
         xs = log_probs if log_probs is not None else values
         kl = [torch.zeros_like(x, dtype=torch.float32, device=x.device) for x in xs]
@@ -162,13 +162,18 @@ def compute_advantages_and_returns(args, rollout_data):
         old_rewards = rewards
         rewards = []
         for reward, k in zip(old_rewards, kl):
-            k[-1] += reward
+            k *= -args.kl_coef
+            cp_rank = mpu.get_context_parallel_rank()
+            if cp_rank == 0:
+                k[-1] += reward
             rewards.append(k)
         advantages, returns = list(
             zip(
                 *[
-                    get_advantages_and_returns(value, reward, args.gamma, args.lambd)
-                    for value, reward in zip(values, rewards)
+                    get_advantages_and_returns(total_length, response_length, value, reward, args.gamma, args.lambd)
+                    for total_length, response_length, value, reward in zip(
+                        total_lengths, response_lengths, values, rewards
+                    )
                 ]
             )
         )
@@ -241,8 +246,14 @@ def compute_advantages_and_returns(args, rollout_data):
             assert (
                 all_advs.size() == all_masks.size()
             ), f"Shape mismatch before whitening: advantages {all_advs.size()}, masks {all_masks.size()}"
+            dp_group = mpu.get_data_parallel_group()
 
-            whitened_advs_flat = distributed_masked_whiten(all_advs, all_masks, shift_mean=True)
+            whitened_advs_flat = distributed_masked_whiten(
+                all_advs,
+                all_masks,
+                process_group=dp_group,
+                shift_mean=True,
+            )
             chunk_lengths = [chunk.size(0) for chunk in advantages]
             advantages = list(torch.split(whitened_advs_flat, chunk_lengths))
 
@@ -362,7 +373,7 @@ def value_loss_function(args, batch, logits, sum_of_sample_mean):
         total_lengths=batch["total_lengths"],
         response_lengths=batch["response_lengths"],
     )
-    values = torch.cat(values["values"], dim=0)
+    values = torch.cat([value.flatten() for value in values["values"]], dim=0)
 
     returns = torch.cat(batch["returns"], dim=0)
 
@@ -417,7 +428,7 @@ def sft_loss_function(args, batch, logits, sum_of_sample_mean):
 
 
 def loss_function(args, batch, num_microbatches, logits):
-    num_tokens = sum(batch["response_lengths"])
+    num_tokens = sum([torch.clamp_min(loss_mask.sum(), 1) for loss_mask in batch["loss_masks"]])
     num_samples = len(batch["response_lengths"])
 
     sum_of_sample_mean = get_sum_of_sample_mean(

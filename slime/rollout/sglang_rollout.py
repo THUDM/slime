@@ -42,6 +42,10 @@ class GenerateState(metaclass=SingletonMeta):
             spaces_between_special_tokens=False,
         )
 
+        if getattr(args, "sglang_enable_deterministic_inference", False):
+            sampling_seed_base = args.rollout_seed
+            self.group_sampling_seeds = [sampling_seed_base + i for i in range(args.n_samples_per_prompt)]
+
         self.reset()
 
     def reset(self):
@@ -66,6 +70,7 @@ class GenerateState(metaclass=SingletonMeta):
 
 
 async def generate(args, sample: Sample, sampling_params) -> Sample:
+    """Generate using traditional SGLang router with token-based workflow"""
     state = GenerateState(args)
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
@@ -211,9 +216,15 @@ async def generate_and_rm_group(args, group: list[Sample], sampling_params: dict
     if state.aborted:
         return group
 
-    group = await asyncio.gather(
-        *[generate_and_rm(args, sample, sampling_params.copy(), evaluation=evaluation) for sample in group]
-    )
+    tasks = []
+    for idx, sample in enumerate(group):
+        current_sampling_params = sampling_params.copy()
+        if getattr(args, "sglang_enable_deterministic_inference", False):
+            seed = state.group_sampling_seeds[idx]
+            current_sampling_params["sampling_seed"] = seed
+        tasks.append(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
+
+    group = await asyncio.gather(*tasks)
 
     # for the rm that need the whole group, we will not do the rm here
     if not state.aborted and args.group_rm:
@@ -397,6 +408,9 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
             sample = copy.deepcopy(prompt_sample)
             sample.index = sample_index
             sample_index += 1
+            if getattr(args, "sglang_enable_deterministic_inference", False):
+                sampling_params = sampling_params.copy()
+                sampling_params["sampling_seed"] = args.rollout_seed + j
             tasks.append(
                 generate_and_rm(
                     args,
@@ -423,7 +437,7 @@ async def eval_rollout_single_dataset(args, rollout_id, name, path):
 
     data.sort(key=lambda sample: sample.index)
 
-    reward_key = args.reward_key or args.eval_reward_key
+    reward_key = args.eval_reward_key or args.reward_key
     return {
         name: {
             "rewards": [sample.reward if not reward_key else sample.reward[reward_key] for sample in data],

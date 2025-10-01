@@ -6,7 +6,6 @@ pillow
 pylatexenc
 pyyaml
 ray[default]
-sglang
 torch
 transformers
 wandb

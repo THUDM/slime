@@ -19,6 +19,9 @@ source "${SCRIPT_DIR}/../scripts/models/glm4-9B.sh"
 CKPT_ARGS=(
    --hf-checkpoint /root/models/GLM-Z1-9B-0414/
    --ref-load /root/GLM-Z1-9B-0414_torch_dist
+
+   --fp8-format e4m3
+   --fp8-recipe blockwise
 )
 
 ROLLOUT_ARGS=(
@@ -74,6 +77,7 @@ GRPO_ARGS=(
    --eps-clip-high 0.28
 
    --use-tis
+   --calculate-per-token-loss
 )
 
 OPTIMIZER_ARGS=(
@@ -87,6 +91,8 @@ OPTIMIZER_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
+
+   --use-slime-router
 )
 
 MISC_ARGS=(
