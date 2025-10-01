@@ -260,9 +260,10 @@ class XTunerTrainRayActor(TrainRayActor):
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
-        if not self.connected:
-            self.connected = True
-            rollout_engines, rollout_engine_lock = ray.get(self.rollout_manager.get_rollout_engines_and_lock.remote())
+        rollout_engines, rollout_engine_lock, num_new_engines = ray.get(
+            self.rollout_manager.get_rollout_engines_and_lock.remote()
+        )
+        if num_new_engines > 0:
             self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 

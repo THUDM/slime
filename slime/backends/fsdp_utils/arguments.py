@@ -18,15 +18,11 @@ class FSDPArgs:
     adam_eps: float = 1e-8
     warmup_ratio: float = 0.03
 
-    # FSDP specific
-    fsdp_wrap: str = "transformer_blocks"  # future use: auto wrap policy
-    fsdp_sharding_strategy: str = "FULL_SHARD"
-    fsdp_cpu_offload: bool = False
-    fsdp_limit_all_gathers: bool = False
-    fsdp_sync_module_states: bool = True
-    fsdp_forward_prefetch: bool = True
-    fsdp_backward_prefetch: bool = True
+    # Weight update configuration
+    update_weights_bucket_size: int = 512 * 1024 * 1024  # Bucket size for batching weight updates in bytes (512MB)
+
     attn_implementation: str = "flash_attention_2"
+
     # Logging
     wandb_project: str = "slime-fsdp"
     wandb_run_name: Optional[str] = None

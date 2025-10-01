@@ -149,6 +149,28 @@ class SGLangEngine(RayActor):
         response.raise_for_status()
         return response.json()
 
+    def health_generate(self, timeout: float = 5.0) -> bool:
+        """Run /health_generate on the underlying SGLang HTTP server.
+
+        Args:
+            timeout: Timeout for the health request in seconds.
+
+        Returns:
+            True if the server responds with HTTP 200.
+
+        Raises:
+            requests.RequestException: If the request fails for any reason, including timeout.
+        """
+        if self.node_rank != 0:
+            return True
+
+        response = requests.get(
+            f"http://{self.server_args.host}:{self.server_args.port}/health_generate",
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return True
+
     def update_weights_from_tensor(
         self,
         serialized_named_tensors: List[str],
@@ -179,7 +201,7 @@ class SGLangEngine(RayActor):
         if self.node_rank != 0:
             return
         # flush cache will not return status_code 200 when there are pending requests
-        while True:
+        for _ in range(60):
             try:
                 response = requests.get(f"http://{self.server_args.host}:{self.server_args.port}/flush_cache")
                 if response.status_code == 200:
@@ -188,7 +210,10 @@ class SGLangEngine(RayActor):
                 raise e
             except Exception as e:
                 print(f"Error flushing cache: {e}")
+                time.sleep(1)
                 continue
+        else:
+            raise TimeoutError("Timeout while flushing cache.")
 
     def shutdown(self):
         requests.post(
@@ -229,6 +254,18 @@ class SGLangEngine(RayActor):
                 "backend": backend,
             },
         )
+
+    def destroy_weights_update_group(self, group_name):
+        try:
+            return self._make_request(
+                "destroy_weights_update_group",
+                {
+                    "group_name": group_name,
+                },
+            )
+        except:
+            # catch the case there the engine is just created and does not have the group.
+            pass
 
     def update_weights_from_distributed(
         self, names, dtypes, shapes, group_name, flush_cache=False, weight_version: Optional[str] = None
