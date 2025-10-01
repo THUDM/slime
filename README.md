@@ -42,29 +42,17 @@ For a comprehensive quick start guide covering environment setup, data preparati
 
 We also provide examples for some use cases not covered in the quick start guide; please check [examples](examples/).
 
-## Projects Built with slime
+## Projects Built upon slime
 
-slime has powered several cutting-edge research projects and production systems. Here are some notable examples:
+slime has powered several novel research projects and production systems. Here are some notable examples:
 
-### TritonForge: AI-Driven GPU Kernel Generation
+### ⚡ TritonForge: Agentic RL Training Framework for Kernel Generation
 
-[**TritonForge**](https://github.com/RLsys-Foundation/TritonForge) leverages slime's RL capabilities to train LLMs that automatically generate optimized GPU kernels. By using a two-stage training approach—supervised fine-tuning followed by reinforcement learning with multi-turn compilation feedback—TritonForge achieves remarkable results in converting PyTorch operations into high-performance Triton kernels.
+[**TritonForge**](https://github.com/RLsys-Foundation/TritonForge) leverages slime's SFT & RL capabilities to train LLMs that automatically generate optimized GPU kernels. By using a two-stage training approach—supervised fine-tuning followed by reinforcement learning with multi-turn compilation feedback—TritonForge achieves remarkable results in converting PyTorch operations into high-performance Triton kernels.
 
-**Key highlights:**
-- Built on slime's flexible RL training framework for iterative kernel refinement
-- Cross-platform support for NVIDIA and AMD GPUs
-- Comprehensive benchmark suite (enhanced KernelBench) with 200+ kernel generation problems
-- Demonstrates how slime enables domain-specific AI applications beyond with using SFT + RL
-
-### APRIL: Accelerating RL Training with Active Partial Rollouts
+### 🚀 APRIL: Accelerating RL Training with Active Partial Rollouts
 
 [**APRIL**](https://github.com/RLsys-Foundation/APRIL) introduces a system-level optimization that seamlessly integrates with slime to accelerate the rollout generation phase in RL training. By intelligently over-provisioning requests and actively managing partial completions, APRIL addresses the long-tail generation bottleneck that typically consumes over 90% of RL training time.
-
-**Key highlights:**
-- Increases rollout throughput by 20-35% and improves model accuracy by 2-5%
-- Drop-in compatible with slime—enable with just two command-line flags
-- Supports multiple RL algorithms including GRPO, DAPO, and GSPO
-- Tested at scale on models like DeepSeek-R1, Qwen3, and GLM-4
 
 These projects showcase slime's versatility—from training code-generation models to optimizing RL training systems—making it a powerful foundation for both research and production deployments.
 
