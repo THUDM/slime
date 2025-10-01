@@ -30,6 +30,11 @@ class FSDPArgs:
     # Precision
     gradient_checkpointing: bool = False
 
+    # Memory debugging
+    enable_memory_visualize: bool = False
+    memory_snapshot_out_dir: str = "./mem_snapshots"
+    memory_snapshot_interval: int = 100  # Dump snapshot every N steps (0 to disable periodic dumps)
+
     # YAML bookkeeping
     config: Optional[str] = None
 
