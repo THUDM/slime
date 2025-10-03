@@ -42,7 +42,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-num-gpus",
                 type=int,
-                default=None,
+                default=8,
                 help=(
                     "Number of GPUs for inference. Note that when using --colocate, "
                     "i.e. the training and the inference engines are on the same gpus, this param will be ignored and will be set as "
