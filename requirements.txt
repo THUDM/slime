@@ -9,3 +9,4 @@ ray[default]
 torch
 transformers
 wandb
+weave

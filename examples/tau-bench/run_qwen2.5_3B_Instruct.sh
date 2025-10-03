@@ -19,26 +19,23 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/../../scripts/models/qwen2.5-3B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen2.5-3B/
-   --ref-load /root/Qwen2.5-3B_torch_dist/
-   --load /root/Qwen2.5-3B_slime/
-   --save /root/Qwen2.5-3B_slime/
+   --hf-checkpoint /root/Qwen2.5-3B-Instruct/
+   --ref-load /root/Qwen2.5-3B-Instruct_torch_dist/
+   --load /root/Qwen2.5-3B-Instruct_slime/
+   --save /root/Qwen2.5-3B-Instruct_slime/
    --save-interval 20
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /root/nq_search/train.parquet
-   --input-key prompt
-   --label-key reward_model
-   --apply-chat-template
+   --prompt-data /root/tau-bench/retail_train_tasks.jsonl
+   --input-key index
    --rollout-shuffle
-   --num-rollout 3000
-   --rollout-batch-size 32
+   --num-rollout 500
+   --rollout-batch-size 16
    --n-samples-per-prompt 8
    --rollout-max-response-len 512
    --rollout-temperature 0.8
-
-   --global-batch-size 256
+   --global-batch-size 128
    --balance-data
 )
 
@@ -49,12 +46,9 @@ PERF_ARGS=(
    --context-parallel-size 1
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
-
    --recompute-granularity full
    --recompute-method uniform
    --recompute-num-layers 1
-
-   # --micro-batch-size 1
    --use-dynamic-batch-size
    --max-tokens-per-gpu 9216
 )
@@ -79,10 +73,10 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   # --use-wandb
-   # --wandb-project slime-dev
-   # --wandb-group search-r1_qwen2.5-3B-test
-   # --wandb-key ${WANDB_KEY}
+   --use-wandb
+   --wandb-project tau-bench-test
+   --wandb-group tau-bench_qwen2.5-3B-instruct-test
+   --wandb-key b61763ae7cd31cbd2ec4d898b3fd02b5b9db8a5c
 )
 
 SGLANG_ARGS=(
@@ -102,12 +96,11 @@ MISC_ARGS=(
 )
 
 CUSTOM_ARGS=(
-   --custom-generate-function-path generate_with_search.generate
-   --custom-rm-path generate_with_search.reward_func
+   --custom-generate-function-path generate_with_tau.generate
 )
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 --disable-usage-stats --temp-dir /root/ray_temp 
 
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
@@ -120,8 +113,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 4 \
-   --rollout-num-gpus 4 \
+   --actor-num-gpus-per-node 2 \
+   --rollout-num-gpus 2 \
    --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
