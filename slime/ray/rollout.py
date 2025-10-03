@@ -7,9 +7,9 @@ from typing import List, Union
 
 import ray
 import torch
+import wandb
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-import wandb
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
@@ -319,6 +319,7 @@ def _start_router(args):
 
     else:
         from sglang_router.launch_router import RouterArgs
+
         from slime.utils.http_utils import run_router
 
         args.sglang_router_ip = get_host_info()[1]
@@ -367,6 +368,19 @@ def _log_eval_rollout_data(rollout_id, args, data):
         )
         wandb.log(log_dict)
 
+    if args.use_tensorboard:
+        from slime.utils.tensorboard_utils import _TensorboardAdapter
+
+        tb = _TensorboardAdapter(args)
+        tb.log(
+            data=log_dict,
+            step=(
+                rollout_id
+                if not args.wandb_always_use_train_step
+                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+            ),
+        )
+
 
 def _log_rollout_data(rollout_id, args, samples, rollout_time):
     if args.load_debug_rollout_data:
@@ -388,3 +402,16 @@ def _log_rollout_data(rollout_id, args, samples, rollout_time):
             else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
         )
         wandb.log(log_dict)
+
+    if args.use_tensorboard:
+        from slime.utils.tensorboard_utils import _TensorboardAdapter
+
+        tb = _TensorboardAdapter(args)
+        tb.log(
+            data=log_dict,
+            step=(
+                rollout_id
+                if not args.wandb_always_use_train_step
+                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+            ),
+        )
