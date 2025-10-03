@@ -733,6 +733,20 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--wandb-run-id", type=str, default=None)
             return parser
 
+        # tensorboard
+        def add_tensorboard_arguments(parser):
+            # tb_project_name, tb_experiment_name
+            parser.add_argument("--use-tensorboard", action="store_true", default=False)
+            parser.add_argument(
+                "--tb-project-name",
+                type=str,
+                default=None,
+                help="Directory to store tensorboard logs. Default is  os.environ.get('TENSORBOARD_DIR') directory.",
+            )
+            parser.add_argument("--tb-experiment-name", type=str, default=None)
+
+            return parser
+
         # debug
         def add_debug_arguments(parser):
             parser.add_argument(
@@ -919,6 +933,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_eval_arguments(parser)
         parser = add_algo_arguments(parser)
         parser = add_wandb_arguments(parser)
+        parser = add_tensorboard_arguments(parser)
         parser = add_router_arguments(parser)
         parser = add_debug_arguments(parser)
         parser = add_sglang_arguments(parser)
