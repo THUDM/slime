@@ -720,7 +720,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             # tb_project_name, tb_experiment_name
             parser.add_argument("--use-tensorboard", action="store_true", default=False)
             parser.add_argument(
-                "--tb-project",
+                "--tb-project-name",
                 type=str,
                 default=None,
                 help="Directory to store tensorboard logs. Default is  os.environ.get('TENSORBOARD_DIR') directory.",
