@@ -5,7 +5,7 @@ import httpx
 import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from starlette.responses import StreamingResponse
+from starlette.responses import Response
 
 from slime.utils.misc import load_function
 
@@ -51,24 +51,6 @@ class SlimeRouter:
             middleware = load_function(middleware_path)
             self.app.add_middleware(middleware, router=self)
 
-    def _update_weight_version_from_response(self, output):
-        """
-        Update weight version from SGLang response meta_info.
-        This is the correct way to get weight version - from the generate response.
-        """
-        if "meta_info" not in output or "weight_version" not in output["meta_info"]:
-            return
-
-        current_weight_version = output["meta_info"]["weight_version"]
-
-        # Update max_weight_version
-        if self.max_weight_version is None or current_weight_version > self.max_weight_version:
-            self.max_weight_version = current_weight_version
-            if self.verbose:
-                print(f"[slime-router] Updated max weight version to: {self.max_weight_version}")
-        elif self.verbose:
-            print(f"[slime-router] Current weight version {current_weight_version} <= max {self.max_weight_version}")
-
     def _setup_routes(self):
         """Setup all the HTTP routes"""
         # sglang-router api
@@ -87,6 +69,7 @@ class SlimeRouter:
         # Forward all other paths to SGLang router
         worker_url = self._use_url()
         url = f"{worker_url}/{path}"
+        # print("path",path)
 
         # Get request body and headers
         body = await request.body()
@@ -94,12 +77,25 @@ class SlimeRouter:
 
         try:
             response = await self.client.request(request.method, url, content=body, headers=headers)
-            return StreamingResponse(
-                response.aiter_bytes(),
-                status_code=response.status_code,
-                headers=response.headers,
-                media_type=response.headers.get("content-type"),
-            )
+            # Eagerly read content so we can return JSON (not streaming)
+            content = await response.aread()
+            content_type = response.headers.get("content-type", "")
+            try:
+                # Prefer parsing JSON if possible
+                data = json.loads(content)
+                return JSONResponse(
+                    content=data,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                )
+            except Exception:
+                # Fall back to raw body with original content type
+                return Response(
+                    content=content,
+                    status_code=response.status_code,
+                    headers=dict(response.headers),
+                    media_type=content_type or None,
+                )
 
         finally:
             self._finish_url(worker_url)
@@ -143,28 +139,23 @@ class SlimeRouter:
         payload = json.loads(body) if body else {}
 
         text = payload.get("text", "")
-        return_logp = payload.get("return_logp", False)
 
         # Use radix tree's retrieve_from_text method (no need to fetch weight version here)
-        result = self.radix_tree.retrieve_from_text(text, return_logp=return_logp)
+        token_ids, logp, loss_mask = self.radix_tree.retrieve_from_text(text, return_logprob=True)
 
         # Handle the result based on whether logp was requested
-        if return_logp:
-            token_ids, logp = result
-        else:
-            token_ids = result
-            logp = None
-
         result = {
             "tokens": token_ids,  # token IDs
-            "response_length": len(token_ids),  # Length of response tokens
             "response": text,  # The input text
-            "loss_mask": [],  # Loss mask for the tokens
+            "loss_mask": loss_mask,  # Loss mask for the tokens
+            "token_length": len(token_ids),
+            "loss_mask_length": len(loss_mask),
+            "rollout_logp": logp,
         }
 
-        # Add logp to response if requested
-        if return_logp and logp is not None:
-            result["logp"] = logp
+        # # Add logp to response if requested
+        # if sum(logp) > 0:
+        #     result["rollout_logp"] = logp
 
         return result
 
