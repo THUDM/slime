@@ -4,13 +4,11 @@ from itertools import accumulate
 import ray
 import torch
 import torch.distributed as dist
+import wandb
+from packaging import version
+from torch.distributed.tensor import DTensor
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
-import logging
-
-
-from torch.distributed.tensor import DTensor
-from packaging import version
 
 # Import FSDP v2 components based on PyTorch version
 if version.parse(torch.__version__) >= version.parse("2.6"):
@@ -20,12 +18,16 @@ elif version.parse(torch.__version__) >= version.parse("2.4"):
 else:
     raise ImportError("FSDP v2 not available")
 
-import wandb
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory
-from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
+from slime.utils.ppo_utils import (
+    compute_approx_kl,
+    compute_policy_loss,
+    get_gspo_token_ratio,
+    get_sequence_level_ratio,
+)
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
@@ -222,7 +224,9 @@ class FSDPTrainRayActor(TrainRayActor):
                     rollout_data["response_lengths"][start:end],
                     rollout_data["advantages"][start:end],
                     rollout_data["returns"][start:end],
-                    rollout_log_probs=rollout_data["rollout_log_probs"][start:end] if "rollout_log_probs" in rollout_data else None,
+                    rollout_log_probs=(
+                        rollout_data["rollout_log_probs"][start:end] if "rollout_log_probs" in rollout_data else None
+                    ),
                     num_packs=mbs_size,
                 )
             )
@@ -244,33 +248,32 @@ class FSDPTrainRayActor(TrainRayActor):
         rank = dist.get_rank()
 
         rollout_data = process_rollout_data(self.args, rollout_data_ref, rank, world_size)
-        if self.args.advantage_estimator in ["grpo"]:
-            rollout_data["advantages"] = rollout_data["returns"] = [
-                torch.tensor([rollout_data["rewards"][i]] * rollout_data["response_lengths"][i])
-                for i in range(len(rollout_data["rewards"]))
-            ]
+
+        if self.args.advantage_estimator in ["grpo", "gspo", "gspo-token"]:
+            rollout_data["advantages"] = [torch.tensor([r]) for r in rollout_data["rewards"]]
+            rollout_data["returns"] = [torch.tensor([r]) for r in rollout_data["raw_reward"]]
         else:
             raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
 
         packed_batches, grad_accum = self.packed_data(rollout_data)
         log_dict = {}
 
-        assert (
-            len(grad_accum) > 0
-        ), f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
+        assert len(grad_accum) > 0, "Invalid grad_accum"
 
         if "ref" in self.weights:
             self.compute_log_prob("ref", packed_batches, store_prefix="ref_")
 
         self.compute_log_prob("actor", packed_batches)
 
-        for metric_key in ["log_probs", "ref_log_probs", "advantages", "returns", "raw_rewards"]:
+        for metric_key in ["log_probs", "ref_log_probs", "advantages", "returns", "raw_reward"]:
             if metric_key not in packed_batches[0]:
                 continue
             val = torch.tensor([0.0], device=torch.cuda.current_device())
-            for mbs_id, batches in enumerate(packed_batches):
+            count = 0
+            for batches in packed_batches:
                 unpacked_batches = unpack_sequences(batches)
                 for unpacked_batch in unpacked_batches:
+                    count += 1
                     if isinstance(unpacked_batch[metric_key], torch.Tensor):
                         loss_masks_tensor = unpacked_batch["loss_masks"].to(device=torch.cuda.current_device())
                         metric_tensor = unpacked_batch[metric_key].to(device=torch.cuda.current_device())
@@ -278,9 +281,8 @@ class FSDPTrainRayActor(TrainRayActor):
                     else:
                         val += unpacked_batch[metric_key]
             dist.all_reduce(val, op=dist.ReduceOp.SUM)
-            log_dict[f"rollout/{metric_key}"] = (
-                val / (self.args.n_samples_per_prompt * self.args.rollout_batch_size)
-            ).item()
+            log_dict[f"rollout/{metric_key}"] = (val / count).item()
+
         if dist.get_rank() == 0:
             print(f"rollout {rollout_id}: {log_dict}")
             if self.args.use_wandb:
@@ -304,22 +306,41 @@ class FSDPTrainRayActor(TrainRayActor):
                     position_ids=packed_batch["position_ids"].unsqueeze(0),
                 ).logits
 
-            # Handle packed sequences
-            log_probs = gather_log_probs_packed(logits, packed_batch["tokens"], packed_batch["cu_seqlens"])
+            log_probs = gather_log_probs_packed(logits, packed_batch["tokens"], self.args.rollout_temperature)
             packed_batch["cur_log_probs"] = log_probs
             unpacked_batches = unpack_sequences(packed_batch)
 
-            old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
-            log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
-            advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
-            loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
-            response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
+            old_log_probs_list = [batch["log_probs"] for batch in unpacked_batches]
+            cur_log_probs_list = [batch["cur_log_probs"] for batch in unpacked_batches]
+            advantages_list = [batch["advantages"] for batch in unpacked_batches]
+            loss_masks_list = [batch["loss_masks"].to(device=logits.device) for batch in unpacked_batches]
+            response_lengths_list = [batch["response_lengths"] for batch in unpacked_batches]
 
-            # Ensure device consistency
-            ppo_kl = old_log_probs.to(device=log_probs.device) - log_probs
-            advantages = advantages.to(device=ppo_kl.device)
+            ppo_kl_list = []
+            if self.args.advantage_estimator == "gspo":
+                for old_lp, cur_lp, mask in zip(old_log_probs_list, cur_log_probs_list, loss_masks_list):
+                    ratio = get_sequence_level_ratio(cur_lp, old_lp, mask)
+                    ppo_kl = -torch.log(ratio + 1e-8)
+                    ppo_kl_list.append(ppo_kl.expand_as(cur_lp))
+            elif self.args.advantage_estimator == "gspo-token":
+                for old_lp, cur_lp, mask in zip(old_log_probs_list, cur_log_probs_list, loss_masks_list):
+                    ratio = get_gspo_token_ratio(cur_lp, old_lp, mask)
+                    ppo_kl = -torch.log(ratio + 1e-8)
+                    ppo_kl_list.append(ppo_kl)
+            else:  # GRPO
+                for old_lp, cur_lp in zip(old_log_probs_list, cur_log_probs_list):
+                    ppo_kl_list.append(old_lp - cur_lp)
+
+            ppo_kl = torch.cat(ppo_kl_list, dim=0)
+            advantages = torch.cat(advantages_list, dim=0).to(device=ppo_kl.device)
+
             pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, self.args.eps_clip, self.args.eps_clip_high)
-            
+
+            pg_loss = sum_of_sample_mean(pg_loss, response_lengths_list, loss_masks_list)
+            pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths_list, loss_masks_list)
+            ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths_list, loss_masks_list)
+            loss = pg_loss
+
             # Apply TIS before sample mean calculation
             if self.args.use_tis:
                 # Initialize TIS variables
@@ -328,43 +349,37 @@ class FSDPTrainRayActor(TrainRayActor):
                 ois = None
                 # Apply TIS off-policy correction using importance sampling
                 assert all(
-                    "rollout_log_probs" in batch and 
-                    isinstance(batch["rollout_log_probs"], torch.Tensor) and 
-                    batch["rollout_log_probs"].numel() > 0
+                    "rollout_log_probs" in batch
+                    and isinstance(batch["rollout_log_probs"], torch.Tensor)
+                    and batch["rollout_log_probs"].numel() > 0
                     for batch in unpacked_batches
                 ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS"
-                
+
                 rollout_log_probs = torch.cat([batch["rollout_log_probs"] for batch in unpacked_batches], dim=0)
                 rollout_log_probs = rollout_log_probs.to(device=log_probs.device)
-                
+                old_log_probs = torch.cat(old_log_probs_list, dim=0)
                 tis = torch.exp(old_log_probs - rollout_log_probs)
                 ois = (-ppo_kl).exp()
-                tis_clip = torch.clamp(tis, min=getattr(self.args, 'tis_clip_low', 0.1), max=getattr(self.args, 'tis_clip', 2.0))
+                tis_clip = torch.clamp(
+                    tis, min=getattr(self.args, "tis_clip_low", 0.1), max=getattr(self.args, "tis_clip", 2.0)
+                )
                 tis_clipfrac = tis_clip != tis
-                
-                pg_loss = pg_loss * tis_clip
-            
-            pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
-            pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
-            ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
 
-            loss = pg_loss
+                pg_loss = pg_loss * tis_clip
 
             if self.args.entropy_coef != 0:
                 raise NotImplementedError("implement entropy bonus")
 
             if self.args.use_kl_loss:
                 ref_log_probs = torch.cat([batch["ref_log_probs"] for batch in unpacked_batches], dim=0)
+                cur_log_probs = torch.cat(cur_log_probs_list, dim=0)
                 kl = compute_approx_kl(
-                    log_probs,
+                    cur_log_probs,
                     ref_log_probs,
                     kl_loss_type=self.args.kl_loss_type,
                 )
-                kl_loss = sum_of_sample_mean(kl, response_lengths, loss_masks)
-
+                kl_loss = sum_of_sample_mean(kl, response_lengths_list, loss_masks_list)
                 loss = loss + self.args.kl_loss_coef * kl_loss
-
-            # TODO: report entropy
 
             reported = {
                 "loss": loss.detach(),
@@ -375,34 +390,36 @@ class FSDPTrainRayActor(TrainRayActor):
 
             if self.args.use_kl_loss:
                 reported["kl_loss"] = kl_loss.detach()
-                
-            if self.args.use_tis and tis is not None:
-                reported["tis"] = sum_of_sample_mean(tis, response_lengths, loss_masks).detach()
-                reported["ois"] = sum_of_sample_mean(ois, response_lengths, loss_masks).detach()
-                reported["tis_clipfrac"] = sum_of_sample_mean(tis_clipfrac.float(), response_lengths, loss_masks).detach()
 
-            # Scale loss for gradient accumulation
+            if self.args.use_tis and tis is not None:
+                reported["tis"] = sum_of_sample_mean(tis, response_lengths_list, loss_masks_list).detach()
+                reported["ois"] = sum_of_sample_mean(ois, response_lengths_list, loss_masks_list).detach()
+                reported["tis_clipfrac"] = sum_of_sample_mean(
+                    tis_clipfrac.float(), response_lengths_list, loss_masks_list
+                ).detach()
+
             loss = loss * dist.get_world_size() / self.args.global_batch_size
             loss.backward()
             clear_memory()
-            # Accumulate reported metrics (store tensors for later mean)
+
             for k, v in reported.items():
                 reported_accum.setdefault(k, []).append(v)
 
             if (mbs_id + 1) in grad_accum:
-                # TODO: check if the grad norm is global grad norm.
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
-                # Aggregate logs
+
                 aggregated = {k: torch.stack(v).sum().item() for k, v in reported_accum.items()}
-                # TODO: change this, this is slow.
+
                 reduced_aggregated = [None] * world_size
                 dist.all_gather_object(reduced_aggregated, aggregated)
+
                 aggregated = {}
                 for k in reported_accum.keys():
                     aggregated[k] = sum([r[k] for r in reduced_aggregated]) / (self.args.global_batch_size)
                 reported_accum = {}
+
                 if dist.get_rank() == 0:
                     log_dict = {
                         f"train/{k}": (val.item() if torch.is_tensor(val) else val) for k, val in aggregated.items()
@@ -428,7 +445,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 self.global_step += 1
 
         self.update_cpu_params_dict(self.weights["actor"])
-
         Timer().start("train_wait")
         return
 
@@ -443,16 +459,12 @@ class FSDPTrainRayActor(TrainRayActor):
             self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
-        # For colocated mode with sharded updates (full_params=False), 
+        # For colocated mode with sharded updates (full_params=False),
         # we don't need to wake up the entire model
         # The bucket-based approach will load parameters selectively from CPU storage
         # TODO:  Add bucket optimization for from distributed mode
-        use_bucket_optimization = (
-            self.args.colocate and 
-            not getattr(self.weight_updator, 'full_params', False)
-        )
-        
-        
+        use_bucket_optimization = self.args.colocate and not getattr(self.weight_updator, "full_params", False)
+
         if self.args.offload and not use_bucket_optimization:
             # Wake up for distributed mode or full_params mode
             self.wake_up(("model"))
@@ -467,13 +479,13 @@ class FSDPTrainRayActor(TrainRayActor):
     @torch.no_grad()
     def update_cpu_params_dict(self, params_dict):
         """Copy model parameters from GPU to CPU storage dictionary"""
-        
+
         state_dict = self.model.state_dict()
 
         for name, param in state_dict.items():
             if isinstance(param, DTensor):
                 param = param.full_tensor()
-                
+
             if name not in params_dict:
                 params_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
             params_dict[name].copy_(param.detach(), non_blocking=True)
@@ -491,7 +503,6 @@ class FSDPTrainRayActor(TrainRayActor):
         """Load reference model parameters once and store in CPU memory (like Megatron backend)"""
         if ref_load_path is None:
             raise ValueError("ref_load_path must be provided when loading reference model")
-
 
         current_weights = {}
         self.update_cpu_params_dict(current_weights)
