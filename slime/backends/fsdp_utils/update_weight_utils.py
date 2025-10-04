@@ -21,7 +21,7 @@ from torch.distributed.tensor import DTensor
 from slime.utils.memory_utils import clear_memory
 
 try:
-    from sglang.srt.model_executor.model_runner import FlattenedTensorBucket, LocalSerializedTensor
+    from sglang.srt.model_executor.model_runner import FlattenedTensorBucket
 
     use_flattened_tensor_bucket = True
 except:
@@ -167,10 +167,37 @@ class UpdateWeightFromTensor:
                 for param_info in param_infos:
                     cpu_param = self.weights["actor"][param_info.name]
                     gpu_param = cpu_param.to(device=torch.cuda.current_device(), non_blocking=True)
-                    named_tensors_batch.append((param_info.name, MultiprocessingSerializer.serialize(gpu_param)))
-                    del gpu_param
+                    named_tensors_batch.append((param_info.name, gpu_param))
                 
                 torch.cuda.synchronize()
+                
+                # Use flattened bucket approach similar to Megatron and full_params=True
+                if use_flattened_tensor_bucket:
+                    print("Using flattened tensor bucket")
+                    # Group tensors by dtype (same as Megatron)
+                    named_tensors_by_dtypes = {}
+                    for name, tensor in named_tensors_batch:
+                        dtype = tensor.dtype
+                        if dtype not in named_tensors_by_dtypes:
+                            named_tensors_by_dtypes[dtype] = []
+                        named_tensors_by_dtypes[dtype].append((name, tensor))
+                    
+                    # Create flattened bucket for each dtype group
+                    serialized_tensors = []
+                    for dtype, named_tensors in named_tensors_by_dtypes.items():
+                        flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
+                        metadata = flattened_tensor_bucket.get_metadata()
+                        flattened_tensor_data = {
+                            "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
+                            "metadata": metadata,
+                        }
+                        serialized_tensors.append(MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True))
+                else:
+                    # Fallback to non-flattened approach
+                    serialized_tensors = MultiprocessingSerializer.serialize(named_tensors_batch, output_str=True)
+                
+                # Clean up GPU tensors after serialization
+                del named_tensors_batch
                 clear_memory()
 
                 if self._ipc_gather_src == dist.get_rank():
@@ -179,49 +206,40 @@ class UpdateWeightFromTensor:
                 else:
                     gathered_serialized_batches = None
 
-                # Gather the named_tensors_batch from all ranks to rank 0.
+                # Gather the serialized batches from all ranks to rank 0.
                 dist.gather_object(
-                    obj=named_tensors_batch,
+                    obj=serialized_tensors,
                     object_gather_list=gathered_serialized_batches,
                     dst=self._ipc_gather_src,
                     group=self._ipc_gather_group,
                 )
-                del named_tensors_batch
+                del serialized_tensors
                 clear_memory()
 
                 if dist.get_rank() == self._ipc_gather_src:
-                    logical_tensors = zip(*gathered_serialized_batches, strict=True)
-                    del gathered_serialized_batches
-                    clear_memory()
-
-                    # Create LocalSerializedTensor objects for each logical tensor
-                    update_tensors = [
-                        (
-                            tensor_group[0][0],  # Get the name from the first rank's data.
-                            LocalSerializedTensor(
-                                values=[rank_part[1] for rank_part in tensor_group]
-                            ),
-                        )
-                        for tensor_group in logical_tensors
-                    ]
-
-                    # Serialize once and reuse for all TP ranks to avoid memory explosion
-                    # TODO: Add flattened tensor support
-                    serialized_update_tensors = MultiprocessingSerializer.serialize(update_tensors, output_str=True)
+                    if use_flattened_tensor_bucket:
+                        # Handle flattened bucket format (same as Megatron approach)
+                        # Each rank may have multiple dtype buckets
+                        # TODO: here we assume all ranks have the same number of dtypes
+                        num_dtypes = len(gathered_serialized_batches[0])
+                        for i in range(num_dtypes):
+                            kwargs = {
+                                "serialized_named_tensors": [tensors[i] for tensors in gathered_serialized_batches],
+                                "load_format": "flattened_bucket",
+                                "flush_cache": False,
+                            }
+                            ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
+                            ray.get(ref)
+                    else:
+                        # Non-flattened approach
+                        kwargs = {
+                            "serialized_named_tensors": gathered_serialized_batches,
+                            "flush_cache": False,
+                        }
+                        ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
+                        ray.get(ref)
                     
-                    del update_tensors
-                    clear_memory()
-                    
-                    kwargs = {
-                        "serialized_named_tensors": [serialized_update_tensors for _ in range(self.tp_size)],
-                        "flush_cache": False,
-                    }
-                    
-                    ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
-                    ray.get(ref)
-                    clear_memory()
-                    
-                    del serialized_update_tensors, kwargs
+                    del gathered_serialized_batches, kwargs
                     clear_memory()
             
             if dist.get_rank() == self._ipc_gather_src:
