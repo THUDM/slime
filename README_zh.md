@@ -36,7 +36,7 @@
 
 - [快速开始指南](./docs/zh/get_started/quick_start.md)
 
-我还还额外提供了一些使用样例，请参考样例目录：[examples](examples/)。
+我们还提供了一些未在快速开始中覆盖的使用示例，请查看 [examples](examples/)。
 
 ## 参数说明
 
@@ -65,3 +65,15 @@
 
 - 常见问题请见 [Q&A](docs/zh/get_started/qa.md)
 - 特别感谢以下项目 & 社区：SGLang、Megatron‑LM、mbridge、OpenRLHF、veRL、Pai-Megatron-Patch 等。
+
+- 引用 slime 请使用：
+```bibtext
+@misc{slime_github,
+  author       = {Zilin Zhu and Chengxing Xie and Xin Lv and slime Contributors},
+  title        = {slime: An LLM post-training framework for RL Scaling},
+  year         = {2025},
+  howpublished = {\url{https://github.com/THUDM/slime}},
+  note         = {GitHub repository. Corresponding author: Xin Lv},
+  urldate      = {2025-06-19}
+}
+```
