@@ -20,6 +20,16 @@ from .rm_hub import async_rm, batched_async_rm
 __all__ = ["generate_rollout"]
 
 
+def _load_and_encode_image(path: str) -> str:
+    """Load an image from path, ensure RGB, encode as JPEG base64 string."""
+    with Image.open(path) as image:
+        buffer = io.BytesIO()
+        if image.mode != "RGB":
+            image = image.convert("RGB")
+        image.save(buffer, format="JPEG")
+        return base64.b64encode(buffer.getvalue()).decode("utf-8")
+
+
 class GenerateState(metaclass=SingletonMeta):
     """
     The global state for the generation process.
@@ -94,13 +104,8 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
             elif part["type"] == "image":
                 text_prompt += image_token
                 try:
-                    with Image.open(part["path"]) as image:
-                        buffer = io.BytesIO()
-                        if image.mode != "RGB":
-                            image = image.convert("RGB")
-                        image.save(buffer, format="JPEG")
-                        img_b64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-                        image_data.append(img_b64)
+                    img_b64 = await asyncio.to_thread(_load_and_encode_image, part["path"])
+                    image_data.append(img_b64)
                 except Exception as e:
                     print(f"Error processing image {part['path']}: {e}")
                     sample.status = Sample.Status.ABORTED
