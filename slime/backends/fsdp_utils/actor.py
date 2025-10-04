@@ -357,7 +357,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
                 rollout_log_probs = torch.cat([batch["rollout_log_probs"] for batch in unpacked_batches], dim=0)
                 rollout_log_probs = rollout_log_probs.to(device=log_probs.device)
-
+                old_log_probs = torch.cat(old_log_probs_list, dim=0)
                 tis = torch.exp(old_log_probs - rollout_log_probs)
                 ois = (-ppo_kl).exp()
                 tis_clip = torch.clamp(
@@ -392,10 +392,10 @@ class FSDPTrainRayActor(TrainRayActor):
                 reported["kl_loss"] = kl_loss.detach()
 
             if self.args.use_tis and tis is not None:
-                reported["tis"] = sum_of_sample_mean(tis, response_lengths, loss_masks).detach()
-                reported["ois"] = sum_of_sample_mean(ois, response_lengths, loss_masks).detach()
+                reported["tis"] = sum_of_sample_mean(tis, response_lengths_list, loss_masks_list).detach()
+                reported["ois"] = sum_of_sample_mean(ois, response_lengths_list, loss_masks_list).detach()
                 reported["tis_clipfrac"] = sum_of_sample_mean(
-                    tis_clipfrac.float(), response_lengths, loss_masks
+                    tis_clipfrac.float(), response_lengths_list, loss_masks_list
                 ).detach()
 
             loss = loss * dist.get_world_size() / self.args.global_batch_size
