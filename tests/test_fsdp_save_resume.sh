@@ -1,5 +1,6 @@
 #!/bin/bash
 
+# for rerun the task
 pkill -9 sglang
 sleep 3
 ray stop --force
@@ -10,8 +11,7 @@ pkill -9 ray
 pkill -9 python
 
 set -ex
-
-
+# will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
 
 # Define a temporary directory for checkpoints and ensure it's clean.
@@ -20,30 +20,26 @@ rm -rf ${CHECKPOINT_DIR}
 echo "--- Using checkpoint directory: ${CHECKPOINT_DIR} ---"
 
 
-# Model checkpoint arguments
 CKPT_ARGS=(
-    --hf-checkpoint /root/Qwen3-4B
+   --hf-checkpoint /root/Qwen3-0.6B
 )
 
-# Rollout arguments, configured for a quick test run.
 ROLLOUT_ARGS=(
-    --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
-    --input-key prompt
-    --label-key label
-    --apply-chat-template
-    --rollout-shuffle
-    --rm-type deepscaler
-    # Run for only 2 rollouts to create a checkpoint quickly.
-    --num-rollout 2
-    # Use smaller batch sizes and lengths for a faster test.
-    --rollout-batch-size 4
-    --n-samples-per-prompt 4
-    --rollout-max-response-len 8192
-    --rollout-temperature 0.8
-    --global-batch-size 16
+   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
+   --input-key prompt
+   --label-key label
+   --apply-chat-template
+   --rollout-shuffle
+   --rm-type deepscaler
+   --num-rollout 3000
+   --rollout-batch-size 16
+   --n-samples-per-prompt 16
+   --rollout-max-response-len 8192
+   --rollout-temperature 0.8
+
+   --global-batch-size 128
 )
 
-# GRPO algorithm specific arguments
 GRPO_ARGS=(
    --advantage-estimator grpo
    #--use-kl-loss
@@ -55,7 +51,6 @@ GRPO_ARGS=(
    --eps-clip-high 0.28
 )
 
-# Optimizer arguments
 OPTIMIZER_ARGS=(
    --optimizer adam
    --lr 1e-6
@@ -65,9 +60,8 @@ OPTIMIZER_ARGS=(
    --adam-beta2 0.98
 )
 
-# SGLang engine arguments
 SGLANG_ARGS=(
-    --rollout-num-gpus-per-engine 1
+   --rollout-num-gpus-per-engine 1
 )
 
 # --- Stage 1: Train and Save Checkpoint ---
