@@ -22,7 +22,7 @@ echo "--- Using checkpoint directory: ${CHECKPOINT_DIR} ---"
 
 # Model checkpoint arguments
 CKPT_ARGS=(
-    --hf-checkpoint /root/Qwen3-0.6B
+    --hf-checkpoint /root/Qwen3-4B
 )
 
 # Rollout arguments, configured for a quick test run.
