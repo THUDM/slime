@@ -5,7 +5,7 @@ SOLVER_PROMPT_TEMPLATE = """{problem_statement}"""
 
 
 def generate_rewriter_template(num_solutions: int) -> str:
-    """根据解决方案数量动态生成重写模板"""
+    """Dynamically generate rewrite templates based on the number of solutions."""
     solution_sections = []
     for i in range(num_solutions):
         solution_sections.append(f"#### Solution {i+1}\n{{solution{i+1}}}\n\n---")
@@ -34,7 +34,7 @@ Refer to the following {num_solutions} solutions and solve the problem.
 
 
 def generate_select_template(num_solutions: int) -> str:
-    """根据解决方案数量动态生成选择模板"""
+    """Dynamically generate select templates based on the number of solutions."""
     solution_sections = []
     for i in range(num_solutions):
         solution_sections.append(f"#### Solution {i+1}\n{{solution{i+1}}}\n\n---")

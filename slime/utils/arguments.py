@@ -216,6 +216,24 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This is used to shuffle the prompts and also for the random sampling of the prompts."
                 ),
             )
+            parser.add_argument(
+                "--rollout-health-check-interval",
+                type=float,
+                default=10.0,
+                help="Interval in seconds between rollout engine /health_generate checks during generate/eval.",
+            )
+            parser.add_argument(
+                "--rollout-health-check-timeout",
+                type=float,
+                default=5.0,
+                help="Timeout in seconds to wait for a rollout engine /health_generate response before killing it.",
+            )
+            parser.add_argument(
+                "--rollout-health-check-first-wait",
+                type=float,
+                default=300.0,
+                help="Time to wait for the compilation before the actual health check.",
+            )
 
             # sampling
             parser.add_argument(
@@ -965,6 +983,8 @@ def parse_args(add_custom_arguments=None):
         from slime.backends.fsdp_utils.arguments import load_fsdp_args
 
         args = load_fsdp_args(extra_args_provider=add_slime_arguments)
+        args.rank = 0  # Primary process rank for wandb initialization
+        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
 
     slime_validate_args(args)
 
