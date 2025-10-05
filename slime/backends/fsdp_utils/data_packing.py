@@ -67,7 +67,7 @@ def pack_sequences(
         flat_advantages = []
         flat_returns = []
         flat_rollout_log_probs = []
-        
+
         for i in indices:
             seq_tokens = tokens[i]
             seq_mask = loss_masks[i]
@@ -92,7 +92,7 @@ def pack_sequences(
                 "response_lengths": [response_lengths[i] for i in indices],
                 "advantages": torch.tensor(flat_advantages, dtype=torch.float32),
                 "returns": torch.tensor(flat_returns, dtype=torch.float32),
-                "rollout_log_probs": torch.tensor(flat_rollout_log_probs, dtype=torch.float32)
+                "rollout_log_probs": torch.tensor(flat_rollout_log_probs, dtype=torch.float32),
             }
         )
 
