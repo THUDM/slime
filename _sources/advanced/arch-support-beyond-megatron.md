@@ -1,7 +1,5 @@
 # Supporting Model Architectures Beyond Megatron-LM
 
-## Background
-
 While the Megatron-LM framework is highly efficient for parallel training, it can lack the flexibility to support rapidly evolving model architectures like Qwen3Next. Natively supporting the unique structures of these models, such as Gated-Delta-Net, often requires invasive and time-consuming modifications to Megatron's core codebase.
 
 To accelerate the adoption of these cutting-edge models, slime introduces a more agile approach: **instead of deeply re-engineering Megatron, we directly import and wrap the model's official HuggingFace implementation**, embedding it as a "black-box" module into Megatron's parallel training pipeline.

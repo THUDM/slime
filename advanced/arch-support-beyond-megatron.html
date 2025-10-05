@@ -435,7 +435,6 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#background">Background</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#principle-and-core-components">Principle and Core Components</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-limitations">Current Limitations</a></li>
 </ul>
@@ -451,12 +450,9 @@ document.write(`
                   
   <section class="tex2jax_ignore mathjax_ignore" id="supporting-model-architectures-beyond-megatron-lm">
 <h1>Supporting Model Architectures Beyond Megatron-LM<a class="headerlink" href="#supporting-model-architectures-beyond-megatron-lm" title="Link to this heading">#</a></h1>
-<section id="background">
-<h2>Background<a class="headerlink" href="#background" title="Link to this heading">#</a></h2>
 <p>While the Megatron-LM framework is highly efficient for parallel training, it can lack the flexibility to support rapidly evolving model architectures like Qwen3Next. Natively supporting the unique structures of these models, such as Gated-Delta-Net, often requires invasive and time-consuming modifications to Megatron’s core codebase.</p>
 <p>To accelerate the adoption of these cutting-edge models, slime introduces a more agile approach: <strong>instead of deeply re-engineering Megatron, we directly import and wrap the model’s official HuggingFace implementation</strong>, embedding it as a “black-box” module into Megatron’s parallel training pipeline.</p>
 <p>This document uses Qwen3Next 80B-A3B as an example to illustrate this concept.</p>
-</section>
 <section id="principle-and-core-components">
 <h2>Principle and Core Components<a class="headerlink" href="#principle-and-core-components" title="Link to this heading">#</a></h2>
 <p>Megatron’s model instantiation is a two-step process: first, it generates a “layer specification” (<code class="docutils literal notranslate"><span class="pre">ModuleSpec</span></code>) based on the configuration, and then it instantiates the actual PyTorch modules according to that spec.</p>
@@ -539,7 +535,6 @@ Once the model architecture is integrated, we must ensure that the weights can b
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#background">Background</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#principle-and-core-components">Principle and Core Components</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#current-limitations">Current Limitations</a></li>
 </ul>
