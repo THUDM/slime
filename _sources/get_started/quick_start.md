@@ -272,6 +272,11 @@ GRPO_ARGS=(
    --eps-clip-high 0.28
 )
 ```
+Of course. Here is the English translation for your documentation:
+
+- `--advantage-estimator`: In addition to `grpo` ([https://arxiv.org/abs/2402.03300](https://arxiv.org/abs/2402.03300)), slime also supports several other training algorithms, such as `gspo` ([https://arxiv.org/abs/2507.18071](https://arxiv.org/abs/2507.18071)), `reinforce_plus_plus` and `reinforce_plus_plus_baseline` ([https://arxiv.org/abs/2501.03262](https://arxiv.org/abs/2501.03262)), and `ppo` ([https://arxiv.org/abs/1707.06347](https://arxiv.org/abs/1707.06347)).
+- `--calculate-per-token-loss`: By default, slime calculates the loss on a per-sample basis, i.e., `mean(sum(sample_i) / len(sample_i))`. To calculate the loss on a per-token basis, i.e., `sum(sum(sample_i)) / sum(len(sample_i))`, you can enable this flag.
+- `--use-tis`: Enable this setting to use TIS (Truncated Importance Sampling) ([https://fengyao.notion.site/off-policy-rl](https://fengyao.notion.site/off-policy-rl)).
 
 ### OPTIMIZER_ARGS: Optimizer Parameters
 

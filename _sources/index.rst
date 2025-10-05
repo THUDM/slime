@@ -35,6 +35,8 @@ slime is an LLM post-training framework for RL scaling, providing two core capab
 
    _examples_synced/reproducibility/README.md
    advanced/speculative-decoding.md
+   advanced/fault-tolerance.md
+   advanced/arch-support-beyond-megatron.md
 
 .. toctree::
    :maxdepth: 1

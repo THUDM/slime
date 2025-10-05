@@ -54,7 +54,7 @@
     <link rel="prev" title="slime 文档" href="../index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2025 年 09 月 25 日"/>
+    <meta name="docbuild:last-update" content="2025 年 10 月 05 日"/>
   </head>
   
   
@@ -182,7 +182,8 @@
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/reproducibility/README.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">Speculative decoding 使用指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">投机采样</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
 <ul class="nav bd-sidenav">
@@ -748,6 +749,11 @@ slime 总是会通过 data packing 的方法训练模型，并且严格保证 pe
 <span class="o">)</span>
 </pre></div>
 </div>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span></code>: 除去 <code class="docutils literal notranslate"><span class="pre">grpo</span></code>（https://arxiv.org/abs/2402.03300），slime 还支持其他的一些训练算法，例如 <code class="docutils literal notranslate"><span class="pre">gspo</span></code>（https://arxiv.org/abs/2507.18071）、<code class="docutils literal notranslate"><span class="pre">reinforce_plus_plus</span></code> 与 <code class="docutils literal notranslate"><span class="pre">reinforce_plus_plus_baseline</span></code>（https://arxiv.org/abs/2501.03262）、以及 <code class="docutils literal notranslate"><span class="pre">ppo</span></code>（https://arxiv.org/abs/1707.06347）；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>：slime 中默认的方案是 per sample loss，即 <code class="docutils literal notranslate"><span class="pre">mean(sum(sample_i)</span> <span class="pre">/</span> <span class="pre">len(sample_i))</span></code>，如果需要计算 per token loss，即 <code class="docutils literal notranslate"><span class="pre">sum(sum(sample_i))</span> <span class="pre">/</span> <span class="pre">sum(len(sample_i))</span></code>，可以开启 <code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置。</p></li>
+</ul>
 </section>
 <section id="optimizer-args">
 <h3>OPTIMIZER_ARGS: 优化器参数<a class="headerlink" href="#optimizer-args" title="Link to this heading">#</a></h3>
@@ -1170,7 +1176,7 @@ ray<span class="w"> </span>start<span class="w"> </span>--address<span class="o"
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2025 年 09 月 25 日.
+  最后更新于 2025 年 10 月 05 日.
   <br/>
 </p>
   </div>

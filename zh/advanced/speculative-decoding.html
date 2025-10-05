@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Speculative decoding 使用指南 &#8212; slime</title>
+    <title>投机采样 &#8212; slime</title>
   
   
   
@@ -50,11 +50,11 @@
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="搜索" href="../search.html" />
-    <link rel="next" title="SFT Qwen3-4B-Base" href="../examples/qwen3-4b-base-openhermes.html" />
+    <link rel="next" title="在 Megatron-LM 中快速支持新模型架构" href="arch-support-beyond-megatron.html" />
     <link rel="prev" title="Reproducibility" href="../_examples_synced/reproducibility/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2025 年 09 月 25 日"/>
+    <meta name="docbuild:last-update" content="2025 年 10 月 05 日"/>
   </head>
   
   
@@ -182,7 +182,8 @@
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/reproducibility/README.html">Reproducibility</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Speculative decoding 使用指南</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">投机采样</a></li>
+<li class="toctree-l1"><a class="reference internal" href="arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
 <ul class="nav bd-sidenav">
@@ -419,7 +420,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>Speculative decoding 使用指南</h1>
+    <h1>投机采样</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -429,9 +430,7 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">支持情况</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">使用方法</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">已知问题</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">已知问题</a></li>
 </ul>
             </nav>
         </div>
@@ -443,49 +442,24 @@ document.write(`
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="speculative-decoding">
-<h1>Speculative decoding 使用指南<a class="headerlink" href="#speculative-decoding" title="Link to this heading">#</a></h1>
-<section id="id1">
-<h2>支持情况<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
-<ul class="simple">
-<li><p>✅ mtp layer 仅推理，不训练</p>
-<ul>
-<li><p>✅ 拥有原生 mtp layer 的模型</p>
-<ul>
-<li><p>✅ Mimo-7B-RL</p></li>
-<li><p>🧪 Deepseek-V3/R1</p></li>
-<li><p>🧪 GLM-4.5</p></li>
-</ul>
-</li>
-<li><p>🚧 SpecForge 训练的外部 draft model</p>
-<ul>
-<li><p>🚧 <a class="reference external" href="https://huggingface.co/lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B">sglang-EAGLE3-LLaMA3.1-Instruct-8B</a></p></li>
-<li><p>🚧 <a class="reference external" href="https://huggingface.co/lmsys/Qwen3-235B-A22B-EAGLE3">Qwen3-235B-A22B-EAGLE3</a></p></li>
-</ul>
-</li>
-</ul>
-</li>
-<li><p>⏳ mtp layer 的 RL 训练</p>
-<ul>
-<li><p>🚧 在Megatron 支持 mtp layer 的 sequence packing</p></li>
-</ul>
-</li>
-</ul>
-</section>
-<section id="id2">
-<h2>使用方法<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
-<p>在 SGLANG_ARGS 里添加如下参数</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># for speculative decoding</span>
---sglang-speculative-algorithm<span class="w"> </span>EAGLE
+  <section class="tex2jax_ignore mathjax_ignore" id="id1">
+<h1>投机采样<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
+<p>Speculative decoding is an important optimization for making faster rollout during RL training. Currently slime only supports speculative decoding without training.</p>
+<p>投机采样是加速 rollout 的重要优化手段，目前 slime 支持不通过训练更新 draft model 式的投机采样。</p>
+<p>对于有 MTP 层支持的模型（例如，GLM-4.6、Deepseek-V3/R1），只需要添加：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-speculative-algorithm<span class="w"> </span>EAGLE
 --sglang-speculative-num-steps<span class="w"> </span><span class="m">3</span>
 --sglang-speculative-eagle-topk<span class="w"> </span><span class="m">1</span>
 --sglang-speculative-num-draft-tokens<span class="w"> </span><span class="m">4</span>
 </pre></div>
 </div>
+<p>如果要使用单独训练的 draft model（例如 <a class="reference external" href="https://docs.sglang.ai/SpecForge/">SpecForge</a> 训练的），还需要额外设置：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--speculative-draft-model-path<span class="w"> </span>/your/draft/model/path
+</pre></div>
+</div>
 <p>详细参数含义及配置方法，请参考 SGLang 的 speculative decoding <a class="reference external" href="https://docs.sglang.ai/advanced_features/speculative_decoding.html">文档</a></p>
-</section>
-<section id="id3">
-<h2>已知问题<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<section id="id2">
+<h2>已知问题<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
 <p><a class="reference external" href="https://github.com/sgl-project/sglang/issues/9888">SGLang issue #9888</a> 或 <a class="reference external" href="https://github.com/sgl-project/sglang/issues/9521">SGLang issue #9521</a></p>
 <ul class="simple">
 <li><p>报错发生在 speculative decoding draft 阶段的 cuda graph padding</p></li>
@@ -548,11 +522,11 @@ document.write(`
       </div>
     </a>
     <a class="right-next"
-       href="../examples/qwen3-4b-base-openhermes.html"
+       href="arch-support-beyond-megatron.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">下一页</p>
-        <p class="prev-next-title">SFT Qwen3-4B-Base</p>
+        <p class="prev-next-title">在 Megatron-LM 中快速支持新模型架构</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -572,9 +546,7 @@ document.write(`
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">支持情况</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">使用方法</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">已知问题</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">已知问题</a></li>
 </ul>
   </nav></div>
 
@@ -608,7 +580,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2025 年 09 月 25 日.
+  最后更新于 2025 年 10 月 05 日.
   <br/>
 </p>
   </div>

@@ -54,7 +54,7 @@
     <link rel="prev" title="Quick Start" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Sep 25, 2025"/>
+    <meta name="docbuild:last-update" content="Oct 05, 2025"/>
   </head>
   
   
@@ -182,7 +182,9 @@
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/reproducibility/README.html">Reproducibility</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">Speculative Decoding – Usage Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">Speculative Decoding</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">Fault Tolerance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
 <ul class="nav bd-sidenav">
@@ -635,7 +637,18 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 </section>
 <section id="hyperparameters-for-rl-training">
 <h3>Hyperparameters for RL Training<a class="headerlink" href="#hyperparameters-for-rl-training" title="Link to this heading">#</a></h3>
-<p>TBD</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span></code>: Specifies the RL algorithm for the training process. Currently supported algorithms include:</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">grpo</span></code> (<a class="reference external" href="https://arxiv.org/abs/2402.03300">https://arxiv.org/abs/2402.03300</a>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">gspo</span></code> (<a class="reference external" href="https://arxiv.org/abs/2507.18071">https://arxiv.org/abs/2507.18071</a>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">reinforce_plus_plus</span></code> and <code class="docutils literal notranslate"><span class="pre">reinforce_plus_plus_baseline</span></code> (<a class="reference external" href="https://arxiv.org/abs/2501.03262">https://arxiv.org/abs/2501.03262</a>)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ppo</span></code> (<a class="reference external" href="https://arxiv.org/abs/1707.06347">https://arxiv.org/abs/1707.06347</a>)</p></li>
+</ul>
+</li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>: By default, Slime calculates loss on a per-sample basis, i.e., <code class="docutils literal notranslate"><span class="pre">mean(sum(sample_i)</span> <span class="pre">/</span> <span class="pre">len(sample_i))</span></code>. Enable this flag to calculate loss on a per-token basis, i.e., <code class="docutils literal notranslate"><span class="pre">sum(sum(sample_i))</span> <span class="pre">/</span> <span class="pre">sum(len(sample_i))</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>: Enable this setting to use TIS (Truncated Importance Sampling) (https://fengyao.notion.site/off-policy-rl).</p></li>
+</ul>
 </section>
 </section>
 <section id="custom-rollout-function">
@@ -867,7 +880,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Sep 25, 2025.
+  Last updated on Oct 05, 2025.
   <br/>
 </p>
   </div>

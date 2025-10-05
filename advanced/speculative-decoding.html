@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Speculative Decoding – Usage Guide &#8212; slime</title>
+    <title>Speculative Decoding &#8212; slime</title>
   
   
   
@@ -50,11 +50,11 @@
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="SFT Qwen3-4B-Base" href="../examples/qwen3-4b-base-openhermes.html" />
+    <link rel="next" title="Fault Tolerance" href="fault-tolerance.html" />
     <link rel="prev" title="Reproducibility" href="../_examples_synced/reproducibility/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Sep 25, 2025"/>
+    <meta name="docbuild:last-update" content="Oct 05, 2025"/>
   </head>
   
   
@@ -182,7 +182,9 @@
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/reproducibility/README.html">Reproducibility</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Speculative Decoding – Usage Guide</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Speculative Decoding</a></li>
+<li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">Fault Tolerance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
 <ul class="nav bd-sidenav">
@@ -423,7 +425,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>Speculative Decoding – Usage Guide</h1>
+    <h1>Speculative Decoding</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -433,8 +435,6 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#support-status">Support Status</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#usage">Usage</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#known-issues">Known Issues</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-issue-9888-or-sglang-issue-9521">SGLang issue #9888 or SGLang issue #9521</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-issue-9481">SGLang issue #9481</a></li>
@@ -452,47 +452,21 @@ document.write(`
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="speculative-decoding-usage-guide">
-<h1>Speculative Decoding – Usage Guide<a class="headerlink" href="#speculative-decoding-usage-guide" title="Link to this heading">#</a></h1>
-<section id="support-status">
-<h2>Support Status<a class="headerlink" href="#support-status" title="Link to this heading">#</a></h2>
-<ul class="simple">
-<li><p>✅ <strong>MTP layer for inference only (no training)</strong></p>
-<ul>
-<li><p>✅ Models with native MTP layers:</p>
-<ul>
-<li><p>✅ Mimo-7B-RL</p></li>
-<li><p>🧪 Deepseek-V3/R1</p></li>
-<li><p>🧪 GLM-4.5</p></li>
-</ul>
-</li>
-<li><p>🚧 External draft models trained with SpecForge:</p>
-<ul>
-<li><p>🚧 <a class="reference external" href="https://huggingface.co/lmsys/sglang-EAGLE3-LLaMA3.1-Instruct-8B">sglang-EAGLE3-LLaMA3.1-Instruct-8B</a></p></li>
-<li><p>🚧 <a class="reference external" href="https://huggingface.co/lmsys/Qwen3-235B-A22B-EAGLE3">Qwen3-235B-A22B-EAGLE3</a></p></li>
-</ul>
-</li>
-</ul>
-</li>
-<li><p>⏳ <strong>MTP layer training with RL</strong></p>
-<ul>
-<li><p>🚧 Sequence packing with MTP layers is under development in Megatron.</p></li>
-</ul>
-</li>
-</ul>
-</section>
-<section id="usage">
-<h2>Usage<a class="headerlink" href="#usage" title="Link to this heading">#</a></h2>
-<p>Add the following flags to <code class="docutils literal notranslate"><span class="pre">SGLANG_ARGS</span></code>:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># for speculative decoding</span>
---sglang-speculative-algorithm<span class="w"> </span>EAGLE
+  <section class="tex2jax_ignore mathjax_ignore" id="speculative-decoding">
+<h1>Speculative Decoding<a class="headerlink" href="#speculative-decoding" title="Link to this heading">#</a></h1>
+<p>Speculative decoding is an important optimization for making faster rollout during RL training. Currently slime only supports speculative decoding without training.</p>
+<p>For model with MTP layer (e.g. GLM-4.6, Deepseek-V3/R1), you can run with:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-speculative-algorithm<span class="w"> </span>EAGLE
 --sglang-speculative-num-steps<span class="w"> </span><span class="m">3</span>
 --sglang-speculative-eagle-topk<span class="w"> </span><span class="m">1</span>
 --sglang-speculative-num-draft-tokens<span class="w"> </span><span class="m">4</span>
 </pre></div>
 </div>
+<p>And for external draft model (e.g. draft models from <a class="reference external" href="https://docs.sglang.ai/SpecForge/">SpecForge</a>), you need also pass:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--speculative-draft-model-path<span class="w"> </span>/your/draft/model/path
+</pre></div>
+</div>
 <p>For details on parameter meanings and configuration, see the <a class="reference external" href="https://docs.sglang.ai/advanced_features/speculative_decoding.html">SGLang speculative decoding documentation</a>.</p>
-</section>
 <section id="known-issues">
 <h2>Known Issues<a class="headerlink" href="#known-issues" title="Link to this heading">#</a></h2>
 <section id="sglang-issue-9888-or-sglang-issue-9521">
@@ -565,11 +539,11 @@ document.write(`
       </div>
     </a>
     <a class="right-next"
-       href="../examples/qwen3-4b-base-openhermes.html"
+       href="fault-tolerance.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">SFT Qwen3-4B-Base</p>
+        <p class="prev-next-title">Fault Tolerance</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -589,8 +563,6 @@ document.write(`
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#support-status">Support Status</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#usage">Usage</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#known-issues">Known Issues</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-issue-9888-or-sglang-issue-9521">SGLang issue #9888 or SGLang issue #9521</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-issue-9481">SGLang issue #9481</a></li>
@@ -630,7 +602,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Sep 25, 2025.
+  Last updated on Oct 05, 2025.
   <br/>
 </p>
   </div>
