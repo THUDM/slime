@@ -971,13 +971,6 @@ def parse_args(add_custom_arguments=None):
         args.rank = 0
         args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
         args = set_default_megatron_args(args)
-    elif backend == "xtuner":
-        warning_for_unfinished_backend(backend)
-        from slime.backends.xtuner_utils.arguments import parse_args as xtuner_parse_args
-
-        args = xtuner_parse_args(add_slime_arguments)
-        args.rank = 0
-        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
     else:
         warning_for_unfinished_backend(backend)
         from slime.backends.fsdp_utils.arguments import load_fsdp_args
