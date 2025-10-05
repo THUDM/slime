@@ -117,7 +117,6 @@ class MemorySnapshotSampler:
             return
             
         self.step_count += 1
-        
         if force or (self.interval > 0 and self.step_count % self.interval == 0):
             sub_dir = f"step_{self.step_count}"
             dump_tag = f"{tag}_step{self.step_count}" if tag else f"step{self.step_count}"
