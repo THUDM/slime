@@ -296,20 +296,28 @@ def get_param_info_buckets(args: Namespace, model: Sequence[torch.nn.Module]) ->
     Partition params into buckets ≤ update_weight_buffer_size (with TP replication).
     """
     param_infos = get_param_infos(args, model)
-    param_info_buckets = [[]]
-    buffer_size = 0
+    param_info_buckets = [[]]  # Start with one empty bucket
+    buffer_size = 0  # Track current bucket size in bytes
+
     for info in param_infos:
+        # Expert params use expert-TP size, others use regular-TP size
         if ".experts." in info.name:
             tp_size = mpu.get_expert_tensor_parallel_world_size()
         else:
             tp_size = mpu.get_tensor_model_parallel_world_size()
+
+        # Full param size = shard size × TP replicas (all-gather will reconstruct full param)
         param_size = info.size * tp_size
 
+        # Create new bucket if adding this param exceeds buffer limit (unless current bucket empty)
         if buffer_size + param_size > args.update_weight_buffer_size and len(param_info_buckets[-1]) > 0:
             param_info_buckets.append([])
             buffer_size = 0
+
+        # Add param to current bucket and update size
         param_info_buckets[-1].append(info)
         buffer_size += param_size
+
     return param_info_buckets
 
 
