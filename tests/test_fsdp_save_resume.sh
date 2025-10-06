@@ -80,7 +80,7 @@ ray job submit --address="http://127.0.0.1:8265" \
         }
     }' \
     -- python3 train.py \
-    --overwrite-checkpoints True \
+    --overwrite-checkpoints \
     --save ${CHECKPOINT_DIR} \
     --save-interval 1\
     --actor-num-nodes 1 \
