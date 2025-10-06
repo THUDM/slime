@@ -32,7 +32,7 @@ except Exception:
 def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     """
     All-gather TP-sharded param to full tensor. expert_bias→param, non-TP/duplicated→param.data.
-    Uses expert-TP for ".experts.", else regular-TP. linear_fc1 rechunked (GLU), linear_fc2 dim fix (MoE bug).
+    Uses expert-TP for ".experts.", else regular-TP. linear_fc1 rechunked (GLU), linear_fc2 dim fix.
     """
     if "expert_bias" in name:
         return param
@@ -69,7 +69,9 @@ def all_gather_params_async(
     param_infos_and_params: list[tuple[ParamInfo, torch.nn.Parameter]],
 ) -> list[torch.Tensor]:
     """
-    Batch async all-gather: launch all → wait all → process. Same logic as all_gather_param per param.
+    Parallel TP all-gather for multiple params. Loop 1: for each TP param, allocate buffers +
+    dist.all_gather(async_op=True) on expert-TP/regular-TP group (skip expert_bias/non-TP/duplicated).
+    Loop 2: wait all NCCL handles (enables overlap). Loop 3: concat partitions + apply GLU rechunk/MoE dim fix.
     """
     # Phase 1: Start all async all_gather operations
     gather_tasks = []
