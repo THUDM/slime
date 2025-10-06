@@ -73,7 +73,7 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
             }
 
             # Determine if we should use safetensors
-            use_safetensors = getattr(args, "save_safe_serialization", True)
+            use_safetensors = getattr(args, "save_safe_serialization", False)
             # print(use_safetensors)
 
             if use_safetensors:

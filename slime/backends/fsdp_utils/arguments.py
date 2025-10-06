@@ -30,7 +30,7 @@ class FSDPArgs:
     # Checkpoint
     save: Optional[str] = None
     load: Optional[str] = None
-    save_safe_serialization: bool = True
+    save_safe_serialization: bool = False
     overwrite_checkpoints: bool = False
 
     # Precision
