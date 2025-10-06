@@ -323,8 +323,9 @@ def get_param_info_buckets(args: Namespace, model: Sequence[torch.nn.Module]) ->
 
 class UpdateWeightFromTensor:
     """
-    Update rollout engines from tensor dict: load → broadcast PP/EP → gather TP → convert HF → send.
-    Colocated: IPC/shared memory. Distributed: NCCL. IPC Gloo groups created at init.
+    Update rollout engines from tensor dict:
+    load(dict→GPU) → broadcast PP/EP(GPU NCCL) → gather TP(GPU NCCL) → convert HF(GPU) → send.
+    Send paths: Colocated(GPU→CPU serialize, Gloo gather, Ray IPC), Distributed(GPU NCCL broadcast).
     """
 
     def __init__(
