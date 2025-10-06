@@ -1,5 +1,4 @@
 import os
-
 import torch
 import torch.distributed as dist
 import torch.distributed.checkpoint as dist_cp
@@ -51,20 +50,30 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
                 ),
             )
 
+            # Flatten the optimizer state dictionary
+            flattened_optim_state_dict = {}
+            for param_name, param_states in optimizer_state_dict.get("state", {}).items():
+                for state_key, state_value in param_states.items():
+                    # Create FQN like 'optim.state.<param_name>.<state_key>'
+                    fqn = f"state.{param_name}.{state_key}"
+                    flattened_optim_state_dict[fqn] = state_value
+            # Include param_groups as is
+            if "param_groups" in optimizer_state_dict:
+                flattened_optim_state_dict["param_groups"] = optimizer_state_dict["param_groups"]
+
             state_dict = {
                 "model": model_state_dict,
-                "optim": optimizer_state_dict,
+                "optim": flattened_optim_state_dict,
             }
 
             # Determine if we should use safetensors
             use_safetensors = getattr(args, "save_safe_serialization", True)
-            # print(use_safetensors)
 
             if use_safetensors:
                 try:
                     from torch.distributed.checkpoint import HuggingFaceStorageWriter
 
-                    # debug
+                    # Debug: Print state dict keys
                     if dist.get_rank() == 0:
                         print("Model state dict keys:", list(state_dict["model"].keys()))
                         print("Optimizer state dict keys:", list(state_dict["optim"].keys()))
