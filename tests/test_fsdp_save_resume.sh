@@ -80,7 +80,9 @@ ray job submit --address="http://127.0.0.1:8265" \
         }
     }' \
     -- python3 train.py \
+    --overwrite-checkpoints True \
     --save ${CHECKPOINT_DIR} \
+    --save-interval 1\
     --actor-num-nodes 1 \
     --actor-num-gpus-per-node 4 \
     --colocate \
@@ -92,11 +94,12 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 echo "--- Save run finished. Stopping Ray to simulate a restart ---"
 ray stop --force
-sleep 3
+sleep 10
 
 echo "--- Files in checkpoint directory AFTER save ---"
 ls -lhR ${CHECKPOINT_DIR} || echo "(empty)"
 
+sleep 15
 echo "--- Restarting Ray Head Node for Load Test ---"
 ray start --head --node-ip-address 127.0.0.1 --num-gpus 4 --disable-usage-stats
 
@@ -125,6 +128,6 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 echo "--- Load test finished. Cleaning up resources ---"
 ray stop --force
-rm -rf ${CHECKPOINT_DIR}
+#rm -rf ${CHECKPOINT_DIR}
 
 echo "--- Save/Load test completed successfully! ---"
