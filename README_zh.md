@@ -69,6 +69,9 @@ slime 是 [GLM-4.5](https://z.ai/blog/glm-4.5) 与 [GLM-4.6](https://z.ai/blog/g
   ```bash
   apt install pre-commit -y
   pre-commit install
+
+  # 运行 pre-commit 保证代码风格
+  pre-commit run --all-files --show-diff-on-failure --color=always
   ```
 
 - 调试技巧请参考 [debug 指南](docs/zh/developer_guide/debug.md)

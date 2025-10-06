@@ -23,12 +23,12 @@ slime is the RL-framework behind [GLM-4.5](https://z.ai/blog/glm-4.5) and [GLM-4
 
 ## Table of Contents
 
-  - [Architecture Overview](#architecture-overview)
-  - [Quick Start](#quick-start)
-  - [Projects Built with slime](#projects-built-with-slime)
-  - [Arguments Walkthrough](#arguments-walkthrough)
-  - [Developer Guide](#developer-guide)
-  - [FAQ & Acknowledgements](#faq--acknowledgements)
+- [Architecture Overview](#architecture-overview)
+- [Quick Start](#quick-start)
+- [Projects Built with slime](#projects-built-with-slime)
+- [Arguments Walkthrough](#arguments-walkthrough)
+- [Developer Guide](#developer-guide)
+- [FAQ & Acknowledgements](#faq--acknowledgements)
 
 ## Architecture Overview
 
@@ -36,9 +36,9 @@ slime is the RL-framework behind [GLM-4.5](https://z.ai/blog/glm-4.5) and [GLM-4
 
 **Module Descriptions**:
 
-  - **training (Megatron)**: Responsible for the main training process, reads data from the Data Buffer, and synchronizes parameters to the rollout module after training.
-  - **rollout (SGLang + router)**: Generates new data (including rewards/verifier outputs) and stores it in the Data Buffer.
-  - **data buffer**: A bridge module that manages prompt initialization, custom data, and rollout generation methods.
+- **training (Megatron)**: Responsible for the main training process, reads data from the Data Buffer, and synchronizes parameters to the rollout module after training.
+- **rollout (SGLang + router)**: Generates new data (including rewards/verifier outputs) and stores it in the Data Buffer.
+- **data buffer**: A bridge module that manages prompt initialization, custom data, and rollout generation methods.
 
 ## Quick Start
 
@@ -73,29 +73,33 @@ For complete usage instructions, please refer to the [Usage Documentation](docs/
 
 ## Developer Guide
 
-  - **Contributions are welcome\!** If you have suggestions for new features, performance tuning, or feedback on user experience, feel free to submit an Issue or PR 😊
+- **Contributions are welcome\!** If you have suggestions for new features, performance tuning, or feedback on user experience, feel free to submit an Issue or PR 😊
 
-  - Use [pre-commit](https://pre-commit.com/) to ensure code style consistency for your commits:
+- Use [pre-commit](https://pre-commit.com/) to ensure code style consistency for your commits:
 
-    ```bash
-    apt install pre-commit -y
-    pre-commit install
-    ```
+```bash
+apt install pre-commit -y
+pre-commit install
 
-  - For debugging tips, please refer to the [Debugging Guide](docs/en/developer_guide/debug.md)
+# run pre-commit to ensure code style consistency
+pre-commit run --all-files --show-diff-on-failure --color=always
+```
+
+- For debugging tips, please refer to the [Debugging Guide](docs/en/developer_guide/debug.md)
 
 ## FAQ & Acknowledgements
 
-  - For frequently asked questions, please see the [Q\&A](docs/en/get_started/qa.md)
-  - Special thanks to the following projects & communities: SGLang, Megatron‑LM, mbridge, OpenRLHF, veRL, Pai-Megatron-Patch and others.
-  - To quote slime, please use:
-  ```bibtext
-  @misc{slime_github,
-    author       = {Zilin Zhu and Chengxing Xie and Xin Lv and slime Contributors},
-    title        = {slime: An LLM post-training framework for RL Scaling},
-    year         = {2025},
-    howpublished = {\url{https://github.com/THUDM/slime}},
-    note         = {GitHub repository. Corresponding author: Xin Lv},
-    urldate      = {2025-06-19}
-  }
-  ```
+- For frequently asked questions, please see the [Q\&A](docs/en/get_started/qa.md)
+- Special thanks to the following projects & communities: SGLang, Megatron‑LM, mbridge, OpenRLHF, veRL, Pai-Megatron-Patch and others.
+- To quote slime, please use:
+
+```bibtext
+@misc{slime_github,
+  author       = {Zilin Zhu and Chengxing Xie and Xin Lv and slime Contributors},
+  title        = {slime: An LLM post-training framework for RL Scaling},
+  year         = {2025},
+  howpublished = {\url{https://github.com/THUDM/slime}},
+  note         = {GitHub repository. Corresponding author: Xin Lv},
+  urldate      = {2025-06-19}
+}
+```
