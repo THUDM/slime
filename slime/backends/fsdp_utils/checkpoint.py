@@ -64,6 +64,11 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
                 try:
                     from torch.distributed.checkpoint import HuggingFaceStorageWriter
 
+                    # debug
+                    if dist.get_rank() == 0:
+                        print("Model state dict keys:", list(state_dict["model"].keys()))
+                        print("Optimizer state dict keys:", list(state_dict["optim"].keys()))
+
                     # Create FQN to index mapping for safetensors
                     fqn_to_index_mapping = {}
                     for key in state_dict["model"].keys():
