@@ -58,7 +58,7 @@ class FSDPTrainRayActor(TrainRayActor):
         torch.manual_seed(args.seed)
 
         hf_checkpoint = args.load if args.load else args.hf_checkpoint
-        loaded_rollout_id = -1
+        start_iteration = 0
         self.global_step = 0
 
         for i in range(dist.get_world_size()):
@@ -95,7 +95,22 @@ class FSDPTrainRayActor(TrainRayActor):
         )
 
         if args.load:
-            loaded_rollout_id, self.global_step = load_checkpoint(args, self.model, self.optimizer)
+            loaded_iteration, self.global_step = load_checkpoint(args, self.model, self.optimizer)
+            if loaded_iteration >= 0:
+                # Successfully loaded a training checkpoint - resume from next iteration
+                start_iteration = loaded_iteration + 1
+                if dist.get_rank() == 0:
+                    print(f"Resuming training from iteration {start_iteration}")
+            else:
+                # No training state found - treating as initial model
+                start_iteration = 0
+                if dist.get_rank() == 0:
+                    print(f"No training checkpoint found at {args.load}. Starting from iteration 0.")
+        else:
+            # Fresh start
+            start_iteration = 0
+            if dist.get_rank() == 0:
+                print("Starting fresh training from iteration 0")
 
         self.weights = {"actor": {}}
 
@@ -119,7 +134,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         Timer().start("train_wait")
         self.micro_step = 0
-        return loaded_rollout_id + 1
+        return start_iteration
 
     def sleep(self, tags):
         if not getattr(self.args, "offload", False):
