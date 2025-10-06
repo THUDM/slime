@@ -68,6 +68,8 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
                     fqn_to_index_mapping = {}
                     for key in state_dict["model"].keys():
                         fqn_to_index_mapping[f"model.{key}"] = 0
+                    for key in state_dict["optim"].keys():
+                        fqn_to_index_mapping[f"optim.{key}"] = 0
 
                     storage_writer = HuggingFaceStorageWriter(
                         path=checkpoint_dir,
