@@ -6,6 +6,7 @@ from contextlib import nullcontext
 from functools import partial
 
 import torch
+import wandb
 from megatron.core import mpu
 from megatron.core.distributed import DistributedDataParallel as DDP
 from megatron.core.distributed import DistributedDataParallelConfig, finalize_model_grads
@@ -18,7 +19,6 @@ from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
-import wandb
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
@@ -479,6 +479,12 @@ def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_
             if args.use_wandb:
                 log_dict["train/step"] = accumulated_step_id
                 wandb.log(log_dict)
+
+            if args.use_tensorboard:
+                from slime.utils.tensorboard_utils import _TensorboardAdapter
+
+                tb = _TensorboardAdapter(args)
+                tb.log(data=log_dict, step=accumulated_step_id)
 
             if args.ci_test:
                 if step_id == 0 and "train/ppo_kl" in log_dict and "train/pg_clipfrac" in log_dict:

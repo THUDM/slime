@@ -581,10 +581,19 @@ index 84f22bde..b4807d26 100644
              # discard the output of the pre-mlp layernorm and register the recompute
              # as a gradient hook of mlp_output_with_bias[0]
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
-index 24ba8926..4f039fd4 100644
+index 24ba8926..dfa9f7a5 100644
 --- a/megatron/training/arguments.py
 +++ b/megatron/training/arguments.py
-@@ -1191,6 +1191,9 @@ def core_transformer_config_from_args(args, config_class=None):
+@@ -937,8 +937,6 @@ def validate_args(args, defaults={}):
+     # MoE Spec check
+     if args.num_experts == 0:
+         args.num_experts = None
+-    if args.num_experts is not None:
+-        assert args.spec is None, "Model Spec must be None when using MoEs"
+     if args.num_experts is not None and args.moe_ffn_hidden_size is None:
+         args.moe_ffn_hidden_size = args.ffn_hidden_size
+         print("Warning: moe_ffn_hidden_size is not set, using ffn_hidden_size for MoE instead.")
+@@ -1191,6 +1189,9 @@ def core_transformer_config_from_args(args, config_class=None):
      if args.is_hybrid_model:
          kw_args['is_hybrid_model'] = args.is_hybrid_model
  
@@ -594,7 +603,7 @@ index 24ba8926..4f039fd4 100644
      # handle quantization config
      # NOTE: Kitchen arguments are only added to the namespace when
      # Kitchen library is available.
-@@ -1481,6 +1484,10 @@ def _add_network_size_args(parser):
+@@ -1481,6 +1482,10 @@ def _add_network_size_args(parser):
                         action='store_true',
                         help='If set, use original BERT residula connection '
                         'ordering.')

@@ -84,10 +84,6 @@ class RayTrainGroup:
 
             actor_impl = MegatronTrainRayActor
 
-        elif backend == "xtuner":
-            from slime.backends.xtuner_utils.actor import XTunerTrainRayActor
-
-            actor_impl = XTunerTrainRayActor
         else:
             from slime.backends.fsdp_utils import FSDPTrainRayActor
 

@@ -244,6 +244,27 @@ index 3d901ceb5..af9554b9a 100644
                  },
              }
          state.out_list.append(out)
+diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
+index 5b0f8a714..86c031c17 100644
+--- a/python/sglang/srt/mem_cache/memory_pool.py
++++ b/python/sglang/srt/mem_cache/memory_pool.py
+@@ -663,6 +663,7 @@ class HybridLinearKVPool(KVCache):
+         full_attention_layer_ids: List[int],
+         enable_kvcache_transpose: bool,
+         device: str,
++        enable_memory_saver: bool,
+     ):
+         self.size = size
+         self.dtype = dtype
+@@ -683,7 +684,7 @@ class HybridLinearKVPool(KVCache):
+             head_dim=head_dim,
+             layer_num=self.full_layer_nums,
+             device=device,
+-            enable_memory_saver=False,
++            enable_memory_saver=enable_memory_saver,
+         )
+         self.full_attention_layer_id_mapping = {
+             id: i for i, id in enumerate(full_attention_layer_ids)
 diff --git a/python/sglang/srt/model_executor/cuda_graph_runner.py b/python/sglang/srt/model_executor/cuda_graph_runner.py
 index 0a1cededd..0093fe2a8 100644
 --- a/python/sglang/srt/model_executor/cuda_graph_runner.py
@@ -280,7 +301,7 @@ index 0a1cededd..0093fe2a8 100644
          self.model_runner.attn_backend.init_forward_metadata_replay_cuda_graph(
              bs,
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index 1f08e43a1..7c4cde66a 100644
+index 1f08e43a1..42c438925 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
 @@ -25,6 +25,7 @@ import time
@@ -300,6 +321,14 @@ index 1f08e43a1..7c4cde66a 100644
              self.model = get_model(
                  model_config=self.model_config,
                  load_config=self.load_config,
+@@ -1616,6 +1617,7 @@ class ModelRunner:
+                     ),
+                     enable_kvcache_transpose=False,
+                     device=self.device,
++                    enable_memory_saver=self.server_args.enable_memory_saver,
+                 )
+             else:
+                 self.token_to_kv_pool = MHATokenToKVPool(
 diff --git a/python/sglang/srt/models/glm4_moe.py b/python/sglang/srt/models/glm4_moe.py
 index 867ffe91b..708d69075 100644
 --- a/python/sglang/srt/models/glm4_moe.py

@@ -6,6 +6,12 @@ slime is an LLM post-training framework for RL scaling, providing two core capab
 - High-Performance Training: Supports efficient training in various modes by connecting Megatron with SGLang;
 - Flexible Data Generation: Enables arbitrary training data generation workflows through custom data generation interfaces and server-based engines.
 
+slime is the RL-framework behind GLM-4.5 and GLM-4.6. Apart from models from Z.ai, we also supports the following models:
+
+- Qwen3 series (Qwen3Next, Qwen3MoE, Qwen3), Qwen2.5 series;
+- DeepSeek V3 series (DeepSeek V3, V3.1, DeepSeek R1);
+- Llama 3.
+
 .. toctree::
    :maxdepth: 1
    :caption: Get Started
@@ -35,6 +41,8 @@ slime is an LLM post-training framework for RL scaling, providing two core capab
 
    _examples_synced/reproducibility/README.md
    advanced/speculative-decoding.md
+   advanced/fault-tolerance.md
+   advanced/arch-support-beyond-megatron.md
 
 .. toctree::
    :maxdepth: 1

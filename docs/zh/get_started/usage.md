@@ -175,7 +175,13 @@ sglang 的加载非常简单，只需要：
 
 ### RL 训练需要的超参
 
-TBD
+- `--advantage-estimator`: 当前训练需要的 RL 算法，目前支持：
+  - `grpo`（https://arxiv.org/abs/2402.03300）；
+  - `gspo`（https://arxiv.org/abs/2507.18071）；
+  - `reinforce_plus_plus` 与 `reinforce_plus_plus_baseline`（https://arxiv.org/abs/2501.03262）；
+  - `ppo`（https://arxiv.org/abs/1707.06347）。
+- `--calculate-per-token-loss`：slime 中默认的方案是 per sample loss，即 `mean(sum(sample_i) / len(sample_i))`，如果需要计算 per token loss，即 `sum(sum(sample_i)) / sum(len(sample_i))`，可以开启 `--calculate-per-token-loss`；
+- `--use-tis`：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置。
 
 ## 自定义 rollout 函数
 

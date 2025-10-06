@@ -733,6 +733,20 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--wandb-run-id", type=str, default=None)
             return parser
 
+        # tensorboard
+        def add_tensorboard_arguments(parser):
+            # tb_project_name, tb_experiment_name
+            parser.add_argument("--use-tensorboard", action="store_true", default=False)
+            parser.add_argument(
+                "--tb-project-name",
+                type=str,
+                default=None,
+                help="Directory to store tensorboard logs. Default is  os.environ.get('TENSORBOARD_DIR') directory.",
+            )
+            parser.add_argument("--tb-experiment-name", type=str, default=None)
+
+            return parser
+
         # debug
         def add_debug_arguments(parser):
             parser.add_argument(
@@ -919,6 +933,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_eval_arguments(parser)
         parser = add_algo_arguments(parser)
         parser = add_wandb_arguments(parser)
+        parser = add_tensorboard_arguments(parser)
         parser = add_router_arguments(parser)
         parser = add_debug_arguments(parser)
         parser = add_sglang_arguments(parser)
@@ -958,7 +973,7 @@ def parse_args(add_custom_arguments=None):
         from slime.backends.megatron_utils import validate_args as megatron_validate_args
 
         args = megatron_parse_args(extra_args_provider=add_slime_arguments)
-        if getattr(args, "hf_checkpoint", None):
+        if args.hf_checkpoint:
             hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
             if args.use_hf_config_for_megatron:
                 from slime.backends.megatron_utils.config_mapping import get_mapper
@@ -971,13 +986,6 @@ def parse_args(add_custom_arguments=None):
         args.rank = 0
         args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
         args = set_default_megatron_args(args)
-    elif backend == "xtuner":
-        warning_for_unfinished_backend(backend)
-        from slime.backends.xtuner_utils.arguments import parse_args as xtuner_parse_args
-
-        args = xtuner_parse_args(add_slime_arguments)
-        args.rank = 0
-        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
     else:
         warning_for_unfinished_backend(backend)
         from slime.backends.fsdp_utils.arguments import load_fsdp_args
