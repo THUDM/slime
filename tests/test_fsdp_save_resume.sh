@@ -63,6 +63,8 @@ OPTIMIZER_ARGS=(
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
 )
+echo "--- Listing files in checkpoint directory BEFORE save ---"
+ls -lhR ${CHECKPOINT_DIR} || echo "(empty)"
 
 # --- Stage 1: Train and Save Checkpoint ---
 echo "--- Starting Ray Head Node for Save Test ---"
@@ -90,6 +92,9 @@ ray job submit --address="http://127.0.0.1:8265" \
 echo "--- Save run finished. Stopping Ray to simulate a restart ---"
 ray stop --force
 sleep 3
+
+echo "--- Files in checkpoint directory AFTER save ---"
+ls -lhR ${CHECKPOINT_DIR} || echo "(empty)"
 
 echo "--- Restarting Ray Head Node for Load Test ---"
 ray start --head --node-ip-address 127.0.0.1 --num-gpus 4 --disable-usage-stats
