@@ -8,9 +8,9 @@ from typing import List, Union
 
 import ray
 import torch
+import wandb
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-import wandb
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
@@ -46,9 +46,12 @@ class RolloutManager:
         print(f"import {self.args.rollout_function_path} as generate_rollout function.")
         print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
-        num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
-        num_engines = args.rollout_num_gpus // num_gpu_per_engine
-        self.all_rollout_engines = [None] * num_engines
+        if self.args.debug_train_only:
+            self.all_rollout_engines = []
+        else:
+            num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
+            num_engines = args.rollout_num_gpus // num_gpu_per_engine
+            self.all_rollout_engines = [None] * num_engines
         self.num_new_engines = init_rollout_engines(args, pg, self.all_rollout_engines)
         self.nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
         # when doing multi-node serving, we will only send request to node-0 for each engine.
@@ -60,7 +63,6 @@ class RolloutManager:
         self._health_monitor_stop_event = None
         self._health_check_interval = args.rollout_health_check_interval
         self._health_check_timeout = args.rollout_health_check_timeout
-        self._health_check_is_first = True
         self._health_check_first_wait = args.rollout_health_check_first_wait
 
     def get_rollout_engines_and_lock(self):
@@ -138,10 +140,8 @@ class RolloutManager:
     def _health_monitor_loop(self) -> None:
         assert self._health_monitor_stop_event is not None
         # TODO: need to be waiting for the large moe to be ready. this is hacky.
-        if self._health_check_is_first:
-            if self._health_monitor_stop_event.wait(self._health_check_first_wait):
-                return
-            self._health_check_is_first = False
+        if self._health_monitor_stop_event.wait(self._health_check_first_wait):
+            return
         while not self._health_monitor_stop_event.is_set():
             self._run_health_checks()
             if self._health_monitor_stop_event.wait(self._health_check_interval):
@@ -283,7 +283,7 @@ class RolloutManager:
 
 def init_rollout_engines(args, pg, all_rollout_engines):
     if args.debug_train_only:
-        return []
+        return 0
 
     num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
     num_engines = args.rollout_num_gpus // num_gpu_per_engine
@@ -413,6 +413,7 @@ def _start_router(args):
 
     else:
         from sglang_router.launch_router import RouterArgs
+
         from slime.utils.http_utils import run_router
 
         args.sglang_router_ip = get_host_info()[1]
@@ -461,6 +462,19 @@ def _log_eval_rollout_data(rollout_id, args, data):
         )
         wandb.log(log_dict)
 
+    if args.use_tensorboard:
+        from slime.utils.tensorboard_utils import _TensorboardAdapter
+
+        tb = _TensorboardAdapter(args)
+        tb.log(
+            data=log_dict,
+            step=(
+                rollout_id
+                if not args.wandb_always_use_train_step
+                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+            ),
+        )
+
 
 def _log_rollout_data(rollout_id, args, samples, rollout_time):
     if args.load_debug_rollout_data:
@@ -482,3 +496,16 @@ def _log_rollout_data(rollout_id, args, samples, rollout_time):
             else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
         )
         wandb.log(log_dict)
+
+    if args.use_tensorboard:
+        from slime.utils.tensorboard_utils import _TensorboardAdapter
+
+        tb = _TensorboardAdapter(args)
+        tb.log(
+            data=log_dict,
+            step=(
+                rollout_id
+                if not args.wandb_always_use_train_step
+                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+            ),
+        )

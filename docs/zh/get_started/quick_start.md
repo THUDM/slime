@@ -272,6 +272,10 @@ GRPO_ARGS=(
 )
 ```
 
+- `--advantage-estimator`: 除去 [GRPO](https://arxiv.org/abs/2402.03300)，slime 还支持丰富的其他训练算法，例如 [GSPO](https://arxiv.org/abs/2507.18071)、[Reinforce++](https://arxiv.org/abs/2501.03262) 与 [Reinforce++ Baseline](https://arxiv.org/abs/2501.03262)、以及 [PPO](https://arxiv.org/abs/1707.06347)；
+- `--calculate-per-token-loss`：slime 中默认的方案是 per sample loss，即 `mean(sum(sample_i) / len(sample_i))`，如果需要计算 per token loss，即 `sum(sum(sample_i)) / sum(len(sample_i))`，可以开启 `--calculate-per-token-loss`；
+- `--use-tis`：如果需要开启 TIS (Truncated Importance Sampling)，可以开启这一设置。TIS 由此[博客](https://fengyao.notion.site/off-policy-rl)介绍。
+
 ### OPTIMIZER_ARGS: 优化器参数
 
 ```bash

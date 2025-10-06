@@ -5,10 +5,10 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+import wandb
 from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 
-import wandb
 from slime.utils.data import get_minimum_num_micro_batch_size
 from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
@@ -87,6 +87,20 @@ def gather_log_data(metic_name, args, rollout_id, log_dict):
                 else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
             )
             wandb.log(reduced_log_dict)
+
+        if args.use_tensorboard:
+            from slime.utils.tensorboard_utils import _TensorboardAdapter
+
+            tb = _TensorboardAdapter(args)
+            tb.log(
+                data=reduced_log_dict,
+                step=(
+                    rollout_id
+                    if not args.wandb_always_use_train_step
+                    else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+                ),
+            )
+
         return reduced_log_dict
     else:
         dist.gather_object(
@@ -385,6 +399,19 @@ def log_perf_data(rollout_id, args):
                 else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
             )
             wandb.log(log_dict)
+
+        if args.use_tensorboard:
+            from slime.utils.tensorboard_utils import _TensorboardAdapter
+
+            tb = _TensorboardAdapter(args)
+            tb.log(
+                data=log_dict,
+                step=(
+                    rollout_id
+                    if not args.wandb_always_use_train_step
+                    else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+                ),
+            )
     timer_instance.reset()
 
 

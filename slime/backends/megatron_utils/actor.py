@@ -90,7 +90,6 @@ class MegatronTrainRayActor(TrainRayActor):
             quantization_config=getattr(self.hf_config, "quantization_config", None),
             vocab_size=self.tokenizer.vocab_size if self.args.vocab_size is None else self.args.vocab_size,
         )
-        self.connected = False
 
         # empty cache after initialization
         clear_memory()

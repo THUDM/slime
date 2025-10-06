@@ -93,7 +93,7 @@ def get_model_provider_func(args, role: str = "actor"):
             transformer_layer_spec = import_module(args.spec)
             # Allow the spec to be a function so that user can use customized Megatron easier.
             if callable(transformer_layer_spec):
-                transformer_layer_spec = transformer_layer_spec(args)
+                transformer_layer_spec = transformer_layer_spec(args, config, vp_stage)
         else:
             if args.num_experts:
                 # Define the decoder block spec
