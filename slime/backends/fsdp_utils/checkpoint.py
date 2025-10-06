@@ -45,7 +45,7 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
                 model,
                 optimizer,
                 options=StateDictOptions(
-                    full_state_dict=False,  # Use sharded state dict for efficiency
+                    full_state_dict=False,
                     cpu_offload=False,
                 ),
             )
@@ -54,12 +54,18 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
             flattened_optim_state_dict = {}
             for param_name, param_states in optimizer_state_dict.get("state", {}).items():
                 for state_key, state_value in param_states.items():
-                    # Create FQN like 'optim.state.<param_name>.<state_key>'
+                    # Create FQN like 'state.<param_name>.<state_key>'
                     fqn = f"state.{param_name}.{state_key}"
                     flattened_optim_state_dict[fqn] = state_value
-            # Include param_groups as is
+
+            # Flatten param_groups (list of dicts)
             if "param_groups" in optimizer_state_dict:
-                flattened_optim_state_dict["param_groups"] = optimizer_state_dict["param_groups"]
+                param_groups = optimizer_state_dict["param_groups"]
+                for group_idx, group in enumerate(param_groups):
+                    for key, value in group.items():
+                        # Create FQN like 'param_groups.<index>.<key>'
+                        fqn = f"param_groups.{group_idx}.{key}"
+                        flattened_optim_state_dict[fqn] = value
 
             state_dict = {
                 "model": model_state_dict,
@@ -68,15 +74,11 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
 
             # Determine if we should use safetensors
             use_safetensors = getattr(args, "save_safe_serialization", True)
+            # print(use_safetensors)
 
             if use_safetensors:
                 try:
                     from torch.distributed.checkpoint import HuggingFaceStorageWriter
-
-                    # Debug: Print state dict keys
-                    if dist.get_rank() == 0:
-                        print("Model state dict keys:", list(state_dict["model"].keys()))
-                        print("Optimizer state dict keys:", list(state_dict["optim"].keys()))
 
                     # Create FQN to index mapping for safetensors
                     fqn_to_index_mapping = {}
