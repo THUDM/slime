@@ -309,7 +309,7 @@ def get_param_info_buckets(args: Namespace, model: Sequence[torch.nn.Module]) ->
         # Full param size = shard size × TP replicas (all-gather will reconstruct full param)
         param_size = info.size * tp_size
 
-        # Create new bucket if adding this param exceeds buffer limit (unless current bucket empty)
+        # If adding this param exceeds limit AND current bucket has params: start new bucket
         if buffer_size + param_size > args.update_weight_buffer_size and len(param_info_buckets[-1]) > 0:
             param_info_buckets.append([])
             buffer_size = 0
