@@ -327,7 +327,8 @@ class UpdateWeightFromTensor:
     """
     Update rollout engines from tensor dict:
     load(dict→GPU) → broadcast PP/EP(GPU NCCL) → gather TP(GPU NCCL) → convert HF(GPU) → send.
-    Send paths: Colocated(GPU→CPU serialize, Gloo gather, Ray IPC), Distributed(GPU NCCL broadcast).
+    Colocated: GPU→CPU serialize → gather_object(Gloo CPU, collects from rollout_num_gpus_per_engine ranks) → Ray IPC to engine.
+    Distributed: GPU NCCL broadcast to remote engines.
     """
 
     def __init__(
