@@ -23,6 +23,7 @@ echo "--- Using checkpoint directory: ${CHECKPOINT_DIR} ---"
 
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-0.6B
+   --save-safe-serialization
 )
 
 ROLLOUT_ARGS=(

@@ -20,7 +20,6 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
                     f"WARNING: Checkpoint directory {checkpoint_dir} already exists and --overwrite-checkpoints is not set. "
                     "Skipping saving."
                 )
-                # Barrier to ensure all ranks skip
                 dist.barrier()
                 return
             else:
@@ -29,11 +28,9 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
         print(f"Saving checkpoint at iteration {iteration} to {checkpoint_dir}")
         os.makedirs(checkpoint_dir, exist_ok=True)
 
-    # Barrier to ensure directory is created before all ranks proceed
     dist.barrier()
 
-    # For FSDP v2 (composable fully_shard), use the new state_dict API
-    # For FSDP v1, fall back to the old API
+    # For FSDP v2, use the new state_dict API
     use_new_api = version.parse(torch.__version__) >= version.parse("2.4")
 
     if use_new_api:
@@ -50,31 +47,13 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
                 ),
             )
 
-            # Flatten the optimizer state dictionary
-            flattened_optim_state_dict = {}
-            for param_name, param_states in optimizer_state_dict.get("state", {}).items():
-                for state_key, state_value in param_states.items():
-                    # Create FQN like 'state.<param_name>.<state_key>'
-                    fqn = f"state.{param_name}.{state_key}"
-                    flattened_optim_state_dict[fqn] = state_value
-
-            # Flatten param_groups (list of dicts)
-            if "param_groups" in optimizer_state_dict:
-                param_groups = optimizer_state_dict["param_groups"]
-                for group_idx, group in enumerate(param_groups):
-                    for key, value in group.items():
-                        # Create FQN like 'param_groups.<index>.<key>'
-                        fqn = f"param_groups.{group_idx}.{key}"
-                        flattened_optim_state_dict[fqn] = value
-
             state_dict = {
                 "model": model_state_dict,
-                "optim": flattened_optim_state_dict,
+                "optim": optimizer_state_dict,
             }
 
             # Determine if we should use safetensors
             use_safetensors = getattr(args, "save_safe_serialization", False)
-            # print(use_safetensors)
 
             if use_safetensors:
                 try:
@@ -84,8 +63,14 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
                     fqn_to_index_mapping = {}
                     for key in state_dict["model"].keys():
                         fqn_to_index_mapping[f"model.{key}"] = 0
-                    for key in state_dict["optim"].keys():
+
+                    # Flatten optimizer state for safetensors
+                    flattened_optim = _flatten_optimizer_state(optimizer_state_dict)
+                    for key in flattened_optim.keys():
                         fqn_to_index_mapping[f"optim.{key}"] = 0
+
+                    # Replace optimizer state dict with flattened version
+                    state_dict["optim"] = flattened_optim
 
                     storage_writer = HuggingFaceStorageWriter(
                         path=checkpoint_dir,
@@ -95,7 +80,6 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
                     if dist.get_rank() == 0:
                         print("Saving with HuggingFace safetensors format")
 
-                    # Use the newer save API
                     dist_cp.save(
                         state_dict=state_dict,
                         storage_writer=storage_writer,
@@ -104,7 +88,6 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
                 except ImportError:
                     if dist.get_rank() == 0:
                         print("WARNING: HuggingFaceStorageWriter not available. Using standard format.")
-
                     storage_writer = dist_cp.FileSystemWriter(checkpoint_dir)
                     dist_cp.save(
                         state_dict=state_dict,
@@ -119,13 +102,12 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step):
                 )
 
         except ImportError:
-            # Fallback if get_state_dict is not available
             if dist.get_rank() == 0:
                 print("WARNING: New state_dict API not available, using fallback.")
             use_new_api = False
 
     if not use_new_api:
-        # Fallback for FSDP v1 or older PyTorch versions
+        # Fallback for FSDP v1
         from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
         from torch.distributed.fsdp import StateDictType
 
@@ -196,24 +178,45 @@ def load_checkpoint(args, model, optimizer):
                 model, optimizer, options=StateDictOptions(full_state_dict=False, cpu_offload=False)
             )
 
-            state_dict = {
-                "model": model_state_dict,
-                "optim": optimizer_state_dict,
-            }
-
-            # Load with appropriate reader
+            # Load based on format
             if is_safetensors:
                 try:
                     from torch.distributed.checkpoint import HuggingFaceStorageReader
 
+                    # Load flattened optimizer state from safetensors
+                    state_dict = {
+                        "model": model_state_dict,
+                        "optim": {},  # Will be populated with flattened keys
+                    }
+
                     storage_reader = HuggingFaceStorageReader(path=checkpoint_path)
                     dist_cp.load(state_dict=state_dict, storage_reader=storage_reader)
+
+                    # Unflatten the optimizer state dict
+                    try:
+                        optimizer_state_dict = _unflatten_optimizer_state(state_dict["optim"])
+                    except (KeyError, IndexError):
+                        # Fallback for older safetensors checkpoints without flattened optimizer state
+                        if dist.get_rank() == 0:
+                            print("WARNING: Failed to unflatten optimizer state. Assuming non-flattened format.")
+                        optimizer_state_dict = state_dict["optim"]
+
                 except ImportError:
                     if dist.get_rank() == 0:
                         print("WARNING: HuggingFaceStorageReader not available. Using standard reader.")
+
+                    state_dict = {
+                        "model": model_state_dict,
+                        "optim": optimizer_state_dict,
+                    }
                     storage_reader = dist_cp.FileSystemReader(checkpoint_path)
                     dist_cp.load(state_dict=state_dict, storage_reader=storage_reader)
             else:
+                # Standard format - load directly
+                state_dict = {
+                    "model": model_state_dict,
+                    "optim": optimizer_state_dict,
+                }
                 storage_reader = dist_cp.FileSystemReader(checkpoint_path)
                 dist_cp.load(state_dict=state_dict, storage_reader=storage_reader)
 
@@ -222,7 +225,7 @@ def load_checkpoint(args, model, optimizer):
                 model,
                 optimizer,
                 model_state_dict=state_dict["model"],
-                optim_state_dict=state_dict["optim"],
+                optim_state_dict=optimizer_state_dict,
                 options=StateDictOptions(full_state_dict=False, cpu_offload=False),
             )
 
@@ -276,11 +279,8 @@ def load_checkpoint(args, model, optimizer):
             global_step = training_state.get("global_step", 0)
             print(f"Loaded training state: iteration={loaded_rollout_id}, global_step={global_step}")
 
-        # Broadcast to all ranks
-        training_state_tensor = torch.tensor([loaded_rollout_id, global_step], dtype=torch.long, device="cpu")
-        if dist.get_rank() == 0:
-            training_state_tensor[0] = loaded_rollout_id
-            training_state_tensor[1] = global_step
+        # Broadcast to all ranks with safe type handling
+        training_state_tensor = torch.tensor([loaded_rollout_id, global_step], dtype=torch.int64, device="cpu")
         dist.broadcast(training_state_tensor, src=0)
         loaded_rollout_id = training_state_tensor[0].item()
         global_step = training_state_tensor[1].item()
@@ -290,3 +290,57 @@ def load_checkpoint(args, model, optimizer):
 
     dist.barrier()
     return loaded_rollout_id, global_step
+
+
+def _flatten_optimizer_state(optimizer_state_dict):
+    """Flatten optimizer state dict for safetensors compatibility."""
+    flattened = {}
+
+    # Flatten state dictionary
+    for param_name, param_states in optimizer_state_dict.get("state", {}).items():
+        for state_key, state_value in param_states.items():
+            fqn = f"state.{param_name}.{state_key}"
+            flattened[fqn] = state_value
+
+    # Flatten param_groups
+    if "param_groups" in optimizer_state_dict:
+        param_groups = optimizer_state_dict["param_groups"]
+        for group_idx, group in enumerate(param_groups):
+            for key, value in group.items():
+                # Include all serializable values, not just tensors/ints/floats
+                if isinstance(value, (torch.Tensor, int, float, bool, str)) or value is None:
+                    fqn = f"param_groups.{group_idx}.{key}"
+                    flattened[fqn] = value
+
+    return flattened
+
+
+def _unflatten_optimizer_state(flattened_dict):
+    """Unflatten optimizer state dict from safetensors format."""
+    state = {}
+    param_groups = []
+
+    for fqn, value in flattened_dict.items():
+        parts = fqn.split(".")
+
+        if parts[0] == "state":
+            # Reconstruct state dictionary: state.<param_name>.<state_key>
+            param_name = parts[1]
+            state_key = parts[2]
+
+            if param_name not in state:
+                state[param_name] = {}
+            state[param_name][state_key] = value
+
+        elif parts[0] == "param_groups":
+            # Reconstruct param_groups: param_groups.<group_idx>.<key>
+            group_idx = int(parts[1])
+            key = parts[2]
+
+            # Ensure param_groups list is large enough
+            while len(param_groups) <= group_idx:
+                param_groups.append({})
+
+            param_groups[group_idx][key] = value
+
+    return {"state": state, "param_groups": param_groups}
