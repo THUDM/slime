@@ -1,9 +1,10 @@
+import collections
 import inspect
 import re
 import socket
 import time
 from argparse import Namespace
-from typing import Any, Iterator, Mapping, Optional, Sequence
+from typing import Any, Iterator, List, Mapping, Optional, Sequence, Tuple
 
 import ray
 import torch
@@ -375,12 +376,51 @@ class UpdateWeightFromTensor:
         if rank == 0:
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
-        for param_infos in tqdm(self.param_info_buckets, disable=rank != 0, desc="Update weights"):
-            self._update_bucket_weights_from_tensor(param_infos)
+
+        num_buckets = len(self.param_info_buckets)
+
+        # Define the window size for the pipeline. This controls how many update tasks
+        # can be in-flight simultaneously to manage memory usage and concurrency.
+        pipeline_window_size = 4
+
+        ray_refs = collections.deque()
+
+        # Create a separate CUDA stream for pre-fetching the next bucket of parameters.
+        side_stream = torch.cuda.Stream()
+
+        current_params, current_infos = self._update_bucket_weights_from_tensor(self.param_info_buckets[0])
+
+        for i in tqdm(range(num_buckets), disable=rank != 0, desc="Update weights (pipelined)"):
+            if i + 1 < num_buckets:
+                with torch.cuda.stream(side_stream):
+                    next_params_future, next_infos_future = self._update_bucket_weights_from_tensor(
+                        self.param_info_buckets[i + 1]
+                    )
+
+            refs = self._update_converted_params_from_tensor(current_params, current_infos)
+            if refs:
+                if isinstance(refs, list):
+                    ray_refs.extend(refs)
+                else:
+                    ray_refs.append(refs)
+
+            # Prevents OOM errors and ensures smooth pipeline execution
+            if rank == self._ipc_gather_src and len(ray_refs) >= pipeline_window_size:
+                ray.get(ray_refs.popleft())
+
+            if i + 1 < num_buckets:
+                torch.cuda.current_stream().wait_stream(side_stream)
+                current_params = next_params_future
+                current_infos = next_infos_future
+
+        if rank == self._ipc_gather_src and ray_refs:
+            ray.get(list(ray_refs))
 
         dist.barrier(group=get_gloo_group())
 
-    def _update_bucket_weights_from_tensor(self, param_infos: Sequence[ParamInfo]) -> None:
+    def _update_bucket_weights_from_tensor(
+        self, param_infos: Sequence[ParamInfo]
+    ) -> Tuple[Sequence[torch.Tensor], Sequence[ParamInfo]]:
         monkey_patch_torch_reductions()
         pp_size = mpu.get_pipeline_model_parallel_world_size()
         ep_size = mpu.get_expert_model_parallel_world_size()
@@ -438,7 +478,12 @@ class UpdateWeightFromTensor:
         # Batch async all_gather for all parameters
         gathered_params = all_gather_params_async(list(zip(param_infos, params)))
 
-        # Process gathered params
+        return gathered_params, param_infos
+
+    def _update_converted_params_from_tensor(
+        self, gathered_params: Sequence[tuple[str, torch.Tensor]], param_infos: List[ParamInfo]
+    ) -> Optional[List[ObjectRef]]:
+
         converted_named_tensors = []
         for info, param in zip(param_infos, gathered_params):
             param = remove_padding(info.name, param, self.vocab_size)
@@ -446,25 +491,28 @@ class UpdateWeightFromTensor:
                 convert_to_hf(self.args, self.model_name, info.name, param, self.quantization_config)
             )
 
-        refs = self._update_converted_params_from_tensor(converted_named_tensors)
+        all_refs = []
+
+        refs_colocated = self._send_to_colocated_engine(converted_named_tensors)
+        all_refs.extend(refs_colocated)
 
         if self.use_distribute and self._is_distributed_src_rank:
-            refs.extend(
-                update_weights_from_distributed(
-                    self.args,
-                    self._group_name,
-                    self._model_update_groups,
-                    self.weight_version,
-                    self.distributed_rollout_engines,
-                    converted_named_tensors,
-                )
+            refs_distributed = update_weights_from_distributed(
+                self.args,
+                self._group_name,
+                self._model_update_groups,
+                self.weight_version,
+                self.distributed_rollout_engines,
+                converted_named_tensors,
             )
+            if refs_distributed:
+                all_refs.extend(refs_distributed)
 
-        ray.get(refs)
+        return all_refs if all_refs else None
 
-    def _update_converted_params_from_tensor(
-        self, converted_named_tensors: Sequence[tuple[str, torch.Tensor]]
-    ) -> list[ObjectRef]:
+    def _send_to_colocated_engine(
+        self, converted_named_tensors: List[Tuple[str, torch.Tensor]]
+    ) -> Optional[List[ObjectRef]]:
         if use_flattened_tensor_bucket:
             converted_named_tensors_by_dtypes = {}
             for name, tensor in converted_named_tensors:
