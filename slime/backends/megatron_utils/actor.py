@@ -1,12 +1,15 @@
 import os
 import socket
 import time
+from argparse import Namespace
 from contextlib import nullcontext
 from pathlib import Path
+from typing import Any, Dict, Iterable, Optional, Tuple, Union
 
 import ray
 import torch
 import torch.distributed as dist
+from ray.actor import ActorHandle
 
 if torch.version.hip:
     from vllm.device_allocator.cumem import CuMemAllocator
@@ -33,7 +36,13 @@ from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTe
 
 
 class MegatronTrainRayActor(TrainRayActor):
-    def init(self, args, role, wandb_run_id, with_ref=False):
+    def init(
+        self,
+        args: Namespace,
+        role: str,
+        wandb_run_id: str,
+        with_ref: bool = False,
+    ) -> Optional[int]:
         super().init(args, role, wandb_run_id, with_ref)
 
         init(args)
@@ -128,7 +137,7 @@ class MegatronTrainRayActor(TrainRayActor):
         return start_rollout_id
 
     @torch.no_grad()
-    def update_cpu_params_dict(self, params_dict):
+    def update_cpu_params_dict(self, params_dict: Dict[str, torch.Tensor]) -> None:
         for name, param in named_parameters(self.args, self.model):
             if name not in params_dict:
                 params_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
@@ -136,21 +145,21 @@ class MegatronTrainRayActor(TrainRayActor):
         torch.cuda.synchronize()
 
     @torch.no_grad()
-    def update_gpu_params_dict(self, params_dict):
+    def update_gpu_params_dict(self, params_dict: Dict[str, torch.Tensor]) -> None:
         for name, param in named_parameters(self.args, self.model):
             assert name in params_dict
             param.copy_(params_dict[name], non_blocking=True)
         torch.cuda.synchronize()
 
     @timer
-    def sleep(self, tags):
+    def sleep(self, tags: Union[str, Tuple[str, ...]]) -> None:
         assert self.args.offload
         assert "model" in tags
         if isinstance(tags, str):
             tags = (tags,)
 
         clear_memory()
-        print_memory(f"before offload model")
+        print_memory("before offload model")
         if hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()
 
@@ -160,10 +169,10 @@ class MegatronTrainRayActor(TrainRayActor):
             allocator = CuMemAllocator.get_instance()
             allocator.sleep(offload_tags=tags)
 
-        print_memory(f"after offload model")
+        print_memory("after offload model")
 
     @timer
-    def wake_up(self, tags):
+    def wake_up(self, tags: Union[str, Tuple[str, ...]]) -> None:
         assert self.args.offload
 
         # there are weird times when sglang is not offloaded immediately, so we wait here.
@@ -189,7 +198,7 @@ class MegatronTrainRayActor(TrainRayActor):
             mpu.reload_process_groups()
         print_memory("after wake_up model")
 
-    def _get_rollout_data(self, rollout_data_ref):
+    def _get_rollout_data(self, rollout_data_ref: Any) -> Dict[str, Any]:
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
         # Both first pp stage and the last pp stage will recieve the data.
         rollout_data = process_rollout_data(
@@ -221,11 +230,11 @@ class MegatronTrainRayActor(TrainRayActor):
 
     def compute_log_prob(
         self,
-        model_tag,
-        data_iterator,
-        num_microbatches,
-        store_prefix="",
-    ):
+        model_tag: str,
+        data_iterator: Iterable[Dict[str, Any]],
+        num_microbatches: int,
+        store_prefix: str = "",
+    ) -> Dict[str, torch.Tensor]:
         self.update_gpu_params_dict(self.weights[model_tag])
 
         with timer(f"{store_prefix}log_probs"):
@@ -238,7 +247,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 store_prefix=store_prefix,
             )
 
-    def train(self, rollout_id, rollout_data_ref):
+    def train(self, rollout_id: int, rollout_data_ref: Any) -> None:
         Timer().end("train_wait")
 
         if self.args.offload:
@@ -256,7 +265,7 @@ class MegatronTrainRayActor(TrainRayActor):
         else:
             return self.train_actor(rollout_id, rollout_data)
 
-    def train_critic(self, rollout_id, rollout_data):
+    def train_critic(self, rollout_id: int, rollout_data: Dict[str, Any]) -> None:
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
         rollout_data.update(
@@ -285,7 +294,7 @@ class MegatronTrainRayActor(TrainRayActor):
         )
         Timer().start("train_wait")
 
-    def train_actor(self, rollout_id, rollout_data):
+    def train_actor(self, rollout_id: int, rollout_data: Dict[str, Any]) -> None:
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
 
@@ -386,14 +395,14 @@ class MegatronTrainRayActor(TrainRayActor):
         log_perf_data(rollout_id, self.args)
         Timer().start("train_wait")
 
-    def save_model(self, iteration):
+    def save_model(self, iteration: int) -> None:
         if self.args.debug_rollout_only:
             return
 
         save(iteration, self.model, self.optimizer, self.opt_param_scheduler)
 
     @timer
-    def update_weights(self):
+    def update_weights(self) -> None:
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
@@ -424,7 +433,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.offload and hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()
 
-    def load_other_checkpoint(self, model_tag, path):
+    def load_other_checkpoint(self, model_tag: str, path: str) -> None:
         old_args = self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune
         self.args.load = path
         self.args.no_load_optim = True
@@ -450,7 +459,12 @@ class MegatronTrainRayActor(TrainRayActor):
         self.weights[model_tag] = {}
         self.update_cpu_params_dict(self.weights[model_tag])
 
-    def connect_actor_critic(self, actor_handle=None, master_address=None, master_port=None):
+    def connect_actor_critic(
+        self,
+        actor_handle: Optional[ActorHandle] = None,
+        master_address: Optional[str] = None,
+        master_port: Optional[int] = None,
+    ) -> None:
         if self.role == "actor":
             master_address = ray.util.get_node_ip_address()
             with socket.socket() as sock:
