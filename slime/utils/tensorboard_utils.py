@@ -36,7 +36,7 @@ class _TensorboardAdapter:
         tensorboard_dir = os.environ.get("TENSORBOARD_DIR", f"tensorboard_log/{tb_project_name}/{tb_experiment_name}")
         os.makedirs(tensorboard_dir, exist_ok=True)
         print(f"Saving tensorboard log to {tensorboard_dir}.")
-        self.writer = SummaryWriter(tensorboard_dir)
+        self._writer = SummaryWriter(tensorboard_dir)
 
     def log(self, data, step):
         """Log data to tensorboard
@@ -46,8 +46,8 @@ class _TensorboardAdapter:
             step (int): Current step/epoch number
         """
         for key in data:
-            self.writer.add_scalar(key, data[key], step)
+            self._writer.add_scalar(key, data[key], step)
 
     def finish(self):
         """Close the tensorboard writer"""
-        self.writer.close()
+        self._writer.close()
