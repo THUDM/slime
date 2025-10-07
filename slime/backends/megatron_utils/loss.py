@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Iterator, Union
 
 import torch
 from megatron.core import mpu
@@ -25,41 +25,93 @@ def get_responses(
     unconcat_tokens: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
-):
+) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+    """Yield per-sample logits and token slices for the response region.
+
+    Args:
+        logits: Model outputs for next-token prediction. Expected shape is
+            [1, total_number_of_tokens, vocab_or_value_dim]. The leading batch
+            dimension must be 1; alignment uses next-token shift.
+        args: Configuration object expected to contain `rollout_temperature`.
+        unconcat_tokens: List of token tensors for each sequence; each tensor
+            length must equal the corresponding `total_lengths[i]`.
+        total_lengths: List with full lengths (prompt + response) per sequence.
+        response_lengths: List with response lengths per sequence.
+
+    Yields:
+        Tuple (logits_chunk, tokens_chunk) where both have length equal to the
+        response length for that sequence, aligned with next-token prediction.
+
+    Notes:
+        - Context-parallel sharding is handled using offsets computed by
+          `get_logits_and_tokens_offset_with_cp`.
+        - Logits are temperature-scaled once up front.
+    """
     assert logits.size(0) == 1, f"{logits.shape}"
     assert logits.dtype == torch.float32, f"{logits.dtype}"
 
-    logits = logits.squeeze(0)
-    logits = logits.div(args.rollout_temperature)
+    scaled_logits = logits.squeeze(0).div(args.rollout_temperature)
 
     cp_size = mpu.get_context_parallel_world_size()
-    end = 0
-    for tokens, total_length, response_length in zip(unconcat_tokens, total_lengths, response_lengths):
+    # Validate parallel lists
+    num_sequences = len(total_lengths)
+    assert (
+        num_sequences == len(response_lengths) == len(unconcat_tokens)
+    ), f"Mismatched input lengths: totals={len(total_lengths)}, responses={len(response_lengths)}, tokens={len(unconcat_tokens)}"
+
+    logits_cursor = 0
+    for seq_index, (tokens, total_length, response_length) in enumerate(
+        zip(unconcat_tokens, total_lengths, response_lengths)
+    ):
+        assert (
+            0 < response_length <= total_length
+        ), f"Invalid lengths for sequence {seq_index}: total={total_length}, response={response_length}"
+        assert (
+            tokens.size(0) == total_length
+        ), f"Token length mismatch for sequence {seq_index}: tokens={tokens.size(0)} vs total={total_length}"
         if cp_size == 1:
-            end += total_length
-            start = end - response_length
-            logits_chunk = logits[start - 1 : end - 1]
-            tokens_chunk = tokens[-response_length:]
+            sequence_end_index = logits_cursor + total_length
+            response_start_index = sequence_end_index - response_length
+            logits_chunk = scaled_logits[response_start_index - 1 : sequence_end_index - 1]
+            tokens_start_index = total_length - response_length
+            tokens_chunk = tokens[tokens_start_index:total_length]
+            logits_cursor = sequence_end_index
+            yield logits_chunk, tokens_chunk
+            continue
+
+        # Context-parallel path
+        chunk_size, chunk_offsets, logits_offsets, token_offsets = get_logits_and_tokens_offset_with_cp(
+            total_length, response_length
+        )
+
+        # Two contiguous parts in the flattened logits stream for this sequence
+        logits_part_0 = scaled_logits[logits_cursor : logits_cursor + chunk_size]
+        logits_part_1 = scaled_logits[logits_cursor + chunk_size : logits_cursor + 2 * chunk_size]
+        logits_cursor += 2 * chunk_size
+
+        # Refine by local offsets
+        logits_part_0 = logits_part_0[
+            logits_offsets[0][0] - chunk_offsets[0][0] : logits_offsets[0][1] - chunk_offsets[0][0]
+        ]
+        logits_part_1 = logits_part_1[
+            logits_offsets[1][0] - chunk_offsets[1][0] : logits_offsets[1][1] - chunk_offsets[1][0]
+        ]
+        tokens_part_0 = tokens[token_offsets[0][0] : token_offsets[0][1]]
+        tokens_part_1 = tokens[token_offsets[1][0] : token_offsets[1][1]]
+
+        if logits_part_0.numel() == 0:
+            logits_chunk, tokens_chunk = logits_part_1, tokens_part_1
+        elif logits_part_1.numel() == 0:
+            logits_chunk, tokens_chunk = logits_part_0, tokens_part_0
         else:
-            # TODO: this is super ugly... do better abstraction.
-            chunk_size, chunks_offset, logits_offset, tokens_offset = get_logits_and_tokens_offset_with_cp(
-                total_length, response_length
-            )
-
-            logits_0, logits_1 = logits[end : end + chunk_size], logits[end + chunk_size : end + 2 * chunk_size]
-            end += 2 * chunk_size
-
-            logits_0 = logits_0[logits_offset[0][0] - chunks_offset[0][0] : logits_offset[0][1] - chunks_offset[0][0]]
-            tokens_0 = tokens[tokens_offset[0][0] : tokens_offset[0][1]]
-
-            logits_1 = logits_1[logits_offset[1][0] - chunks_offset[1][0] : logits_offset[1][1] - chunks_offset[1][0]]
-            tokens_1 = tokens[tokens_offset[1][0] : tokens_offset[1][1]]
-
-            assert logits_0.size(0) == tokens_0.size(0), f"{logits_0.size(0)} vs {tokens_0.size(0)}"
-            assert logits_1.size(0) == tokens_1.size(0), f"{logits_1.size(0)} vs {tokens_1.size(0)}"
-
-            logits_chunk = torch.cat([logits_0, logits_1], dim=0)
-            tokens_chunk = torch.cat([tokens_0, tokens_1], dim=0)
+            assert logits_part_0.size(0) == tokens_part_0.size(
+                0
+            ), f"{logits_part_0.size(0)} vs {tokens_part_0.size(0)}"
+            assert logits_part_1.size(0) == tokens_part_1.size(
+                0
+            ), f"{logits_part_1.size(0)} vs {tokens_part_1.size(0)}"
+            logits_chunk = torch.cat([logits_part_0, logits_part_1], dim=0)
+            tokens_chunk = torch.cat([tokens_part_0, tokens_part_1], dim=0)
 
         yield logits_chunk, tokens_chunk
 
