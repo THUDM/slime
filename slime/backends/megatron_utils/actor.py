@@ -82,7 +82,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.update_cpu_params_dict(self.weights["rollout_actor"])
 
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
-        self.weight_updator = update_weight_cls(
+        self.weight_updater = update_weight_cls(
             self.args,
             self.model,
             self.weights,
@@ -404,12 +404,12 @@ class MegatronTrainRayActor(TrainRayActor):
             self.rollout_manager.get_rollout_engines_and_lock.remote()
         )
         if num_new_engines > 0:
-            self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
+            self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
             print_memory("before update_weights")
-            self.weight_updator.update_weights()
+            self.weight_updater.update_weights()
             print_memory("after update_weights")
 
             if getattr(self.args, "keep_old_actor", False):
