@@ -1,4 +1,6 @@
+import datetime
 import os
+
 from torch.utils.tensorboard import SummaryWriter
 
 
@@ -24,10 +26,12 @@ class _TensorboardAdapter:
         if cls._instance is None:
             cls._instance = super(_TensorboardAdapter, cls).__new__(cls)
             # Initialize if parameters are provided during first creation
-            if (tb_project_name is not None and tb_experiment_name is not None) or os.environ.get(
-                "TENSORBOARD_DIR", None
-            ):
+            if tb_project_name is not None or os.environ.get("TENSORBOARD_DIR", None):
+                if tb_project_name is not None and tb_experiment_name is None:
+                    tb_experiment_name = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 cls._instance._initialize(tb_project_name, tb_experiment_name)
+            else:
+                raise ValueError("tb_project_name and tb_experiment_name, or TENSORBOARD_DIR are required")
         return cls._instance
 
     def _initialize(self, tb_project_name, tb_experiment_name):
