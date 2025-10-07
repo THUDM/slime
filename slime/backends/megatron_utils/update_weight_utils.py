@@ -393,7 +393,7 @@ class UpdateWeightFromTensor:
         for i in tqdm(range(num_buckets), disable=rank != 0, desc="Update weights (pipelined)"):
             if i + 1 < num_buckets:
                 with torch.cuda.stream(side_stream):
-                    next_params_future, next_infos_future = self._update_bucket_weights_from_tensor(
+                    next_params, next_infos = self._update_bucket_weights_from_tensor(
                         self.param_info_buckets[i + 1]
                     )
 
@@ -405,13 +405,15 @@ class UpdateWeightFromTensor:
                     ray_refs.append(refs)
 
             # Prevents OOM errors and ensures smooth pipeline execution
-            if rank == self._ipc_gather_src and len(ray_refs) >= pipeline_window_size:
-                ray.get(ray_refs.popleft())
+            if rank == self._ipc_gather_src:
+                while len(ray_refs) >= pipeline_window_size:
+                    oldest_ref = ray_refs.popleft()
+                    ray.get(oldest_ref)
 
             if i + 1 < num_buckets:
                 torch.cuda.current_stream().wait_stream(side_stream)
-                current_params = next_params_future
-                current_infos = next_infos_future
+                current_params = next_params
+                current_infos = next_infos
 
         if rank == self._ipc_gather_src and ray_refs:
             ray.get(list(ray_refs))
