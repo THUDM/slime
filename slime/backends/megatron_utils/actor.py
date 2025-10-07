@@ -4,7 +4,7 @@ import time
 from argparse import Namespace
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple, Union
+from typing import Dict, Optional, Tuple, Union
 
 import ray
 import torch
@@ -23,12 +23,13 @@ from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.memory_utils import clear_memory, print_memory
+from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
 from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp
-from .data import get_data_iterator, log_perf_data, log_rollout_data, sync_actor_critic_data
+from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data, sync_actor_critic_data
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
@@ -198,7 +199,9 @@ class MegatronTrainRayActor(TrainRayActor):
             mpu.reload_process_groups()
         print_memory("after wake_up model")
 
-    def _get_rollout_data(self, rollout_data_ref: Any) -> Dict[str, Any]:
+    def _get_rollout_data(
+        self, rollout_data_ref: Box
+    ) -> Dict[str, list[torch.Tensor] | list[int] | list[float] | list[str]]:
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
         # Both first pp stage and the last pp stage will recieve the data.
         rollout_data = process_rollout_data(
@@ -231,10 +234,10 @@ class MegatronTrainRayActor(TrainRayActor):
     def compute_log_prob(
         self,
         model_tag: str,
-        data_iterator: Iterable[Dict[str, Any]],
-        num_microbatches: int,
+        data_iterator: list[DataIterator],
+        num_microbatches: list[int],
         store_prefix: str = "",
-    ) -> Dict[str, torch.Tensor]:
+    ) -> Dict[str, list[torch.Tensor]]:
         self.update_gpu_params_dict(self.weights[model_tag])
 
         with timer(f"{store_prefix}log_probs"):
@@ -247,7 +250,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 store_prefix=store_prefix,
             )
 
-    def train(self, rollout_id: int, rollout_data_ref: Any) -> None:
+    def train(self, rollout_id: int, rollout_data_ref: Box) -> None:
         Timer().end("train_wait")
 
         if self.args.offload:
@@ -265,7 +268,9 @@ class MegatronTrainRayActor(TrainRayActor):
         else:
             return self.train_actor(rollout_id, rollout_data)
 
-    def train_critic(self, rollout_id: int, rollout_data: Dict[str, Any]) -> None:
+    def train_critic(
+        self, rollout_id: int, rollout_data: Dict[str, list[torch.Tensor] | list[int] | list[float] | list[str]]
+    ) -> None:
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
         rollout_data.update(
@@ -294,7 +299,9 @@ class MegatronTrainRayActor(TrainRayActor):
         )
         Timer().start("train_wait")
 
-    def train_actor(self, rollout_id: int, rollout_data: Dict[str, Any]) -> None:
+    def train_actor(
+        self, rollout_id: int, rollout_data: Dict[str, list[torch.Tensor] | list[int] | list[float] | list[str]]
+    ) -> None:
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
 
