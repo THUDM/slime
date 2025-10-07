@@ -148,12 +148,16 @@ class UpdateWeightFromTensor:
         monkey_patch_torch_reductions()
 
         if self.full_params:
-            print("Using FULL_STATE_DICT path")
-            state_dict = self.model.state_dict()
-
-            # Preprocess tensors to handle DTensor -> full tensor conversion
-            named_tensors = [(name, param) for name, param in state_dict.items()]
-            clear_memory()
+            print("Using FULL_STATE_DICT path with loading from CPU storage")
+            
+            # Load all parameters from CPU storage to GPU in one go
+            # This is more memory intensive but faster than bucket-based approach
+            named_tensors = []
+            for name, cpu_param in self.weights["actor"].items():
+                gpu_param = cpu_param.to(device=torch.cuda.current_device(), non_blocking=True)
+                named_tensors.append((name, gpu_param))
+            
+            torch.cuda.synchronize()
 
             if use_flattened_tensor_bucket:
                 flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
@@ -167,6 +171,8 @@ class UpdateWeightFromTensor:
             else:
                 serialized_tensors = MultiprocessingSerializer.serialize(named_tensors, output_str=True)
 
+            # Clean up GPU tensors after serialization
+            del named_tensors
             clear_memory()
 
             serialized_named_tensors = (
@@ -293,6 +299,7 @@ class UpdateWeightFromDistributed:
     def __init__(self, args: Namespace, model: torch.nn.Module) -> None:
         self.args = args
         self.model = model
+        self.weights = weights  # CPU parameter storage
 
     def connect_rollout_engines(
         self,
@@ -343,19 +350,22 @@ class UpdateWeightFromDistributed:
         torch.cuda.empty_cache()
         clear_memory()
 
-        # FSDP v2 doesn't need context managers - get state dict directly
-        state_dict = model.state_dict()
+        # Load parameters from CPU storage one by one to minimize GPU memory usage
+        param_names = list(self.weights["actor"].keys())
 
-        # Send weights one by one to minimize memory usage
-        param_names = list(state_dict.keys())
-
-        for i, name in enumerate(tqdm(param_names, desc="[broadcast weight]")):
-            # Process one parameter at a time to minimize memory usage
-            param = state_dict[name].to(torch.bfloat16)
-            single_param_dict = {name: param}
-
-            # Send this single parameter
+        for name in tqdm(param_names, desc="[broadcast weight]", disable=not self._is_src_rank):
+            # Load single parameter from CPU to GPU
+            cpu_param = self.weights["actor"][name]
+            gpu_param = cpu_param.to(device=torch.cuda.current_device(), dtype=torch.bfloat16, non_blocking=True)
+            torch.cuda.synchronize()
+            
+            # Broadcast this single parameter
+            single_param_dict = {name: gpu_param}
             self.request_update_params(single_param_dict)
+            
+            # Clean up GPU memory immediately
+            del gpu_param
+            clear_memory()
 
         dist.barrier()
         torch.cuda.empty_cache()

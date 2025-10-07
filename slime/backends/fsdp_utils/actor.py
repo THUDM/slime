@@ -104,7 +104,7 @@ class FSDPTrainRayActor(TrainRayActor):
         self.weight_updater = (
             UpdateWeightFromTensor(self.args, self.model, self.weights)
             if self.args.colocate
-            else UpdateWeightFromDistributed(self.args, self.model)
+            else UpdateWeightFromDistributed(self.args, self.model, self.weights)
         )
 
         # Initialize data packing parameters
@@ -542,22 +542,8 @@ class FSDPTrainRayActor(TrainRayActor):
             self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
-        # For colocated mode with sharded updates (full_params=False),
-        # we don't need to wake up the entire model
-        # The bucket-based approach will load parameters selectively from CPU storage
-        # TODO:  Add bucket optimization for from distributed mode
-        use_bucket_optimization = self.args.colocate and not getattr(self.weight_updater, "full_params", False)
-
-        if self.args.offload and not use_bucket_optimization:
-            # Wake up for distributed mode or full_params mode
-            self.wake_up(("model"))
-
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
-            self.weight_updater.update_weights()
-
-        if self.args.offload and not use_bucket_optimization:
-            # Sleep for distributed mode or full_params mode
-            self.sleep(("model"))
+            self.weight_updator.update_weights()
 
     @torch.no_grad()
     def update_cpu_params_dict(self, params_dict: dict[str, torch.Tensor]) -> None:

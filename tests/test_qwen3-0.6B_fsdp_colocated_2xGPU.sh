@@ -27,7 +27,7 @@ pkill -9 ray
 pkill -9 python
 
 set -ex
-
+export CUDA_VISIBLE_DEVICES=0,1
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
 
