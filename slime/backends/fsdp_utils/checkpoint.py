@@ -20,6 +20,11 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step, c
         model, optimizer, options=StateDictOptions(full_state_dict=False, cpu_offload=False)
     )
 
+    # Debug: Check optimizer state
+    if dist.get_rank() == 0:
+        if not optimizer_state_dict or not optimizer_state_dict.get("state", {}):
+            raise ValueError(f"Optimizer state dictionary is empty for iteration {iteration}")
+
     use_safetensors = getattr(args, "save_safe_serialization", False)
 
     if use_safetensors:
@@ -29,24 +34,31 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step, c
             # Flatten optimizer for safetensors compatibility
             flattened_optim = _flatten_optimizer_state(optimizer_state_dict)
 
+            if dist.get_rank() == 0:
+                print(f"Optimizer state keys: {len(flattened_optim)}")
+
             # Create FQN mappings for model and optimizer
             model_fqn_to_index = {f"model.{k}": 0 for k in model_state_dict.keys()}
             optim_fqn_to_index = {f"optim.{k}": 0 for k in flattened_optim.keys()}
 
             # Save model state dict
+            if dist.get_rank() == 0:
+                print(f"Saving model checkpoint to {checkpoint_dir}")
             model_storage_writer = HuggingFaceStorageWriter(
                 path=checkpoint_dir, fqn_to_index_mapping=model_fqn_to_index
             )
             dist_cp.save(state_dict={"model": model_state_dict}, storage_writer=model_storage_writer)
 
             # Save optimizer state dict
+            if dist.get_rank() == 0:
+                print(f"Saving optimizer checkpoint to {checkpoint_dir}")
             optim_storage_writer = HuggingFaceStorageWriter(
                 path=checkpoint_dir, fqn_to_index_mapping=optim_fqn_to_index
             )
             dist_cp.save(state_dict={"optim": flattened_optim}, storage_writer=optim_storage_writer)
 
             if dist.get_rank() == 0:
-                print("Saving model and optimizer in safetensors format")
+                print("Saved model and optimizer in safetensors format")
 
         except ImportError as e:
             raise ImportError(
@@ -54,10 +66,14 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step, c
             ) from e
     else:
         # Save model state dict
+        if dist.get_rank() == 0:
+            print(f"Saving model checkpoint to {os.path.join(checkpoint_dir, 'model')}")
         model_storage_writer = dist_cp.FileSystemWriter(os.path.join(checkpoint_dir, "model"))
         dist_cp.save(state_dict={"model": model_state_dict}, storage_writer=model_storage_writer)
 
         # Save optimizer state dict
+        if dist.get_rank() == 0:
+            print(f"Saving optimizer checkpoint to {os.path.join(checkpoint_dir, 'optimizer')}")
         optim_storage_writer = dist_cp.FileSystemWriter(os.path.join(checkpoint_dir, "optimizer"))
         dist_cp.save(state_dict={"optim": optimizer_state_dict}, storage_writer=optim_storage_writer)
 
