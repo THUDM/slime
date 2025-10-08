@@ -65,6 +65,13 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step, c
     optim_writer = dist_cp.FileSystemWriter(optimizer_subdir)
     dist_cp.save(state_dict={"optim": optimizer_state_dict}, storage_writer=optim_writer)
 
+    # Debug: Verify optimizer files
+    if dist.get_rank() == 0:
+        optim_files = os.listdir(optimizer_subdir)
+        print(f"Optimizer files saved: {optim_files}")
+        if not optim_files:
+            print(f"WARNING: No optimizer files found in {optimizer_subdir}")
+
     # Save tokenizer, training state, and Hugging Face config on rank 0
     if dist.get_rank() == 0:
         tokenizer.save_pretrained(checkpoint_dir)
@@ -91,8 +98,7 @@ def _detect_safetensors(checkpoint_path):
 def load_checkpoint(args, model, optimizer):
     """Load a checkpoint using FSDP distributed checkpointing (FSDP v2 only).
 
-    Returns:
-        (iteration, global_step) - iteration is -1 if no training state found
+    Loads model from 'model' subdir (safetensors or standard) and optimizer from 'optimizer' subdir (standard).
     """
     checkpoint_path = args.load
     if not checkpoint_path:
