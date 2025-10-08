@@ -1,3 +1,4 @@
+import os
 from contextlib import nullcontext
 from itertools import accumulate
 
@@ -151,6 +152,19 @@ class FSDPTrainRayActor(TrainRayActor):
     def save_model(self, iteration):
         if self.args.debug_rollout_only:
             return
+        checkpoint_dir = os.path.join(self.args.save, str(iteration))
+        should_save = True
+        if dist.get_rank() == 0:
+            if os.path.exists(checkpoint_dir) and not self.args.overwrite_checkpoints:
+                print(f"WARNING: Checkpoint {checkpoint_dir} exists. Skipping save.")
+                should_save = False
+        # Broadcast the decision from rank 0 to all other ranks.
+        should_save_tensor = torch.tensor(
+            [1 if should_save else 0], dtype=torch.int, device=torch.cuda.current_device()
+        )
+        dist.broadcast(should_save_tensor, src=0)
+        if should_save_tensor.item() == 0:
+            return
 
         save_checkpoint(
             self.args,
@@ -159,6 +173,7 @@ class FSDPTrainRayActor(TrainRayActor):
             self.optimizer,
             self.tokenizer,
             self.global_step,
+            config=self.hf_config,
         )
 
     def compute_log_prob(
