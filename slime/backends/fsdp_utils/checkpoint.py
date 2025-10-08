@@ -20,62 +20,50 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step, c
         model, optimizer, options=StateDictOptions(full_state_dict=False, cpu_offload=False)
     )
 
-    # Debug: Check optimizer state
+    # Debug: Check state dicts
     if dist.get_rank() == 0:
+        print(f"Model state keys: {len(model_state_dict)}")
         if not optimizer_state_dict or not optimizer_state_dict.get("state", {}):
             raise ValueError(f"Optimizer state dictionary is empty for iteration {iteration}")
+        print(f"Raw optimizer state keys: {len(optimizer_state_dict.get('state', {}))}")
 
     use_safetensors = getattr(args, "save_safe_serialization", False)
 
+    model_subdir = os.path.join(checkpoint_dir, "model")
+    optimizer_subdir = os.path.join(checkpoint_dir, "optimizer")
+
+    if dist.get_rank() == 0:
+        os.makedirs(model_subdir, exist_ok=True)
+        os.makedirs(optimizer_subdir, exist_ok=True)
+
+    dist.barrier()
+
+    # Save model (safetensors if enabled, else standard)
     if use_safetensors:
         try:
             from torch.distributed.checkpoint import HuggingFaceStorageWriter
 
-            # Flatten optimizer for safetensors compatibility
-            flattened_optim = _flatten_optimizer_state(optimizer_state_dict)
-
-            if dist.get_rank() == 0:
-                print(f"Optimizer state keys: {len(flattened_optim)}")
-
-            # Create FQN mappings for model and optimizer
-            model_fqn_to_index = {f"model.{k}": 0 for k in model_state_dict.keys()}
-            optim_fqn_to_index = {f"optim.{k}": 0 for k in flattened_optim.keys()}
-
-            # Save model state dict
-            if dist.get_rank() == 0:
-                print(f"Saving model checkpoint to {checkpoint_dir}")
-            model_storage_writer = HuggingFaceStorageWriter(
-                path=checkpoint_dir, fqn_to_index_mapping=model_fqn_to_index
+            model_writer = HuggingFaceStorageWriter(
+                path=model_subdir, fqn_to_index_mapping={k: 0 for k in model_state_dict.keys()}
             )
-            dist_cp.save(state_dict={"model": model_state_dict}, storage_writer=model_storage_writer)
-
-            # Save optimizer state dict
             if dist.get_rank() == 0:
-                print(f"Saving optimizer checkpoint to {checkpoint_dir}")
-            optim_storage_writer = HuggingFaceStorageWriter(
-                path=checkpoint_dir, fqn_to_index_mapping=optim_fqn_to_index
-            )
-            dist_cp.save(state_dict={"optim": flattened_optim}, storage_writer=optim_storage_writer)
-
-            if dist.get_rank() == 0:
-                print("Saved model and optimizer in safetensors format")
-
+                print(f"Saving model (safetensors) to {model_subdir}")
+            dist_cp.save(state_dict=model_state_dict, storage_writer=model_writer)
         except ImportError as e:
             raise ImportError(
                 "Safetensors library is required when save_safe_serialization is True, but it is not installed."
             ) from e
     else:
-        # Save model state dict
         if dist.get_rank() == 0:
-            print(f"Saving model checkpoint to {os.path.join(checkpoint_dir, 'model')}")
-        model_storage_writer = dist_cp.FileSystemWriter(os.path.join(checkpoint_dir, "model"))
-        dist_cp.save(state_dict={"model": model_state_dict}, storage_writer=model_storage_writer)
+            print(f"Saving model to {model_subdir}")
+        model_writer = dist_cp.FileSystemWriter(model_subdir)
+        dist_cp.save(state_dict={"model": model_state_dict}, storage_writer=model_writer)
 
-        # Save optimizer state dict
-        if dist.get_rank() == 0:
-            print(f"Saving optimizer checkpoint to {os.path.join(checkpoint_dir, 'optimizer')}")
-        optim_storage_writer = dist_cp.FileSystemWriter(os.path.join(checkpoint_dir, "optimizer"))
-        dist_cp.save(state_dict={"optim": optimizer_state_dict}, storage_writer=optim_storage_writer)
+    # Save optimizer (always standard format)
+    if dist.get_rank() == 0:
+        print(f"Saving optimizer to {optimizer_subdir}")
+    optim_writer = dist_cp.FileSystemWriter(optimizer_subdir)
+    dist_cp.save(state_dict={"optim": optimizer_state_dict}, storage_writer=optim_writer)
 
     # Save tokenizer, training state, and Hugging Face config on rank 0
     if dist.get_rank() == 0:
@@ -88,6 +76,16 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step, c
         print(f"Checkpoint saved to {checkpoint_dir}")
 
     dist.barrier()
+
+
+def _detect_safetensors(checkpoint_path):
+    """Detect if checkpoint uses safetensors format by checking for .safetensors files in model subdir."""
+    subpath = os.path.join(checkpoint_path, "model")
+    if os.path.isdir(subpath):
+        files = os.listdir(subpath)
+        if any(f.endswith(".safetensors") for f in files):
+            return True
+    return False
 
 
 def load_checkpoint(args, model, optimizer):
@@ -105,12 +103,12 @@ def load_checkpoint(args, model, optimizer):
             raise FileNotFoundError(f"Checkpoint directory {checkpoint_path} does not exist.")
         print(f"Loading checkpoint from {checkpoint_path}")
 
-    # Detect safetensors format
+    # Detect safetensors format for model
     is_safetensors = False
     if dist.get_rank() == 0 and os.path.exists(checkpoint_path):
-        is_safetensors = any(f.endswith(".safetensors") for f in os.listdir(checkpoint_path))
+        is_safetensors = _detect_safetensors(checkpoint_path)
         if is_safetensors:
-            print("Detected safetensors format")
+            print("Detected safetensors format in model subdir")
 
     is_safetensors_t = torch.tensor([is_safetensors], dtype=torch.long, device="cpu")
     dist.broadcast(is_safetensors_t, src=0)
@@ -121,49 +119,57 @@ def load_checkpoint(args, model, optimizer):
         model, optimizer, options=StateDictOptions(full_state_dict=False, cpu_offload=False)
     )
 
-    # Load based on format
+    model_subdir = os.path.join(checkpoint_path, "model")
+    optimizer_subdir = os.path.join(checkpoint_path, "optimizer")
+
+    # Validate subdirs exist
+    if dist.get_rank() == 0:
+        if not os.path.exists(model_subdir):
+            raise FileNotFoundError(f"Model checkpoint subdirectory {model_subdir} does not exist.")
+        if not os.path.exists(optimizer_subdir):
+            raise FileNotFoundError(f"Optimizer checkpoint subdirectory {optimizer_subdir} does not exist.")
+
+    dist.barrier()
+
+    # Load model
     if is_safetensors:
         try:
             from torch.distributed.checkpoint import HuggingFaceStorageReader
 
-            # Load model state dict
+            if dist.get_rank() == 0:
+                print(f"Loading model from {model_subdir}")
             model_state_dict = {"model": model_state_dict}
-            model_storage_reader = HuggingFaceStorageReader(path=checkpoint_path)
+            model_storage_reader = HuggingFaceStorageReader(path=model_subdir)
             dist_cp.load(state_dict=model_state_dict, storage_reader=model_storage_reader)
-
-            # Load optimizer state dict
-            optim_state_dict = {"optim": {}}
-            optim_storage_reader = HuggingFaceStorageReader(path=checkpoint_path)
-            dist_cp.load(state_dict=optim_state_dict, storage_reader=optim_storage_reader)
-            optimizer_state_dict = _unflatten_optimizer_state(optim_state_dict["optim"])
-
+            model_state_dict = model_state_dict["model"]
         except ImportError as e:
             raise ImportError(
                 "Safetensors library is required to load safetensors checkpoint files, but it is not installed."
             ) from e
     else:
-        # Load model state dict
-        model_checkpoint_path = os.path.join(checkpoint_path, "model")
-        if dist.get_rank() == 0 and not os.path.exists(model_checkpoint_path):
-            raise FileNotFoundError(f"Model checkpoint directory {model_checkpoint_path} does not exist.")
+        if dist.get_rank() == 0:
+            print(f"Loading model from {model_subdir}")
         model_state_dict = {"model": model_state_dict}
-        model_storage_reader = dist_cp.FileSystemReader(model_checkpoint_path)
+        model_storage_reader = dist_cp.FileSystemReader(model_subdir)
         dist_cp.load(state_dict=model_state_dict, storage_reader=model_storage_reader)
+        model_state_dict = model_state_dict["model"]
 
-        # Load optimizer state dict
-        optim_checkpoint_path = os.path.join(checkpoint_path, "optimizer")
-        if dist.get_rank() == 0 and not os.path.exists(optim_checkpoint_path):
-            raise FileNotFoundError(f"Optimizer checkpoint directory {optim_checkpoint_path} does not exist.")
-        optim_state_dict = {"optim": optimizer_state_dict}
-        optim_storage_reader = dist_cp.FileSystemReader(optim_checkpoint_path)
-        dist_cp.load(state_dict=optim_state_dict, storage_reader=optim_storage_reader)
-        optimizer_state_dict = optim_state_dict["optim"]
+    # Load optimizer (always standard format)
+    if dist.get_rank() == 0:
+        print(f"Loading optimizer from {optimizer_subdir}")
+    optim_state_dict = {"optim": optimizer_state_dict}
+    optim_storage_reader = dist_cp.FileSystemReader(optimizer_subdir)
+    dist_cp.load(state_dict=optim_state_dict, storage_reader=optim_storage_reader)
+    optimizer_state_dict = optim_state_dict["optim"]
+
+    if not optimizer_state_dict.get("state", {}):
+        raise ValueError("Optimizer state dictionary is empty after loading")
 
     # Apply loaded state
     set_state_dict(
         model,
         optimizer,
-        model_state_dict=model_state_dict["model"],
+        model_state_dict=model_state_dict,
         optim_state_dict=optimizer_state_dict,
         options=StateDictOptions(full_state_dict=False, cpu_offload=False),
     )
@@ -197,42 +203,3 @@ def load_checkpoint(args, model, optimizer):
 
     dist.barrier()
     return loaded_iteration, global_step
-
-
-def _flatten_optimizer_state(optimizer_state_dict):
-    """Flatten optimizer state for safetensors compatibility."""
-    flattened = {}
-
-    for param_name, param_states in optimizer_state_dict.get("state", {}).items():
-        for state_key, state_value in param_states.items():
-            flattened[f"state.{param_name}.{state_key}"] = state_value
-
-    for group_idx, group in enumerate(optimizer_state_dict.get("param_groups", [])):
-        for key, value in group.items():
-            if isinstance(value, (torch.Tensor, int, float, bool)) or value is None:
-                flattened[f"param_groups.{group_idx}.{key}"] = value
-
-    return flattened
-
-
-def _unflatten_optimizer_state(flattened_dict):
-    """Unflatten optimizer state from safetensors format."""
-    state = {}
-    param_groups = []
-
-    for fqn, value in flattened_dict.items():
-        parts = fqn.split(".", 2)  # Split into at most 3 parts
-
-        if parts[0] == "state":
-            param_name, state_key = parts[1], parts[2]
-            if param_name not in state:
-                state[param_name] = {}
-            state[param_name][state_key] = value
-
-        elif parts[0] == "param_groups":
-            group_idx, key = int(parts[1]), parts[2]
-            while len(param_groups) <= group_idx:
-                param_groups.append({})
-            param_groups[group_idx][key] = value
-
-    return {"state": state, "param_groups": param_groups}
