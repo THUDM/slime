@@ -10,7 +10,6 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step, c
     checkpoint_dir = os.path.join(args.save, str(iteration))
 
     if dist.get_rank() == 0:
-        print(f"Saving checkpoint at iteration {iteration} to {checkpoint_dir}")
         os.makedirs(checkpoint_dir, exist_ok=True)
 
     dist.barrier()
@@ -20,12 +19,8 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step, c
         model, optimizer, options=StateDictOptions(full_state_dict=False, cpu_offload=False)
     )
 
-    # Debug: Check state dicts
-    if dist.get_rank() == 0:
-        print(f"Model state keys: {len(model_state_dict)}")
-        if not optimizer_state_dict or not optimizer_state_dict.get("state", {}):
-            raise ValueError(f"Optimizer state dictionary is empty for iteration {iteration}")
-        print(f"Raw optimizer state keys: {len(optimizer_state_dict.get('state', {}))}")
+    if not optimizer_state_dict or not optimizer_state_dict.get("state", {}):
+        raise ValueError(f"Optimizer state dictionary is empty for iteration {iteration}")
 
     use_safetensors = getattr(args, "save_safe_serialization", False)
 
@@ -46,31 +41,18 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step, c
             model_writer = HuggingFaceStorageWriter(
                 path=model_subdir, fqn_to_index_mapping={k: 0 for k in model_state_dict.keys()}
             )
-            if dist.get_rank() == 0:
-                print(f"Saving model (safetensors) to {model_subdir}")
             dist_cp.save(state_dict=model_state_dict, storage_writer=model_writer)
         except ImportError as e:
             raise ImportError(
                 "Safetensors library is required when save_safe_serialization is True, but it is not installed."
             ) from e
     else:
-        if dist.get_rank() == 0:
-            print(f"Saving model to {model_subdir}")
         model_writer = dist_cp.FileSystemWriter(model_subdir)
         dist_cp.save(state_dict={"model": model_state_dict}, storage_writer=model_writer)
 
     # Save optimizer (always standard format)
-    if dist.get_rank() == 0:
-        print(f"Saving optimizer to {optimizer_subdir}")
     optim_writer = dist_cp.FileSystemWriter(optimizer_subdir)
     dist_cp.save(state_dict={"optim": optimizer_state_dict}, storage_writer=optim_writer)
-
-    # Debug: Verify optimizer files
-    if dist.get_rank() == 0:
-        optim_files = os.listdir(optimizer_subdir)
-        print(f"Optimizer files saved: {optim_files}")
-        if not optim_files:
-            print(f"WARNING: No optimizer files found in {optimizer_subdir}")
 
     # Save tokenizer, training state, and Hugging Face config on rank 0
     if dist.get_rank() == 0:
@@ -80,7 +62,6 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step, c
         torch.save(
             {"iteration": iteration, "global_step": global_step}, os.path.join(checkpoint_dir, "training_state.pt")
         )
-        print(f"Checkpoint saved to {checkpoint_dir}")
 
     dist.barrier()
 
@@ -96,25 +77,18 @@ def _detect_safetensors(checkpoint_path):
 
 
 def load_checkpoint(args, model, optimizer):
-    """Load a checkpoint using FSDP distributed checkpointing (FSDP v2 only).
-
-    Loads model from 'model' subdir (safetensors or standard) and optimizer from 'optimizer' subdir (standard).
-    """
+    """Load a checkpoint using FSDP distributed checkpointing (FSDP v2 only)."""
     checkpoint_path = args.load
     if not checkpoint_path:
         return -1, 0
 
-    if dist.get_rank() == 0:
-        if not os.path.exists(checkpoint_path):
-            raise FileNotFoundError(f"Checkpoint directory {checkpoint_path} does not exist.")
-        print(f"Loading checkpoint from {checkpoint_path}")
+    if dist.get_rank() == 0 and not os.path.exists(checkpoint_path):
+        raise FileNotFoundError(f"Checkpoint directory {checkpoint_path} does not exist.")
 
     # Detect safetensors format for model
     is_safetensors = False
     if dist.get_rank() == 0 and os.path.exists(checkpoint_path):
         is_safetensors = _detect_safetensors(checkpoint_path)
-        if is_safetensors:
-            print("Detected safetensors format in model subdir")
 
     is_safetensors_t = torch.tensor([is_safetensors], dtype=torch.long, device="cpu")
     dist.broadcast(is_safetensors_t, src=0)
@@ -142,8 +116,6 @@ def load_checkpoint(args, model, optimizer):
         try:
             from torch.distributed.checkpoint import HuggingFaceStorageReader
 
-            if dist.get_rank() == 0:
-                print(f"Loading model from {model_subdir}")
             model_state_dict = {"model": model_state_dict}
             model_storage_reader = HuggingFaceStorageReader(path=model_subdir)
             dist_cp.load(state_dict=model_state_dict, storage_reader=model_storage_reader)
@@ -153,16 +125,12 @@ def load_checkpoint(args, model, optimizer):
                 "Safetensors library is required to load safetensors checkpoint files, but it is not installed."
             ) from e
     else:
-        if dist.get_rank() == 0:
-            print(f"Loading model from {model_subdir}")
         model_state_dict = {"model": model_state_dict}
         model_storage_reader = dist_cp.FileSystemReader(model_subdir)
         dist_cp.load(state_dict=model_state_dict, storage_reader=model_storage_reader)
         model_state_dict = model_state_dict["model"]
 
     # Load optimizer (always standard format)
-    if dist.get_rank() == 0:
-        print(f"Loading optimizer from {optimizer_subdir}")
     optim_state_dict = {"optim": optimizer_state_dict}
     optim_storage_reader = dist_cp.FileSystemReader(optimizer_subdir)
     dist_cp.load(state_dict=optim_state_dict, storage_reader=optim_storage_reader)
@@ -180,9 +148,6 @@ def load_checkpoint(args, model, optimizer):
         options=StateDictOptions(full_state_dict=False, cpu_offload=False),
     )
 
-    if dist.get_rank() == 0:
-        print("Loaded model and optimizer state")
-
     # Load training state
     loaded_iteration = -1
     global_step = 0
@@ -193,7 +158,6 @@ def load_checkpoint(args, model, optimizer):
             training_state = torch.load(training_state_path, map_location="cpu")
             loaded_iteration = training_state.get("iteration", -1)
             global_step = training_state.get("global_step", 0)
-            print(f"Loaded training state: iteration={loaded_iteration}, global_step={global_step}")
 
         # Broadcast to all ranks
         state_t = torch.tensor([0, 0], dtype=torch.int64, device="cpu")
@@ -203,9 +167,6 @@ def load_checkpoint(args, model, optimizer):
         dist.broadcast(state_t, src=0)
         loaded_iteration = state_t[0].item()
         global_step = state_t[1].item()
-    else:
-        if dist.get_rank() == 0:
-            print("No training state found - loaded model weights only")
 
     dist.barrier()
     return loaded_iteration, global_step
