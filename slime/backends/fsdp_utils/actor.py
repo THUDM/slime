@@ -123,6 +123,15 @@ class FSDPTrainRayActor(TrainRayActor):
     def wake_up(self, tags):
         if not getattr(self.args, "offload", False):
             return
+        
+        mem_fraction_static = self.args.sglang_mem_fraction_static or 0.8
+        for _ in range(60):
+            memory_info = print_memory("before wake_up model")
+            if memory_info["used_GB"] >= mem_fraction_static * memory_info["total_GB"]:
+                time.sleep(1)
+                continue
+            break
+            
         if torch_memory_saver is not None:
             torch_memory_saver.resume()
 
@@ -430,10 +439,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 self.global_step += 1
 
         self.update_cpu_params_dict(self.weights["actor"])
-
-        # Offload optimizer after training to save memory during waiting periods
-        if self.args.offload:
-            self.sleep(("model"))
 
         Timer().start("train_wait")
         return
