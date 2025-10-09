@@ -30,6 +30,9 @@ class FSDPArgs:
     # Precision
     gradient_checkpointing: bool = False
 
+    # FSDP configuration
+    fsdp_full_params: bool = False  # If True, use full_tensor; if False, use shard_tensor
+
     # YAML bookkeeping
     config: Optional[str] = None
 
