@@ -73,12 +73,11 @@ class RolloutManager:
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
     def generate(self, rollout_id):
-        self.rollout_id = rollout_id
         monitor_started = self._start_health_monitor()
         start_time = time.time()
         try:
-            data = self._get_rollout_data()
-            self._save_debug_rollout_data(data)
+            data = self._get_rollout_data(rollout_id=rollout_id)
+            self._save_debug_rollout_data(data, rollout_id=rollout_id)
             _log_rollout_data(rollout_id, self.args, data, time.time() - start_time)
             data = self._convert_samples_to_train_data(data)
             return Box(ray.put(data))
@@ -170,14 +169,14 @@ class RolloutManager:
                 self.all_rollout_engines[i] = None
             self.rollout_engines[rollout_engine_id] = None
 
-    def _get_rollout_data(self):
+    def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
             data = torch.load(
-                open(self.args.load_debug_rollout_data.format(rollout_id=self.rollout_id), "rb"),
+                open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
         else:
-            data = self.generate_rollout(self.args, self.rollout_id, self.data_source, evaluation=False)
+            data = self.generate_rollout(self.args, rollout_id, self.data_source, evaluation=False)
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
                 data = sum(data, [])
@@ -189,15 +188,15 @@ class RolloutManager:
                 print(f"trim number of samples from {origin_data_length} to {trim_len}")
         return data
 
-    def _save_debug_rollout_data(self, data):
+    def _save_debug_rollout_data(self, data, rollout_id):
         # TODO to be refactored (originally Buffer._set_data)
         if (path_template := self.args.save_debug_rollout_data) is not None:
-            path = Path(path_template.format(rollout_id=self.rollout_id))
+            path = Path(path_template.format(rollout_id=rollout_id))
             print(f"Save debug rollout data to {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(
                 dict(
-                    rollout_id=self.rollout_id,
+                    rollout_id=rollout_id,
                     samples=[sample.to_dict() for sample in data],
                 ),
                 path,
