@@ -2,6 +2,7 @@ from argparse import Namespace
 from collections.abc import Iterable
 from contextlib import nullcontext
 from itertools import accumulate
+import time
 
 import ray
 import torch
@@ -31,6 +32,8 @@ from slime.utils.wandb_utils import init_wandb_secondary
 
 from .data_packing import pack_sequences, unpack_sequences
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
+
+from slime.utils.memory_utils import print_memory
 
 
 class FSDPTrainRayActor(TrainRayActor):
@@ -67,6 +70,16 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if self.args.multimodal_keys:
             self.vlm_processor = AutoProcessor.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
+
+        # Enable global tracking for torch_memory_saver if offload is enabled
+        # This ensures model and optimizer tensors are tracked for pause/resume
+        if self.args.offload and torch_memory_saver is not None:
+            # Ensure torch_memory_saver is initialized by calling _ensure_initialized
+            torch_memory_saver._ensure_initialized()
+            if torch_memory_saver._impl is not None:
+                torch_memory_saver._impl._binary_wrapper.cdll.tms_set_interesting_region(True)
+                if dist.get_rank() == 0:
+                    print("Enabled torch_memory_saver global tracking for model and optimizer")
 
         # Load model
         with torch.autocast(device_type=f"cuda:{torch.cuda.current_device()}"):
@@ -129,7 +142,11 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         if not getattr(self.args, "offload", False):
             return
+        
+        print_memory(f"before offload model")
+        
         if torch_memory_saver is not None:
+<<<<<<< HEAD
             if tags is None:
                 torch_memory_saver.pause()
             elif isinstance(tags, str):
@@ -137,6 +154,11 @@ class FSDPTrainRayActor(TrainRayActor):
             else:
                 for tag in tags:
                     torch_memory_saver.pause(tag)
+=======
+            torch_memory_saver.pause()
+        
+        print_memory(f"after offload model")
+>>>>>>> 80adadc (Fix torch memory saver in FSDP)
 
     def wake_up(self, tags: str | Iterable[str] | None) -> None:
         """Resume CUDA memory for tagged tensors via torch_memory_saver.
@@ -150,6 +172,7 @@ class FSDPTrainRayActor(TrainRayActor):
         if not getattr(self.args, "offload", False):
             return
         
+        # Wait for SGLang to release GPU memory before resuming training model
         mem_fraction_static = self.args.sglang_mem_fraction_static or 0.8
         for _ in range(60):
             memory_info = print_memory("before wake_up model")
@@ -157,8 +180,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 time.sleep(1)
                 continue
             break
-            
+        
         if torch_memory_saver is not None:
+<<<<<<< HEAD
             if tags is None:
                 torch_memory_saver.resume()
             elif isinstance(tags, str):
@@ -166,6 +190,11 @@ class FSDPTrainRayActor(TrainRayActor):
             else:
                 for tag in tags:
                     torch_memory_saver.resume(tag)
+=======
+            torch_memory_saver.resume()
+        
+        print_memory("after wake_up model")
+>>>>>>> 80adadc (Fix torch memory saver in FSDP)
 
     def save_model(self, iteration: int) -> None:
         """Save model state and optimizer state for the given iteration.
