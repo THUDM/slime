@@ -149,6 +149,15 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         if not getattr(self.args, "offload", False):
             return
+        
+        mem_fraction_static = self.args.sglang_mem_fraction_static or 0.8
+        for _ in range(60):
+            memory_info = print_memory("before wake_up model")
+            if memory_info["used_GB"] >= mem_fraction_static * memory_info["total_GB"]:
+                time.sleep(1)
+                continue
+            break
+            
         if torch_memory_saver is not None:
             if tags is None:
                 torch_memory_saver.resume()
@@ -513,6 +522,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.update_cpu_params_dict(self.weights["actor"])
 
+<<<<<<< HEAD
         # Update ref model if needed
         if (
             self.args.ref_update_interval is not None
@@ -523,6 +533,8 @@ class FSDPTrainRayActor(TrainRayActor):
                 print(f"Updating ref model at rollout_id {rollout_id}")
             self.update_cpu_params_dict(self.weights["ref"])
 
+=======
+>>>>>>> bbf490c (Remove redundant sleep and add wait for sglang flush cache)
         Timer().start("train_wait")
         return
 
