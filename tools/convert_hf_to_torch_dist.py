@@ -3,13 +3,13 @@ import shutil
 
 import torch
 import torch.distributed as dist
-from mbridge import AutoBridge
 from megatron.core.enums import ModelType
 from megatron.training.arguments import parse_args, validate_args
 from megatron.training.checkpointing import get_checkpoint_name, get_checkpoint_tracker_filename, save_checkpoint
 from megatron.training.training import get_model
 
 import slime_plugins.mbridge  # noqa: F401
+from mbridge import AutoBridge
 from slime.backends.megatron_utils import set_default_megatron_args
 from slime.backends.megatron_utils.initialize import init
 from slime.backends.megatron_utils.model_provider import get_model_provider_func

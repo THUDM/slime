@@ -9,6 +9,7 @@ pkill -9 python
 sleep 3
 pkill -9 ray
 pkill -9 python
+pkill -9 redis
 
 set -ex
 

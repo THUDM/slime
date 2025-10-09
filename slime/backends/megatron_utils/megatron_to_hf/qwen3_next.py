@@ -5,7 +5,7 @@ import torch
 from packaging.version import parse
 
 
-def convert_qwen3moe_to_hf(args, name, param):
+def convert_qwen3_next_to_hf(args, name, param):
     if name == "module.module.embedding.word_embeddings.weight":
         return [("model.embed_tokens.weight", param)]
     if name == "module.module.output_layer.weight":
@@ -126,5 +126,25 @@ def convert_qwen3moe_to_hf(args, name, param):
             return [(f"model.layers.{layer_idx}.self_attn.q_norm.weight", param)]
         elif rest == "self_attention.k_layernorm.weight":
             return [(f"model.layers.{layer_idx}.self_attn.k_norm.weight", param)]
+        elif rest.startswith("self_attention.") and rest[len("self_attention.") :] in [
+            "input_layernorm.weight",
+            # linear attn
+            "linear_attn.A_log",
+            "linear_attn.conv1d.weight",
+            "linear_attn.dt_bias",
+            "linear_attn.in_proj_ba.weight",
+            "linear_attn.in_proj_qkvz.weight",
+            "linear_attn.norm.weight",
+            "linear_attn.out_proj.weight",
+            # gated attn
+            "self_attn.k_norm.weight",
+            "self_attn.k_proj.weight",
+            "self_attn.o_proj.weight",
+            "self_attn.q_norm.weight",
+            "self_attn.q_proj.weight",
+            "self_attn.v_proj.weight",
+        ]:
+            rest = rest[len("self_attention.") :]
+            return [(f"model.layers.{layer_idx}.{rest}", param)]
 
     raise ValueError(f"Unknown parameter name: {name}")

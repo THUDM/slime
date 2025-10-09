@@ -6,6 +6,12 @@ slime 是一个面向 RL Scaling 的 LLM 后训练框架，提供两大核心能
 - 高性能训练：通过连接 Megatron 与 SGLang，支持多种模式下的高效训练；
 - 灵活的数据生成：通过自定义数据生成接口与基于服务器的引擎，实现任意训练数据生成流程。
 
+slime 是 GLM-4.5 与 GLM-4.6 背后的 RL 训练框架。除此之外，slime 还支持:
+
+- Qwen3 系列 (Qwen3Next, Qwen3MoE, Qwen3), Qwen2.5 系列；
+- DeepSeek V3 系列 (DeepSeek V3, V3.1, DeepSeek R1)；
+- Llama 3。
+
 .. toctree::
    :maxdepth: 1
    :caption: 开始使用
@@ -35,6 +41,8 @@ slime 是一个面向 RL Scaling 的 LLM 后训练框架，提供两大核心能
 
    _examples_synced/reproducibility/README.md
    advanced/speculative-decoding.md
+   advanced/fault-tolerance.md
+   advanced/arch-support-beyond-megatron.md
 
 .. toctree::
    :maxdepth: 1
