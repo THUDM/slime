@@ -388,27 +388,24 @@ class UpdateWeightFromTensor:
         # Create a separate CUDA stream for pre-fetching the next bucket of parameters.
         side_stream = torch.cuda.Stream()
 
-        current_params, current_infos = self._update_bucket_weights_from_tensor(self.param_info_buckets[0])
+        current_params, current_infos = self._gather_bucket_params(self.param_info_buckets[0])
 
         for i in tqdm(range(num_buckets), disable=rank != 0, desc="Update weights (pipelined)"):
             if i + 1 < num_buckets:
                 with torch.cuda.stream(side_stream):
-                    next_params, next_infos = self._update_bucket_weights_from_tensor(
+                    next_params, next_infos = self._gather_bucket_params(
                         self.param_info_buckets[i + 1]
                     )
 
             refs = self._update_converted_params_from_tensor(current_params, current_infos)
-            if refs:
-                if isinstance(refs, list):
-                    ray_refs.extend(refs)
-                else:
-                    ray_refs.append(refs)
+            ray_refs.append(refs)
 
             # Prevents OOM errors and ensures smooth pipeline execution
             if rank == self._ipc_gather_src:
                 while len(ray_refs) >= pipeline_window_size:
-                    oldest_ref = ray_refs.popleft()
-                    ray.get(oldest_ref)
+                    oldest_refs_list = ray_refs.popleft()
+                    if oldest_refs_list:
+                        ray.get(oldest_refs_list)
 
             if i + 1 < num_buckets:
                 torch.cuda.current_stream().wait_stream(side_stream)
@@ -416,11 +413,13 @@ class UpdateWeightFromTensor:
                 current_infos = next_infos
 
         if rank == self._ipc_gather_src and ray_refs:
-            ray.get(list(ray_refs))
+            all_remaining_refs = sum(ray_refs, [])
+            if all_remaining_refs:
+                ray.get(all_remaining_refs)
 
         dist.barrier(group=get_gloo_group())
 
-    def _update_bucket_weights_from_tensor(
+    def _gather_bucket_params(
         self, param_infos: Sequence[ParamInfo]
     ) -> Tuple[Sequence[torch.Tensor], Sequence[ParamInfo]]:
         monkey_patch_torch_reductions()
@@ -510,7 +509,7 @@ class UpdateWeightFromTensor:
             if refs_distributed:
                 all_refs.extend(refs_distributed)
 
-        return all_refs if all_refs else None
+        return all_refs
 
     def _send_to_colocated_engine(
         self, converted_named_tensors: List[Tuple[str, torch.Tensor]]
