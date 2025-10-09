@@ -95,7 +95,7 @@ FSDP_ARGS=(
    --offload
    
    # Set to true for FULL_STATE_DICT mode, false for SHARDED_STATE_DICT mode (default)
-   --fsdp-full-params  # Uncomment this line to enable full params mode
+   # --fsdp-full-params  # Uncomment this line to enable full params mode
 
    # Set the bucket size for weight update (256MB = 268435456 bytes)
    --update-weights-bucket-size 268435456

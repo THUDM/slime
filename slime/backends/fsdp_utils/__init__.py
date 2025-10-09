@@ -1,11 +1,14 @@
 import logging
 
+import torch
 
 try:
+    from torch_memory_saver import torch_memory_saver
     _TORCH_MEMORY_SAVER_AVAILABLE = True
 except ImportError:
     logging.warning("torch_memory_saver is not installed, refer to : https://github.com/fzyzcjy/torch_memory_saver")
     _TORCH_MEMORY_SAVER_AVAILABLE = False
+    torch_memory_saver = None
 
 try:
     _FSDP_AVAILABLE = True
