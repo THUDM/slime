@@ -1,31 +1,30 @@
 import os
 import socket
 import time
+from argparse import Namespace
 from contextlib import nullcontext
 from pathlib import Path
+from typing import Dict, Optional, Tuple, Union
 
 import ray
 import torch
 import torch.distributed as dist
-
-if torch.version.hip:
-    from vllm.device_allocator.cumem import CuMemAllocator
-else:
-    from torch_memory_saver import torch_memory_saver
-
 from megatron.core import mpu
+from ray.actor import ActorHandle
+from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.memory_utils import clear_memory, print_memory
+from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
 from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp
-from .data import get_data_iterator, log_perf_data, log_rollout_data, sync_actor_critic_data
+from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data, sync_actor_critic_data
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
@@ -33,7 +32,13 @@ from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTe
 
 
 class MegatronTrainRayActor(TrainRayActor):
-    def init(self, args, role, wandb_run_id, with_ref=False):
+    def init(
+        self,
+        args: Namespace,
+        role: str,
+        wandb_run_id: str,
+        with_ref: bool = False,
+    ) -> Optional[int]:
         super().init(args, role, wandb_run_id, with_ref)
 
         init(args)
@@ -82,7 +87,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.update_cpu_params_dict(self.weights["rollout_actor"])
 
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
-        self.weight_updator = update_weight_cls(
+        self.weight_updater = update_weight_cls(
             self.args,
             self.model,
             self.weights,
@@ -128,7 +133,7 @@ class MegatronTrainRayActor(TrainRayActor):
         return start_rollout_id
 
     @torch.no_grad()
-    def update_cpu_params_dict(self, params_dict):
+    def update_cpu_params_dict(self, params_dict: Dict[str, torch.Tensor]) -> None:
         for name, param in named_parameters(self.args, self.model):
             if name not in params_dict:
                 params_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
@@ -136,34 +141,30 @@ class MegatronTrainRayActor(TrainRayActor):
         torch.cuda.synchronize()
 
     @torch.no_grad()
-    def update_gpu_params_dict(self, params_dict):
+    def update_gpu_params_dict(self, params_dict: Dict[str, torch.Tensor]) -> None:
         for name, param in named_parameters(self.args, self.model):
             assert name in params_dict
             param.copy_(params_dict[name], non_blocking=True)
         torch.cuda.synchronize()
 
     @timer
-    def sleep(self, tags):
+    def sleep(self, tags: Union[str, Tuple[str, ...]]) -> None:
         assert self.args.offload
         assert "model" in tags
         if isinstance(tags, str):
             tags = (tags,)
 
         clear_memory()
-        print_memory(f"before offload model")
+        print_memory("before offload model")
         if hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()
 
-        if not torch.version.hip:
-            torch_memory_saver.pause()
-        else:
-            allocator = CuMemAllocator.get_instance()
-            allocator.sleep(offload_tags=tags)
+        torch_memory_saver.pause()
 
-        print_memory(f"after offload model")
+        print_memory("after offload model")
 
     @timer
-    def wake_up(self, tags):
+    def wake_up(self, tags: Union[str, Tuple[str, ...]]) -> None:
         assert self.args.offload
 
         # there are weird times when sglang is not offloaded immediately, so we wait here.
@@ -178,18 +179,16 @@ class MegatronTrainRayActor(TrainRayActor):
         if isinstance(tags, str):
             tags = (tags,)
 
-        if not torch.version.hip:
-            torch_memory_saver.resume()
-        else:
-            allocator = CuMemAllocator.get_instance()
-            allocator.wake_up(tags)
+        torch_memory_saver.resume()
 
         clear_memory()
         if hasattr(mpu, "reload_process_groups"):
             mpu.reload_process_groups()
         print_memory("after wake_up model")
 
-    def _get_rollout_data(self, rollout_data_ref):
+    def _get_rollout_data(
+        self, rollout_data_ref: Box
+    ) -> Dict[str, list[torch.Tensor] | list[int] | list[float] | list[str]]:
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
         # Both first pp stage and the last pp stage will recieve the data.
         rollout_data = process_rollout_data(
@@ -221,11 +220,11 @@ class MegatronTrainRayActor(TrainRayActor):
 
     def compute_log_prob(
         self,
-        model_tag,
-        data_iterator,
-        num_microbatches,
-        store_prefix="",
-    ):
+        model_tag: str,
+        data_iterator: list[DataIterator],
+        num_microbatches: list[int],
+        store_prefix: str = "",
+    ) -> Dict[str, list[torch.Tensor]]:
         self.update_gpu_params_dict(self.weights[model_tag])
 
         with timer(f"{store_prefix}log_probs"):
@@ -238,7 +237,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 store_prefix=store_prefix,
             )
 
-    def train(self, rollout_id, rollout_data_ref):
+    def train(self, rollout_id: int, rollout_data_ref: Box) -> None:
         Timer().end("train_wait")
 
         if self.args.offload:
@@ -256,7 +255,9 @@ class MegatronTrainRayActor(TrainRayActor):
         else:
             return self.train_actor(rollout_id, rollout_data)
 
-    def train_critic(self, rollout_id, rollout_data):
+    def train_critic(
+        self, rollout_id: int, rollout_data: Dict[str, list[torch.Tensor] | list[int] | list[float] | list[str]]
+    ) -> None:
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
         rollout_data.update(
@@ -285,7 +286,9 @@ class MegatronTrainRayActor(TrainRayActor):
         )
         Timer().start("train_wait")
 
-    def train_actor(self, rollout_id, rollout_data):
+    def train_actor(
+        self, rollout_id: int, rollout_data: Dict[str, list[torch.Tensor] | list[int] | list[float] | list[str]]
+    ) -> None:
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
 
@@ -386,14 +389,14 @@ class MegatronTrainRayActor(TrainRayActor):
         log_perf_data(rollout_id, self.args)
         Timer().start("train_wait")
 
-    def save_model(self, iteration):
+    def save_model(self, iteration: int) -> None:
         if self.args.debug_rollout_only:
             return
 
         save(iteration, self.model, self.optimizer, self.opt_param_scheduler)
 
     @timer
-    def update_weights(self):
+    def update_weights(self) -> None:
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
@@ -404,12 +407,12 @@ class MegatronTrainRayActor(TrainRayActor):
             self.rollout_manager.get_rollout_engines_and_lock.remote()
         )
         if num_new_engines > 0:
-            self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
+            self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
-        with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
+        with torch_memory_saver.disable() if self.args.offload else nullcontext():
             print_memory("before update_weights")
-            self.weight_updator.update_weights()
+            self.weight_updater.update_weights()
             print_memory("after update_weights")
 
             if getattr(self.args, "keep_old_actor", False):
@@ -424,7 +427,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.offload and hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()
 
-    def load_other_checkpoint(self, model_tag, path):
+    def load_other_checkpoint(self, model_tag: str, path: str) -> None:
         old_args = self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune
         self.args.load = path
         self.args.no_load_optim = True
@@ -450,7 +453,12 @@ class MegatronTrainRayActor(TrainRayActor):
         self.weights[model_tag] = {}
         self.update_cpu_params_dict(self.weights[model_tag])
 
-    def connect_actor_critic(self, actor_handle=None, master_address=None, master_port=None):
+    def connect_actor_critic(
+        self,
+        actor_handle: Optional[ActorHandle] = None,
+        master_address: Optional[str] = None,
+        master_port: Optional[int] = None,
+    ) -> None:
         if self.role == "actor":
             master_address = ray.util.get_node_ip_address()
             with socket.socket() as sock:
