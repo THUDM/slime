@@ -312,7 +312,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
 
                 advantages_seq = torch.split(advantages, response_lengths, dim=0)
-                advantages_seq = torch.stack([adv_seq.mean() for adv_seq in advantages_seq], device=log_probs.device)
+                advantages_seq = torch.stack([adv_seq.mean() for adv_seq in advantages_seq])
                 log_ratio = torch.split(log_probs - old_log_probs, response_lengths, dim=0)
                 s_i = torch.stack(
                     [
