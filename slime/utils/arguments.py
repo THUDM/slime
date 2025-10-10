@@ -42,7 +42,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-num-gpus",
                 type=int,
-                default=None,
+                default=8,
                 help=(
                     "Number of GPUs for inference. Note that when using --colocate, "
                     "i.e. the training and the inference engines are on the same gpus, this param will be ignored and will be set as "
@@ -332,7 +332,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--num-rollout",
                 type=int,
-                default=None,
+                default=1,
                 help="Number of rollout steps. Currently, we don't support passing num_epoch and calculate num_rollout from data size.",
             )
             parser.add_argument(
