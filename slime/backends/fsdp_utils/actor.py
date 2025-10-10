@@ -476,7 +476,7 @@ class FSDPTrainRayActor(TrainRayActor):
             dist.barrier(group=get_gloo_group())
 
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
-            self.weight_updator.update_weights()
+            self.weight_updater.update_weights()
 
     @torch.no_grad()
     def update_cpu_params_dict(self, params_dict):
