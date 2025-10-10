@@ -319,8 +319,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     [
                         torch.exp((log_ratio_i * mask_i).sum() / mask_i.sum().clamp_min(1))
                         for log_ratio_i, mask_i in zip(log_ratio, loss_masks)
-                    ],
-                    device=log_probs.device,
+                    ]
                 )
 
                 clipped_s_i = torch.clamp(s_i, 1.0 - self.args.eps_clip, 1.0 + self.args.eps_clip)
