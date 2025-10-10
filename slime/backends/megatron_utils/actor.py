@@ -51,7 +51,8 @@ class MegatronTrainRayActor(TrainRayActor):
             if i == dist.get_rank():
                 self.hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
                 self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
-            dist.barrier(group=get_gloo_group())
+        # Synchronize all processes after the loop
+        dist.barrier(group=get_gloo_group())
 
         if self.args.debug_rollout_only:
             Timer().start("train_wait")
