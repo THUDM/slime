@@ -21,7 +21,6 @@ import wandb
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.memory_utils import clear_memory
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
@@ -72,7 +71,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 trust_remote_code=True,
                 attn_implementation=self.args.attn_implementation,
             )
-            print(f"Model attn implementation: {model.config._attn_implementation}")
         model.train()
 
         if args.gradient_checkpointing:
@@ -226,9 +224,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 )
             )
             start = end
-        if dist.get_rank() == 0:
-            print("*" * 100)
-            print("length of packed_batches: ", len(packed_batches))
         grad_accum = list(accumulate(num_microbatches))
 
         return packed_batches, grad_accum
@@ -308,9 +303,13 @@ class FSDPTrainRayActor(TrainRayActor):
             packed_batch["cur_log_probs"] = log_probs
             unpacked_batches = unpack_sequences(packed_batch)
 
-            old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
-            log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
-            advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
+            if self.args.advantage_estimator == "gspo":
+                raise NotImplementedError("implement gspo")
+            else:
+                old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
+                log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
+                advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
+
             loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
             response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
 
@@ -387,7 +386,7 @@ class FSDPTrainRayActor(TrainRayActor):
             # Scale loss for gradient accumulation
             loss = loss * dist.get_world_size() / self.args.global_batch_size
             loss.backward()
-            clear_memory()
+
             # Accumulate reported metrics (store tensors for later mean)
             for k, v in reported.items():
                 reported_accum.setdefault(k, []).append(v)
@@ -395,6 +394,9 @@ class FSDPTrainRayActor(TrainRayActor):
             if (mbs_id + 1) in grad_accum:
                 # TODO: check if the grad norm is global grad norm.
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
+                # the grad norm used to be of DTensor
+                grad_norm = float(grad_norm)
+
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
                 # Aggregate logs
@@ -410,7 +412,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     log_dict = {
                         f"train/{k}": (val.item() if torch.is_tensor(val) else val) for k, val in aggregated.items()
                     }
-                    log_dict["train/grad_norm"] = grad_norm.item() if not isinstance(grad_norm, float) else grad_norm
+                    log_dict["train/grad_norm"] = grad_norm
 
                     for gid, group in enumerate(self.optimizer.param_groups):
                         if "lr" in group:
@@ -420,10 +422,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     if self.args.use_kl_loss and "kl_loss" in aggregated:
                         kl_info = f", kl_loss: {aggregated['kl_loss']:.4f}, kl_penalty: {aggregated['kl_loss'] * self.args.kl_loss_coef:.4f}"
 
-                    print(
-                        f"step {self.global_step}: loss: {aggregated.get('loss', 0):.4f}, pg_loss: {aggregated.get('pg_loss', 0):.4f}{kl_info}"
-                    )
-                    print(f"step {self.global_step} full: {log_dict}")
+                    print(f"step {self.global_step}: {log_dict}")
 
                     if self.args.use_wandb:
                         log_dict["train/step"] = self.global_step

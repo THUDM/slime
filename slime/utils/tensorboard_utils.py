@@ -1,7 +1,10 @@
 import datetime
 import os
 
-from torch.utils.tensorboard import SummaryWriter
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except:
+    SummaryWriter = None
 
 
 class _TensorboardAdapter:
