@@ -77,7 +77,7 @@ class RayTrainGroup:
         if self.args.use_routing_replay:
             env_vars["ENABLE_ROUTING_REPLAY"] = "1"
 
-        backend = os.environ.get("SLIME_BACKEND", "megatron").lower()
+        backend = self.args.train_backend
         if backend == "megatron":
             from slime.backends.megatron_utils import MegatronTrainRayActor
 

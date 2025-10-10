@@ -12,6 +12,7 @@ from transformers import AutoTokenizer
 from slime.utils.async_utils import run
 from slime.utils.data import Dataset
 from slime.utils.http_utils import get, post
+from slime.utils.mask_utils import get_response_lengths
 from slime.utils.misc import SingletonMeta, load_function
 from slime.utils.types import Sample
 
@@ -143,21 +144,36 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     output = await post(url, payload)
 
     # Extract new response tokens
-    if "output_token_logprobs" in output["meta_info"]:
-        new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
-        new_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
-    else:
-        new_response_tokens, new_response_log_probs = [], []
 
-    # Update sample with tokens directly - avoiding re-tokenization
-    sample.tokens = sample.tokens + new_response_tokens
-    sample.response_length += len(new_response_tokens)
-    sample.response += output["text"]
+    if args.use_slime_router and "RadixTreeMiddleware" in args.slime_router_middleware_paths:
+        assert not args.partial_rollout, "Currently parital rollout is not suppurted when using slime router"
+        retrieve_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/retrieve_from_text"
+        retrieve_payload = {"text": sample.prompt + output["text"], "return_logp": True}
+        retrieve_output = await post(retrieve_url, retrieve_payload)
+        sample.tokens = retrieve_output["tokens"]
+        sample.response += output["text"]
+        sample.loss_mask = retrieve_output["loss_mask"]
+        sample.response_length = get_response_lengths([sample.loss_mask])[0]
+        sample.loss_mask = sample.loss_mask[-sample.response_length :]
+        sample.rollout_log_probs = retrieve_output["rollout_logp"][-sample.response_length :]
+    else:
+        if "output_token_logprobs" in output["meta_info"]:
+            new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
+            new_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
+        else:
+            new_response_tokens, new_response_log_probs = [], []
+
+        # Update sample with tokens directly - avoiding re-tokenization
+        sample.tokens = sample.tokens + new_response_tokens
+        sample.response_length += len(new_response_tokens)
+        sample.response += output["text"]
+
+        if sample.rollout_log_probs is None:
+            sample.rollout_log_probs = []
+        sample.rollout_log_probs += new_response_log_probs
+
     if "weight_version" in output["meta_info"]:
         sample.weight_versions.append(output["meta_info"]["weight_version"])
-    if sample.rollout_log_probs is None:
-        sample.rollout_log_probs = []
-    sample.rollout_log_probs += new_response_log_probs
 
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":

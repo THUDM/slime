@@ -90,7 +90,7 @@ FSDP_ARGS=(
    # --fsdp-full-params  # Uncomment this line to enable full params mode
 
    # Set the bucket size for weight update
-   --update-weights-bucket-size 512 * 1024 * 1024 # 512MB
+   --update-weights-buffer-size $((512 * 1024 * 1024)) # 512MB
 )
 
 # launch the master node of ray in container
@@ -100,13 +100,13 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
      "env_vars": {
         "no_proxy": "localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}",
-        "SLIME_BACKEND": "fsdp"
      }
    }' \
    -- python3 train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 2 \
    --colocate \
+   --train-backend fsdp \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
