@@ -57,17 +57,21 @@ class TrainRayActor(RayActor):
         args.world_size = dist.get_world_size()
 
         try:
-            import pynvml
+            if torch.version.hip is not None:
+                print(f"Detected ROCm/HIP environment, skipping NUMA affinity setup")
+                # will find the coresponding API to implement ROCm version as below
+            else:
+                import pynvml
 
-            pynvml.nvmlInit()
+                pynvml.nvmlInit()
 
-            local_rank = int(os.environ["RANK"]) % args.num_gpus_per_node
+                local_rank = int(os.environ["RANK"]) % args.num_gpus_per_node
 
-            handle = pynvml.nvmlDeviceGetHandleByIndex(local_rank)
-            pynvml.nvmlDeviceSetCpuAffinity(handle)
+                handle = pynvml.nvmlDeviceGetHandleByIndex(local_rank)
+                pynvml.nvmlDeviceSetCpuAffinity(handle)
 
-            print(f"Set NUMA affinity for GPU {local_rank}")
-            pynvml.nvmlShutdown()
+                print(f"Set NUMA affinity for GPU {local_rank}")
+                pynvml.nvmlShutdown()
 
         except ImportError:
             print(f"Warning: pynvml not available, skipping NUMA affinity setup")

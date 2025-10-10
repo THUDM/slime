@@ -11,10 +11,7 @@ import torch
 import torch.distributed as dist
 from ray.actor import ActorHandle
 
-if torch.version.hip:
-    from vllm.device_allocator.cumem import CuMemAllocator
-else:
-    from torch_memory_saver import torch_memory_saver
+from torch_memory_saver import torch_memory_saver
 
 from megatron.core import mpu
 from transformers import AutoConfig, AutoTokenizer
@@ -164,11 +161,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()
 
-        if not torch.version.hip:
-            torch_memory_saver.pause()
-        else:
-            allocator = CuMemAllocator.get_instance()
-            allocator.sleep(offload_tags=tags)
+        torch_memory_saver.pause()
 
         print_memory("after offload model")
 
@@ -188,11 +181,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if isinstance(tags, str):
             tags = (tags,)
 
-        if not torch.version.hip:
-            torch_memory_saver.resume()
-        else:
-            allocator = CuMemAllocator.get_instance()
-            allocator.wake_up(tags)
+        torch_memory_saver.resume()
 
         clear_memory()
         if hasattr(mpu, "reload_process_groups"):
@@ -423,7 +412,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
-        with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
+        with torch_memory_saver.disable() if self.args.offload else nullcontext():
             print_memory("before update_weights")
             self.weight_updater.update_weights()
             print_memory("after update_weights")
