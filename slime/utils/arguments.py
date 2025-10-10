@@ -933,6 +933,20 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--ci-test",
                 action="store_true",
             )
+            parser.add_argument(
+                "--ci-disable-kl-checker",
+                action="store_true",
+            )
+            parser.add_argument(
+                "--ci-metric-checker-key",
+                type=str,
+                default=None,
+            )
+            parser.add_argument(
+                "--ci-metric-checker-threshold",
+                type=float,
+                default=None,
+            )
             return parser
 
         # Add custom arguments in front to prevent overwritten some slime arguments.
