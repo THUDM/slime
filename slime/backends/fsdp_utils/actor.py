@@ -238,7 +238,7 @@ class FSDPTrainRayActor(TrainRayActor):
         rank = dist.get_rank()
 
         rollout_data = process_rollout_data(self.args, rollout_data_ref, rank, world_size)
-        if self.args.advantage_estimator in ["grpo"]:
+        if self.args.advantage_estimator in ["grpo", "gspo"]:
             rollout_data["advantages"] = rollout_data["returns"] = [
                 torch.tensor([rollout_data["rewards"][i]] * rollout_data["response_lengths"][i])
                 for i in range(len(rollout_data["rewards"]))
@@ -304,49 +304,72 @@ class FSDPTrainRayActor(TrainRayActor):
             unpacked_batches = unpack_sequences(packed_batch)
 
             if self.args.advantage_estimator == "gspo":
-                raise NotImplementedError("implement gspo")
+                old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
+                log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
+                advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
+
+                loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
+                response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
+
+                advantages_seq = torch.split(advantages, response_lengths, dim=0)
+                advantages_seq = torch.tensor([adv_seq.mean() for adv_seq in advantages_seq], device=log_probs.device)
+                log_ratio = torch.split(log_probs - old_log_probs, response_lengths, dim=0)
+                s_i = torch.tensor(
+                    [
+                        torch.exp((log_ratio_i * mask_i).sum() / mask_i.sum().clamp_min(1))
+                        for log_ratio_i, mask_i in zip(log_ratio, loss_masks)
+                    ],
+                    device=log_probs.device,
+                )
+
+                clipped_s_i = torch.clamp(s_i, 1.0 - self.args.eps_clip, 1.0 + self.args.eps_clip)
+                pg_loss = -torch.mean(torch.min(s_i * advantages_seq, clipped_s_i * advantages_seq))
+                pg_clipfrac = torch.mean((s_i != clipped_s_i).float())
+                ppo_kl = sum_of_sample_mean((old_log_probs - log_probs).abs(), response_lengths, loss_masks)
             else:
                 old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
                 log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
                 advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
 
-            loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
-            response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
+                loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
+                response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
 
-            # Ensure device consistency
-            ppo_kl = old_log_probs.to(device=log_probs.device) - log_probs
-            advantages = advantages.to(device=ppo_kl.device)
-            pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, self.args.eps_clip, self.args.eps_clip_high)
-
-            # Apply TIS before sample mean calculation
-            if self.args.use_tis:
-                # Initialize TIS variables
-                tis = None
-                tis_clipfrac = None
-                ois = None
-                # Apply TIS off-policy correction using importance sampling
-                assert all(
-                    "rollout_log_probs" in batch
-                    and isinstance(batch["rollout_log_probs"], torch.Tensor)
-                    and batch["rollout_log_probs"].numel() > 0
-                    for batch in unpacked_batches
-                ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS"
-
-                rollout_log_probs = torch.cat([batch["rollout_log_probs"] for batch in unpacked_batches], dim=0)
-                rollout_log_probs = rollout_log_probs.to(device=log_probs.device)
-
-                tis = torch.exp(old_log_probs - rollout_log_probs)
-                ois = (-ppo_kl).exp()
-                tis_clip = torch.clamp(
-                    tis, min=getattr(self.args, "tis_clip_low", 0.1), max=getattr(self.args, "tis_clip", 2.0)
+                # Ensure device consistency
+                ppo_kl = old_log_probs.to(device=log_probs.device) - log_probs
+                advantages = advantages.to(device=ppo_kl.device)
+                pg_loss, pg_clipfrac = compute_policy_loss(
+                    ppo_kl, advantages, self.args.eps_clip, self.args.eps_clip_high
                 )
-                tis_clipfrac = tis_clip != tis
 
-                pg_loss = pg_loss * tis_clip
+                # Apply TIS before sample mean calculation
+                if self.args.use_tis:
+                    # Initialize TIS variables
+                    tis = None
+                    tis_clipfrac = None
+                    ois = None
+                    # Apply TIS off-policy correction using importance sampling
+                    assert all(
+                        "rollout_log_probs" in batch
+                        and isinstance(batch["rollout_log_probs"], torch.Tensor)
+                        and batch["rollout_log_probs"].numel() > 0
+                        for batch in unpacked_batches
+                    ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS"
 
-            pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
-            pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
-            ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
+                    rollout_log_probs = torch.cat([batch["rollout_log_probs"] for batch in unpacked_batches], dim=0)
+                    rollout_log_probs = rollout_log_probs.to(device=log_probs.device)
+
+                    tis = torch.exp(old_log_probs - rollout_log_probs)
+                    ois = (-ppo_kl).exp()
+                    tis_clip = torch.clamp(
+                        tis, min=getattr(self.args, "tis_clip_low", 0.1), max=getattr(self.args, "tis_clip", 2.0)
+                    )
+                    tis_clipfrac = tis_clip != tis
+
+                    pg_loss = pg_loss * tis_clip
+
+                pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
+                pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
+                ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
 
             loss = pg_loss
 
