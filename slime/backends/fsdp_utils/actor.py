@@ -311,8 +311,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
                 response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
 
-                advantages_seq = torch.split(advantages, response_lengths, dim=0)
-                advantages_seq = torch.stack([adv_seq.mean() for adv_seq in advantages_seq])
+                advantages_seq = torch.stack(
+                    [adv_seq.mean() for adv_seq in torch.split(advantages, response_lengths, dim=0)]
+                )
                 log_ratio = torch.split(log_probs - old_log_probs, response_lengths, dim=0)
                 s_i = torch.stack(
                     [
