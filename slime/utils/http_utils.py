@@ -121,6 +121,9 @@ async def _post(client, url, payload, max_retries=60):
 def init_http_client(args):
     """Initialize HTTP client and optionally enable distributed POST via Ray."""
     global _http_client, _client_concurrency, _distributed_post_enabled
+    if args.rollout_num_gpus is None:
+        return
+
     _client_concurrency = args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
     if _http_client is None:
         _http_client = httpx.AsyncClient(
