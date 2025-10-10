@@ -9,11 +9,9 @@ from typing import Dict, Optional, Tuple, Union
 import ray
 import torch
 import torch.distributed as dist
-from ray.actor import ActorHandle
-
-from torch_memory_saver import torch_memory_saver
-
 from megatron.core import mpu
+from ray.actor import ActorHandle
+from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor

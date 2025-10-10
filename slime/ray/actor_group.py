@@ -2,7 +2,6 @@ import os
 from typing import Optional
 
 import ray
-import torch
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 

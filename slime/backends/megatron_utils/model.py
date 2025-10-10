@@ -2,7 +2,6 @@ import dataclasses
 import gc
 import math
 import os
-from contextlib import nullcontext
 from functools import partial
 
 import torch
@@ -97,9 +96,7 @@ def setup_model_and_optimizer(
     # ring-reduce implementations are large enough to remain bandwidth-bound rather than
     # latency-bound.
     if ddp_config.bucket_size is None:
-        ddp_config.bucket_size = max(
-            40000000, 1000000 * mpu.get_data_parallel_world_size(with_context_parallel=True)
-        )
+        ddp_config.bucket_size = max(40000000, 1000000 * mpu.get_data_parallel_world_size(with_context_parallel=True))
     # Set bucket_size to infinity if overlap_grad_reduce is False.
     if not ddp_config.overlap_grad_reduce:
         ddp_config.bucket_size = None
