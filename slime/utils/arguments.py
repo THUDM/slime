@@ -1027,9 +1027,8 @@ def parse_args(add_custom_arguments=None):
 
 
 def parse_args_train_backend():
-    if (x := os.environ.get("SLIME_BACKEND")) is not None:
-        print("WARN: `SLIME_BACKEND` is deprecated, please use --train-backend directly.")
-        return x
+    if os.environ.get("SLIME_BACKEND") is not None:
+        raise Exception("`SLIME_BACKEND` is deprecated, please use --train-backend directly.")
 
     parser = argparse.ArgumentParser()
     get_slime_extra_args_provider()(parser)
