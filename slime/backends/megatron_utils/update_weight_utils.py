@@ -393,9 +393,7 @@ class UpdateWeightFromTensor:
         for i in tqdm(range(num_buckets), disable=rank != 0, desc="Update weights (pipelined)"):
             if i + 1 < num_buckets:
                 with torch.cuda.stream(side_stream):
-                    next_params, next_infos = self._gather_bucket_params(
-                        self.param_info_buckets[i + 1]
-                    )
+                    next_params, next_infos = self._gather_bucket_params(self.param_info_buckets[i + 1])
 
             refs = self._update_converted_params_from_tensor(current_params, current_infos)
             ray_refs.append(refs)
