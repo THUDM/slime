@@ -336,6 +336,18 @@ def init_rollout_engines(args, pg, all_rollout_engines):
     if num_new_engines == 0:
         return num_new_engines
 
+    addr_and_ports = _allocate_rollout_engine_addr_and_ports_normal(
+        args=args, num_engines=num_engines, rollout_engines=rollout_engines
+    )
+
+    # TODO: don't ray.get here to overlap train actor init with rollout engine init.
+    # somehow if we don't sync here, the --debug-rollout-only mode will crash.
+    init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in rollout_engines]
+    ray.get(init_handles)
+    return num_new_engines
+
+
+def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout_engines):
     # get ports
     # there are 4 ports we need to allocate
     # 1. server port
@@ -399,11 +411,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
             assert key in addr_and_ports[i], f"Engine {i} {key} is not set."
         print(f"Ports for engine {i}: {addr_and_ports[i]}")
 
-    # TODO: don't ray.get here to overlap train actor init with rollout engine init.
-    # somehow if we don't sync here, the --debug-rollout-only mode will crash.
-    init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in rollout_engines]
-    ray.get(init_handles)
-    return num_new_engines
+    return addr_and_ports
 
 
 def _start_router(args):
