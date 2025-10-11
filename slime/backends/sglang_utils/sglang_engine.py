@@ -27,18 +27,25 @@ def get_base_gpu_id(args, rank):
 
 
 def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
-
     p = multiprocessing.Process(target=launch_server, args=(server_args,))
     p.start()
 
     if server_args.node_rank != 0:
         return
 
-    base_url = server_args.url()
+    _wait_server_healthy(
+        base_url=server_args.url(),
+        api_key=server_args.api_key,
+        is_process_alive=lambda: p.is_alive(),
+    )
 
+    return p
+
+
+def _wait_server_healthy(base_url, api_key, is_process_alive):
     headers = {
         "Content-Type": "application/json; charset=utf-8",
-        "Authorization": f"Bearer {server_args.api_key}",
+        "Authorization": f"Bearer {api_key}",
     }
 
     with requests.Session() as session:
@@ -50,7 +57,7 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
             except requests.RequestException:
                 pass
 
-            if not p.is_alive():
+            if not is_process_alive():
                 raise Exception("Server process terminated unexpectedly.")
 
             time.sleep(2)
@@ -65,12 +72,10 @@ def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
             except requests.RequestException:
                 pass
 
-            if not p.is_alive():
+            if not is_process_alive():
                 raise Exception("Server process terminated unexpectedly.")
 
             time.sleep(2)
-
-    return p
 
 
 class SGLangEngine(RayActor):
@@ -78,57 +83,54 @@ class SGLangEngine(RayActor):
         self.args = args
         self.rank = rank
 
-    def init(self, dist_init_addr, port, nccl_port):
-        args = self.args
-        rank = self.rank
+    def init(self, dist_init_addr, port, nccl_port, host=None):
+        self.router_ip = self.args.sglang_router_ip
+        self.router_port = self.args.sglang_router_port
 
-        nnodes = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
-        node_rank = rank % nnodes
-        kwargs = {
-            "model_path": args.hf_checkpoint,
-            "trust_remote_code": True,
-            "random_seed": args.seed + rank,
-            # memory
-            "enable_memory_saver": args.offload,
-            # distributed
-            "host": get_host_info()[1],
-            "port": port,
-            "nccl_port": nccl_port,
-            "nnodes": nnodes,
-            "node_rank": node_rank,
-            "dist_init_addr": dist_init_addr,
-            "gpu_id_step": 1,
-            "base_gpu_id": get_base_gpu_id(args, rank),
-            # parallel
-            "tp_size": args.rollout_num_gpus_per_engine,
-            "dp_size": args.sglang_dp_size,
-            "pp_size": args.sglang_pp_size,
-            "ep_size": args.sglang_ep_size,
-            # always skip warmup to prevent warmup timeout.
-            "skip_server_warmup": True,
-        }
+        host = host or get_host_info()[1]
+        server_args_dict, external_engine_need_check_fields = _compute_server_args(
+            self.args, self.rank, dist_init_addr, nccl_port, host, port
+        )
 
-        unused_keys = set(kwargs.keys())
-        for attr in dataclasses.fields(ServerArgs):
-            if hasattr(args, f"sglang_{attr.name}") and attr.name not in kwargs:
-                kwargs[attr.name] = getattr(args, f"sglang_{attr.name}")
-            unused_keys.discard(attr.name)
+        self.node_rank = server_args_dict["node_rank"]
+        self.server_host = server_args_dict["host"]
+        self.server_port = server_args_dict["port"]
 
-        # for compatibility with old args
-        if len(unused_keys) > 0:
-            print(f"Warning: The following arguments is not supported in the current sglang: {unused_keys}.")
-            for key in unused_keys:
-                kwargs.pop(key)
+        if self.args.rollout_external:
+            self._init_external(server_args_dict, external_engine_need_check_fields=external_engine_need_check_fields)
+        else:
+            self._init_normal(server_args_dict)
 
-        self.router_ip = args.sglang_router_ip
-        self.router_port = args.sglang_router_port
-        self.server_args = ServerArgs(**kwargs)
-        self.node_rank = self.server_args.node_rank
-        print(f"Launch HttpServerEngineAdapter at: {self.server_args.host}:{self.server_args.port}")
-        self.process = launch_server_process(self.server_args)
+    def _init_external(self, expect_server_args, external_engine_need_check_fields):
+        print(f"Use external SGLang engine (rank={self.rank}, expect_server_args={expect_server_args})")
+
+        def _get_actual_server_args():
+            response = requests.get(f"http://{self.server_host}:{self.server_port}/get_server_info")
+            response.raise_for_status()
+            return response.json()
+
+        def _sanity_check_server_args(actual_server_args, expect_server_args):
+            for name in external_engine_need_check_fields:
+                expect_value = expect_server_args.get(name)
+                actual_value = actual_server_args.get(name)
+                assert (
+                    actual_value == expect_value
+                ), f"{name=} {expect_value=} {actual_value=} {expect_server_args=} {actual_server_args=}"
+
+        _wait_server_healthy(
+            base_url=f"http://{self.server_host}:{self.server_port}",
+            api_key=None,
+            is_process_alive=lambda: True,
+        )
+        actual_server_args = _get_actual_server_args()
+        _sanity_check_server_args(actual_server_args, expect_server_args)
+
+    def _init_normal(self, server_args_dict):
+        print(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
+        self.process = launch_server_process(ServerArgs(**server_args_dict))
         if self.node_rank == 0 and self.router_ip and self.router_port:
             requests.post(
-                f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_args.host}:{self.server_args.port}"
+                f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}"
             )
 
     def _make_request(self, endpoint: str, payload: Optional[dict] = None):
@@ -144,7 +146,7 @@ class SGLangEngine(RayActor):
         if self.node_rank != 0:
             return
 
-        url = f"http://{self.server_args.host}:{self.server_args.port}/{endpoint}"
+        url = f"http://{self.server_host}:{self.server_port}/{endpoint}"
         response = requests.post(url, json=payload or {})
         response.raise_for_status()
         return response.json()
@@ -165,7 +167,7 @@ class SGLangEngine(RayActor):
             return True
 
         response = requests.get(
-            f"http://{self.server_args.host}:{self.server_args.port}/health_generate",
+            f"http://{self.server_host}:{self.server_port}/health_generate",
             timeout=timeout,
         )
         response.raise_for_status()
@@ -203,7 +205,7 @@ class SGLangEngine(RayActor):
         # flush cache will not return status_code 200 when there are pending requests
         for _ in range(60):
             try:
-                response = requests.get(f"http://{self.server_args.host}:{self.server_args.port}/flush_cache")
+                response = requests.get(f"http://{self.server_host}:{self.server_port}/flush_cache")
                 if response.status_code == 200:
                     break
             except NewConnectionError as e:
@@ -216,15 +218,18 @@ class SGLangEngine(RayActor):
             raise TimeoutError("Timeout while flushing cache.")
 
     def shutdown(self):
+        if self.args.rollout_external:
+            return
+
         requests.post(
-            f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_args.host}:{self.server_args.port}"
+            f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
         )
         kill_process_tree(self.process.pid)
 
     def get_weight_version(self):
         if self.node_rank != 0:
             return
-        url = f"http://{self.server_args.host}:{self.server_args.port}/get_weight_version"
+        url = f"http://{self.server_host}:{self.server_port}/get_weight_version"
         response = requests.get(url)
         response.raise_for_status()
         return response.json()["weight_version"]
@@ -285,10 +290,10 @@ class SGLangEngine(RayActor):
         )
 
     def pause_generation(self):
-        return requests.post(f"http://{self.server_args.host}:{self.server_args.port}/pause_generation", json={})
+        return requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
 
     def continue_generation(self):
-        return requests.post(f"http://{self.server_args.host}:{self.server_args.port}/continue_generation", json={})
+        return requests.post(f"http://{self.server_host}:{self.server_port}/continue_generation", json={})
 
     def start_profile(
         self,
@@ -305,7 +310,7 @@ class SGLangEngine(RayActor):
         record_shapes: Optional[bool] = None,
     ):
         return requests.post(
-            f"http://{self.server_args.host}:{self.server_args.port}/start_profile",
+            f"http://{self.server_host}:{self.server_port}/start_profile",
             json={
                 "output_dir": output_dir,
                 "start_step": start_step,
@@ -318,4 +323,58 @@ class SGLangEngine(RayActor):
         )
 
     def stop_profile(self):
-        return requests.post(f"http://{self.server_args.host}:{self.server_args.port}/stop_profile", json={})
+        return requests.post(f"http://{self.server_host}:{self.server_port}/stop_profile", json={})
+
+
+def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
+    nnodes = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
+    node_rank = rank % nnodes
+    kwargs = {
+        "model_path": args.hf_checkpoint,
+        "trust_remote_code": True,
+        "random_seed": args.seed + rank,
+        # memory
+        "enable_memory_saver": args.offload,
+        # distributed
+        "host": host,
+        "port": port,
+        "nccl_port": nccl_port,
+        "nnodes": nnodes,
+        "node_rank": node_rank,
+        "dist_init_addr": dist_init_addr,
+        "gpu_id_step": 1,
+        "base_gpu_id": get_base_gpu_id(args, rank),
+        # parallel
+        "tp_size": args.rollout_num_gpus_per_engine,
+        "dp_size": args.sglang_dp_size,
+        "pp_size": args.sglang_pp_size,
+        "ep_size": args.sglang_ep_size,
+        # always skip warmup to prevent warmup timeout.
+        "skip_server_warmup": True,
+    }
+
+    external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
+
+    unused_keys = set(kwargs.keys())
+    for attr in dataclasses.fields(ServerArgs):
+        if hasattr(args, f"sglang_{attr.name}") and attr.name not in kwargs:
+            kwargs[attr.name] = getattr(args, f"sglang_{attr.name}")
+        unused_keys.discard(attr.name)
+
+    # for compatibility with old args
+    if len(unused_keys) > 0:
+        print(f"Warning: The following arguments is not supported in the current sglang: {unused_keys}.")
+        for key in unused_keys:
+            kwargs.pop(key)
+
+    return kwargs, external_engine_need_check_fields
+
+
+_EXTERNAL_ENGINE_SKIP_CHECK_FIELDS = [
+    "model_path",
+    "trust_remote_code",
+    "random_seed",
+    "nccl_port",
+    "dist_init_addr",
+    "skip_server_warmup",
+]

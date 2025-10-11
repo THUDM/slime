@@ -84,6 +84,8 @@ def train(args):
         ):
             ray.get(rollout_manager.eval.remote(rollout_id))
 
+    ray.get(rollout_manager.dispose.remote())
+
 
 if __name__ == "__main__":
     args = parse_args()
