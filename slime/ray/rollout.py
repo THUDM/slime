@@ -1,7 +1,6 @@
 import logging
 import multiprocessing
 import random
-import threading
 import time
 from pathlib import Path
 from typing import List, Union
@@ -13,6 +12,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
+from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
 from slime.utils.metric_checker import MetricChecker
 from slime.utils.misc import load_function
@@ -63,13 +63,7 @@ class RolloutManager:
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
 
         self._metric_checker = MetricChecker.maybe_create(args)
-
-        # fault tolerance
-        self._health_monitor_thread = None
-        self._health_monitor_stop_event = None
-        self._health_check_interval = args.rollout_health_check_interval
-        self._health_check_timeout = args.rollout_health_check_timeout
-        self._health_check_first_wait = args.rollout_health_check_first_wait
+        self._health_monitor = RolloutHealthMonitor(self, args)
 
     def dispose(self):
         if self._metric_checker is not None:
@@ -83,7 +77,7 @@ class RolloutManager:
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
     def generate(self, rollout_id):
-        monitor_started = self._start_health_monitor()
+        monitor_started = self._health_monitor.start()
         start_time = time.time()
         try:
             data = self._get_rollout_data(rollout_id=rollout_id)
@@ -93,7 +87,7 @@ class RolloutManager:
             return Box(ray.put(data))
         finally:
             if monitor_started:
-                self._stop_health_monitor()
+                self._health_monitor.stop()
                 self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
                 self.rollout_engines = self.all_rollout_engines[:: self.nodes_per_engine]
 
@@ -118,68 +112,6 @@ class RolloutManager:
 
     def onload(self, tags: List[str] = None):
         return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines]
-
-    def _start_health_monitor(self) -> bool:
-        if not self.rollout_engines:
-            return False
-
-        assert self._health_monitor_thread is None, "Health monitor thread is already running."
-
-        self._health_monitor_stop_event = threading.Event()
-        self._health_monitor_thread = threading.Thread(
-            target=self._health_monitor_loop,
-            name="RolloutHealthMonitor",
-            daemon=True,
-        )
-        self._health_monitor_thread.start()
-        return True
-
-    def _stop_health_monitor(self) -> None:
-        if not self._health_monitor_thread:
-            return
-
-        assert self._health_monitor_stop_event is not None
-        self._health_monitor_stop_event.set()
-        timeout = self._health_check_timeout + self._health_check_interval + 5
-        self._health_monitor_thread.join(timeout=timeout)
-        if self._health_monitor_thread.is_alive():
-            logging.warning("Rollout health monitor thread did not terminate within %.1fs", timeout)
-
-        self._health_monitor_thread = None
-        self._health_monitor_stop_event = None
-
-    def _health_monitor_loop(self) -> None:
-        assert self._health_monitor_stop_event is not None
-        # TODO: need to be waiting for the large moe to be ready. this is hacky.
-        if self._health_monitor_stop_event.wait(self._health_check_first_wait):
-            return
-        while not self._health_monitor_stop_event.is_set():
-            self._run_health_checks()
-            if self._health_monitor_stop_event.wait(self._health_check_interval):
-                break
-
-    def _run_health_checks(self) -> None:
-        for rollout_engine_id, engine in enumerate(self.rollout_engines):
-            if self._health_monitor_stop_event is not None and self._health_monitor_stop_event.is_set():
-                break
-            self._check_engine_health(rollout_engine_id, engine)
-
-    def _check_engine_health(self, rollout_engine_id, engine) -> None:
-        if engine is None:
-            return
-
-        try:
-            ray.get(engine.health_generate.remote(timeout=self._health_check_timeout))
-        except Exception as e:
-            print(f"Health check timed out for rollout engine {rollout_engine_id} (ray timeout). Killing actor.")
-            for i in range(rollout_engine_id * self.nodes_per_engine, (rollout_engine_id + 1) * self.nodes_per_engine):
-                engine = self.all_rollout_engines[i]
-                try:
-                    ray.kill(engine)
-                except Exception:
-                    pass
-                self.all_rollout_engines[i] = None
-            self.rollout_engines[rollout_engine_id] = None
 
     def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
