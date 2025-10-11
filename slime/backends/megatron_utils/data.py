@@ -65,9 +65,13 @@ def get_batch(data_iterator, keys):
     return batch
 
 
-def gather_log_data(metic_name, args, rollout_id, log_dict):
+def gather_log_data(metric_name, args, rollout_id, log_dict):
+    """Gather and log metrics across data parallel ranks."""
+
     if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
-        gathered_log_dict = [None] * mpu.get_data_parallel_world_size(with_context_parallel=True)
+        dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
+
+        gathered_log_dict = [None] * dp_size
         # Not sure if this will be a performance bottleneck.
         dist.gather_object(
             log_dict,
@@ -75,31 +79,27 @@ def gather_log_data(metic_name, args, rollout_id, log_dict):
             dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
             group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
         )
-        dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
+
         reduced_log_dict = {
-            f"{metic_name}/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
+            f"{metric_name}/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
         }
-        print(f"{metic_name} {rollout_id}: {reduced_log_dict}")
+        print(f"{metric_name} {rollout_id}: {reduced_log_dict}")
+
+        # Calculate step once to avoid duplication
+        step = (
+            rollout_id
+            if not args.wandb_always_use_train_step
+            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+        )
         if args.use_wandb:
-            reduced_log_dict["rollout/step"] = (
-                rollout_id
-                if not args.wandb_always_use_train_step
-                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-            )
+            reduced_log_dict["rollout/step"] = step
             wandb.log(reduced_log_dict)
 
         if args.use_tensorboard:
             from slime.utils.tensorboard_utils import _TensorboardAdapter
 
             tb = _TensorboardAdapter(args)
-            tb.log(
-                data=reduced_log_dict,
-                step=(
-                    rollout_id
-                    if not args.wandb_always_use_train_step
-                    else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-                ),
-            )
+            tb.log(data=reduced_log_dict, step=step)
 
         return reduced_log_dict
     else:
@@ -392,26 +392,21 @@ def log_perf_data(rollout_id, args):
                 log_dict["perf/wait_time_ratio"] = log_dict["perf/train_wait_time"] / total_time
 
         print(f"perf {rollout_id}: {log_dict}")
+
+        step = (
+            rollout_id
+            if not args.wandb_always_use_train_step
+            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+        )
         if args.use_wandb:
-            log_dict["rollout/step"] = (
-                rollout_id
-                if not args.wandb_always_use_train_step
-                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-            )
+            log_dict["rollout/step"] = step
             wandb.log(log_dict)
 
         if args.use_tensorboard:
             from slime.utils.tensorboard_utils import _TensorboardAdapter
 
             tb = _TensorboardAdapter(args)
-            tb.log(
-                data=log_dict,
-                step=(
-                    rollout_id
-                    if not args.wandb_always_use_train_step
-                    else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-                ),
-            )
+            tb.log(data=log_dict, step=step)
     timer_instance.reset()
 
 
