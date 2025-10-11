@@ -88,13 +88,42 @@ class SGLangEngine(RayActor):
         self.router_port = self.args.sglang_router_port
 
         host = host or get_host_info()[1]
-        server_args_dict = _compute_server_args(self.args, self.rank, dist_init_addr, nccl_port, host, port)
+        server_args_dict, external_engine_need_check_fields = _compute_server_args(
+            self.args, self.rank, dist_init_addr, nccl_port, host, port
+        )
 
         self.node_rank = server_args_dict["node_rank"]
         self.server_host = server_args_dict["host"]
         self.server_port = server_args_dict["port"]
 
-        self._init_normal(server_args_dict)
+        if self.args.rollout_external:
+            self._init_external(server_args_dict, external_engine_need_check_fields=external_engine_need_check_fields)
+        else:
+            self._init_normal(server_args_dict)
+
+    def _init_external(self, expect_server_args, external_engine_need_check_fields):
+        print(f"Use external SGLang engine (rank={self.rank}, expect_server_args={expect_server_args})")
+
+        def _get_actual_server_args():
+            response = requests.get(f"http://{self.server_host}:{self.server_port}/get_server_info")
+            response.raise_for_status()
+            return response.json()
+
+        def _sanity_check_server_args(actual_server_args, expect_server_args):
+            for name in external_engine_need_check_fields:
+                expect_value = expect_server_args.get(name)
+                actual_value = actual_server_args.get(name)
+                assert (
+                    actual_value == expect_value
+                ), f"{name=} {expect_value=} {actual_value=} {expect_server_args=} {actual_server_args=}"
+
+        _wait_server_healthy(
+            base_url=f"http://{self.server_host}:{self.server_port}",
+            api_key=None,
+            is_process_alive=lambda: True,
+        )
+        actual_server_args = _get_actual_server_args()
+        _sanity_check_server_args(actual_server_args, expect_server_args)
 
     def _init_normal(self, server_args_dict):
         print(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
@@ -189,6 +218,9 @@ class SGLangEngine(RayActor):
             raise TimeoutError("Timeout while flushing cache.")
 
     def shutdown(self):
+        if self.args.rollout_external:
+            return
+
         requests.post(
             f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
         )
@@ -321,6 +353,8 @@ def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
         "skip_server_warmup": True,
     }
 
+    external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
+
     unused_keys = set(kwargs.keys())
     for attr in dataclasses.fields(ServerArgs):
         if hasattr(args, f"sglang_{attr.name}") and attr.name not in kwargs:
@@ -333,4 +367,14 @@ def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
         for key in unused_keys:
             kwargs.pop(key)
 
-    return kwargs
+    return kwargs, external_engine_need_check_fields
+
+
+_EXTERNAL_ENGINE_SKIP_CHECK_FIELDS = [
+    "model_path",
+    "trust_remote_code",
+    "random_seed",
+    "nccl_port",
+    "dist_init_addr",
+    "skip_server_warmup",
+]

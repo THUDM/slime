@@ -335,6 +335,19 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "It may be helpful for updating loss mask."
                 ),
             )
+            parser.add_argument(
+                "--rollout-external",
+                action="store_true",
+                default=False,
+                help="Use external SGLang instances instead of launching them inside the framework.",
+            )
+            parser.add_argument(
+                "--rollout-external-engine-addrs",
+                type=str,
+                default=None,
+                nargs="+",
+                help="Address and ports of the external engines.",
+            )
             return parser
 
         # data

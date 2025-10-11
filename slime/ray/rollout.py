@@ -336,15 +336,33 @@ def init_rollout_engines(args, pg, all_rollout_engines):
     if num_new_engines == 0:
         return num_new_engines
 
-    addr_and_ports = _allocate_rollout_engine_addr_and_ports_normal(
-        args=args, num_engines=num_engines, rollout_engines=rollout_engines
-    )
+    if args.rollout_external:
+        addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(args=args, rollout_engines=rollout_engines)
+    else:
+        addr_and_ports = _allocate_rollout_engine_addr_and_ports_normal(
+            args=args, num_engines=num_engines, rollout_engines=rollout_engines
+        )
 
     # TODO: don't ray.get here to overlap train actor init with rollout engine init.
     # somehow if we don't sync here, the --debug-rollout-only mode will crash.
     init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in rollout_engines]
     ray.get(init_handles)
     return num_new_engines
+
+
+def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
+    addr_and_ports = []
+    for rank, _ in rollout_engines:
+        [host, port] = args.rollout_external_engine_addrs[rank].split(":")
+        addr_and_ports.append(
+            dict(
+                dist_init_addr=None,
+                nccl_port=None,
+                host=host,
+                port=int(port),
+            )
+        )
+    return addr_and_ports
 
 
 def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout_engines):
