@@ -93,6 +93,7 @@ FSDP_ARGS=(
    # Enable offloading (automatically enabled with --colocate, but explicit for clarity)
    # Offloading moves the model to CPU during inference to free GPU memory
    --offload
+   --optimizer deepspeed_cpu_adam
    
    # Set to true for FULL_STATE_DICT mode, false for SHARDED_STATE_DICT mode (default)
    # --fsdp-full-params  # Uncomment this line to enable full params mode

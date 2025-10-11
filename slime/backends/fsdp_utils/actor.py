@@ -222,20 +222,39 @@ class FSDPTrainRayActor(TrainRayActor):
         # Create FSDP v2 model using FSDP
         self.model = FSDP(model)
 
-        # Use DeepSpeedCPUAdam with wrapper - keeps optimizer states and shadow params on CPU
-        # This significantly reduces GPU memory usage
-        base_optimizer = DeepSpeedCPUAdam(
-            [torch.zeros(1)],  # Dummy param, will be replaced by wrapper
-            lr=args.lr,
-            betas=(args.adam_beta1, args.adam_beta2),
-            eps=args.adam_eps,
-            weight_decay=args.weight_decay,
-            adamw_mode=True,  # Use AdamW mode (decoupled weight decay)
-            fp32_optimizer_states=True,  # Keep optimizer states in FP32
-        )
-        
-        # Wrap to handle GPU<->CPU parameter and gradient transfers
-        self.optimizer = FSDPCPUAdamWrapper(base_optimizer, self.model)
+        # Initialize optimizer based on args.optimizer
+        if args.optimizer == "deepspeed_cpu_adam":
+            # Use DeepSpeedCPUAdam with wrapper - keeps optimizer states and shadow params on CPU
+            # This significantly reduces GPU memory usage
+            base_optimizer = DeepSpeedCPUAdam(
+                [torch.zeros(1)],  # Dummy param, will be replaced by wrapper
+                lr=args.lr,
+                betas=(args.adam_beta1, args.adam_beta2),
+                eps=args.adam_eps,
+                weight_decay=args.weight_decay,
+                adamw_mode=True,  # Use AdamW mode (decoupled weight decay)
+                fp32_optimizer_states=True,  # Keep optimizer states in FP32
+            )
+            
+            # Wrap to handle GPU<->CPU parameter and gradient transfers
+            self.optimizer = FSDPCPUAdamWrapper(base_optimizer, self.model)
+            
+            if dist.get_rank() == 0:
+                print(f"[Optimizer] Using DeepSpeedCPUAdam (offloaded to CPU)")
+        elif args.optimizer == "adam":
+            # Use standard PyTorch AdamW optimizer (GPU-based)
+            self.optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                lr=args.lr,
+                betas=(args.adam_beta1, args.adam_beta2),
+                eps=args.adam_eps,
+                weight_decay=args.weight_decay,
+            )
+            
+            if dist.get_rank() == 0:
+                print(f"[Optimizer] Using standard AdamW (GPU-based)")
+        else:
+            raise ValueError(f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam', 'deepspeed_cpu_adam'")
 
         # TODO: load
 
@@ -708,8 +727,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 if mbs_id == 0:
                     print_memory(f"[Before Optimizer Step] Rollout {rollout_id}, MBS {mbs_id}")
                 
-                # DeepSpeedCPUAdam works directly with GPU parameters
-                # It automatically keeps optimizer states on CPU to save GPU memory
+                # Perform optimizer step
                 self.optimizer.step()
                 
                 # Zero gradients
