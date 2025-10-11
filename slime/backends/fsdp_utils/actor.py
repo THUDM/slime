@@ -25,6 +25,7 @@ import wandb
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.memory_utils import print_memory
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, timer
@@ -71,16 +72,6 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.multimodal_keys:
             self.vlm_processor = AutoProcessor.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
 
-        # Enable global tracking for torch_memory_saver if offload is enabled
-        # This ensures model and optimizer tensors are tracked for pause/resume
-        if self.args.offload and torch_memory_saver is not None:
-            # Ensure torch_memory_saver is initialized by calling _ensure_initialized
-            torch_memory_saver._ensure_initialized()
-            if torch_memory_saver._impl is not None:
-                torch_memory_saver._impl._binary_wrapper.cdll.tms_set_interesting_region(True)
-                if dist.get_rank() == 0:
-                    print("Enabled torch_memory_saver global tracking for model and optimizer")
-
         # Load model
         with torch.autocast(device_type=f"cuda:{torch.cuda.current_device()}"):
             model = AutoModelForCausalLM.from_pretrained(
@@ -94,7 +85,7 @@ class FSDPTrainRayActor(TrainRayActor):
             model.gradient_checkpointing_enable()
 
         # Create FSDP v2 model using FSDP
-        self.model = FSDP(model)
+        self.model = FSDP(model, cpu_offload = True)
 
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
@@ -147,6 +138,7 @@ class FSDPTrainRayActor(TrainRayActor):
         
         if torch_memory_saver is not None:
 <<<<<<< HEAD
+<<<<<<< HEAD
             if tags is None:
                 torch_memory_saver.pause()
             elif isinstance(tags, str):
@@ -155,6 +147,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 for tag in tags:
                     torch_memory_saver.pause(tag)
 =======
+=======
+            print_memory("[Sleep Before]")
+>>>>>>> 0781bc6 (Add log)
             torch_memory_saver.pause()
         
         print_memory(f"after offload model")
@@ -183,6 +178,7 @@ class FSDPTrainRayActor(TrainRayActor):
         
         if torch_memory_saver is not None:
 <<<<<<< HEAD
+<<<<<<< HEAD
             if tags is None:
                 torch_memory_saver.resume()
             elif isinstance(tags, str):
@@ -191,6 +187,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 for tag in tags:
                     torch_memory_saver.resume(tag)
 =======
+=======
+            print_memory("[Wake Up Before]")
+>>>>>>> 0781bc6 (Add log)
             torch_memory_saver.resume()
         
         print_memory("after wake_up model")
@@ -340,15 +339,24 @@ class FSDPTrainRayActor(TrainRayActor):
                 by `process_rollout_data` based on data-parallel rank/size.
         """
         Timer().end("train_wait")
+        
+        print_memory(f"[Train Start] Rollout {rollout_id}")
 
         if self.args.offload:
+            print_memory(f"[Before Wake Up] Rollout {rollout_id}")
             self.wake_up(("model"))
+            print_memory(f"[After Wake Up] Rollout {rollout_id}")
 
         world_size = dist.get_world_size()
         rank = dist.get_rank()
 
         rollout_data = process_rollout_data(self.args, rollout_data_ref, rank, world_size)
+<<<<<<< HEAD
         if self.args.advantage_estimator in ["grpo", "gspo"]:
+=======
+        print_memory(f"[After Data Processing] Rollout {rollout_id}")
+        if self.args.advantage_estimator in ["grpo"]:
+>>>>>>> 0781bc6 (Add log)
             rollout_data["advantages"] = rollout_data["returns"] = [
                 torch.tensor([rollout_data["rewards"][i]] * rollout_data["response_lengths"][i])
                 for i in range(len(rollout_data["rewards"]))
@@ -357,6 +365,7 @@ class FSDPTrainRayActor(TrainRayActor):
             raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
 
         packed_batches, grad_accum = self.packed_data(rollout_data)
+        print_memory(f"[After Data Packing] Rollout {rollout_id}")
         log_dict = {}
 
         assert (
@@ -365,8 +374,10 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if "ref" in self.weights:
             self.compute_log_prob("ref", packed_batches, store_prefix="ref_")
+            print_memory(f"[After Ref Log Probs] Rollout {rollout_id}")
 
         self.compute_log_prob("actor", packed_batches)
+        print_memory(f"[After Actor Log Probs] Rollout {rollout_id}")
 
         for metric_key in ["log_probs", "ref_log_probs", "advantages", "returns", "raw_rewards"]:
             if metric_key not in packed_batches[0]:
@@ -400,19 +411,28 @@ class FSDPTrainRayActor(TrainRayActor):
 
         reported_accum: dict[str, list[torch.Tensor]] = {}
         self.optimizer.zero_grad(set_to_none=True)
+        print_memory(f"[Before Training Loop] Rollout {rollout_id}")
+        
         for mbs_id, packed_batch in enumerate(packed_batches):
+            if mbs_id == 0:
+                print_memory(f"[Before First Forward] Rollout {rollout_id}, MBS {mbs_id}")
+            
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logits = self.model(
                     input_ids=packed_batch["tokens"].unsqueeze(0),
                     attention_mask=None,
                     position_ids=packed_batch["position_ids"].unsqueeze(0),
                 ).logits
+            
+            if mbs_id == 0:
+                print_memory(f"[After First Forward] Rollout {rollout_id}, MBS {mbs_id}")
 
             # Handle packed sequences
             log_probs = gather_log_probs_packed(logits, packed_batch["tokens"], packed_batch["cu_seqlens"])
             packed_batch["cur_log_probs"] = log_probs
             unpacked_batches = unpack_sequences(packed_batch)
 
+<<<<<<< HEAD
             old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
             log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
             advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
@@ -420,6 +440,25 @@ class FSDPTrainRayActor(TrainRayActor):
             response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
 
             advantages = advantages.to(device=log_probs.device)
+=======
+            if mbs_id == 0:
+                print_memory(f"[After Unpack Sequences] Rollout {rollout_id}, MBS {mbs_id}")
+
+            if self.args.advantage_estimator == "gspo":
+                raise NotImplementedError("implement gspo")
+            else:
+                old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
+                log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
+                advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
+
+            loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
+            response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
+
+            if mbs_id == 0:
+                print_memory(f"[Before Loss Computation] Rollout {rollout_id}, MBS {mbs_id}")
+
+            # Ensure device consistency
+>>>>>>> 0781bc6 (Add log)
             ppo_kl = old_log_probs.to(device=log_probs.device) - log_probs
 
             if self.args.advantage_estimator == "gspo":
@@ -505,7 +544,14 @@ class FSDPTrainRayActor(TrainRayActor):
 
             # Scale loss for gradient accumulation
             loss = loss * dist.get_world_size() / self.args.global_batch_size
+            
+            if mbs_id == 0:
+                print_memory(f"[Before First Backward] Rollout {rollout_id}, MBS {mbs_id}")
+            
             loss.backward()
+            
+            if mbs_id == 0:
+                print_memory(f"[After First Backward] Rollout {rollout_id}, MBS {mbs_id}")
 
             # Accumulate reported metrics (store tensors for later mean)
             for k, v in reported.items():
@@ -519,6 +565,8 @@ class FSDPTrainRayActor(TrainRayActor):
 
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
+                print_memory(f"[After Optimizer Step] Rollout {rollout_id}, Global Step {self.global_step}")
+                
                 # Aggregate logs
                 aggregated = {k: torch.stack(v).sum().item() for k, v in reported_accum.items()}
                 # TODO: change this, this is slow.
@@ -550,6 +598,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 self.global_step += 1
 
         self.update_cpu_params_dict(self.weights["actor"])
+        print_memory(f"[After Update CPU Params] Rollout {rollout_id}")
 
 <<<<<<< HEAD
         # Update ref model if needed
@@ -565,6 +614,7 @@ class FSDPTrainRayActor(TrainRayActor):
 =======
 >>>>>>> bbf490c (Remove redundant sleep and add wait for sglang flush cache)
         Timer().start("train_wait")
+        print_memory(f"[Train End] Rollout {rollout_id}")
         return
 
     def update_weights(self) -> None:  # type: ignore[override]
@@ -576,6 +626,8 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
+        print_memory("[Update Weights Start]")
+        
         rollout_engines, rollout_engine_lock, num_new_engines = ray.get(
             self.rollout_manager.get_rollout_engines_and_lock.remote()
         )
@@ -583,8 +635,11 @@ class FSDPTrainRayActor(TrainRayActor):
             self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
+
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
             self.weight_updater.update_weights()
+        
+        print_memory("[Update Weights After Transfer]")
 
     @torch.no_grad()
     def update_cpu_params_dict(self, params_dict: dict[str, torch.Tensor]) -> None:
