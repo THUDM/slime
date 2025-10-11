@@ -18,11 +18,13 @@ else:
     raise ImportError("FSDP v2 not available")
 
 import wandb
+
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.timer import Timer, timer
+from slime.utils.tis import compute_kl_metrics, compute_tis_weights
 from slime.utils.wandb_utils import init_wandb_secondary
 
 from .data_packing import pack_sequences, unpack_sequences
@@ -321,8 +323,7 @@ class FSDPTrainRayActor(TrainRayActor):
             # Apply TIS before sample mean calculation
             if self.args.use_tis:
                 # Initialize TIS variables
-                tis = None
-                tis_clipfrac = None
+                tis_weights = None
                 ois = None
                 # Apply TIS off-policy correction using importance sampling
                 assert all(
@@ -332,17 +333,41 @@ class FSDPTrainRayActor(TrainRayActor):
                     for batch in unpacked_batches
                 ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS"
 
-                rollout_log_probs = torch.cat([batch["rollout_log_probs"] for batch in unpacked_batches], dim=0)
-                rollout_log_probs = rollout_log_probs.to(device=log_probs.device)
-
-                tis = torch.exp(old_log_probs - rollout_log_probs)
-                ois = (-ppo_kl).exp()
-                tis_clip = torch.clamp(
-                    tis, min=getattr(self.args, "tis_clip_low", 0.1), max=getattr(self.args, "tis_clip", 2.0)
+                rollout_log_probs = torch.cat([batch["rollout_log_probs"] for batch in unpacked_batches], dim=0).to(
+                    device=log_probs.device
                 )
-                tis_clipfrac = tis_clip != tis
 
-                pg_loss = pg_loss * tis_clip
+                # Build eos mask from loss masks
+                loss_mask = torch.cat(loss_masks, dim=0).to(device=log_probs.device)
+
+                upper = self.args.tis_threshold_upper
+                lower = self.args.tis_threshold_lower
+
+                tis_weights, tis_metrics = compute_tis_weights(
+                    old_log_prob=old_log_probs,
+                    rollout_log_prob=rollout_log_probs,
+                    loss_mask=loss_mask,
+                    level=getattr(self.args, "tis_level", "token"),
+                    mode=getattr(self.args, "tis_mode", "truncate"),
+                    upper_threshold=upper,
+                    lower_threshold=lower,
+                    veto_threshold=getattr(self.args, "tis_veto_threshold", 1e-4),
+                    safety_bound=getattr(self.args, "tis_safety_bound", 20.0),
+                    response_lengths=response_lengths,
+                )
+
+                ois = (-ppo_kl).exp()
+
+                if tis_weights is not None:
+                    pg_loss = pg_loss * tis_weights
+
+                # KL metrics next to TIS metrics
+                kl_metrics = compute_kl_metrics(
+                    old_log_prob=old_log_probs,
+                    rollout_log_prob=rollout_log_probs,
+                    loss_mask=loss_mask,
+                    response_lengths=response_lengths,
+                )
 
             pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
             pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
@@ -376,12 +401,15 @@ class FSDPTrainRayActor(TrainRayActor):
             if self.args.use_kl_loss:
                 reported["kl_loss"] = kl_loss.detach()
 
-            if self.args.use_tis and tis is not None:
-                reported["tis"] = sum_of_sample_mean(tis, response_lengths, loss_masks).detach()
+            if self.args.use_tis and tis_weights is not None:
                 reported["ois"] = sum_of_sample_mean(ois, response_lengths, loss_masks).detach()
-                reported["tis_clipfrac"] = sum_of_sample_mean(
-                    tis_clipfrac.float(), response_lengths, loss_masks
-                ).detach()
+                # Report all TIS and KL metrics uniformly, filtering out non-numeric values
+                for k, v in {**tis_metrics, **kl_metrics}.items():
+                    if torch.is_tensor(v):
+                        reported[k] = v.detach()
+                    elif isinstance(v, (int, float)):
+                        reported[k] = torch.tensor(v, device=log_probs.device)
+                    # Skip string and other non-numeric types
 
             # Scale loss for gradient accumulation
             loss = loss * dist.get_world_size() / self.args.global_batch_size
