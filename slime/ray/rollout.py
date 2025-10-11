@@ -488,26 +488,21 @@ def _log_eval_rollout_data(rollout_id, args, data):
             log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
 
     print(f"eval {rollout_id}: {log_dict}")
+
+    step = (
+        rollout_id
+        if not args.wandb_always_use_train_step
+        else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    )
     if args.use_wandb:
-        log_dict["eval/step"] = (
-            rollout_id
-            if not args.wandb_always_use_train_step
-            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-        )
+        log_dict["eval/step"] = step
         wandb.log(log_dict)
 
     if args.use_tensorboard:
         from slime.utils.tensorboard_utils import _TensorboardAdapter
 
         tb = _TensorboardAdapter(args)
-        tb.log(
-            data=log_dict,
-            step=(
-                rollout_id
-                if not args.wandb_always_use_train_step
-                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-            ),
-        )
+        tb.log(data=log_dict, step=step)
 
     return log_dict
 
@@ -525,23 +520,17 @@ def _log_rollout_data(rollout_id, args, samples, rollout_time):
         log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
     print(f"perf {rollout_id}: {log_dict}")
+    step = (
+        rollout_id
+        if not args.wandb_always_use_train_step
+        else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    )
     if args.use_wandb:
-        log_dict["rollout/step"] = (
-            rollout_id
-            if not args.wandb_always_use_train_step
-            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-        )
+        log_dict["rollout/step"] = step
         wandb.log(log_dict)
 
     if args.use_tensorboard:
         from slime.utils.tensorboard_utils import _TensorboardAdapter
 
         tb = _TensorboardAdapter(args)
-        tb.log(
-            data=log_dict,
-            step=(
-                rollout_id
-                if not args.wandb_always_use_train_step
-                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-            ),
-        )
+        tb.log(data=log_dict, step=step)
