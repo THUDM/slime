@@ -34,7 +34,10 @@ class RolloutManager:
         self.args = args
         self.pg = pg
         _start_router(args)
-        init_wandb_secondary(args, wandb_run_id)
+        # TODO make args immutable
+        init_wandb_secondary(
+            args, wandb_run_id, router_addr=f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
+        )
         init_http_client(args)
 
         self.data_source = RolloutDataSourceWithBuffer(args)

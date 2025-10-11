@@ -73,7 +73,7 @@ def init_wandb_primary(args):
 
 
 # https://docs.wandb.ai/guides/track/log/distributed-training/#track-all-processes-to-a-single-run
-def init_wandb_secondary(args, wandb_run_id):
+def init_wandb_secondary(args, wandb_run_id, router_addr=None):
     if wandb_run_id is None:
         return
 
@@ -94,6 +94,17 @@ def init_wandb_secondary(args, wandb_run_id):
             mode="shared",
             x_primary=False,
             x_update_finish_state=False,
+        )
+
+    if args.sglang_enable_metrics and router_addr is not None:
+        print(f"Forward SGLang metrics at {router_addr} to WandB.")
+        settings_kwargs |= dict(
+            x_stats_open_metrics_endpoints={
+                "sgl_engine": f"{router_addr}/engine_metrics",
+            },
+            x_stats_open_metrics_filters={
+                "sgl_engine.*": {},
+            },
         )
 
     init_kwargs = {
