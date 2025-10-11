@@ -158,6 +158,8 @@ class FSDPTrainRayActor(TrainRayActor):
             if os.path.exists(checkpoint_dir) and not self.args.overwrite_checkpoints:
                 print(f"WARNING: Checkpoint {checkpoint_dir} exists. Skipping save.")
                 should_save = False
+            elif os.path.exists(checkpoint_dir):
+                print(f"WARNING: Overwriting checkpoint {checkpoint_dir}")
         # Broadcast the decision from rank 0 to all other ranks.
         should_save_tensor = torch.tensor(
             [1 if should_save else 0], dtype=torch.int, device=torch.cuda.current_device()

@@ -116,10 +116,8 @@ def load_checkpoint(args, model, optimizer):
         try:
             from torch.distributed.checkpoint import HuggingFaceStorageReader
 
-            model_state_dict = {"model": model_state_dict}
             model_storage_reader = HuggingFaceStorageReader(path=model_subdir)
             dist_cp.load(state_dict=model_state_dict, storage_reader=model_storage_reader)
-            model_state_dict = model_state_dict["model"]
         except ImportError as e:
             raise ImportError(
                 "Safetensors library is required to load safetensors checkpoint files, but it is not installed."
