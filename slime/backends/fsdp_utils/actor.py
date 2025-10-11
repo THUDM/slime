@@ -85,7 +85,7 @@ class FSDPTrainRayActor(TrainRayActor):
             model.gradient_checkpointing_enable()
 
         # Create FSDP v2 model using FSDP
-        self.model = FSDP(model, cpu_offload = True)
+        self.model = FSDP(model)
 
         self.optimizer = torch.optim.AdamW(
             self.model.parameters(),
