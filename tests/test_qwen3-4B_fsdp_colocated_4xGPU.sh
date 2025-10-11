@@ -102,9 +102,7 @@ FSDP_ARGS=(
    
    # Optional: Enable these if you still hit OOM after the wake_up bug fix
    --gradient-checkpointing              # Reduces activation memory by 30-40%
-   # --use-dynamic-batch-size              # Enables automatic batch splitting
-   # --max-tokens-per-gpu 6144             # Limits each microbatch size
-   # --micro-batch-size 1                  # Ensures proper microbatching
+   --max-tokens-per-gpu 6144             # Limits each microbatch size
 )
 
 

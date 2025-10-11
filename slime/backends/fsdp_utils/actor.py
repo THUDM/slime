@@ -11,6 +11,7 @@ from packaging import version
 from torch.distributed.tensor import DTensor
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from deepspeed.ops.adam import DeepSpeedCPUAdam
 
 # Import FSDP v2 components based on PyTorch version
 if version.parse(torch.__version__) >= version.parse("2.6"):
@@ -35,6 +36,140 @@ from .data_packing import pack_sequences, unpack_sequences
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
 from slime.utils.memory_utils import print_memory
+
+
+class FSDPCPUAdamWrapper:
+    """
+    Wrapper for DeepSpeedCPUAdam to work with FSDP models where parameters are on GPU.
+    
+    DeepSpeedCPUAdam requires both parameters and gradients to be on CPU. This wrapper:
+    1. Maintains CPU shadow copies of GPU parameters (contiguous, proper dtype)
+    2. Copies gradients from GPU to CPU before optimizer step (contiguous)
+    3. Runs optimizer update on CPU
+    4. Copies updated parameters back to GPU
+    
+    Following the parameter copy pattern from update_weight_utils.py
+    """
+    
+    def __init__(self, optimizer, model):
+        """
+        Args:
+            optimizer: DeepSpeedCPUAdam instance (will be reinitialized with CPU params)
+            model: FSDP model with GPU parameters
+        """
+        self.model = model
+        self.gpu_params = list(model.parameters())
+        
+        # Store optimizer config before replacing
+        self.optimizer_config = {
+            'lr': optimizer.param_groups[0]['lr'],
+            'betas': optimizer.param_groups[0]['betas'],
+            'eps': optimizer.param_groups[0]['eps'],
+            'weight_decay': optimizer.param_groups[0]['weight_decay'],
+            'adamw_mode': optimizer.adam_w_mode,
+            'fp32_optimizer_states': optimizer.fp32_optimizer_states,
+        }
+        
+        # Create CPU shadow copies of parameters using the pattern from update_weight_utils.py
+        # CRITICAL: DeepSpeed AVX operations require FP32 params on CPU for stability
+        # AVX operations need proper alignment and FP32 precision
+        self.cpu_params = []
+        for gpu_param in self.gpu_params:
+            # Handle DTensor from FSDP by getting the full tensor first
+            param_data = gpu_param.detach()
+            if isinstance(param_data, DTensor):
+                param_data = param_data.full_tensor()
+            
+            # Convert to FP32 on CPU for DeepSpeed compatibility
+            # DeepSpeed's AVX operations work best with FP32 (documented behavior)
+            # Use .to() with explicit dtype and contiguous layout
+            cpu_param = param_data.contiguous().to(device='cpu', dtype=torch.float32, non_blocking=True)
+            cpu_param.requires_grad_(True)
+            
+            # Verify properties required for DeepSpeed AVX
+            assert cpu_param.is_contiguous(), f"CPU param must be contiguous for AVX"
+            assert cpu_param.dtype == torch.float32, f"CPU param must be FP32 for DeepSpeed"
+            
+            self.cpu_params.append(cpu_param)
+        
+        torch.cuda.synchronize()
+        
+        if dist.get_rank() == 0:
+            total_params = sum(p.numel() for p in self.cpu_params)
+            print(f"[DeepSpeedCPUAdam] Initialized with {len(self.cpu_params)} parameter tensors")
+            print(f"[DeepSpeedCPUAdam] Total parameters: {total_params:,} ({total_params*4/1e9:.2f}GB in FP32)")
+            print(f"[DeepSpeedCPUAdam] All params contiguous: {all(p.is_contiguous() for p in self.cpu_params)}")
+            print(f"[DeepSpeedCPUAdam] All params FP32: {all(p.dtype == torch.float32 for p in self.cpu_params)}")
+        
+        # Create new DeepSpeedCPUAdam with CPU FP32 parameters
+        self.cpu_optimizer = DeepSpeedCPUAdam(
+            self.cpu_params,
+            lr=self.optimizer_config['lr'],
+            betas=self.optimizer_config['betas'],
+            eps=self.optimizer_config['eps'],
+            weight_decay=self.optimizer_config['weight_decay'],
+            adamw_mode=self.optimizer_config['adamw_mode'],
+            fp32_optimizer_states=self.optimizer_config['fp32_optimizer_states'],
+        )
+        
+        # Copy param_groups for compatibility
+        self.param_groups = self.cpu_optimizer.param_groups
+    
+    def zero_grad(self, set_to_none=True):
+        """Zero gradients on GPU parameters"""
+        for param in self.gpu_params:
+            if set_to_none:
+                param.grad = None
+            elif param.grad is not None:
+                param.grad.zero_()
+    
+    def step(self):
+        """
+        Perform optimizer step:
+        1. Copy gradients from GPU to CPU (handling DTensor, ensuring contiguous FP32)
+        2. Run optimizer update on CPU
+        3. Copy updated parameters back to GPU
+        
+        Uses the same .to() pattern as update_weight_utils.py for proper memory layout
+        """
+        # Copy gradients from GPU to CPU - handle DTensor and ensure FP32 for DeepSpeed AVX
+        for gpu_param, cpu_param in zip(self.gpu_params, self.cpu_params):
+            if gpu_param.grad is not None:
+                # Handle DTensor gradients from FSDP
+                grad_data = gpu_param.grad.detach()
+                if isinstance(grad_data, DTensor):
+                    grad_data = grad_data.full_tensor()
+                
+                # CRITICAL: Convert to FP32 for DeepSpeed AVX compatibility
+                # DeepSpeed's AVX operations expect FP32 gradients to match FP32 params
+                cpu_grad = grad_data.contiguous().to(device='cpu', dtype=torch.float32, non_blocking=True)
+                
+                # Verify gradient properties for DeepSpeed AVX
+                assert cpu_grad.is_contiguous(), "CPU gradient must be contiguous for AVX"
+                assert cpu_grad.dtype == torch.float32, "CPU gradient must be FP32 for DeepSpeed"
+                
+                cpu_param.grad = cpu_grad
+            else:
+                cpu_param.grad = None
+        
+        torch.cuda.synchronize()
+        
+        # Run optimizer step on CPU (FP32 params and grads)
+        self.cpu_optimizer.step()
+        
+        # Copy updated FP32 parameters back to GPU with original dtype
+        for gpu_param, cpu_param in zip(self.gpu_params, self.cpu_params):
+            # Handle DTensor if needed
+            if isinstance(gpu_param.data, DTensor):
+                # For DTensor, we need to be more careful
+                updated_param = cpu_param.data.to(device=torch.cuda.current_device(), dtype=gpu_param.dtype, non_blocking=True)
+                gpu_param.data = updated_param
+            else:
+                # Regular tensor - convert back to original dtype (likely bfloat16)
+                updated_param = cpu_param.data.to(device=torch.cuda.current_device(), dtype=gpu_param.dtype, non_blocking=True)
+                gpu_param.data.copy_(updated_param, non_blocking=True)
+        
+        torch.cuda.synchronize()
 
 
 class FSDPTrainRayActor(TrainRayActor):
@@ -87,13 +222,20 @@ class FSDPTrainRayActor(TrainRayActor):
         # Create FSDP v2 model using FSDP
         self.model = FSDP(model)
 
-        self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
+        # Use DeepSpeedCPUAdam with wrapper - keeps optimizer states and shadow params on CPU
+        # This significantly reduces GPU memory usage
+        base_optimizer = DeepSpeedCPUAdam(
+            [torch.zeros(1)],  # Dummy param, will be replaced by wrapper
             lr=args.lr,
             betas=(args.adam_beta1, args.adam_beta2),
             eps=args.adam_eps,
             weight_decay=args.weight_decay,
+            adamw_mode=True,  # Use AdamW mode (decoupled weight decay)
+            fp32_optimizer_states=True,  # Keep optimizer states in FP32
         )
+        
+        # Wrap to handle GPU<->CPU parameter and gradient transfers
+        self.optimizer = FSDPCPUAdamWrapper(base_optimizer, self.model)
 
         # TODO: load
 
@@ -563,8 +705,16 @@ class FSDPTrainRayActor(TrainRayActor):
                 # the grad norm used to be of DTensor
                 grad_norm = float(grad_norm)
 
+                if mbs_id == 0:
+                    print_memory(f"[Before Optimizer Step] Rollout {rollout_id}, MBS {mbs_id}")
+                
+                # DeepSpeedCPUAdam works directly with GPU parameters
+                # It automatically keeps optimizer states on CPU to save GPU memory
                 self.optimizer.step()
+                
+                # Zero gradients
                 self.optimizer.zero_grad(set_to_none=True)
+                
                 print_memory(f"[After Optimizer Step] Rollout {rollout_id}, Global Step {self.global_step}")
                 
                 # Aggregate logs
