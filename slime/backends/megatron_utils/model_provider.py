@@ -2,7 +2,7 @@
 import argparse
 import inspect
 from contextlib import nullcontext
-from typing import Callable, Literal, Optional
+from typing import Literal, Optional
 
 import torch
 from megatron.core import tensor_parallel
@@ -52,7 +52,7 @@ class LinearForLastLayer(torch.nn.Linear):
 def get_model_provider_func(
     args: argparse.Namespace,
     role: Literal["actor", "critic"] = "actor",
-) -> Callable[[bool, bool, Optional[int]], GPTModel]:
+):
     def model_provider(
         pre_process: bool = True, post_process: bool = True, vp_stage: Optional[int] = None
     ) -> GPTModel:
