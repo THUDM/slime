@@ -23,6 +23,10 @@ class FSDPArgs:
 
     attn_implementation: str = "flash_attention_2"
 
+    # Context Parallelism (CP) settings
+    enable_cp: bool = False                     # enable Context Parallelism or not
+    ring_flash_atten_type: str = "llama3"              # Ring attention specific implementation: "basic", "zigzag", "llama3"
+
     # Logging
     wandb_project: str = "slime-fsdp"
     wandb_run_name: Optional[str] = None
