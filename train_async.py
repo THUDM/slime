@@ -11,11 +11,12 @@ def train(args):
     pgs = create_placement_groups(args)
     wandb_run_id = init_wandb_primary(args)
 
+    # create the rollout manager, with sglang engines inside.
+    # need to initialize rollout manager first to calculate num_rollout
+    rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"], wandb_run_id=wandb_run_id)
+
     # create the actor and critic models
     actor_model, critic_model = create_training_models(args, pgs, wandb_run_id=wandb_run_id)
-
-    # create the rollout manager, with sglang engines inside.
-    rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"], wandb_run_id=wandb_run_id)
 
     actor_model.set_rollout_manager(rollout_manager)
 
