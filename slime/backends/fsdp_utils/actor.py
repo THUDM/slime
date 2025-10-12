@@ -232,19 +232,59 @@ class FSDPTrainRayActor(TrainRayActor):
         return packed_batches, grad_accum
 
     def setup_context_parallelism(self):
-        """Setup Context Parallelism process groups"""
+        """Setup Context Parallelism process groups with varlen support"""
         dist.init_process_group(backend="nccl")
         world_size = dist.get_world_size()
         rank = dist.get_rank()
-        
+
         # Create single CP group with all GPUs
         all_ranks = list(range(world_size))
         self.cp_group = dist.new_group(ranks=all_ranks, backend="nccl")
         ring_attn_rank = dist.get_rank(group=self.cp_group)
-        substitute_hf_flash_attn(self.cp_group, heads_k_stride=1)
 
-        print(f"Ring attention rank: {ring_attn_rank}")
-        
+        # Import and use the varlen-aware ring attention
+        if self.args.ring_flash_atten_type == "llama3":
+            substitute_hf_flash_attn(self.cp_group, heads_k_stride=1)
+        else:
+            raise NotImplementedError(
+                f"ring_flash_atten_type={self.args.ring_flash_atten_type} not supported. "
+                "using 'llama3'  for CP with varlen now."
+            )
+
+        print(
+            f"[CP] Ring attention initialized: rank={ring_attn_rank}, "
+            f"world_size={world_size}, type={self.args.ring_flash_atten_type}"
+        )
+
+    def _update_cp_cu_seqlens(self, packed_batch):
+        """Update ring flash attention parameters with current batch's cu_seqlens
+
+        This method should be called before each forward pass when CP is enabled.
+        It tells the ring attention implementation where sequence boundaries are.
+
+        Args:
+            packed_batch: Dictionary containing 'cu_seqlens' tensor
+        """
+        cu_seqlens = packed_batch["cu_seqlens"]
+
+        # Ensure cu_seqlens is on the correct device and has correct dtype
+        current_device = torch.cuda.current_device()
+        if cu_seqlens.device.index != current_device:
+            cu_seqlens = cu_seqlens.to(device=f"cuda:{current_device}")
+        if cu_seqlens.dtype != torch.int32:
+            cu_seqlens = cu_seqlens.to(dtype=torch.int32)
+
+        # Update the ring attention parameters
+        update_ring_flash_attn_params(cu_seqlens, self.cp_group)
+
+        # Debug logging
+        if dist.get_rank() == 0 and self.args.debug:
+            max_seqlen = cu_seqlens.diff().max().item()
+            num_seqs = len(cu_seqlens) - 1
+            print(
+                f"[CP Debug] Updated cu_seqlens for {num_seqs} sequences, "
+                f"max_seqlen={max_seqlen}, cu_seqlens={cu_seqlens.tolist()}"
+            )
 
     def train(self, rollout_id, rollout_data_ref):
         Timer().end("train_wait")
@@ -309,6 +349,10 @@ class FSDPTrainRayActor(TrainRayActor):
         reported_accum: dict[str, list[torch.Tensor]] = {}
         self.optimizer.zero_grad(set_to_none=True)
         for mbs_id, packed_batch in enumerate(packed_batches):
+            # Update cu_seqlens for CP before forward pass
+            if self.args.enable_cp:
+                self._update_cp_cu_seqlens(packed_batch)
+
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logits = self.model(
                     input_ids=packed_batch["tokens"].unsqueeze(0),
