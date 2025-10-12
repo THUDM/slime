@@ -148,6 +148,7 @@ def normalize_final_answer(final_answer: str) -> str:
     Returns:
         Normalized answer string
     """
+    final_answer = str(final_answer)
     final_answer = final_answer.split("=")[-1]
 
     # Apply substitutions and removals

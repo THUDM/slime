@@ -13,7 +13,11 @@ from megatron.core import mpu
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
 from ray import ObjectRef
 from ray.actor import ActorHandle
-from sglang.srt.patch_torch import monkey_patch_torch_reductions
+
+try:
+    from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
+except:
+    from sglang.srt.patch_torch import monkey_patch_torch_reductions
 from sglang.srt.utils import MultiprocessingSerializer
 from tqdm import tqdm
 

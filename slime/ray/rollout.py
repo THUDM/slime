@@ -258,7 +258,9 @@ def init_rollout_engines(args, pg, all_rollout_engines):
                 "env_vars": {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST}
                 | {
                     "SGL_JIT_DEEPGEMM_PRECOMPILE": "false",
+                    "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
                     "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                    "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                 }
             },
         ).remote(args, rank=i)
