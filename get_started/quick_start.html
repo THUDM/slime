@@ -54,7 +54,7 @@
     <link rel="prev" title="slime Documentation" href="../index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Oct 10, 2025"/>
+    <meta name="docbuild:last-update" content="Oct 12, 2025"/>
   </head>
   
   
@@ -873,7 +873,7 @@ The <code class="docutils literal notranslate"><span class="pre">sample.metadata
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="w">   </span><span class="c1"># Used to load tokenizer and other information, actually won&#39;t use model weight parameters from hf path</span>
 <span class="w">   </span>--hf-checkpoint<span class="w"> </span>/root/Qwen3-4B-FP8
 
-<span class="w">   </span><span class="c1"># The megatron checkpoint still needs to be the dist weights converted from bf16 huggingface at the beginning, not modified because of FP rollout.</span>
+<span class="w">   </span><span class="c1"># The megatron checkpoint still needs to be the dist weights converted from bf16 huggingface at the beginning, not modified because of FP8 rollout.</span>
 <span class="w">   </span>--ref-load<span class="w"> </span>/root/Qwen3-4B_torch_dist
 </pre></div>
 </div>
@@ -1179,7 +1179,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 10, 2025.
+  Last updated on Oct 12, 2025.
   <br/>
 </p>
   </div>

@@ -54,7 +54,7 @@
     <link rel="prev" title="slime 文档" href="../index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2025 年 10 月 10 日"/>
+    <meta name="docbuild:last-update" content="2025 年 10 月 12 日"/>
   </head>
   
   
@@ -870,7 +870,7 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="w">   </span><span class="c1"># 用于加载 tokenizer 等其他信息，实际上不会使用 hf 路径中的模型权重参数</span>
 <span class="w">   </span>--hf-checkpoint<span class="w"> </span>/root/Qwen3-4B-FP8
 
-<span class="w">   </span><span class="c1">#  megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的 dist 权重，不因为 FP rollout 而去做修改。</span>
+<span class="w">   </span><span class="c1">#  megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的 dist 权重，不因为 FP8 rollout 而去做修改。</span>
 <span class="w">   </span>--ref-load<span class="w"> </span>/root/Qwen3-4B_torch_dist
 </pre></div>
 </div>
@@ -1176,7 +1176,7 @@ ray<span class="w"> </span>start<span class="w"> </span>--address<span class="o"
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2025 年 10 月 10 日.
+  最后更新于 2025 年 10 月 12 日.
   <br/>
 </p>
   </div>
