@@ -28,8 +28,8 @@ jobs:
         --memory=0
         --memory-swap=0
         -v /data/slime_ci:/data/slime_ci
-        -v /data/slime_ci/models:/root/models
-        -v /data/slime_ci/datasets:/root/datasets
+        -v /data/models:/root/models
+        -v /data/datasets:/root/datasets
     strategy:
       fail-fast: false
       matrix:
