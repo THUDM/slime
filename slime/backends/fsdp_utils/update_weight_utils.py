@@ -338,6 +338,10 @@ class UpdateWeightFromDistributed:
             # Ensure tensor is contiguous and on the right device
             param_data = param.data.contiguous()
 
+            # avoid `DTensor._op_dispatcher.dispatch` has `assert compute_mesh is not None` error
+            if dist.get_world_size() == 1:
+                param_data = param_data.full_tensor()
+
             # Synchronous broadcast to avoid memory buildup
             dist.broadcast(param_data, 0, group=self._model_update_groups, async_op=False)
 

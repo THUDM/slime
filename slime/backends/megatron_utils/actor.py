@@ -9,14 +9,9 @@ from typing import Dict, Optional, Tuple, Union
 import ray
 import torch
 import torch.distributed as dist
-from ray.actor import ActorHandle
-
-if torch.version.hip:
-    from vllm.device_allocator.cumem import CuMemAllocator
-else:
-    from torch_memory_saver import torch_memory_saver
-
 from megatron.core import mpu
+from ray.actor import ActorHandle
+from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
@@ -88,8 +83,9 @@ class MegatronTrainRayActor(TrainRayActor):
             # Load old_actor checkpoint
             self.load_other_checkpoint("old_actor", args.load)
             # Create rollout_actor as a copy of current actor
-            self.weights["rollout_actor"] = {}
-            self.update_cpu_params_dict(self.weights["rollout_actor"])
+            if args.update_weights_interval == 1:
+                self.weights["rollout_actor"] = {}
+                self.update_cpu_params_dict(self.weights["rollout_actor"])
 
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
         self.weight_updater = update_weight_cls(
@@ -164,11 +160,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()
 
-        if not torch.version.hip:
-            torch_memory_saver.pause()
-        else:
-            allocator = CuMemAllocator.get_instance()
-            allocator.sleep(offload_tags=tags)
+        torch_memory_saver.pause()
 
         print_memory("after offload model")
 
@@ -188,11 +180,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if isinstance(tags, str):
             tags = (tags,)
 
-        if not torch.version.hip:
-            torch_memory_saver.resume()
-        else:
-            allocator = CuMemAllocator.get_instance()
-            allocator.wake_up(tags)
+        torch_memory_saver.resume()
 
         clear_memory()
         if hasattr(mpu, "reload_process_groups"):
@@ -423,19 +411,22 @@ class MegatronTrainRayActor(TrainRayActor):
             self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
-        with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
+        with torch_memory_saver.disable() if self.args.offload else nullcontext():
             print_memory("before update_weights")
             self.weight_updater.update_weights()
             print_memory("after update_weights")
 
             if getattr(self.args, "keep_old_actor", False):
-                print("updating model queue: rollout_actor -> old_actor, actor -> rollout_actor")
-                # Queue-style update: rollout_actor params -> old_actor, actor params -> rollout_actor
-                # First copy rollout_actor to old_actor
-                for name in self.weights["old_actor"]:
-                    self.weights["old_actor"][name].copy_(self.weights["rollout_actor"][name])
-                # Then copy current actor to rollout_actor
-                self.update_cpu_params_dict(self.weights["rollout_actor"])
+                if self.args.update_weights_interval == 1:
+                    print("updating model queue: rollout_actor -> old_actor, actor -> rollout_actor")
+                    # Queue-style update: rollout_actor params -> old_actor, actor params -> rollout_actor
+                    # First copy rollout_actor to old_actor
+                    for name in self.weights["old_actor"]:
+                        self.weights["old_actor"][name].copy_(self.weights["rollout_actor"][name])
+                    # Then copy current actor to rollout_actor
+                    self.update_cpu_params_dict(self.weights["rollout_actor"])
+                else:
+                    self.update_cpu_params_dict(self.weights["old_actor"])
 
         if self.args.offload and hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()

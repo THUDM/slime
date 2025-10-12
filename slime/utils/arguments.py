@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 from typing import Any, Dict
@@ -85,6 +86,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
             reset_arg(parser, "--distributed-backend", type=str, default="nccl")
             reset_arg(parser, "--distributed-timeout-minutes", type=int, default=10)
+
+            return parser
+
+        def add_train_arguments(parser):
+            parser.add_argument(
+                "--train-backend",
+                type=str,
+                choices=["megatron", "fsdp"],
+                default="megatron",
+                help="The backend for training.",
+            )
 
             return parser
 
@@ -322,6 +334,19 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "The called after we have all the rollout data including log_probs. "
                     "It may be helpful for updating loss mask."
                 ),
+            )
+            parser.add_argument(
+                "--rollout-external",
+                action="store_true",
+                default=False,
+                help="Use external SGLang instances instead of launching them inside the framework.",
+            )
+            parser.add_argument(
+                "--rollout-external-engine-addrs",
+                type=str,
+                default=None,
+                nargs="+",
+                help="Address and ports of the external engines.",
             )
             return parser
 
@@ -672,7 +697,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--slime-router-middleware-paths",
                 type=str,
                 nargs="+",
-                default=None,
+                default="",
             )
             return parser
 
@@ -921,6 +946,20 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--ci-test",
                 action="store_true",
             )
+            parser.add_argument(
+                "--ci-disable-kl-checker",
+                action="store_true",
+            )
+            parser.add_argument(
+                "--ci-metric-checker-key",
+                type=str,
+                default=None,
+            )
+            parser.add_argument(
+                "--ci-metric-checker-threshold",
+                type=float,
+                default=None,
+            )
             return parser
 
         # Add custom arguments in front to prevent overwritten some slime arguments.
@@ -928,6 +967,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser = add_custom_arguments(parser)
 
         parser = add_cluster_arguments(parser)
+        parser = add_train_arguments(parser)
         parser = add_rollout_arguments(parser)
         parser = add_data_arguments(parser)
         parser = add_eval_arguments(parser)
@@ -966,7 +1006,7 @@ def warning_for_unfinished_backend(backend: str):
 def parse_args(add_custom_arguments=None):
     add_slime_arguments = get_slime_extra_args_provider(add_custom_arguments)
 
-    backend = os.environ.get("SLIME_BACKEND", "megatron").lower()
+    backend = parse_args_train_backend()
     if backend == "megatron":
         from slime.backends.megatron_utils import parse_args as megatron_parse_args
         from slime.backends.megatron_utils import set_default_megatron_args
@@ -1011,6 +1051,16 @@ def parse_args(add_custom_arguments=None):
     sglang_validate_args(args)
 
     return args
+
+
+def parse_args_train_backend():
+    if os.environ.get("SLIME_BACKEND") is not None:
+        raise Exception("`SLIME_BACKEND` is deprecated, please use --train-backend directly.")
+
+    parser = argparse.ArgumentParser()
+    get_slime_extra_args_provider()(parser)
+    args_partial, _ = parser.parse_known_args()
+    return args_partial.train_backend
 
 
 def slime_validate_args(args):

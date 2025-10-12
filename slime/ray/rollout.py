@@ -1,7 +1,6 @@
 import logging
 import multiprocessing
 import random
-import threading
 import time
 from pathlib import Path
 from typing import List, Union
@@ -13,7 +12,9 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
+from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
+from slime.utils.metric_checker import MetricChecker
 from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
 from slime.utils.types import Sample
@@ -33,7 +34,10 @@ class RolloutManager:
         self.args = args
         self.pg = pg
         _start_router(args)
-        init_wandb_secondary(args, wandb_run_id)
+        # TODO make args immutable
+        init_wandb_secondary(
+            args, wandb_run_id, router_addr=f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
+        )
         init_http_client(args)
 
         self.data_source = RolloutDataSourceWithBuffer(args)
@@ -58,12 +62,12 @@ class RolloutManager:
         self.rollout_engines = self.all_rollout_engines[:: self.nodes_per_engine]
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
 
-        # fault tolerance
-        self._health_monitor_thread = None
-        self._health_monitor_stop_event = None
-        self._health_check_interval = args.rollout_health_check_interval
-        self._health_check_timeout = args.rollout_health_check_timeout
-        self._health_check_first_wait = args.rollout_health_check_first_wait
+        self._metric_checker = MetricChecker.maybe_create(args)
+        self._health_monitor = RolloutHealthMonitor(self, args)
+
+    def dispose(self):
+        if self._metric_checker is not None:
+            self._metric_checker.dispose()
 
     def get_rollout_engines_and_lock(self):
         return self.rollout_engines, self.rollout_engine_lock, self.num_new_engines
@@ -73,18 +77,17 @@ class RolloutManager:
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
     def generate(self, rollout_id):
-        self.rollout_id = rollout_id
-        monitor_started = self._start_health_monitor()
+        monitor_started = self._health_monitor.start()
         start_time = time.time()
         try:
-            data = self._get_rollout_data()
-            self._save_debug_rollout_data(data)
+            data = self._get_rollout_data(rollout_id=rollout_id)
+            self._save_debug_rollout_data(data, rollout_id=rollout_id)
             _log_rollout_data(rollout_id, self.args, data, time.time() - start_time)
             data = self._convert_samples_to_train_data(data)
             return Box(ray.put(data))
         finally:
             if monitor_started:
-                self._stop_health_monitor()
+                self._health_monitor.stop()
                 self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
                 self.rollout_engines = self.all_rollout_engines[:: self.nodes_per_engine]
 
@@ -94,7 +97,9 @@ class RolloutManager:
             return
         # TODO: add fault tolerance to eval
         data = self.eval_generate_rollout(self.args, rollout_id, self.data_source, evaluation=True)
-        _log_eval_rollout_data(rollout_id, self.args, data)
+        metrics = _log_eval_rollout_data(rollout_id, self.args, data)
+        if self._metric_checker is not None:
+            self._metric_checker.on_eval(metrics)
 
     def save(self, rollout_id):
         self.data_source.save(rollout_id)
@@ -108,76 +113,14 @@ class RolloutManager:
     def onload(self, tags: List[str] = None):
         return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines]
 
-    def _start_health_monitor(self) -> bool:
-        if not self.rollout_engines:
-            return False
-
-        assert self._health_monitor_thread is None, "Health monitor thread is already running."
-
-        self._health_monitor_stop_event = threading.Event()
-        self._health_monitor_thread = threading.Thread(
-            target=self._health_monitor_loop,
-            name="RolloutHealthMonitor",
-            daemon=True,
-        )
-        self._health_monitor_thread.start()
-        return True
-
-    def _stop_health_monitor(self) -> None:
-        if not self._health_monitor_thread:
-            return
-
-        assert self._health_monitor_stop_event is not None
-        self._health_monitor_stop_event.set()
-        timeout = self._health_check_timeout + self._health_check_interval + 5
-        self._health_monitor_thread.join(timeout=timeout)
-        if self._health_monitor_thread.is_alive():
-            logging.warning("Rollout health monitor thread did not terminate within %.1fs", timeout)
-
-        self._health_monitor_thread = None
-        self._health_monitor_stop_event = None
-
-    def _health_monitor_loop(self) -> None:
-        assert self._health_monitor_stop_event is not None
-        # TODO: need to be waiting for the large moe to be ready. this is hacky.
-        if self._health_monitor_stop_event.wait(self._health_check_first_wait):
-            return
-        while not self._health_monitor_stop_event.is_set():
-            self._run_health_checks()
-            if self._health_monitor_stop_event.wait(self._health_check_interval):
-                break
-
-    def _run_health_checks(self) -> None:
-        for rollout_engine_id, engine in enumerate(self.rollout_engines):
-            if self._health_monitor_stop_event is not None and self._health_monitor_stop_event.is_set():
-                break
-            self._check_engine_health(rollout_engine_id, engine)
-
-    def _check_engine_health(self, rollout_engine_id, engine) -> None:
-        if engine is None:
-            return
-
-        try:
-            ray.get(engine.health_generate.remote(timeout=self._health_check_timeout))
-        except Exception as e:
-            print(f"Health check timed out for rollout engine {rollout_engine_id} (ray timeout). Killing actor.")
-            for i in range(rollout_engine_id * self.nodes_per_engine, (rollout_engine_id + 1) * self.nodes_per_engine):
-                engine = self.all_rollout_engines[i]
-                try:
-                    ray.kill(engine)
-                except Exception:
-                    pass
-                self.all_rollout_engines[i] = None
-            self.rollout_engines[rollout_engine_id] = None
-
-    def _get_rollout_data(self):
+    def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
             data = torch.load(
-                open(self.args.load_debug_rollout_data.format(rollout_id=self.rollout_id), "rb"),
+                open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
         else:
-            data = self.generate_rollout(self.args, self.rollout_id, self.data_source, evaluation=False)
+            data = self.generate_rollout(self.args, rollout_id, self.data_source, evaluation=False)
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
                 data = sum(data, [])
@@ -189,15 +132,15 @@ class RolloutManager:
                 print(f"trim number of samples from {origin_data_length} to {trim_len}")
         return data
 
-    def _save_debug_rollout_data(self, data):
+    def _save_debug_rollout_data(self, data, rollout_id):
         # TODO to be refactored (originally Buffer._set_data)
         if (path_template := self.args.save_debug_rollout_data) is not None:
-            path = Path(path_template.format(rollout_id=self.rollout_id))
+            path = Path(path_template.format(rollout_id=rollout_id))
             print(f"Save debug rollout data to {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(
                 dict(
-                    rollout_id=self.rollout_id,
+                    rollout_id=rollout_id,
                     samples=[sample.to_dict() for sample in data],
                 ),
                 path,
@@ -328,6 +271,36 @@ def init_rollout_engines(args, pg, all_rollout_engines):
     if num_new_engines == 0:
         return num_new_engines
 
+    if args.rollout_external:
+        addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(args=args, rollout_engines=rollout_engines)
+    else:
+        addr_and_ports = _allocate_rollout_engine_addr_and_ports_normal(
+            args=args, num_engines=num_engines, rollout_engines=rollout_engines
+        )
+
+    # TODO: don't ray.get here to overlap train actor init with rollout engine init.
+    # somehow if we don't sync here, the --debug-rollout-only mode will crash.
+    init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in rollout_engines]
+    ray.get(init_handles)
+    return num_new_engines
+
+
+def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
+    addr_and_ports = []
+    for rank, _ in rollout_engines:
+        [host, port] = args.rollout_external_engine_addrs[rank].split(":")
+        addr_and_ports.append(
+            dict(
+                dist_init_addr=None,
+                nccl_port=None,
+                host=host,
+                port=int(port),
+            )
+        )
+    return addr_and_ports
+
+
+def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout_engines):
     # get ports
     # there are 4 ports we need to allocate
     # 1. server port
@@ -391,11 +364,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
             assert key in addr_and_ports[i], f"Engine {i} {key} is not set."
         print(f"Ports for engine {i}: {addr_and_ports[i]}")
 
-    # TODO: don't ray.get here to overlap train actor init with rollout engine init.
-    # somehow if we don't sync here, the --debug-rollout-only mode will crash.
-    init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in rollout_engines]
-    ray.get(init_handles)
-    return num_new_engines
+    return addr_and_ports
 
 
 def _start_router(args):
@@ -454,26 +423,23 @@ def _log_eval_rollout_data(rollout_id, args, data):
             log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
 
     print(f"eval {rollout_id}: {log_dict}")
+
+    step = (
+        rollout_id
+        if not args.wandb_always_use_train_step
+        else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    )
     if args.use_wandb:
-        log_dict["eval/step"] = (
-            rollout_id
-            if not args.wandb_always_use_train_step
-            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-        )
+        log_dict["eval/step"] = step
         wandb.log(log_dict)
 
     if args.use_tensorboard:
         from slime.utils.tensorboard_utils import _TensorboardAdapter
 
         tb = _TensorboardAdapter(args)
-        tb.log(
-            data=log_dict,
-            step=(
-                rollout_id
-                if not args.wandb_always_use_train_step
-                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-            ),
-        )
+        tb.log(data=log_dict, step=step)
+
+    return log_dict
 
 
 def _log_rollout_data(rollout_id, args, samples, rollout_time):
@@ -489,23 +455,17 @@ def _log_rollout_data(rollout_id, args, samples, rollout_time):
         log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
     print(f"perf {rollout_id}: {log_dict}")
+    step = (
+        rollout_id
+        if not args.wandb_always_use_train_step
+        else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    )
     if args.use_wandb:
-        log_dict["rollout/step"] = (
-            rollout_id
-            if not args.wandb_always_use_train_step
-            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-        )
+        log_dict["rollout/step"] = step
         wandb.log(log_dict)
 
     if args.use_tensorboard:
         from slime.utils.tensorboard_utils import _TensorboardAdapter
 
         tb = _TensorboardAdapter(args)
-        tb.log(
-            data=log_dict,
-            step=(
-                rollout_id
-                if not args.wandb_always_use_train_step
-                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-            ),
-        )
+        tb.log(data=log_dict, step=step)

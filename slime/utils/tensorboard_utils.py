@@ -1,5 +1,10 @@
+import datetime
 import os
-from torch.utils.tensorboard import SummaryWriter
+
+try:
+    from torch.utils.tensorboard import SummaryWriter
+except:
+    SummaryWriter = None
 
 
 class _TensorboardAdapter:
@@ -24,10 +29,12 @@ class _TensorboardAdapter:
         if cls._instance is None:
             cls._instance = super(_TensorboardAdapter, cls).__new__(cls)
             # Initialize if parameters are provided during first creation
-            if (tb_project_name is not None and tb_experiment_name is not None) or os.environ.get(
-                "TENSORBOARD_DIR", None
-            ):
+            if tb_project_name is not None or os.environ.get("TENSORBOARD_DIR", None):
+                if tb_project_name is not None and tb_experiment_name is None:
+                    tb_experiment_name = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
                 cls._instance._initialize(tb_project_name, tb_experiment_name)
+            else:
+                raise ValueError("tb_project_name and tb_experiment_name, or TENSORBOARD_DIR are required")
         return cls._instance
 
     def _initialize(self, tb_project_name, tb_experiment_name):
@@ -36,7 +43,7 @@ class _TensorboardAdapter:
         tensorboard_dir = os.environ.get("TENSORBOARD_DIR", f"tensorboard_log/{tb_project_name}/{tb_experiment_name}")
         os.makedirs(tensorboard_dir, exist_ok=True)
         print(f"Saving tensorboard log to {tensorboard_dir}.")
-        self.writer = SummaryWriter(tensorboard_dir)
+        self._writer = SummaryWriter(tensorboard_dir)
 
     def log(self, data, step):
         """Log data to tensorboard
@@ -46,8 +53,8 @@ class _TensorboardAdapter:
             step (int): Current step/epoch number
         """
         for key in data:
-            self.writer.add_scalar(key, data[key], step)
+            self._writer.add_scalar(key, data[key], step)
 
     def finish(self):
         """Close the tensorboard writer"""
-        self.writer.close()
+        self._writer.close()
