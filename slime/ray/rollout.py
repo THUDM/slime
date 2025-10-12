@@ -59,8 +59,6 @@ class RolloutManager:
             self.all_rollout_engines = [None] * num_engines
         self.num_new_engines = init_rollout_engines(args, pg, self.all_rollout_engines)
         self.nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
-        # when doing multi-node serving, we will only send request to node-0 for each engine.
-        self.rollout_engines = self.all_rollout_engines[:: self.nodes_per_engine]
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
 
         self._metric_checker = MetricChecker.maybe_create(args)
@@ -69,6 +67,12 @@ class RolloutManager:
     def dispose(self):
         if self._metric_checker is not None:
             self._metric_checker.dispose()
+
+    # TODO maybe rename "rollout_engines" and "all_rollout_engines" later
+    @property
+    def rollout_engines(self):
+        # when doing multi-node serving, we will only send request to node-0 for each engine.
+        return self.all_rollout_engines[:: self.nodes_per_engine]
 
     def get_rollout_engines_and_lock(self):
         return self.rollout_engines, self.rollout_engine_lock, self.num_new_engines
@@ -90,7 +94,6 @@ class RolloutManager:
             if monitor_started:
                 self._health_monitor.stop()
                 self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
-                self.rollout_engines = self.all_rollout_engines[:: self.nodes_per_engine]
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
@@ -264,7 +267,9 @@ def init_rollout_engines(args, pg, all_rollout_engines):
                 "env_vars": {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST}
                 | {
                     "SGL_JIT_DEEPGEMM_PRECOMPILE": "false",
+                    "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
                     "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                    "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                 }
             },
         ).remote(args, rank=i)

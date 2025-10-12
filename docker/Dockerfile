@@ -25,17 +25,19 @@ RUN NVCC_APPEND_FLAGS="--threads 4" \
   --config-settings "--build-option=--cpp_ext --cuda_ext --parallel 8" git+https://github.com/NVIDIA/apex.git
 # transformer engine, we install with --no-deps to avoid installing torch and torch-extensions
 RUN pip install pybind11
-RUN pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@3cd6870
+RUN pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@stable
 # flash attn
 # the newest version megatron supports is v2.7.4
 RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1
 RUN pip install flash-linear-attention
-RUN pip install git+https://github.com/huggingface/transformers.git@main
 
 WORKDIR /root/
 RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
     cd Megatron-LM && \
     pip install -e .
+
+# remove the cudnn installed by megatron
+RUN pip uninstall nvidia-cudnn-cu12 -y
 
 # sandwitch norm for GLM models
 COPY patch/${SGLANG_VERSION}/megatron.patch /root/Megatron-LM/
