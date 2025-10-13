@@ -26,13 +26,13 @@ def train(args):
     actor_model.set_rollout_manager(rollout_manager)
 
     if args.offload:
-        ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
         ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
 
     # always update weight first so that sglang has the loaded weights from training.
     actor_model.update_weights()
 
     if args.offload:
+        ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
         ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
 
     # train loop.
@@ -78,8 +78,9 @@ def train(args):
         actor_model.update_weights()
 
         if args.offload:
-            ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
             ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
+            ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
+
 
         if args.eval_interval is not None and (
             (rollout_id + 1) % args.eval_interval == 0

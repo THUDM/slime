@@ -14,7 +14,6 @@ set -ex
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
-SGLANG_MEMORY_SAVER_CUDA_GRAPH=1
 
 NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
 if [ "$NVLINK_COUNT" -gt 0 ]; then
@@ -43,21 +42,21 @@ ROLLOUT_ARGS=(
    --apply-chat-template
    --rollout-shuffle
    --rm-type deepscaler
-   --num-rollout 3000
-   --rollout-batch-size 32
+   --num-rollout 100
+   --rollout-batch-size 16
    --n-samples-per-prompt 8
-   --rollout-max-response-len 8192
+   --rollout-max-response-len 4096
    --rollout-temperature 0.8
 
-   --global-batch-size 256
+   --global-batch-size 128
    --balance-data
 )
 
 EVAL_ARGS=(
    --eval-interval 20
    --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
-   --n-samples-per-eval-prompt 16
-   --eval-max-response-len 16384
+   --n-samples-per-eval-prompt 4
+   --eval-max-response-len 4096
    --eval-top-p 0.7
 )
 
@@ -122,14 +121,16 @@ MISC_ARGS=(
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 # Build the runtime environment JSON with proper variable substitution
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"PYTHONPATH\": \"/root/Megatron-LM/\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\"
+    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
+    \"CUDA_VISIBLE_DEVICES\": \"4,5,6,7\",
+    \"SGLANG_MEMORY_SAVER_CUDA_GRAPH\" : \"1\"
   }
 }"
 
@@ -137,7 +138,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 8 \
+   --actor-num-gpus-per-node 4 \
+   --num-gpus-per-node 4 \
    --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
