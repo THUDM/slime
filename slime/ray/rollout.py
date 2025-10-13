@@ -7,12 +7,14 @@ from typing import List, Union
 
 import ray
 import torch
+import wandb
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
-import wandb
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
+from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
+from slime.utils.metric_checker import MetricChecker
 from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
 from slime.utils.types import Sample
@@ -30,8 +32,12 @@ class RolloutManager:
 
     def __init__(self, args, pg, wandb_run_id):
         self.args = args
+        self.pg = pg
         _start_router(args)
-        init_wandb_secondary(args, wandb_run_id)
+        # TODO make args immutable
+        init_wandb_secondary(
+            args, wandb_run_id, router_addr=f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
+        )
         init_http_client(args)
 
         self.data_source = RolloutDataSourceWithBuffer(args)
@@ -44,37 +50,59 @@ class RolloutManager:
         print(f"import {self.args.rollout_function_path} as generate_rollout function.")
         print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
-        self.all_rollout_engines = _create_rollout_engines(args, pg)
-        nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
+        if self.args.debug_train_only:
+            self.all_rollout_engines = []
+        else:
+            num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
+            num_engines = args.rollout_num_gpus // num_gpu_per_engine
+            self.all_rollout_engines = [None] * num_engines
+        self.num_new_engines = init_rollout_engines(args, pg, self.all_rollout_engines)
+        self.nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
+        self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
+
+        self._metric_checker = MetricChecker.maybe_create(args)
+        self._health_monitor = RolloutHealthMonitor(self, args)
+
+    def dispose(self):
+        if self._metric_checker is not None:
+            self._metric_checker.dispose()
+
+    # TODO maybe rename "rollout_engines" and "all_rollout_engines" later
+    @property
+    def rollout_engines(self):
         # when doing multi-node serving, we will only send request to node-0 for each engine.
-        self.rollout_engines = self.all_rollout_engines[::nodes_per_engine]
-        self.rollout_engine_lock = Lock.options(
-            num_cpus=1,
-            num_gpus=0,
-        ).remote()
+        return self.all_rollout_engines[:: self.nodes_per_engine]
 
     def get_rollout_engines_and_lock(self):
-        return self.rollout_engines, self.rollout_engine_lock
+        return self.rollout_engines, self.rollout_engine_lock, self.num_new_engines
 
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
     def generate(self, rollout_id):
-        self.rollout_id = rollout_id
+        monitor_started = self._health_monitor.start()
         start_time = time.time()
-        data = self._get_rollout_data()
-        self._save_debug_rollout_data(data)
-        _log_rollout_data(rollout_id, self.args, data, time.time() - start_time)
-        data = self._convert_samples_to_train_data(data)
-        return Box(ray.put(data))
+        try:
+            data = self._get_rollout_data(rollout_id=rollout_id)
+            self._save_debug_rollout_data(data, rollout_id=rollout_id)
+            _log_rollout_data(rollout_id, self.args, data, time.time() - start_time)
+            data = self._convert_samples_to_train_data(data)
+            return Box(ray.put(data))
+        finally:
+            if monitor_started:
+                self._health_monitor.stop()
+                self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
             # if debug train only, we don't generate evaluation data
             return
+        # TODO: add fault tolerance to eval
         data = self.eval_generate_rollout(self.args, rollout_id, self.data_source, evaluation=True)
-        _log_eval_rollout_data(rollout_id, self.args, data)
+        metrics = _log_eval_rollout_data(rollout_id, self.args, data)
+        if self._metric_checker is not None:
+            self._metric_checker.on_eval(metrics)
 
     def save(self, rollout_id):
         self.data_source.save(rollout_id)
@@ -88,14 +116,14 @@ class RolloutManager:
     def onload(self, tags: List[str] = None):
         return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines]
 
-    def _get_rollout_data(self):
+    def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
             data = torch.load(
-                open(self.args.load_debug_rollout_data.format(rollout_id=self.rollout_id), "rb"),
+                open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
         else:
-            data = self.generate_rollout(self.args, self.rollout_id, self.data_source, evaluation=False)
+            data = self.generate_rollout(self.args, rollout_id, self.data_source, evaluation=False)
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
                 data = sum(data, [])
@@ -107,15 +135,15 @@ class RolloutManager:
                 print(f"trim number of samples from {origin_data_length} to {trim_len}")
         return data
 
-    def _save_debug_rollout_data(self, data):
+    def _save_debug_rollout_data(self, data, rollout_id):
         # TODO to be refactored (originally Buffer._set_data)
         if (path_template := self.args.save_debug_rollout_data) is not None:
-            path = Path(path_template.format(rollout_id=self.rollout_id))
+            path = Path(path_template.format(rollout_id=rollout_id))
             print(f"Save debug rollout data to {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
             torch.save(
                 dict(
-                    rollout_id=self.rollout_id,
+                    rollout_id=rollout_id,
                     samples=[sample.to_dict() for sample in data],
                 ),
                 path,
@@ -199,12 +227,13 @@ class RolloutManager:
         return train_data
 
 
-def _create_rollout_engines(args, pg):
+def init_rollout_engines(args, pg, all_rollout_engines):
     if args.debug_train_only:
-        return []
+        return 0
 
     num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
     num_engines = args.rollout_num_gpus // num_gpu_per_engine
+    assert len(all_rollout_engines) == num_engines
 
     pg, reordered_bundle_indices = pg
 
@@ -212,6 +241,9 @@ def _create_rollout_engines(args, pg):
 
     rollout_engines = []
     for i in range(num_engines):
+        if all_rollout_engines[i] is not None:
+            continue
+
         num_gpus = 0.2
         num_cpus = num_gpus
 
@@ -221,21 +253,59 @@ def _create_rollout_engines(args, pg):
             placement_group_bundle_index=reordered_bundle_indices[i * num_gpu_per_engine],
         )
 
-        rollout_engines.append(
-            RolloutRayActor.options(
-                num_cpus=num_cpus,
-                num_gpus=num_gpus,
-                scheduling_strategy=scheduling_strategy,
-                runtime_env={
-                    "env_vars": {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST}
-                    | {
-                        "SGL_JIT_DEEPGEMM_PRECOMPILE": "false",
-                        "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
-                    }
-                },
-            ).remote(args, rank=i)
+        rollout_engine = RolloutRayActor.options(
+            num_cpus=num_cpus,
+            num_gpus=num_gpus,
+            scheduling_strategy=scheduling_strategy,
+            runtime_env={
+                "env_vars": {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST}
+                | {
+                    "SGL_JIT_DEEPGEMM_PRECOMPILE": "false",
+                    "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
+                    "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                    "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                }
+            },
+        ).remote(args, rank=i)
+
+        rollout_engines.append((i, rollout_engine))
+        all_rollout_engines[i] = rollout_engine
+
+    num_new_engines = len(rollout_engines)
+
+    if num_new_engines == 0:
+        return num_new_engines
+
+    if args.rollout_external:
+        addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(args=args, rollout_engines=rollout_engines)
+    else:
+        addr_and_ports = _allocate_rollout_engine_addr_and_ports_normal(
+            args=args, num_engines=num_engines, rollout_engines=rollout_engines
         )
 
+    # TODO: don't ray.get here to overlap train actor init with rollout engine init.
+    # somehow if we don't sync here, the --debug-rollout-only mode will crash.
+    init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in rollout_engines]
+    ray.get(init_handles)
+    return num_new_engines
+
+
+def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
+    addr_and_ports = []
+    for rank, _ in rollout_engines:
+        [host, port] = args.rollout_external_engine_addrs[rank].split(":")
+        addr_and_ports.append(
+            dict(
+                dist_init_addr=None,
+                nccl_port=None,
+                host=host,
+                port=int(port),
+            )
+        )
+    return addr_and_ports
+
+
+def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout_engines):
     # get ports
     # there are 4 ports we need to allocate
     # 1. server port
@@ -246,9 +316,15 @@ def _create_rollout_engines(args, pg):
         1, min(args.num_gpus_per_node, args.rollout_num_gpus) // args.rollout_num_gpus_per_engine
     )
     addr_and_ports = [{} for _ in range(num_engines)]
-    for rank, engine in enumerate(rollout_engines):
-        if rank % num_engines_per_node != 0:
+
+    visited_nodes = set()
+    for rank, engine in rollout_engines:
+        if rank // num_engines_per_node in visited_nodes:
             continue
+        visited_nodes.add(rank // num_engines_per_node)
+        # TODO: currently when restarting engines, we will set port for all engines on this node starting with this rank.
+        # e.g. for 8 gpus, if we are restarting engine on gpu 3, we will set port for engine 3,4,5,6,7 on this node.
+        num_engines_on_this_node = num_engines_per_node - (rank % num_engines_per_node)
 
         def get_addr_and_ports():
             # use small ports to prevent ephemeral port between 32768 and 65536.
@@ -273,7 +349,7 @@ def _create_rollout_engines(args, pg):
 
         get_addr, get_port = get_addr_and_ports()
 
-        for i in range(num_engines_per_node):
+        for i in range(num_engines_on_this_node):
             addr_and_ports[rank + i]["port"] = get_port()
             addr_and_ports[rank + i]["nccl_port"] = get_port()
 
@@ -285,23 +361,15 @@ def _create_rollout_engines(args, pg):
                 for i in range(num_node_per_engine):
                     addr_and_ports[rank + i]["dist_init_addr"] = dist_init_addr
         else:
-            for i in range(num_engines_per_node):
+            for i in range(num_engines_on_this_node):
                 addr_and_ports[rank + i]["dist_init_addr"] = f"{get_addr()}:{get_port(6 + args.sglang_dp_size)}"
 
-    for i in range(num_engines):
+    for i, _ in rollout_engines:
         for key in ["port", "nccl_port", "dist_init_addr"]:
             assert key in addr_and_ports[i], f"Engine {i} {key} is not set."
         print(f"Ports for engine {i}: {addr_and_ports[i]}")
 
-    # TODO: don't ray.get here to overlap train actor init with rollout engine init.
-    # somehow if we don't sync here, the --debug-rollout-only mode will crash.
-    init_handles = [engine.init.remote(**ports) for engine, ports in zip(rollout_engines, addr_and_ports)]
-    ray.get(init_handles)
-
-    if args.offload:
-        ray.get([engine.release_memory_occupation.remote() for engine in rollout_engines])
-
-    return rollout_engines
+    return addr_and_ports
 
 
 def _start_router(args):
@@ -319,6 +387,7 @@ def _start_router(args):
 
     else:
         from sglang_router.launch_router import RouterArgs
+
         from slime.utils.http_utils import run_router
 
         args.sglang_router_ip = get_host_info()[1]
@@ -359,13 +428,23 @@ def _log_eval_rollout_data(rollout_id, args, data):
             log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
 
     print(f"eval {rollout_id}: {log_dict}")
+
+    step = (
+        rollout_id
+        if not args.wandb_always_use_train_step
+        else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    )
     if args.use_wandb:
-        log_dict["eval/step"] = (
-            rollout_id
-            if not args.wandb_always_use_train_step
-            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-        )
+        log_dict["eval/step"] = step
         wandb.log(log_dict)
+
+    if args.use_tensorboard:
+        from slime.utils.tensorboard_utils import _TensorboardAdapter
+
+        tb = _TensorboardAdapter(args)
+        tb.log(data=log_dict, step=step)
+
+    return log_dict
 
 
 def _log_rollout_data(rollout_id, args, samples, rollout_time):
@@ -381,10 +460,17 @@ def _log_rollout_data(rollout_id, args, samples, rollout_time):
         log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
     print(f"perf {rollout_id}: {log_dict}")
+    step = (
+        rollout_id
+        if not args.wandb_always_use_train_step
+        else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+    )
     if args.use_wandb:
-        log_dict["rollout/step"] = (
-            rollout_id
-            if not args.wandb_always_use_train_step
-            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-        )
+        log_dict["rollout/step"] = step
         wandb.log(log_dict)
+
+    if args.use_tensorboard:
+        from slime.utils.tensorboard_utils import _TensorboardAdapter
+
+        tb = _TensorboardAdapter(args)
+        tb.log(data=log_dict, step=step)

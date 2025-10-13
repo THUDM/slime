@@ -4,9 +4,9 @@ from typing import Any, Dict, List
 
 import aiohttp
 import requests
+import wandb
 from transformers import AutoTokenizer
 
-import wandb
 from slime.utils.async_utils import run
 from slime.utils.mask_utils import MultiTurnLossMaskGenerator
 from slime.utils.types import Sample
@@ -113,16 +113,20 @@ def log_raw_info(args, all_meta_info, rollout_id):
                     f"rollout/no_filter/avg_reward": final_meta_info["avg_reward"],
                 }
                 try:
+                    step = (
+                        rollout_id
+                        if not args.wandb_always_use_train_step
+                        else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+                    )
                     if args.use_wandb:
-                        log_dict["rollout/step"] = (
-                            rollout_id
-                            if not args.wandb_always_use_train_step
-                            else rollout_id
-                            * args.rollout_batch_size
-                            * args.n_samples_per_prompt
-                            // args.global_batch_size
-                        )
+                        log_dict["rollout/step"] = step
                         wandb.log(log_dict)
+
+                    if args.use_tensorboard:
+                        from slime.utils.tensorboard_utils import _TensorboardAdapter
+
+                        tb = _TensorboardAdapter(args)
+                        tb.log(data=log_dict, step=step)
                     print(f"no filter rollout log {rollout_id}: {log_dict}")
                 except Exception as e:
                     print(f"Failed to log to wandb: {e}")

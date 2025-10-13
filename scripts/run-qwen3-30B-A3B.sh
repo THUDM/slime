@@ -9,6 +9,7 @@ pkill -9 python
 sleep 3
 pkill -9 ray
 pkill -9 python
+pkill -9 redis
 
 set -ex
 
@@ -30,8 +31,8 @@ CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-30B-A3B
    #--hf-checkpoint /root/Qwen3-30B-A3B-FP8
    --ref-load /root/Qwen3-30B-A3B_torch_dist
-   --load /root/Qwen3-4B_slime/
-   --save /root/Qwen3-4B_slime/
+   --load /root/Qwen3-30B-A3B_slime/
+   --save /root/Qwen3-30B-A3B_slime/
    --save-interval 20
 )
 
@@ -148,7 +149,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
-   ${DISTRIBUTED_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \

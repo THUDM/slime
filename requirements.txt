@@ -6,6 +6,7 @@ pillow
 pylatexenc
 pyyaml
 ray[default]
+tensorboard
 torch
 transformers
 wandb

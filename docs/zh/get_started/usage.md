@@ -154,7 +154,8 @@ sglang 的加载非常简单，只需要：
   "prompt": [
     {
       "content": "Solve the following math problem step by step. The last line of your response should be of the form Answer: \\boxed{$Answer} where $Answer is the answer to the problem.\n\nIn triangle $ABC$, $\\sin \\angle A = \\frac{4}{5}$ and $\\angle A < 90^\\circ$. Let $D$ be a point outside triangle $ABC$ such that $\\angle BAD = \\angle DAC$ and $\\angle BDC = 90^\\circ$. Suppose that $AD = 1$ and that $\\frac{BD}{CD} = \\frac{3}{2}$. If $AB + AC$ can be expressed in the form $\\frac{a\\sqrt{b}}{c}$ where $a, b, c$ are pairwise relatively prime integers, find $a + b + c$.\n\nRemember to put your answer on its own line after \"Answer:\".",
-      "role": "user"
+      "role": "user",
+      "step_loss_mask": 1,
     }
   ],
   "label": "34"
@@ -169,11 +170,18 @@ sglang 的加载非常简单，只需要：
   --apply-chat-template
 ```
 
+请注意，这里的 `step_loss_mask`（默认值为 1）字段为 SFT 阶段提供，若设置为 0，则会将该轮 `loss_mask` 设置为 0；若设置为 1，则使用正常 `loss_mask`。
 另外我们还提供了一个 metadata_key，默认为 `"metadata"`，读取后我们会把数据中的 metadata 加载进 slime，可能会对自定义数据生成或者自定义 reward model 有帮助。
 
 ### RL 训练需要的超参
 
-TBD
+- `--advantage-estimator`: 当前训练需要的 RL 算法，目前支持：
+  - `grpo`（https://arxiv.org/abs/2402.03300）；
+  - `gspo`（https://arxiv.org/abs/2507.18071）；
+  - `reinforce_plus_plus` 与 `reinforce_plus_plus_baseline`（https://arxiv.org/abs/2501.03262）；
+  - `ppo`（https://arxiv.org/abs/1707.06347）。
+- `--calculate-per-token-loss`：slime 中默认的方案是 per sample loss，即 `mean(sum(sample_i) / len(sample_i))`，如果需要计算 per token loss，即 `sum(sum(sample_i)) / sum(len(sample_i))`，可以开启 `--calculate-per-token-loss`；
+- `--use-tis`：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置。
 
 ## 自定义 rollout 函数
 

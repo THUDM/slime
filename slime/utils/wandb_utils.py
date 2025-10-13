@@ -73,7 +73,7 @@ def init_wandb_primary(args):
 
 
 # https://docs.wandb.ai/guides/track/log/distributed-training/#track-all-processes-to-a-single-run
-def init_wandb_secondary(args, wandb_run_id):
+def init_wandb_secondary(args, wandb_run_id, router_addr=None):
     if wandb_run_id is None:
         return
 
@@ -86,6 +86,27 @@ def init_wandb_secondary(args, wandb_run_id):
     if (not offline) and args.wandb_key is not None:
         wandb.login(key=args.wandb_key, host=args.wandb_host)
 
+    # Configure settings based on offline/online mode
+    if offline:
+        settings_kwargs = dict(mode="offline")
+    else:
+        settings_kwargs = dict(
+            mode="shared",
+            x_primary=False,
+            x_update_finish_state=False,
+        )
+
+    if args.sglang_enable_metrics and router_addr is not None:
+        print(f"Forward SGLang metrics at {router_addr} to WandB.")
+        settings_kwargs |= dict(
+            x_stats_open_metrics_endpoints={
+                "sgl_engine": f"{router_addr}/engine_metrics",
+            },
+            x_stats_open_metrics_filters={
+                "sgl_engine.*": {},
+            },
+        )
+
     init_kwargs = {
         "id": wandb_run_id,
         "entity": args.wandb_team,
@@ -93,17 +114,8 @@ def init_wandb_secondary(args, wandb_run_id):
         "config": args.__dict__,
         "resume": "allow",
         "reinit": True,
+        "settings": wandb.Settings(**settings_kwargs),
     }
-
-    # Configure settings based on offline/online mode
-    if offline:
-        init_kwargs["settings"] = wandb.Settings(mode="offline")
-    else:
-        init_kwargs["settings"] = wandb.Settings(
-            mode="shared",
-            x_primary=False,
-            x_update_finish_state=False,
-        )
 
     # Add custom directory if specified
     if args.wandb_dir:

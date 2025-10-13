@@ -1,3 +1,4 @@
+import argparse
 import json
 import os
 from typing import Any, Dict
@@ -85,6 +86,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
             reset_arg(parser, "--distributed-backend", type=str, default="nccl")
             reset_arg(parser, "--distributed-timeout-minutes", type=int, default=10)
+
+            return parser
+
+        def add_train_arguments(parser):
+            parser.add_argument(
+                "--train-backend",
+                type=str,
+                choices=["megatron", "fsdp"],
+                default="megatron",
+                help="The backend for training.",
+            )
 
             return parser
 
@@ -216,6 +228,24 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This is used to shuffle the prompts and also for the random sampling of the prompts."
                 ),
             )
+            parser.add_argument(
+                "--rollout-health-check-interval",
+                type=float,
+                default=30.0,
+                help="Interval in seconds between rollout engine /health_generate checks during generate/eval.",
+            )
+            parser.add_argument(
+                "--rollout-health-check-timeout",
+                type=float,
+                default=30.0,
+                help="Timeout in seconds to wait for a rollout engine /health_generate response before killing it.",
+            )
+            parser.add_argument(
+                "--rollout-health-check-first-wait",
+                type=float,
+                default=300.0,
+                help="Time to wait for the compilation before the actual health check.",
+            )
 
             # sampling
             parser.add_argument(
@@ -304,6 +334,19 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "The called after we have all the rollout data including log_probs. "
                     "It may be helpful for updating loss mask."
                 ),
+            )
+            parser.add_argument(
+                "--rollout-external",
+                action="store_true",
+                default=False,
+                help="Use external SGLang instances instead of launching them inside the framework.",
+            )
+            parser.add_argument(
+                "--rollout-external-engine-addrs",
+                type=str,
+                default=None,
+                nargs="+",
+                help="Address and ports of the external engines.",
             )
             return parser
 
@@ -635,6 +678,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=0,
                 help="Lower bound clipping threshold C for importance sampling ratios to control variance.",
             )
+
+            parser.add_argument(
+                "--use-routing-replay",
+                action="store_true",
+                default=False,
+            )
             return parser
 
         def add_router_arguments(parser):
@@ -648,7 +697,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--slime-router-middleware-paths",
                 type=str,
                 nargs="+",
-                default=None,
+                default="",
             )
             return parser
 
@@ -707,6 +756,20 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Whether to turn on passrate logging, which will log the pass@n of the responses in the rollout.",
             )
             parser.add_argument("--wandb-run-id", type=str, default=None)
+            return parser
+
+        # tensorboard
+        def add_tensorboard_arguments(parser):
+            # tb_project_name, tb_experiment_name
+            parser.add_argument("--use-tensorboard", action="store_true", default=False)
+            parser.add_argument(
+                "--tb-project-name",
+                type=str,
+                default=None,
+                help="Directory to store tensorboard logs. Default is  os.environ.get('TENSORBOARD_DIR') directory.",
+            )
+            parser.add_argument("--tb-experiment-name", type=str, default=None)
+
             return parser
 
         # debug
@@ -883,6 +946,20 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--ci-test",
                 action="store_true",
             )
+            parser.add_argument(
+                "--ci-disable-kl-checker",
+                action="store_true",
+            )
+            parser.add_argument(
+                "--ci-metric-checker-key",
+                type=str,
+                default=None,
+            )
+            parser.add_argument(
+                "--ci-metric-checker-threshold",
+                type=float,
+                default=None,
+            )
             return parser
 
         # Add custom arguments in front to prevent overwritten some slime arguments.
@@ -890,11 +967,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser = add_custom_arguments(parser)
 
         parser = add_cluster_arguments(parser)
+        parser = add_train_arguments(parser)
         parser = add_rollout_arguments(parser)
         parser = add_data_arguments(parser)
         parser = add_eval_arguments(parser)
         parser = add_algo_arguments(parser)
         parser = add_wandb_arguments(parser)
+        parser = add_tensorboard_arguments(parser)
         parser = add_router_arguments(parser)
         parser = add_debug_arguments(parser)
         parser = add_sglang_arguments(parser)
@@ -927,14 +1006,14 @@ def warning_for_unfinished_backend(backend: str):
 def parse_args(add_custom_arguments=None):
     add_slime_arguments = get_slime_extra_args_provider(add_custom_arguments)
 
-    backend = os.environ.get("SLIME_BACKEND", "megatron").lower()
+    backend = parse_args_train_backend()
     if backend == "megatron":
         from slime.backends.megatron_utils import parse_args as megatron_parse_args
         from slime.backends.megatron_utils import set_default_megatron_args
         from slime.backends.megatron_utils import validate_args as megatron_validate_args
 
         args = megatron_parse_args(extra_args_provider=add_slime_arguments)
-        if getattr(args, "hf_checkpoint", None):
+        if args.hf_checkpoint:
             hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
             if args.use_hf_config_for_megatron:
                 from slime.backends.megatron_utils.config_mapping import get_mapper
@@ -947,18 +1026,13 @@ def parse_args(add_custom_arguments=None):
         args.rank = 0
         args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
         args = set_default_megatron_args(args)
-    elif backend == "xtuner":
-        warning_for_unfinished_backend(backend)
-        from slime.backends.xtuner_utils.arguments import parse_args as xtuner_parse_args
-
-        args = xtuner_parse_args(add_slime_arguments)
-        args.rank = 0
-        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
     else:
         warning_for_unfinished_backend(backend)
         from slime.backends.fsdp_utils.arguments import load_fsdp_args
 
         args = load_fsdp_args(extra_args_provider=add_slime_arguments)
+        args.rank = 0  # Primary process rank for wandb initialization
+        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
 
     slime_validate_args(args)
 
@@ -977,6 +1051,16 @@ def parse_args(add_custom_arguments=None):
     sglang_validate_args(args)
 
     return args
+
+
+def parse_args_train_backend():
+    if os.environ.get("SLIME_BACKEND") is not None:
+        raise Exception("`SLIME_BACKEND` is deprecated, please use --train-backend directly.")
+
+    parser = argparse.ArgumentParser()
+    get_slime_extra_args_provider()(parser)
+    args_partial, _ = parser.parse_known_args()
+    return args_partial.train_backend
 
 
 def slime_validate_args(args):
@@ -1076,6 +1160,8 @@ def slime_validate_args(args):
                 f"* actor_num_nodes {args.actor_num_nodes}, overriding rollout_num_gpus to match actor_num_gpus_per_node * actor_num_nodes."
             )
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
+            if args.use_critic:
+                args.rollout_num_gpus += args.critic_num_gpus_per_node * args.critic_num_nodes
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path

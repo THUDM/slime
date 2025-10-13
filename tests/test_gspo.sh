@@ -26,24 +26,23 @@ ROLLOUT_ARGS=(
    --apply-chat-template
    --rollout-shuffle
    --rm-type deepscaler
-   --num-rollout 3000
-   --rollout-batch-size 16
-   --n-samples-per-prompt 16
+   --num-rollout 2
+   --rollout-batch-size 4
+   --n-samples-per-prompt 4
    --rollout-max-response-len 8192
    --rollout-temperature 0.8
 
-   --global-batch-size 128
+   --global-batch-size 16
 )
 
-GRPO_ARGS=(
-   --advantage-estimator grpo
+GSPO_ARGS=(
+   --advantage-estimator gspo
    #--use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    --kl-coef 0.00
    --entropy-coef 0.00
-   --eps-clip 0.2
-   --eps-clip-high 0.28
+   --eps-clip 3.5e-4
 )
 
 OPTIMIZER_ARGS=(
@@ -65,17 +64,16 @@ ray start --head --node-ip-address 127.0.0.1 --num-gpus 4 --disable-usage-stats
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
      "env_vars": {
-        "no_proxy": "localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}",
-        "SLIME_BACKEND": "fsdp"
+        "no_proxy": "localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}"
      }
    }' \
    -- python3 train.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 4 \
    --colocate \
+   --train-backend fsdp \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
-   ${GRPO_ARGS[@]} \
-   ${DISTRIBUTED_ARGS[@]} \
+   ${GSPO_ARGS[@]} \
    ${SGLANG_ARGS[@]}

@@ -1,7 +1,8 @@
 # Adapt from https://github.com/NVIDIA/Megatron-LM/blob/b1efb3c7126ef7615e8c333432d76e08038e17ff/pretrain_gpt.py
+import argparse
 import inspect
 from contextlib import nullcontext
-from typing import Optional
+from typing import Literal, Optional
 
 import torch
 from megatron.core import tensor_parallel
@@ -12,6 +13,7 @@ from megatron.core.models.gpt.gpt_layer_specs import (
     get_gpt_layer_with_transformer_engine_spec,
 )
 from megatron.core.transformer.spec_utils import import_module
+from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.training.arguments import core_transformer_config_from_args
 
 
@@ -19,12 +21,12 @@ from megatron.training.arguments import core_transformer_config_from_args
 class LinearForLastLayer(torch.nn.Linear):
     def __init__(
         self,
-        input_size,
-        output_size,
+        input_size: int,
+        output_size: int,
         *,
-        config,
-        bias=True,
-    ):
+        config: TransformerConfig,
+        bias: bool = True,
+    ) -> None:
         super().__init__(in_features=input_size, out_features=output_size, bias=bias)
         self.sequence_parallel = config.sequence_parallel
         if self.sequence_parallel:
@@ -36,10 +38,10 @@ class LinearForLastLayer(torch.nn.Linear):
 
     def forward(
         self,
-        input_,
-        weight=None,
-        runtime_gather_output=None,
-    ):
+        input_: torch.Tensor,
+        weight: Optional[torch.Tensor] = None,
+        runtime_gather_output: Optional[bool] = None,
+    ) -> tuple[torch.Tensor, None]:
         logits = super().forward(input_)
         logits = logits.float()
         if self.sequence_parallel:
@@ -47,8 +49,13 @@ class LinearForLastLayer(torch.nn.Linear):
         return logits, None
 
 
-def get_model_provider_func(args, role: str = "actor"):
-    def model_provider(pre_process=True, post_process=True, vp_stage: Optional[int] = None) -> GPTModel:
+def get_model_provider_func(
+    args: argparse.Namespace,
+    role: Literal["actor", "critic"] = "actor",
+):
+    def model_provider(
+        pre_process: bool = True, post_process: bool = True, vp_stage: Optional[int] = None
+    ) -> GPTModel:
         """Builds the model.
 
         If you set the use_legacy_models to True, it will return the legacy GPT model and if not the mcore GPT model.
@@ -87,13 +94,13 @@ def get_model_provider_func(args, role: str = "actor"):
             torch._C._cuda_attach_out_of_memory_observer(oom_observer)
 
         # Experimental loading arguments from yaml
-        config = core_transformer_config_from_args(args)
+        config: TransformerConfig = core_transformer_config_from_args(args)
 
         if args.spec is not None:
             transformer_layer_spec = import_module(args.spec)
             # Allow the spec to be a function so that user can use customized Megatron easier.
             if callable(transformer_layer_spec):
-                transformer_layer_spec = transformer_layer_spec(args)
+                transformer_layer_spec = transformer_layer_spec(args, config, vp_stage)
         else:
             if args.num_experts:
                 # Define the decoder block spec
@@ -134,7 +141,7 @@ def get_model_provider_func(args, role: str = "actor"):
                 # Check if fp8_model_init supports preserve_high_precision_init_val
                 if "preserve_high_precision_init_val" in inspect.signature(fp8_model_init).parameters:
                     build_model_context_args["preserve_high_precision_init_val"] = True
-            except:
+            except Exception:
                 raise RuntimeError(
                     "--fp8-param-gather requires `fp8_model_init` from TransformerEngine, but not found."
                 )

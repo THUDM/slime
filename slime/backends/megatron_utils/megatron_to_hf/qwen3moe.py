@@ -63,11 +63,13 @@ def convert_qwen3moe_to_hf(args, name, param):
             if rest == "linear_fc1.weight":
                 gate_weight, up_weight = param.chunk(2, dim=0)
                 return [
-                    (f"model.layers.{layer_idx}.mlp.shared_experts.gate_proj.weight", gate_weight),
-                    (f"model.layers.{layer_idx}.mlp.shared_experts.up_proj.weight", up_weight),
+                    (f"model.layers.{layer_idx}.mlp.shared_expert.gate_proj.weight", gate_weight),
+                    (f"model.layers.{layer_idx}.mlp.shared_expert.up_proj.weight", up_weight),
                 ]
             elif rest == "linear_fc2.weight":
-                return [(f"model.layers.{layer_idx}.mlp.shared_experts.down_proj.weight", param)]
+                return [(f"model.layers.{layer_idx}.mlp.shared_expert.down_proj.weight", param)]
+            elif rest == "gate_weight":
+                return [(f"model.layers.{layer_idx}.mlp.shared_expert_gate.weight", param)]
             else:
                 raise ValueError(f"Unknown shared expert parameter name: {name}")
 

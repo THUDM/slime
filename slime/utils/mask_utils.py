@@ -3,6 +3,10 @@ from typing import Dict, List, Tuple
 from transformers import AutoTokenizer
 
 
+def get_response_lengths(loss_masks: List[List[int]]) -> List[int]:
+    return [len(mask[mask.index(1) :]) if 1 in mask else 0 for mask in loss_masks]
+
+
 class MultiTurnLossMaskGenerator:
     def __init__(self, tokenizer: AutoTokenizer, tokenizer_type: str = "qwen"):
         self.tokenizer = tokenizer
@@ -10,7 +14,7 @@ class MultiTurnLossMaskGenerator:
         self.tokenizer_type = tokenizer_type
 
     def get_response_lengths(self, loss_masks: List[List[int]]) -> List[int]:
-        return [len(mask[mask.index(1) :]) if 1 in mask else 0 for mask in loss_masks]
+        return get_response_lengths(loss_masks)
 
     def find_all_sublist_indices(self, main_list, sublist):
         sublist_len = len(sublist)
@@ -57,6 +61,9 @@ class MultiTurnLossMaskGenerator:
             else:
                 loss_mask = [0] * len(message_ids)
 
+            if message.get("step_loss_mask", 1) != 1:
+                loss_mask = [0] * len(message_ids)
+
             all_loss_masks.extend(loss_mask)
             all_token_ids.extend(message_ids)
 
@@ -81,6 +88,9 @@ class MultiTurnLossMaskGenerator:
             else:
                 loss_mask = [0] * len(message_ids)
 
+            if message.get("step_loss_mask", 1) != 1:
+                loss_mask = [0] * len(message_ids)
+
             all_loss_masks.extend(loss_mask)
             all_token_ids.extend(message_ids)
 
@@ -95,6 +105,9 @@ class MultiTurnLossMaskGenerator:
         response_length = len(response_tokens)
         token_ids = prompt_tokens + response_tokens
         loss_mask = [0] * len(prompt_tokens) + [1] * response_length
+
+        if messages[-1].get("step_loss_mask", 1) != 1:
+            loss_mask = [0] * len(token_ids)
         return token_ids, loss_mask
 
     def get_loss_mask(self, messages: List[Dict]) -> List[int]:

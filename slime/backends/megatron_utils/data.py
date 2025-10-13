@@ -5,10 +5,10 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+import wandb
 from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 
-import wandb
 from slime.utils.data import get_minimum_num_micro_batch_size
 from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
@@ -65,9 +65,13 @@ def get_batch(data_iterator, keys):
     return batch
 
 
-def gather_log_data(metic_name, args, rollout_id, log_dict):
+def gather_log_data(metric_name, args, rollout_id, log_dict):
+    """Gather and log metrics across data parallel ranks."""
+
     if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
-        gathered_log_dict = [None] * mpu.get_data_parallel_world_size(with_context_parallel=True)
+        dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
+
+        gathered_log_dict = [None] * dp_size
         # Not sure if this will be a performance bottleneck.
         dist.gather_object(
             log_dict,
@@ -75,18 +79,28 @@ def gather_log_data(metic_name, args, rollout_id, log_dict):
             dst=mpu.get_data_parallel_src_rank(with_context_parallel=True),
             group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
         )
-        dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
+
         reduced_log_dict = {
-            f"{metic_name}/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
+            f"{metric_name}/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
         }
-        print(f"{metic_name} {rollout_id}: {reduced_log_dict}")
+        print(f"{metric_name} {rollout_id}: {reduced_log_dict}")
+
+        # Calculate step once to avoid duplication
+        step = (
+            rollout_id
+            if not args.wandb_always_use_train_step
+            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+        )
         if args.use_wandb:
-            reduced_log_dict["rollout/step"] = (
-                rollout_id
-                if not args.wandb_always_use_train_step
-                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-            )
+            reduced_log_dict["rollout/step"] = step
             wandb.log(reduced_log_dict)
+
+        if args.use_tensorboard:
+            from slime.utils.tensorboard_utils import _TensorboardAdapter
+
+            tb = _TensorboardAdapter(args)
+            tb.log(data=reduced_log_dict, step=step)
+
         return reduced_log_dict
     else:
         dist.gather_object(
@@ -378,32 +392,44 @@ def log_perf_data(rollout_id, args):
                 log_dict["perf/wait_time_ratio"] = log_dict["perf/train_wait_time"] / total_time
 
         print(f"perf {rollout_id}: {log_dict}")
+
+        step = (
+            rollout_id
+            if not args.wandb_always_use_train_step
+            else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+        )
         if args.use_wandb:
-            log_dict["rollout/step"] = (
-                rollout_id
-                if not args.wandb_always_use_train_step
-                else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-            )
+            log_dict["rollout/step"] = step
             wandb.log(log_dict)
+
+        if args.use_tensorboard:
+            from slime.utils.tensorboard_utils import _TensorboardAdapter
+
+            tb = _TensorboardAdapter(args)
+            tb.log(data=log_dict, step=step)
     timer_instance.reset()
 
 
 def sync_actor_critic_data(
     args,
-    values: Optional[list[torch.Tensor]] = None,
-    log_probs: Optional[list[torch.Tensor]] = None,
-    ref_log_probs: Optional[list[torch.Tensor]] = None,
+    rollout_data: Optional[dict[str, list[torch.Tensor]]] = None,
     group: Optional[dist.ProcessGroup] = None,
 ):
+    values, log_probs, ref_log_probs = map(rollout_data.get, ("values", "log_probs", "ref_log_probs"))
+
+    # return when not the pp last stage
+    if not values and not log_probs:
+        return
+
     handles = []
 
-    if values is None:
+    if not values:
         values = [torch.empty_like(log_prob) for log_prob in log_probs]
     for value in values:
         handles.append(dist.broadcast(value, src=1, group=group, async_op=True))
 
     if args.kl_coef != 0 or args.use_kl_loss:
-        if log_probs is None:
+        if not log_probs:
             ref_log_probs = [torch.empty_like(value) for value in values]
             log_probs = [torch.empty_like(value) for value in values]
         for ref_log_prob, log_prob in zip(ref_log_probs, log_probs):
@@ -412,4 +438,5 @@ def sync_actor_critic_data(
 
     for handle in handles:
         handle.wait()
-    return values, log_probs, ref_log_probs
+
+    rollout_data.update({"values": values, "log_probs": log_probs, "ref_log_probs": ref_log_probs})

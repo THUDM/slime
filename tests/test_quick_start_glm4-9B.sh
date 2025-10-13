@@ -19,6 +19,10 @@ source "${SCRIPT_DIR}/../scripts/models/glm4-9B.sh"
 CKPT_ARGS=(
    --hf-checkpoint /root/models/GLM-Z1-9B-0414/
    --ref-load /root/GLM-Z1-9B-0414_torch_dist
+
+   --fp8-format e4m3
+   --fp8-recipe blockwise
+   --fp8-param-gather
 )
 
 ROLLOUT_ARGS=(
@@ -129,7 +133,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
-   ${DISTRIBUTED_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \

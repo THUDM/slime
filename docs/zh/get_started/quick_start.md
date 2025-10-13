@@ -6,8 +6,21 @@
 
 由于 slime 可能会包含针对 sglang/megatron 的临时补丁（patch）。为避免潜在的环境配置问题，强烈建议**用户使用我们提供的最新 Docker 镜像**，它已预置好所有依赖。
 
-- 对于不方便使用 docker 的场景，请参考 [build_conda.sh](./../../build_conda.sh)；
-- 对于 AMD 支持，请参考 [AMD 使用教程](../en/amd_tutorial.md)。
+### 硬件支持说明
+
+**slime** 支持多种 NVIDIA GPU 硬件平台：
+
+- **B200 系列**：完全支持，运行步骤与 H 系列完全相同
+- **H 系列 (H100/H200)**：官方支持，具有完整的 CI 测试保护，运行稳定可靠
+
+**重要说明**：
+- 最新的 Docker 镜像对 B 卡和 H 卡通用，无需额外配置
+- Megatron 后端在 H 卡上具有 CI 保护，经过充分测试验证，推荐生产环境使用
+- B 卡基本功能稳定，可作为开发和测试参考，但暂无 CI 保护
+- 两种硬件平台使用完全相同的安装和启动流程
+
+- 对于不方便使用 docker 的场景，请参考 [build_conda.sh](https://github.com/THUDM/slime/blob/main/build_conda.sh)；
+- 对于 AMD 支持，请参考 [AMD 使用教程](../../en/platform_support/amd_tutorial.md)。
 
 ### 拉取并启动 Docker 容器
 
@@ -259,6 +272,10 @@ GRPO_ARGS=(
 )
 ```
 
+- `--advantage-estimator`: 除去 [GRPO](https://arxiv.org/abs/2402.03300)，slime 还支持丰富的其他训练算法，例如 [GSPO](https://arxiv.org/abs/2507.18071)、[Reinforce++](https://arxiv.org/abs/2501.03262) 与 [Reinforce++ Baseline](https://arxiv.org/abs/2501.03262)、以及 [PPO](https://arxiv.org/abs/1707.06347)；
+- `--calculate-per-token-loss`：slime 中默认的方案是 per sample loss，即 `mean(sum(sample_i) / len(sample_i))`，如果需要计算 per token loss，即 `sum(sum(sample_i)) / sum(len(sample_i))`，可以开启 `--calculate-per-token-loss`；
+- `--use-tis`：如果需要开启 TIS (Truncated Importance Sampling)，可以开启这一设置。TIS 由此[博客](https://fengyao.notion.site/off-policy-rl)介绍。
+
 ### OPTIMIZER_ARGS: 优化器参数
 
 ```bash
@@ -388,7 +405,7 @@ hf download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
    # 用于加载 tokenizer 等其他信息，实际上不会使用 hf 路径中的模型权重参数
    --hf-checkpoint /root/Qwen3-4B-FP8
 
-   #  megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的 dist 权重，不因为 FP rollout 而去做修改。
+   #  megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的 dist 权重，不因为 FP8 rollout 而去做修改。
    --ref-load /root/Qwen3-4B_torch_dist
 ```
 

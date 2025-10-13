@@ -19,14 +19,14 @@ set -euxo pipefail
 
 
 ### AMD Support ###
-SLIME_DIR="/home/yushensu/projects/slime" # Need to change to your own path
-export SLIME_DIR=$SLIME_DIR
+SLIME_DIR="${SLIME_DIR:-/home/yushensu/projects/slime}" # Default path if not set in environment
+export SLIME_DIR
 
-MODEL_DIR="/home/yushensu/projects/model" # Need to change to your own path
-export MODEL_DIR=$MODEL_DIR
+MODEL_DIR="${MODEL_DIR:-/home/yushensu/projects/model}" # Default path if not set in environment
+export MODEL_DIR
 
-DATA_DIR="/home/yushensu/projects/data"  # Need to change to your own path
-export DATA_DIR=$DATA_DIR
+DATA_DIR="${DATA_DIR:-/home/yushensu/projects/data}"  # Default path if not set in environment
+export DATA_DIR
 
 # For AMD GPU
 export RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=${RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES:-"1"} # Must set to 1
@@ -174,7 +174,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
-   ${DISTRIBUTED_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \

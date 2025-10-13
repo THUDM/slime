@@ -1,3 +1,5 @@
+from typing import Callable, Union
+
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -43,18 +45,18 @@ def get_logits_and_tokens_offset_with_cp(
 
 
 def get_sum_of_sample_mean(
-    total_lengths,
-    response_lengths,
-    loss_masks,
+    total_lengths: list[int],
+    response_lengths: list[int],
+    loss_masks: list[torch.Tensor],
     calculate_per_token_loss: bool = False,
-):
+) -> Callable[[torch.Tensor], torch.Tensor]:
     """
     Calculate correct sample mean for CP
     """
     cp_size = mpu.get_context_parallel_world_size()
     if cp_size == 1:
 
-        def sum_of_sample_mean(x: torch.Tensor):
+        def sum_of_sample_mean(x: torch.Tensor) -> torch.Tensor:
             return sum(
                 [
                     (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)
@@ -62,7 +64,7 @@ def get_sum_of_sample_mean(
                 ]
             )
 
-        def sum_of_token(x: torch.Tensor):
+        def sum_of_token(x: torch.Tensor) -> torch.Tensor:
             return sum(
                 [(x_i * loss_mask_i).sum() for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks)]
             )
@@ -80,7 +82,7 @@ def get_sum_of_sample_mean(
             chunked_loss_masks.append(torch.cat([loss_mask_0, loss_mask_1], dim=0))
             cp_chunk_lengths.append(chunked_loss_masks[i].size(0))
 
-        def sum_of_sample_mean(x):
+        def sum_of_sample_mean(x: torch.Tensor) -> torch.Tensor:
             return sum(
                 [
                     (x_i * chunked_loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
@@ -90,7 +92,7 @@ def get_sum_of_sample_mean(
                 ]
             )
 
-        def sum_of_token(x: torch.Tensor):
+        def sum_of_token(x: torch.Tensor) -> torch.Tensor:
             return sum(
                 [
                     (x_i * chunked_loss_mask).sum()
@@ -101,7 +103,7 @@ def get_sum_of_sample_mean(
     return sum_of_sample_mean if not calculate_per_token_loss else sum_of_token
 
 
-def all_gather_with_cp(tensor: torch.Tensor, total_length: int, response_length: int):
+def all_gather_with_cp(tensor: torch.Tensor, total_length: int, response_length: int) -> torch.Tensor:
     """
     Gather tensors across all ranks in the context parallel group.
     The first dimension of the output tensor will be the `response_length`.
@@ -120,7 +122,7 @@ def all_gather_with_cp(tensor: torch.Tensor, total_length: int, response_length:
     chunk_1 = tensor[logits_offset[0][1] - logits_offset[0][0] :]
     assert chunk_1.shape[0] == logits_offset[1][1] - logits_offset[1][0]
 
-    def zero(len):
+    def zero(len: int) -> torch.Tensor:
         return torch.zeros(
             [len] + list(tensor.shape[1:]),
             dtype=tensor.dtype,
@@ -153,7 +155,7 @@ def all_gather_with_cp(tensor: torch.Tensor, total_length: int, response_length:
     return full_tensor
 
 
-def slice_with_cp(tokens: torch.Tensor, pad_value):
+def slice_with_cp(tokens: torch.Tensor, pad_value: int) -> torch.Tensor:
     cp_rank = mpu.get_context_parallel_rank()
     cp_size = mpu.get_context_parallel_world_size()
 
@@ -170,7 +172,11 @@ def slice_with_cp(tokens: torch.Tensor, pad_value):
     return torch.cat([tokens[start_1:end_1], tokens[start_2:end_2]])
 
 
-def slice_log_prob_with_cp(log_prob: list[float], total_length: int, response_length: int):
+def slice_log_prob_with_cp(
+    log_prob: Union[list[float], torch.Tensor],
+    total_length: int,
+    response_length: int,
+) -> Union[list[float], torch.Tensor]:
     assert len(log_prob) == response_length
 
     cp_size = mpu.get_context_parallel_world_size()
@@ -183,4 +189,8 @@ def slice_log_prob_with_cp(log_prob: list[float], total_length: int, response_le
 
     chunk_1 = log_prob[logits_offset[0][0] - (prompt_length - 1) : logits_offset[0][1] - (prompt_length - 1)]
     chunk_2 = log_prob[logits_offset[1][0] - (prompt_length - 1) : logits_offset[1][1] - (prompt_length - 1)]
-    return chunk_1 + chunk_2
+
+    if isinstance(log_prob, list):
+        return chunk_1 + chunk_2
+    else:
+        return torch.cat([chunk_1, chunk_2], dim=0)
