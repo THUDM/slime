@@ -8,6 +8,7 @@ from packaging import version
 from torch.distributed.tensor import DTensor
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from ring_flash_attn import substitute_hf_flash_attn, update_ring_flash_attn_params
 
 # Import FSDP v2 components based on PyTorch version
 if version.parse(torch.__version__) >= version.parse("2.6"):
@@ -60,7 +61,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 self.hf_config = AutoConfig.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
                 self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
-
+        
+        if self.args.enable_cp:
+            self.setup_context_parallelism()
         if self.args.multimodal_keys:
             self.vlm_processor = AutoProcessor.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
 
@@ -228,6 +231,27 @@ class FSDPTrainRayActor(TrainRayActor):
 
         return packed_batches, grad_accum
 
+    def setup_context_parallelism(self):
+        """Setup Context Parallelism process groups with varlen support"""
+        dist.init_process_group(backend="nccl")
+        world_size = dist.get_world_size()
+        rank = dist.get_rank()
+
+        # Create single CP group with all GPUs
+        all_ranks = list(range(world_size))
+        self.cp_group = dist.new_group(ranks=all_ranks, backend="nccl")
+        ring_attn_rank = dist.get_rank(group=self.cp_group)
+        substitute_hf_flash_attn(self.cp_group, heads_k_stride=1)
+
+        print(f"Ring attention rank: {ring_attn_rank}")
+
+    def _update_cp_cu_seqlens(self, packed_batch):
+        cu_seqlens = packed_batch["cu_seqlens"]
+        
+        # Update the ring attention parameters
+        update_ring_flash_attn_params(cu_seqlens, self.cp_group)
+
+
     def train(self, rollout_id, rollout_data_ref):
         Timer().end("train_wait")
 
@@ -291,6 +315,10 @@ class FSDPTrainRayActor(TrainRayActor):
         reported_accum: dict[str, list[torch.Tensor]] = {}
         self.optimizer.zero_grad(set_to_none=True)
         for mbs_id, packed_batch in enumerate(packed_batches):
+            # Update cu_seqlens for CP before forward pass
+            if self.args.enable_cp:
+                self._update_cp_cu_seqlens(packed_batch)
+
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logits = self.model(
                     input_ids=packed_batch["tokens"].unsqueeze(0),
