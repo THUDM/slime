@@ -1,7 +1,8 @@
 #### Use the base image
 
 # The Docker image built with this Dockerfile:
-# Supports at least up to slime commit ID: d4a7741 (Sep 7, 2025) - supported by amd_patch/sglv0.5.0rc0 
+# Supports at least up to slime commit ID: 2710445 (Oct 9, 2025) - supported by amd_patch/sglv0.5.0rc0 
+# Still need to update amd_patch
 
 # You can find the latest pre-built Docker image from here: https://hub.docker.com/r/rlsys/slime/tags
 # Current latest docker img: `rlsys/slime:slime_ubuntu22.04_rocm6.3.4-patch-numa-patch_sglang0.4.9_megatron-patch_ray2.47.1_apex_torch-memory-saver0.0.8-patch-vim` manually add the patch to mitigate checkpoint loading issue. (vim /workspace/Megatron-LM-amd_version/megatron/training/checkpointing.py. Line: 1449 ~ 1457 - comment out if becasue of dismatch number of dist checkpoints
@@ -343,6 +344,15 @@ RUN pip install git+https://github.com/ISEEKYAN/mbridge.git --no-deps
 RUN pip install pydra_config==0.0.15
 RUN pip install together
 RUN pip install google-generativeai
+########################################
+########################################
+########################################
+
+
+########################################
+########Additional packages#############
+########################################
+RUN pip install tensorboard
 ########################################
 ########################################
 ########################################

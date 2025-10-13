@@ -1,6 +1,11 @@
+
 import os
+
+from argparse import Namespace
+
 from contextlib import nullcontext
 from itertools import accumulate
+from typing import Iterable, Optional
 
 import ray
 import torch
@@ -22,8 +27,8 @@ else:
 from slime.ray.train_actor import TrainRayActor
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.memory_utils import clear_memory
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
+from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
@@ -45,7 +50,7 @@ class FSDPTrainRayActor(TrainRayActor):
       * For small models this is fine; for larger models consider sharded state_dict type.
     """
 
-    def init(self, args, role, wandb_run_id, with_ref: bool = False):  # type: ignore[override]
+    def init(self, args: Namespace, role: str, wandb_run_id: str, with_ref: bool = False) -> int:  # type: ignore[override]
         super().init(args, role, wandb_run_id, with_ref)
 
         # Update rank and world_size for wandb secondary initialization (using actual distributed values)
@@ -78,7 +83,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 trust_remote_code=True,
                 attn_implementation=self.args.attn_implementation,
             )
-            print(f"Model attn implementation: {model.config._attn_implementation}")
         model.train()
 
         if args.gradient_checkpointing:
@@ -121,7 +125,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.update_cpu_params_dict(self.weights["actor"])
 
-        self.weight_updator = (
+        self.weight_updater = (
             UpdateWeightFromTensor(self.args, self.model, self.weights)
             if self.args.colocate
             else UpdateWeightFromDistributed(self.args, self.model)
@@ -137,19 +141,53 @@ class FSDPTrainRayActor(TrainRayActor):
         self.micro_step = 0
         return start_iteration
 
-    def sleep(self, tags):
+    def sleep(self, tags: Optional[str | Iterable[str]]) -> None:
+        """Pause CUDA memory for tagged tensors via torch_memory_saver.
+
+        When offloading is enabled, this forwards tags to
+        `torch_memory_saver.pause`. If `tags` is a string, that tag is paused.
+        If `tags` is an iterable of strings, each tag is paused. If `tags` is
+        None, all registered regions are paused. See the torch_memory_saver
+        tagged API for details.
+        """
         if not getattr(self.args, "offload", False):
             return
         if torch_memory_saver is not None:
-            torch_memory_saver.pause()
+            if tags is None:
+                torch_memory_saver.pause()
+            elif isinstance(tags, str):
+                torch_memory_saver.pause(tags)
+            else:
+                for tag in tags:
+                    torch_memory_saver.pause(tag)
 
-    def wake_up(self, tags):
+    def wake_up(self, tags: Optional[str | Iterable[str]]) -> None:
+        """Resume CUDA memory for tagged tensors via torch_memory_saver.
+
+        When offloading is enabled, this forwards tags to
+        `torch_memory_saver.resume`. If `tags` is a string, that tag is resumed.
+        If `tags` is an iterable of strings, each tag is resumed. If `tags` is
+        None, all registered regions are resumed. See the torch_memory_saver
+        tagged API for details.
+        """
         if not getattr(self.args, "offload", False):
             return
         if torch_memory_saver is not None:
-            torch_memory_saver.resume()
+            if tags is None:
+                torch_memory_saver.resume()
+            elif isinstance(tags, str):
+                torch_memory_saver.resume(tags)
+            else:
+                for tag in tags:
+                    torch_memory_saver.resume(tag)
 
-    def save_model(self, iteration):
+    def save_model(self, iteration: int) -> None:
+        """Save model state and optimizer state for the given iteration.
+
+        Parameters:
+            iteration: Global training step to associate with the checkpoint.
+
+        """
         if self.args.debug_rollout_only:
             return
         checkpoint_dir = os.path.join(self.args.save, str(iteration))
@@ -180,17 +218,27 @@ class FSDPTrainRayActor(TrainRayActor):
 
     def compute_log_prob(
         self,
-        model_tag,
-        packed_batches,
-        store_prefix="",
-    ):
-        """
-        Compute log probabilities using specified model.
+        model_tag: str,
+        packed_batches: list[dict[str, torch.Tensor]],
+        store_prefix: str = "",
+    ) -> dict[str, list[torch.Tensor]]:
+        """Compute token log-probabilities for a list of packed batches.
 
-        Args:
-            model_tag: "actor" for current model, "ref" for reference model
-            padded_batches: Input batches
-            store_prefix: Prefix for storing results (e.g., "ref_")
+        Parameters:
+            model_tag: Which parameters to use, e.g. "actor" or "ref".
+            packed_batches: A list of packed batch dictionaries produced by
+                `pack_sequences`, each containing at least `tokens` and
+                `position_ids`; may also include multimodal keys like `pixel_values`.
+            store_prefix: Prefix to use for keys in outputs (e.g., "ref_").
+
+        Returns:
+            A lightweight dictionary keyed by f"{store_prefix}log_probs". The
+            actual per-sequence results are written in-place into each element of
+            `packed_batches` under the same key and can be read back by callers.
+
+        Note:
+            This method temporarily switches model weights when `model_tag != "actor"`
+            and restores the original weights and train mode afterwards.
         """
         need_restore = False
         if model_tag != "actor" and model_tag in self.weights:
@@ -223,7 +271,21 @@ class FSDPTrainRayActor(TrainRayActor):
                 self.model.train()
                 torch.cuda.synchronize()
 
-    def packed_data(self, rollout_data):
+    def packed_data(
+        self, rollout_data: dict[str, list[torch.Tensor]]
+    ) -> tuple[list[dict[str, torch.Tensor]], list[int]]:
+        """Pack variable-length sequences for efficient processing.
+
+        Parameters:
+            rollout_data: Dictionary of lists containing sequence-level tensors
+                such as `tokens`, `loss_masks`, `rewards`, `response_lengths`,
+                `advantages`, `returns`, and optional `rollout_log_probs`.
+
+        Returns:
+            A pair `(packed_batches, grad_accum)` where `packed_batches` is a list
+            of packed batch dictionaries and `grad_accum` lists the micro-batch
+            indices at which to perform optimizer steps.
+        """
         # Pack sequences efficiently
         tokens = rollout_data["tokens"]
 
@@ -270,14 +332,21 @@ class FSDPTrainRayActor(TrainRayActor):
                 )
             )
             start = end
-        if dist.get_rank() == 0:
-            print("*" * 100)
-            print("length of packed_batches: ", len(packed_batches))
         grad_accum = list(accumulate(num_microbatches))
 
         return packed_batches, grad_accum
 
-    def train(self, rollout_id, rollout_data_ref):
+    def train(self, rollout_id: int, rollout_data_ref: Box) -> None:
+        """Run one training update over a rollout batch.
+
+        Parameters:
+            rollout_id: Monotonic id for logging.
+            rollout_data_ref: A Box handle wrapping a Ray object reference to a
+                dictionary with rollout tensors and metadata (e.g., `tokens`,
+                `loss_masks`, `rewards`, `response_lengths`, optional
+                `rollout_log_probs`, etc.). It will be fetched and partitioned
+                by `process_rollout_data` based on data-parallel rank/size.
+        """
         Timer().end("train_wait")
 
         if self.args.offload:
@@ -287,7 +356,7 @@ class FSDPTrainRayActor(TrainRayActor):
         rank = dist.get_rank()
 
         rollout_data = process_rollout_data(self.args, rollout_data_ref, rank, world_size)
-        if self.args.advantage_estimator in ["grpo"]:
+        if self.args.advantage_estimator in ["grpo", "gspo"]:
             rollout_data["advantages"] = rollout_data["returns"] = [
                 torch.tensor([rollout_data["rewards"][i]] * rollout_data["response_lengths"][i])
                 for i in range(len(rollout_data["rewards"]))
@@ -358,9 +427,23 @@ class FSDPTrainRayActor(TrainRayActor):
             loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
             response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
 
-            # Ensure device consistency
+            advantages = advantages.to(device=log_probs.device)
             ppo_kl = old_log_probs.to(device=log_probs.device) - log_probs
-            advantages = advantages.to(device=ppo_kl.device)
+
+            if self.args.advantage_estimator == "gspo":
+                log_ratio_splits = torch.split(ppo_kl, response_lengths, dim=0)
+
+                seq_kls = [
+                    ((log_ratio_i * mask_i).sum() / mask_i.sum().clamp_min(1))
+                    for log_ratio_i, mask_i in zip(log_ratio_splits, loss_masks)
+                ]
+
+                ppo_kl_list = []
+                for seq_kl, length in zip(seq_kls, response_lengths):
+                    ppo_kl_list.append(seq_kl.expand(length))
+
+                ppo_kl = torch.cat(ppo_kl_list)
+
             pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, self.args.eps_clip, self.args.eps_clip_high)
 
             # Apply TIS before sample mean calculation
@@ -431,7 +514,7 @@ class FSDPTrainRayActor(TrainRayActor):
             # Scale loss for gradient accumulation
             loss = loss * dist.get_world_size() / self.args.global_batch_size
             loss.backward()
-            clear_memory()
+
             # Accumulate reported metrics (store tensors for later mean)
             for k, v in reported.items():
                 reported_accum.setdefault(k, []).append(v)
@@ -439,6 +522,9 @@ class FSDPTrainRayActor(TrainRayActor):
             if (mbs_id + 1) in grad_accum:
                 # TODO: check if the grad norm is global grad norm.
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
+                # the grad norm used to be of DTensor
+                grad_norm = float(grad_norm)
+
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
                 # Aggregate logs
@@ -454,7 +540,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     log_dict = {
                         f"train/{k}": (val.item() if torch.is_tensor(val) else val) for k, val in aggregated.items()
                     }
-                    log_dict["train/grad_norm"] = grad_norm.item() if not isinstance(grad_norm, float) else grad_norm
+                    log_dict["train/grad_norm"] = grad_norm
 
                     for gid, group in enumerate(self.optimizer.param_groups):
                         if "lr" in group:
@@ -463,13 +549,10 @@ class FSDPTrainRayActor(TrainRayActor):
                     kl_info = ""
                     if self.args.use_kl_loss and "kl_loss" in aggregated:
                         kl_info = f", kl_loss: {aggregated['kl_loss']:.4f}, kl_penalty: {aggregated['kl_loss'] * self.args.kl_loss_coef:.4f}"
+                        print(kl_info)
+                    print(f"step {self.global_step}: {log_dict}")
 
-                    print(
-                        f"step {self.global_step}: loss: {aggregated.get('loss', 0):.4f}, pg_loss: {aggregated.get('pg_loss', 0):.4f}{kl_info}"
-                    )
-                    print(f"step {self.global_step} full: {log_dict}")
-
-                    if self.args.use_wandb:
+                    if self.args.use_wandb and wandb is not None:
                         log_dict["train/step"] = self.global_step
                         wandb.log(log_dict)
                 self.global_step += 1
@@ -479,7 +562,12 @@ class FSDPTrainRayActor(TrainRayActor):
         Timer().start("train_wait")
         return
 
-    def update_weights(self):  # type: ignore[override]
+    def update_weights(self) -> None:  # type: ignore[override]
+        """Synchronize actor weights to rollout engines.
+
+        Handles both colocated and distributed update modes. In offload mode,
+        wakes up parameters as needed to perform the update.
+        """
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
@@ -487,29 +575,34 @@ class FSDPTrainRayActor(TrainRayActor):
             self.rollout_manager.get_rollout_engines_and_lock.remote()
         )
         if num_new_engines > 0:
-            self.weight_updator.connect_rollout_engines(rollout_engines, rollout_engine_lock)
+            self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
         # For colocated mode with sharded updates (full_params=False),
         # we don't need to wake up the entire model
         # The bucket-based approach will load parameters selectively from CPU storage
         # TODO:  Add bucket optimization for from distributed mode
-        use_bucket_optimization = self.args.colocate and not getattr(self.weight_updator, "full_params", False)
+        use_bucket_optimization = self.args.colocate and not getattr(self.weight_updater, "full_params", False)
 
         if self.args.offload and not use_bucket_optimization:
             # Wake up for distributed mode or full_params mode
             self.wake_up(("model"))
 
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
-            self.weight_updator.update_weights()
+            self.weight_updater.update_weights()
 
         if self.args.offload and not use_bucket_optimization:
             # Sleep for distributed mode or full_params mode
             self.sleep(("model"))
 
     @torch.no_grad()
-    def update_cpu_params_dict(self, params_dict):
-        """Copy model parameters from GPU to CPU storage dictionary"""
+    def update_cpu_params_dict(self, params_dict: dict[str, torch.Tensor]) -> None:
+        """Copy model parameters from GPU to a pinned CPU dictionary.
+
+        Parameters:
+            params_dict: Destination mapping from parameter names to CPU tensors.
+                Missing entries are allocated with matching shapes and dtypes.
+        """
 
         state_dict = self.model.state_dict()
 
@@ -523,15 +616,24 @@ class FSDPTrainRayActor(TrainRayActor):
         torch.cuda.synchronize()
 
     @torch.no_grad()
-    def update_gpu_params_dict(self, params_dict):
-        """Load parameters from CPU storage dictionary to GPU model"""
+    def update_gpu_params_dict(self, params_dict: dict[str, torch.Tensor]) -> None:
+        """Load parameters from a CPU dictionary into the GPU model.
+
+        Parameters:
+            params_dict: Source mapping from parameter names to CPU tensors.
+        """
         # FSDP v2 doesn't need context managers - load state dict directly
         gpu_state_dict = {name: param.cuda(non_blocking=True) for name, param in params_dict.items()}
         self.model.load_state_dict(gpu_state_dict, strict=True)
         torch.cuda.synchronize()
 
-    def load_ref_model(self, ref_load_path):
-        """Load reference model parameters once and store in CPU memory (like Megatron backend)"""
+    def load_ref_model(self, ref_load_path: Optional[str]) -> None:
+        """Load reference model weights once and cache them on CPU.
+
+        Parameters:
+            ref_load_path: Path to a directory containing a HF checkpoint. If
+                None, a ValueError is raised.
+        """
         if ref_load_path is None:
             raise ValueError("ref_load_path must be provided when loading reference model")
 
@@ -559,13 +661,23 @@ class FSDPTrainRayActor(TrainRayActor):
             self.weights["ref"] = {}
             self.update_cpu_params_dict(self.weights["ref"])
 
-            print(f"Reference model parameters loaded and stored in CPU memory")
+            print("Reference model parameters loaded and stored in CPU memory")
 
         finally:
             self.update_gpu_params_dict(current_weights)
 
 
 def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temperature: float = 1.0) -> torch.Tensor:
+    """Gather next-token log probabilities for standard (unpadded) batches.
+
+    Parameters:
+        logits: Logits of shape [B, T, V].
+        input_ids: Token ids of shape [B, T].
+        rollout_temperature: Optional temperature for logits scaling.
+
+    Returns:
+        Log-probabilities of targets with shape [B, T-1].
+    """
     # log_probs: [B, T-1, V]; input_ids: [B, T]
     pred_logits = logits[:, :-1]
     # haoran: whether to apply temperature shifting here?
@@ -577,8 +689,20 @@ def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temp
     return log_probs
 
 
-def gather_log_probs_packed(logits: torch.Tensor, input_ids: torch.Tensor, cu_seqlens: torch.Tensor) -> torch.Tensor:
-    """Gather log probabilities for packed sequences."""
+def gather_log_probs_packed(
+    logits: torch.Tensor, input_ids: torch.Tensor, cu_seqlens: Optional[torch.Tensor | float] = None
+) -> torch.Tensor:
+    """Gather next-token log probabilities for packed sequences.
+
+    Parameters:
+        logits: Model logits of shape [B, T, V] or [T, V].
+        input_ids: Token ids of shape [B, T] or [T].
+        cu_seqlens: Optional cumulative sequence lengths (unused here). Present
+            for API compatibility with callers.
+
+    Returns:
+        A tensor of shape [T-1] (or [B, T-1]) with log-probabilities of targets.
+    """
     # Handle batch dimension - logits should be [batch_size, seq_len, vocab_size]
     if logits.dim() == 3:
         # Remove batch dimension for packed sequences
@@ -596,8 +720,18 @@ def gather_log_probs_packed(logits: torch.Tensor, input_ids: torch.Tensor, cu_se
     return gathered
 
 
-def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks: list[torch.Tensor]):
+def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks: list[torch.Tensor]) -> torch.Tensor:
+    """Compute sum of per-sample means across variable-length responses.
 
+    Parameters:
+        x: Flat tensor containing concatenated per-token values across samples.
+        response_lengths: Lengths of each sample's response segment in `x`.
+        loss_masks: Per-sample masks aligned with `response_lengths`.
+
+    Returns:
+        A scalar tensor equal to the sum over samples of the mean value within
+        each sample's response segment.
+    """
     return sum(
         [
             (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)

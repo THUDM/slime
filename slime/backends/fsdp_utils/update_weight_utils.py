@@ -3,7 +3,12 @@ import socket
 import ray
 import torch
 import torch.distributed as dist
-from sglang.srt.patch_torch import monkey_patch_torch_reductions
+
+try:
+    from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
+except:
+    from sglang.srt.patch_torch import monkey_patch_torch_reductions
+
 from sglang.srt.utils import MultiprocessingSerializer
 from tqdm import tqdm
 
@@ -337,6 +342,10 @@ class UpdateWeightFromDistributed:
             torch.cuda.empty_cache()
             # Ensure tensor is contiguous and on the right device
             param_data = param.data.contiguous()
+
+            # avoid `DTensor._op_dispatcher.dispatch` has `assert compute_mesh is not None` error
+            if dist.get_world_size() == 1:
+                param_data = param_data.full_tensor()
 
             # Synchronous broadcast to avoid memory buildup
             dist.broadcast(param_data, 0, group=self._model_update_groups, async_op=False)

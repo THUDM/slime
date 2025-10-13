@@ -2,7 +2,6 @@ import os
 from typing import Optional
 
 import ray
-import torch
 from ray.util.placement_group import PlacementGroup
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
@@ -62,7 +61,7 @@ class RayTrainGroup:
             **{name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST},
         }
 
-        if not torch.version.hip and self.args.offload:
+        if self.args.offload:
             import torch_memory_saver
 
             dynlib_path = os.path.join(
@@ -78,7 +77,7 @@ class RayTrainGroup:
         if self.args.use_routing_replay:
             env_vars["ENABLE_ROUTING_REPLAY"] = "1"
 
-        backend = os.environ.get("SLIME_BACKEND", "megatron").lower()
+        backend = self.args.train_backend
         if backend == "megatron":
             from slime.backends.megatron_utils import MegatronTrainRayActor
 
