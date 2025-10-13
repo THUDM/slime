@@ -1,21 +1,25 @@
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Any
 
 from slime.utils.types import Sample
 
 
-# TODO may make input dataclass too to allow extensibility
 @dataclass
-class RolloutFnCallOutput:
-    samples: Optional[list[list[Sample]]] = None
-    metrics: Optional[Dict[str, Any]] = None
+class RolloutFnTrainOutput:
+    samples: list[list[Sample]]
+    metrics: dict[str, Any] = None
+
+
+@dataclass
+class RolloutFnEvalOutput:
+    data: dict[str, dict[str, Any]]
 
 
 def call_rollout_fn(fn, *args, evaluation: bool, **kwargs):
     output = fn(*args, **kwargs, evaluation=evaluation)
 
     # compatibility for legacy version
-    if not isinstance(output, RolloutFnCallOutput):
-        output = RolloutFnCallOutput(metrics=output) if evaluation else RolloutFnCallOutput(samples=output)
+    if not isinstance(output, (RolloutFnTrainOutput, RolloutFnEvalOutput)):
+        output = RolloutFnEvalOutput(data=output) if evaluation else RolloutFnTrainOutput(samples=output)
 
     return output

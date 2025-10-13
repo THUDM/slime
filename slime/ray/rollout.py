@@ -102,7 +102,7 @@ class RolloutManager:
         # TODO: add fault tolerance to eval
         data = call_rollout_fn(
             self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True
-        ).metrics
+        ).data
         metrics = _log_eval_rollout_data(rollout_id, self.args, data)
         if self._metric_checker is not None:
             self._metric_checker.on_eval(metrics)

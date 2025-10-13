@@ -9,7 +9,7 @@ from PIL import Image
 from tqdm import tqdm
 from transformers import AutoTokenizer
 
-from slime.rollout.base_types import RolloutFnCallOutput
+from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from slime.utils.async_utils import run
 from slime.utils.data import Dataset
 from slime.utils.http_utils import get, post
@@ -377,7 +377,7 @@ async def generate_rollout_async(
 
     # reset the global state to prevent effects on the next rollout or eval.
     state.reset()
-    return RolloutFnCallOutput(samples=data), aborted_samples
+    return RolloutFnTrainOutput(samples=data), aborted_samples
 
 
 EVAL_PROMPT_DATASET = {}
@@ -389,7 +389,7 @@ async def eval_rollout(args: Namespace, rollout_id: int) -> tuple[dict[str, dict
     for i in range(0, len(args.eval_prompt_data), 2):
         name, path = args.eval_prompt_data[i : i + 2]
         results.update(await eval_rollout_single_dataset(args, rollout_id, name, path))
-    return RolloutFnCallOutput(metrics=results), []
+    return RolloutFnEvalOutput(data=results), []
 
 
 async def eval_rollout_single_dataset(
@@ -486,7 +486,7 @@ async def eval_rollout_single_dataset(
 # TODO remove this temp function
 def generate_rollout(
     args: Namespace, rollout_id: int, data_buffer: Any, evaluation: bool = False
-) -> RolloutFnCallOutput:
+) -> Union[RolloutFnTrainOutput, RolloutFnEvalOutput]:
     """An example to implement the generate_rollout function for an rule based rm rollout generation.
 
     Args:
