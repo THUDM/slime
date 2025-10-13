@@ -29,13 +29,13 @@ def get_batch(
     Steps:
     - Fetch raw fields via iterator.
     - Save original token tensors under "unconcat_tokens".
-    - Slice tokens into two THD CP chunks, concatenate, and pad to a multiple of 128.
-    - Build cu_seqlens and `PackedSeqParams` with THD layout.
+    - Slice tokens into two chunks for Context Parallelism (CP), concatenate, and pad to a multiple of 128.
+    - Build cu_seqlens and `PackedSeqParams` with T-H-D layout (T: sequence length, H: attention heads, D: head dimension).
 
     Returns a dict including:
     - "tokens": torch.LongTensor of shape [1, T_padded] on the current CUDA device
     - "unconcat_tokens": list[torch.LongTensor] for the micro-batch before CP slicing/concat
-    - "packed_seq_params": PackedSeqParams with THD settings (cu_seqlens on CUDA, dtype=int)
+    - "packed_seq_params": PackedSeqParams with T-H-D settings (cu_seqlens on CUDA, dtype=int)
     Plus any other requested keys forwarded from the iterator.
     """
 
@@ -218,7 +218,7 @@ def get_data_iterator(
       micro-batches of `micro_batch_size`.
     - If True, computes the number of micro-batches per local step based on
       `max_tokens_per_gpu` and per-sample lengths, all-reduces to a DP-wide
-      maximum, optionally enforces divisibility for VPP, and builds a balanced
+      maximum, optionally enforces divisibility for Virtual Pipeline Parallelism (VPP), and builds a balanced
       index schedule to equalize token counts across micro-batches.
 
     Returns `(data_iterators, num_microbatches)` where:
