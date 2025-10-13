@@ -1,6 +1,6 @@
 import math
 from argparse import Namespace
-from typing import Optional, Sequence, TypedDict, Union
+from typing import Optional, Sequence, Union
 
 import numpy as np
 import torch
@@ -14,27 +14,9 @@ from slime.utils.data import get_minimum_num_micro_batch_size
 from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.timer import Timer
+from slime.utils.types import RolloutBatch
 
 from .cp_utils import get_sum_of_sample_mean, slice_with_cp
-
-
-class RolloutData(TypedDict, total=False):
-    """Typed view over rollout buffers passed through data iterators and loggers."""
-
-    tokens: list[torch.Tensor]
-    total_lengths: list[int]
-    response_lengths: list[int]
-    loss_masks: list[torch.Tensor]
-    # Optional per-sample tensors used in logging/eval
-    log_probs: list[torch.Tensor]
-    ref_log_probs: list[torch.Tensor]
-    rollout_log_probs: list[torch.Tensor]
-    returns: list[torch.Tensor]
-    advantages: list[torch.Tensor]
-    values: list[torch.Tensor]
-    raw_reward: list[Union[int, float]]
-    round_number: list[int]
-    sample_indices: list[int]
 
 
 def get_batch(
@@ -44,12 +26,17 @@ def get_batch(
     """
     Generate a CP-ready batch with packed sequence parameters.
 
-    Returns a dictionary that includes at least:
-    - "tokens": torch.Tensor of shape [1, T_padded]
-    - "unconcat_tokens": list[torch.Tensor] before CP slicing/concat
-    - "packed_seq_params": PackedSeqParams configured for THD
+    Steps:
+    - Fetch raw fields via iterator.
+    - Save original token tensors under "unconcat_tokens".
+    - Slice tokens into two THD CP chunks, concatenate, and pad to a multiple of 128.
+    - Build cu_seqlens and `PackedSeqParams` with THD layout.
 
-    Additional requested keys are forwarded from the iterator and may be lists or None.
+    Returns a dict including:
+    - "tokens": torch.Tensor of shape [1, T_padded]
+    - "unconcat_tokens": list[torch.Tensor] prior to CP slicing/concat
+    - "packed_seq_params": PackedSeqParams with THD settings
+    Plus any other requested keys forwarded from the iterator.
     """
 
     assert "tokens" in keys
@@ -103,7 +90,13 @@ def gather_log_data(
     rollout_id: int,
     log_dict: dict[str, float],
 ) -> Optional[dict[str, float]]:
-    """Gather and log metrics across data parallel ranks."""
+    """
+    Gather per-rank metrics, reduce by mean on the DP source rank, and log.
+
+    Expects `log_dict` to contain plain scalars. The DP source rank prints and
+    optionally logs to WandB/TensorBoard using a consistent step derived from
+    `rollout_id` and batch sizing arguments.
+    """
 
     if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
         dp_size = mpu.get_data_parallel_world_size(with_context_parallel=True)
@@ -150,9 +143,15 @@ def gather_log_data(
 
 
 class DataIterator:
+    """Micro-batch iterator over rollout dicts.
+
+    Supports either fixed contiguous micro-batches or an explicit per-step
+    index schedule (for dynamic batch sizing / sequence-length balancing).
+    """
+
     def __init__(
         self,
-        rollout_data: RolloutData,
+        rollout_data: RolloutBatch,
         micro_batch_size: Optional[int] = None,
         micro_batch_indices: Optional[list[list[int]]] = None,
     ) -> None:
@@ -192,20 +191,19 @@ class DataIterator:
 def get_data_iterator(
     args: Namespace,
     model: Union[torch.nn.Module, Sequence[torch.nn.Module]],
-    rollout_data: RolloutData,
+    rollout_data: RolloutBatch,
 ) -> tuple[list[DataIterator], list[int]]:
     """
-    Creates data iterators for training and log probability evaluation, supporting both static and dynamic batch sizes,
-    with optional virtual pipeline parallelism and sequence length balancing.
-    Args:
-        args: An object containing configuration parameters, including batch sizes, micro batch sizes,
-              dynamic batch size usage, and maximum tokens per GPU et.al.
-        model: The model or list of model stages, used to extract configuration for parallelism.
-        rollout_data: A dictionary containing rollout data, including 'total_lengths' for each sample.
-    Returns:
-        tuple: A tuple containing:
-            - data_iterator: List of DataIterator objects for log probability evaluation.
-            - num_microbatches: Number of microbatches for log probability evaluation.
+    Create iterators and a micro-batch schedule for a rollout step.
+
+    - If `use_dynamic_batch_size` is False, splits into fixed-size contiguous
+      micro-batches of `micro_batch_size`.
+    - If True, computes the number of micro-batches per local step based on
+      `max_tokens_per_gpu` and per-sample lengths, all-reduces to a DP-wide
+      maximum, optionally enforces divisibility for VPP, and builds a balanced
+      index schedule to equalize token counts across micro-batches.
+
+    Returns `(data_iterators, num_microbatches)`.
     """
     dp_size = mpu.get_data_parallel_world_size(with_context_parallel=False)
     dp_group = mpu.get_data_parallel_group()
@@ -279,7 +277,16 @@ def get_data_iterator(
     )
 
 
-def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutData) -> None:
+def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -> None:
+    """
+    Summarize rollout fields and log reduced metrics on PP last stage, TP rank 0.
+
+    - Tensor-valued lists are concatenated and averaged. For token-level metrics
+      like log-probs/returns/advantages/values, computes a CP-correct sample mean
+      using `loss_masks` and total/response lengths.
+    - Non-tensor lists are averaged elementwise.
+    - Scalars are converted to Python numbers.
+    """
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
         cp_size = mpu.get_context_parallel_world_size()
         log_dict = {}
@@ -330,7 +337,13 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutData
         log_passrate(rollout_id, args, rollout_data)
 
 
-def log_multi_turn_data(rollout_id: int, args: Namespace, rollout_data: RolloutData) -> None:
+def log_multi_turn_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -> None:
+    """
+    Log multi-turn auxiliary metrics such as raw/observed response lengths and rounds.
+
+    Operates only on PP last stage and TP rank 0. Uses GPU tensors when available
+    to compute statistics without host transfers.
+    """
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
         log_dict = {}
         for key, val in rollout_data.items():
@@ -363,7 +376,13 @@ def log_multi_turn_data(rollout_id: int, args: Namespace, rollout_data: RolloutD
         gather_log_data("multi_turn", args, rollout_id, log_dict)
 
 
-def log_passrate(rollout_id: int, args: Namespace, rollout_data: RolloutData) -> None:
+def log_passrate(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -> None:
+    """
+    Compute pass@k metrics from `raw_reward` groups and log the results.
+
+    `raw_reward` is reshaped to `[group_number, group_size]`, then pass@k is
+    estimated per problem and averaged.
+    """
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
         log_dict = {}
         for key, val in rollout_data.items():
@@ -405,6 +424,12 @@ def log_passrate(rollout_id: int, args: Namespace, rollout_data: RolloutData) ->
 
 
 def log_perf_data(rollout_id: int, args: Namespace) -> None:
+    """
+    Log timing metrics and derived TFLOPs for compute phases if available.
+
+    Only active on PP last stage, TP rank 0, and DP source rank. The step is
+    consistent with other logs.
+    """
     timer_instance = Timer()
     if (
         mpu.get_tensor_model_parallel_rank() == 0
@@ -453,9 +478,17 @@ def log_perf_data(rollout_id: int, args: Namespace) -> None:
 
 def sync_actor_critic_data(
     args: Namespace,
-    rollout_data: Optional[RolloutData] = None,
+    rollout_data: Optional[RolloutBatch] = None,
     group: Optional[dist.ProcessGroup] = None,
 ) -> None:
+    """
+    Broadcast `values` (from critic) and optionally `log_probs`/`ref_log_probs`
+    (from actor) across PP ranks to align data dependencies.
+
+    - Values are broadcast from src=1.
+    - Log-probs and ref-log-probs are broadcast from src=0 when KL is used.
+    Updates `rollout_data` in place with the synchronized tensors.
+    """
     values, log_probs, ref_log_probs = map(rollout_data.get, ("values", "log_probs", "ref_log_probs"))
 
     # return when not the pp last stage

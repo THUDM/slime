@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 
 import torch
 
@@ -52,7 +52,9 @@ class Sample:
 class ParamInfo:
     name: str
     dtype: torch.dtype
-    shape: torch.Size
-    attrs: dict
-    size: int
-    src_rank: int
+
+
+# A dict-based batch produced along the rollout -> training path
+# In Megatron backend, several fields are converted to torch.Tensor lists on GPU
+# before being consumed by data iterators (see megatron_utils.actor._get_rollout_data).
+RolloutBatch = Dict[str, Union[List[torch.Tensor], List[int], List[float], List[str]]]
