@@ -961,14 +961,14 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
             )
             return parser
-        
+
         def add_sglang_tp_size():
             temp_parser = argparse.ArgumentParser(add_help=False)
             temp_parser.add_argument("--rollout-num-gpus-per-engine", type=int, default=1)
             temp_args, _ = temp_parser.parse_known_args()
             sglang_tp_size = temp_args.rollout_num_gpus_per_engine
             return sglang_tp_size
-        
+
         # Add custom arguments in front to prevent overwritten some slime arguments.
         if add_custom_arguments is not None:
             parser = add_custom_arguments(parser)
@@ -989,7 +989,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_rollout_buffer_arguments(parser)
         parser = add_ci_arguments(parser)
         parser.set_defaults(sglang_tensor_parallel_size=add_sglang_tp_size())
-        
+
         # For megatron
         parser = add_custom_megatron_plugins_arguments(parser)
         try:
