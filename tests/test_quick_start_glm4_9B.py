@@ -22,8 +22,6 @@ def execute():
     ckpt_args = (
         f"--hf-checkpoint /root/models/{MODEL_NAME}/ "
         f"--ref-load /root/{MODEL_NAME}_torch_dist "
-        "--fp8-format e4m3 "
-        "--fp8-recipe blockwise "
     )
 
     rollout_args = (
