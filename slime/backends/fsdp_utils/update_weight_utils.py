@@ -26,8 +26,6 @@ try:
 except ImportError:
     use_flattened_tensor_bucket = False
 
-## duplicate import removed
-
 
 def get_param_info_buckets(
     args: Namespace, weights: Mapping[str, Mapping[str, torch.Tensor]]
