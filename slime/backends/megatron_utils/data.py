@@ -24,7 +24,7 @@ def get_batch(
     keys: Sequence[str],
 ) -> dict[str, Union[torch.Tensor, PackedSeqParams, list[torch.Tensor], None]]:
     """
-    Generate a CP-ready batch with packed sequence parameters.
+    Generate a CP-ready micro-batch with packed sequence parameters.
 
     Steps:
     - Fetch raw fields via iterator.
@@ -33,9 +33,9 @@ def get_batch(
     - Build cu_seqlens and `PackedSeqParams` with THD layout.
 
     Returns a dict including:
-    - "tokens": torch.Tensor of shape [1, T_padded]
-    - "unconcat_tokens": list[torch.Tensor] prior to CP slicing/concat
-    - "packed_seq_params": PackedSeqParams with THD settings
+    - "tokens": torch.LongTensor of shape [1, T_padded] on the current CUDA device
+    - "unconcat_tokens": list[torch.LongTensor] for the micro-batch before CP slicing/concat
+    - "packed_seq_params": PackedSeqParams with THD settings (cu_seqlens on CUDA, dtype=int)
     Plus any other requested keys forwarded from the iterator.
     """
 
@@ -155,6 +155,14 @@ class DataIterator:
         micro_batch_size: Optional[int] = None,
         micro_batch_indices: Optional[list[list[int]]] = None,
     ) -> None:
+        """Initialize an iterator over `rollout_data`.
+
+        Args:
+            rollout_data: Dict of per-sample fields for the local step.
+            micro_batch_size: Fixed contiguous slice size when not using dynamic scheduling.
+            micro_batch_indices: Explicit indices per micro-batch when using dynamic balancing.
+                Must be mutually exclusive with `micro_batch_size`.
+        """
         self.rollout_data = rollout_data
         self.micro_batch_size = micro_batch_size
         self.micro_batch_indices = micro_batch_indices
@@ -162,6 +170,15 @@ class DataIterator:
         self.offset = 0
 
     def get_next(self, keys: Sequence[str]) -> dict[str, Optional[list[object]]]:
+        """Return the next micro-batch for the requested keys.
+
+        - If `micro_batch_indices` is provided, selects rows according to the current
+          index list for each requested key.
+        - Otherwise, slices a contiguous window of size `micro_batch_size` starting
+          at the current offset.
+
+        Returns a dict mapping each key to a list subset (or None if absent).
+        """
         batch = {}
         for key in keys:
             vals = self.rollout_data.get(key, None)
@@ -184,6 +201,7 @@ class DataIterator:
         return batch
 
     def reset(self) -> "DataIterator":
+        """Reset internal offset to the start and return self."""
         self.offset = 0
         return self
 
@@ -203,7 +221,9 @@ def get_data_iterator(
       maximum, optionally enforces divisibility for VPP, and builds a balanced
       index schedule to equalize token counts across micro-batches.
 
-    Returns `(data_iterators, num_microbatches)`.
+    Returns `(data_iterators, num_microbatches)` where:
+    - `data_iterators`: list of `DataIterator`, one per VPP stage (size 1 if VPP disabled)
+    - `num_microbatches`: list[int], one entry per local step in the rollout
     """
     dp_size = mpu.get_data_parallel_world_size(with_context_parallel=False)
     dp_group = mpu.get_data_parallel_group()
