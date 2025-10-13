@@ -18,7 +18,7 @@ def get_base_gpu_id(args, rank):
     if args.colocate:
         start_index = (rank * num_gpus) % args.num_gpus_per_node
     else:
-        num_actor_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
+        num_actor_gpus = 0 if args.debug_rollout_only else args.actor_num_gpus_per_node * args.actor_num_nodes
         start_index = (num_actor_gpus + rank * num_gpus) % args.num_gpus_per_node
         if args.use_critic:
             num_critic_gpus = args.critic_num_gpus_per_node * args.critic_num_nodes
