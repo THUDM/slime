@@ -1,5 +1,6 @@
 import math
-from typing import Optional
+from argparse import Namespace
+from typing import Optional, Sequence, TypedDict, Union
 
 import numpy as np
 import torch
@@ -17,8 +18,39 @@ from slime.utils.timer import Timer
 from .cp_utils import get_sum_of_sample_mean, slice_with_cp
 
 
-def get_batch(data_iterator, keys):
-    """Generate a batch."""
+class RolloutData(TypedDict, total=False):
+    """Typed view over rollout buffers passed through data iterators and loggers."""
+
+    tokens: list[torch.Tensor]
+    total_lengths: list[int]
+    response_lengths: list[int]
+    loss_masks: list[torch.Tensor]
+    # Optional per-sample tensors used in logging/eval
+    log_probs: list[torch.Tensor]
+    ref_log_probs: list[torch.Tensor]
+    rollout_log_probs: list[torch.Tensor]
+    returns: list[torch.Tensor]
+    advantages: list[torch.Tensor]
+    values: list[torch.Tensor]
+    raw_reward: list[Union[int, float]]
+    round_number: list[int]
+    sample_indices: list[int]
+
+
+def get_batch(
+    data_iterator: "DataIterator",
+    keys: Sequence[str],
+) -> dict[str, Union[torch.Tensor, PackedSeqParams, list[torch.Tensor], None]]:
+    """
+    Generate a CP-ready batch with packed sequence parameters.
+
+    Returns a dictionary that includes at least:
+    - "tokens": torch.Tensor of shape [1, T_padded]
+    - "unconcat_tokens": list[torch.Tensor] before CP slicing/concat
+    - "packed_seq_params": PackedSeqParams configured for THD
+
+    Additional requested keys are forwarded from the iterator and may be lists or None.
+    """
 
     assert "tokens" in keys
     batch = data_iterator.get_next(keys)
@@ -65,7 +97,12 @@ def get_batch(data_iterator, keys):
     return batch
 
 
-def gather_log_data(metric_name, args, rollout_id, log_dict):
+def gather_log_data(
+    metric_name: str,
+    args: Namespace,
+    rollout_id: int,
+    log_dict: dict[str, float],
+) -> Optional[dict[str, float]]:
     """Gather and log metrics across data parallel ranks."""
 
     if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
@@ -91,7 +128,7 @@ def gather_log_data(metric_name, args, rollout_id, log_dict):
             if not args.wandb_always_use_train_step
             else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
         )
-        if args.use_wandb:
+        if args.use_wandb and wandb is not None:
             reduced_log_dict["rollout/step"] = step
             wandb.log(reduced_log_dict)
 
@@ -115,17 +152,17 @@ def gather_log_data(metric_name, args, rollout_id, log_dict):
 class DataIterator:
     def __init__(
         self,
-        rollout_data,
+        rollout_data: RolloutData,
         micro_batch_size: Optional[int] = None,
         micro_batch_indices: Optional[list[list[int]]] = None,
-    ):
+    ) -> None:
         self.rollout_data = rollout_data
         self.micro_batch_size = micro_batch_size
         self.micro_batch_indices = micro_batch_indices
         assert micro_batch_size is None or micro_batch_indices is None
         self.offset = 0
 
-    def get_next(self, keys):
+    def get_next(self, keys: Sequence[str]) -> dict[str, Optional[list[object]]]:
         batch = {}
         for key in keys:
             vals = self.rollout_data.get(key, None)
@@ -147,12 +184,16 @@ class DataIterator:
             self.offset += self.micro_batch_size
         return batch
 
-    def reset(self):
+    def reset(self) -> "DataIterator":
         self.offset = 0
         return self
 
 
-def get_data_iterator(args, model, rollout_data):
+def get_data_iterator(
+    args: Namespace,
+    model: Union[torch.nn.Module, Sequence[torch.nn.Module]],
+    rollout_data: RolloutData,
+) -> tuple[list[DataIterator], list[int]]:
     """
     Creates data iterators for training and log probability evaluation, supporting both static and dynamic batch sizes,
     with optional virtual pipeline parallelism and sequence length balancing.
@@ -238,7 +279,7 @@ def get_data_iterator(args, model, rollout_data):
     )
 
 
-def log_rollout_data(rollout_id, args, rollout_data):
+def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutData) -> None:
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
         cp_size = mpu.get_context_parallel_world_size()
         log_dict = {}
@@ -289,7 +330,7 @@ def log_rollout_data(rollout_id, args, rollout_data):
         log_passrate(rollout_id, args, rollout_data)
 
 
-def log_multi_turn_data(rollout_id, args, rollout_data):
+def log_multi_turn_data(rollout_id: int, args: Namespace, rollout_data: RolloutData) -> None:
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
         log_dict = {}
         for key, val in rollout_data.items():
@@ -322,7 +363,7 @@ def log_multi_turn_data(rollout_id, args, rollout_data):
         gather_log_data("multi_turn", args, rollout_id, log_dict)
 
 
-def log_passrate(rollout_id, args, rollout_data):
+def log_passrate(rollout_id: int, args: Namespace, rollout_data: RolloutData) -> None:
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
         log_dict = {}
         for key, val in rollout_data.items():
@@ -363,7 +404,7 @@ def log_passrate(rollout_id, args, rollout_data):
         gather_log_data("passrate", args, rollout_id, log_dict)
 
 
-def log_perf_data(rollout_id, args):
+def log_perf_data(rollout_id: int, args: Namespace) -> None:
     timer_instance = Timer()
     if (
         mpu.get_tensor_model_parallel_rank() == 0
@@ -398,7 +439,7 @@ def log_perf_data(rollout_id, args):
             if not args.wandb_always_use_train_step
             else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
         )
-        if args.use_wandb:
+        if args.use_wandb and wandb is not None:
             log_dict["rollout/step"] = step
             wandb.log(log_dict)
 
@@ -411,10 +452,10 @@ def log_perf_data(rollout_id, args):
 
 
 def sync_actor_critic_data(
-    args,
-    rollout_data: Optional[dict[str, list[torch.Tensor]]] = None,
+    args: Namespace,
+    rollout_data: Optional[RolloutData] = None,
     group: Optional[dist.ProcessGroup] = None,
-):
+) -> None:
     values, log_probs, ref_log_probs = map(rollout_data.get, ("values", "log_probs", "ref_log_probs"))
 
     # return when not the pp last stage
