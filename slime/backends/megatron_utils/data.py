@@ -94,8 +94,8 @@ def gather_log_data(
     Gather per-rank metrics, reduce by mean on the DP source rank, and log.
 
     Expects `log_dict` to contain plain scalars. The DP source rank prints and
-    optionally logs to WandB/TensorBoard using a consistent step derived from
-    `rollout_id` and batch sizing arguments.
+    optionally logs to WandB/TensorBoard with a step derived from `rollout_id` and
+    batch sizes. Returns the reduced dict on the DP source rank; returns None on others.
     """
 
     if mpu.get_data_parallel_rank(with_context_parallel=True) == 0:
@@ -223,7 +223,7 @@ def get_data_iterator(
 
     Returns `(data_iterators, num_microbatches)` where:
     - `data_iterators`: list of `DataIterator`, one per VPP stage (size 1 if VPP disabled)
-    - `num_microbatches`: list[int], one entry per local step in the rollout
+    - `num_microbatches`: list[int], one per local step in the rollout (length = steps)
     """
     dp_size = mpu.get_data_parallel_world_size(with_context_parallel=False)
     dp_group = mpu.get_data_parallel_group()
