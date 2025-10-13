@@ -231,13 +231,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-health-check-interval",
                 type=float,
-                default=10.0,
+                default=30.0,
                 help="Interval in seconds between rollout engine /health_generate checks during generate/eval.",
             )
             parser.add_argument(
                 "--rollout-health-check-timeout",
                 type=float,
-                default=5.0,
+                default=30.0,
                 help="Timeout in seconds to wait for a rollout engine /health_generate response before killing it.",
             )
             parser.add_argument(

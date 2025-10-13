@@ -81,4 +81,3 @@ class RolloutHealthMonitor:
             except Exception as e:
                 print(f"Fail to kill engine and skip (e: {e})")
             self._rollout_manager.all_rollout_engines[i] = None
-        self._rollout_manager.rollout_engines[rollout_engine_id] = None
