@@ -19,10 +19,7 @@ def prepare():
 
 
 def execute():
-    ckpt_args = (
-        f"--hf-checkpoint /root/models/{MODEL_NAME}/ "
-        f"--ref-load /root/{MODEL_NAME}_torch_dist "
-    )
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/{MODEL_NAME}_torch_dist "
 
     rollout_args = (
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
