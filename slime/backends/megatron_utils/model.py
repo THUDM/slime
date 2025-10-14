@@ -3,8 +3,8 @@ import gc
 import math
 import os
 from argparse import Namespace
+from collections.abc import Callable, Sequence
 from functools import partial
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import torch
 import wandb
@@ -80,23 +80,23 @@ def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer)
 def setup_model_and_optimizer(
     args: Namespace,
     role: str = "actor",
-    no_wd_decay_cond: Optional[Callable[..., bool]] = None,
-    scale_lr_cond: Optional[Callable[..., bool]] = None,
+    no_wd_decay_cond: Callable[..., bool] | None = None,
+    scale_lr_cond: Callable[..., bool] | None = None,
     lr_mult: float = 1.0,
-) -> Tuple[List[DDP], MegatronOptimizer, OptimizerParamScheduler]:
+) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler]:
     """Build model(s), wrap with DDP, and construct optimizer and scheduler.
 
     Args:
         args (Namespace): Training/runtime arguments (argparse namespace).
         role (str): Logical role of the model (e.g., "actor", "critic").
-        no_wd_decay_cond (Optional[Callable[..., bool]]): Predicate to exclude
+        no_wd_decay_cond (Callable[..., bool] | None): Predicate to exclude
             parameters from weight decay.
-        scale_lr_cond (Optional[Callable[..., bool]]): Predicate to scale LR for
+        scale_lr_cond (Callable[..., bool] | None): Predicate to scale LR for
             selected parameter groups.
         lr_mult (float): Global learning-rate multiplier for the optimizer.
 
     Returns:
-        Tuple[List[DDP], MegatronOptimizer, OptimizerParamScheduler]:
+        tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler]:
             - List of model chunks wrapped by ``DDP``.
             - The constructed ``MegatronOptimizer`` instance.
             - The learning-rate/weight-decay scheduler tied to the optimizer.
@@ -193,20 +193,20 @@ def disable_forward_pre_hook(model_chunks: Sequence[DDP], param_sync: bool = Tru
 
 @torch.no_grad()
 def forward_only(
-    f: Callable[..., Dict[str, List[torch.Tensor]]],
+    f: Callable[[torch.Tensor], dict[str, list[torch.Tensor]]],
     args: Namespace,
     model: Sequence[DDP],
     data_iterator: Sequence[DataIterator],
     num_microbatches: Sequence[int],
     store_prefix: str = "",
-) -> Dict[str, List[torch.Tensor]]:
+) -> dict[str, list[torch.Tensor]]:
     """Run forward passes only and collect non-loss outputs (e.g., logprobs).
 
     The model is put into evaluation mode, a forward-only pipeline pass is
     executed, and relevant outputs are aggregated and returned.
 
     Args:
-        f (Callable[..., Dict[str, List[torch.Tensor]]]): Post-forward callback used to compute
+        f (Callable[[torch.Tensor], dict[str, list[torch.Tensor]]]): Post-forward callback used to compute
             and package outputs to collect.
         args (Namespace): Runtime arguments.
         model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
@@ -215,7 +215,7 @@ def forward_only(
         store_prefix (str): Prefix to prepend to stored output keys.
 
     Returns:
-        Dict[str, List[torch.Tensor]]: Aggregated outputs keyed by ``store_prefix + key``.
+        dict[str, list[torch.Tensor]]: Aggregated outputs keyed by ``store_prefix + key``.
     """
 
     # reset data iterator
@@ -224,7 +224,9 @@ def forward_only(
 
     config = get_model_config(model[0])
 
-    def forward_step(data_iterator: DataIterator, model: GPTModel) -> Tuple[torch.Tensor, Callable[..., Any]]:
+    def forward_step(
+        data_iterator: DataIterator, model: GPTModel
+    ) -> tuple[torch.Tensor, Callable[[torch.Tensor], dict[str, list[torch.Tensor]]]]:
         """Forward step used by Megatron's pipeline engine.
 
         Args:
@@ -232,8 +234,9 @@ def forward_only(
             model (GPTModel): The GPT model chunk to execute.
 
         Returns:
-            Tuple[torch.Tensor, Callable[..., Any]]: Output tensor(s) and a callable that
-            computes and packages results to be collected by the engine.
+            tuple[torch.Tensor, Callable[[torch.Tensor], dict[str, list[torch.Tensor]]]]:
+            Output tensor(s) and a callable that computes and packages results
+            to be collected by the engine.
         """
 
         # Get the batch.
@@ -323,7 +326,7 @@ def train_one_step(
     optimizer: MegatronOptimizer,
     opt_param_scheduler: OptimizerParamScheduler,
     num_microbatches: int,
-) -> Tuple[Dict[str, float], float]:
+) -> tuple[dict[str, float], float]:
     """Execute a single pipeline-parallel training step.
 
     Runs forward/backward over ``num_microbatches``, applies optimizer step and
@@ -340,7 +343,7 @@ def train_one_step(
         num_microbatches (int): Number of microbatches to process.
 
     Returns:
-        Tuple[Dict[str, float], float]: Reduced loss dictionary (last stage only)
+        tuple[dict[str, float], float]: Reduced loss dictionary (last stage only)
         and gradient norm for logging.
     """
     args = get_args()
@@ -356,7 +359,9 @@ def train_one_step(
         custom_before_train_step_hook = load_function(args.custom_megatron_before_train_step_hook_path)
         custom_before_train_step_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler)
 
-    def forward_step(data_iterator: DataIterator, model: GPTModel) -> Tuple[Any, Callable[..., Any]]:
+    def forward_step(
+        data_iterator: DataIterator, model: GPTModel
+    ) -> tuple[torch.Tensor, Callable[[torch.Tensor], tuple[torch.Tensor, int, dict[str, torch.Tensor]]]]:
         """Forward step used by Megatron's pipeline engine during training.
 
         Args:
@@ -364,7 +369,8 @@ def train_one_step(
             model (GPTModel): The GPT model chunk to execute.
 
         Returns:
-            Tuple[Any, Callable[..., Any]]: Output tensor(s) and the loss fn.
+            tuple[torch.Tensor, Callable[[torch.Tensor], tuple[torch.Tensor, int, dict[str, torch.Tensor]]]]:
+            Output tensor(s) and the loss function.
         """
 
         # Get the batch.
@@ -634,7 +640,7 @@ def save(
 
 def initialize_model_and_optimizer(
     args: Namespace, role: str = "actor"
-) -> Tuple[List[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
+) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
     """Initialize model(s), optimizer, scheduler, and load from checkpoint.
 
     Args:
@@ -642,7 +648,7 @@ def initialize_model_and_optimizer(
         role (str): Logical role of the model (e.g., "actor", "critic").
 
     Returns:
-        Tuple[List[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
+        tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
             DDP-wrapped model chunks, optimizer, scheduler, and iteration index.
     """
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args, role)
