@@ -1,6 +1,7 @@
 #!/bin/bash
 
 set -e
+set -x
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
