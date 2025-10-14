@@ -1,5 +1,7 @@
 import argparse
+import asyncio
 import json
+import threading
 
 import httpx
 import uvicorn
@@ -7,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
+from slime.router.utils.component_registry import ComponentRegistry
 from slime.utils.misc import load_function
 
 
@@ -15,7 +18,7 @@ def run_router(args):
     Run the Slime router with the specified configuration.
     """
     # Initialize the router with tokenizer and lazy worker initialization
-    slime_router = SlimeRouter(args, verbose=False)
+    slime_router = SlimeRouter(args, verbose=args.verbose)
 
     # Start the server
     uvicorn.run(slime_router.app, host=args.sglang_router_ip, port=args.sglang_router_port, log_level="info")
@@ -29,11 +32,25 @@ class SlimeRouter:
 
         self.app = FastAPI()
 
+        # Initialize component registry for dependency injection
+        self._component_registry = None
+        self._registry_lock = threading.RLock()  # Use RLock for safer recursive access
+
+        # Cache availability check result (None = not checked yet)
+        self._cache_available = None
+        self._cache_lock = threading.RLock()  # Use RLock for safer recursive access
+
+        # Lazy-initialized chat completion handler (singleton)
+        self._chat_completion_handler = None
+
         # Worker information
         self.worker_urls: dict[str, int] = {}
         self.max_weight_version = None
 
-        # TODO: remove this hardcode
+        # Concurrency control for worker URL selection
+        self._url_lock = asyncio.Lock()
+
+        # HTTP client configuration
         self.client = httpx.AsyncClient(
             limits=httpx.Limits(
                 max_connections=args.sglang_server_concurrency
@@ -57,19 +74,79 @@ class SlimeRouter:
         self.app.post("/add_worker")(self.add_worker)
         self.app.get("/list_workers")(self.list_workers)
         self.app.post("/retrieve_from_text")(self.retrieve_from_text)
+        self.app.post("/retrieve_from_messages_template")(self.retrieve_from_messages_template)
+
+        # OpenAI Chat Completion API (non-streaming only for now)
+        self.app.post("/v1/chat/completions")(self.chat_completions)
+
         # Catch-all route for proxying to SGLang - must be registered LAST
         self.app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])(self.proxy)
+
+    def get_component_registry(self) -> ComponentRegistry:
+        """
+        Get or create the component registry (thread-safe lazy initialization).
+
+        Returns:
+            ComponentRegistry instance
+        """
+        if self._component_registry is None:
+            with self._registry_lock:
+                # Double-check locking pattern
+                if self._component_registry is None:
+                    self._component_registry = ComponentRegistry()
+        return self._component_registry
+
+    @property
+    def component_registry(self) -> ComponentRegistry:
+        """Property accessor for component registry."""
+        return self.get_component_registry()
+
+    def _check_cache_availability(self) -> bool:
+        """
+        Check if cache support is available (thread-safe).
+
+        This method checks if the router has radix tree caching enabled
+        by looking for the radix_tree attribute or checking the component registry.
+
+        Returns:
+            bool: True if cache is available, False otherwise
+        """
+        if self._cache_available is not None:
+            return self._cache_available
+
+        with self._cache_lock:
+            # Double-check locking
+            if self._cache_available is not None:
+                return self._cache_available
+
+            # Check if radix tree is available
+            has_radix_tree = False
+
+            # Method 1: Check direct attribute
+            if hasattr(self, 'radix_tree') and self.radix_tree is not None:
+                has_radix_tree = True
+
+            # Method 2: Check component registry
+            if not has_radix_tree and hasattr(self, '_component_registry') and self._component_registry is not None:
+                if self._component_registry.has("radix_tree"):
+                    has_radix_tree = True
+
+            self._cache_available = has_radix_tree
+
+            if self.verbose:
+                print(f"[slime-router] Cache availability check: {has_radix_tree}")
+
+            return self._cache_available
 
     async def health_check(self, request: Request):
         # TODO: do health check in background
         pass
 
     async def proxy(self, request: Request, path: str):
-        """Proxy all other requests to the SGLang router"""
+        """Proxy all other requests to the SGLang router (non-streaming)"""
         # Forward all other paths to SGLang router
-        worker_url = self._use_url()
+        worker_url = await self._use_url()
         url = f"{worker_url}/{path}"
-        # print("path",path)
 
         # Get request body and headers
         body = await request.body()
@@ -98,7 +175,7 @@ class SlimeRouter:
                 )
 
         finally:
-            self._finish_url(worker_url)
+            await self._finish_url(worker_url)
 
     async def add_worker(self, request: Request):
         """Add a new worker to the router.
@@ -159,20 +236,101 @@ class SlimeRouter:
 
         return result
 
-    def _use_url(self):
-        """Select a worker URL using round-robin strategy"""
+    async def retrieve_from_messages_template(self, request: Request):
+        """
+        Get token information from OpenAI messages format using chat template.
+
+        This endpoint applies chat template to messages and returns cached tokens.
+        """
+        body = await request.body()
+        payload = json.loads(body) if body else {}
+
+        messages = payload.get("messages", [])
+        tools = payload.get("tools", None)
+
+        if not messages:
+            return JSONResponse(
+                status_code=400,
+                content={"error": "messages field is required"}
+            )
+
+        # Get tokenizer and radix tree
+        if not hasattr(self, 'radix_tree') or self.radix_tree is None:
+            return JSONResponse(
+                status_code=503,
+                content={"error": "Radix tree not initialized"}
+            )
+
+        # Get tokenizer from component registry or radix tree
+        tokenizer = None
+        if hasattr(self, 'component_registry') and self.component_registry.has("tokenizer"):
+            tokenizer = self.component_registry.get("tokenizer")
+        elif hasattr(self.radix_tree, 'tokenizer'):
+            tokenizer = self.radix_tree.tokenizer
+
+        if not tokenizer:
+            return JSONResponse(
+                status_code=503,
+                content={"error": "Tokenizer not available"}
+            )
+
+        # Apply chat template
+        try:
+            text = tokenizer.apply_chat_template(
+                messages,
+                tools=tools,
+                add_generation_prompt=True,
+                tokenize=False
+            )
+        except Exception as e:
+            return JSONResponse(
+                status_code=400,
+                content={"error": f"Failed to apply chat template: {str(e)}"}
+            )
+
+        # Retrieve from radix tree
+        token_ids, logp, loss_mask = self.radix_tree.retrieve_from_text(text, return_logprob=True)
+
+        result = {
+            "tokens": token_ids,
+            "response": text,
+            "loss_mask": loss_mask,
+            "token_length": len(token_ids),
+            "loss_mask_length": len(loss_mask),
+            "rollout_logp": logp,
+        }
+
+        return result
+
+    async def chat_completions(self, request: Request):
+        """
+        OpenAI Chat Completion API endpoint (non-streaming).
+
+        This endpoint provides 100% OpenAI-compatible Chat Completion API.
+        """
+        # Lazy load ChatCompletionHandler (singleton pattern)
+        if self._chat_completion_handler is None:
+            from slime.router.handlers.openai_chat_completion import create_chat_completion_handler
+            self._chat_completion_handler = create_chat_completion_handler(self)
+
+        return await self._chat_completion_handler.handle_request(request)
+
+    async def _use_url(self):
+        """Select a worker URL using round-robin strategy (async with lock)"""
         assert len(self.worker_urls) > 0, "No workers available"
 
-        # get the url with mininal count
-        url = min(self.worker_urls, key=self.worker_urls.get)
-        self.worker_urls[url] += 1
-        return url
+        async with self._url_lock:
+            # get the url with minimal count
+            url = min(self.worker_urls, key=self.worker_urls.get)
+            self.worker_urls[url] += 1
+            return url
 
-    def _finish_url(self, url):
-        """Mark the request to the given URL as finished"""
+    async def _finish_url(self, url):
+        """Mark the request to the given URL as finished (async with lock)"""
         assert url in self.worker_urls, f"URL {url} not recognized"
-        self.worker_urls[url] -= 1
-        assert self.worker_urls[url] >= 0, f"URL {url} count went negative"
+        async with self._url_lock:
+            self.worker_urls[url] -= 1
+            assert self.worker_urls[url] >= 0, f"URL {url} count went negative"
 
 
 if __name__ == "__main__":
