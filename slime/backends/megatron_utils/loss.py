@@ -1,5 +1,5 @@
 from argparse import Namespace
-from typing import Any, Callable, Dict, Iterator, List, Tuple, Union
+from typing import Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 import torch
 from megatron.core import mpu
@@ -209,13 +209,13 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             "total_lengths"). Modified in-place to add "advantages" and
             "returns" keys, each mapping to lists of tensors per sample.
     """
-    log_probs: List[torch.Tensor] = rollout_data.get("log_probs", None)
-    ref_log_probs: List[torch.Tensor] = rollout_data.get("ref_log_probs", None)
-    rewards: List[float] = rollout_data.get("rewards", None)
-    values: Union[None, List[torch.Tensor]] = rollout_data.get("values", None)
-    response_lengths: List[int] = rollout_data.get("response_lengths", None)
-    loss_masks: List[torch.Tensor] = rollout_data.get("loss_masks", None)
-    total_lengths: List[int] = rollout_data.get("total_lengths", None)
+    log_probs: Optional[List[torch.Tensor]] = rollout_data.get("log_probs", None)
+    ref_log_probs: Optional[List[torch.Tensor]] = rollout_data.get("ref_log_probs", None)
+    rewards: Optional[List[float]] = rollout_data.get("rewards", None)
+    values: Optional[List[torch.Tensor]] = rollout_data.get("values", None)
+    response_lengths: Optional[List[int]] = rollout_data.get("response_lengths", None)
+    loss_masks: Optional[List[torch.Tensor]] = rollout_data.get("loss_masks", None)
+    total_lengths: Optional[List[int]] = rollout_data.get("total_lengths", None)
 
     # return when not the last pp stage.
     if log_probs is None and values is None:
@@ -426,7 +426,7 @@ def policy_loss_function(
         tis = torch.exp(old_log_probs - rollout_log_probs)
         ois = (-ppo_kl).exp()
         tis_clip = torch.clamp(tis, min=args.tis_clip_low, max=args.tis_clip)
-        tis_clipfrac = tis_clip != tis
+        tis_clipfrac = (tis_clip != tis).float()
 
         pg_loss = pg_loss * tis_clip
 
@@ -508,7 +508,7 @@ def value_loss_function(
         total_lengths=batch["total_lengths"],
         response_lengths=batch["response_lengths"],
     )
-    values = torch.cat([value.flatten() for value in values["values"]], dim=0)
+    values = torch.cat(values["values"], dim=0)
 
     returns = torch.cat(batch["returns"], dim=0)
 
@@ -588,7 +588,7 @@ def loss_function(
     batch: RolloutBatch,
     num_microbatches: int,
     logits: torch.Tensor,
-) -> Tuple[torch.Tensor, Union[int, torch.Tensor], Dict[str, Any]]:
+) -> Tuple[torch.Tensor, Union[int, torch.Tensor], Dict[str, Union[List[str], torch.Tensor]]]:
     """Dispatch to the configured loss and rescale for Megatron integration.
 
     Selects one of "policy_loss", "value_loss", "sft_loss", or a custom loss
@@ -652,12 +652,14 @@ def loss_function(
         num_tokens if args.calculate_per_token_loss else 1,
         {
             "keys": list(log.keys()),
-            "values": torch.tensor(
+            "values": torch.cat(
                 [
-                    num_samples if not args.calculate_per_token_loss else num_tokens,
+                    torch.tensor(
+                        [num_samples if not args.calculate_per_token_loss else num_tokens.item()],
+                        device=logits.device,
+                    ),
+                    torch.stack(list(log.values())),
                 ]
-                + list(log.values()),
-                device=logits.device,
             ),
         },
     )
