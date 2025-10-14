@@ -1,4 +1,4 @@
-from typing import Union
+from typing import Optional
 
 import torch
 from megatron.core import mpu
@@ -125,13 +125,13 @@ def get_values(
 
 
 def compute_advantages_and_returns(args, rollout_data):
-    log_probs: list[torch.Tensor] = rollout_data.get("log_probs", None)
-    ref_log_probs: list[torch.Tensor] = rollout_data.get("ref_log_probs", None)
-    rewards: list[float] = rollout_data.get("rewards", None)
-    values: Union[None, list[torch.Tensor]] = rollout_data.get("values", None)
-    response_lengths: list[int] = rollout_data.get("response_lengths", None)
-    loss_masks: list[torch.Tensor] = rollout_data.get("loss_masks", None)
-    total_lengths: list[int] = rollout_data.get("total_lengths", None)
+    log_probs: list[torch.Tensor] = rollout_data.get("log_probs")
+    ref_log_probs: list[torch.Tensor] = rollout_data.get("ref_log_probs")
+    rewards: list[float] = rollout_data.get("rewards")
+    values: Optional[list[torch.Tensor]] = rollout_data.get("values")
+    response_lengths: list[int] = rollout_data.get("response_lengths")
+    loss_masks: list[torch.Tensor] = rollout_data.get("loss_masks")
+    total_lengths: list[int] = rollout_data.get("total_lengths")
 
     # return when not the last pp stage.
     if log_probs is None and values is None:
