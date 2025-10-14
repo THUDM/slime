@@ -62,7 +62,8 @@ class RolloutManager:
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
 
         self._metric_checker = MetricChecker.maybe_create(args)
-        self._health_monitor = RolloutHealthMonitor(self, args)
+        if self.args.use_fault_tolerance:
+            self._health_monitor = RolloutHealthMonitor(self, args)
 
     def dispose(self):
         if self._metric_checker is not None:
@@ -82,7 +83,7 @@ class RolloutManager:
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
     def generate(self, rollout_id):
-        monitor_started = self._health_monitor.start()
+        monitor_started = self.args.use_fault_tolerance and self._health_monitor.start()
         start_time = time.time()
         try:
             data, metrics = self._get_rollout_data(rollout_id=rollout_id)
