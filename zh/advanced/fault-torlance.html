@@ -445,6 +445,7 @@ document.write(`
   <section class="tex2jax_ignore mathjax_ignore" id="id1">
 <h1>容灾<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
 <p>为了保证长期稳定的 RL 训练，slime 会默认开始一定程度的容灾机制。这里主要介绍一下 slime 中容灾的一些设计思路。</p>
+<p>可以通过 <code class="docutils literal notranslate"><span class="pre">--use-fault-tolerance</span></code> 开启容灾机制。</p>
 <section id="rollout">
 <h2>rollout 容灾<a class="headerlink" href="#rollout" title="Link to this heading">#</a></h2>
 <p>slime 会在 rollout 过程中，定期向所有 SGLang server 发送心跳请求（<code class="docutils literal notranslate"><span class="pre">/health_generate</span></code>），如果心跳超时，则会停止这个 SGLang server。并在这轮 rollout 完成之后进行重启和正确的参数更新。</p>
