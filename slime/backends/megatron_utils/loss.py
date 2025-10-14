@@ -1,5 +1,5 @@
 from argparse import Namespace
-from typing import Callable, Dict, Iterator, List, Optional, Tuple, Union
+from collections.abc import Callable, Iterator
 
 import torch
 from megatron.core import mpu
@@ -24,10 +24,10 @@ def get_responses(
     logits: torch.Tensor,
     *,
     args: Namespace,
-    unconcat_tokens: List[torch.Tensor],
-    total_lengths: List[int],
-    response_lengths: List[int],
-) -> Iterator[Tuple[torch.Tensor, torch.Tensor]]:
+    unconcat_tokens: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
     """Yield response-aligned `(logits_chunk, tokens_chunk)` pairs per sample.
 
     After squeezing batch dimension and applying temperature scaling, this
@@ -91,12 +91,12 @@ def get_log_probs_and_entropy(
     logits: torch.Tensor,
     *,
     args: Namespace,
-    unconcat_tokens: List[torch.Tensor],
-    total_lengths: List[int],
-    response_lengths: List[int],
+    unconcat_tokens: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
     with_entropy: bool = False,
     non_loss_data: bool = True,
-) -> Dict[str, List[torch.Tensor]]:
+) -> dict[str, list[torch.Tensor]]:
     """Compute per-token log-probabilities (and optionally entropy) on responses.
 
     For each sample, extracts response-aligned logits and tokens, then computes
@@ -147,12 +147,12 @@ def get_values(
     logits: torch.Tensor,
     *,
     args: Namespace,
-    unconcat_tokens: List[torch.Tensor],
-    total_lengths: List[int],
-    response_lengths: List[int],
+    unconcat_tokens: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
     with_entropy: bool = False,
     non_loss_data: bool = True,
-) -> Dict[str, List[torch.Tensor]]:
+) -> dict[str, list[torch.Tensor]]:
     """Extract per-token value predictions over response tokens.
 
     For each sample, extracts response-aligned chunks from the value head
@@ -209,13 +209,13 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             "total_lengths"). Modified in-place to add "advantages" and
             "returns" keys, each mapping to lists of tensors per sample.
     """
-    log_probs: Optional[List[torch.Tensor]] = rollout_data.get("log_probs", None)
-    ref_log_probs: Optional[List[torch.Tensor]] = rollout_data.get("ref_log_probs", None)
-    rewards: Optional[List[float]] = rollout_data.get("rewards", None)
-    values: Optional[List[torch.Tensor]] = rollout_data.get("values", None)
-    response_lengths: Optional[List[int]] = rollout_data.get("response_lengths", None)
-    loss_masks: Optional[List[torch.Tensor]] = rollout_data.get("loss_masks", None)
-    total_lengths: Optional[List[int]] = rollout_data.get("total_lengths", None)
+    log_probs: list[torch.Tensor] | None = rollout_data.get("log_probs", None)
+    ref_log_probs: list[torch.Tensor] | None = rollout_data.get("ref_log_probs", None)
+    rewards: list[float] | None = rollout_data.get("rewards", None)
+    values: list[torch.Tensor] | None = rollout_data.get("values", None)
+    response_lengths: list[int] | None = rollout_data.get("response_lengths", None)
+    loss_masks: list[torch.Tensor] | None = rollout_data.get("loss_masks", None)
+    total_lengths: list[int] | None = rollout_data.get("total_lengths", None)
 
     # return when not the last pp stage.
     if log_probs is None and values is None:
@@ -350,7 +350,7 @@ def policy_loss_function(
     batch: RolloutBatch,
     logits: torch.Tensor,
     sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
-) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute policy loss (PPO/GSPO) and metrics.
 
     Computes current log-probabilities and entropy from model logits, then
@@ -481,7 +481,7 @@ def value_loss_function(
     batch: RolloutBatch,
     logits: torch.Tensor,
     sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
-) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute clipped value loss and metrics.
 
     Extracts current value predictions from `logits`, compares them against
@@ -508,7 +508,7 @@ def value_loss_function(
         total_lengths=batch["total_lengths"],
         response_lengths=batch["response_lengths"],
     )
-    values = torch.cat(values["values"], dim=0)
+    values = torch.cat([value.flatten() for value in values["values"]], dim=0)
 
     returns = torch.cat(batch["returns"], dim=0)
 
@@ -538,7 +538,7 @@ def sft_loss_function(
     batch: RolloutBatch,
     logits: torch.Tensor,
     sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
-) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Compute supervised fine-tuning loss over response tokens.
 
     Computes log-probabilities of the ground-truth tokens in the response
@@ -588,7 +588,7 @@ def loss_function(
     batch: RolloutBatch,
     num_microbatches: int,
     logits: torch.Tensor,
-) -> Tuple[torch.Tensor, Union[int, torch.Tensor], Dict[str, Union[List[str], torch.Tensor]]]:
+) -> tuple[torch.Tensor, int | torch.Tensor, dict[str, list[str] | torch.Tensor]]:
     """Dispatch to the configured loss and rescale for Megatron integration.
 
     Selects one of "policy_loss", "value_loss", "sft_loss", or a custom loss
@@ -652,14 +652,12 @@ def loss_function(
         num_tokens if args.calculate_per_token_loss else 1,
         {
             "keys": list(log.keys()),
-            "values": torch.cat(
+            "values": torch.tensor(
                 [
-                    torch.tensor(
-                        [num_samples if not args.calculate_per_token_loss else num_tokens.item()],
-                        device=logits.device,
-                    ),
-                    torch.stack(list(log.values())),
+                    num_samples if not args.calculate_per_token_loss else num_tokens,
                 ]
+                + list(log.values()),
+                device=logits.device,
             ),
         },
     )
