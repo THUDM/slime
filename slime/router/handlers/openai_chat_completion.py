@@ -62,6 +62,25 @@ class ChatCompletionHandler:
         self._reasoning_parser = None  # Lazy-initialized reasoning parser
         self._function_call_parser = None  # Lazy-initialized function call parser
 
+        # Cache frequently accessed components at initialization (performance optimization)
+        # These are set once by middleware and never change, so safe to cache
+        self._radix_tree = None
+        self._tokenizer = None
+
+    @property
+    def radix_tree(self):
+        """Lazy-load and cache radix tree (performance optimization)."""
+        if self._radix_tree is None:
+            self._radix_tree = self.router.component_registry.get("radix_tree")
+        return self._radix_tree
+
+    @property
+    def tokenizer(self):
+        """Lazy-load and cache tokenizer (performance optimization)."""
+        if self._tokenizer is None:
+            self._tokenizer = self.router.component_registry.get("tokenizer")
+        return self._tokenizer
+
     async def handle_request(self, request: Request):
         """
         Handle Chat Completion request with auto cache detection.
@@ -321,10 +340,10 @@ class ChatCompletionHandler:
         messages = request_data.get("messages", [])
         tools = request_data.get("tools", None)
 
-        # Step 1: Get tokenizer and radix tree from component registry
+        # Step 1: Get tokenizer and radix tree (cached, no lock contention after first call)
         try:
-            radix_tree = self.router.component_registry.get("radix_tree")
-            tokenizer = self.router.component_registry.get("tokenizer")
+            radix_tree = self.radix_tree
+            tokenizer = self.tokenizer
 
             # Step 2: Apply chat template to convert messages to text
             text = tokenizer.apply_chat_template(messages, tools=tools, add_generation_prompt=True, tokenize=False)
