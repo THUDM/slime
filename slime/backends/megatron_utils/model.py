@@ -193,7 +193,7 @@ def disable_forward_pre_hook(model_chunks: Sequence[DDP], param_sync: bool = Tru
 
 @torch.no_grad()
 def forward_only(
-    f: Callable[[torch.Tensor], dict[str, list[torch.Tensor]]],
+    f: Callable[..., dict[str, list[torch.Tensor]]],
     args: Namespace,
     model: Sequence[DDP],
     data_iterator: Sequence[DataIterator],
@@ -206,8 +206,13 @@ def forward_only(
     executed, and relevant outputs are aggregated and returned.
 
     Args:
-        f (Callable[[torch.Tensor], dict[str, list[torch.Tensor]]]): Post-forward callback used to compute
-            and package outputs to collect.
+        f (Callable[..., dict[str, list[torch.Tensor]]]): Post-forward callback used to
+            compute and package outputs to collect. This should accept a logits
+            tensor as its first positional argument and additional keyword-only
+            arguments; see ``get_log_probs_and_entropy``/``get_values`` in
+            ``megatron_utils.loss`` for examples. It will be partially applied
+            so that the callable returned from the internal forward step only
+            requires the logits tensor.
         args (Namespace): Runtime arguments.
         model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
         data_iterator (Sequence[DataIterator]): Iterable(s) yielding batches for inference.
