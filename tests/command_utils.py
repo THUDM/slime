@@ -65,7 +65,7 @@ def execute_train(
     )
 
     exec_command(
-        f"export PYTHONBUFFERED=16 && "
+        f"export no_proxy=127.0.0.1 && export PYTHONBUFFERED=16 && "
         f'source "{repo_base_dir}/scripts/models/{model_type}.sh" && '
         # TODO should this 127.0.0.1 be `master_addr` instead
         f'ray job submit --address="http://127.0.0.1:8265" '
