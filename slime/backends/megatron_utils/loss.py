@@ -106,6 +106,7 @@ def get_values(
     unconcat_tokens: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
+    non_loss_data: bool = True,
 ) -> dict[str, list[torch.Tensor]]:
     value_list = []
     for logits_chunk, _ in get_responses(
