@@ -61,7 +61,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 self.hf_config = AutoConfig.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
                 self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
-        
+        print(f"enable_cp: {self.args.enable_cp}")
         if self.args.enable_cp:
             self.setup_context_parallelism()
         if self.args.multimodal_keys:
@@ -233,6 +233,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
     def setup_context_parallelism(self):
         """Setup Context Parallelism process groups with varlen support"""
+        print(f"Setting up Context Parallelism with ring attention type: {self.args.ring_flash_atten_type}")
         dist.init_process_group(backend="nccl")
         world_size = dist.get_world_size()
         rank = dist.get_rank()
