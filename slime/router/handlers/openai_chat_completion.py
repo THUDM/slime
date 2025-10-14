@@ -8,7 +8,6 @@ Key Features:
 - Full OpenAI API compatibility (text in/out)
 - Unified flow: messages → generate → OpenAI format
 - Radix Tree Middleware integration for automatic caching
-- Non-streaming support only (streaming to be added in future PR)
 - Simplified architecture with minimal abstraction
 
 Architecture:
@@ -42,7 +41,7 @@ except ImportError:
 
 class ChatCompletionHandler:
     """
-    Simplified Chat Completion handler with unified processing flow.
+    Chat Completion handler with auto cache detection.
 
     This handler automatically detects cache capability by testing the
     /retrieve_from_messages_template endpoint and uses the appropriate
@@ -65,7 +64,7 @@ class ChatCompletionHandler:
 
     async def handle_request(self, request: Request):
         """
-        Handle Chat Completion request with unified flow.
+        Handle Chat Completion request with auto cache detection.
 
         Args:
             request: FastAPI Request object
