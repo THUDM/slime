@@ -253,27 +253,6 @@ class ChatCompletionHandler:
                 if response.status_code >= 400:
                     await self._handle_sglang_error(response, content)
 
-                # Ensure OpenAI compatibility: content field cannot be None
-                try:
-                    response_json = json.loads(content) if content else {}
-                    if (
-                        isinstance(response_json, dict)
-                        and "choices" in response_json
-                        and len(response_json["choices"]) > 0
-                    ):
-                        for choice in response_json["choices"]:
-                            if "message" in choice and isinstance(choice["message"], dict):
-                                message = choice["message"]
-                                # Fix content=None for OpenAI compatibility (keep reasoning_content as-is)
-                                if message.get("content") is None:
-                                    if getattr(self.args, "verbose", False):
-                                        has_reasoning = "reasoning_content" in message
-                                        print(f"[slime-router] Fixing content=None (has reasoning: {has_reasoning})")
-                                    message["content"] = ""
-                        content = json.dumps(response_json).encode("utf-8")
-                except (json.JSONDecodeError, KeyError, TypeError):
-                    pass  # Keep original content if parsing fails
-
                 return Response(content=content, status_code=response.status_code, headers=dict(response.headers))
             except httpx.HTTPStatusError as e:
                 # Handle HTTP errors from SGLang

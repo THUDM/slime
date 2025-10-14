@@ -78,6 +78,9 @@ class RadixTreeMiddleware(BaseHTTPMiddleware):
         if "text" in request_json:
             input_text = request_json.pop("text", "")
         elif "input_ids" in request_json:
+            # TODO: Add support for batch format input_ids (list of lists)
+            # Currently only handles single sequence format: [id1, id2, ...]
+            # Batch format [[id1, id2, ...], [...]] is not yet supported
             input_text = self.tokenizer.decode(request_json["input_ids"])
         else:
             input_text = None
