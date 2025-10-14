@@ -209,13 +209,13 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             "total_lengths"). Modified in-place to add "advantages" and
             "returns" keys, each mapping to lists of tensors per sample.
     """
-    log_probs: list[torch.Tensor] | None = rollout_data.get("log_probs", None)
-    ref_log_probs: list[torch.Tensor] | None = rollout_data.get("ref_log_probs", None)
-    rewards: list[float] | None = rollout_data.get("rewards", None)
-    values: list[torch.Tensor] | None = rollout_data.get("values", None)
-    response_lengths: list[int] | None = rollout_data.get("response_lengths", None)
-    loss_masks: list[torch.Tensor] | None = rollout_data.get("loss_masks", None)
-    total_lengths: list[int] | None = rollout_data.get("total_lengths", None)
+    log_probs: list[torch.Tensor] = rollout_data.get("log_probs")
+    ref_log_probs: list[torch.Tensor] = rollout_data.get("ref_log_probs")
+    rewards: list[float] = rollout_data.get("rewards")
+    values: list[torch.Tensor] = rollout_data.get("values")
+    response_lengths: list[int] = rollout_data.get("response_lengths")
+    loss_masks: list[torch.Tensor] = rollout_data.get("loss_masks")
+    total_lengths: list[int] = rollout_data.get("total_lengths")
 
     # return when not the last pp stage.
     if log_probs is None and values is None:
