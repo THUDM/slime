@@ -52,6 +52,10 @@ class Sample:
 class ParamInfo:
     name: str
     dtype: torch.dtype
+    shape: torch.Size
+    attrs: dict
+    size: int
+    src_rank: int
 
 
 # A dict-based batch produced along the rollout -> training path

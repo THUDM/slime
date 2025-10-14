@@ -484,7 +484,7 @@ def log_perf_data(rollout_id: int, args: Namespace) -> None:
             if not args.wandb_always_use_train_step
             else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
         )
-        if args.use_wandb and wandb is not None:
+        if args.use_wandb:
             log_dict["rollout/step"] = step
             wandb.log(log_dict)
 
