@@ -17,11 +17,10 @@ Architecture:
 - Convert responses to OpenAI format
 """
 
-import asyncio
 import json
 import time
 import uuid
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Optional, Tuple
 
 import httpx
 from fastapi import HTTPException, Request
@@ -30,8 +29,9 @@ from starlette.responses import Response
 
 # Try to import SGLang parsers for advanced output processing
 try:
-    from sglang.srt.parser.reasoning_parser import ReasoningParser
     from sglang.srt.function_call.function_call_parser import FunctionCallParser
+    from sglang.srt.parser.reasoning_parser import ReasoningParser
+
     SGLANG_PARSERS_AVAILABLE = True
 except ImportError:
     SGLANG_PARSERS_AVAILABLE = False
@@ -76,10 +76,7 @@ class ChatCompletionHandler:
             try:
                 request_data = await request.json()
             except json.JSONDecodeError as e:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid JSON in request body: {str(e)}"
-                )
+                raise HTTPException(status_code=400, detail=f"Invalid JSON in request body: {str(e)}")
 
             # Validate request structure
             self._validate_chat_completion_request(request_data)
@@ -88,7 +85,7 @@ class ChatCompletionHandler:
             if request_data.get("stream", False):
                 raise HTTPException(
                     status_code=400,
-                    detail="Streaming is not supported yet. Please set stream=false or remove the stream parameter."
+                    detail="Streaming is not supported yet. Please set stream=false or remove the stream parameter.",
                 )
 
             # Check if cache support is available (use router's method)
@@ -106,14 +103,12 @@ class ChatCompletionHandler:
         except Exception as e:
             # Catch any unexpected errors and log them
             import traceback
+
             error_traceback = traceback.format_exc()
-            if getattr(self.args, 'verbose', False):
+            if getattr(self.args, "verbose", False):
                 print(f"[slime-router] ERROR in handle_request: {e}")
                 print(f"[slime-router] Traceback:\n{error_traceback}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Internal server error: {str(e)}"
-            )
+            raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
     def _validate_chat_completion_request(self, request_data: dict):
         """
@@ -130,36 +125,27 @@ class ChatCompletionHandler:
         """
         # Only check the absolute minimum required for OpenAI API compatibility
         if "messages" not in request_data:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid request: 'messages' field is required"
-            )
+            raise HTTPException(status_code=400, detail="Invalid request: 'messages' field is required")
 
         messages = request_data["messages"]
         if not isinstance(messages, list) or len(messages) == 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Invalid request: 'messages' must be a non-empty list"
-            )
+            raise HTTPException(status_code=400, detail="Invalid request: 'messages' must be a non-empty list")
 
         # Basic message structure check - let SGLang handle detailed validation
         for i, message in enumerate(messages):
             if not isinstance(message, dict):
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid request: message at index {i} must be a dictionary"
+                    status_code=400, detail=f"Invalid request: message at index {i} must be a dictionary"
                 )
 
             if "role" not in message or "content" not in message:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid request: message at index {i} must have 'role' and 'content' fields"
+                    detail=f"Invalid request: message at index {i} must have 'role' and 'content' fields",
                 )
 
     def _parse_generated_output(
-        self,
-        generated_text: str,
-        request_data: dict
+        self, generated_text: str, request_data: dict
     ) -> Tuple[str, Optional[dict], Optional[str]]:
         """
         Parse generated output with SGLang parsers (reasoning + tool calls).
@@ -187,13 +173,13 @@ class ChatCompletionHandler:
 
         try:
             # Step 1: Parse reasoning content (if reasoning parser configured)
-            reasoning_parser_type = getattr(self.args, 'sglang_reasoning_parser', None)
+            reasoning_parser_type = getattr(self.args, "sglang_reasoning_parser", None)
             if reasoning_parser_type:
                 if not self._reasoning_parser:
                     # Lazy initialize reasoning parser
                     self._reasoning_parser = ReasoningParser(
                         model_type=reasoning_parser_type,
-                        stream_reasoning=False  # For non-streaming, accumulate reasoning
+                        stream_reasoning=False,  # For non-streaming, accumulate reasoning
                     )
 
                 # Parse reasoning
@@ -202,17 +188,17 @@ class ChatCompletionHandler:
 
             # Step 2: Parse tool calls (if tools provided)
             tools = request_data.get("tools")
-            tool_call_parser_type = getattr(self.args, 'sglang_tool_call_parser', None)
+            tool_call_parser_type = getattr(self.args, "sglang_tool_call_parser", None)
 
             if tools and tool_call_parser_type:
                 if not self._function_call_parser:
                     # Lazy initialize function call parser
                     from sglang.srt.entrypoints.openai.protocol import Tool
+
                     # Convert OpenAI tool format to SGLang Tool format if needed
                     sglang_tools = [Tool(**tool) if isinstance(tool, dict) else tool for tool in tools]
                     self._function_call_parser = FunctionCallParser(
-                        tools=sglang_tools,
-                        tool_call_parser=tool_call_parser_type
+                        tools=sglang_tools, tool_call_parser=tool_call_parser_type
                     )
 
                 # Parse tool calls
@@ -226,15 +212,17 @@ class ChatCompletionHandler:
                             "type": "function",
                             "function": {
                                 "name": call.name,
-                                "arguments": json.dumps(call.arguments) if isinstance(call.arguments, dict) else call.arguments
-                            }
+                                "arguments": (
+                                    json.dumps(call.arguments) if isinstance(call.arguments, dict) else call.arguments
+                                ),
+                            },
                         }
                         for call in parsed_calls
                     ]
 
         except Exception as e:
             # Parser error - log and return raw text
-            if getattr(self.args, 'verbose', False):
+            if getattr(self.args, "verbose", False):
                 print(f"[slime-router] Warning: Parser error, using raw output: {e}")
             return generated_text, None, None
 
@@ -268,27 +256,25 @@ class ChatCompletionHandler:
                 # Ensure OpenAI compatibility: content field cannot be None
                 try:
                     response_json = json.loads(content) if content else {}
-                    if (isinstance(response_json, dict) and
-                        'choices' in response_json and
-                        len(response_json['choices']) > 0):
-                        for choice in response_json['choices']:
-                            if 'message' in choice and isinstance(choice['message'], dict):
-                                message = choice['message']
+                    if (
+                        isinstance(response_json, dict)
+                        and "choices" in response_json
+                        and len(response_json["choices"]) > 0
+                    ):
+                        for choice in response_json["choices"]:
+                            if "message" in choice and isinstance(choice["message"], dict):
+                                message = choice["message"]
                                 # Fix content=None for OpenAI compatibility (keep reasoning_content as-is)
-                                if message.get('content') is None:
-                                    if getattr(self.args, 'verbose', False):
-                                        has_reasoning = 'reasoning_content' in message
+                                if message.get("content") is None:
+                                    if getattr(self.args, "verbose", False):
+                                        has_reasoning = "reasoning_content" in message
                                         print(f"[slime-router] Fixing content=None (has reasoning: {has_reasoning})")
-                                    message['content'] = ""
-                        content = json.dumps(response_json).encode('utf-8')
+                                    message["content"] = ""
+                        content = json.dumps(response_json).encode("utf-8")
                 except (json.JSONDecodeError, KeyError, TypeError):
                     pass  # Keep original content if parsing fails
 
-                return Response(
-                    content=content,
-                    status_code=response.status_code,
-                    headers=dict(response.headers)
-                )
+                return Response(content=content, status_code=response.status_code, headers=dict(response.headers))
             except httpx.HTTPStatusError as e:
                 # Handle HTTP errors from SGLang
                 await self._handle_sglang_error(e.response, await e.response.aread())
@@ -296,8 +282,7 @@ class ChatCompletionHandler:
             except httpx.RequestError as e:
                 # Handle connection/network errors
                 raise HTTPException(
-                    status_code=503,
-                    detail="Service temporarily unavailable: Unable to reach inference backend"
+                    status_code=503, detail="Service temporarily unavailable: Unable to reach inference backend"
                 )
         finally:
             await self.router._finish_url(worker_url)
@@ -311,40 +296,30 @@ class ChatCompletionHandler:
             content: Response content bytes
         """
         try:
-            error_data = json.loads(content.decode('utf-8')) if content else {}
+            error_data = json.loads(content.decode("utf-8")) if content else {}
 
             # Map common SGLang errors to OpenAI format
             if response.status_code == 400:
                 # Validation errors - pass through SGLang's message
-                detail = error_data.get('error', error_data.get('detail', 'Invalid request parameters'))
-                raise HTTPException(
-                    status_code=400,
-                    detail=detail
-                )
+                detail = error_data.get("error", error_data.get("detail", "Invalid request parameters"))
+                raise HTTPException(status_code=400, detail=detail)
             elif response.status_code == 429:
                 # Rate limiting
-                raise HTTPException(
-                    status_code=429,
-                    detail="Rate limit exceeded. Please try again later."
-                )
+                raise HTTPException(status_code=429, detail="Rate limit exceeded. Please try again later.")
             elif response.status_code >= 500:
                 # Server errors
                 raise HTTPException(
-                    status_code=response.status_code,
-                    detail="Inference service error. Please try again later."
+                    status_code=response.status_code, detail="Inference service error. Please try again later."
                 )
             else:
                 # Other errors
                 raise HTTPException(
                     status_code=response.status_code,
-                    detail=error_data.get('error', error_data.get('detail', 'Unknown error'))
+                    detail=error_data.get("error", error_data.get("detail", "Unknown error")),
                 )
         except (json.JSONDecodeError, UnicodeDecodeError):
             # If we can't parse the error, return a generic message
-            raise HTTPException(
-                status_code=response.status_code,
-                detail="Service error: Unable to process request"
-            )
+            raise HTTPException(status_code=response.status_code, detail="Service error: Unable to process request")
 
     async def _handle_with_radix_cache(self, request_data: dict):
         """
@@ -369,32 +344,11 @@ class ChatCompletionHandler:
 
         # Step 1: Get tokenizer and radix tree from component registry
         try:
-            # Get radix tree and tokenizer from router's component registry
-            radix_tree = None
-            tokenizer = None
-
-            if hasattr(self.router, 'component_registry'):
-                if self.router.component_registry.has("radix_tree"):
-                    radix_tree = self.router.component_registry.get("radix_tree")
-                if self.router.component_registry.has("tokenizer"):
-                    tokenizer = self.router.component_registry.get("tokenizer")
-
-            # Fallback to legacy router.radix_tree if available
-            if not radix_tree and hasattr(self.router, 'radix_tree'):
-                radix_tree = self.router.radix_tree
-                if hasattr(self.router, 'component_registry') and self.router.component_registry.has("tokenizer"):
-                    tokenizer = self.router.component_registry.get("tokenizer")
-
-            if not radix_tree or not tokenizer:
-                raise RuntimeError("Radix tree or tokenizer not available")
+            radix_tree = self.router.component_registry.get("radix_tree")
+            tokenizer = self.router.component_registry.get("tokenizer")
 
             # Step 2: Apply chat template to convert messages to text
-            text = tokenizer.apply_chat_template(
-                messages,
-                tools=tools,
-                add_generation_prompt=True,
-                tokenize=False
-            )
+            text = tokenizer.apply_chat_template(messages, tools=tools, add_generation_prompt=True, tokenize=False)
 
             if not text or not text.strip():
                 raise RuntimeError("Messages template resulted in empty text")
@@ -406,7 +360,7 @@ class ChatCompletionHandler:
                 raise RuntimeError("Failed to get tokens from radix tree")
 
         except Exception as e:
-            if getattr(self.args, 'verbose', False):
+            if getattr(self.args, "verbose", False):
                 print(f"[slime-router] Warning: Failed to get cached tokens, falling back to direct mode: {e}")
             # Fallback to direct proxy
             return await self._proxy_to_sglang_chat_from_data(request_data)
@@ -416,7 +370,9 @@ class ChatCompletionHandler:
 
         return await self._non_stream_generate_with_cache(token_ids, sampling_params, radix_tree, text, request_data)
 
-    def _build_sampling_params(self, request_data: dict) -> dict:
+    def _build_sampling_params(
+        self, request_data: dict
+    ) -> dict:  # TODO this function should match with oai endpoint parameters
         """
         Build sampling parameters for SGLang generation request.
 
@@ -433,16 +389,13 @@ class ChatCompletionHandler:
             "top_p": request_data.get("top_p", 1.0),
             "top_k": request_data.get("top_k", -1),
             "min_p": request_data.get("min_p", 0.0),
-
             # Penalty parameters
             "frequency_penalty": request_data.get("frequency_penalty", 0.0),
             "presence_penalty": request_data.get("presence_penalty", 0.0),
-
             # Stop conditions
             "stop": request_data.get("stop"),
             "stop_token_ids": request_data.get("stop_token_ids"),
             "ignore_eos": request_data.get("ignore_eos"),
-
             # Special token handling
             "skip_special_tokens": request_data.get("skip_special_tokens"),
             "spaces_between_special_tokens": request_data.get("spaces_between_special_tokens"),
@@ -489,26 +442,17 @@ class ChatCompletionHandler:
                     "return_logprob": False,
                     "return_text_in_logprobs": False,
                 },
-                timeout=60.0
+                timeout=60.0,  # TODO make it configurable
             )
             response.raise_for_status()
             generate_data = response.json()
 
         except httpx.TimeoutException:
-            raise HTTPException(
-                status_code=504,
-                detail="Request timeout while calling SGLang worker"
-            )
+            raise HTTPException(status_code=504, detail="Request timeout while calling SGLang worker")
         except httpx.HTTPStatusError as e:
-            raise HTTPException(
-                status_code=e.response.status_code,
-                detail=f"SGLang worker error: {e.response.text}"
-            )
+            raise HTTPException(status_code=e.response.status_code, detail=f"SGLang worker error: {e.response.text}")
         except httpx.RequestError as e:
-            raise HTTPException(
-                status_code=503,
-                detail=f"Failed to connect to SGLang worker: {str(e)}"
-            )
+            raise HTTPException(status_code=503, detail=f"Failed to connect to SGLang worker: {str(e)}")
         finally:
             await self.router._finish_url(worker_url)
 
@@ -523,7 +467,7 @@ class ChatCompletionHandler:
                 full_text = input_text + generated_text
                 await radix_tree.insert_async(full_text, token_ids + output_ids)
             except Exception as e:
-                if getattr(self.args, 'verbose', False):
+                if getattr(self.args, "verbose", False):
                     print(f"[slime-router] Warning: Failed to update radix cache: {e}")
 
         # Calculate token usage
@@ -532,23 +476,17 @@ class ChatCompletionHandler:
         total_tokens = prompt_tokens + completion_tokens
 
         # Parse output with SGLang parsers (reasoning + tool calls)
-        final_text, tool_calls, reasoning_text = self._parse_generated_output(
-            generated_text,
-            request_data
-        )
+        final_text, tool_calls, reasoning_text = self._parse_generated_output(generated_text, request_data)
 
         # Build message content
-        message_content = {
-            "role": "assistant",
-            "content": final_text
-        }
+        message_content = {"role": "assistant", "content": final_text}
 
         # Add tool_calls if present
         if tool_calls:
             message_content["tool_calls"] = tool_calls
 
         # Optionally include reasoning in metadata (non-standard, for debugging)
-        if reasoning_text and getattr(self.args, 'include_reasoning_in_response', False):
+        if reasoning_text and getattr(self.args, "include_reasoning_in_response", False):
             message_content["reasoning"] = reasoning_text
 
         # Convert to OpenAI format
@@ -556,17 +494,21 @@ class ChatCompletionHandler:
             "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
             "object": "chat.completion",
             "created": int(time.time()),
-            "model": getattr(self.args, 'model_name', 'slime-model'),
-            "choices": [{
-                "index": 0,
-                "message": message_content,
-                "finish_reason": "tool_calls" if tool_calls else "stop"
-            }],
+            "model": getattr(self.args, "model_name", "slime-model"),
+            "choices": [
+                {
+                    "index": 0,
+                    "message": message_content,
+                    "finish_reason": (
+                        "tool_calls" if tool_calls else "stop"
+                    ),  # TODO change the finish reason based on actual reason
+                }
+            ],
             "usage": {
                 "prompt_tokens": prompt_tokens,
                 "completion_tokens": completion_tokens,
-                "total_tokens": total_tokens
-            }
+                "total_tokens": total_tokens,
+            },
         }
 
         return JSONResponse(content=openai_response)

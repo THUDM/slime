@@ -59,6 +59,12 @@ class RadixTreeMiddleware(BaseHTTPMiddleware):
         self.args = router.args
         self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
         self.radix_tree = StringRadixTrie(max_cache_size=10000, tokenizer=self.tokenizer, verbose=False)
+
+        # Register components in the component registry
+        self.router.component_registry.register("tokenizer", self.tokenizer)
+        self.router.component_registry.register("radix_tree", self.radix_tree)
+
+        # Keep backward compatibility: also set as direct attribute
         self.router.radix_tree = self.radix_tree
 
     async def dispatch(self, request: Request, call_next):

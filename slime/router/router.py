@@ -119,17 +119,8 @@ class SlimeRouter:
             if self._cache_available is not None:
                 return self._cache_available
 
-            # Check if radix tree is available
-            has_radix_tree = False
-
-            # Method 1: Check direct attribute
-            if hasattr(self, 'radix_tree') and self.radix_tree is not None:
-                has_radix_tree = True
-
-            # Method 2: Check component registry
-            if not has_radix_tree and hasattr(self, '_component_registry') and self._component_registry is not None:
-                if self._component_registry.has("radix_tree"):
-                    has_radix_tree = True
+            # Check if radix tree is available in component registry
+            has_radix_tree = self.component_registry.has("radix_tree")
 
             self._cache_available = has_radix_tree
 
@@ -217,8 +208,11 @@ class SlimeRouter:
 
         text = payload.get("text", "")
 
+        # Get radix tree from component registry
+        radix_tree = self.component_registry.get("radix_tree")
+
         # Use radix tree's retrieve_from_text method (no need to fetch weight version here)
-        token_ids, logp, loss_mask = self.radix_tree.retrieve_from_text(text, return_logprob=True)
+        token_ids, logp, loss_mask = radix_tree.retrieve_from_text(text, return_logprob=True)
 
         # Handle the result based on whether logp was requested
         result = {
@@ -249,47 +243,23 @@ class SlimeRouter:
         tools = payload.get("tools", None)
 
         if not messages:
-            return JSONResponse(
-                status_code=400,
-                content={"error": "messages field is required"}
-            )
+            return JSONResponse(status_code=400, content={"error": "messages field is required"})
 
-        # Get tokenizer and radix tree
-        if not hasattr(self, 'radix_tree') or self.radix_tree is None:
-            return JSONResponse(
-                status_code=503,
-                content={"error": "Radix tree not initialized"}
-            )
-
-        # Get tokenizer from component registry or radix tree
-        tokenizer = None
-        if hasattr(self, 'component_registry') and self.component_registry.has("tokenizer"):
+        # Get radix tree and tokenizer from component registry
+        try:
+            radix_tree = self.component_registry.get("radix_tree")
             tokenizer = self.component_registry.get("tokenizer")
-        elif hasattr(self.radix_tree, 'tokenizer'):
-            tokenizer = self.radix_tree.tokenizer
-
-        if not tokenizer:
-            return JSONResponse(
-                status_code=503,
-                content={"error": "Tokenizer not available"}
-            )
+        except RuntimeError as e:
+            return JSONResponse(status_code=503, content={"error": f"Cache components not initialized: {str(e)}"})
 
         # Apply chat template
         try:
-            text = tokenizer.apply_chat_template(
-                messages,
-                tools=tools,
-                add_generation_prompt=True,
-                tokenize=False
-            )
+            text = tokenizer.apply_chat_template(messages, tools=tools, add_generation_prompt=True, tokenize=False)
         except Exception as e:
-            return JSONResponse(
-                status_code=400,
-                content={"error": f"Failed to apply chat template: {str(e)}"}
-            )
+            return JSONResponse(status_code=400, content={"error": f"Failed to apply chat template: {str(e)}"})
 
         # Retrieve from radix tree
-        token_ids, logp, loss_mask = self.radix_tree.retrieve_from_text(text, return_logprob=True)
+        token_ids, logp, loss_mask = radix_tree.retrieve_from_text(text, return_logprob=True)
 
         result = {
             "tokens": token_ids,
@@ -311,6 +281,7 @@ class SlimeRouter:
         # Lazy load ChatCompletionHandler (singleton pattern)
         if self._chat_completion_handler is None:
             from slime.router.handlers.openai_chat_completion import create_chat_completion_handler
+
             self._chat_completion_handler = create_chat_completion_handler(self)
 
         return await self._chat_completion_handler.handle_request(request)
