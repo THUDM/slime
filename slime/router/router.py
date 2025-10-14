@@ -217,6 +217,17 @@ class SlimeRouter:
 
         text = payload.get("text", "")
 
+        # Handle empty string early - return empty response
+        if not text:
+            return {
+                "tokens": [],
+                "response": text,
+                "loss_mask": [],
+                "token_length": 0,
+                "loss_mask_length": 0,
+                "rollout_logp": [],
+            }
+
         # Use radix tree's retrieve_from_text method (no need to fetch weight version here)
         token_ids, logp, loss_mask = self.radix_tree.retrieve_from_text(text, return_logprob=True)
 
@@ -247,6 +258,7 @@ class SlimeRouter:
 
         messages = payload.get("messages", [])
         tools = payload.get("tools", None)
+        add_generation_prompt = payload.get("add_generation_prompt", False)
 
         if not messages:
             return JSONResponse(
@@ -279,7 +291,7 @@ class SlimeRouter:
             text = tokenizer.apply_chat_template(
                 messages,
                 tools=tools,
-                add_generation_prompt=True,
+                add_generation_prompt=add_generation_prompt,
                 tokenize=False
             )
         except Exception as e:
