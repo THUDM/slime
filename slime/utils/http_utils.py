@@ -41,7 +41,12 @@ def get_host_info():
     if env_overwrite_local_ip := os.getenv(SLIME_HOST_IP_ENV, None):
         local_ip = env_overwrite_local_ip
     else:
-        local_ip = socket.gethostbyname(hostname)
+        try:
+            local_ip = socket.gethostbyname(hostname)
+        except socket.gaierror:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_sock:
+                udp_sock.connect(("8.8.8.8", 80))  # Google DNS
+                local_ip = udp_sock.getsockname()[0]
 
     return hostname, local_ip
 
@@ -121,6 +126,9 @@ async def _post(client, url, payload, max_retries=60):
 def init_http_client(args):
     """Initialize HTTP client and optionally enable distributed POST via Ray."""
     global _http_client, _client_concurrency, _distributed_post_enabled
+    if args.rollout_num_gpus is None:
+        return
+
     _client_concurrency = args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
     if _http_client is None:
         _http_client = httpx.AsyncClient(

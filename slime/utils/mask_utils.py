@@ -3,6 +3,10 @@ from typing import Dict, List, Tuple
 from transformers import AutoTokenizer
 
 
+def get_response_lengths(loss_masks: List[List[int]]) -> List[int]:
+    return [len(mask[mask.index(1) :]) if 1 in mask else 0 for mask in loss_masks]
+
+
 class MultiTurnLossMaskGenerator:
     def __init__(self, tokenizer: AutoTokenizer, tokenizer_type: str = "qwen"):
         self.tokenizer = tokenizer
@@ -10,7 +14,7 @@ class MultiTurnLossMaskGenerator:
         self.tokenizer_type = tokenizer_type
 
     def get_response_lengths(self, loss_masks: List[List[int]]) -> List[int]:
-        return [len(mask[mask.index(1) :]) if 1 in mask else 0 for mask in loss_masks]
+        return get_response_lengths(loss_masks)
 
     def find_all_sublist_indices(self, main_list, sublist):
         sublist_len = len(sublist)

@@ -11,11 +11,12 @@ def train(args):
     pgs = create_placement_groups(args)
     wandb_run_id = init_wandb_primary(args)
 
+    # create the rollout manager, with sglang engines inside.
+    # need to initialize rollout manager first to calculate num_rollout
+    rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"], wandb_run_id=wandb_run_id)
+
     # create the actor and critic models
     actor_model, critic_model = create_training_models(args, pgs, wandb_run_id=wandb_run_id)
-
-    # create the rollout manager, with sglang engines inside.
-    rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"], wandb_run_id=wandb_run_id)
 
     actor_model.set_rollout_manager(rollout_manager)
 
@@ -53,7 +54,7 @@ def train(args):
 
         if (rollout_id + 1) % args.update_weights_interval == 0:
             # sync generate before update weights to prevent update weight in the middle of generation
-            rollout_data_curr_ref = ray.get(rollout_data_next_future)
+            rollout_data_curr_ref = ray.get(x) if (x := rollout_data_next_future) is not None else None
             rollout_data_next_future = None
             actor_model.update_weights()
 
@@ -62,6 +63,8 @@ def train(args):
             or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
         ):
             ray.get(rollout_manager.eval.remote(rollout_id))
+
+    ray.get(rollout_manager.dispose.remote())
 
 
 if __name__ == "__main__":

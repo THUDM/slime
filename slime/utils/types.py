@@ -9,6 +9,7 @@ import torch
 class Sample:
     """The sample generated"""
 
+    group_index: Optional[int] = None
     index: Optional[int] = None
     # prompt
     prompt: Union[str, list[dict[str, str]]] = ""
