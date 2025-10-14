@@ -160,6 +160,10 @@ class FSDPTrainRayActor(TrainRayActor):
             rollout_data = {f"{store_prefix}log_probs": []}
             with timer(f"{store_prefix}log_probs") and torch.no_grad():
                 for batch in packed_batches:
+                    # Update cu_seqlens for CP before forward pass
+                    if self.args.enable_cp:
+                        self._update_cp_cu_seqlens(batch)
+
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                         model_args = {
                             "input_ids": batch["tokens"].unsqueeze(0),

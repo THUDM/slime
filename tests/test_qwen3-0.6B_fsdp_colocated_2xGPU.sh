@@ -93,6 +93,13 @@ FSDP_ARGS=(
    --update-weights-buffer-size $((512 * 1024 * 1024)) # 512MB
 )
 
+# Context Parallelism Arguments
+# Uncomment to enable CP with varlen support and data packing
+CP_ARGS=(
+   # --enable-cp                        # Enable Context Parallelism
+   # --ring-flash-atten-type llama3    # Use llama3 ring attention implementation
+)
+
 # launch the master node of ray in container
 ray start --head --node-ip-address 127.0.0.1 --num-gpus 2 --disable-usage-stats
 
@@ -112,4 +119,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
-   ${WANDB_ARGS[@]} 
+   ${WANDB_ARGS[@]} \
+   ${FSDP_ARGS[@]} \
+   ${CP_ARGS[@]} 
