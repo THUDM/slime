@@ -364,9 +364,10 @@ def train_one_step(
         custom_before_train_step_hook = load_function(args.custom_megatron_before_train_step_hook_path)
         custom_before_train_step_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler)
 
-    def forward_step(
-        data_iterator: DataIterator, model: GPTModel
-    ) -> tuple[torch.Tensor, Callable[[torch.Tensor], tuple[torch.Tensor, int, dict[str, torch.Tensor]]]]:
+    def forward_step(data_iterator: DataIterator, model: GPTModel) -> tuple[
+        torch.Tensor,
+        Callable[[torch.Tensor], tuple[torch.Tensor, int, dict[str, torch.Tensor | list[str]]]],
+    ]:
         """Forward step used by Megatron's pipeline engine during training.
 
         Args:
@@ -374,8 +375,9 @@ def train_one_step(
             model (GPTModel): The GPT model chunk to execute.
 
         Returns:
-            tuple[torch.Tensor, Callable[[torch.Tensor], tuple[torch.Tensor, int, dict[str, torch.Tensor]]]]:
-            Output tensor(s) and the loss function.
+            tuple[torch.Tensor, Callable[[torch.Tensor], tuple[torch.Tensor, int, dict[str, torch.Tensor | list[str]]]]]:
+            Output tensor(s) and the loss function, which returns
+            (loss, num_elems, {"keys": list[str], "values": torch.Tensor}).
         """
 
         # Get the batch.
