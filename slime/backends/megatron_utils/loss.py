@@ -72,7 +72,6 @@ def get_log_probs_and_entropy(
     total_lengths: list[int],
     response_lengths: list[int],
     with_entropy: bool = False,
-    non_loss_data: bool = True,
 ) -> dict[str, list[torch.Tensor]]:
     log_probs_list = []
     entropy_list = []
@@ -105,8 +104,6 @@ def get_values(
     unconcat_tokens: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
-    with_entropy: bool = False,
-    non_loss_data: bool = True,
 ) -> dict[str, list[torch.Tensor]]:
     value_list = []
     for logits_chunk, _ in get_responses(
