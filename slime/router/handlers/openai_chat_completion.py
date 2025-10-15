@@ -448,7 +448,7 @@ class ChatCompletionHandler:
             generate_data = response.json()
 
         except httpx.TimeoutException:
-            timeout_val = getattr(self.args, "router_generation_timeout", 120.0)
+            timeout_val = getattr(self.args, "slime_router_generation_timeout", 120.0)
             raise HTTPException(
                 status_code=504,
                 detail=f"Request timeout after {timeout_val}s while calling SGLang worker. You can adjust this with --slime-router-generation-timeout parameter.",
