@@ -228,24 +228,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This is used to shuffle the prompts and also for the random sampling of the prompts."
                 ),
             )
-            parser.add_argument(
-                "--rollout-health-check-interval",
-                type=float,
-                default=30.0,
-                help="Interval in seconds between rollout engine /health_generate checks during generate/eval.",
-            )
-            parser.add_argument(
-                "--rollout-health-check-timeout",
-                type=float,
-                default=30.0,
-                help="Timeout in seconds to wait for a rollout engine /health_generate response before killing it.",
-            )
-            parser.add_argument(
-                "--rollout-health-check-first-wait",
-                type=float,
-                default=300.0,
-                help="Time to wait for the compilation before the actual health check.",
-            )
 
             # sampling
             parser.add_argument(
@@ -347,6 +329,33 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 nargs="+",
                 help="Address and ports of the external engines.",
+            )
+            return parser
+
+        def add_fault_tolerance_arguments(parser):
+            parser.add_argument(
+                "--use-fault-tolerance",
+                action="store_true",
+                default=False,
+                help="Whether to enable the fault tolerance function during rollout.",
+            )
+            parser.add_argument(
+                "--rollout-health-check-interval",
+                type=float,
+                default=30.0,
+                help="Interval in seconds between rollout engine /health_generate checks during generate/eval.",
+            )
+            parser.add_argument(
+                "--rollout-health-check-timeout",
+                type=float,
+                default=30.0,
+                help="Timeout in seconds to wait for a rollout engine /health_generate response before killing it.",
+            )
+            parser.add_argument(
+                "--rollout-health-check-first-wait",
+                type=float,
+                default=300.0,
+                help="Time to wait for the compilation before the actual health check.",
             )
             return parser
 
@@ -633,6 +642,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=float,
                 default=0.0,
                 help="KL penalty coefficient for the loss function. This is added to the final PPO loss.",
+            )
+            parser.add_argument(
+                "--ref-update-interval",
+                type=int,
+                default=None,
+                help="Interval (in rollout steps) to update ref model from actor. If None, ref model is not updated.",
             )
             parser.add_argument("--entropy-coef", type=float, default=0.0, help="Entropy loss coef")
             parser.add_argument("--gamma", type=float, default=1.0, help="PPO GAE gamma")
@@ -969,6 +984,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_cluster_arguments(parser)
         parser = add_train_arguments(parser)
         parser = add_rollout_arguments(parser)
+        parser = add_fault_tolerance_arguments(parser)
         parser = add_data_arguments(parser)
         parser = add_eval_arguments(parser)
         parser = add_algo_arguments(parser)

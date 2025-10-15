@@ -515,7 +515,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     # 7. Fill and return Sample object
     sample.response = full_response
     sample.tokens = ...
-    sample.loss_masks = loss_masks
+    sample.loss_mask = loss_masks
     return sample
 ```
 
