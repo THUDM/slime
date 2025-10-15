@@ -210,6 +210,7 @@ class RolloutManager:
             # always instantiate loss_mask if not provided
             if sample.loss_mask is None:
                 sample.loss_mask = [1] * sample.response_length
+            
             assert (
                 len(sample.loss_mask) == sample.response_length
             ), f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
@@ -466,6 +467,42 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
     if args.rollout_num_gpus is not None:
         log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+    # For group based rollout, additionally log the raw reward statistics. 
+    raw_rewards = torch.tensor([sample.get_reward_value(args) for sample in samples], dtype=torch.float)
+    sample_indices = torch.tensor([sample.index for sample in samples])
+    if args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]:
+        if len(raw_rewards) == args.n_samples_per_prompt * args.rollout_batch_size:
+            rewards = raw_rewards.reshape(-1, args.n_samples_per_prompt)
+            sample_indices = sample_indices.reshape(-1, args.n_samples_per_prompt)
+            # Make sure per group sample indices are identical. 
+            assert (sample_indices == sample_indices[:, 0].unsqueeze(1)).all(dim=1).all(), f" {sample_indices} Per group sample indices are not identical."
+            group_count, sample_per_group = rewards.shape
+            # Collect pass@k statistics for each group
+            all_zeros = rewards.eq(0).all(dim=-1)
+            all_ones = rewards.eq(1).all(dim=-1)
+            
+            # Calculate pass@k metrics dynamically for powers of 2
+            # pass@k is the probability that at least one of the first k samples passes
+            max_k = sample_per_group
+            k_values = []
+            current_k = 1
+            while current_k <= max_k:
+                k_values.append(current_k)
+                current_k *= 2
+            
+            for k in k_values:
+                if k == 1:
+                    # pass@1: probability that the first sample passes
+                    pass_at_k = rewards[:, 0].float().mean()
+                else:
+                    # pass@k: probability that at least one of the first k samples passes
+                    first_k_samples = rewards[:, :k]
+                    pass_at_k = (first_k_samples.sum(dim=-1) > 0).float().mean()
+                
+                log_dict[f"rollout/pass_at_{k}"] = pass_at_k.item()
+            
+            log_dict["rollout/group_all_zeros"] = all_zeros.sum() / group_count
+            log_dict["rollout/group_all_ones"] = all_ones.sum() / group_count
     print(f"perf {rollout_id}: {log_dict}")
     step = (
         rollout_id

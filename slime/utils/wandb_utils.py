@@ -1,6 +1,6 @@
 import os
 import wandb
-
+import weave
 
 def _is_offline_mode(args) -> bool:
     """Detect whether W&B should run in offline mode.
@@ -66,6 +66,11 @@ def init_wandb_primary(args):
         print(f"W&B logs will be stored in: {args.wandb_dir}")
 
     wandb.init(**init_kwargs)
+    if args.wandb_team:
+        project = args.wandb_team+"/"+args.wandb_project
+    else:
+        project = args.wandb_project
+    weave.init(project)
 
     _init_wandb_common()
 
@@ -123,6 +128,11 @@ def init_wandb_secondary(args, wandb_run_id, router_addr=None):
         init_kwargs["dir"] = args.wandb_dir
 
     wandb.init(**init_kwargs)
+    if args.wandb_team:
+        project = args.wandb_team+"/"+args.wandb_project
+    else:
+        project = args.wandb_project
+    weave.init(project)
 
     _init_wandb_common()
 
