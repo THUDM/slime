@@ -385,7 +385,8 @@ def _start_router(args):
         return
 
     args.sglang_router_ip = get_host_info()[1]
-    args.sglang_router_port = find_available_port(random.randint(3000, 4000))
+    if args.sglang_router_port is None:
+        args.sglang_router_port = find_available_port(random.randint(3000, 4000))
 
     if args.use_slime_router:
         from slime.router.router import run_router
@@ -396,9 +397,6 @@ def _start_router(args):
         from sglang_router.launch_router import RouterArgs
 
         from slime.utils.http_utils import run_router
-
-        args.sglang_router_ip = get_host_info()[1]
-        args.sglang_router_port = find_available_port(random.randint(3000, 4000))
 
         router_args = RouterArgs(
             host=args.sglang_router_ip,
