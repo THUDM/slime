@@ -231,6 +231,10 @@ class RolloutManager:
         if samples[0].train_metadata is not None:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
 
+        # Extract pixel_values for VLM training
+        if samples[0].pixel_values is not None:
+            train_data["pixel_values"] = [sample.pixel_values for sample in samples]
+
         return train_data
 
 
