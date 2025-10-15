@@ -16,7 +16,7 @@ class Sample:
     # response
     response: str = ""
     response_length: int = 0
-    label: str | None = None
+    label: str | dict[str, str] | None = None
     reward: int | float | dict[str, int | float | str | bool | None] | None = None
     loss_mask: list[int] | None = None
     weight_versions: list[str] = field(default_factory=list)
@@ -52,7 +52,7 @@ class ParamInfo:
     name: str
     dtype: torch.dtype
     shape: torch.Size
-    attrs: dict[str, int | bool | None]
+    attrs: dict[str, int | bool | str | None]
     size: int
     src_rank: int
 
