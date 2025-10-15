@@ -699,6 +699,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 nargs="+",
                 default="",
             )
+            parser.add_argument(
+                "--slime-router-generation-timeout",
+                type=float,
+                default=120.0,
+                help="Timeout in seconds for router generation requests to SGLang worker. Default is 120 seconds.",
+            )
             return parser
 
         # wandb
