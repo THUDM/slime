@@ -40,7 +40,6 @@ def parse_fsdp_cli(extra_args_provider=None):
         if f.name == "config":
             continue
 
-        # Map str | None to str for argparse; otherwise use the field type as-is
         arg_type = str if f.type == (str | None) else f.type
 
         if arg_type is bool:
