@@ -201,7 +201,9 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer) -> List[Lis
                 )
                 do_print = False
 
-            # Simplified: directly add samples, no filters used
+            # Skip groups containing ABORTED or reward-less samples to match standard rollout behavior
+            if any(s.reward is None for s in group):
+                continue
             data.append(group)
             processed_any = True
 
