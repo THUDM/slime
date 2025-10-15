@@ -439,7 +439,7 @@ class ChatCompletionHandler:
                 json={
                     "input_ids": token_ids,
                     "sampling_params": sampling_params,
-                    "return_logprob": False,
+                    "return_logprob": True,  # Request logprobs
                     "return_text_in_logprobs": False,
                 },
                 timeout=timeout,
@@ -460,16 +460,35 @@ class ChatCompletionHandler:
         finally:
             await self.router._finish_url(worker_url)
 
-        # Extract generated text and token information
-        generated_text = generate_data.get("text", "")
-        output_ids = generate_data.get("meta_info", {}).get("output_token_ids", [])
+        # Extract generated text and token information from output_token_logprobs
+        # Format: output_token_logprobs is a list of [logprob, token_id] pairs
+        try:
+            output_token_logprobs = generate_data.get("meta_info", {}).get("output_token_logprobs", [])
+            output_ids = [item[1] for item in output_token_logprobs]
+            output_logprobs = [float(item[0]) for item in output_token_logprobs]
+
+            # Decode tokens to get response text
+            if output_ids:
+                generated_text = self.tokenizer.decode(output_ids, skip_special_tokens=False)
+            else:
+                # Fallback to text field if no logprobs available
+                generated_text = generate_data.get("text", "")
+        except (KeyError, IndexError, TypeError) as e:
+            if getattr(self.args, "verbose", False):
+                print(f"[slime-router] Warning: Failed to extract from output_token_logprobs: {e}, using fallback")
+            # Fallback to original method
+            generated_text = generate_data.get("text", "")
+            output_ids = generate_data.get(
+                "output_ids", self.tokenizer.encode(generated_text, add_special_tokens=False)
+            )
+            output_logprobs = len(output_ids) * [0.0]  # Dummy logprobs if not available
 
         # Maintain radix cache: insert full sequence (input + output)
         if output_ids:
             try:
                 # Combine input and output tokens for cache insertion
                 full_text = input_text + generated_text
-                await radix_tree.insert_async(full_text, token_ids + output_ids)
+                await radix_tree.insert_async(full_text, token_ids + output_ids)  # TODO implement inser async
             except Exception as e:
                 if getattr(self.args, "verbose", False):
                     print(f"[slime-router] Warning: Failed to update radix cache: {e}")
