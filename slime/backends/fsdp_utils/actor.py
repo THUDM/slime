@@ -9,7 +9,7 @@ import torch.distributed as dist
 from packaging import version
 from torch.distributed.tensor import DTensor
 from torch_memory_saver import torch_memory_saver
-from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForVision2Seq, AutoProcessor, AutoTokenizer
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText, AutoProcessor, AutoTokenizer
 
 # Import FSDP v2 components based on PyTorch version
 if version.parse(torch.__version__) >= version.parse("2.6"):
@@ -72,7 +72,7 @@ class FSDPTrainRayActor(TrainRayActor):
         with torch.autocast(device_type=f"cuda:{torch.cuda.current_device()}"):
             # Use VLM-specific model class if multimodal_keys is set
             if self.args.multimodal_keys:
-                model = AutoModelForVision2Seq.from_pretrained(
+                model = AutoModelForImageTextToText.from_pretrained(
                     self.args.hf_checkpoint,
                     trust_remote_code=True,
                     attn_implementation=self.args.attn_implementation,
