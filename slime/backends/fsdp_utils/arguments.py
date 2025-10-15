@@ -1,7 +1,6 @@
 import argparse
 import dataclasses
 from dataclasses import dataclass
-from typing import get_args, get_origin
 
 import yaml
 
@@ -40,12 +39,9 @@ def parse_fsdp_cli(extra_args_provider=None):
     for f in dataclasses.fields(FSDPArgs):
         if f.name == "config":
             continue
-        # Resolve Optional/Union types to the underlying concrete type for argparse
-        arg_type = f.type
-        origin = get_origin(arg_type)
-        if origin is not None:
-            args_ = [t for t in get_args(arg_type) if t is not type(None)]  # drop NoneType
-            arg_type = args_[0] if len(args_) == 1 else str
+
+        # Map str | None to str for argparse; otherwise use the field type as-is
+        arg_type = str if f.type == (str | None) else f.type
 
         if arg_type is bool:
             parser.add_argument(f"--{f.name.replace('_', '-')}", action="store_true")
