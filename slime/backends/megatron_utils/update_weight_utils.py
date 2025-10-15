@@ -71,7 +71,7 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
 
 
 def all_gather_params_async(
-    param_infos_and_params: list[tuple[ParamInfo, torch.nn.Parameter]],
+    param_infos_and_params: list[tuple[ParamInfo, torch.Tensor]],
 ) -> list[torch.Tensor]:
     """
     Parallel TP all-gather for multiple params. Loop 1: for each TP param, allocate buffers +
@@ -144,7 +144,7 @@ def remove_padding(name: str, param: torch.Tensor, vocab_size: int) -> torch.Ten
     return param
 
 
-def named_parameters(args: Namespace, model: Sequence[torch.nn.Module]) -> Iterator[tuple[str, torch.nn.Parameter]]:
+def named_parameters(args: Namespace, model: Sequence[torch.nn.Module]) -> Iterator[tuple[str, torch.Tensor]]:
     """
     Yield (global_name, param/buffer) with consistent names across PP/EP. Adjusts indices for
     virtual PP + EP offsets. Handles decoder.layers, mtp.layers (Multi-Token Prediction), expert_bias.
@@ -524,8 +524,8 @@ class UpdateWeightFromTensor:
         return gathered_params, param_infos
 
     def _update_converted_params_from_tensor(
-        self, gathered_params: Sequence[tuple[str, torch.Tensor]], param_infos: list[ParamInfo]
-    ) -> list[ObjectRef] | None:
+        self, gathered_params: Sequence[torch.Tensor], param_infos: list[ParamInfo]
+    ) -> list[ObjectRef]:
 
         converted_named_tensors = []
         for info, param in zip(param_infos, gathered_params):
@@ -553,9 +553,7 @@ class UpdateWeightFromTensor:
 
         return all_refs
 
-    def _send_to_colocated_engine(
-        self, converted_named_tensors: list[tuple[str, torch.Tensor]]
-    ) -> list[ObjectRef] | None:
+    def _send_to_colocated_engine(self, converted_named_tensors: list[tuple[str, torch.Tensor]]) -> list[ObjectRef]:
         if use_flattened_tensor_bucket:
             converted_named_tensors_by_dtypes = {}
             for name, tensor in converted_named_tensors:
@@ -621,7 +619,7 @@ class UpdateWeightFromDistributed:
         weights: Mapping[str, Mapping[str, torch.Tensor]],
         *,
         model_name: str,
-        quantization_config: dict[str, int | str] | None,
+        quantization_config: dict[str, int | str | list[str]] | None,
         vocab_size: int,
     ) -> None:
         """
