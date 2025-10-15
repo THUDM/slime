@@ -488,7 +488,9 @@ class ChatCompletionHandler:
             try:
                 # Combine input and output tokens for cache insertion
                 full_text = input_text + generated_text
-                await radix_tree.insert_async(full_text, token_ids + output_ids)  # TODO implement inser async
+                await radix_tree.insert(
+                    full_text, token_ids + output_ids, output_logprobs
+                )  # TODO implement insert async
             except Exception as e:
                 if getattr(self.args, "verbose", False):
                     print(f"[slime-router] Warning: Failed to update radix cache: {e}")
@@ -512,6 +514,15 @@ class ChatCompletionHandler:
         if reasoning_text and getattr(self.args, "include_reasoning_in_response", False):
             message_content["reasoning"] = reasoning_text
 
+        if tool_calls:
+            finish_reason = "tool_calls"
+        else:
+            try:
+                finish_reason = generate_data.get("meta_info", {}).get("finish_reason", "stop")
+            except Exception as e:
+                if getattr(self.args, "verbose", False):
+                    print(f"[slime-router] Warning: Failed to get finish_reason: {e}, defaulting to 'stop'")
+                finish_reason = "stop"
         # Convert to OpenAI format
         openai_response = {
             "id": f"chatcmpl-{uuid.uuid4().hex[:8]}",
@@ -522,9 +533,7 @@ class ChatCompletionHandler:
                 {
                     "index": 0,
                     "message": message_content,
-                    "finish_reason": (
-                        "tool_calls" if tool_calls else "stop"
-                    ),  # TODO change the finish reason based on actual reason
+                    "finish_reason": finish_reason,  # Use extracted
                 }
             ],
             "usage": {
