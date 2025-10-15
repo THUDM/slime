@@ -2,6 +2,8 @@
 
 为了保证长期稳定的 RL 训练，slime 会默认开始一定程度的容灾机制。这里主要介绍一下 slime 中容灾的一些设计思路。
 
+可以通过 `--use-fault-tolerance` 开启容灾机制。
+
 ## rollout 容灾
 
 slime 会在 rollout 过程中，定期向所有 SGLang server 发送心跳请求（`/health_generate`），如果心跳超时，则会停止这个 SGLang server。并在这轮 rollout 完成之后进行重启和正确的参数更新。

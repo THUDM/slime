@@ -12,6 +12,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
+from slime.rollout.base_types import call_rollout_fn
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
 from slime.utils.metric_checker import MetricChecker
@@ -61,7 +62,8 @@ class RolloutManager:
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
 
         self._metric_checker = MetricChecker.maybe_create(args)
-        self._health_monitor = RolloutHealthMonitor(self, args)
+        if self.args.use_fault_tolerance:
+            self._health_monitor = RolloutHealthMonitor(self, args)
 
     def dispose(self):
         if self._metric_checker is not None:
@@ -81,12 +83,12 @@ class RolloutManager:
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
     def generate(self, rollout_id):
-        monitor_started = self._health_monitor.start()
+        monitor_started = self.args.use_fault_tolerance and self._health_monitor.start()
         start_time = time.time()
         try:
-            data = self._get_rollout_data(rollout_id=rollout_id)
+            data, metrics = self._get_rollout_data(rollout_id=rollout_id)
             self._save_debug_rollout_data(data, rollout_id=rollout_id)
-            _log_rollout_data(rollout_id, self.args, data, time.time() - start_time)
+            _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
             data = self._convert_samples_to_train_data(data)
             return Box(ray.put(data))
         finally:
@@ -99,7 +101,9 @@ class RolloutManager:
             # if debug train only, we don't generate evaluation data
             return
         # TODO: add fault tolerance to eval
-        data = self.eval_generate_rollout(self.args, rollout_id, self.data_source, evaluation=True)
+        data = call_rollout_fn(
+            self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True
+        ).data
         metrics = _log_eval_rollout_data(rollout_id, self.args, data)
         if self._metric_checker is not None:
             self._metric_checker.on_eval(metrics)
@@ -122,8 +126,11 @@ class RolloutManager:
                 open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
+            metrics = None
         else:
-            data = self.generate_rollout(self.args, rollout_id, self.data_source, evaluation=False)
+            data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
+            metrics = data.metrics
+            data = data.samples
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
                 data = sum(data, [])
@@ -133,7 +140,7 @@ class RolloutManager:
                 origin_data_length = len(data)
                 data = data[:trim_len]
                 print(f"trim number of samples from {origin_data_length} to {trim_len}")
-        return data
+        return data, metrics
 
     def _save_debug_rollout_data(self, data, rollout_id):
         # TODO to be refactored (originally Buffer._set_data)
@@ -447,11 +454,11 @@ def _log_eval_rollout_data(rollout_id, args, data):
     return log_dict
 
 
-def _log_rollout_data(rollout_id, args, samples, rollout_time):
+def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
     if args.load_debug_rollout_data:
         return
 
-    log_dict = {}
+    log_dict = {**(rollout_extra_metrics or {})}
     response_lengths = [
         sum(sample.loss_mask) if sample.loss_mask is not None else sample.response_length for sample in samples
     ]
