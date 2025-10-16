@@ -1,0 +1,116 @@
+ARG TransformerEngine_VERSION=25.06-py3
+FROM nvcr.io/nvidia/pytorch:${TransformerEngine_VERSION} AS TransformerEngine
+
+# we need to write this again after from
+ARG SGLANG_VERSION
+ARG MEGATRON_COMMIT=main
+
+RUN apt update
+RUN apt install -y nvtop
+
+####################
+# sglang deps
+####################
+RUN export BASE_DIR=/root
+WORKDIR /root/
+RUN pip install uv
+RUN git clone https://github.com/sgl-project/sglang.git --branch v0.4.9.post2 --depth 1 &&\
+    cd /root/sglang/ &&\
+    pip -v install --no-deps -e "python[all]" &&\
+    cd sgl-kernel    &&\
+    make install-deps
+
+# TODO: change to pip install sglang-router after it has a new release
+RUN pip install sgl_kernel==0.2.9
+RUN pip install sglang-router --force-reinstall
+RUN pip install ray[default]
+RUN pip install httpx[http2] wandb pylatexenc blobfile accelerate "mcp[cli]"
+RUN pip install git+https://github.com/zhuzilin/cumem_allocator.git
+
+####################
+# megatron deps
+####################
+RUN pip -v install --no-build-isolation \
+  git+https://github.com/fanshiqing/grouped_gemm@v1.1.4
+
+####################
+# flash-attention 3
+####################
+RUN cd /root/ && \
+    MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1
+RUN cd /root/ && \
+    git clone https://github.com/Dao-AILab/flash-attention.git && cd flash-attention/ && git checkout 27f501d && cd hopper/ && python setup.py install
+RUN python_path=`python -c "import site; print(site.getsitepackages()[0])"` && \
+   mkdir -p $python_path/flash_attn_3 && \
+   wget -P $python_path/flash_attn_3 https://raw.githubusercontent.com/Dao-AILab/flash-attention/27f501dbe011f4371bff938fe7e09311ab3002fa/hopper/flash_attn_interface.py
+
+# megatron
+WORKDIR /root/
+RUN git clone https://github.com/InfiXAI/Megatron-LM.git --recursive && \
+    cd Megatron-LM && \
+    pip install -e .
+
+####################
+# other deps
+####################
+RUN pip install git+https://github.com/zhuzilin/cumem_allocator.git --no-build-isolation
+RUN pip install git+https://github.com/ISEEKYAN/mbridge.git --no-deps
+
+####################
+# slime
+####################
+RUN cd /root &&\
+    git clone https://github.com/fy1214/slime.git --branch submit    && \
+    cd slime && \
+    pip install -e .
+# apply patch
+#RUN cd $BASE_DIR/sglang
+#git apply /root/slime/docker/patch/sglang.patch
+
+####################
+# other deps
+####################
+RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git
+RUN pip uninstall triton
+RUN pip install triton==3.3.0
+
+####################
+# deps from sgl-kernel
+####################
+RUN pip install blobfile==3.0.0
+RUN pip install build
+RUN pip install compressed-tensors
+RUN pip install datasets
+RUN pip install fastapi
+RUN pip install hf_transfer
+RUN pip install huggingface_hub
+RUN pip install interegular
+RUN pip install llguidance==0.7.11
+RUN pip install modelscope
+RUN pip install msgspec
+RUN pip install ninja
+RUN pip install orjson
+RUN pip install outlines==0.1.11
+RUN pip install packaging
+RUN pip install partial_json_parser
+RUN pip install pillow
+RUN pip install prometheus-client>=0.20.0
+RUN pip install psutil
+RUN pip install pydantic
+RUN pip install pynvml
+RUN pip install pybase64
+RUN pip install python-multipart
+RUN pip install pyzmq==25.1.2
+RUN pip install sentencepiece
+RUN pip install soundfile==0.13.1
+RUN pip install scipy
+RUN pip install torchao==0.9.0
+RUN pip install transformers==4.54.1
+RUN pip install timm==1.0.16
+RUN pip install uvicorn
+RUN pip install uvloop
+RUN pip install xgrammar==0.1.21
+RUN pip install compressed_tensors
+
+WORKDIR /root/
+ENTRYPOINT /bin/bash
