@@ -247,9 +247,9 @@ class FSDPTrainRayActor(TrainRayActor):
         mbs_size_list = []
         dp_size = dist.get_world_size()
         local_batch_size = self.args.global_batch_size // dp_size
-        assert self.args.global_batch_size % dp_size == 0, (
-            f"global_batch_size {self.args.global_batch_size} is not divisible by dp_world_size {dp_size}"
-        )
+        assert (
+            self.args.global_batch_size % dp_size == 0
+        ), f"global_batch_size {self.args.global_batch_size} is not divisible by dp_world_size {dp_size}"
         # Use global_batch_size for splitting when max_tokens_per_gpu is enabled
         if self.args.use_dynamic_batch_size:
             for i in range(0, len(tokens), local_batch_size):
@@ -321,9 +321,9 @@ class FSDPTrainRayActor(TrainRayActor):
         packed_batches, grad_accum = self.packed_data(rollout_data)
         log_dict = {}
 
-        assert len(grad_accum) > 0, (
-            f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
-        )
+        assert (
+            len(grad_accum) > 0
+        ), f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
 
         if "ref" in self.weights:
             self.compute_log_prob("ref", packed_batches, store_prefix="ref_")
