@@ -24,20 +24,20 @@ def compute_approx_kl(
 
     log_ratio = log_probs.float() - log_probs_base.float()
 
-    if kl_loss_type == "kl":
+    if kl_loss_type == "k1":
         return log_ratio
     elif kl_loss_type == "k2":
         log_ratio = log_probs.float() - log_probs_base.float()
         log_ratio = log_ratio**2 / 2.0
         return log_ratio
     elif kl_loss_type == "k3":
+        # The non negative kl approximation in
+        # http://joschu.net/blog/kl-approx.html
+        # Besides non negative, it is also unbiased and have lower variance.
         log_ratio = -log_ratio
         log_ratio = log_ratio.exp() - 1 - log_ratio
         return log_ratio
     elif kl_loss_type == "low_var_kl":
-        # The non negative kl approximation in
-        # http://joschu.net/blog/kl-approx.html
-        # Besides non negative, it is also unbiased and have lower variance.
         log_ratio = -log_ratio
         log_ratio = log_ratio.exp() - 1 - log_ratio
         return torch.clamp(log_ratio, min=-10, max=10)
