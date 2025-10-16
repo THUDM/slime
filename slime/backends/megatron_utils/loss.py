@@ -1,6 +1,6 @@
 from argparse import Namespace
 from collections.abc import Callable, Iterator
-from typing import Optional, Union
+from typing import Union
 
 import torch
 from megatron.core import mpu
