@@ -247,9 +247,9 @@ class FSDPTrainRayActor(TrainRayActor):
         mbs_size_list = []
         dp_size = dist.get_world_size()
         local_batch_size = self.args.global_batch_size // dp_size
-        assert (
-            self.args.global_batch_size % dp_size == 0
-        ), f"global_batch_size {self.args.global_batch_size} is not divisible by dp_world_size {dp_size}"
+        assert self.args.global_batch_size % dp_size == 0, (
+            f"global_batch_size {self.args.global_batch_size} is not divisible by dp_world_size {dp_size}"
+        )
         # Use global_batch_size for splitting when max_tokens_per_gpu is enabled
         if self.args.use_dynamic_batch_size:
             for i in range(0, len(tokens), local_batch_size):
@@ -321,9 +321,9 @@ class FSDPTrainRayActor(TrainRayActor):
         packed_batches, grad_accum = self.packed_data(rollout_data)
         log_dict = {}
 
-        assert (
-            len(grad_accum) > 0
-        ), f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
+        assert len(grad_accum) > 0, (
+            f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
+        )
 
         if "ref" in self.weights:
             self.compute_log_prob("ref", packed_batches, store_prefix="ref_")
@@ -631,6 +631,24 @@ class FSDPTrainRayActor(TrainRayActor):
             self.update_gpu_params_dict(current_weights)
 
 
+@torch.compile(dynamic=True)
+def selective_log_softmax(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
+    """Fused version of the common `log_softmax -> gather` operation.
+
+    The fused version of this operation avoids the (potentially large) memory overhead
+    of allocating a new tensor to store the full logprobs.
+
+     Parameters:
+        logits: Tensor of shape [..., V] containing model logits.
+        input_ids: Tensor of shape [...] of token indices whose log-probabilities are gathered.
+
+    Returns:
+        Tensor of shape [...] containing the log-probabilities corresponding to `input_ids`.
+    """
+    logprobs = logits.log_softmax(dim=-1)
+    return torch.gather(logprobs, dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
+
+
 def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temperature: float = 1.0) -> torch.Tensor:
     """Gather next-token log probabilities for standard (unpadded) batches.
 
@@ -647,9 +665,8 @@ def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temp
     # haoran: whether to apply temperature shifting here?
     if rollout_temperature != 1.0:
         pred_logits = pred_logits / rollout_temperature
-    log_probs_all = torch.log_softmax(pred_logits, dim=-1)
     tgt = input_ids[:, 1:].contiguous()
-    log_probs = log_probs_all.gather(-1, tgt.unsqueeze(-1)).squeeze(-1)
+    log_probs = selective_log_softmax(pred_logits, tgt)
     return log_probs
 
 
@@ -674,14 +691,11 @@ def gather_log_probs_packed(
         input_ids = input_ids.squeeze(0)
 
     # Shift for next-token prediction: logits[:-1] predicts input_ids[1:]
-    log_probs = torch.log_softmax(logits[:-1], dim=-1)
-    targets = input_ids[1:].to(device=log_probs.device)
+    shifted_logits = logits[:-1]
+    targets = input_ids[1:].to(device=shifted_logits.device)
 
-    # Gather log probs for targets
-    gathered = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
-
-    # Apply mask to exclude first tokens
-    return gathered
+    # Gather log probs for targets using the efficient helper
+    return selective_log_softmax(shifted_logits, targets)
 
 
 def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks: list[torch.Tensor]) -> torch.Tensor:
