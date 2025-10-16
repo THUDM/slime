@@ -4,7 +4,8 @@ import copy
 import io
 from argparse import Namespace
 from collections import defaultdict
-from typing import Any, Callable, Optional, Union
+from collections.abc import Callable
+from typing import Any
 
 from PIL import Image
 from tqdm import tqdm
@@ -191,10 +192,10 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
 async def generate_and_rm(
     args: Namespace,
-    sample: Union[Sample, list[Sample]],
+    sample: Sample | list[Sample],
     sampling_params: dict[str, Any],
     evaluation: bool = False,
-) -> Union[Sample, list[Sample]]:
+) -> Sample | list[Sample]:
     # For samples with existing response, check if they're complete
     if sample.status == Sample.Status.COMPLETED or sample.status == Sample.Status.TRUNCATED:
         assert sample.response is not None
@@ -403,7 +404,7 @@ class _MetricGatherer:
     def __init__(self):
         self._dynamic_filter_drop_reason_count = defaultdict(lambda: 0)
 
-    def on_dynamic_filter_drop(self, reason: Optional[str]):
+    def on_dynamic_filter_drop(self, reason: str | None):
         if not reason:
             return
         self._dynamic_filter_drop_reason_count[reason] += 1
@@ -521,7 +522,7 @@ async def eval_rollout_single_dataset(
 # TODO remove this temp function
 def generate_rollout(
     args: Namespace, rollout_id: int, data_buffer: Any, evaluation: bool = False
-) -> Union[RolloutFnTrainOutput, RolloutFnEvalOutput]:
+) -> RolloutFnTrainOutput | RolloutFnEvalOutput:
     """An example to implement the generate_rollout function for an rule based rm rollout generation.
 
     Args:
