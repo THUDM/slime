@@ -694,7 +694,7 @@ def gather_log_probs_packed(
     shifted_logits = logits[:-1]
     targets = input_ids[1:].to(device=shifted_logits.device)
 
-    # Gather log probs for targets using the efficient helper
+    # Gather log probs for targets
     return selective_log_softmax(shifted_logits, targets)
 
 
