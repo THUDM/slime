@@ -17,6 +17,7 @@ def pack_sequences(
     advantages: List[float],
     returns: List[float],
     rollout_log_probs: Optional[List[List[float]]] = None,
+    pixel_values: Optional[List] = None,
     max_tokens_per_gpu: Optional[int] = None,
     num_packs: Optional[int] = None,
 ) -> List[Dict]:
@@ -81,20 +82,27 @@ def pack_sequences(
             if rollout_log_probs:
                 flat_rollout_log_probs.extend(rollout_log_probs[i])
             cu_seqlens.append(cu_seqlens[-1] + len(seq_tokens))
-        result.append(
-            {
-                "tokens": torch.tensor(flat_tokens, dtype=torch.long),
-                "loss_masks": torch.tensor(flat_masks, dtype=torch.int),
-                "position_ids": torch.tensor(flat_positionids, dtype=torch.int),
-                "cu_seqlens": torch.tensor(cu_seqlens, dtype=torch.int32),
-                "rewards": torch.tensor([rewards[i] for i in indices], dtype=torch.float32),
-                "raw_rewards": [raw_rewards[i] for i in indices],
-                "response_lengths": [response_lengths[i] for i in indices],
-                "advantages": torch.tensor(flat_advantages, dtype=torch.float32),
-                "returns": torch.tensor(flat_returns, dtype=torch.float32),
-                "rollout_log_probs": torch.tensor(flat_rollout_log_probs, dtype=torch.float32),
-            }
-        )
+
+        packed_batch = {
+            "tokens": torch.tensor(flat_tokens, dtype=torch.long),
+            "loss_masks": torch.tensor(flat_masks, dtype=torch.int),
+            "position_ids": torch.tensor(flat_positionids, dtype=torch.int),
+            "cu_seqlens": torch.tensor(cu_seqlens, dtype=torch.int32),
+            "rewards": torch.tensor([rewards[i] for i in indices], dtype=torch.float32),
+            "raw_rewards": [raw_rewards[i] for i in indices],
+            "response_lengths": [response_lengths[i] for i in indices],
+            "advantages": torch.tensor(flat_advantages, dtype=torch.float32),
+            "returns": torch.tensor(flat_returns, dtype=torch.float32),
+            "rollout_log_probs": torch.tensor(flat_rollout_log_probs, dtype=torch.float32),
+        }
+
+        # Pack pixel_values for VLM (don't flatten, concatenate per-sample tensors)
+        if pixel_values is not None:
+            pack_pixel_values = [pixel_values[i] for i in indices if pixel_values[i] is not None]
+            if pack_pixel_values:
+                packed_batch["pixel_values"] = torch.cat(pack_pixel_values, dim=0)
+
+        result.append(packed_batch)
 
     return result
 
