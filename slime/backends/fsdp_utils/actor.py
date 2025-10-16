@@ -638,7 +638,7 @@ def selective_log_softmax(logits: torch.Tensor, input_ids: torch.Tensor) -> torc
     The fused version of this operation avoids the (potentially large) memory overhead
     of allocating a new tensor to store the full logprobs.
 
-     Parameters:
+    Parameters:
         logits: Tensor of shape [..., V] containing model logits.
         input_ids: Tensor of shape [...] of token indices whose log-probabilities are gathered.
 
