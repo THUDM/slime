@@ -69,10 +69,9 @@ PERF_ARGS=(
 OPTIMIZER_ARGS=(
    --optimizer adam
    --lr 1e-5
-   --lr-warmup-iters 128
    --lr-decay-style cosine
    --min-lr 1e-6
-   --lr-warmup-fraction 0.9
+   --lr-warmup-fraction 0.1
    --weight-decay 0.1
    --adam-beta1 0.9
    --adam-beta2 0.95
