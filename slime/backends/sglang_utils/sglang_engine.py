@@ -1,7 +1,6 @@
 import dataclasses
 import multiprocessing
 import time
-from typing import List, Optional
 
 import requests
 from sglang.srt.entrypoints.http_server import launch_server
@@ -26,7 +25,7 @@ def get_base_gpu_id(args, rank):
     return start_index
 
 
-def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
+def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process | None:
     p = multiprocessing.Process(target=launch_server, args=(server_args,))
     p.start()
 
@@ -133,7 +132,7 @@ class SGLangEngine(RayActor):
                 f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}"
             )
 
-    def _make_request(self, endpoint: str, payload: Optional[dict] = None):
+    def _make_request(self, endpoint: str, payload: dict | None = None):
         """Make a POST request to the specified endpoint with the given payload.
 
         Args:
@@ -175,10 +174,10 @@ class SGLangEngine(RayActor):
 
     def update_weights_from_tensor(
         self,
-        serialized_named_tensors: List[str],
-        load_format: Optional[str] = None,
+        serialized_named_tensors: list[str],
+        load_format: str | None = None,
         flush_cache: bool = False,
-        weight_version: Optional[str] = None,
+        weight_version: str | None = None,
     ):
         """
         Update model weights from tensor data. The HTTP server will only post meta data, and the real weights will be copied directly from GPUs.
@@ -238,7 +237,7 @@ class SGLangEngine(RayActor):
         self.flush_cache()
         return self._make_request("release_memory_occupation")
 
-    def resume_memory_occupation(self, tags: List[str] = None):
+    def resume_memory_occupation(self, tags: list[str] | None = None):
         """
         Available tags for multi-stage resume: weights, kv_cache
         """
@@ -273,7 +272,7 @@ class SGLangEngine(RayActor):
             pass
 
     def update_weights_from_distributed(
-        self, names, dtypes, shapes, group_name, flush_cache=False, weight_version: Optional[str] = None
+        self, names, dtypes, shapes, group_name, flush_cache=False, weight_version: str | None = None
     ):
         payload = {
             "names": names,
@@ -298,16 +297,16 @@ class SGLangEngine(RayActor):
     def start_profile(
         self,
         # The output directory
-        output_dir: Optional[str] = None,
+        output_dir: str | None = None,
         # If set, it profile as many as this number of steps.
         # If it is set, profiling is automatically stopped after this step, and
         # the caller doesn't need to run stop_profile.
-        start_step: Optional[int] = None,
-        num_steps: Optional[int] = None,
-        activities: Optional[List[str]] = None,
+        start_step: int | None = None,
+        num_steps: int | None = None,
+        activities: list[str] | None = None,
         profile_by_stage: bool = False,
-        with_stack: Optional[bool] = None,
-        record_shapes: Optional[bool] = None,
+        with_stack: bool | None = None,
+        record_shapes: bool | None = None,
     ):
         return requests.post(
             f"http://{self.server_host}:{self.server_port}/start_profile",
