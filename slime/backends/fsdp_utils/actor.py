@@ -1,7 +1,7 @@
 from argparse import Namespace
+from collections.abc import Iterable
 from contextlib import nullcontext
 from itertools import accumulate
-from typing import Iterable, Optional
 
 import ray
 import torch
@@ -118,7 +118,7 @@ class FSDPTrainRayActor(TrainRayActor):
         self.micro_step = 0
         return 0
 
-    def sleep(self, tags: Optional[str | Iterable[str]]) -> None:
+    def sleep(self, tags: str | Iterable[str] | None) -> None:
         """Pause CUDA memory for tagged tensors via torch_memory_saver.
 
         When offloading is enabled, this forwards tags to
@@ -138,7 +138,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 for tag in tags:
                     torch_memory_saver.pause(tag)
 
-    def wake_up(self, tags: Optional[str | Iterable[str]]) -> None:
+    def wake_up(self, tags: str | Iterable[str] | None) -> None:
         """Resume CUDA memory for tagged tensors via torch_memory_saver.
 
         When offloading is enabled, this forwards tags to
@@ -591,7 +591,7 @@ class FSDPTrainRayActor(TrainRayActor):
         self.model.load_state_dict(gpu_state_dict, strict=True)
         torch.cuda.synchronize()
 
-    def load_ref_model(self, ref_load_path: Optional[str]) -> None:
+    def load_ref_model(self, ref_load_path: str | None) -> None:
         """Load reference model weights once and cache them on CPU.
 
         Parameters:
@@ -654,7 +654,7 @@ def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temp
 
 
 def gather_log_probs_packed(
-    logits: torch.Tensor, input_ids: torch.Tensor, cu_seqlens: Optional[torch.Tensor | float] = None
+    logits: torch.Tensor, input_ids: torch.Tensor, cu_seqlens: torch.Tensor | float | None = None
 ) -> torch.Tensor:
     """Gather next-token log probabilities for packed sequences.
 

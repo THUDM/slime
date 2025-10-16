@@ -1,6 +1,6 @@
 import socket
 from argparse import Namespace
-from typing import Mapping, Optional, Sequence
+from collections.abc import Mapping, Sequence
 
 import ray
 import torch
@@ -90,7 +90,7 @@ class UpdateWeightFromTensor:
         self,
         args: Namespace,
         model: torch.nn.Module,
-        weights: Optional[Mapping[str, Mapping[str, torch.Tensor]]],
+        weights: Mapping[str, Mapping[str, torch.Tensor]] | None,
         full_params: bool = False,
     ) -> None:
         self.args = args
@@ -116,7 +116,7 @@ class UpdateWeightFromTensor:
     def connect_rollout_engines(
         self,
         rollout_engines: Sequence[ActorHandle],
-        rollout_engine_lock: Optional[ActorHandle],
+        rollout_engine_lock: ActorHandle | None,
     ) -> None:
         """Attach rollout engines and create per-engine IPC (Gloo) groups.
 
@@ -297,7 +297,7 @@ class UpdateWeightFromDistributed:
     def connect_rollout_engines(
         self,
         rollout_engines: Sequence[ActorHandle],
-        rollout_engine_lock: Optional[ActorHandle],
+        rollout_engine_lock: ActorHandle | None,
     ) -> None:
         """On rank 0, initialize a temporary NCCL group for parameter broadcast."""
         self.rollout_engines = rollout_engines

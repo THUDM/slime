@@ -1,7 +1,6 @@
 import argparse
 import dataclasses
 from dataclasses import dataclass
-from typing import Optional
 
 import yaml
 
@@ -25,13 +24,13 @@ class FSDPArgs:
 
     # Logging
     wandb_project: str = "slime-fsdp"
-    wandb_run_name: Optional[str] = None
+    wandb_run_name: str | None = None
 
     # Precision
     gradient_checkpointing: bool = False
 
     # YAML bookkeeping
-    config: Optional[str] = None
+    config: str | None = None
 
 
 def parse_fsdp_cli(extra_args_provider=None):
@@ -40,7 +39,9 @@ def parse_fsdp_cli(extra_args_provider=None):
     for f in dataclasses.fields(FSDPArgs):
         if f.name == "config":
             continue
-        arg_type = f.type if f.type != Optional[str] else str
+
+        arg_type = str if f.type == (str | None) else f.type
+
         if arg_type is bool:
             parser.add_argument(f"--{f.name.replace('_', '-')}", action="store_true")
         else:
