@@ -4,7 +4,6 @@ import time
 from argparse import Namespace
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Union
 
 import ray
 import torch
@@ -39,7 +38,7 @@ class MegatronTrainRayActor(TrainRayActor):
         role: str,
         wandb_run_id: str,
         with_ref: bool = False,
-    ) -> Optional[int]:
+    ) -> int | None:
         super().init(args, role, wandb_run_id, with_ref)
 
         init(args)
@@ -135,7 +134,7 @@ class MegatronTrainRayActor(TrainRayActor):
         return start_rollout_id
 
     @torch.no_grad()
-    def update_cpu_params_dict(self, params_dict: Dict[str, torch.Tensor]) -> None:
+    def update_cpu_params_dict(self, params_dict: dict[str, torch.Tensor]) -> None:
         for name, param in named_parameters(self.args, self.model):
             if name not in params_dict:
                 params_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
@@ -143,14 +142,14 @@ class MegatronTrainRayActor(TrainRayActor):
         torch.cuda.synchronize()
 
     @torch.no_grad()
-    def update_gpu_params_dict(self, params_dict: Dict[str, torch.Tensor]) -> None:
+    def update_gpu_params_dict(self, params_dict: dict[str, torch.Tensor]) -> None:
         for name, param in named_parameters(self.args, self.model):
             assert name in params_dict
             param.copy_(params_dict[name], non_blocking=True)
         torch.cuda.synchronize()
 
     @timer
-    def sleep(self, tags: Union[str, Tuple[str, ...]]) -> None:
+    def sleep(self, tags: str | tuple[str, ...]) -> None:
         assert self.args.offload
         assert "model" in tags
         if isinstance(tags, str):
@@ -166,7 +165,7 @@ class MegatronTrainRayActor(TrainRayActor):
         print_memory("after offload model")
 
     @timer
-    def wake_up(self, tags: Union[str, Tuple[str, ...]]) -> None:
+    def wake_up(self, tags: str | tuple[str, ...]) -> None:
         assert self.args.offload
 
         # there are weird times when sglang is not offloaded immediately, so we wait here.
@@ -224,7 +223,7 @@ class MegatronTrainRayActor(TrainRayActor):
         data_iterator: list[DataIterator],
         num_microbatches: list[int],
         store_prefix: str = "",
-    ) -> Dict[str, list[torch.Tensor]]:
+    ) -> dict[str, list[torch.Tensor]]:
         self.update_gpu_params_dict(self.weights[model_tag])
 
         with timer(f"{store_prefix}log_probs"):
@@ -465,9 +464,9 @@ class MegatronTrainRayActor(TrainRayActor):
 
     def connect_actor_critic(
         self,
-        actor_handle: Optional[ActorHandle] = None,
-        master_address: Optional[str] = None,
-        master_port: Optional[int] = None,
+        actor_handle: ActorHandle | None = None,
+        master_address: str | None = None,
+        master_port: int | None = None,
     ) -> None:
         if self.role == "actor":
             master_address = ray.util.get_node_ip_address()

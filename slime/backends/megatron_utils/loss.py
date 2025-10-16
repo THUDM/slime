@@ -1,6 +1,5 @@
 from argparse import Namespace
 from collections.abc import Callable, Iterator
-from typing import Union
 
 import torch
 from megatron.core import mpu
@@ -213,7 +212,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     log_probs: list[torch.Tensor] = rollout_data.get("log_probs")
     ref_log_probs: list[torch.Tensor] = rollout_data.get("ref_log_probs")
     rewards: list[float] = rollout_data.get("rewards")
-    values: Union[None, list[torch.Tensor]] = rollout_data.get("values")
+    values: list[torch.Tensor] | None = rollout_data.get("values")
     response_lengths: list[int] = rollout_data.get("response_lengths")
     loss_masks: list[torch.Tensor] = rollout_data.get("loss_masks")
     total_lengths: list[int] = rollout_data.get("total_lengths")
