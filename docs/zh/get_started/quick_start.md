@@ -405,7 +405,7 @@ hf download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
    # 用于加载 tokenizer 等其他信息，实际上不会使用 hf 路径中的模型权重参数
    --hf-checkpoint /root/Qwen3-4B-FP8
 
-   #  megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的 dist 权重，不因为 FP rollout 而去做修改。
+   #  megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的 dist 权重，不因为 FP8 rollout 而去做修改。
    --ref-load /root/Qwen3-4B_torch_dist
 ```
 
@@ -521,7 +521,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     # 7. 填充并返回 Sample 对象
     sample.response = full_response
     sample.tokens = ...
-    sample.loss_masks = loss_masks
+    sample.loss_mask = loss_masks
     return sample
 ```
 

@@ -401,7 +401,7 @@ And replace `--hf-checkpoint` with:
    # Used to load tokenizer and other information, actually won't use model weight parameters from hf path
    --hf-checkpoint /root/Qwen3-4B-FP8
 
-   # The megatron checkpoint still needs to be the dist weights converted from bf16 huggingface at the beginning, not modified because of FP rollout.
+   # The megatron checkpoint still needs to be the dist weights converted from bf16 huggingface at the beginning, not modified because of FP8 rollout.
    --ref-load /root/Qwen3-4B_torch_dist
 ```
 
@@ -515,7 +515,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     # 7. Fill and return Sample object
     sample.response = full_response
     sample.tokens = ...
-    sample.loss_masks = loss_masks
+    sample.loss_mask = loss_masks
     return sample
 ```
 

@@ -20,6 +20,7 @@ from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, timer
+from slime.utils.types import RolloutBatch
 from slime.utils.wandb_utils import init_wandb_secondary
 
 from .checkpoint import load_checkpoint
@@ -83,8 +84,9 @@ class MegatronTrainRayActor(TrainRayActor):
             # Load old_actor checkpoint
             self.load_other_checkpoint("old_actor", args.load)
             # Create rollout_actor as a copy of current actor
-            self.weights["rollout_actor"] = {}
-            self.update_cpu_params_dict(self.weights["rollout_actor"])
+            if args.update_weights_interval == 1:
+                self.weights["rollout_actor"] = {}
+                self.update_cpu_params_dict(self.weights["rollout_actor"])
 
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
         self.weight_updater = update_weight_cls(
@@ -186,9 +188,7 @@ class MegatronTrainRayActor(TrainRayActor):
             mpu.reload_process_groups()
         print_memory("after wake_up model")
 
-    def _get_rollout_data(
-        self, rollout_data_ref: Box
-    ) -> Dict[str, list[torch.Tensor] | list[int] | list[float] | list[str]]:
+    def _get_rollout_data(self, rollout_data_ref: Box) -> RolloutBatch:
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
         # Both first pp stage and the last pp stage will recieve the data.
         rollout_data = process_rollout_data(
@@ -255,9 +255,7 @@ class MegatronTrainRayActor(TrainRayActor):
         else:
             return self.train_actor(rollout_id, rollout_data)
 
-    def train_critic(
-        self, rollout_id: int, rollout_data: Dict[str, list[torch.Tensor] | list[int] | list[float] | list[str]]
-    ) -> None:
+    def train_critic(self, rollout_id: int, rollout_data: RolloutBatch) -> None:
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
         rollout_data.update(
@@ -286,9 +284,7 @@ class MegatronTrainRayActor(TrainRayActor):
         )
         Timer().start("train_wait")
 
-    def train_actor(
-        self, rollout_id: int, rollout_data: Dict[str, list[torch.Tensor] | list[int] | list[float] | list[str]]
-    ) -> None:
+    def train_actor(self, rollout_id: int, rollout_data: RolloutBatch) -> None:
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
 
@@ -386,6 +382,17 @@ class MegatronTrainRayActor(TrainRayActor):
         # update the cpu actor weight to the latest model
         self.update_cpu_params_dict(self.weights["actor"])
 
+        # Update ref model if needed
+        if (
+            self.args.ref_update_interval is not None
+            and (rollout_id + 1) % self.args.ref_update_interval == 0
+            and "ref" in self.weights
+        ):
+            with timer("ref_model_update"):
+                if is_megatron_main_rank():
+                    print(f"Updating ref model at rollout_id {rollout_id}")
+                self.update_cpu_params_dict(self.weights["ref"])
+
         log_perf_data(rollout_id, self.args)
         Timer().start("train_wait")
 
@@ -416,13 +423,16 @@ class MegatronTrainRayActor(TrainRayActor):
             print_memory("after update_weights")
 
             if getattr(self.args, "keep_old_actor", False):
-                print("updating model queue: rollout_actor -> old_actor, actor -> rollout_actor")
-                # Queue-style update: rollout_actor params -> old_actor, actor params -> rollout_actor
-                # First copy rollout_actor to old_actor
-                for name in self.weights["old_actor"]:
-                    self.weights["old_actor"][name].copy_(self.weights["rollout_actor"][name])
-                # Then copy current actor to rollout_actor
-                self.update_cpu_params_dict(self.weights["rollout_actor"])
+                if self.args.update_weights_interval == 1:
+                    print("updating model queue: rollout_actor -> old_actor, actor -> rollout_actor")
+                    # Queue-style update: rollout_actor params -> old_actor, actor params -> rollout_actor
+                    # First copy rollout_actor to old_actor
+                    for name in self.weights["old_actor"]:
+                        self.weights["old_actor"][name].copy_(self.weights["rollout_actor"][name])
+                    # Then copy current actor to rollout_actor
+                    self.update_cpu_params_dict(self.weights["rollout_actor"])
+                else:
+                    self.update_cpu_params_dict(self.weights["old_actor"])
 
         if self.args.offload and hasattr(mpu, "destroy_process_groups"):
             mpu.destroy_process_groups()

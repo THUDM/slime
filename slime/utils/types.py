@@ -9,6 +9,7 @@ import torch
 class Sample:
     """The sample generated"""
 
+    group_index: Optional[int] = None
     index: Optional[int] = None
     # prompt
     prompt: Union[str, list[dict[str, str]]] = ""
@@ -55,3 +56,9 @@ class ParamInfo:
     attrs: dict
     size: int
     src_rank: int
+
+
+# A dict-based batch produced along the rollout -> training path
+# In Megatron backend, several fields are converted to torch.Tensor lists on GPU
+# before being consumed by data iterators (see megatron_utils.actor._get_rollout_data).
+RolloutBatch = dict[str, list[torch.Tensor] | list[int] | list[float] | list[str]]

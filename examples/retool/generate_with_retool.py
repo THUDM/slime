@@ -300,7 +300,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     sample.tokens = prompt_tokens_ids + response_token_ids
     sample.response_length = len(response_token_ids)
     sample.response = response
-    sample.loss_masks = loss_masks
+    sample.loss_mask = loss_masks
 
     # Store payload information for wandb logging
     sample.payload_text = prompt + response
