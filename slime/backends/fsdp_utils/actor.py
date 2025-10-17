@@ -73,12 +73,15 @@ class FSDPCPUAdamWrapper:
         # Create CPU shadow copies of parameters using the pattern from update_weight_utils.py
         # CRITICAL: DeepSpeed AVX operations require FP32 params on CPU for stability
         # AVX operations need proper alignment and FP32 precision
+        # IMPORTANT: Store only the LOCAL SHARD for each rank, not the full tensor
         self.cpu_params = []
         for gpu_param in self.gpu_params:
-            # Handle DTensor from FSDP by getting the full tensor first
+            # Handle DTensor from FSDP by getting the LOCAL shard only
+            # This ensures shape consistency with gradients during training
             param_data = gpu_param.detach()
             if isinstance(param_data, DTensor):
-                param_data = param_data.full_tensor()
+                # Get only the local shard, not the full tensor
+                param_data = param_data.to_local()
             
             # Convert to FP32 on CPU for DeepSpeed compatibility
             # DeepSpeed's AVX operations work best with FP32 (documented behavior)
@@ -133,12 +136,14 @@ class FSDPCPUAdamWrapper:
         Uses the same .to() pattern as update_weight_utils.py for proper memory layout
         """
         # Copy gradients from GPU to CPU - handle DTensor and ensure FP32 for DeepSpeed AVX
+        # IMPORTANT: Use LOCAL SHARD only for shape consistency with params
         for gpu_param, cpu_param in zip(self.gpu_params, self.cpu_params):
             if gpu_param.grad is not None:
-                # Handle DTensor gradients from FSDP
+                # Handle DTensor gradients from FSDP - get LOCAL shard only
                 grad_data = gpu_param.grad.detach()
                 if isinstance(grad_data, DTensor):
-                    grad_data = grad_data.full_tensor()
+                    # Get only the local shard to match the local parameter shape
+                    grad_data = grad_data.to_local()
                 
                 # CRITICAL: Convert to FP32 for DeepSpeed AVX compatibility
                 # DeepSpeed's AVX operations expect FP32 gradients to match FP32 params
@@ -158,15 +163,17 @@ class FSDPCPUAdamWrapper:
         self.cpu_optimizer.step()
         
         # Copy updated FP32 parameters back to GPU with original dtype
+        # CRITICAL: Must use .copy_() for both DTensor and regular tensors to preserve metadata
         for gpu_param, cpu_param in zip(self.gpu_params, self.cpu_params):
-            # Handle DTensor if needed
+            # Convert back to GPU with original dtype (likely bfloat16)
+            updated_param = cpu_param.data.to(device=torch.cuda.current_device(), dtype=gpu_param.dtype, non_blocking=True)
+            
+            # Handle DTensor by copying to the local shard
             if isinstance(gpu_param.data, DTensor):
-                # For DTensor, we need to be more careful
-                updated_param = cpu_param.data.to(device=torch.cuda.current_device(), dtype=gpu_param.dtype, non_blocking=True)
-                gpu_param.data = updated_param
+                # Get the local tensor component of the DTensor and copy to it
+                gpu_param.data.to_local().copy_(updated_param, non_blocking=True)
             else:
-                # Regular tensor - convert back to original dtype (likely bfloat16)
-                updated_param = cpu_param.data.to(device=torch.cuda.current_device(), dtype=gpu_param.dtype, non_blocking=True)
+                # Regular tensor - use standard copy
                 gpu_param.data.copy_(updated_param, non_blocking=True)
         
         torch.cuda.synchronize()

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# FSDP Colocated 4GPU Training Script with Weights & Biases Support
+# FSDP Colocated 8GPU Training Script with Weights & Biases Support
 # 
 # This script runs FSDP training with wandb logging enabled.
 # 
@@ -27,7 +27,7 @@ pkill -9 ray
 pkill -9 python
 
 set -ex
-export CUDA_VISIBLE_DEVICES=6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
 
@@ -43,12 +43,12 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 1000
-   --rollout-batch-size 4
+   --rollout-batch-size 8
    --n-samples-per-prompt 4
    --rollout-max-response-len 2048
    --rollout-temperature 0.8
 
-   --global-batch-size 16
+   --global-batch-size 32
    --balance-data
 )
 
@@ -64,7 +64,7 @@ GRPO_ARGS=(
 )
 
 OPTIMIZER_ARGS=(
-   --optimizer adam
+   --optimizer deepspeed_cpu_adam
    --lr 1e-6
    --lr-decay-style constant
    --weight-decay 0.1
@@ -74,7 +74,7 @@ OPTIMIZER_ARGS=(
 
 SGLANG_ARGS=(
    # Set equal to the number of GPUs per node for colocated mode
-   --rollout-num-gpus-per-engine 2
+   --rollout-num-gpus-per-engine 8
    --sglang-decode-log-interval 1000
    --sglang-mem-fraction-static 0.55  # Further reduced to ~12GB per GPU to leave ~60GB for FSDP training
    --sglang-max-running-requests 32   # Reduced from 64 to lower KV cache memory usage
@@ -85,7 +85,7 @@ SGLANG_ARGS=(
 WANDB_ARGS=(
    --use-wandb
    --wandb-project "gsm8k_async_rl"
-   --wandb-group "fsdp-4gpu-colocated"
+   --wandb-group "fsdp-8gpu-colocated"
    --wandb-mode "online"  # Change to "offline" for local logging only
 )
 
@@ -108,7 +108,7 @@ FSDP_ARGS=(
 
 
 # launch the master node of ray in container
-ray start --head --node-ip-address 127.0.0.1 --num-gpus 2 --disable-usage-stats
+ray start --head --node-ip-address 127.0.0.1 --num-gpus 8 --disable-usage-stats
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
@@ -119,7 +119,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    -- python3 train.py \
    --train-backend fsdp \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 2 \
+   --actor-num-gpus-per-node 8 \
    --colocate \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
@@ -129,3 +129,4 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${SGLANG_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${FSDP_ARGS[@]} 
+
