@@ -7,6 +7,7 @@ __all__ = ["generate_rollout"]
 
 TOKENIZER = None
 MASK_GENERATOR = None
+SAMPLE_PRINTED = False
 
 
 def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
@@ -24,7 +25,7 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
     assert not evaluation
     assert args.rollout_global_dataset
 
-    global TOKENIZER, MASK_GENERATOR
+    global TOKENIZER, MASK_GENERATOR, SAMPLE_PRINTED
     if TOKENIZER is None:
         TOKENIZER = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
 
@@ -33,7 +34,7 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
 
     samples = data_buffer.get_samples(args.rollout_batch_size)
 
-    for sample in samples:
+    for i, sample in enumerate(samples):
         (sample,) = sample
         messages = sample.prompt
         token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages)
@@ -43,5 +44,11 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
         sample.response_length = response_length
         sample.reward = 0
         sample.loss_mask = loss_mask[-response_length:]
+
+        if i == 0 and not SAMPLE_PRINTED:
+            print(
+                f"sft_rollout::generate_rollout example data: {sample=} (raw){messages=} (raw){token_ids=} (raw){loss_mask=} {response_length=}"
+            )
+            SAMPLE_PRINTED = True
 
     return samples
