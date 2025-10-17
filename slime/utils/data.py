@@ -1,5 +1,7 @@
 import json
 import random
+import re
+
 import numpy as np
 import pandas as pd
 import ray
@@ -14,14 +16,31 @@ __all__ = ["Dataset"]
 
 # TODO: don't read the whole file into memory.
 def read_file(path):
+    path, row_slice = _parse_generalized_path(path)
+
     if path.endswith(".jsonl"):
         df = pd.read_json(path, lines=True)
     elif path.endswith(".parquet"):
         df = pd.read_parquet(path, dtype_backend="pyarrow")
     else:
         raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
+
+    if row_slice is not None:
+        print(f"read_file path={path} slice {len(df)=} rows into {row_slice=}")
+        df = df.iloc[row_slice]
+
     for _, row in df.iterrows():
         yield row.to_dict()
+
+
+def _parse_generalized_path(s: str):
+    if (m := re.match(r"^(?P<real_path>.*)@\[(?P<start>-?\d*):(?P<end>-?\d*)\]$", s)) is not None:
+        path = m.group("real_path")
+        start = int(x) if (x := m.group("start")) != "" else None
+        end = int(x) if (x := m.group("end")) != "" else None
+        return path, slice(start, end)
+
+    return s, None
 
 
 class Dataset:
