@@ -514,6 +514,7 @@ async def eval_rollout_single_dataset(
         name: {
             "rewards": [sample.reward if not reward_key else sample.reward[reward_key] for sample in data],
             "truncated": [sample.status == Sample.Status.TRUNCATED for sample in data],
+            "samples": data,
         }
     }
 
