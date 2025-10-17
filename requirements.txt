@@ -10,3 +10,4 @@ tensorboard
 torch
 transformers
 wandb
+deepspeed
