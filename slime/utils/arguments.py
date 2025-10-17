@@ -694,6 +694,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=0,
                 help="Lower bound clipping threshold C for importance sampling ratios to control variance.",
             )
+            parser.add_argument(
+                "--custom-tis-function-path",
+                type=str,
+                default=None,
+                help="Path to the custom TIS function.",
+            )
 
             parser.add_argument(
                 "--use-routing-replay",
