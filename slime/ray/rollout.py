@@ -429,6 +429,8 @@ def _log_eval_rollout_data(rollout_id, args, data):
     for key in data.keys():
         rewards = data[key]["rewards"]
         log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
+        if (samples := data[key].get("samples")) is not None:
+            log_dict |= dict_add_prefix(_compute_reward_cat_metrics(args, samples), f"eval/{key}-")
         if "truncated" in data[key]:
             truncated = data[key]["truncated"]
             log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
@@ -466,6 +468,7 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
         log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
     log_dict |= _compute_zero_std_metrics(args, samples)
+    log_dict |= dict_add_prefix(_compute_reward_cat_metrics(args, samples), f"rollout/")
     print(f"perf {rollout_id}: {log_dict}")
     step = (
         rollout_id
@@ -498,3 +501,13 @@ def _compute_zero_std_metrics(args, all_samples: List[Sample]):
     interesting_rewards = [str(round(g[0].get_reward_value(args), 1)) for g in interesting_sample_groups]
 
     return {f"rollout/zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
+
+
+def _compute_reward_cat_metrics(args, all_samples: List[Sample]):
+    reward_cat_key = args.log_reward_category
+    if reward_cat_key is None:
+        return {}
+
+    samples_of_reward_cat = group_by(all_samples, lambda s: s.reward[reward_cat_key])
+
+    return {f"error_cat/{reward_cat}": len(s) / len(all_samples) for reward_cat, s in samples_of_reward_cat.items()}

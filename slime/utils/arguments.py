@@ -771,6 +771,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=False,
                 help="Whether to turn on passrate logging, which will log the pass@n of the responses in the rollout.",
             )
+            parser.add_argument(
+                "--log-reward-category",
+                type=str,
+                default=None,
+                help=(
+                    "Log statistics of the category of reward, such as why the reward function considers it as failed. "
+                    "Specify the key in the reward dict using this argument.",
+                ),
+            )
             parser.add_argument("--wandb-run-id", type=str, default=None)
             return parser
 
