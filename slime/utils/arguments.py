@@ -3,6 +3,7 @@ import json
 import os
 from typing import Any, Dict
 
+import yaml
 from transformers import AutoConfig
 
 from slime.backends.sglang_utils.arguments import add_sglang_arguments
@@ -1009,6 +1010,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         # For megatron
         parser = add_custom_megatron_plugins_arguments(parser)
         try:
+            parser.add_argument(
+                "--custom-config-path",
+                type=str,
+                default=None,
+                help="Path to the YAML config for custom function arguments.",
+            )
             parser.add_argument("--padded-vocab-size", type=int, default=None)
         except:
             pass
@@ -1230,6 +1237,15 @@ def slime_validate_args(args):
         assert args.num_rollout is not None, (
             "num_epoch is not set, but num_rollout is not set, " "please set --num-rollout or --num-epoch"
         )
+
+    if args.custom_config_path:
+        with open(args.custom_config_path, "r") as f:
+            data = yaml.safe_load(f) or {}
+        for k, v in data.items():
+            if not hasattr(args, k):
+                setattr(args, k, v)
+            else:
+                print(f"Warning: Argument {k} is already set to {getattr(args, k)}, will not override with {v}.")
 
 
 def hf_validate_args(args, hf_config):
