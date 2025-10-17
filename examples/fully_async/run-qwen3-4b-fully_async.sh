@@ -35,14 +35,19 @@ CKPT_ARGS=(
    --save-interval 20
 )
 
+PROMPT_SET=/path/to/dapo-math-17k.jsonl
+
 ROLLOUT_ARGS=(
    --rollout-function-path fully_async_rollout.generate_rollout_fully_async
-   --prompt-data /mnt/o1_alicloud/personal/zzl/rl_data/dapo-math-17k.jsonl
+   --prompt-data ${PROMPT_SET}
    --input-key prompt
    --label-key label
    --apply-chat-template
    --rollout-shuffle
-   --rm-type deepscaler
+
+   --rm-type dapo
+   --reward-key score
+
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8

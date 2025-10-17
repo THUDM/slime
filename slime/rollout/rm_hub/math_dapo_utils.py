@@ -136,6 +136,8 @@ REMOVED_EXPRESSIONS = [
     "{,}",
     '"',
     "\\dots",
+    "<|im_end|>",
+    "<|endoftext|>",
 ]
 
 
@@ -205,6 +207,8 @@ def is_correct_minerva(
         gt = normalize_final_answer(remove_boxed(last_boxed_only_string(gt)))
     else:
         gt = normalize_final_answer(gt)
+
+    gt = str(int(float(gt)))  # in dapo, all answers are integers
 
     return (pred == gt), pred
 
