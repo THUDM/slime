@@ -298,8 +298,6 @@ class FSDPTrainRayActor(TrainRayActor):
         print_memory(f"before offload model")
         
         if torch_memory_saver is not None:
-<<<<<<< HEAD
-<<<<<<< HEAD
             if tags is None:
                 torch_memory_saver.pause()
             elif isinstance(tags, str):
@@ -307,14 +305,10 @@ class FSDPTrainRayActor(TrainRayActor):
             else:
                 for tag in tags:
                     torch_memory_saver.pause(tag)
-=======
-=======
             print_memory("[Sleep Before]")
->>>>>>> 0781bc6 (Add log)
             torch_memory_saver.pause()
         
         print_memory(f"after offload model")
->>>>>>> 80adadc (Fix torch memory saver in FSDP)
 
     def wake_up(self, tags: str | Iterable[str] | None) -> None:
         """Resume CUDA memory for tagged tensors via torch_memory_saver.
@@ -338,8 +332,6 @@ class FSDPTrainRayActor(TrainRayActor):
             break
         
         if torch_memory_saver is not None:
-<<<<<<< HEAD
-<<<<<<< HEAD
             if tags is None:
                 torch_memory_saver.resume()
             elif isinstance(tags, str):
@@ -347,14 +339,10 @@ class FSDPTrainRayActor(TrainRayActor):
             else:
                 for tag in tags:
                     torch_memory_saver.resume(tag)
-=======
-=======
             print_memory("[Wake Up Before]")
->>>>>>> 0781bc6 (Add log)
             torch_memory_saver.resume()
         
         print_memory("after wake_up model")
->>>>>>> 80adadc (Fix torch memory saver in FSDP)
 
     def save_model(self, iteration: int) -> None:
         """Save model state and optimizer state for the given iteration.
@@ -512,12 +500,8 @@ class FSDPTrainRayActor(TrainRayActor):
         rank = dist.get_rank()
 
         rollout_data = process_rollout_data(self.args, rollout_data_ref, rank, world_size)
-<<<<<<< HEAD
-        if self.args.advantage_estimator in ["grpo", "gspo"]:
-=======
         print_memory(f"[After Data Processing] Rollout {rollout_id}")
-        if self.args.advantage_estimator in ["grpo"]:
->>>>>>> 0781bc6 (Add log)
+        if self.args.advantage_estimator in ["grpo", "gspo"]:
             rollout_data["advantages"] = rollout_data["returns"] = [
                 torch.tensor([rollout_data["rewards"][i]] * rollout_data["response_lengths"][i])
                 for i in range(len(rollout_data["rewards"]))
@@ -593,7 +577,6 @@ class FSDPTrainRayActor(TrainRayActor):
             packed_batch["cur_log_probs"] = log_probs
             unpacked_batches = unpack_sequences(packed_batch)
 
-<<<<<<< HEAD
             old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
             log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
             advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
@@ -601,25 +584,13 @@ class FSDPTrainRayActor(TrainRayActor):
             response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
 
             advantages = advantages.to(device=log_probs.device)
-=======
             if mbs_id == 0:
                 print_memory(f"[After Unpack Sequences] Rollout {rollout_id}, MBS {mbs_id}")
-
-            if self.args.advantage_estimator == "gspo":
-                raise NotImplementedError("implement gspo")
-            else:
-                old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
-                log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
-                advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
-
-            loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
-            response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
 
             if mbs_id == 0:
                 print_memory(f"[Before Loss Computation] Rollout {rollout_id}, MBS {mbs_id}")
 
             # Ensure device consistency
->>>>>>> 0781bc6 (Add log)
             ppo_kl = old_log_probs.to(device=log_probs.device) - log_probs
 
             if self.args.advantage_estimator == "gspo":
@@ -768,7 +739,6 @@ class FSDPTrainRayActor(TrainRayActor):
         self.update_cpu_params_dict(self.weights["actor"])
         print_memory(f"[After Update CPU Params] Rollout {rollout_id}")
 
-<<<<<<< HEAD
         # Update ref model if needed
         if (
             self.args.ref_update_interval is not None
@@ -779,8 +749,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 print(f"Updating ref model at rollout_id {rollout_id}")
             self.update_cpu_params_dict(self.weights["ref"])
 
-=======
->>>>>>> bbf490c (Remove redundant sleep and add wait for sglang flush cache)
         Timer().start("train_wait")
         print_memory(f"[Train End] Rollout {rollout_id}")
         return

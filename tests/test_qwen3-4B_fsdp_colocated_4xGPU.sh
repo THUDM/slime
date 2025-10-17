@@ -27,7 +27,7 @@ pkill -9 ray
 pkill -9 python
 
 set -ex
-export CUDA_VISIBLE_DEVICES=4,5,6,7
+export CUDA_VISIBLE_DEVICES=6,7
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
 
@@ -74,7 +74,7 @@ OPTIMIZER_ARGS=(
 
 SGLANG_ARGS=(
    # Set equal to the number of GPUs per node for colocated mode
-   --rollout-num-gpus-per-engine 4
+   --rollout-num-gpus-per-engine 2
    --sglang-decode-log-interval 1000
    --sglang-mem-fraction-static 0.55  # Further reduced to ~12GB per GPU to leave ~60GB for FSDP training
    --sglang-max-running-requests 32   # Reduced from 64 to lower KV cache memory usage
@@ -109,7 +109,7 @@ FSDP_ARGS=(
 
 
 # launch the master node of ray in container
-ray start --head --node-ip-address 127.0.0.1 --num-gpus 4 --disable-usage-stats
+ray start --head --node-ip-address 127.0.0.1 --num-gpus 2 --disable-usage-stats
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
@@ -120,7 +120,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    -- python3 train.py \
    --train-backend fsdp \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 4 \
+   --actor-num-gpus-per-node 2 \
    --colocate \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
