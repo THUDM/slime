@@ -6,7 +6,7 @@ ARG SGLANG_VERSION
 ARG MEGATRON_COMMIT=main
 
 RUN apt update
-RUN apt install -y nvtop
+RUN apt install -y nvtop rsync
 
 # TODO: change to pip install sglang-router after it has a new release
 RUN pip install sglang-router --force-reinstall
