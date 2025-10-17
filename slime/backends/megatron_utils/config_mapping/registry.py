@@ -1,5 +1,5 @@
 import logging
-from typing import Callable, Dict, List
+from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
@@ -10,9 +10,9 @@ class MapperRegistry:
     """
 
     def __init__(self):
-        self._mappers: Dict[str, Callable] = {}
+        self._mappers: dict[str, Callable] = {}
 
-    def register(self, model_types: List[str], mapper_func: Callable):
+    def register(self, model_types: list[str], mapper_func: Callable):
         if not callable(mapper_func):
             raise TypeError(f"Mapper for {model_types} must be callable")
 
@@ -30,7 +30,7 @@ class MapperRegistry:
             raise ValueError(f"Mapper for {name} is not registered.")
         return self._mappers[name]
 
-    def list_registered_mappers(self) -> List[str]:
+    def list_registered_mappers(self) -> list[str]:
         return list(self._mappers.keys())
 
 
