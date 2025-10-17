@@ -1,4 +1,3 @@
-import math
 from argparse import Namespace
 from typing import Optional, Sequence, Union
 
@@ -12,6 +11,7 @@ from megatron.core.packed_seq_params import PackedSeqParams
 
 from slime.utils.data import get_minimum_num_micro_batch_size
 from slime.utils.flops_utils import calculate_fwd_flops
+from slime.utils.metric_utils import compute_pass_rate
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.timer import Timer
 from slime.utils.types import RolloutBatch
@@ -409,36 +409,11 @@ def log_passrate(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -
             if key != "raw_reward":
                 continue
 
-            group_size = args.n_samples_per_prompt
-            group_number = args.rollout_batch_size
-            assert len(val) == group_number * group_size
-            pass_rate_name_list = [2**i for i in range(int(math.log2(group_size)) + 1)]
-
-            val = np.array(val).reshape(group_number, group_size)
-
-            def estimate_pass_at_k(num_samples, num_correct, k):
-                """
-                Estimates pass@k of each problem and returns them in an array.
-                """
-
-                def estimator(n, c, k):
-                    """
-                    Calculates 1 - comb(n - c, k) / comb(n, k).
-                    """
-                    if n - c < k:
-                        return 1.0
-                    return 1.0 - np.prod(1.0 - k / np.arange(n - c + 1, n + 1))
-
-                return np.array([estimator(int(n), int(c), k) for n, c in zip(num_samples, num_correct)])
-
-            for k in pass_rate_name_list:
-                num_correct = np.sum(val == 1, axis=1)
-                num_samples = np.full(group_number, group_size)
-
-                pass_k_estimates = estimate_pass_at_k(num_samples, num_correct, k)
-
-                pass_k = np.mean(pass_k_estimates)
-                log_dict[f"pass@{k}"] = pass_k
+            log_dict |= compute_pass_rate(
+                flat_rewards=val,
+                group_size=args.n_samples_per_prompt,
+                num_groups=args.rollout_batch_size,
+            )
 
         gather_log_data("passrate", args, rollout_id, log_dict)
 
