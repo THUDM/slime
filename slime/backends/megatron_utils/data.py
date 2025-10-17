@@ -470,6 +470,9 @@ def log_perf_data(rollout_id: int, args: Namespace) -> None:
 
             if log_dict["perf/actor_train_time"] > 0:
                 log_dict["perf/actor_train_tflops"] = 3 * total_fwd_flops / log_dict["perf/actor_train_time"]
+                log_dict["perf/actor_train_tok_per_s"] = (
+                    sum(timer_instance.seq_lens) / log_dict["perf/actor_train_time"]
+                )
 
         if "perf/train_wait_time" in log_dict and "perf/train_time" in log_dict:
             total_time = log_dict["perf/train_wait_time"] + log_dict["perf/train_time"]
