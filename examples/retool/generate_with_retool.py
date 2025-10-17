@@ -94,6 +94,66 @@ def format_conversation_with_tools(
     return formatted_text
 
 
+def reconstruct_loss_masks(response: str, tokenizer) -> list:
+    """
+    Reconstruct loss masks from response content.
+    Used when resuming a partial rollout.
+    
+    """
+    try:
+        # Tokenize the entire response once to get correct token boundaries
+        response_tokens = tokenizer(response, add_special_tokens=False)["input_ids"]
+        loss_masks = [1] * len(response_tokens)  # Default: all trainable
+        
+        # Find all interpreter blocks in the text
+        interpreter_pattern = r'<interpreter>(.*?)</interpreter>'
+        matches = list(re.finditer(interpreter_pattern, response, re.DOTALL))
+        
+        if not matches:
+            # No interpreter blocks, all tokens are trainable
+            return loss_masks
+        
+        # For each interpreter block, find which tokens it corresponds to
+        for match in matches:
+            start_char = match.start()
+            end_char = match.end()
+            
+            # Find token indices that overlap with this interpreter block
+            # We'll retokenize prefix to find where interpreter starts in token space
+            prefix = response[:start_char]
+            prefix_tokens = tokenizer(prefix, add_special_tokens=False)["input_ids"]
+            start_token_idx = len(prefix_tokens)
+            
+            # Tokenize up to end of interpreter block
+            prefix_with_interpreter = response[:end_char]
+            prefix_with_interp_tokens = tokenizer(prefix_with_interpreter, add_special_tokens=False)["input_ids"]
+            end_token_idx = len(prefix_with_interp_tokens)
+            
+            # Mark these tokens as non-trainable
+            for i in range(start_token_idx, end_token_idx):
+                if i < len(loss_masks):
+                    loss_masks[i] = 0
+        
+        return loss_masks
+        
+    except Exception as e:
+        print(f"[WARNING] Error reconstructing loss masks: {e}")
+        # Fallback: treat everything as trainable
+        response_tokens = tokenizer(response, add_special_tokens=False)["input_ids"]
+        loss_masks = [1] * len(response_tokens)
+        return loss_masks
+
+
+def count_tool_turns(response: str) -> int:
+    """
+    Count the number of completed tool turns in the response.
+    Used to determine where to resume generation.
+    """
+    # Count interpreter blocks to estimate turn count
+    interpreter_count = response.count("</interpreter>")
+    return interpreter_count
+
+
 def postprocess_predictions(prediction: str):
     """Extract action and content from prediction string"""
     # Check for Answer: \boxed{...} format (only format we need for math_dapo)
@@ -213,27 +273,89 @@ async def execute_predictions(prediction: str) -> str:
 
 
 async def generate(args, sample: Sample, sampling_params) -> Sample:
-    """Custom generation function supporting tool calls"""
-    assert not args.partial_rollout, "Partial rollout is not supported for " "this function at the moment."
-
+    """Custom generation function supporting tool calls with partial rollout support"""
+    
     state = GenerateState(args)
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
+    MAX_CONTEXT_LENGTH = args.rollout_max_context_len
+    SAFETY_MARGIN = 1024
+
+    # Initialize total_off_policy_tokens if it doesn't exist
+    if not hasattr(sample, 'total_off_policy_tokens'):
+        sample.total_off_policy_tokens = 0
 
     # Set up the initial prompt with system prompt and tools (outside the loop)
     tool_specs = tool_registry.get_tool_specs()
-    prompt = format_conversation_with_tools(prompt=sample.prompt, tools=tool_specs)
 
-    prompt_tokens_ids = state.tokenizer(prompt, add_special_tokens=False)["input_ids"]
-    response = ""
-    response_token_ids = []
-    loss_masks = []
-    tool_call_count = 0  # Track actual tool call rounds
+    # Ensure metadata exists
+    if not hasattr(sample, 'metadata') or sample.metadata is None:
+        sample.metadata = {}
 
-    for turn in range(TOOL_CONFIGS["max_turns"]):
+    # Check if this is a partial rollout resume
+    if args.partial_rollout and sample.status == Sample.Status.ABORTED and sample.response:
+        # Partial rollout: resume from existing response
+        metadata = sample.metadata
+        
+        if metadata.get("formatted_prompt"):
+            prompt = metadata["formatted_prompt"]
+        else:
+            prompt = format_conversation_with_tools(prompt=sample.prompt, tools=tool_specs)
+            
+        prompt_tokens_ids = state.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        
+        # Restore state from saved metadata if available
+        response = sample.response
+        response_token_ids = state.tokenizer(response, add_special_tokens=False)["input_ids"]
+        
+        if metadata.get("partial_rollout") and metadata.get("loss_masks") and metadata.get("tool_call_count"):
+            # Use saved state
+            loss_masks = metadata["loss_masks"]
+            # Verify length matches
+            if len(loss_masks) != len(response_token_ids):
+                print(f"[WARNING] Saved loss_masks length ({len(loss_masks)}) != response tokens ({len(response_token_ids)})")
+                loss_masks = reconstruct_loss_masks(response, state.tokenizer)
+            
+            tool_call_count = metadata.get("tool_call_count")
+            start_turn = metadata.get("current_turn", tool_call_count)
+        else:
+            # Fall back to reconstruction
+            loss_masks = reconstruct_loss_masks(response, state.tokenizer)
+            tool_call_count = count_tool_turns(response)
+            start_turn = tool_call_count
+        
+        # Update off-policy token count
+        sample.total_off_policy_tokens += len(response_token_ids)
+    else:
+        # Non-partial rollout: start fresh
+        prompt = format_conversation_with_tools(prompt=sample.prompt, tools=tool_specs)
+        prompt_tokens_ids = state.tokenizer(prompt, add_special_tokens=False)["input_ids"]
+        
+        response = ""
+        response_token_ids = []
+        loss_masks = []
+        tool_call_count = 0
+        start_turn = 0
+
+    for turn in range(start_turn, TOOL_CONFIGS["max_turns"]):
+        current_length = len(prompt_tokens_ids) + len(response_token_ids)
+        remaining_context = MAX_CONTEXT_LENGTH - current_length - SAFETY_MARGIN
+        if remaining_context <= 0:
+            sample.status = Sample.Status.TRUNCATED
+            break
+
+        adjusted_max_tokens = min(
+            sampling_params["max_new_tokens"], # this is usally the --rollout-max-response-len
+            remaining_context
+        )
+
+        from copy import deepcopy
+        turn_sampling_params = deepcopy(sampling_params)
+        turn_sampling_params["max_new_tokens"] = adjusted_max_tokens
+
         # Simple: just send prompt + response
         payload = {
             "text": prompt + response,
-            "sampling_params": sampling_params,
+            "sampling_params": turn_sampling_params,
         }
 
         # Log payload to wandb for debugging
@@ -259,10 +381,58 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
         output = await post(url, payload)
 
-        # Handle abort
+        # Handle abort - save state for partial rollout
         if output["meta_info"]["finish_reason"]["type"] == "abort":
-            sample.status = Sample.Status.ABORTED
-            return sample
+            if not args.partial_rollout:
+                sample.status = Sample.Status.ABORTED
+                return sample
+            else:
+                # Partial rollout enabled: process partial response and save state
+                cur_response = output["text"]
+                cur_response = postprocess_responses(cur_response)
+                
+                if cur_response:  # Only update if there's actual content
+                    cur_response_token_ids = state.tokenizer(cur_response, add_special_tokens=False)["input_ids"]
+                    response += cur_response
+                    response_token_ids += cur_response_token_ids
+                    loss_masks += [1] * len(cur_response_token_ids)
+
+                    # Execute predictions to maintain conversation flow
+                    next_obs, done = await execute_predictions(cur_response)
+
+                    # Add tool execution results if any
+                    if next_obs:
+                        if "<interpreter>" in next_obs:
+                            tool_call_count += 1
+                        
+                        obs_tokens_ids = state.tokenizer(next_obs, add_special_tokens=False)["input_ids"]
+                        response += next_obs
+                        response_token_ids += obs_tokens_ids
+                        loss_masks += [0] * len(obs_tokens_ids)
+                
+                # Save state for resumption
+                sample.status = Sample.Status.ABORTED
+                sample.tokens = prompt_tokens_ids + response_token_ids
+                sample.response_length = len(response_token_ids)
+                sample.response = response
+                sample.loss_masks = loss_masks
+                sample.tool_call_count = tool_call_count
+
+                # Store payload information for wandb logging
+                sample.payload_text = prompt + response
+                sample.payload_has_system = "<|im_start|>system" in prompt + response
+                sample.payload_has_tools = "# Tools" in prompt + response
+                
+                # Save metadata for resumption
+                sample.metadata = sample.metadata or {}
+                sample.metadata.update({
+                    "partial_rollout": True,
+                    "current_turn": turn,
+                    "loss_masks": loss_masks,
+                    "tool_call_count": tool_call_count,
+                    "formatted_prompt": prompt,
+                })
+                return sample
 
         cur_response = output["text"]
         cur_response = postprocess_responses(cur_response)
@@ -300,7 +470,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     sample.tokens = prompt_tokens_ids + response_token_ids
     sample.response_length = len(response_token_ids)
     sample.response = response
-    sample.loss_mask = loss_masks
+    sample.loss_masks = loss_masks
 
     # Store payload information for wandb logging
     sample.payload_text = prompt + response
@@ -348,3 +518,4 @@ async def reward_func(args, sample, **kwargs):
         result["pred"] = ""
 
     return result
+
