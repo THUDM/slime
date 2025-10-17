@@ -39,7 +39,7 @@ class MegatronTrainRayActor(TrainRayActor):
         role: str,
         wandb_run_id: str,
         with_ref: bool = False,
-    ) -> Optional[int]:
+    ):
         super().init(args, role, wandb_run_id, with_ref)
 
         init(args)
@@ -73,7 +73,11 @@ class MegatronTrainRayActor(TrainRayActor):
             Timer().start("train_wait")
             return
 
-        start_rollout_id = loaded_rollout_id + 1
+        expected_start_rollout_id = 0 if loaded_rollout_id == 0 else (loaded_rollout_id + 1)
+        assert (
+            args.start_rollout_id == expected_start_rollout_id
+        ), f"{args.start_rollout_id=} {expected_start_rollout_id=}"
+
         self.weights = {"actor": {}}
         self.update_cpu_params_dict(self.weights["actor"])
 
@@ -132,7 +136,6 @@ class MegatronTrainRayActor(TrainRayActor):
             self.prof.start()
 
         Timer().start("train_wait")
-        return start_rollout_id
 
     @torch.no_grad()
     def update_cpu_params_dict(self, params_dict: Dict[str, torch.Tensor]) -> None:
