@@ -1,5 +1,4 @@
 import os
-from typing import Optional
 
 import ray
 from ray.util.placement_group import PlacementGroup
@@ -34,7 +33,7 @@ class RayTrainGroup:
         num_nodes,
         num_gpus_per_node,
         pg: tuple[PlacementGroup, list[int]],
-        wandb_run_id: Optional[str] = None,
+        wandb_run_id: str | None = None,
         num_gpus_per_actor: float = 1,
         role: str = "actor",
     ) -> None:
@@ -47,7 +46,7 @@ class RayTrainGroup:
         # Allocate the GPUs for actors w/o instantiating them
         self._allocate_gpus_for_actor(pg, num_gpus_per_actor, wandb_run_id=wandb_run_id)
 
-    def _allocate_gpus_for_actor(self, pg, num_gpus_per_actor, wandb_run_id: Optional[str]):
+    def _allocate_gpus_for_actor(self, pg, num_gpus_per_actor, wandb_run_id: str | None):
         world_size = self._num_nodes * self._num_gpus_per_node
 
         # Use placement group to lock resources for models of same type

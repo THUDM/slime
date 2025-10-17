@@ -3,7 +3,6 @@ import multiprocessing
 import random
 import time
 from pathlib import Path
-from typing import List, Union
 
 import ray
 import torch
@@ -118,7 +117,7 @@ class RolloutManager:
     def offload(self):
         return [engine.release_memory_occupation.remote() for engine in self.rollout_engines]
 
-    def onload(self, tags: List[str] = None):
+    def onload(self, tags: list[str] = None):
         return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines]
 
     def _get_rollout_data(self, rollout_id):
@@ -157,7 +156,7 @@ class RolloutManager:
                 path,
             )
 
-    def _post_process_rewards(self, samples: Union[list[Sample], list[list[Sample]]]):
+    def _post_process_rewards(self, samples: list[Sample] | list[list[Sample]]):
         if self.custom_reward_post_process_func is not None:
             return self.custom_reward_post_process_func(self.args, samples)
 
@@ -184,7 +183,7 @@ class RolloutManager:
 
         return raw_rewards, raw_rewards
 
-    def _convert_samples_to_train_data(self, samples: Union[list[Sample], list[list[Sample]]]):
+    def _convert_samples_to_train_data(self, samples: list[Sample] | list[list[Sample]]):
         """
         Convert inference generated samples to training data.
         """
@@ -483,12 +482,12 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
         tb.log(data=log_dict, step=step)
 
 
-def _compute_zero_std_metrics(args, all_samples: List[Sample]):
+def _compute_zero_std_metrics(args, all_samples: list[Sample]):
     # only compute in GRPO-like algorithms where one prompt has multiple responses
     if args.advantage_estimator == "ppo":
         return {}
 
-    def _is_zero_std(samples: List[Sample]):
+    def _is_zero_std(samples: list[Sample]):
         rewards = [sample.get_reward_value(args) for sample in samples]
         return len(rewards) == 0 or all(rewards[0] == r for r in rewards)
 
