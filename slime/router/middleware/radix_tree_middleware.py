@@ -7,7 +7,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from transformers import AutoTokenizer
 
-from .radix_tree import StringRadixTrie
+from slime.router.core.radix_tree import StringRadixTrie
 
 # Hop-by-hop headers that should not be forwarded
 HOP_BY_HOP = {
@@ -59,6 +59,12 @@ class RadixTreeMiddleware(BaseHTTPMiddleware):
         self.args = router.args
         self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
         self.radix_tree = StringRadixTrie(max_cache_size=10000, tokenizer=self.tokenizer, verbose=False)
+
+        # Register components in the component registry
+        self.router.component_registry.register("tokenizer", self.tokenizer)
+        self.router.component_registry.register("radix_tree", self.radix_tree)
+
+        # Keep backward compatibility: also set as direct attribute
         self.router.radix_tree = self.radix_tree
 
     async def dispatch(self, request: Request, call_next):
@@ -72,6 +78,9 @@ class RadixTreeMiddleware(BaseHTTPMiddleware):
         if "text" in request_json:
             input_text = request_json.pop("text", "")
         elif "input_ids" in request_json:
+            # TODO: Add support for batch format input_ids (list of lists)
+            # Currently only handles single sequence format: [id1, id2, ...]
+            # Batch format [[id1, id2, ...], [...]] is not yet supported
             input_text = self.tokenizer.decode(request_json["input_ids"])
         else:
             input_text = None
