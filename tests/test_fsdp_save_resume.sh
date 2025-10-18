@@ -76,8 +76,7 @@ echo "--- Submitting job to train and SAVE a checkpoint to ${CHECKPOINT_DIR} ---
 ray job submit --address="http://127.0.0.1:8265" \
     --runtime-env-json='{
         "env_vars": {
-            "no_proxy": "localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}",
-            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"
+            "no_proxy": "localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}"
         }
     }' \
     -- python3 train.py \
@@ -113,8 +112,7 @@ echo "--- Submitting job to LOAD from checkpoint: ${LOAD_PATH} ---"
 ray job submit --address="http://127.0.0.1:8265" \
     --runtime-env-json='{
         "env_vars": {
-            "no_proxy": "localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}",
-            "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"
+            "no_proxy": "localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}"
         }
     }' \
     -- python3 train.py \
