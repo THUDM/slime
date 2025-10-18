@@ -64,6 +64,9 @@ OPTIMIZER_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
+   --sglang-max-total-tokens 300000
+   --sglang-mem-fraction-static 0.8
+   --sglang-log-level debug
 )
 echo "--- Listing files in checkpoint directory BEFORE save ---"
 ls -lhR ${CHECKPOINT_DIR} || echo "(empty)"
