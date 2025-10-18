@@ -38,10 +38,12 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step, c
         try:
             from torch.distributed.checkpoint import HuggingFaceStorageWriter
 
-            model_writer = HuggingFaceStorageWriter(
-                path=model_subdir, fqn_to_index_mapping={k: 0 for k in model_state_dict.keys()}
-            )
-            # --- FIX: Wrap the model_state_dict in a dictionary ---
+            # --- FIX: Create the fqn_to_index_mapping with the same prefixed keys
+            # that will be used by the checkpoint saver.
+            prefixed_fqn_mapping = {f"model.{k}": 0 for k in model_state_dict.keys()}
+
+            model_writer = HuggingFaceStorageWriter(path=model_subdir, fqn_to_index_mapping=prefixed_fqn_mapping)
+            # Wrap the model_state_dict in a dictionary, which causes the prefixing.
             dist_cp.save(state_dict={"model": model_state_dict}, storage_writer=model_writer)
         except ImportError as e:
             raise ImportError(
@@ -67,6 +69,8 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step, c
     dist.barrier()
 
 
+# The rest of the file (_detect_safetensors and load_checkpoint) remains the same
+# as in the previous corrected answer.
 def _detect_safetensors(checkpoint_path):
     """Detect if checkpoint uses safetensors format by checking for .safetensors files in model subdir."""
     subpath = os.path.join(checkpoint_path, "model")
@@ -112,7 +116,7 @@ def load_checkpoint(args, model, optimizer):
 
     dist.barrier()
 
-    # --- FIX: Wrap the model_state_dict for loading as well ---
+    # Wrap the model_state_dict for loading as well
     # This ensures consistency with the save operation.
     wrapped_model_state_dict = {"model": model_state_dict}
 
