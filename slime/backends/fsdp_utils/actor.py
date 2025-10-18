@@ -3,9 +3,9 @@ import os
 
 from argparse import Namespace
 
+from collections.abc import Iterable
 from contextlib import nullcontext
 from itertools import accumulate
-from typing import Iterable, Optional
 
 import ray
 import torch
@@ -141,7 +141,7 @@ class FSDPTrainRayActor(TrainRayActor):
         self.micro_step = 0
         return start_iteration
 
-    def sleep(self, tags: Optional[str | Iterable[str]]) -> None:
+    def sleep(self, tags: str | Iterable[str] | None) -> None:
         """Pause CUDA memory for tagged tensors via torch_memory_saver.
 
         When offloading is enabled, this forwards tags to
@@ -161,7 +161,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 for tag in tags:
                     torch_memory_saver.pause(tag)
 
-    def wake_up(self, tags: Optional[str | Iterable[str]]) -> None:
+    def wake_up(self, tags: str | Iterable[str] | None) -> None:
         """Resume CUDA memory for tagged tensors via torch_memory_saver.
 
         When offloading is enabled, this forwards tags to
@@ -559,6 +559,16 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.update_cpu_params_dict(self.weights["actor"])
 
+        # Update ref model if needed
+        if (
+            self.args.ref_update_interval is not None
+            and (rollout_id + 1) % self.args.ref_update_interval == 0
+            and "ref" in self.weights
+        ):
+            if dist.get_rank() == 0:
+                print(f"Updating ref model at rollout_id {rollout_id}")
+            self.update_cpu_params_dict(self.weights["ref"])
+
         Timer().start("train_wait")
         return
 
@@ -627,7 +637,7 @@ class FSDPTrainRayActor(TrainRayActor):
         self.model.load_state_dict(gpu_state_dict, strict=True)
         torch.cuda.synchronize()
 
-    def load_ref_model(self, ref_load_path: Optional[str]) -> None:
+    def load_ref_model(self, ref_load_path: str | None) -> None:
         """Load reference model weights once and cache them on CPU.
 
         Parameters:
@@ -690,7 +700,7 @@ def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temp
 
 
 def gather_log_probs_packed(
-    logits: torch.Tensor, input_ids: torch.Tensor, cu_seqlens: Optional[torch.Tensor | float] = None
+    logits: torch.Tensor, input_ids: torch.Tensor, cu_seqlens: torch.Tensor | float | None = None
 ) -> torch.Tensor:
     """Gather next-token log probabilities for packed sequences.
 

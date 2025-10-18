@@ -1,13 +1,16 @@
 import socket
+from argparse import Namespace
+from collections.abc import Mapping, Sequence
 
 import ray
 import torch
 import torch.distributed as dist
+from ray.actor import ActorHandle
 
 try:
-    from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
-except:
-    from sglang.srt.patch_torch import monkey_patch_torch_reductions
+    from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions  # type: ignore[import]
+except ImportError:
+    from sglang.srt.patch_torch import monkey_patch_torch_reductions  # type: ignore[import]
 
 from sglang.srt.utils import MultiprocessingSerializer
 from tqdm import tqdm
@@ -17,24 +20,23 @@ from slime.utils.memory_utils import clear_memory
 from slime.utils.types import ParamInfo
 
 try:
-    from sglang.srt.model_executor.model_runner import FlattenedTensorBucket
+    from sglang.srt.model_executor.model_runner import FlattenedTensorBucket  # type: ignore[import]
 
     use_flattened_tensor_bucket = True
 except ImportError:
     use_flattened_tensor_bucket = False
 
-from slime.utils.memory_utils import clear_memory
 
-try:
-    from sglang.srt.model_executor.model_runner import FlattenedTensorBucket
+def get_param_info_buckets(
+    args: Namespace, weights: Mapping[str, Mapping[str, torch.Tensor]]
+) -> list[list[ParamInfo]]:
+    """Build `ParamInfo` buckets capped by `args.update_weights_bucket_size`.
 
-    use_flattened_tensor_bucket = True
-except:
-    use_flattened_tensor_bucket = False
-
-
-def get_param_info_buckets(args, weights) -> list[list[ParamInfo]]:
-    """Create parameter info buckets similar to Megatron's approach."""
+    - Expects `weights["actor"]` to map parameter names to CPU tensors.
+    - Each `ParamInfo.size` is computed in bytes (`numel * element_size`).
+    - Buckets are sorted by parameter name for determinism.
+    - Returns a list of buckets, each a list of `ParamInfo`.
+    """
     # Create ParamInfo objects for each parameter
     param_infos = []
     rank = dist.get_rank()
@@ -72,7 +74,25 @@ def get_param_info_buckets(args, weights) -> list[list[ParamInfo]]:
 
 
 class UpdateWeightFromTensor:
-    def __init__(self, args, model, weights, full_params: bool = False):
+    """Push model weights to rollout engines using tensors.
+
+    Supports two paths:
+    - full_params=True: serialize the full state dict on each rank, gather
+      serialized blobs via `dist.gather_object` to a designated source rank,
+      and have that source issue a single RPC to the engine.
+    - full_params=False: stream parameters in size-bounded buckets; optionally
+      group tensors by dtype and flatten per dtype, gather per-rank blobs to the
+      source, and issue one RPC per dtype per bucket (or one per bucket if not
+      flattened).
+    """
+
+    def __init__(
+        self,
+        args: Namespace,
+        model: torch.nn.Module,
+        weights: Mapping[str, Mapping[str, torch.Tensor]] | None,
+        full_params: bool = False,
+    ) -> None:
         self.args = args
         self.model = model
         self.weights = weights  # CPU parameter storage
@@ -93,7 +113,16 @@ class UpdateWeightFromTensor:
         self.tp_size = args.rollout_num_gpus_per_engine
         # tp_rank will be set during connect_rollout_engines based on the IPC group
 
-    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
+    def connect_rollout_engines(
+        self,
+        rollout_engines: Sequence[ActorHandle],
+        rollout_engine_lock: ActorHandle | None,
+    ) -> None:
+        """Attach rollout engines and create per-engine IPC (Gloo) groups.
+
+        Sets the gather source rank, engine handle, and `tp_rank` within the
+        engine's local group.
+        """
         self.rollout_engines = rollout_engines
 
         # Here we assume the gpu id of rollout engines and train actors are the same.
@@ -113,7 +142,8 @@ class UpdateWeightFromTensor:
                 self.tp_rank = dist.get_rank() - start_rank
 
     @torch.no_grad()
-    def update_weights(self):
+    def update_weights(self) -> None:
+        """Send weights over IPC using either full or sharded mode."""
 
         monkey_patch_torch_reductions()
 
@@ -122,7 +152,7 @@ class UpdateWeightFromTensor:
             state_dict = self.model.state_dict()
 
             # Preprocess tensors to handle DTensor -> full tensor conversion
-            named_tensors = [(name, param) for name, param in self.model.state_dict().items()]
+            named_tensors = [(name, param) for name, param in state_dict.items()]
             clear_memory()
 
             if use_flattened_tensor_bucket:
@@ -258,11 +288,18 @@ class UpdateWeightFromTensor:
 
 
 class UpdateWeightFromDistributed:
-    def __init__(self, args, model):
+    """Broadcast weights via a temporary NCCL group to rollout engines."""
+
+    def __init__(self, args: Namespace, model: torch.nn.Module) -> None:
         self.args = args
         self.model = model
 
-    def connect_rollout_engines(self, rollout_engines, rollout_engine_lock):
+    def connect_rollout_engines(
+        self,
+        rollout_engines: Sequence[ActorHandle],
+        rollout_engine_lock: ActorHandle | None,
+    ) -> None:
+        """On rank 0, initialize a temporary NCCL group for parameter broadcast."""
         self.rollout_engines = rollout_engines
         self.rollout_engine_lock = rollout_engine_lock
 
@@ -271,7 +308,7 @@ class UpdateWeightFromDistributed:
         #   2. Broadcast parameters from rank 0 to all sglang engines
         self._is_src_rank = dist.get_rank() == 0
         if self._is_src_rank:
-            self._group_name = f"slime"
+            self._group_name = "slime"
             master_address = ray._private.services.get_node_ip_address()
             with socket.socket() as sock:
                 sock.bind(("", 0))
@@ -300,7 +337,8 @@ class UpdateWeightFromDistributed:
             ray.get(refs)
 
     @torch.no_grad()
-    def update_weights(self):
+    def update_weights(self) -> None:
+        """Cast params to bfloat16, then broadcast each synchronously to receivers."""
         model = self.model
         torch.cuda.empty_cache()
         clear_memory()
@@ -323,7 +361,12 @@ class UpdateWeightFromDistributed:
         torch.cuda.empty_cache()
         return
 
-    def request_update_params(self, state_dict):
+    def request_update_params(self, state_dict: Mapping[str, torch.Tensor]) -> None:
+        """Send names/dtypes/shapes metadata to engines, then broadcast tensors.
+
+        Ensures tensors are contiguous; when `world_size == 1`, converts DTensors
+        to full tensors prior to `dist.broadcast`.
+        """
         if not self._is_src_rank or not state_dict:
             return
 

@@ -521,7 +521,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     # 7. 填充并返回 Sample 对象
     sample.response = full_response
     sample.tokens = ...
-    sample.loss_masks = loss_masks
+    sample.loss_mask = loss_masks
     return sample
 ```
 

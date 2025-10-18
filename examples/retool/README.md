@@ -33,7 +33,7 @@ hf download --repo-type dataset zhuzilin/aime-2024  --local-dir /root/aime-2024
 hf download font-info/qwen3-4b-sft-SGLang-RL --local-dir /root/font-info/qwen3-4b-sft
 ```
 
-2. Create torch dict
+2. Create torch dist
 For SFT 
 ```bash
 source scripts/models/qwen3-4B.sh

@@ -1,7 +1,6 @@
 """Data packing utilities for FSDP backend to reduce padding overhead."""
 
 import math
-from typing import Dict, List, Optional
 
 import torch
 
@@ -9,17 +8,17 @@ from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 
 
 def pack_sequences(
-    tokens: List[List[int]],
-    loss_masks: List[List[int]],
-    rewards: List[float],
-    raw_rewards: List,
-    response_lengths: List[int],
-    advantages: List[float],
-    returns: List[float],
-    rollout_log_probs: Optional[List[List[float]]] = None,
-    max_tokens_per_gpu: Optional[int] = None,
-    num_packs: Optional[int] = None,
-) -> List[Dict]:
+    tokens: list[list[int]],
+    loss_masks: list[list[int]],
+    rewards: list[float],
+    raw_rewards: list,
+    response_lengths: list[int],
+    advantages: list[float],
+    returns: list[float],
+    rollout_log_probs: list[list[float]] | None = None,
+    max_tokens_per_gpu: int | None = None,
+    num_packs: int | None = None,
+) -> list[dict]:
     """
     Pack sequences into dense batches with cumulative sequence lengths.
 
@@ -99,7 +98,7 @@ def pack_sequences(
     return result
 
 
-def unpack_sequences(packed_batch: Dict) -> List[Dict]:
+def unpack_sequences(packed_batch: dict) -> list[dict]:
     """
     Unpack sequences from a packed batch.
 
