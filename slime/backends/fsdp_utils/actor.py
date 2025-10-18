@@ -291,7 +291,7 @@ class FSDPTrainRayActor(TrainRayActor):
         return 0
 
     def sleep(self, tags: str | Iterable[str] | None) -> None:
-        """Pause CUDA memory for tagged tensors via torch_memory_saver.
+        """Pause CUDA memory for all tracked tensors via torch_memory_saver.
 
         When offloading is enabled, this forwards tags to
         `torch_memory_saver.pause`. If `tags` is a string, that tag is paused.
@@ -303,22 +303,17 @@ class FSDPTrainRayActor(TrainRayActor):
             return
         
         print_memory(f"before offload model")
+
+        if isinstance(tags, str):
+            tags = (tags,)
         
         if torch_memory_saver is not None:
-            if tags is None:
-                torch_memory_saver.pause()
-            elif isinstance(tags, str):
-                torch_memory_saver.pause(tags)
-            else:
-                for tag in tags:
-                    torch_memory_saver.pause(tag)
-            print_memory("[Sleep Before]")
             torch_memory_saver.pause()
         
         print_memory(f"after offload model")
 
     def wake_up(self, tags: str | Iterable[str] | None) -> None:
-        """Resume CUDA memory for tagged tensors via torch_memory_saver.
+        """Resume CUDA memory for all tracked tensors via torch_memory_saver.
 
         When offloading is enabled, this forwards tags to
         `torch_memory_saver.resume`. If `tags` is a string, that tag is resumed.
@@ -338,15 +333,10 @@ class FSDPTrainRayActor(TrainRayActor):
                 continue
             break
         
+        if isinstance(tags, str):
+            tags = (tags,)
+        
         if torch_memory_saver is not None:
-            if tags is None:
-                torch_memory_saver.resume()
-            elif isinstance(tags, str):
-                torch_memory_saver.resume(tags)
-            else:
-                for tag in tags:
-                    torch_memory_saver.resume(tag)
-            print_memory("[Wake Up Before]")
             torch_memory_saver.resume()
         
         print_memory("after wake_up model")
@@ -833,6 +823,7 @@ class FSDPTrainRayActor(TrainRayActor):
             import os
 
             if os.path.isdir(ref_load_path):
+                # Load reference model - torch_memory_saver automatically tracks all tensors
                 temp_ref_model = AutoModelForCausalLM.from_pretrained(
                     ref_load_path,
                     trust_remote_code=True,
