@@ -1106,7 +1106,7 @@ def slime_validate_args(args):
                 "please make sure it is a valid megatron checkpoint directory."
             )
 
-    load_ckpt_iter = get_latest_checkpointed_iteration(args.load)
+    load_ckpt_iter = get_latest_checkpointed_iteration(args)
     if load_ckpt_iter is None:
         args.no_load_optim = True
         args.no_load_rng = True
