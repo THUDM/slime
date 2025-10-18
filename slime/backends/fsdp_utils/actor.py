@@ -2,7 +2,6 @@ from argparse import Namespace
 from collections.abc import Iterable
 from contextlib import nullcontext
 from itertools import accumulate
-import time
 
 import ray
 import torch
@@ -11,7 +10,6 @@ from packaging import version
 from torch.distributed.tensor import DTensor
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
-from deepspeed.ops.adam import DeepSpeedCPUAdam
 
 # Import FSDP v2 components based on PyTorch version
 if version.parse(torch.__version__) >= version.parse("2.6"):
@@ -380,11 +378,10 @@ class FSDPTrainRayActor(TrainRayActor):
                     * self.args.n_samples_per_prompt
                     // self.args.global_batch_size
                 )
-                    wandb.log(log_dict)
+                wandb.log(log_dict)
 
         reported_accum: dict[str, list[torch.Tensor]] = {}
         self.optimizer.zero_grad(set_to_none=True)
-        
         for mbs_id, packed_batch in enumerate(packed_batches):
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                 logits = self.model(
@@ -405,8 +402,6 @@ class FSDPTrainRayActor(TrainRayActor):
             response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
 
             advantages = advantages.to(device=log_probs.device)
-
-            # Ensure device consistency
             ppo_kl = old_log_probs.to(device=log_probs.device) - log_probs
 
             if self.args.advantage_estimator == "gspo":
@@ -492,7 +487,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
             # Scale loss for gradient accumulation
             loss = loss * dist.get_world_size() / self.args.global_batch_size
-            
             loss.backward()
 
             # Accumulate reported metrics (store tensors for later mean)
@@ -504,13 +498,8 @@ class FSDPTrainRayActor(TrainRayActor):
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
                 # the grad norm used to be of DTensor
                 grad_norm = float(grad_norm)
-                
-                # Perform optimizer step
                 self.optimizer.step()
-                
-                # Zero gradients
                 self.optimizer.zero_grad(set_to_none=True)
-                
                 # Aggregate logs
                 aggregated = {k: torch.stack(v).sum().item() for k, v in reported_accum.items()}
                 # TODO: change this, this is slow.
@@ -564,7 +553,6 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
-        
         rollout_engines, rollout_engine_lock, num_new_engines = ray.get(
             self.rollout_manager.get_rollout_engines_and_lock.remote()
         )
