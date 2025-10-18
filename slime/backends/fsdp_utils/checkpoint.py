@@ -41,7 +41,8 @@ def save_checkpoint(args, iteration, model, optimizer, tokenizer, global_step, c
             model_writer = HuggingFaceStorageWriter(
                 path=model_subdir, fqn_to_index_mapping={k: 0 for k in model_state_dict.keys()}
             )
-            dist_cp.save(state_dict=model_state_dict, storage_writer=model_writer)
+            # --- FIX: Wrap the model_state_dict in a dictionary ---
+            dist_cp.save(state_dict={"model": model_state_dict}, storage_writer=model_writer)
         except ImportError as e:
             raise ImportError(
                 "Safetensors library is required when save_safe_serialization is True, but it is not installed."
@@ -111,22 +112,26 @@ def load_checkpoint(args, model, optimizer):
 
     dist.barrier()
 
+    # --- FIX: Wrap the model_state_dict for loading as well ---
+    # This ensures consistency with the save operation.
+    wrapped_model_state_dict = {"model": model_state_dict}
+
     # Load model
     if is_safetensors:
         try:
             from torch.distributed.checkpoint import HuggingFaceStorageReader
 
             model_storage_reader = HuggingFaceStorageReader(path=model_subdir)
-            dist_cp.load(state_dict=model_state_dict, storage_reader=model_storage_reader)
+            dist_cp.load(state_dict=wrapped_model_state_dict, storage_reader=model_storage_reader)
         except ImportError as e:
             raise ImportError(
                 "Safetensors library is required to load safetensors checkpoint files, but it is not installed."
             ) from e
     else:
-        model_state_dict = {"model": model_state_dict}
         model_storage_reader = dist_cp.FileSystemReader(model_subdir)
-        dist_cp.load(state_dict=model_state_dict, storage_reader=model_storage_reader)
-        model_state_dict = model_state_dict["model"]
+        dist_cp.load(state_dict=wrapped_model_state_dict, storage_reader=model_storage_reader)
+
+    # After loading, model_state_dict is populated in place within the wrapped dict.
 
     # Load optimizer (always standard format)
     optim_state_dict = {"optim": optimizer_state_dict}
@@ -141,7 +146,7 @@ def load_checkpoint(args, model, optimizer):
     set_state_dict(
         model,
         optimizer,
-        model_state_dict=model_state_dict,
+        model_state_dict=model_state_dict,  # Use the original (now populated) state_dict
         optim_state_dict=optimizer_state_dict,
         options=StateDictOptions(full_state_dict=False, cpu_offload=False),
     )
