@@ -120,17 +120,6 @@ def allocate_train_group(args, num_nodes, num_gpus_per_node, pg, wandb_run_id):
     )
 
 
-def create_training_group(args, pg, wandb_run_id):
-    actor_model = allocate_train_group(
-        args=args,
-        num_nodes=args.actor_num_nodes,
-        num_gpus_per_node=args.actor_num_gpus_per_node,
-        pg=pg,
-        wandb_run_id=wandb_run_id,
-    )
-    return actor_model
-
-
 def create_training_models(args, pgs, rollout_manager, wandb_run_id):
     actor_model = allocate_train_group(
         args=args,
