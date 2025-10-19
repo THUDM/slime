@@ -171,7 +171,6 @@ class UpdateWeightFromTensor:
             else:
                 serialized_tensors = MultiprocessingSerializer.serialize(named_tensors, output_str=True)
 
-            # Clean up GPU tensors after serialization
             del named_tensors
             clear_memory()
 
@@ -241,7 +240,6 @@ class UpdateWeightFromTensor:
                     # Fallback to non-flattened approach
                     serialized_tensors = MultiprocessingSerializer.serialize(named_tensors_batch, output_str=True)
 
-                # Clean up GPU tensors after serialization
                 del named_tensors_batch
                 clear_memory()
 
@@ -363,7 +361,6 @@ class UpdateWeightFromDistributed:
             single_param_dict = {name: gpu_param}
             self.request_update_params(single_param_dict)
             
-            # Clean up GPU memory immediately
             del gpu_param
             clear_memory()
 

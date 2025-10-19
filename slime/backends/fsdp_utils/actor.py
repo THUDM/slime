@@ -98,8 +98,6 @@ class FSDPTrainRayActor(TrainRayActor):
             
             self.optimizer = FSDPCPUAdamWrapper(optimizer_config, self.model)
             
-            if dist.get_rank() == 0:
-                print(f"[Optimizer] Using DeepSpeedCPUAdam (offloaded to CPU)")
         elif args.optimizer == "adam":
             # Use standard PyTorch AdamW optimizer (GPU-based)
             self.optimizer = torch.optim.AdamW(
@@ -110,8 +108,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 weight_decay=args.weight_decay,
             )
             
-            if dist.get_rank() == 0:
-                print(f"[Optimizer] Using standard AdamW (GPU-based)")
         else:
             raise ValueError(f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam', 'deepspeed_cpu_adam'")
 
@@ -498,6 +494,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
                 # the grad norm used to be of DTensor
                 grad_norm = float(grad_norm)
+
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
                 # Aggregate logs
@@ -553,6 +550,7 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
+            
         rollout_engines, rollout_engine_lock, num_new_engines = ray.get(
             self.rollout_manager.get_rollout_engines_and_lock.remote()
         )
