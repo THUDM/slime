@@ -43,15 +43,7 @@ class FSDPCPUAdamWrapper:
             self.cpu_params.append(cpu_param)
         
         torch.cuda.synchronize()
-        
-        if dist.get_rank() == 0:
-            total_params = sum(p.numel() for p in self.cpu_params)
-            print(f"[DeepSpeedCPUAdam] Initialized with {len(self.cpu_params)} parameter tensors")
-            print(f"[DeepSpeedCPUAdam] Total parameters: {total_params:,} ({total_params*4/1e9:.2f}GB in FP32)")
-            print(f"[DeepSpeedCPUAdam] All params contiguous: {all(p.is_contiguous() for p in self.cpu_params)}")
-            print(f"[DeepSpeedCPUAdam] All params FP32: {all(p.dtype == torch.float32 for p in self.cpu_params)}")
-        
-        # Create new DeepSpeedCPUAdam with CPU FP32 parameters
+
         self.cpu_optimizer = DeepSpeedCPUAdam(
             self.cpu_params,
             lr=self.optimizer_config['lr'],
@@ -62,7 +54,6 @@ class FSDPCPUAdamWrapper:
             fp32_optimizer_states=self.optimizer_config['fp32_optimizer_states'],
         )
         
-        # Copy param_groups for compatibility
         self.param_groups = self.cpu_optimizer.param_groups
     
     def zero_grad(self, set_to_none: bool = True) -> None:
@@ -120,4 +111,3 @@ class FSDPCPUAdamWrapper:
                 gpu_param.data.copy_(updated_param, non_blocking=True)
         
         torch.cuda.synchronize()
-
