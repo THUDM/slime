@@ -1,9 +1,15 @@
 ARG SGLANG_VERSION=latest
-FROM lmsysorg/sglang:${SGLANG_VERSION} AS sglang
+# TODO will unify after it is merged into sglang main
+# FROM lmsysorg/sglang:${SGLANG_VERSION} AS sglang
+FROM ishandhanani/sglang:gb300-tom-deepep AS sglang
 
 # we need to write this again after from
 ARG SGLANG_VERSION
-ARG MEGATRON_COMMIT=48406695c4efcf1026a7ed70bb390793918dd97b
+ARG MEGATRON_COMMIT=ca9797e95e88d93623b0f69831529a1b521297ac
+
+ARG ENABLE_BLACKWELL_BUILD=0
+ARG ENABLE_CUDA_13=0
+ARG ENABLE_TIGHT_BUILD_RES=0
 
 RUN apt update
 RUN apt install -y nvtop
@@ -17,7 +23,13 @@ RUN pip install httpx[http2] wandb pylatexenc blobfile accelerate "mcp[cli]"
 # mbridge
 RUN pip install git+https://github.com/ISEEKYAN/mbridge.git --no-deps
 
-RUN TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0;9.0a" pip install git+https://github.com/fanshiqing/grouped_gemm@v1.1.4
+RUN if [ "${ENABLE_BLACKWELL_BUILD}" = "1" ]; then \
+          export TLIST="8.0;8.9;9.0;9.0a;10.0"; \
+        else \
+          export TLIST="8.0;8.9;9.0;9.0a"; \
+        fi && \
+    TORCH_CUDA_ARCH_LIST="$TLIST" pip install git+https://github.com/fanshiqing/grouped_gemm@v1.1.4
+
 # apex
 RUN NVCC_APPEND_FLAGS="--threads 4" \
   pip -v install --disable-pip-version-check --no-cache-dir \
@@ -25,11 +37,24 @@ RUN NVCC_APPEND_FLAGS="--threads 4" \
   --config-settings "--build-option=--cpp_ext --cuda_ext --parallel 8" git+https://github.com/NVIDIA/apex.git
 # transformer engine, we install with --no-deps to avoid installing torch and torch-extensions
 RUN pip install pybind11
+
 # flash attn
 # the newest version megatron supports is v2.7.4
-RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1
+RUN if [ "$ENABLE_TIGHT_BUILD_RES" = "1" ]; then \
+      export MAX_JOBS=32; \
+    else \
+      export MAX_JOBS=64; \
+    fi && \
+    pip -v install flash-attn==2.7.4.post1
+
 RUN pip install flash-linear-attention
-RUN pip -v install --no-build-isolation transformer_engine[pytorch]
+
+# TE does not have wheel on cuda 13 yet, thus need to install from source
+RUN if [ "${ENABLE_CUDA_13}" = "1" ]; then \
+          pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@stable; \
+        else \
+          pip -v install --no-build-isolation "transformer_engine[pytorch]"; \
+        fi
 
 WORKDIR /root/
 RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
