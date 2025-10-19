@@ -84,9 +84,7 @@ class FSDPTrainRayActor(TrainRayActor):
         # Create FSDP v2 model using FSDP
         self.model = FSDP(model)
 
-        # Initialize optimizer based on args.optimizer
         if args.optimizer == "deepspeed_cpu_adam":
-            # Use DeepSpeedCPUAdam with wrapper - keeps optimizer states and shadow params on CPU
             optimizer_config = {
                 'lr': args.lr,
                 'betas': (args.adam_beta1, args.adam_beta2),
@@ -99,7 +97,6 @@ class FSDPTrainRayActor(TrainRayActor):
             self.optimizer = FSDPCPUAdamWrapper(optimizer_config, self.model)
             
         elif args.optimizer == "adam":
-            # Use standard PyTorch AdamW optimizer (GPU-based)
             self.optimizer = torch.optim.AdamW(
                 self.model.parameters(),
                 lr=args.lr,
@@ -550,7 +547,7 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
-            
+
         rollout_engines, rollout_engine_lock, num_new_engines = ray.get(
             self.rollout_manager.get_rollout_engines_and_lock.remote()
         )
@@ -611,7 +608,6 @@ class FSDPTrainRayActor(TrainRayActor):
             import os
 
             if os.path.isdir(ref_load_path):
-                # Load reference model - torch_memory_saver automatically tracks all tensors
                 temp_ref_model = AutoModelForCausalLM.from_pretrained(
                     ref_load_path,
                     trust_remote_code=True,
