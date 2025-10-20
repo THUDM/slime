@@ -3,7 +3,7 @@ FROM lmsysorg/sglang:${SGLANG_VERSION} AS sglang
 
 # we need to write this again after from
 ARG SGLANG_VERSION
-ARG MEGATRON_COMMIT=main
+ARG MEGATRON_COMMIT=48406695c4efcf1026a7ed70bb390793918dd97b
 
 RUN apt update
 RUN apt install -y nvtop

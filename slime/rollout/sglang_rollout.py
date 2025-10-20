@@ -3,7 +3,8 @@ import base64
 import copy
 import io
 from argparse import Namespace
-from typing import Any, Callable, Union
+from collections import defaultdict
+from typing import Any, Callable, Optional, Union
 
 from PIL import Image
 from tqdm import tqdm
@@ -327,6 +328,8 @@ async def generate_rollout_async(
         load_function(args.dynamic_sampling_filter_path) if args.dynamic_sampling_filter_path is not None else None
     )
 
+    metric_gatherer = _MetricGatherer()
+
     # target_data_size is the total number of valid samples to get
     target_data_size = args.rollout_batch_size
 
@@ -355,6 +358,7 @@ async def generate_rollout_async(
             assert len(group) == args.n_samples_per_prompt
             dynamic_filter_output = _call_dynamic_filter(dynamic_filter, args, group)
             if not dynamic_filter_output.keep:
+                metric_gatherer.on_dynamic_filter_drop(reason=dynamic_filter_output.reason)
                 state.remaining_batch_size -= 1
                 continue
 
@@ -379,7 +383,7 @@ async def generate_rollout_async(
 
     # reset the global state to prevent effects on the next rollout or eval.
     state.reset()
-    return RolloutFnTrainOutput(samples=data), aborted_samples
+    return RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect()), aborted_samples
 
 
 def _call_dynamic_filter(fn, *args, **kwargs):
@@ -393,6 +397,22 @@ def _call_dynamic_filter(fn, *args, **kwargs):
         output = DynamicFilterOutput(keep=output)
 
     return output
+
+
+class _MetricGatherer:
+    def __init__(self):
+        self._dynamic_filter_drop_reason_count = defaultdict(lambda: 0)
+
+    def on_dynamic_filter_drop(self, reason: Optional[str]):
+        if not reason:
+            return
+        self._dynamic_filter_drop_reason_count[reason] += 1
+
+    def collect(self):
+        return {
+            f"rollout/dynamic_filter/drop_{reason}": count
+            for reason, count in self._dynamic_filter_drop_reason_count.items()
+        }
 
 
 EVAL_PROMPT_DATASET = {}
