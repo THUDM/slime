@@ -664,9 +664,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="How to normalize advantages: 'prompt' (per prompt), 'batch' (global), 'disable' (no normalization)",
             )
             parser.add_argument(
-                "--advantage-mean-normalization",
-                action="store_true",
-                default=False,
+                "--disable-advantage-mean-normalization",
+                action="store_false",
+                dest="advantage_mean_normalization",
                 help="Whether to normalize advantage by subtracting mean (for example, ScaleRL only normalize by std of batch)",
             )
             parser.add_argument(
