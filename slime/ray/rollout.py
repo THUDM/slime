@@ -165,7 +165,7 @@ class RolloutManager:
         if self.args.rewards_normalization and (
             self.args.advantage_normalization in ["prompt", "disable"]
             or self.args.advantage_estimator == "reinforce_plus_plus_baseline"
-        ):  # REINFORCE++ computed mean in prompt level, but std in batch level
+        ):  # REINFORCE++ subtracted mean in both prompt level and batch level, and std in batch level
             # group norm
             rewards = torch.tensor(raw_rewards, dtype=torch.float)
             if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
@@ -174,7 +174,8 @@ class RolloutManager:
                 # when samples count are not equal in each group
                 rewards = rewards.view(-1, rewards.shape[-1])
             mean = rewards.mean(dim=-1, keepdim=True)
-            rewards = rewards - mean
+            if self.args.advantage_mean_normalization:
+                rewards = rewards - mean
 
             # This check makes sure we don't apply prompt-level std normalization to REINFORCE++
             if self.args.advantage_normalization == "prompt":

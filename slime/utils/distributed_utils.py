@@ -96,6 +96,7 @@ def distributed_masked_whiten(
     mask: torch.Tensor,
     process_group: Optional[dist.ProcessGroup] = None,
     shift_mean: bool = True,
+    advantage_mean_normalization: bool = True,
     epsilon: float = 1e-8,
 ):
     """
@@ -146,7 +147,7 @@ def distributed_masked_whiten(
         global_var = global_var * bessel_correction
 
     # Whiten local data using global stats
-    whitened_values = (values - global_mean) * torch.rsqrt(global_var + epsilon)
+    whitened_values = (values - global_mean if advantage_mean_normalization else 0) * torch.rsqrt(global_var + epsilon)
 
     if not shift_mean:
         whitened_values += global_mean

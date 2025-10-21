@@ -664,6 +664,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="How to normalize advantages: 'prompt' (per prompt), 'batch' (global), 'disable' (no normalization)",
             )
             parser.add_argument(
+                "--advantage-mean-normalization",
+                action="store_true",
+                default=False,
+                help="Whether to normalize advantage by subtracting mean",
+            )
+            parser.add_argument(
                 "--loss-aggregation",
                 type=str,
                 choices=["token", "sample", "prompt", "none"],

@@ -343,6 +343,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
                 all_masks,
                 process_group=dp_group,
                 shift_mean=True,
+                advantage_mean_normalization=self.args.advantage_mean_normalization,
             )
             chunk_lengths = [chunk.size(0) for chunk in advantages]
             advantages = list(torch.split(whitened_advs_flat, chunk_lengths))
