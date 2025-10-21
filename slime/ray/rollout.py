@@ -174,8 +174,7 @@ class RolloutManager:
                 # when samples count are not equal in each group
                 rewards = rewards.view(-1, rewards.shape[-1])
             mean = rewards.mean(dim=-1, keepdim=True)
-            if self.args.advantage_mean_normalization:
-                rewards = rewards - mean
+            rewards = rewards - mean
 
             # This check makes sure we don't apply prompt-level std normalization to REINFORCE++
             if self.args.advantage_normalization == "prompt":
