@@ -110,7 +110,7 @@ def get_sum_of_sample_mean(
 
         def sum_of_prompt(x: torch.Tensor) -> torch.Tensor:
             # TODO: Find some way to aggregate the response length over all CP
-            raise "Prompt-level aggregation is currently not supported with context parallelism"
+            raise NotImplementedError("Prompt-level aggregation is currently not supported with context parallelism")
 
     loss_aggregation_fn = {"sample": sum_of_sample_mean, "token": sum_of_token, "prompt": sum_of_prompt}
 
