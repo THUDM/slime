@@ -664,12 +664,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="How to normalize advantages: 'prompt' (per prompt), 'batch' (global), 'disable' (no normalization)",
             )
             parser.add_argument(
-                "--disable-advantage-mean-normalization",
-                action="store_false",
-                dest="advantage_mean_normalization",
-                help="Whether to normalize advantage by subtracting batch mean (for example, ScaleRL subtracts by group mean only, and normalize by std of batch)",
-            )
-            parser.add_argument(
                 "--loss-aggregation",
                 type=str,
                 choices=["token", "sample", "prompt", "none"],
@@ -1125,8 +1119,8 @@ def parse_args_train_backend():
 
 
 def set_args_for_rl_algo(args):
-    if self.calculate_per_token_loss:
-        self.loss_aggregation = "token"
+    if args.calculate_per_token_loss:
+        args.loss_aggregation = "token"
     if args.advantage_estimator in ["grpo", "gspo"]:
         args.advantage_normalization = (
             "prompt" if args.advantage_normalization == "none" else args.advantage_normalization

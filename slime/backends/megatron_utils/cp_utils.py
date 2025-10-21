@@ -48,7 +48,8 @@ def get_sum_of_sample_mean(
     total_lengths: list[int],
     response_lengths: list[int],
     loss_masks: list[torch.Tensor],
-    calculate_per_token_loss: bool = False,
+    loss_aggregation: str = "sample",
+    n_samples_per_prompt: int = 1,
 ) -> Callable[[torch.Tensor], torch.Tensor]:
     """
     Calculate correct sample mean for CP

@@ -162,28 +162,31 @@ class RolloutManager:
             return self.custom_reward_post_process_func(self.args, samples)
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
-        if self.args.rewards_normalization and (
-            self.args.advantage_normalization in ["prompt", "disable"]
-            or self.args.advantage_estimator == "reinforce_plus_plus_baseline"
-        ):  # REINFORCE++ subtracted mean in both prompt level and batch level, and std in batch level
-            # group norm
+        if self.args.rewards_normalization: 
             rewards = torch.tensor(raw_rewards, dtype=torch.float)
+
             if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
                 rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
             else:
                 # when samples count are not equal in each group
                 rewards = rewards.view(-1, rewards.shape[-1])
             mean = rewards.mean(dim=-1, keepdim=True)
-            rewards = rewards - mean
+            # This check makes sure we don't apply prompt-level mean subtraction to REINFORCE++
+            if self.args.advantage_estimator != "reinforce_plus_plus":
+                # Algorithms like Dr.GRPO will still reach this part
+                rewards = rewards - mean
 
-            # This check makes sure we don't apply prompt-level std normalization to REINFORCE++
             if self.args.advantage_normalization == "prompt":
                 std = rewards.std(dim=-1, keepdim=True)
                 rewards = rewards / (std + 1e-6)
+            elif self.args.advantage_normalization == "batch" and not self.args.advantage_estimator in ["reinforce_plus_plus", "reinforce_plus_plus_baseline"]:
+                batch_mean = rewards.mean()
+                batch_std = rewards.std()
+                rewards = (rewards - batch_mean) / (batch_std + 1e-6)
 
             return raw_rewards, rewards.flatten().tolist()
 
-        # When advantage normalization is set to batch, return raw rewards as is
+        # When rewards_normalization is disabled, return raw rewards as is (for example, PPO)
         return raw_rewards, raw_rewards
 
     def _convert_samples_to_train_data(self, samples: Union[list[Sample], list[list[Sample]]]):
