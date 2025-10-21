@@ -670,7 +670,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default="none",
                 help="How to aggregate the loss: 'token' (per token), 'sample' (per sample), 'prompt' (per prompt)",
             )
-            
+
             parser.add_argument("--normalize-advantages", action="store_true", default=False)
             parser.add_argument(
                 "--disable-grpo-std-normalization",
@@ -1117,16 +1117,24 @@ def parse_args_train_backend():
     args_partial, _ = parser.parse_known_args()
     return args_partial.train_backend
 
+
 def set_args_for_rl_algo(args):
     if args.advantage_estimator in ["grpo", "gspo"]:
-        args.advantage_normalization = "prompt" if args.advantage_normalization == "none" else args.advantage_normalization
+        args.advantage_normalization = (
+            "prompt" if args.advantage_normalization == "none" else args.advantage_normalization
+        )
         args.loss_aggregation = "sample" if args.loss_aggregation == "none" else args.loss_aggregation
     elif args.advantage_estimator in ["reinforce_plus_plus", "reinforce_plus_plus_baseline"]:
-        args.advantage_normalization = "batch" if args.advantage_normalization == "none" else args.advantage_normalization
+        args.advantage_normalization = (
+            "batch" if args.advantage_normalization == "none" else args.advantage_normalization
+        )
         args.loss_aggregation = "token" if args.loss_aggregation == "none" else args.loss_aggregation
     elif args.advantage_estimator in ["ppo"]:
-        args.advantage_normalization = "disable" if args.advantage_normalization == "none" else args.advantage_normalization
+        args.advantage_normalization = (
+            "disable" if args.advantage_normalization == "none" else args.advantage_normalization
+        )
         args.loss_aggregation = "token" if args.loss_aggregation == "none" else args.loss_aggregation
+
 
 def slime_validate_args(args):
     if args.kl_coef != 0 or args.use_kl_loss:
@@ -1170,7 +1178,6 @@ def slime_validate_args(args):
         args.advantage_normalization = "disable"
 
     set_args_for_rl_algo(args)
-
 
     if args.use_dynamic_batch_size:
         assert args.max_tokens_per_gpu is not None, "max_tokens_per_gpu must be set when use_dynamic_batch_size is set"

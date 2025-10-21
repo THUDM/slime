@@ -76,6 +76,7 @@ def get_sum_of_sample_mean(
             )
             total_length = sum([loss_mask_i.sum() for loss_mask_i in loss_masks])
             return total_loss / torch.clamp_min(total_length, 1)
+
     else:
         cp_chunk_lengths = []
         chunked_loss_masks = []
@@ -111,11 +112,7 @@ def get_sum_of_sample_mean(
             # TODO: Find some way to aggregate the response length over all CP
             raise "Prompt-level aggregation is currently not supported with context parallelism"
 
-    loss_aggregation_fn = {
-        "sample": sum_of_sample_mean,
-        "token": sum_of_token,
-        "prompt": sum_of_prompt
-    }
+    loss_aggregation_fn = {"sample": sum_of_sample_mean, "token": sum_of_token, "prompt": sum_of_prompt}
 
     return loss_aggregation_fn[loss_aggregation]
 

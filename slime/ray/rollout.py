@@ -162,13 +162,10 @@ class RolloutManager:
             return self.custom_reward_post_process_func(self.args, samples)
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
-        if (
-            self.args.rewards_normalization
-            and (
-                self.args.advantage_normalization in ["prompt","disable"]
-                or self.args.advantage_estimator == "reinforce_plus_plus_baseline"
-            )  # REINFORCE++ computed mean in prompt level, but std in batch level
-        ):
+        if self.args.rewards_normalization and (
+            self.args.advantage_normalization in ["prompt", "disable"]
+            or self.args.advantage_estimator == "reinforce_plus_plus_baseline"
+        ):  # REINFORCE++ computed mean in prompt level, but std in batch level
             # group norm
             rewards = torch.tensor(raw_rewards, dtype=torch.float)
             if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
