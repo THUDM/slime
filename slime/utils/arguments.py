@@ -1119,6 +1119,8 @@ def parse_args_train_backend():
 
 
 def set_args_for_rl_algo(args):
+    if self.calculate_per_token_loss:
+        self.loss_aggregation = "token"
     if args.advantage_estimator in ["grpo", "gspo"]:
         args.advantage_normalization = (
             "prompt" if args.advantage_normalization == "none" else args.advantage_normalization

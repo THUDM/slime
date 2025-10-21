@@ -686,12 +686,12 @@ def loss_function(
 
     return (
         loss,
-        num_tokens if args.calculate_per_token_loss else 1,
+        num_tokens if self.loss_aggregation == "token" else 1,
         {
             "keys": list(log.keys()),
             "values": torch.tensor(
                 [
-                    num_samples if not args.calculate_per_token_loss else num_tokens,
+                    num_samples if not self.loss_aggregation == "token" else num_tokens,
                 ]
                 + list(log.values()),
                 device=logits.device,
