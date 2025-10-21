@@ -48,8 +48,7 @@ def get_sum_of_sample_mean(
     total_lengths: list[int],
     response_lengths: list[int],
     loss_masks: list[torch.Tensor],
-    loss_aggregation: str = "sample",
-    n_samples_per_prompt: int = 1,
+    calculate_per_token_loss: bool = False,
 ) -> Callable[[torch.Tensor], torch.Tensor]:
     """
     Calculate correct sample mean for CP
@@ -123,7 +122,11 @@ def get_sum_of_sample_mean(
                 ]
             )
 
-    loss_aggregation_fn = {"sample": sum_of_sample_mean, "token": sum_of_token}
+        def sum_of_prompt(x: torch.Tensor) -> torch.Tensor:
+            # TODO: Support prompt-level loss aggregation with CP > 1
+            raise NotImplementedError("Prompt-level loss aggregation is not yet supported when CP > 1")
+
+    loss_aggregation_fn = {"sample": sum_of_sample_mean, "token": sum_of_token, "prompt": sum_of_prompt}
 
     return loss_aggregation_fn[loss_aggregation]
 
