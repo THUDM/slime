@@ -656,6 +656,7 @@ def loss_function(
         batch["response_lengths"],
         batch["loss_masks"],
         args.loss_aggregation,
+        args.n_samples_per_prompt,
     )
 
     loss_function_kwargs = {

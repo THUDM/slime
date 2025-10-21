@@ -49,6 +49,7 @@ def get_sum_of_sample_mean(
     response_lengths: list[int],
     loss_masks: list[torch.Tensor],
     loss_aggregation: str = "sample",
+    n_samples_per_prompt: int = 1,
 ) -> Callable[[torch.Tensor], torch.Tensor]:
     """
     Calculate correct sample mean for CP
@@ -70,12 +71,26 @@ def get_sum_of_sample_mean(
             )
 
         def sum_of_prompt(x: torch.Tensor) -> torch.Tensor:
-            # Total loss across all samples divided by total length (See DAPO)
-            total_loss = sum(
-                [(x_i * loss_mask_i).sum() for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks)]
-            )
-            total_length = sum([loss_mask_i.sum() for loss_mask_i in loss_masks])
-            return total_loss / torch.clamp_min(total_length, 1)
+            # Per-prompt aggregation: group samples by prompt, compute loss per prompt, then sum
+            x_splits = list(x.split(response_lengths, dim=0))
+            num_prompts = len(loss_masks) // n_samples_per_prompt
+            
+            prompt_losses = []
+            for i in range(num_prompts):
+                start_idx = i * n_samples_per_prompt
+                end_idx = start_idx + n_samples_per_prompt
+                
+                # Get samples for this prompt
+                group_x = x_splits[start_idx:end_idx]
+                group_masks = loss_masks[start_idx:end_idx]
+                
+                # Compute aggregated loss for this prompt
+                group_total_loss = sum([(x_i * mask_i).sum() for x_i, mask_i in zip(group_x, group_masks)])
+                group_total_length = sum([mask_i.sum() for mask_i in group_masks])
+                prompt_losses.append(group_total_loss / torch.clamp_min(group_total_length, 1))
+            
+            # Sum across prompts (mean would be: sum / num_prompts)
+            return sum(prompt_losses)
 
     else:
         cp_chunk_lengths = []
@@ -108,11 +123,7 @@ def get_sum_of_sample_mean(
                 ]
             )
 
-        def sum_of_prompt(x: torch.Tensor) -> torch.Tensor:
-            # TODO: Find some way to aggregate the response length over all CP
-            raise NotImplementedError("Prompt-level aggregation is currently not supported with context parallelism")
-
-    loss_aggregation_fn = {"sample": sum_of_sample_mean, "token": sum_of_token, "prompt": sum_of_prompt}
+    loss_aggregation_fn = {"sample": sum_of_sample_mean, "token": sum_of_token}
 
     return loss_aggregation_fn[loss_aggregation]
 
