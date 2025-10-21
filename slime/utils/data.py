@@ -72,8 +72,9 @@ class Dataset:
 
             # TODO: this is slow.
             if max_length is not None:
+                raw_prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
                 if not multimodal_keys:
-                    if len(prompt) > max_length:
+                    if len(raw_prompt_ids) > max_length:
                         continue
 
             self.origin_samples.append(
