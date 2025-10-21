@@ -667,7 +667,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--disable-advantage-mean-normalization",
                 action="store_false",
                 dest="advantage_mean_normalization",
-                help="Whether to normalize advantage by subtracting mean (for example, ScaleRL only normalize by std of batch)",
+                help="Whether to normalize advantage by subtracting batch mean (for example, ScaleRL subtracts by group mean only, and normalize by std of batch)",
             )
             parser.add_argument(
                 "--loss-aggregation",
