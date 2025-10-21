@@ -372,6 +372,8 @@ async def generate_rollout_async(
         if args.effective_batch_filtering:
             break
 
+    args.rollout_batch_size = len(data)
+
     pbar.close()
     sample = data[-1][0][0] if isinstance(data[-1][0], list) else data[-1][0]
     print(
