@@ -30,6 +30,7 @@ from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
 from .data_packing import pack_sequences, unpack_sequences
+from .fsdp_cpu_adam_wrapper import FSDPCPUAdamWrapper
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
 
@@ -83,13 +84,29 @@ class FSDPTrainRayActor(TrainRayActor):
         # Create FSDP v2 model using FSDP
         self.model = FSDP(model)
 
-        self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=args.lr,
-            betas=(args.adam_beta1, args.adam_beta2),
-            eps=args.adam_eps,
-            weight_decay=args.weight_decay,
-        )
+        if args.optimizer == "deepspeed_cpu_adam":
+            optimizer_config = {
+                'lr': args.lr,
+                'betas': (args.adam_beta1, args.adam_beta2),
+                'eps': args.adam_eps,
+                'weight_decay': args.weight_decay,
+                'adamw_mode': True,  # Use AdamW mode (decoupled weight decay)
+                'fp32_optimizer_states': True,  # Keep optimizer states in FP32
+            }
+            
+            self.optimizer = FSDPCPUAdamWrapper(optimizer_config, self.model)
+            
+        elif args.optimizer == "adam":
+            self.optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                lr=args.lr,
+                betas=(args.adam_beta1, args.adam_beta2),
+                eps=args.adam_eps,
+                weight_decay=args.weight_decay,
+            )
+            
+        else:
+            raise ValueError(f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam', 'deepspeed_cpu_adam'")
 
         # TODO: load
 
@@ -104,7 +121,7 @@ class FSDPTrainRayActor(TrainRayActor):
         self.weight_updater = (
             UpdateWeightFromTensor(self.args, self.model, self.weights)
             if self.args.colocate
-            else UpdateWeightFromDistributed(self.args, self.model)
+            else UpdateWeightFromDistributed(self.args, self.model, self.weights)
         )
 
         # Initialize data packing parameters
@@ -119,7 +136,7 @@ class FSDPTrainRayActor(TrainRayActor):
         return 0
 
     def sleep(self, tags: str | Iterable[str] | None) -> None:
-        """Pause CUDA memory for tagged tensors via torch_memory_saver.
+        """Pause CUDA memory for all tracked tensors via torch_memory_saver.
 
         When offloading is enabled, this forwards tags to
         `torch_memory_saver.pause`. If `tags` is a string, that tag is paused.
@@ -129,17 +146,15 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         if not getattr(self.args, "offload", False):
             return
+
+        if isinstance(tags, str):
+            tags = (tags,)
+        
         if torch_memory_saver is not None:
-            if tags is None:
-                torch_memory_saver.pause()
-            elif isinstance(tags, str):
-                torch_memory_saver.pause(tags)
-            else:
-                for tag in tags:
-                    torch_memory_saver.pause(tag)
+            torch_memory_saver.pause()
 
     def wake_up(self, tags: str | Iterable[str] | None) -> None:
-        """Resume CUDA memory for tagged tensors via torch_memory_saver.
+        """Resume CUDA memory for all tracked tensors via torch_memory_saver.
 
         When offloading is enabled, this forwards tags to
         `torch_memory_saver.resume`. If `tags` is a string, that tag is resumed.
@@ -149,14 +164,12 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         if not getattr(self.args, "offload", False):
             return
+        
+        if isinstance(tags, str):
+            tags = (tags,)
+        
         if torch_memory_saver is not None:
-            if tags is None:
-                torch_memory_saver.resume()
-            elif isinstance(tags, str):
-                torch_memory_saver.resume(tags)
-            else:
-                for tag in tags:
-                    torch_memory_saver.resume(tag)
+            torch_memory_saver.resume()
 
     def save_model(self, iteration: int) -> None:
         """Save model state and optimizer state for the given iteration.
@@ -542,22 +555,9 @@ class FSDPTrainRayActor(TrainRayActor):
             self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
-        # For colocated mode with sharded updates (full_params=False),
-        # we don't need to wake up the entire model
-        # The bucket-based approach will load parameters selectively from CPU storage
-        # TODO:  Add bucket optimization for from distributed mode
-        use_bucket_optimization = self.args.colocate and not getattr(self.weight_updater, "full_params", False)
-
-        if self.args.offload and not use_bucket_optimization:
-            # Wake up for distributed mode or full_params mode
-            self.wake_up(("model"))
 
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
             self.weight_updater.update_weights()
-
-        if self.args.offload and not use_bucket_optimization:
-            # Sleep for distributed mode or full_params mode
-            self.sleep(("model"))
 
     @torch.no_grad()
     def update_cpu_params_dict(self, params_dict: dict[str, torch.Tensor]) -> None:

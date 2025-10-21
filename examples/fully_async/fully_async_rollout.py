@@ -193,6 +193,23 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer) -> List[Lis
 
             group = completed_groups.pop(group_id)
 
+            # If any sample in the group was aborted, return the whole group to the data buffer
+            # and do not forward it to the training engine.
+            try:
+                any_aborted = any([sample.status == Sample.Status.ABORTED for sample in group])
+            except Exception:
+                any_aborted = False
+
+            if any_aborted:
+                try:
+                    # add back to buffer so it can be retried or handled by buffer policy
+                    data_buffer.add_samples([group])
+                    print(f"Returned aborted group {group_id} to data buffer", flush=True)
+                except Exception as e:
+                    print(f"Failed to return aborted group {group_id} to buffer: {e}", flush=True)
+                # don't count as processed for training
+                continue
+
             if do_print:
                 print(
                     f"First rollout sample: {[group[0].prompt + group[0].response]}, "
