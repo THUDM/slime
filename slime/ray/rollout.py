@@ -163,8 +163,11 @@ class RolloutManager:
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
         if (
-            self.args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
-            and self.args.rewards_normalization
+            self.args.rewards_normalization
+            and (
+                self.args.advantage_normalization in ["prompt","disable"]
+                or self.args.advantage_estimator == "reinforce_plus_plus_baseline"
+            )  # REINFORCE++ computed mean in prompt level, but std in batch level
         ):
             # group norm
             rewards = torch.tensor(raw_rewards, dtype=torch.float)
@@ -176,12 +179,14 @@ class RolloutManager:
             mean = rewards.mean(dim=-1, keepdim=True)
             rewards = rewards - mean
 
-            if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
+            # This check makes sure we don't apply prompt-level std normalization to REINFORCE++
+            if self.args.advantage_normalization == "prompt":
                 std = rewards.std(dim=-1, keepdim=True)
                 rewards = rewards / (std + 1e-6)
 
             return raw_rewards, rewards.flatten().tolist()
 
+        # When advantage normalization is set to batch, return raw rewards as is
         return raw_rewards, raw_rewards
 
     def _convert_samples_to_train_data(self, samples: Union[list[Sample], list[list[Sample]]]):

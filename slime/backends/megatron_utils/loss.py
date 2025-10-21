@@ -289,8 +289,13 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     else:
         raise NotImplementedError(f"advantage_estimator {args.advantage_estimator} is not supported. ")
 
-    # TODO: OpenRLHF always does advantages normalization but veRL doesn't seem to do it.
-    if args.normalize_advantages:
+    # Advantage normalization by dividing standard deviation of rewards
+    if args.advantage_normalization == "prompt":
+        # Normalize advantages within each prompt group
+        # This is done in slime/ray/rollout.py under `_post_process_rewards()`
+        pass
+    elif args.advantage_normalization == "batch":
+        # Normalize advantages over the whole batch
         all_advs = torch.cat(advantages)
         cp_size = mpu.get_context_parallel_world_size()
         if cp_size == 1:
@@ -650,7 +655,7 @@ def loss_function(
         batch["total_lengths"],
         batch["response_lengths"],
         batch["loss_masks"],
-        args.calculate_per_token_loss,
+        args.loss_aggregation,
     )
 
     loss_function_kwargs = {

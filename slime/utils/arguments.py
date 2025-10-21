@@ -653,6 +653,24 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--entropy-coef", type=float, default=0.0, help="Entropy loss coef")
             parser.add_argument("--gamma", type=float, default=1.0, help="PPO GAE gamma")
             parser.add_argument("--lambd", type=float, default=1.0, help="PPO GAE lambd")
+
+            # Advantage normalization and loss aggregation options
+            # See https://arxiv.org/pdf/2510.13786
+            parser.add_argument(
+                "--advantage-normalization",
+                type=str,
+                choices=["prompt", "batch", "disable", "none"],
+                default="none",
+                help="How to normalize advantages: 'prompt' (per prompt), 'batch' (global), 'disable' (no normalization)",
+            )
+            parser.add_argument(
+                "--loss-aggregation",
+                type=str,
+                choices=["token", "sample", "prompt", "none"],
+                default="none",
+                help="How to aggregate the loss: 'token' (per token), 'sample' (per sample), 'prompt' (per prompt)",
+            )
+            
             parser.add_argument("--normalize-advantages", action="store_true", default=False)
             parser.add_argument(
                 "--disable-grpo-std-normalization",
@@ -1099,6 +1117,16 @@ def parse_args_train_backend():
     args_partial, _ = parser.parse_known_args()
     return args_partial.train_backend
 
+def set_args_for_rl_algo(args):
+    if args.advantage_estimator in ["grpo", "gspo"]:
+        args.advantage_normalization = "prompt" if args.advantage_normalization == "none" else args.advantage_normalization
+        args.loss_aggregation = "sample" if args.loss_aggregation == "none" else args.loss_aggregation
+    elif args.advantage_estimator in ["reinforce_plus_plus", "reinforce_plus_plus_baseline"]:
+        args.advantage_normalization = "batch" if args.advantage_normalization == "none" else args.advantage_normalization
+        args.loss_aggregation = "token" if args.loss_aggregation == "none" else args.loss_aggregation
+    elif args.advantage_estimator in ["ppo"]:
+        args.advantage_normalization = "disable" if args.advantage_normalization == "none" else args.advantage_normalization
+        args.loss_aggregation = "token" if args.loss_aggregation == "none" else args.loss_aggregation
 
 def slime_validate_args(args):
     if args.kl_coef != 0 or args.use_kl_loss:
@@ -1137,11 +1165,12 @@ def slime_validate_args(args):
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 
-    if args.advantage_estimator in ["reinforce_plus_plus", "reinforce_plus_plus_baseline"]:
-        assert args.normalize_advantages, (
-            "The 'reinforce_plus_plus' and 'reinforce_plus_plus_baseline' advantage estimators "
-            "require advantage normalization. Please add `--normalize-advantages` to your command."
-        )
+    if not args.grpo_std_normalization:
+        # For backward compatibility, disable advantage normalization for all RL algorithms
+        args.advantage_normalization = "disable"
+
+    set_args_for_rl_algo(args)
+
 
     if args.use_dynamic_batch_size:
         assert args.max_tokens_per_gpu is not None, "max_tokens_per_gpu must be set when use_dynamic_batch_size is set"
