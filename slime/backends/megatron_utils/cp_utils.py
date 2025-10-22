@@ -75,7 +75,7 @@ def get_sum_of_sample_mean(
             x_splits = list(x.split(response_lengths, dim=0))
             num_prompts = len(loss_masks) // n_samples_per_prompt
             
-            total_loss = torch.tensor(0.0, device=x.device, dtype=x.dtype)
+            total_loss = 0.0 * x.sum()
             for i in range(num_prompts):
                 start_idx = i * n_samples_per_prompt
                 end_idx = start_idx + n_samples_per_prompt
