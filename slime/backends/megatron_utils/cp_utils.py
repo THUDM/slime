@@ -75,7 +75,7 @@ def get_sum_of_sample_mean(
             x_splits = list(x.split(response_lengths, dim=0))
             num_prompts = len(loss_masks) // n_samples_per_prompt
             
-            total_loss = 0.0 * x.sum()
+            prompt_loss = []
             for i in range(num_prompts):
                 start_idx = i * n_samples_per_prompt
                 end_idx = start_idx + n_samples_per_prompt
@@ -87,9 +87,9 @@ def get_sum_of_sample_mean(
                 # Compute aggregated loss for this prompt
                 group_total_loss = sum([(x_i * mask_i).sum() for x_i, mask_i in zip(group_x, group_masks)])
                 group_total_length = sum([mask_i.sum() for mask_i in group_masks])
-                total_loss = total_loss + group_total_loss / torch.clamp_min(group_total_length, 1)
+                prompt_loss.append(group_total_loss / torch.clamp_min(group_total_length, 1))
             
-            return total_loss
+            return torch.stack(prompt_loss).sum()
 
     else:
         cp_chunk_lengths = []
