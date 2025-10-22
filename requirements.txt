@@ -1,5 +1,6 @@
 accelerate
 datasets
+deepspeed
 httpx[http2]
 mcp[cli]
 pillow
@@ -10,4 +11,3 @@ tensorboard
 torch
 transformers
 wandb
-deepspeed
