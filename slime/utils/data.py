@@ -186,6 +186,7 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         "sample_indices",
         "rollout_log_probs",
         "prompt",
+        "pixel_values",
     ]:
         if key not in data:
             continue
