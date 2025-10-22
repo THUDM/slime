@@ -20,7 +20,10 @@ from slime.utils.memory_utils import clear_memory
 from slime.utils.types import ParamInfo
 
 try:
-    from sglang.srt.model_executor.model_runner import FlattenedTensorBucket  # type: ignore[import]
+    try:
+        from sglang.srt.weight_sync.tensor_bucket import FlattenedTensorBucket  # type: ignore[import]
+    except ImportError:
+        from sglang.srt.model_executor.model_runner import FlattenedTensorBucket  # type: ignore[import]
 
     use_flattened_tensor_bucket = True
 except ImportError:
