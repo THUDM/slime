@@ -709,14 +709,19 @@ def loss_function(
         loss * num_microbatches / args.global_batch_size * mpu.get_data_parallel_world_size(with_context_parallel=True)
     )
 
+    if args.loss_aggregation == "prompt":
+        # The above computation includes the 1/G in GRPO/GSPO
+        # However, we don't do that when we aggregate loss in prompt-level
+        loss = loss * args.n_samples_per_prompt
+
     return (
         loss,
-        num_tokens if self.loss_aggregation == "token" else 1,
+        num_tokens if args.loss_aggregation == "token" else 1,
         {
             "keys": list(log.keys()),
             "values": torch.tensor(
                 [
-                    num_samples if not self.loss_aggregation == "token" else num_tokens,
+                    num_samples if not args.loss_aggregation == "token" else num_tokens,
                 ]
                 + list(log.values()),
                 device=logits.device,
