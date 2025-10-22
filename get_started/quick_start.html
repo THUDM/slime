@@ -54,7 +54,7 @@
     <link rel="prev" title="slime Documentation" href="../index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Oct 14, 2025"/>
+    <meta name="docbuild:last-update" content="Oct 22, 2025"/>
   </head>
   
   
@@ -1020,10 +1020,10 @@ The <code class="docutils literal notranslate"><span class="pre">sample.metadata
 <p>Finally, in the training script, enable the above custom functions through the following parameters:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CUSTOM_ARGS</span><span class="o">=(</span>
 <span class="w">   </span><span class="c1"># Specify the path of custom generation function (format: path.to.your.file:function_name)</span>
-<span class="w">   </span>--custom-generate-function-path<span class="w"> </span>your_module.multiturn_logic:generate
+<span class="w">   </span>--custom-generate-function-path<span class="w"> </span>your_module.multiturn_logic.generate
 
 <span class="w">   </span><span class="c1"># Specify the path of custom reward function</span>
-<span class="w">   </span>--custom-rm-path<span class="w"> </span>your_module.multiturn_logic:reward_func
+<span class="w">   </span>--custom-rm-path<span class="w"> </span>your_module.multiturn_logic.reward_func
 <span class="o">)</span>
 </pre></div>
 </div>
@@ -1179,7 +1179,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 14, 2025.
+  Last updated on Oct 22, 2025.
   <br/>
 </p>
   </div>
