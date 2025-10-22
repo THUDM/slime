@@ -20,7 +20,10 @@ from slime.utils.memory_utils import clear_memory
 from slime.utils.types import ParamInfo
 
 try:
-    from sglang.srt.model_executor.model_runner import FlattenedTensorBucket  # type: ignore[import]
+    try:
+        from sglang.srt.weight_sync.tensor_bucket import FlattenedTensorBucket  # type: ignore[import]
+    except ImportError:
+        from sglang.srt.model_executor.model_runner import FlattenedTensorBucket  # type: ignore[import]
 
     use_flattened_tensor_bucket = True
 except ImportError:
@@ -149,14 +152,14 @@ class UpdateWeightFromTensor:
 
         if self.full_params:
             print("Using FULL_STATE_DICT path with loading from CPU storage")
-            
+
             # Load all parameters from CPU storage to GPU in one go
             # This is more memory intensive but faster than bucket-based approach
             named_tensors = []
             for name, cpu_param in self.weights["actor"].items():
                 gpu_param = cpu_param.to(device=torch.cuda.current_device(), non_blocking=True)
                 named_tensors.append((name, gpu_param))
-            
+
             torch.cuda.synchronize()
 
             if use_flattened_tensor_bucket:
@@ -356,11 +359,11 @@ class UpdateWeightFromDistributed:
             cpu_param = self.weights["actor"][name]
             gpu_param = cpu_param.to(device=torch.cuda.current_device(), dtype=torch.bfloat16, non_blocking=True)
             torch.cuda.synchronize()
-            
+
             # Broadcast this single parameter
             single_param_dict = {name: gpu_param}
             self.request_update_params(single_param_dict)
-            
+
             del gpu_param
             clear_memory()
 

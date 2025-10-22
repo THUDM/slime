@@ -86,16 +86,16 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if args.optimizer == "deepspeed_cpu_adam":
             optimizer_config = {
-                'lr': args.lr,
-                'betas': (args.adam_beta1, args.adam_beta2),
-                'eps': args.adam_eps,
-                'weight_decay': args.weight_decay,
-                'adamw_mode': True,  # Use AdamW mode (decoupled weight decay)
-                'fp32_optimizer_states': True,  # Keep optimizer states in FP32
+                "lr": args.lr,
+                "betas": (args.adam_beta1, args.adam_beta2),
+                "eps": args.adam_eps,
+                "weight_decay": args.weight_decay,
+                "adamw_mode": True,  # Use AdamW mode (decoupled weight decay)
+                "fp32_optimizer_states": True,  # Keep optimizer states in FP32
             }
-            
+
             self.optimizer = FSDPCPUAdamWrapper(optimizer_config, self.model)
-            
+
         elif args.optimizer == "adam":
             self.optimizer = torch.optim.AdamW(
                 self.model.parameters(),
@@ -104,9 +104,11 @@ class FSDPTrainRayActor(TrainRayActor):
                 eps=args.adam_eps,
                 weight_decay=args.weight_decay,
             )
-            
+
         else:
-            raise ValueError(f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam', 'deepspeed_cpu_adam'")
+            raise ValueError(
+                f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam', 'deepspeed_cpu_adam'"
+            )
 
         # TODO: load
 
@@ -149,7 +151,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if isinstance(tags, str):
             tags = (tags,)
-        
+
         if torch_memory_saver is not None:
             torch_memory_saver.pause()
 
@@ -164,10 +166,10 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         if not getattr(self.args, "offload", False):
             return
-        
+
         if isinstance(tags, str):
             tags = (tags,)
-        
+
         if torch_memory_saver is not None:
             torch_memory_saver.resume()
 
@@ -554,7 +556,6 @@ class FSDPTrainRayActor(TrainRayActor):
         if num_new_engines > 0:
             self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
-
 
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
             self.weight_updater.update_weights()
