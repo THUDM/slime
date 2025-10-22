@@ -31,6 +31,12 @@ RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1
 RUN pip install flash-linear-attention
 RUN pip -v install --no-build-isolation transformer_engine[pytorch]
 
+RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
+    cd flash-attention/ && git submodule update --init && cd hopper/ && python setup.py install && \
+    export python_path=`python -c "import site; print(site.getsitepackages()[0])"` && \
+    mkdir -p $python_path/flash_attn_3 && \
+    cp flash_attn_interface.py $python_path/flash_attn_3/flash_attn_interface.py
+
 WORKDIR /root/
 RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
     cd Megatron-LM && \
