@@ -435,7 +435,6 @@ class MegatronTrainRayActor(TrainRayActor):
                 else:
                     self.update_cpu_params_dict(self.weights["old_actor"])
 
-        clear_memory()
         if self.args.offload:
             destroy_process_groups()
 
