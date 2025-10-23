@@ -386,7 +386,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 ).logits
 
             # Handle packed sequences
-            log_probs = gather_log_probs_packed(logits, packed_batch["tokens"], packed_batch["cu_seqlens"])
+            log_probs = gather_log_probs_packed(
+                logits, packed_batch["tokens"], packed_batch["cu_seqlens"], temperature=self.args.rollout_temperature
+            )
             packed_batch["cur_log_probs"] = log_probs
             unpacked_batches = unpack_sequences(packed_batch)
 
