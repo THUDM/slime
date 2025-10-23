@@ -1,4 +1,5 @@
 import os
+import torch
 
 
 ROUTING_REPLAY = None
@@ -19,17 +20,20 @@ class RoutingReplay:
         RoutingReplay.all_routing_replays.append(self)
 
     def record(self, top_indices):
-        self.top_indices_list.append(top_indices)
+        # offload top_indices to CPU pinned memory
+        buf = torch.empty_like(top_indices, device="cpu", pin_memory=True)
+        buf.copy_(top_indices)
+        self.top_indices_list.append(buf)
 
     def pop_forward(self):
         top_indices = self.top_indices_list[self.forward_index]
         self.forward_index += 1
-        return top_indices
+        return top_indices.to(torch.cuda.current_device())
 
     def pop_backward(self):
         top_indices = self.top_indices_list[self.backward_index]
         self.backward_index += 1
-        return top_indices
+        return top_indices.to(torch.cuda.current_device())
 
     def clear(self):
         self.forward_index = 0
