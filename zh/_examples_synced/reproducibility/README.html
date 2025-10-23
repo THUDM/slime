@@ -54,7 +54,7 @@
     <link rel="prev" title="128xH100 训练 DeepSeek R1" href="../../examples/deepseek-r1.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2025 年 10 月 22 日"/>
+    <meta name="docbuild:last-update" content="2025 年 10 月 23 日"/>
   </head>
   
   
@@ -435,7 +435,7 @@ document.write(`
   <section class="tex2jax_ignore mathjax_ignore" id="reproducibility">
 <h1>Reproducibility<a class="headerlink" href="#reproducibility" title="Link to this heading">#</a></h1>
 <p>Reproducibility is a bedrock of scientific progress. By combining the <a class="reference external" href="https://lmsys.org/blog/2025-09-22-sglang-deterministic/">deterministic inference</a> of SGLang and the deterministic mode of Megatron-LM, slime supports bitwise experiment reproduction.</p>
-<p>To enable deterministic training, you need to set:</p>
+<p>To enable deterministic training, you need to first uninstall the flash attention 3 in the docker with <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">uninstall</span> <span class="pre">flash_attn_3</span> <span class="pre">-y</span></code> and set:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="w">  </span><span class="c1"># sglang config</span>
 <span class="w">  </span>--sglang-enable-deterministic-inference
 <span class="w">  </span>--sglang-attention-backend<span class="w"> </span>flashinfer
@@ -453,7 +453,6 @@ document.write(`
 <span class="w">     </span><span class="o">}</span>
 </pre></div>
 </div>
-<p>We also need to set <code class="docutils literal notranslate"><span class="pre">--use-slime-router</span></code> until the pypi whl of sglang-router updates.</p>
 <p>Here we provide the script to do RL training on Qwen2.5 0.5B model and GSM8K dataset with full deterministic.</p>
 <p>For data and checkpoint preparation, please run:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># download</span>
@@ -541,7 +540,7 @@ huggingface-cli<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2025 年 10 月 22 日.
+  最后更新于 2025 年 10 月 23 日.
   <br/>
 </p>
   </div>
