@@ -632,28 +632,6 @@ class FSDPTrainRayActor(TrainRayActor):
             self.update_gpu_params_dict(current_weights)
 
 
-def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temperature: float = 1.0) -> torch.Tensor:
-    """Gather next-token log probabilities for standard (unpadded) batches.
-
-    Parameters:
-        logits: Logits of shape [B, T, V].
-        input_ids: Token ids of shape [B, T].
-        rollout_temperature: Optional temperature for logits scaling.
-
-    Returns:
-        Log-probabilities of targets with shape [B, T-1].
-    """
-    # log_probs: [B, T-1, V]; input_ids: [B, T]
-    pred_logits = logits[:, :-1]
-    # haoran: whether to apply temperature shifting here?
-    if rollout_temperature != 1.0:
-        pred_logits = pred_logits / rollout_temperature
-    log_probs_all = torch.log_softmax(pred_logits, dim=-1)
-    tgt = input_ids[:, 1:].contiguous()
-    log_probs = log_probs_all.gather(-1, tgt.unsqueeze(-1)).squeeze(-1)
-    return log_probs
-
-
 def gather_log_probs_packed(
     logits: torch.Tensor, input_ids: torch.Tensor, cu_seqlens: torch.Tensor | float | None = None
 ) -> torch.Tensor:
