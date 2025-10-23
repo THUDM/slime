@@ -66,6 +66,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args.load = self.args.critic_load
             self.args.save = self.args.critic_save
             self.args.lr = self.args.critic_lr
+            self.args.lr_warmup_iters = self.args.critic_lr_warmup_iters
 
         (self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id) = initialize_model_and_optimizer(
             args, role
@@ -433,9 +434,12 @@ class MegatronTrainRayActor(TrainRayActor):
                     self.update_cpu_params_dict(self.weights["rollout_actor"])
                 else:
                     self.update_cpu_params_dict(self.weights["old_actor"])
-
+                    
+        clear_memory()
         if self.args.offload:
             destroy_process_groups()
+        
+        
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
         old_args = self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune
