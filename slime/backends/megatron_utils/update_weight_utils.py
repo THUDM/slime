@@ -1,4 +1,3 @@
-import collections
 import inspect
 import re
 import socket
@@ -428,7 +427,7 @@ class UpdateWeightFromTensor:
         for i in tqdm(range(num_buckets), disable=rank != 0, desc="Update weights"):
             current_params, current_infos = self._gather_bucket_params(self.param_info_buckets[i])
             refs = self._update_converted_params_from_tensor(current_params, current_infos)
-            ray.get(refs)            
+            ray.get(refs)
 
         dist.barrier(group=get_gloo_group())
 
