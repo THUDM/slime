@@ -230,7 +230,7 @@ class FSDPTrainRayActor(TrainRayActor):
                             model_args["pixel_values"] = batch["pixel_values"]
                         logits = self.model(**model_args).logits
                     batch[f"{store_prefix}log_probs"] = gather_log_probs_packed(
-                        logits, batch["tokens"], self.args.rollout_temperature
+                        logits, batch["tokens"]
                     )
             return rollout_data
 
