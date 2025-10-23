@@ -20,6 +20,79 @@ from slime.utils.types import RolloutBatch
 
 from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
 
+def get_reinforce_plus_plus_normalized_advantages(
+    advantages: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+) -> list[torch.Tensor]:
+    """Normalize advantages for reinforce++ and reinforce++_baseline using batch-level whitening.
+
+    This function performs distributed masked whitening of advantages across the
+    data-parallel group, handling context parallelism when enabled.
+
+    Args:
+        advantages: List of advantage tensors per sample.
+        loss_masks: List of mask tensors per sample.
+        total_lengths: Total sequence lengths per sample.
+        response_lengths: Response segment lengths per sample.
+
+    Returns:
+        List of whitened advantage tensors per sample.
+    """
+    # Normalize advantages over the whole batch
+    all_advs = torch.cat(advantages)
+    cp_size = mpu.get_context_parallel_world_size()
+    if cp_size == 1:
+        all_masks = torch.cat(loss_masks)
+    else:
+        mask_chunks = []
+        for i in range(len(advantages)):
+            total_len = total_lengths[i]
+            response_len = response_lengths[i]
+            prompt_len = total_len - response_len
+
+            _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(total_len, response_len)
+
+            # Convert global offsets to response-space offsets
+            s0, e0 = token_offsets[0]
+            s1, e1 = token_offsets[1]
+            res_s0, res_e0 = max(0, s0 - prompt_len), max(0, e0 - prompt_len)
+            res_s1, res_e1 = max(0, s1 - prompt_len), max(0, e1 - prompt_len)
+
+            local_mask_parts = []
+            full_mask = loss_masks[i]
+            if res_e0 > res_s0:
+                local_mask_parts.append(full_mask[res_s0:res_e0])
+            if res_e1 > res_s1:
+                local_mask_parts.append(full_mask[res_s1:res_e1])
+
+            # Concatenate the parts to form the final mask chunk for this rank and this sequence
+            local_mask_chunk = (
+                torch.cat(local_mask_parts)
+                if local_mask_parts
+                else torch.tensor([], device=all_advs.device, dtype=full_mask.dtype)
+            )
+            mask_chunks.append(local_mask_chunk)
+
+        all_masks = torch.cat(mask_chunks)
+
+    if all_masks.numel() > 0:
+        assert (
+            all_advs.size() == all_masks.size()
+        ), f"Shape mismatch before whitening: advantages {all_advs.size()}, masks {all_masks.size()}"
+        dp_group = mpu.get_data_parallel_group()
+
+        whitened_advs_flat = distributed_masked_whiten(
+            all_advs,
+            all_masks,
+            process_group=dp_group,
+            shift_mean=True,
+        )
+        chunk_lengths = [chunk.size(0) for chunk in advantages]
+        advantages = list(torch.split(whitened_advs_flat, chunk_lengths))
+
+    return advantages
 
 def get_responses(
     logits: torch.Tensor,
@@ -289,58 +362,15 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     else:
         raise NotImplementedError(f"advantage_estimator {args.advantage_estimator} is not supported. ")
 
-    # TODO: OpenRLHF always does advantages normalization but veRL doesn't seem to do it.
-    if args.normalize_advantages:
-        all_advs = torch.cat(advantages)
-        cp_size = mpu.get_context_parallel_world_size()
-        if cp_size == 1:
-            all_masks = torch.cat(loss_masks)
-        else:
-            mask_chunks = []
-            for i in range(len(advantages)):
-                total_len = total_lengths[i]
-                response_len = response_lengths[i]
-                prompt_len = total_len - response_len
-
-                _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(total_len, response_len)
-
-                # Convert global offsets to response-space offsets
-                s0, e0 = token_offsets[0]
-                s1, e1 = token_offsets[1]
-                res_s0, res_e0 = max(0, s0 - prompt_len), max(0, e0 - prompt_len)
-                res_s1, res_e1 = max(0, s1 - prompt_len), max(0, e1 - prompt_len)
-
-                local_mask_parts = []
-                full_mask = loss_masks[i]
-                if res_e0 > res_s0:
-                    local_mask_parts.append(full_mask[res_s0:res_e0])
-                if res_e1 > res_s1:
-                    local_mask_parts.append(full_mask[res_s1:res_e1])
-
-                # Concatenate the parts to form the final mask chunk for this rank and this sequence
-                local_mask_chunk = (
-                    torch.cat(local_mask_parts)
-                    if local_mask_parts
-                    else torch.tensor([], device=all_advs.device, dtype=full_mask.dtype)
-                )
-                mask_chunks.append(local_mask_chunk)
-
-            all_masks = torch.cat(mask_chunks)
-
-        if all_masks.numel() > 0:
-            assert (
-                all_advs.size() == all_masks.size()
-            ), f"Shape mismatch before whitening: advantages {all_advs.size()}, masks {all_masks.size()}"
-            dp_group = mpu.get_data_parallel_group()
-
-            whitened_advs_flat = distributed_masked_whiten(
-                all_advs,
-                all_masks,
-                process_group=dp_group,
-                shift_mean=True,
-            )
-            chunk_lengths = [chunk.size(0) for chunk in advantages]
-            advantages = list(torch.split(whitened_advs_flat, chunk_lengths))
+    if args.advantage_estimator in ["reinforce_plus_plus", "reinforce_plus_plus_baseline"]:
+        # We will handle the advantage normalization of REINFORCE++ in token level
+        # Other than REINFORCE++, we handle them in rollout.py under _post_process_rewards()
+        advantages = get_reinforce_plus_plus_normalized_advantages(
+            advantages=advantages,
+            loss_masks=loss_masks,
+            total_lengths=total_lengths,
+            response_lengths=response_lengths,
+        )
 
     rollout_data["advantages"] = advantages
     rollout_data["returns"] = returns
@@ -650,7 +680,8 @@ def loss_function(
         batch["total_lengths"],
         batch["response_lengths"],
         batch["loss_masks"],
-        args.calculate_per_token_loss,
+        args.loss_aggregation,
+        args.n_samples_per_prompt,
     )
 
     loss_function_kwargs = {
@@ -678,14 +709,19 @@ def loss_function(
         loss * num_microbatches / args.global_batch_size * mpu.get_data_parallel_world_size(with_context_parallel=True)
     )
 
+    if args.loss_aggregation == "prompt":
+        # The above computation includes the 1/G in GRPO/GSPO
+        # However, we don't do that when we aggregate loss in prompt-level
+        loss = loss * args.n_samples_per_prompt
+
     return (
         loss,
-        num_tokens if args.calculate_per_token_loss else 1,
+        num_tokens if args.loss_aggregation == "token" else 1,
         {
             "keys": list(log.keys()),
             "values": torch.tensor(
                 [
-                    num_samples if not args.calculate_per_token_loss else num_tokens,
+                    num_samples if not args.loss_aggregation == "token" else num_tokens,
                 ]
                 + list(log.values()),
                 device=logits.device,

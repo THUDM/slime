@@ -326,7 +326,9 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                     # modified in place and will cause problem for the next rollout.
                     val = torch.cat(val).clone().detach()
                     if key in ["log_probs", "ref_log_probs", "rollout_log_probs", "returns", "advantages", "values"]:
-                        sum_of_sample_mean = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks)
+                        sum_of_sample_mean = get_sum_of_sample_mean(
+                            total_lengths, response_lengths, loss_masks, args.loss_aggregation, args.n_samples_per_prompt
+                        )
                         val = cp_size * sum_of_sample_mean(val) / len(loss_masks)
                     else:
                         val = val.mean() * cp_size
