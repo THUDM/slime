@@ -1,6 +1,6 @@
 import time
 from argparse import Namespace
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from contextlib import nullcontext
 from itertools import accumulate
 
@@ -8,7 +8,11 @@ import ray
 import torch
 import torch.distributed as dist
 from packaging import version
-from torch.distributed.tensor import DTensor
+from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
+    get_model_state_dict,
+)
+from torch.distributed.tensor import DTensor, distribute_tensor
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 from slime.utils.memory_utils import print_memory
@@ -22,6 +26,9 @@ else:
     raise ImportError("FSDP v2 not available")
 
 import wandb
+
+# Use distributed checkpoint helpers so composable FSDP v2 returns full tensors.
+# FSDP_FULL_STATE_DICT_OPTS = StateDictOptions(full_state_dict=True, cpu_offload=False)
 
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import profile_utils
@@ -67,6 +74,9 @@ class FSDPTrainRayActor(TrainRayActor):
             init_wandb_secondary(args, wandb_run_id)
 
         self.args = args
+        self.fsdp_full_state_dict_opts = StateDictOptions(
+            full_state_dict=True, cpu_offload=getattr(self.args, "fsdp_state_dict_cpu_offload", False)
+        )
         torch.manual_seed(args.seed)
 
         if args.record_memory_history:
@@ -597,6 +607,44 @@ class FSDPTrainRayActor(TrainRayActor):
             self.weight_updater.update_weights()
 
     @torch.no_grad()
+    def _load_full_state_dict_into_model(self, full_state_dict: Mapping[str, torch.Tensor]) -> None:
+        """Load a global (full) state_dict into the FSDP model handling DTensors.
+
+        This expects `full_state_dict` to contain full-precision CPU tensors. Parameters
+        that are sharded as DTensor will be redistributed to match the model mesh
+        before copying. Non-tensor entries are ignored.
+        """
+        param_map = dict(self.model.named_parameters())
+        buffer_map = dict(self.model.named_buffers())
+
+        for name, src in full_state_dict.items():
+            if not torch.is_tensor(src):
+                continue
+
+            target_param = param_map.get(name)
+            target_buffer = None
+            if target_param is None:
+                target_buffer = buffer_map.get(name)
+                if target_buffer is None:
+                    continue
+
+            dst_tensor = target_param.data if target_param is not None else target_buffer
+            src_tensor = src.detach()
+            if src_tensor.dtype != dst_tensor.dtype:
+                src_tensor = src_tensor.to(dtype=dst_tensor.dtype)
+            if isinstance(dst_tensor, DTensor):
+                src_tensor = src_tensor.contiguous()
+                distributed = distribute_tensor(
+                    src_tensor,
+                    device_mesh=dst_tensor.device_mesh,
+                    placements=dst_tensor.placements,
+                )
+                dst_tensor.copy_(distributed)
+            else:
+                device = dst_tensor.device
+                dst_tensor.copy_(src_tensor.to(device=device, non_blocking=True))
+
+    @torch.no_grad()
     def update_cpu_params_dict(self, params_dict: dict[str, torch.Tensor]) -> None:
         """Copy model parameters from GPU to a pinned CPU dictionary.
 
@@ -605,15 +653,15 @@ class FSDPTrainRayActor(TrainRayActor):
                 Missing entries are allocated with matching shapes and dtypes.
         """
 
-        state_dict = self.model.state_dict()
+        state_dict = get_model_state_dict(self.model, options=self.fsdp_full_state_dict_opts)
 
         for name, param in state_dict.items():
-            if isinstance(param, DTensor):
-                param = param.full_tensor()
-
+            if not torch.is_tensor(param):
+                continue
+            cpu_tensor = param.detach().to(device=torch.device("cpu"))
             if name not in params_dict:
-                params_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
-            params_dict[name].copy_(param.detach(), non_blocking=True)
+                params_dict[name] = torch.empty_like(cpu_tensor, device=torch.device("cpu"), pin_memory=True)
+            params_dict[name].copy_(cpu_tensor, non_blocking=True)
         torch.cuda.synchronize()
 
     @torch.no_grad()
@@ -623,9 +671,7 @@ class FSDPTrainRayActor(TrainRayActor):
         Parameters:
             params_dict: Source mapping from parameter names to CPU tensors.
         """
-        # FSDP v2 doesn't need context managers - load state dict directly
-        gpu_state_dict = {name: param.cuda(non_blocking=True) for name, param in params_dict.items()}
-        self.model.load_state_dict(gpu_state_dict, strict=True)
+        self._load_full_state_dict_into_model(params_dict)
         torch.cuda.synchronize()
 
     def load_ref_model(self, ref_load_path: str | None) -> None:
@@ -651,8 +697,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     torch_dtype=torch.bfloat16,
                 )
 
-                # FSDP v2 doesn't need context managers - load state dict directly
-                self.model.load_state_dict(temp_ref_model.state_dict(), strict=True)
+                self._load_full_state_dict_into_model(temp_ref_model.state_dict())
 
                 del temp_ref_model
                 torch.cuda.empty_cache()
