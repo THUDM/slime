@@ -2,7 +2,6 @@ from typing import Any, Dict, List
 
 import torch
 import torch.nn as nn
-from deepspeed.ops.adam import DeepSpeedCPUAdam
 from torch.distributed.tensor import DTensor
 
 
@@ -20,6 +19,8 @@ class FSDPCPUAdamWrapper:
     """
 
     def __init__(self, optimizer_config: Dict[str, Any], model: nn.Module) -> None:
+        from deepspeed.ops.adam import DeepSpeedCPUAdam
+
         self.model: nn.Module = model
         self.gpu_params: List[nn.Parameter] = list(model.parameters())
         self.optimizer_config: Dict[str, Any] = optimizer_config
