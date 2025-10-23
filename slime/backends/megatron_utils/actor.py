@@ -434,12 +434,10 @@ class MegatronTrainRayActor(TrainRayActor):
                     self.update_cpu_params_dict(self.weights["rollout_actor"])
                 else:
                     self.update_cpu_params_dict(self.weights["old_actor"])
-                    
+
         clear_memory()
         if self.args.offload:
             destroy_process_groups()
-        
-        
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
         old_args = self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune
