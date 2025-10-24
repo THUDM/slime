@@ -430,6 +430,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
             pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, self.args.eps_clip, self.args.eps_clip_high)
 
+            rollout_log_probs = torch.cat([batch["rollout_log_probs"] for batch in unpacked_batches], dim=0)
+            rollout_log_probs = rollout_log_probs.to(device=log_probs.device)
+
             # Apply TIS before sample mean calculation
             if self.args.use_tis:
                 # Initialize TIS variables
@@ -443,9 +446,6 @@ class FSDPTrainRayActor(TrainRayActor):
                     and batch["rollout_log_probs"].numel() > 0
                     for batch in unpacked_batches
                 ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS"
-
-                rollout_log_probs = torch.cat([batch["rollout_log_probs"] for batch in unpacked_batches], dim=0)
-                rollout_log_probs = rollout_log_probs.to(device=log_probs.device)
 
                 tis = torch.exp(old_log_probs - rollout_log_probs)
                 ois = (-ppo_kl).exp()
