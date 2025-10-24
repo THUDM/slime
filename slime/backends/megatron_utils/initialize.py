@@ -84,6 +84,11 @@ def init(args):
         torch.backends.cudnn.benchmark = False
         torch.use_deterministic_algorithms(True, warn_only=False)
 
+    if args.tp_comm_overlap:
+        from megatron.training.initialize import _initialize_tp_communicators
+
+        _initialize_tp_communicators()
+
     if getattr(args, "custom_megatron_init_path", None):
         from slime.utils.misc import load_function
 
