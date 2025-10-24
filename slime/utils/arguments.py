@@ -578,6 +578,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--critic-load", type=str, default=None, help="The checkpoint for critic model.")
             parser.add_argument("--critic-save", type=str, default=None, help="The checkpoint for critic model.")
             parser.add_argument("--critic-lr", type=float, default=None, help="The lr for critic model")
+            parser.add_argument(
+                "--critic-lr-warmup-iters",
+                type=int,
+                default=0,
+                help="number of iterations to linearly warmup for critic model.",
+            )
 
             parser.add_argument("--eps-clip", type=float, default=0.2, help="PPO clip range")
             parser.add_argument("--eps-clip-high", type=float, default=None, help="PPO clip upper range")
@@ -616,9 +622,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--kl-loss-type",
                 type=str,
-                choices=["kl", "k2", "k3", "low_var_kl"],
-                default="kl",
-                help="Choose KL loss type: kl, k2, k3 low_var_kl",
+                choices=["k1", "k2", "k3", "low_var_kl"],
+                default="k1",
+                help="Choose KL loss type: kl, k2, k3, low_var_kl",
             )
             parser.add_argument(
                 "--advantage-estimator",
@@ -694,6 +700,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=float,
                 default=0,
                 help="Lower bound clipping threshold C for importance sampling ratios to control variance.",
+            )
+            parser.add_argument(
+                "--custom-tis-function-path",
+                type=str,
+                default=None,
+                help="Path to the custom TIS function.",
             )
 
             parser.add_argument(
@@ -771,6 +783,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
                 default=False,
                 help="Whether to turn on passrate logging, which will log the pass@n of the responses in the rollout.",
+            )
+            parser.add_argument(
+                "--log-reward-category",
+                type=str,
+                default=None,
+                help=(
+                    "Log statistics of the category of reward, such as why the reward function considers it as failed. "
+                    "Specify the key in the reward dict using this argument.",
+                ),
             )
             parser.add_argument("--wandb-run-id", type=str, default=None)
             return parser

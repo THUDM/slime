@@ -21,6 +21,6 @@ def available_memory():
 
 def print_memory(msg):
     memory_info = available_memory()
-    if dist.get_rank() == 0:
-        print(f"Memory-Usage {msg}:", memory_info)
+    # Need to print for all ranks, b/c different rank can have different behaviors
+    print(f"[Rank {dist.get_rank()}] Memory-Usage {msg}:", memory_info)
     return memory_info

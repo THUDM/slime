@@ -30,6 +30,7 @@ from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
 from .data_packing import pack_sequences, unpack_sequences
+from .fsdp_cpu_adam_wrapper import FSDPCPUAdamWrapper
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
 
@@ -83,13 +84,31 @@ class FSDPTrainRayActor(TrainRayActor):
         # Create FSDP v2 model using FSDP
         self.model = FSDP(model)
 
-        self.optimizer = torch.optim.AdamW(
-            self.model.parameters(),
-            lr=args.lr,
-            betas=(args.adam_beta1, args.adam_beta2),
-            eps=args.adam_eps,
-            weight_decay=args.weight_decay,
-        )
+        if args.optimizer == "deepspeed_cpu_adam":
+            optimizer_config = {
+                "lr": args.lr,
+                "betas": (args.adam_beta1, args.adam_beta2),
+                "eps": args.adam_eps,
+                "weight_decay": args.weight_decay,
+                "adamw_mode": True,  # Use AdamW mode (decoupled weight decay)
+                "fp32_optimizer_states": True,  # Keep optimizer states in FP32
+            }
+
+            self.optimizer = FSDPCPUAdamWrapper(optimizer_config, self.model)
+
+        elif args.optimizer == "adam":
+            self.optimizer = torch.optim.AdamW(
+                self.model.parameters(),
+                lr=args.lr,
+                betas=(args.adam_beta1, args.adam_beta2),
+                eps=args.adam_eps,
+                weight_decay=args.weight_decay,
+            )
+
+        else:
+            raise ValueError(
+                f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam', 'deepspeed_cpu_adam'"
+            )
 
         # TODO: load
 
@@ -104,7 +123,7 @@ class FSDPTrainRayActor(TrainRayActor):
         self.weight_updater = (
             UpdateWeightFromTensor(self.args, self.model, self.weights)
             if self.args.colocate
-            else UpdateWeightFromDistributed(self.args, self.model)
+            else UpdateWeightFromDistributed(self.args, self.model, self.weights)
         )
 
         # Initialize data packing parameters
@@ -119,7 +138,7 @@ class FSDPTrainRayActor(TrainRayActor):
         return 0
 
     def sleep(self, tags: str | Iterable[str] | None) -> None:
-        """Pause CUDA memory for tagged tensors via torch_memory_saver.
+        """Pause CUDA memory for all tracked tensors via torch_memory_saver.
 
         When offloading is enabled, this forwards tags to
         `torch_memory_saver.pause`. If `tags` is a string, that tag is paused.
@@ -129,17 +148,15 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         if not getattr(self.args, "offload", False):
             return
+
+        if isinstance(tags, str):
+            tags = (tags,)
+
         if torch_memory_saver is not None:
-            if tags is None:
-                torch_memory_saver.pause()
-            elif isinstance(tags, str):
-                torch_memory_saver.pause(tags)
-            else:
-                for tag in tags:
-                    torch_memory_saver.pause(tag)
+            torch_memory_saver.pause()
 
     def wake_up(self, tags: str | Iterable[str] | None) -> None:
-        """Resume CUDA memory for tagged tensors via torch_memory_saver.
+        """Resume CUDA memory for all tracked tensors via torch_memory_saver.
 
         When offloading is enabled, this forwards tags to
         `torch_memory_saver.resume`. If `tags` is a string, that tag is resumed.
@@ -149,14 +166,12 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         if not getattr(self.args, "offload", False):
             return
+
+        if isinstance(tags, str):
+            tags = (tags,)
+
         if torch_memory_saver is not None:
-            if tags is None:
-                torch_memory_saver.resume()
-            elif isinstance(tags, str):
-                torch_memory_saver.resume(tags)
-            else:
-                for tag in tags:
-                    torch_memory_saver.resume(tag)
+            torch_memory_saver.resume()
 
     def save_model(self, iteration: int) -> None:
         """Save model state and optimizer state for the given iteration.
@@ -215,7 +230,7 @@ class FSDPTrainRayActor(TrainRayActor):
                             model_args["pixel_values"] = batch["pixel_values"]
                         logits = self.model(**model_args).logits
                     batch[f"{store_prefix}log_probs"] = gather_log_probs_packed(
-                        logits, batch["tokens"], self.args.rollout_temperature
+                        logits, batch["tokens"], temperature=self.args.rollout_temperature
                     )
             return rollout_data
 
@@ -371,7 +386,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 ).logits
 
             # Handle packed sequences
-            log_probs = gather_log_probs_packed(logits, packed_batch["tokens"], packed_batch["cu_seqlens"])
+            log_probs = gather_log_probs_packed(
+                logits, packed_batch["tokens"], packed_batch["cu_seqlens"], temperature=self.args.rollout_temperature
+            )
             packed_batch["cur_log_probs"] = log_probs
             unpacked_batches = unpack_sequences(packed_batch)
 
@@ -542,22 +559,8 @@ class FSDPTrainRayActor(TrainRayActor):
             self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
-        # For colocated mode with sharded updates (full_params=False),
-        # we don't need to wake up the entire model
-        # The bucket-based approach will load parameters selectively from CPU storage
-        # TODO:  Add bucket optimization for from distributed mode
-        use_bucket_optimization = self.args.colocate and not getattr(self.weight_updater, "full_params", False)
-
-        if self.args.offload and not use_bucket_optimization:
-            # Wake up for distributed mode or full_params mode
-            self.wake_up(("model"))
-
         with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
             self.weight_updater.update_weights()
-
-        if self.args.offload and not use_bucket_optimization:
-            # Sleep for distributed mode or full_params mode
-            self.sleep(("model"))
 
     @torch.no_grad()
     def update_cpu_params_dict(self, params_dict: dict[str, torch.Tensor]) -> None:
@@ -631,30 +634,11 @@ class FSDPTrainRayActor(TrainRayActor):
             self.update_gpu_params_dict(current_weights)
 
 
-def gather_log_probs(logits: torch.Tensor, input_ids: torch.Tensor, rollout_temperature: float = 1.0) -> torch.Tensor:
-    """Gather next-token log probabilities for standard (unpadded) batches.
-
-    Parameters:
-        logits: Logits of shape [B, T, V].
-        input_ids: Token ids of shape [B, T].
-        rollout_temperature: Optional temperature for logits scaling.
-
-    Returns:
-        Log-probabilities of targets with shape [B, T-1].
-    """
-    # log_probs: [B, T-1, V]; input_ids: [B, T]
-    pred_logits = logits[:, :-1]
-    # haoran: whether to apply temperature shifting here?
-    if rollout_temperature != 1.0:
-        pred_logits = pred_logits / rollout_temperature
-    log_probs_all = torch.log_softmax(pred_logits, dim=-1)
-    tgt = input_ids[:, 1:].contiguous()
-    log_probs = log_probs_all.gather(-1, tgt.unsqueeze(-1)).squeeze(-1)
-    return log_probs
-
-
 def gather_log_probs_packed(
-    logits: torch.Tensor, input_ids: torch.Tensor, cu_seqlens: torch.Tensor | float | None = None
+    logits: torch.Tensor,
+    input_ids: torch.Tensor,
+    cu_seqlens: torch.Tensor | float | None = None,
+    temperature: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Gather next-token log probabilities for packed sequences.
 
@@ -672,6 +656,9 @@ def gather_log_probs_packed(
         # Remove batch dimension for packed sequences
         logits = logits.squeeze(0)
         input_ids = input_ids.squeeze(0)
+
+    if temperature is not None:
+        logits = logits.div(temperature)
 
     # Shift for next-token prediction: logits[:-1] predicts input_ids[1:]
     log_probs = torch.log_softmax(logits[:-1], dim=-1)

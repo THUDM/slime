@@ -8,7 +8,7 @@ import yaml
 @dataclass
 class FSDPArgs:
     # Optim
-    optimizer: str = "adam"
+    optimizer: str = "adam"  # Options: "adam" (GPU-based AdamW), "deepspeed_cpu_adam" (CPU-offloaded optimizer states)
     lr: float = 2e-5
     lr_decay_style: str = "constant"
     weight_decay: float = 0.0
@@ -28,6 +28,9 @@ class FSDPArgs:
 
     # Precision
     gradient_checkpointing: bool = False
+
+    # FSDP configuration
+    fsdp_full_params: bool = False  # If True, use full_tensor; if False, use shard_tensor
 
     # YAML bookkeeping
     config: str | None = None
