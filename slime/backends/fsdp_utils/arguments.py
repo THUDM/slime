@@ -32,6 +32,9 @@ class FSDPArgs:
     # FSDP configuration
     fsdp_full_params: bool = False  # If True, use full_tensor; if False, use shard_tensor
 
+    # Others
+    deterministic_mode: bool = False  # This name must be the same as Megatron's
+
     # YAML bookkeeping
     config: str | None = None
 

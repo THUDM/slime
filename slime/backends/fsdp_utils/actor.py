@@ -50,6 +50,12 @@ class FSDPTrainRayActor(TrainRayActor):
     def init(self, args: Namespace, role: str, wandb_run_id: str, with_ref: bool = False) -> int:  # type: ignore[override]
         super().init(args, role, wandb_run_id, with_ref)
 
+        if args.true_on_policy_mode:
+            from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
+
+            print("FSDPTrainRayActor call enable_batch_invariant_mode for true-on-policy")
+            enable_batch_invariant_mode()
+
         # Update rank and world_size for wandb secondary initialization (using actual distributed values)
         args.rank = dist.get_rank()
         args.world_size = dist.get_world_size()
@@ -447,6 +453,11 @@ class FSDPTrainRayActor(TrainRayActor):
             pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
             ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
 
+            train_rollout_logprob_diff = old_log_probs - rollout_log_probs
+            train_rollout_logprob_diff = sum_of_sample_mean(
+                train_rollout_logprob_diff, response_lengths, loss_masks
+            ).detach()
+
             loss = pg_loss
 
             if self.args.entropy_coef != 0:
@@ -470,6 +481,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 "pg_loss": pg_loss.detach(),
                 "pg_clipfrac": pg_clipfrac.detach(),
                 "ppo_kl": ppo_kl.detach(),
+                "train_rollout_logprob_diff": train_rollout_logprob_diff,
             }
 
             if self.args.use_kl_loss:
