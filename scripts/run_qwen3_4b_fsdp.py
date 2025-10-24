@@ -13,6 +13,8 @@ NUM_GPUS = 8
 MODE = os.environ.get("SLIME_SCRIPT_MODE", "normal")
 assert MODE in {"normal", "debug_minimal"}
 
+ENABLE_TRUE_ON_POLICY = bool(int(os.environ.get("SLIME_SCRIPT_ENABLE_TRUE_ON_POLICY", "0")))
+
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
@@ -83,7 +85,7 @@ def execute():
     )
 
     # TODO improve mem-frac
-    sglang_args = "--rollout-num-gpus-per-engine 1 " "--sglang-mem-fraction-static 0.28 "
+    sglang_args = "--rollout-num-gpus-per-engine 1 " "--sglang-mem-fraction-static 0.6 "
 
     fsdp_args = (
         "--train-backend fsdp "
@@ -93,6 +95,25 @@ def execute():
     )
 
     misc_args = "--actor-num-nodes 1 " "--actor-num-gpus-per-node 8 " "--colocate "
+
+    true_on_policy_args = ""
+    true_on_policy_envs = {}
+    if ENABLE_TRUE_ON_POLICY:
+        true_on_policy_args = (
+            "--sglang-enable-deterministic-inference "
+            "--sglang-rl-on-policy-target fsdp "
+            "--sglang-attention-backend fa3 "
+            "--attn-implementation flash_attention_3 "
+            "--deterministic-mode "
+            "--true-on-policy-mode "
+        )
+        true_on_policy_envs = {
+            # TODO note: "Ring" in original RL PR, "allreduce:tree" in SGLang
+            # "NCCL_ALGO": "Ring",
+            "NCCL_ALGO": "allreduce:tree",
+            "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
+            "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+        }
 
     train_args = (
         f"{ckpt_args} "
@@ -105,12 +126,16 @@ def execute():
         f"{sglang_args} "
         f"{fsdp_args} "
         f"{misc_args} "
+        f"{true_on_policy_args} "
     )
 
     U.execute_train(
         train_args=train_args,
         num_gpus=NUM_GPUS,
         model_type=None,
+        extra_env_vars={
+            **true_on_policy_envs,
+        },
     )
 
 
