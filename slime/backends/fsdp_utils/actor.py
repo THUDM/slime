@@ -168,6 +168,9 @@ class FSDPTrainRayActor(TrainRayActor):
         if torch_memory_saver is not None:
             torch_memory_saver.pause()
 
+        torch.cuda.synchronize()
+        dist.barrier(group=get_gloo_group())
+
     def wake_up(self, tags: str | Iterable[str] | None) -> None:
         """Resume CUDA memory for all tracked tensors via torch_memory_saver.
 
