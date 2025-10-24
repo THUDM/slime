@@ -297,7 +297,7 @@ class UpdateWeightFromTensor:
 class UpdateWeightFromDistributed:
     """Broadcast weights via a temporary NCCL group to rollout engines."""
 
-    def __init__(self, args: Namespace, model: torch.nn.Module) -> None:
+    def __init__(self, args: Namespace, model: torch.nn.Module, weights) -> None:
         self.args = args
         self.model = model
         self.weights = weights  # CPU parameter storage
