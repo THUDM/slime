@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - "docs/**"
+      - "examples/**"
       - "version.txt"
   workflow_dispatch:
 

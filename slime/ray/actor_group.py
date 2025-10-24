@@ -61,7 +61,7 @@ class RayTrainGroup:
             **{name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST},
         }
 
-        if self.args.offload:
+        if self.args.offload_train:
             import torch_memory_saver
 
             dynlib_path = os.path.join(
@@ -127,6 +127,9 @@ class RayTrainGroup:
 
     def offload(self):
         return ray.get([actor.sleep.remote(("model")) for actor in self._actor_handlers])
+
+    def clear_memory(self):
+        return ray.get([actor.clear_memory.remote() for actor in self._actor_handlers])
 
     def connect(self, critic_group):
         return ray.get(

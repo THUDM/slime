@@ -534,10 +534,10 @@ Finally, in the training script, enable the above custom functions through the f
 ```bash
 CUSTOM_ARGS=(
    # Specify the path of custom generation function (format: path.to.your.file:function_name)
-   --custom-generate-function-path your_module.multiturn_logic:generate
+   --custom-generate-function-path your_module.multiturn_logic.generate
 
    # Specify the path of custom reward function
-   --custom-rm-path your_module.multiturn_logic:reward_func
+   --custom-rm-path your_module.multiturn_logic.reward_func
 )
 ```
 
