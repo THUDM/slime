@@ -58,12 +58,12 @@ def train(args):
             (rollout_id + 1) % args.save_interval == 0
             or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
         ):
+            if (not args.use_critic) or (rollout_id >= args.num_critic_only_steps):
+                actor_model.save_model(rollout_id)
             if args.use_critic:
                 critic_model.save_model(rollout_id)
-                if rollout_id >= args.num_critic_only_steps:
-                    actor_model.save_model(rollout_id)
-                else:
-                    actor_model.save_model(rollout_id)
+            if args.rollout_global_dataset:
+                ray.get(rollout_manager.save.remote(rollout_id))
 
         if args.offload:
             if args.use_critic:
