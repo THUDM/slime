@@ -334,7 +334,7 @@ def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
         "trust_remote_code": True,
         "random_seed": args.seed + rank,
         # memory
-        "enable_memory_saver": args.offload,
+        "enable_memory_saver": args.offload_rollout,
         # distributed
         "host": host,
         "port": port,

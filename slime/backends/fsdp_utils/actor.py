@@ -129,7 +129,7 @@ class FSDPTrainRayActor(TrainRayActor):
         # Initialize data packing parameters
         self.max_tokens_per_gpu = args.max_tokens_per_gpu  # From main arguments
 
-        if self.args.offload:
+        if self.args.offload_train:
             self.sleep(("model"))
 
         Timer().start("train_wait")
@@ -318,7 +318,7 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         Timer().end("train_wait")
 
-        if self.args.offload:
+        if self.args.offload_train:
             self.wake_up(("model"))
 
         world_size = dist.get_world_size()
@@ -559,7 +559,7 @@ class FSDPTrainRayActor(TrainRayActor):
             self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
-        with torch_memory_saver.disable() if self.args.offload and not torch.version.hip else nullcontext():
+        with torch_memory_saver.disable() if self.args.offload_train and not torch.version.hip else nullcontext():
             self.weight_updater.update_weights()
 
     @torch.no_grad()

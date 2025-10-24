@@ -61,7 +61,7 @@ class RayTrainGroup:
             **{name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST},
         }
 
-        if self.args.offload:
+        if self.args.offload_train:
             import torch_memory_saver
 
             dynlib_path = os.path.join(
