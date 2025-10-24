@@ -869,6 +869,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=("Dump all details of training for post-hoc analysis and visualization."),
             )
+            # use together with --record-memory-history and --memory-snapshot-path (defined in Megatron)
+            parser.add_argument(
+                "--memory-snapshot-dir",
+                type=str,
+                default=".",
+            )
             return parser
 
         def add_network_arguments(parser):
