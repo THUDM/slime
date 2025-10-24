@@ -1,3 +1,4 @@
+import time
 from argparse import Namespace
 from collections.abc import Iterable
 from contextlib import nullcontext
@@ -10,6 +11,7 @@ from packaging import version
 from torch.distributed.tensor import DTensor
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from slime.utils.memory_utils import print_memory
 
 # Import FSDP v2 components based on PyTorch version
 if version.parse(torch.__version__) >= version.parse("2.6"):
@@ -182,6 +184,16 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if isinstance(tags, str):
             tags = (tags,)
+
+        # TODO this is copy-pasted from megatron side; should unify the two
+        # there are weird times when sglang is not offloaded immediately, so we wait here.
+        mem_fraction_static = self.args.sglang_mem_fraction_static or 0.8
+        for _ in range(60):
+            memory_info = print_memory("before wake_up model")
+            if memory_info["used_GB"] >= mem_fraction_static * memory_info["total_GB"]:
+                time.sleep(1)
+                continue
+            break
 
         if torch_memory_saver is not None:
             torch_memory_saver.resume()
