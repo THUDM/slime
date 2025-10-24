@@ -11,7 +11,7 @@ _ = exec_command
 repo_base_dir = Path(os.path.abspath(__file__)).resolve().parents[1]
 
 
-def convert_checkpoint(model_name, model_type, num_gpus: int=8, dir_dst="/root"):
+def convert_checkpoint(model_name, model_type, num_gpus: int, dir_dst="/root"):
     # TODO shall we make it in host-mapped folder and thus can cache it to speedup CI
     path_dst = f"{dir_dst}/{model_name}_torch_dist"
     if Path(path_dst).exists():
