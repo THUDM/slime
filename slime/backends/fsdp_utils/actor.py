@@ -159,7 +159,7 @@ class FSDPTrainRayActor(TrainRayActor):
         None, all registered regions are paused. See the torch_memory_saver
         tagged API for details.
         """
-        if not getattr(self.args, "offload", False):
+        if not self.args.offload_train:
             return
 
         if isinstance(tags, str):
@@ -177,7 +177,7 @@ class FSDPTrainRayActor(TrainRayActor):
         None, all registered regions are resumed. See the torch_memory_saver
         tagged API for details.
         """
-        if not getattr(self.args, "offload", False):
+        if not self.args.offload_train:
             return
 
         if isinstance(tags, str):
