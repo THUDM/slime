@@ -76,6 +76,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--offload",
+                action="store_true",
+                default=False,
+                help=("Equivalent to --offload-train + --offload-rollout. "),
+            )
+            parser.add_argument(
                 "--offload-train",
                 action="store_true",
                 default=False,
@@ -1198,6 +1204,11 @@ def slime_validate_args(args):
         args.critic_load = args.load
     if args.critic_lr is None:
         args.critic_lr = args.lr
+
+    if args.offload:
+        args.offload_train = True
+        args.offload_rollout = True
+    del args.offload
 
     if args.debug_rollout_only:
         if args.colocate and args.rollout_num_gpus is None:
