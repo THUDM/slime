@@ -661,6 +661,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     ref_load_path,
                     trust_remote_code=True,
                     torch_dtype=torch.bfloat16,
+                    attn_implementation=self.args.attn_implementation,
                 )
 
                 set_model_state_dict(
