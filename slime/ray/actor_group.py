@@ -128,6 +128,9 @@ class RayTrainGroup:
     def offload(self):
         return ray.get([actor.sleep.remote(("model")) for actor in self._actor_handlers])
 
+    def clear_memory(self):
+        return ray.get([actor.clear_memory.remote() for actor in self._actor_handlers])
+
     def connect(self, critic_group):
         return ray.get(
             [
