@@ -70,10 +70,7 @@ class FSDPTrainRayActor(TrainRayActor):
         torch.manual_seed(args.seed)
 
         if args.record_memory_history:
-            profile_utils.attach_oom_dump_memory_history(
-                memory_snapshot_dir=args.memory_snapshot_dir,
-                memory_snapshot_path=args.memory_snapshot_path,
-            )
+            profile_utils.attach_oom_dump_memory_history(profile_utils.get_memory_snapshot_full_path(args))
 
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
@@ -573,6 +570,9 @@ class FSDPTrainRayActor(TrainRayActor):
             if dist.get_rank() == 0:
                 print(f"Updating ref model at rollout_id {rollout_id}")
             self.update_cpu_params_dict(self.weights["ref"])
+
+        if self.args.record_memory_history and (rollout_id == self.args.memory_snapshot_num_steps - 1):
+            profile_utils.dump_snapshot_and_stop(profile_utils.get_memory_snapshot_full_path(self.args))
 
         Timer().start("train_wait")
         return

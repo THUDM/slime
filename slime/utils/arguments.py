@@ -900,6 +900,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=".",
             )
+            parser.add_argument(
+                "--memory-snapshot-num-steps",
+                type=int,
+                default=None,
+            )
             return parser
 
         def add_network_arguments(parser):
