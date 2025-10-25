@@ -150,22 +150,10 @@ index 63ee9d1f5..b90b744c1 100644
          ops.append(recv_next_op)
      if len(ops) > 0:
 diff --git a/megatron/core/transformer/moe/moe_utils.py b/megatron/core/transformer/moe/moe_utils.py
-index 235b6f6af..9f5e150a9 100644
+index 235b6f6af..fbcffe278 100644
 --- a/megatron/core/transformer/moe/moe_utils.py
 +++ b/megatron/core/transformer/moe/moe_utils.py
-@@ -1,9 +1,11 @@
- # Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
- 
-+import os
- import math
- from typing import List, Optional, Union
- 
- import torch
-+import torch.distributed as dist
- 
- from megatron.core import parallel_state
- from megatron.core.process_groups_config import ModelCommProcessGroups
-@@ -566,6 +568,9 @@ def topk_routing_with_score_function(
+@@ -566,6 +566,9 @@ def topk_routing_with_score_function(
          else:
              return torch.topk(scores, k=topk, dim=1)
  
@@ -176,17 +164,10 @@ index 235b6f6af..9f5e150a9 100644
          if use_pre_softmax:
              scores = torch.softmax(logits, dim=-1, dtype=torch.float32).type_as(logits)
 diff --git a/megatron/core/transformer/moe/router.py b/megatron/core/transformer/moe/router.py
-index 6b20b8622..73da4e232 100644
+index 6b20b8622..459e65921 100644
 --- a/megatron/core/transformer/moe/router.py
 +++ b/megatron/core/transformer/moe/router.py
-@@ -1,5 +1,6 @@
- # Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
- 
-+import os
- from abc import ABC, abstractmethod
- from typing import Optional
- 
-@@ -156,6 +157,9 @@ class TopKRouter(Router):
+@@ -156,6 +156,9 @@ class TopKRouter(Router):
              self.local_tokens_per_expert = None
              self.expert_bias = None
  
