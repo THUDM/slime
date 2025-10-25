@@ -1,5 +1,9 @@
+
+import os
+
 import time
 from argparse import Namespace
+
 from collections.abc import Iterable
 from contextlib import nullcontext
 from itertools import accumulate
@@ -7,6 +11,7 @@ from itertools import accumulate
 import ray
 import torch
 import torch.distributed as dist
+import wandb
 from packaging import version
 from torch.distributed.tensor import DTensor
 from torch_memory_saver import torch_memory_saver
@@ -21,8 +26,6 @@ elif version.parse(torch.__version__) >= version.parse("2.4"):
 else:
     raise ImportError("FSDP v2 not available")
 
-import wandb
-
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import profile_utils
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
@@ -32,6 +35,7 @@ from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
+from .checkpoint import load_checkpoint, save_checkpoint
 from .data_packing import pack_sequences, unpack_sequences
 from .fsdp_cpu_adam_wrapper import FSDPCPUAdamWrapper
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
@@ -69,6 +73,9 @@ class FSDPTrainRayActor(TrainRayActor):
         self.args = args
         torch.manual_seed(args.seed)
 
+        hf_checkpoint = args.load if args.load else args.hf_checkpoint
+        start_iteration = 0
+        self.global_step = 0
         if args.record_memory_history:
             profile_utils.attach_oom_dump_memory_history(
                 memory_snapshot_dir=args.memory_snapshot_dir,
@@ -77,8 +84,8 @@ class FSDPTrainRayActor(TrainRayActor):
 
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
-                self.hf_config = AutoConfig.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
-                self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
+                self.hf_config = AutoConfig.from_pretrained(hf_checkpoint, trust_remote_code=True)
+                self.tokenizer = AutoTokenizer.from_pretrained(hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
 
         if self.args.multimodal_keys:
@@ -87,7 +94,7 @@ class FSDPTrainRayActor(TrainRayActor):
         # Load model
         with torch.autocast(device_type=f"cuda:{torch.cuda.current_device()}"):
             model = AutoModelForCausalLM.from_pretrained(
-                self.args.hf_checkpoint,
+                hf_checkpoint,
                 trust_remote_code=True,
                 attn_implementation=self.args.attn_implementation,
             )
@@ -125,7 +132,23 @@ class FSDPTrainRayActor(TrainRayActor):
                 f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam', 'deepspeed_cpu_adam'"
             )
 
-        # TODO: load
+        if args.load:
+            loaded_iteration, self.global_step = load_checkpoint(args, self.model, self.optimizer)
+            if loaded_iteration >= 0:
+                # Successfully loaded a training checkpoint - resume from next iteration
+                start_iteration = loaded_iteration + 1
+                if dist.get_rank() == 0:
+                    print(f"Resuming training from iteration {start_iteration}")
+            else:
+                # No training state found - treating as initial model
+                start_iteration = 0
+                if dist.get_rank() == 0:
+                    print(f"No training checkpoint found at {args.load}. Starting from iteration 0.")
+        else:
+            # Fresh start
+            start_iteration = 0
+            if dist.get_rank() == 0:
+                print("Starting fresh training from iteration 0")
 
         self.weights = {"actor": {}}
 
@@ -148,9 +171,8 @@ class FSDPTrainRayActor(TrainRayActor):
             self.sleep(("model"))
 
         Timer().start("train_wait")
-        self.global_step = 0
         self.micro_step = 0
-        return 0
+        return start_iteration
 
     def sleep(self, tags: str | Iterable[str] | None) -> None:
         """Pause CUDA memory for all tracked tensors via torch_memory_saver.
@@ -210,8 +232,31 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         if self.args.debug_rollout_only:
             return
+        checkpoint_dir = os.path.join(self.args.save, str(iteration))
+        should_save = True
+        if dist.get_rank() == 0:
+            if os.path.exists(checkpoint_dir) and not self.args.overwrite_checkpoints:
+                print(f"WARNING: Checkpoint {checkpoint_dir} exists. Skipping save.")
+                should_save = False
+            elif os.path.exists(checkpoint_dir):
+                print(f"WARNING: Overwriting checkpoint {checkpoint_dir}")
+        # Broadcast the decision from rank 0 to all other ranks.
+        should_save_tensor = torch.tensor(
+            [1 if should_save else 0], dtype=torch.int, device=torch.cuda.current_device()
+        )
+        dist.broadcast(should_save_tensor, src=0)
+        if should_save_tensor.item() == 0:
+            return
 
-        raise NotImplementedError()
+        save_checkpoint(
+            self.args,
+            iteration,
+            self.model,
+            self.optimizer,
+            self.tokenizer,
+            self.global_step,
+            config=self.hf_config,
+        )
 
     def compute_log_prob(
         self,
