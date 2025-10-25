@@ -73,10 +73,7 @@ def get_model_provider_func(
 
         # TODO maybe move this to other parts
         if args.record_memory_history:
-            profile_utils.attach_oom_dump_memory_history(
-                memory_snapshot_dir=args.memory_snapshot_dir,
-                memory_snapshot_path=args.memory_snapshot_path,
-            )
+            profile_utils.attach_oom_dump_memory_history(profile_utils.get_memory_snapshot_full_path(args))
 
         # Experimental loading arguments from yaml
         config: TransformerConfig = core_transformer_config_from_args(args)
