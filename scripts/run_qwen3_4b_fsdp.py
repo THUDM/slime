@@ -9,6 +9,7 @@ import command_utils as U
 MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-4B")
 NUM_GPUS = 8
 
+EXTRA_ARGS = os.environ.get("SLIME_SCRIPT_EXTRA_ARGS", "")
 
 MODE = os.environ.get("SLIME_SCRIPT_MODE", "normal")
 assert MODE in {"normal", "debug_minimal"}
@@ -52,8 +53,9 @@ def execute():
             "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "
         )
 
+    # sometimes disable eval to speed up debugging
     eval_args = ""
-    if MODE != "debug_minimal":
+    if (MODE != "debug_minimal") and bool(int(os.environ.get("SLIME_SCRIPT_ENABLE_EVAL", "1"))):
         eval_args += (
             "--eval-interval 20 "
             "--eval-prompt-data aime /root/datasets/aime-2024/aime-2024.jsonl "
@@ -85,7 +87,10 @@ def execute():
     )
 
     # TODO improve mem-frac
-    sglang_args = "--rollout-num-gpus-per-engine 1 " "--sglang-mem-fraction-static 0.6 "
+    sglang_args = (
+        "--rollout-num-gpus-per-engine 1 "
+        f"--sglang-mem-fraction-static {os.environ.get('SLIME_SCRIPT_SGLANG_MEM_FRACTION_STATIC' ,'0.6')} "
+    )
 
     fsdp_args = (
         "--train-backend fsdp "
@@ -94,7 +99,7 @@ def execute():
         f"--update-weights-bucket-size {512 * 1024 * 1024} "  # 512MB
     )
 
-    misc_args = "--actor-num-nodes 1 " "--actor-num-gpus-per-node 8 " "--colocate "
+    misc_args = "--actor-num-nodes 1 " "--actor-num-gpus-per-node 8 " "--colocate " "--use-fault-tolerance "
 
     true_on_policy_args = ""
     true_on_policy_envs = {}
@@ -127,6 +132,7 @@ def execute():
         f"{fsdp_args} "
         f"{misc_args} "
         f"{true_on_policy_args} "
+        f"{EXTRA_ARGS} "
     )
 
     U.execute_train(
