@@ -4,10 +4,16 @@ import os
 from typing import Any, Dict
 
 import yaml
+from omegaconf import OmegaConf
 from transformers import AutoConfig
 
 from slime.backends.sglang_utils.arguments import add_sglang_arguments
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
+from slime.utils.eval_config import (
+    EvalDatasetConfig,
+    build_eval_dataset_configs,
+    ensure_dataset_list,
+)
 
 
 def reset_arg(parser, name, **kwargs):
@@ -552,6 +558,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Path to the evaluation prompt data, "
                     "should first input the name of the eval dataset and then the path, e.g. "
                     "aime /path/to/aime.jsonl"
+                ),
+            )
+            parser.add_argument(
+                "--eval-config",
+                type=str,
+                default=None,
+                help=(
+                    "Path to an OmegaConf YAML/JSON file describing evaluation datasets. "
+                    "When provided, this overrides --eval-prompt-data."
                 ),
             )
 
@@ -1142,7 +1157,52 @@ def parse_args_train_backend():
     return args_partial.train_backend
 
 
+def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
+    """
+    Build evaluation dataset configurations from either --eval-config or --eval-prompt-data.
+    """
+    datasets_config = []
+    defaults: Dict[str, Any] = {}
+
+    if args.eval_config:
+        cfg = OmegaConf.load(args.eval_config)
+        cfg_dict = OmegaConf.to_container(cfg, resolve=True)
+        if not isinstance(cfg_dict, dict):
+            raise ValueError("--eval-config must contain a mapping at the root.")
+
+        eval_cfg = cfg_dict.get("eval", cfg_dict)
+        if not isinstance(eval_cfg, dict):
+            raise ValueError("--eval-config must define an `eval` mapping or be a mapping itself.")
+
+        defaults = dict(eval_cfg.get("defaults") or {})
+        datasets_config = ensure_dataset_list(eval_cfg.get("datasets"))
+        if not datasets_config:
+            raise ValueError("--eval-config does not define any datasets under `eval.datasets`.")
+    elif args.eval_prompt_data:
+        values = list(args.eval_prompt_data)
+        if len(values) == 1:
+            print("[legacy] only one eval_prompt_data detected, will assume it is data for aime")
+            values = ["aime", values[0]]
+        if len(values) % 2 != 0:
+            raise ValueError("eval prompt data must be provided as name/path pairs.")
+        datasets_config = [
+            {"name": values[i], "path": values[i + 1]} for i in range(0, len(values), 2)
+        ]
+    else:
+        datasets_config = []
+
+    eval_datasets = build_eval_dataset_configs(datasets_config, defaults)
+    if eval_datasets:
+        args.eval_prompt_data = [item for dataset in eval_datasets for item in (dataset.name, dataset.path)]
+    else:
+        args.eval_prompt_data = None
+
+    return eval_datasets
+
+
 def slime_validate_args(args):
+    args.eval_datasets = _resolve_eval_datasets(args)
+
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):
             raise FileNotFoundError(f"ref_load {args.ref_load} does not exist, please check the path.")
@@ -1168,11 +1228,7 @@ def slime_validate_args(args):
         args.start_rollout_id = 0
 
     if args.eval_interval is not None:
-        assert args.eval_prompt_data is not None, "eval_prompt_data must be set when eval_interval is set"
-        if len(args.eval_prompt_data) == 1:
-            print(f"[legacy] only one eval_prompt_data detected, will assume it is data for aime")
-            args.eval_prompt_data = ["aime", args.eval_prompt_data[0]]
-        assert len(args.eval_prompt_data) % 2 == 0, "eval prompt data will need to be in pairs"
+        assert args.eval_datasets, "Evaluation datasets must be configured when eval_interval is set."
 
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."

@@ -25,6 +25,7 @@ echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/qwen3-4B.sh"
+EVAL_CONFIG_PATH="${SCRIPT_DIR}/../configs/eval/gpqa-dev.yaml"
 
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-4B
@@ -54,12 +55,7 @@ ROLLOUT_ARGS=(
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data
-   # aime /root/aime-2024/aime-2024.jsonl
-   gpqa /root/gpqa/gpqa_eval.jsonl # huggingface-cli download --repo-type dataset zyzshishui0627/gpqa_diamond --local-dir /root/gpqa
-   --n-samples-per-eval-prompt 2
-   --eval-max-response-len 16384
-   --eval-top-p 0.7
+   --eval-config "${EVAL_CONFIG_PATH}"
 )
 
 PERF_ARGS=(
