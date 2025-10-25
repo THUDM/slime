@@ -84,8 +84,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             parser.add_argument(
                 "--offload-train",
-                action="store_true",
-                default=False,
+                action=argparse.BooleanOptionalAction,
                 help=(
                     "Whether to offload the training actor to CPU during training. "
                     "This will always be true when --colocate is set."
@@ -93,8 +92,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             parser.add_argument(
                 "--offload-rollout",
-                action="store_true",
-                default=False,
+                action=argparse.BooleanOptionalAction,
                 help=(
                     "Whether to offload the rollout generator to CPU during training. "
                     "This will always be true when --colocate is set."
@@ -1288,7 +1286,10 @@ def slime_validate_args(args):
 
     # always true on offload for colocate at the moment.
     if args.colocate:
-        args.offload_train = args.offload_rollout = True
+        if args.offload_train is None:
+            args.offload_train = True
+        if args.offload_rollout is None:
+            args.offload_rollout = True
         if args.rollout_num_gpus != args.actor_num_gpus_per_node * args.actor_num_nodes:
             print(
                 f"rollout_num_gpus {args.rollout_num_gpus} != actor_num_gpus_per_node {args.actor_num_gpus_per_node} "
@@ -1297,6 +1298,11 @@ def slime_validate_args(args):
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
             if args.use_critic:
                 args.rollout_num_gpus += args.critic_num_gpus_per_node * args.critic_num_nodes
+
+    if args.offload_train is None:
+        args.offload_train = False
+    if args.offload_rollout is None:
+        args.offload_rollout = False
 
     if args.eval_function_path is None:
         args.eval_function_path = args.rollout_function_path
