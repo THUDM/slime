@@ -11,7 +11,7 @@ from packaging import version
 from torch.distributed.tensor import DTensor
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
-from slime.utils.memory_utils import print_memory
+from slime.utils.memory_utils import clear_memory, print_memory
 
 # Import FSDP v2 components based on PyTorch version
 if version.parse(torch.__version__) >= version.parse("2.6"):
@@ -163,6 +163,13 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         if not self.args.offload_train:
             return
+
+        # Try to avoid this case:
+        # * FSDP contains a lot of cached memory and sleep
+        # * SGLang resumes and allocate some memory
+        # * FSDP resumes but realize there is no enough memory, thus OOM currently, but indeed the cache can be (partially) freed to fulfill requirements
+        # TODO: improve it later
+        clear_memory()
 
         if isinstance(tags, str):
             tags = (tags,)
