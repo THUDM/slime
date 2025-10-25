@@ -7,6 +7,6 @@ eval:
     - name: aime
       path: /root/aime-2024/aime-2024.jsonl
       rm_type: deepscaler
-    - name: gpqa
+    - name: gpqa # huggingface-cli download --repo-type dataset zyzshishui0627/gpqa_diamond --local-dir /root/gpqa
       path: /root/gpqa/gpqa_eval.jsonl
       rm_type: gpqa

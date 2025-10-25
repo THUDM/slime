@@ -24,8 +24,9 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/models/qwen3-4B.sh"
-EVAL_CONFIG_PATH="${SCRIPT_DIR}/../configs/eval/gpqa-dev.yaml"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." &>/dev/null && pwd)"
+source "${REPO_ROOT}/scripts/models/qwen3-4B.sh"
+EVAL_CONFIG_PATH="${REPO_ROOT}/examples/eval_multi_task/gpqa-dev.yaml"
 
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-4B
@@ -132,7 +133,7 @@ RUNTIME_ENV_JSON="{
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
-   -- python3 train.py \
+   -- python3 "${REPO_ROOT}/train.py" \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 8 \
    --colocate \
