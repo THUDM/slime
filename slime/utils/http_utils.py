@@ -100,7 +100,6 @@ def _next_actor():
 
 
 async def _post(client, url, payload, max_retries=60):
-    max_retries = 60
     retry_count = 0
     while retry_count < max_retries:
         try:
