@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from pydantic import BaseModel, Field, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _EMPTY_VALUES = (None, [], {})
 
