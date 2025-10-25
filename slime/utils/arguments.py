@@ -9,11 +9,7 @@ from transformers import AutoConfig
 
 from slime.backends.sglang_utils.arguments import add_sglang_arguments
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
-from slime.utils.eval_config import (
-    EvalDatasetConfig,
-    build_eval_dataset_configs,
-    ensure_dataset_list,
-)
+from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
 
 
 def reset_arg(parser, name, **kwargs):
@@ -1185,9 +1181,7 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
             values = ["aime", values[0]]
         if len(values) % 2 != 0:
             raise ValueError("eval prompt data must be provided as name/path pairs.")
-        datasets_config = [
-            {"name": values[i], "path": values[i + 1]} for i in range(0, len(values), 2)
-        ]
+        datasets_config = [{"name": values[i], "path": values[i + 1]} for i in range(0, len(values), 2)]
     else:
         datasets_config = []
 

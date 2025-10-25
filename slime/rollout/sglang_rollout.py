@@ -485,9 +485,7 @@ async def eval_rollout_single_dataset(
     dataset = EVAL_PROMPT_DATASET[cache_key]
 
     base_sampling_params = dict(
-        temperature=_resolve_dataset_setting(
-            dataset_cfg.temperature, args.eval_temperature, args.rollout_temperature
-        ),
+        temperature=_resolve_dataset_setting(dataset_cfg.temperature, args.eval_temperature, args.rollout_temperature),
         top_p=_resolve_dataset_setting(
             dataset_cfg.top_p,
             args.eval_top_p,

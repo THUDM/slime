@@ -106,7 +106,9 @@ def ensure_dataset_list(config: Any) -> List[Dict[str, Any]]:
     raise TypeError("eval.datasets must be either a list or a mapping.")
 
 
-def build_eval_dataset_configs(raw_config: Iterable[Dict[str, Any]], defaults: Dict[str, Any]) -> List[EvalDatasetConfig]:
+def build_eval_dataset_configs(
+    raw_config: Iterable[Dict[str, Any]], defaults: Dict[str, Any]
+) -> List[EvalDatasetConfig]:
     datasets: List[EvalDatasetConfig] = []
     for cfg in raw_config:
         dataset = EvalDatasetConfig(**cfg)
