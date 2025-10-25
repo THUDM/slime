@@ -57,7 +57,11 @@ class FSDPTrainRayActor(TrainRayActor):
             from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
 
             print("FSDPTrainRayActor call enable_batch_invariant_mode for true-on-policy")
-            enable_batch_invariant_mode()
+            enable_batch_invariant_mode(
+                # In Qwen3, rope `inv_freq_expanded.float() @ position_ids_expanded.float()` uses bmm
+                # and disabling it will make it aligned
+                enable_bmm=False,
+            )
 
         # Update rank and world_size for wandb secondary initialization (using actual distributed values)
         args.rank = dist.get_rank()
