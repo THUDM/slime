@@ -201,6 +201,9 @@ class FSDPTrainRayActor(TrainRayActor):
         if torch_memory_saver is not None:
             torch_memory_saver.resume()
 
+        torch.cuda.synchronize()
+        dist.barrier(group=get_gloo_group())
+
     def save_model(self, iteration: int) -> None:
         """Save model state and optimizer state for the given iteration.
 
