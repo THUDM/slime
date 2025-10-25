@@ -4,7 +4,6 @@ import os
 from typing import Any, Dict
 
 import yaml
-from omegaconf import OmegaConf
 from transformers import AutoConfig
 
 from slime.backends.sglang_utils.arguments import add_sglang_arguments
@@ -1161,6 +1160,8 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
     defaults: Dict[str, Any] = {}
 
     if args.eval_config:
+        from omegaconf import OmegaConf
+
         cfg = OmegaConf.load(args.eval_config)
         cfg_dict = OmegaConf.to_container(cfg, resolve=True)
         if not isinstance(cfg_dict, dict):
