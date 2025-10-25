@@ -1,8 +1,8 @@
 diff --git a/megatron/core/dist_checkpointing/strategies/torch.py b/megatron/core/dist_checkpointing/strategies/torch.py
-index 0b10b66b..516320c8 100644
+index ccf5242a2..807959da5 100644
 --- a/megatron/core/dist_checkpointing/strategies/torch.py
 +++ b/megatron/core/dist_checkpointing/strategies/torch.py
-@@ -582,10 +582,12 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
+@@ -556,10 +556,12 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
      def _validate_global_shapes(self, metadata, sharded_tensors):
          for sh_ten in sharded_tensors:
              if sh_ten.key not in metadata.state_dict_metadata:
@@ -19,7 +19,7 @@ index 0b10b66b..516320c8 100644
              loaded_shape = metadata.state_dict_metadata[sh_ten.key].size
              expected_shape = self._expected_shape(sh_ten)
              if loaded_shape != expected_shape:
-@@ -615,7 +617,7 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
+@@ -589,7 +591,7 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
          tensor_metadata = self.metadata.state_dict_metadata
          metadata_with_sizes = [
              (tensor_metadata[key], tensor_metadata[key].size, sharded_tensor)
@@ -28,7 +28,7 @@ index 0b10b66b..516320c8 100644
          ]
          try:
              # Temporarily set sizes to expected shapes
-@@ -945,6 +947,7 @@ class TorchDistLoadShardedStrategy(LoadShardedStrategy):
+@@ -918,6 +920,7 @@ class TorchDistLoadShardedStrategy(LoadShardedStrategy):
              planner=MCoreLoadPlanner(
                  shapes_validation_sharded_tensors=flexible_shape_sharded_tensors,
                  allow_shape_mismatch_sharded_tensors=allow_shape_mismatch_sharded_tensors,
@@ -37,7 +37,7 @@ index 0b10b66b..516320c8 100644
          )
  
 diff --git a/megatron/core/distributed/__init__.py b/megatron/core/distributed/__init__.py
-index fe26e8b4..4451f277 100644
+index fe26e8b43..4451f2776 100644
 --- a/megatron/core/distributed/__init__.py
 +++ b/megatron/core/distributed/__init__.py
 @@ -11,3 +11,15 @@ from .finalize_model_grads import finalize_model_grads
@@ -57,10 +57,10 @@ index fe26e8b4..4451f277 100644
 +    if hasattr(custom_fsdp, 'MegatronFSDP'):
 +        custom_fsdp.FullyShardedDataParallel = custom_fsdp.MegatronFSDP
 diff --git a/megatron/core/extensions/transformer_engine.py b/megatron/core/extensions/transformer_engine.py
-index 99c3edc0..26ea5cb4 100644
+index 7727efe1e..966fe652a 100644
 --- a/megatron/core/extensions/transformer_engine.py
 +++ b/megatron/core/extensions/transformer_engine.py
-@@ -404,6 +404,7 @@ class TELinear(te.pytorch.Linear):
+@@ -366,6 +366,7 @@ class TELinear(te.pytorch.Linear):
          )
  
          for param in self.parameters():
@@ -69,19 +69,19 @@ index 99c3edc0..26ea5cb4 100644
                  # Reduce the gradient on the expert_data_parallel group for expert linear layers
                  setattr(param, "allreduce", not self.expert_parallel)
 diff --git a/megatron/core/models/gpt/gpt_layer_specs.py b/megatron/core/models/gpt/gpt_layer_specs.py
-index 002edb92..f7273488 100755
+index 860ee64a9..80944b702 100755
 --- a/megatron/core/models/gpt/gpt_layer_specs.py
 +++ b/megatron/core/models/gpt/gpt_layer_specs.py
-@@ -80,6 +80,8 @@ def get_gpt_layer_with_transformer_engine_spec(
+@@ -79,6 +79,8 @@ def get_gpt_layer_with_transformer_engine_spec(
+     qk_l2_norm: Optional[bool] = False,
      use_te_op_fuser: Optional[bool] = False,
      use_kitchen: bool = False,
-     use_te_activation_func: bool = False,
 +    post_self_attn_layernorm: bool = False,
 +    post_mlp_layernorm: bool = False,
  ) -> ModuleSpec:
      """Use this spec to use lower-level Transformer Engine modules (required for fp8 training).
  
-@@ -182,9 +184,11 @@ def get_gpt_layer_with_transformer_engine_spec(
+@@ -178,9 +180,11 @@ def get_gpt_layer_with_transformer_engine_spec(
                      ),
                  ),
                  self_attn_bda=get_bias_dropout_add,
@@ -94,10 +94,10 @@ index 002edb92..f7273488 100755
                      "mlp.0.weight": "mlp.linear_fc1.layer_norm_weight",
                      "mlp.0.bias": "mlp.linear_fc1.layer_norm_bias",
 diff --git a/megatron/core/models/gpt/gpt_model.py b/megatron/core/models/gpt/gpt_model.py
-index df9adc3e..2f4f544a 100644
+index 6aec66e6d..3ac631935 100644
 --- a/megatron/core/models/gpt/gpt_model.py
 +++ b/megatron/core/models/gpt/gpt_model.py
-@@ -443,7 +443,7 @@ class GPTModel(LanguageModule):
+@@ -446,7 +446,7 @@ class GPTModel(LanguageModule):
          if self.share_embeddings_and_output_weights:
              output_weight = self.shared_embedding_or_output_weight()
  
@@ -107,7 +107,7 @@ index df9adc3e..2f4f544a 100644
                  input_ids=input_ids,
                  position_ids=position_ids,
 diff --git a/megatron/core/parallel_state.py b/megatron/core/parallel_state.py
-index 57332ac3..f3abd642 100644
+index a40c85a88..86688c331 100644
 --- a/megatron/core/parallel_state.py
 +++ b/megatron/core/parallel_state.py
 @@ -9,6 +9,7 @@ from typing import Callable, List, Optional
@@ -118,222 +118,8 @@ index 57332ac3..f3abd642 100644
  
  from .utils import GlobalMemoryBuffer, is_torch_min_version
  
-@@ -163,6 +164,213 @@ def get_nccl_options(pg_name, nccl_comm_cfgs):
-         return None
- 
- 
-+old_new_group = None
-+
-+
-+def monkey_patch_torch_dist():
-+    print("Applying monkey patch to torch.distributed", flush=True)
-+    global old_new_group
-+    if old_new_group is not None:
-+        return
-+
-+    old_new_group = dist.new_group
-+
-+    def new_group(*args, **kwargs):
-+        group = old_new_group(*args, **kwargs)
-+        # skip none nccl group.
-+        if (
-+            len(args) >= 3 and args[2] == "gloo" or
-+            "backend" in kwargs and kwargs["backend"] == "gloo"
-+        ):
-+            return group
-+        
-+        # Get ranks from arguments
-+        if len(args) >= 1 and args[0] is not None:
-+            ranks = args[0]
-+        elif "ranks" in kwargs and kwargs["ranks"] is not None:
-+            ranks = kwargs["ranks"]
-+        else:
-+            # If no ranks specified, use all ranks in world
-+            ranks = list(range(dist.get_world_size()))
-+
-+        if len(ranks) == 1:
-+            return group
-+
-+        group = ReloadableProcessGroup(group, ranks)
-+        return group
-+
-+    dist.new_group = new_group
-+
-+    def get_new_function(func):
-+        def new_function(*args, **kwargs):
-+            args = (
-+                arg.group if isinstance(arg, ReloadableProcessGroup) else arg
-+                for arg in args
-+            )
-+            kwargs = {
-+                k: (v.group if isinstance(v, ReloadableProcessGroup) else v)
-+                for k, v in kwargs.items()
-+            }
-+            return func(*args, **kwargs)
-+        return new_function
-+
-+    dist.get_rank = get_new_function(dist.get_rank)
-+    dist.get_world_size = get_new_function(dist.get_world_size)
-+    dist.get_backend = get_new_function(dist.get_backend)
-+    dist.get_global_rank = get_new_function(dist.get_global_rank)
-+    dist.get_group_rank = get_new_function(dist.get_group_rank)
-+    dist.get_process_group_ranks = get_new_function(dist.get_process_group_ranks)
-+
-+    dist.all_reduce = get_new_function(dist.all_reduce)
-+    dist.all_gather = get_new_function(dist.all_gather)
-+    dist.all_gather_into_tensor = get_new_function(dist.all_gather_into_tensor)
-+    dist.all_gather_object = get_new_function(dist.all_gather_object)
-+    dist.all_to_all = get_new_function(dist.all_to_all)
-+    dist.all_to_all_single = get_new_function(dist.all_to_all_single)
-+    dist.broadcast = get_new_function(dist.broadcast)
-+    dist.reduce = get_new_function(dist.reduce)
-+    dist.reduce_scatter = get_new_function(dist.reduce_scatter)
-+    dist.reduce_scatter_tensor = get_new_function(dist.reduce_scatter_tensor)
-+    dist.scatter = get_new_function(dist.scatter)
-+    dist.gather = get_new_function(dist.gather)
-+    dist.barrier = get_new_function(dist.barrier)
-+    dist.send = get_new_function(dist.send)
-+    dist.recv = get_new_function(dist.recv)
-+    dist._coalescing_manager = get_new_function(dist._coalescing_manager)
-+
-+    # p2p
-+    old_isend = dist.isend
-+    old_irecv = dist.irecv
-+
-+    dist.isend = get_new_function(dist.isend)
-+    dist.irecv = get_new_function(dist.irecv)
-+
-+    def get_new_p2pop_function(func):
-+        def new_function(*args, **kwargs):
-+            def convert(arg):
-+                if isinstance(arg, ReloadableProcessGroup):
-+                    return arg.group
-+                elif arg == dist.isend:
-+                    arg = old_isend
-+                elif arg == dist.irecv:
-+                    arg = old_irecv
-+                return arg
-+
-+            args = (convert(arg) for arg in args)
-+            kwargs = {
-+                k: convert(v)
-+                for k, v in kwargs.items()
-+            }
-+            return func(*args, **kwargs)
-+        return new_function
-+    
-+    dist.P2POp.__new__ = get_new_p2pop_function(dist.P2POp.__new__)
-+    dist.P2POp.__init__ = get_new_p2pop_function(dist.P2POp.__init__)
-+
-+
-+
-+class ReloadableProcessGroup(torch.distributed.ProcessGroup):
-+    GROUPS = []
-+
-+    def __init__(self, group, ranks):
-+        super().__init__(
-+            rank=dist.get_rank(group),
-+            size=dist.get_world_size(group),
-+        )
-+        #print(f"Creating ReloadableProcessGroup with ranks: {ranks}", flush=True)
-+        self.group = group
-+        self.group_info = {
-+            "ranks": ranks,
-+        }
-+        ReloadableProcessGroup.GROUPS.append(self)
-+
-+    def __getattr__(self, name):
-+        return getattr(self.group, name)
-+
-+    @staticmethod
-+    def destroy_process_groups():
-+        for reloadable_group in ReloadableProcessGroup.GROUPS:
-+            if reloadable_group.group is None:
-+                continue
-+            #print(f"Destroying process group: {reloadable_group.group_info['ranks']}")
-+            dist.destroy_process_group(reloadable_group.group)
-+            del reloadable_group.group
-+            reloadable_group.group = None
-+
-+    @staticmethod
-+    def reload_process_groups():
-+        for reloadable_group in ReloadableProcessGroup.GROUPS:
-+            if reloadable_group.group is not None:
-+                continue
-+            #print(f"Reloading process group: {reloadable_group.group_info['ranks']}")
-+            group = old_new_group(
-+                ranks=reloadable_group.group_info["ranks"],
-+                backend="nccl"
-+            )
-+            reloadable_group.group = group
-+
-+    def rank(self) -> int: return self.group.rank()
-+    def size(self) -> int: return self.group.size()
-+    def name(self) -> str: return self.group.name()
-+
-+    def shutdown(self) -> None:
-+        if self.group is not None:
-+            self.group.shutdown()
-+
-+    def abort(self) -> None:
-+        if self.group is not None:
-+            self.group.abort()
-+
-+    def _fwd(self, method, *args, **kwargs):
-+        inner = self.group
-+        if inner is None:
-+            raise RuntimeError("ReloadableProcessGroup: inner PG is None, call reload() first.")
-+        return getattr(inner, method)(*args, **kwargs)
-+
-+    def barrier(self, *a, **kw): return self._fwd("barrier", *a, **kw)
-+    def broadcast(self, *a, **kw): return self._fwd("broadcast", *a, **kw)
-+    def allreduce(self, *a, **kw): return self._fwd("allreduce", *a, **kw)
-+    def allreduce_coalesced(self, *a, **kw): return self._fwd("allreduce_coalesced", *a, **kw)
-+    def reduce(self, *a, **kw): return self._fwd("reduce", *a, **kw)
-+    def allgather(self, *a, **kw): return self._fwd("allgather", *a, **kw)
-+    def _allgather_base(self, *a, **kw): return self._fwd("_allgather_base", *a, **kw)
-+    def allgather_coalesced(self, *a, **kw): return self._fwd("allgather_coalesced", *a, **kw)
-+    def allgather_into_tensor_coalesced(self, *a, **kw): return self._fwd("allgather_into_tensor_coalesced", *a, **kw)
-+    def gather(self, *a, **kw): return self._fwd("gather", *a, **kw)
-+    def scatter(self, *a, **kw): return self._fwd("scatter", *a, **kw)
-+    def reduce_scatter(self, *a, **kw): return self._fwd("reduce_scatter", *a, **kw)
-+    def _reduce_scatter_base(self, *a, **kw): return self._fwd("_reduce_scatter_base", *a, **kw)
-+    def reduce_scatter_tensor_coalesced(self, *a, **kw): return self._fwd("reduce_scatter_tensor_coalesced", *a, **kw)
-+    def alltoall_base(self, *a, **kw): return self._fwd("alltoall_base", *a, **kw)
-+    def alltoall(self, *a, **kw): return self._fwd("alltoall", *a, **kw)
-+    def send(self, *a, **kw): return self._fwd("send", *a, **kw)
-+    def recv(self, *a, **kw): return self._fwd("recv", *a, **kw)
-+    def recv_anysource(self, *a, **kw): return self._fwd("recv_anysource", *a, **kw)
-+
-+    def _start_coalescing(self, *a, **kw): return self._fwd("_start_coalescing", *a, **kw)
-+    def _end_coalescing(self, *a, **kw): return self._fwd("_end_coalescing", *a, **kw)
-+    def _get_backend_name(self): return self._fwd("_get_backend_name")
-+    def _get_backend(self, *a, **kw): return self._fwd("_get_backend", *a, **kw)
-+    def _set_default_backend(self, *a, **kw): return self._fwd("_set_default_backend", *a, **kw)
-+    @property
-+    def bound_device_id(self): return self.group.bound_device_id
-+    @bound_device_id.setter
-+    def bound_device_id(self, dev): self.group.bound_device_id = dev
-+
-+
-+def destroy_process_groups():
-+    """Destroy all reloadable process groups."""
-+    ReloadableProcessGroup.destroy_process_groups()
-+
-+
-+def reload_process_groups():
-+    """Reload all reloadable process groups."""
-+    ReloadableProcessGroup.reload_process_groups()
-+
-+
-+monkey_patch_torch_dist()
-+
-+
- def create_group(
-     ranks=None,
-     timeout=None,
 diff --git a/megatron/core/pipeline_parallel/p2p_communication.py b/megatron/core/pipeline_parallel/p2p_communication.py
-index 63ee9d1f..b90b744c 100644
+index 63ee9d1f5..b90b744c1 100644
 --- a/megatron/core/pipeline_parallel/p2p_communication.py
 +++ b/megatron/core/pipeline_parallel/p2p_communication.py
 @@ -26,22 +26,22 @@ def _batched_p2p_ops(
@@ -364,7 +150,7 @@ index 63ee9d1f..b90b744c 100644
          ops.append(recv_next_op)
      if len(ops) > 0:
 diff --git a/megatron/core/transformer/moe/moe_utils.py b/megatron/core/transformer/moe/moe_utils.py
-index 235b6f6a..39693a03 100644
+index 235b6f6af..9f5e150a9 100644
 --- a/megatron/core/transformer/moe/moe_utils.py
 +++ b/megatron/core/transformer/moe/moe_utils.py
 @@ -1,9 +1,11 @@
@@ -379,96 +165,18 @@ index 235b6f6a..39693a03 100644
  
  from megatron.core import parallel_state
  from megatron.core.process_groups_config import ModelCommProcessGroups
-@@ -506,6 +508,47 @@ def pad_routing_map(routing_map: torch.Tensor, pad_multiple: int) -> torch.Tenso
-     return routing_map
- 
- 
-+ROUTING_REPLAY = None
-+
-+
-+def set_routing_replay(replay):
-+    global ROUTING_REPLAY
-+    ROUTING_REPLAY = replay
-+
-+
-+class RoutingReplay:
-+    all_routing_replays = []
-+
-+    def __init__(self):
-+        self.forward_index = 0
-+        self.backward_index = 0
-+        self.top_indices_list = []
-+        RoutingReplay.all_routing_replays.append(self)
-+
-+    def record(self, top_indices):
-+        self.top_indices_list.append(top_indices)
-+
-+    def pop_forward(self):
-+        top_indices = self.top_indices_list[self.forward_index]
-+        self.forward_index += 1
-+        return top_indices
-+    
-+    def pop_backward(self):
-+        top_indices = self.top_indices_list[self.backward_index]
-+        self.backward_index += 1
-+        return top_indices
-+
-+    def clear(self):
-+        self.forward_index = 0
-+        self.backward_index = 0
-+        self.top_indices_list = []
-+
-+    @staticmethod
-+    def clear_all():
-+        for replay in RoutingReplay.all_routing_replays:
-+            replay.clear()
-+
-+
- def topk_routing_with_score_function(
-     logits: torch.Tensor,
-     topk: int,
-@@ -553,7 +596,7 @@ def topk_routing_with_score_function(
-             expert_bias=expert_bias,
-         )
- 
--    def compute_topk(scores, topk, num_groups=None, group_topk=None):
-+    def _compute_topk(scores, topk, num_groups=None, group_topk=None):
-         if group_topk:
-             return group_limited_topk(
-                 scores=scores,
-@@ -566,6 +609,30 @@ def topk_routing_with_score_function(
+@@ -566,6 +568,9 @@ def topk_routing_with_score_function(
          else:
              return torch.topk(scores, k=topk, dim=1)
  
-+    def compute_topk(scores, topk, num_groups=None, group_topk=None):
-+        if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
-+            routing_replay_stage = os.environ["ROUTING_REPLAY_STAGE"]
-+            if routing_replay_stage == "fallthrough":
-+                return _compute_topk(scores, topk, num_groups=num_groups, group_topk=group_topk)
-+            if routing_replay_stage == "record":
-+                probs, top_indices = _compute_topk(scores, topk, num_groups=num_groups, group_topk=group_topk)
-+                ROUTING_REPLAY.record(top_indices)
-+            elif routing_replay_stage == "replay_forward":
-+                top_indices = ROUTING_REPLAY.pop_forward()
-+                assert top_indices.shape[0] == scores.shape[0] and top_indices.shape[1] == topk, (
-+                    f"top_indices shape {top_indices.shape} does not match scores shape {scores.shape} and topk {topk}"
-+                )
-+                probs = scores.gather(1, top_indices)
-+            elif routing_replay_stage == "replay_backward":
-+                top_indices = ROUTING_REPLAY.pop_backward()
-+                assert top_indices.shape[0] == scores.shape[0] and top_indices.shape[1] == topk, (
-+                    f"top_indices shape {top_indices.shape} does not match scores shape {scores.shape} and topk {topk}"
-+                )
-+                probs = scores.gather(1, top_indices)
-+            return probs, top_indices
-+        else:
-+            return _compute_topk(scores, topk, num_groups=num_groups, group_topk=group_topk)
++    from slime.utils.routing_replay import get_routing_replay_compute_topk
++    compute_topk = get_routing_replay_compute_topk(compute_topk)
 +
      if score_function == "softmax":
          if use_pre_softmax:
              scores = torch.softmax(logits, dim=-1, dtype=torch.float32).type_as(logits)
 diff --git a/megatron/core/transformer/moe/router.py b/megatron/core/transformer/moe/router.py
-index 6b20b862..405d95f8 100644
+index 6b20b8622..73da4e232 100644
 --- a/megatron/core/transformer/moe/router.py
 +++ b/megatron/core/transformer/moe/router.py
 @@ -1,5 +1,6 @@
@@ -478,24 +186,18 @@ index 6b20b862..405d95f8 100644
  from abc import ABC, abstractmethod
  from typing import Optional
  
-@@ -156,6 +157,15 @@ class TopKRouter(Router):
+@@ -156,6 +157,9 @@ class TopKRouter(Router):
              self.local_tokens_per_expert = None
              self.expert_bias = None
  
-+        if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
-+            from .moe_utils import RoutingReplay, set_routing_replay
-+            self.routing_replay = RoutingReplay()
-+
-+            def pre_forward_hook(*args, **kwargs):
-+                set_routing_replay(self.routing_replay)
-+
-+            self.register_forward_pre_hook(pre_forward_hook)
++        from slime.utils.routing_replay import register_routing_replay
++        register_routing_replay(self)
 +
      def _maintain_float32_expert_bias(self):
          """
          Maintain the expert bias in float32.
 diff --git a/megatron/core/transformer/transformer_config.py b/megatron/core/transformer/transformer_config.py
-index 6f557e1f..b295fd35 100644
+index d55bebe7e..1e1d9c781 100644
 --- a/megatron/core/transformer/transformer_config.py
 +++ b/megatron/core/transformer/transformer_config.py
 @@ -173,6 +173,9 @@ class TransformerConfig(ModelParallelConfig):
@@ -509,7 +211,7 @@ index 6f557e1f..b295fd35 100644
      """Whether to run real-time tests."""
  
 diff --git a/megatron/core/transformer/transformer_layer.py b/megatron/core/transformer/transformer_layer.py
-index 84f22bde..b4807d26 100644
+index 84f22bdea..f0f3f8e86 100644
 --- a/megatron/core/transformer/transformer_layer.py
 +++ b/megatron/core/transformer/transformer_layer.py
 @@ -224,6 +224,7 @@ class TransformerLayerSubmodules:
@@ -528,7 +230,7 @@ index 84f22bde..b4807d26 100644
  
      # Mapping for sharded tensor keys to be applied in `sharded_state_dict` method
      sharded_state_dict_keys_map: Dict[str, str] = field(default_factory=dict)
-@@ -336,6 +338,14 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+@@ -336,6 +338,13 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
          # [Module 3: BiasDropoutFusion]
          self.self_attn_bda = build_module(submodules.self_attn_bda)
  
@@ -539,11 +241,10 @@ index 84f22bde..b4807d26 100644
 +            eps=self.config.layernorm_epsilon,
 +        )
 +
-+
          # [Module 4: Post SelfAttention] Optional Layernorm after self-attn
          self.pre_cross_attn_layernorm = build_module(
              submodules.pre_cross_attn_layernorm,
-@@ -399,6 +409,13 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+@@ -399,6 +408,13 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
          # [Module 9: BiasDropoutFusion]
          self.mlp_bda = build_module(submodules.mlp_bda)
  
@@ -557,7 +258,7 @@ index 84f22bde..b4807d26 100644
          self.recompute_input_layernorm = False
          self.recompute_pre_mlp_layernorm = False
          self.recompute_mlp = False
-@@ -535,6 +552,11 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+@@ -535,6 +551,10 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
                  attention_output_with_bias[0]
              )
  
@@ -565,11 +266,10 @@ index 84f22bde..b4807d26 100644
 +        attention_output = self.post_self_attn_layernorm(attention_output)
 +        attention_output_with_bias = (attention_output, attention_output_bias)
 +
-+
          # TODO: could we move `bias_dropout_add_exec_handler` itself
          # inside the module provided in the `bias_dropout_add_spec` module?
          nvtx_range_push(suffix="self_attn_bda")
-@@ -635,6 +657,10 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+@@ -635,6 +655,10 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
          else:
              mlp_output_with_bias = self.mlp(pre_mlp_layernorm_output)
  
@@ -581,7 +281,7 @@ index 84f22bde..b4807d26 100644
              # discard the output of the pre-mlp layernorm and register the recompute
              # as a gradient hook of mlp_output_with_bias[0]
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
-index 24ba8926..dfa9f7a5 100644
+index e3459c5ee..2a2fefac3 100644
 --- a/megatron/training/arguments.py
 +++ b/megatron/training/arguments.py
 @@ -937,8 +937,6 @@ def validate_args(args, defaults={}):
@@ -593,7 +293,7 @@ index 24ba8926..dfa9f7a5 100644
      if args.num_experts is not None and args.moe_ffn_hidden_size is None:
          args.moe_ffn_hidden_size = args.ffn_hidden_size
          print("Warning: moe_ffn_hidden_size is not set, using ffn_hidden_size for MoE instead.")
-@@ -1191,6 +1189,9 @@ def core_transformer_config_from_args(args, config_class=None):
+@@ -1198,6 +1196,9 @@ def core_transformer_config_from_args(args, config_class=None):
      if args.is_hybrid_model:
          kw_args['is_hybrid_model'] = args.is_hybrid_model
  
@@ -603,7 +303,7 @@ index 24ba8926..dfa9f7a5 100644
      # handle quantization config
      # NOTE: Kitchen arguments are only added to the namespace when
      # Kitchen library is available.
-@@ -1481,6 +1482,10 @@ def _add_network_size_args(parser):
+@@ -1488,6 +1489,10 @@ def _add_network_size_args(parser):
                         action='store_true',
                         help='If set, use original BERT residula connection '
                         'ordering.')

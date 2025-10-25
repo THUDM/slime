@@ -103,7 +103,7 @@ index 57332ac3..f3abd642 100644
 +            "backend" in kwargs and kwargs["backend"] == "gloo"
 +        ):
 +            return group
-+        
++
 +        # Get ranks from arguments
 +        if len(args) >= 1 and args[0] is not None:
 +            ranks = args[0]
@@ -183,7 +183,7 @@ index 57332ac3..f3abd642 100644
 +            }
 +            return func(*args, **kwargs)
 +        return new_function
-+    
++
 +    dist.P2POp.__new__ = get_new_p2pop_function(dist.P2POp.__new__)
 +    dist.P2POp.__init__ = get_new_p2pop_function(dist.P2POp.__init__)
 +
