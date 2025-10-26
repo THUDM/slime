@@ -1,5 +1,17 @@
 import os
+from typing import Any
+
 import wandb
+
+
+def _build_wandb_config(args) -> dict[str, Any]:
+    config = args.__dict__
+    if args.eval_datasets:
+        for dataset_config in args.eval_datasets:
+            name = dataset_config.name
+            for key, value in dataset_config.__dict__.items():
+                config[f"eval_{name}_{key}"] = value
+    return config
 
 
 def _is_offline_mode(args) -> bool:
@@ -49,7 +61,7 @@ def init_wandb_primary(args):
         "project": args.wandb_project,
         "group": group,
         "name": run_name,
-        "config": args.__dict__,
+        "config": _build_wandb_config(args),
     }
 
     # Configure settings based on offline/online mode
@@ -111,7 +123,7 @@ def init_wandb_secondary(args, wandb_run_id, router_addr=None):
         "id": wandb_run_id,
         "entity": args.wandb_team,
         "project": args.wandb_project,
-        "config": args.__dict__,
+        "config": _build_wandb_config(args),
         "resume": "allow",
         "reinit": True,
         "settings": wandb.Settings(**settings_kwargs),
