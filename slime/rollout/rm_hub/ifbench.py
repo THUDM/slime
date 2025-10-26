@@ -18,10 +18,25 @@
 from __future__ import annotations
 
 import dataclasses
+import importlib
 import logging
+import sys
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
-from .ifbench_utils import instructions_registry
+try:
+    from ifbench import instructions_registry  # type: ignore[attr-defined]
+except ImportError:
+    _IFBENCH_REPO_ROOT = Path(__file__).resolve().parents[3] / "ifbench"
+    if not _IFBENCH_REPO_ROOT.exists():
+        raise ImportError(
+            "IFBench repository not found. Clone https://github.com/allenai/IFBench.git "
+            "into the repo root or export PYTHONPATH accordingly."
+        ) from None
+    repo_path = str(_IFBENCH_REPO_ROOT)
+    if repo_path not in sys.path:
+        sys.path.insert(0, repo_path)
+    instructions_registry = importlib.import_module("instructions_registry")
 
 logger = logging.getLogger(__name__)
 
