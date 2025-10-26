@@ -486,9 +486,9 @@ class FSDPTrainRayActor(TrainRayActor):
             pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
             ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
 
-            train_rollout_logprob_diff = (old_log_probs - rollout_log_probs).abs()
-            train_rollout_logprob_diff = sum_of_sample_mean(
-                train_rollout_logprob_diff, response_lengths, loss_masks
+            train_rollout_logprob_abs_diff = (old_log_probs - rollout_log_probs).abs()
+            train_rollout_logprob_abs_diff = sum_of_sample_mean(
+                train_rollout_logprob_abs_diff, response_lengths, loss_masks
             ).detach()
 
             loss = pg_loss
@@ -514,7 +514,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 "pg_loss": pg_loss.detach(),
                 "pg_clipfrac": pg_clipfrac.detach(),
                 "ppo_kl": ppo_kl.detach(),
-                "train_rollout_logprob_diff": train_rollout_logprob_diff,
+                "train_rollout_logprob_abs_diff": train_rollout_logprob_abs_diff,
             }
 
             if self.args.use_kl_loss:
