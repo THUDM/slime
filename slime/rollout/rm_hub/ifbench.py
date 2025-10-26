@@ -20,25 +20,74 @@ from __future__ import annotations
 import dataclasses
 import importlib
 import logging
+import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
-try:
-    from ifbench import instructions_registry  # type: ignore[attr-defined]
-except ImportError:
-    _IFBENCH_REPO_ROOT = Path(__file__).resolve().parents[3] / "ifbench"
-    if not _IFBENCH_REPO_ROOT.exists():
-        raise ImportError(
-            "IFBench repository not found. Clone https://github.com/allenai/IFBench.git "
-            "into the repo root or export PYTHONPATH accordingly."
-        ) from None
-    repo_path = str(_IFBENCH_REPO_ROOT)
-    if repo_path not in sys.path:
-        sys.path.insert(0, repo_path)
-    instructions_registry = importlib.import_module("instructions_registry")
-
 logger = logging.getLogger(__name__)
+
+
+def _ensure_ifbench_repo() -> Path:
+    """Clone IFBench repo if needed and ensure it is available on sys.path."""
+
+    repo_root = Path(__file__).resolve().parents[3]
+    repo_path = repo_root / "ifbench"
+
+    if not repo_path.exists():
+        clone_cmd = ["git", "clone", "https://github.com/allenai/IFBench.git", str(repo_path)]
+        try:
+            subprocess.run(clone_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        except Exception as exc:
+            raise ImportError(
+                "Unable to automatically clone IFBench. Please clone "
+                "https://github.com/allenai/IFBench.git into the repo root."
+            ) from exc
+
+    repo_str = str(repo_path)
+    if repo_str not in sys.path:
+        sys.path.insert(0, repo_str)
+
+    current_pythonpath = os.environ.get("PYTHONPATH")
+    if current_pythonpath is None:
+        os.environ["PYTHONPATH"] = repo_str
+    elif repo_str not in current_pythonpath.split(os.pathsep):
+        os.environ["PYTHONPATH"] = os.pathsep.join([repo_str, current_pythonpath])
+
+    return repo_path
+
+
+def _ensure_ifbench_dependencies(repo_path: Path) -> None:
+    """Install IFBench requirements the first time the module is imported."""
+
+    requirements_file = repo_path / "requirements.txt"
+    if not requirements_file.exists():
+        return
+
+    sentinel = repo_path / ".deps_installed"
+    if sentinel.exists():
+        return
+
+    install_cmd = [sys.executable, "-m", "pip", "install", "-r", str(requirements_file)]
+    try:
+        subprocess.run(install_cmd, check=True)
+    except Exception as exc:
+        logger.warning("Failed to install IFBench dependencies automatically: %s", exc)
+    else:
+        sentinel.write_text("installed\n")
+
+
+def _load_instructions_registry():
+    repo_path = _ensure_ifbench_repo()
+    try:
+        return importlib.import_module("instructions_registry")
+    except ImportError:
+        _ensure_ifbench_dependencies(repo_path)
+        return importlib.import_module("instructions_registry")
+
+
+instructions_registry = _load_instructions_registry()
 
 
 JsonDict = Dict[str, Any]
