@@ -11,7 +11,7 @@ eval:
       path: /root/gpqa/gpqa_eval.jsonl
       rm_type: gpqa
       n_samples_per_eval_prompt: 2
-    - name: ifbench   # huggingface-cli download --repo-type dataset zyzshishui0627/IFBench --local-dir /root/IFBench
-      path: /root/IFBench/IFBench_eval.jsonl
+    - name: ifbench   # huggingface-cli download --repo-type dataset zyzshishui0627/IFBench --local-dir /root/ifbench
+      path: /root/ifbench/IFBench_eval.jsonl
       rm_type: ifbench
       n_samples_per_eval_prompt: 1
