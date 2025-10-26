@@ -28,12 +28,15 @@ from typing import Any, Dict, List, Optional, Sequence, Union
 
 logger = logging.getLogger(__name__)
 
+_WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
+_WORKSPACE_PARENT = _WORKSPACE_ROOT.parent
+_LOCAL_IFBENCH_REQUIREMENTS = _WORKSPACE_ROOT / "examples" / "eval_multi_task" / "requirements.txt"
+
 
 def _ensure_ifbench_repo() -> Path:
     """Clone IFBench repo if needed and ensure it is available on sys.path."""
 
-    repo_root = Path(__file__).resolve().parents[3]
-    repo_path = repo_root / "ifbench"
+    repo_path = _WORKSPACE_PARENT / "IFBench"
 
     if not repo_path.exists():
         clone_cmd = ["git", "clone", "https://github.com/allenai/IFBench.git", str(repo_path)]
@@ -61,8 +64,10 @@ def _ensure_ifbench_repo() -> Path:
 def _ensure_ifbench_dependencies(repo_path: Path) -> None:
     """Install IFBench requirements the first time the module is imported."""
 
-    requirements_file = repo_path / "requirements.txt"
+    requirements_file = _LOCAL_IFBENCH_REQUIREMENTS
+
     if not requirements_file.exists():
+        logger.debug("Local IFBench requirements file not found at %s; skipping install.", requirements_file)
         return
 
     sentinel = repo_path / ".deps_installed"
