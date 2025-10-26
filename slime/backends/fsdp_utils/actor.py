@@ -269,7 +269,10 @@ class FSDPTrainRayActor(TrainRayActor):
                             model_args["pixel_values"] = batch["pixel_values"]
                         logits = self.model(**model_args).logits
                     batch[f"{store_prefix}log_probs"] = gather_log_probs_packed(
-                        logits, batch["tokens"], temperature=self.args.rollout_temperature
+                        logits,
+                        batch["tokens"],
+                        allow_compile=not self.args.true_on_policy_mode,
+                        temperature=self.args.rollout_temperature,
                     )
             return rollout_data
 
@@ -426,7 +429,11 @@ class FSDPTrainRayActor(TrainRayActor):
 
             # Handle packed sequences
             log_probs = gather_log_probs_packed(
-                logits, packed_batch["tokens"], packed_batch["cu_seqlens"], temperature=self.args.rollout_temperature
+                logits,
+                packed_batch["tokens"],
+                allow_compile=not self.args.true_on_policy_mode,
+                cu_seqlens=packed_batch["cu_seqlens"],
+                temperature=self.args.rollout_temperature,
             )
             packed_batch["cur_log_probs"] = log_probs
             unpacked_batches = unpack_sequences(packed_batch)
@@ -682,8 +689,7 @@ class FSDPTrainRayActor(TrainRayActor):
             self.update_gpu_params_dict(current_weights)
 
 
-@torch.compile(dynamic=True)
-def selective_log_softmax(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
+def selective_log_softmax_raw(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
     """Fused version of the common `log_softmax -> gather` operation.
 
     The fused version of this operation avoids the (potentially large) memory overhead
@@ -700,9 +706,13 @@ def selective_log_softmax(logits: torch.Tensor, input_ids: torch.Tensor) -> torc
     return torch.gather(logprobs, dim=-1, index=input_ids.unsqueeze(-1)).squeeze(-1)
 
 
+selective_log_softmax_compiled = torch.compile(dynamic=True)(selective_log_softmax_raw)
+
+
 def gather_log_probs_packed(
     logits: torch.Tensor,
     input_ids: torch.Tensor,
+    allow_compile: bool,
     cu_seqlens: torch.Tensor | float | None = None,
     temperature: torch.Tensor | None = None,
 ) -> torch.Tensor:
@@ -731,6 +741,7 @@ def gather_log_probs_packed(
     targets = input_ids[1:].to(device=shifted_logits.device)
 
     # Gather log probs for targets
+    selective_log_softmax = selective_log_softmax_compiled if allow_compile else selective_log_softmax_raw
     return selective_log_softmax(shifted_logits, targets)
 
 
