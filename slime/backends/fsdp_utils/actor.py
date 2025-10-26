@@ -1,6 +1,5 @@
 import time
 from argparse import Namespace
-from collections.abc import Iterable
 from contextlib import nullcontext
 from itertools import accumulate
 
@@ -146,22 +145,15 @@ class FSDPTrainRayActor(TrainRayActor):
         self.max_tokens_per_gpu = args.max_tokens_per_gpu  # From main arguments
 
         if self.args.offload_train:
-            self.sleep(("model"))
+            self.sleep()
 
         Timer().start("train_wait")
         self.global_step = 0
         self.micro_step = 0
         return 0
 
-    def sleep(self, tags: str | Iterable[str] | None) -> None:
-        """Pause CUDA memory for all tracked tensors via torch_memory_saver.
-
-        When offloading is enabled, this forwards tags to
-        `torch_memory_saver.pause`. If `tags` is a string, that tag is paused.
-        If `tags` is an iterable of strings, each tag is paused. If `tags` is
-        None, all registered regions are paused. See the torch_memory_saver
-        tagged API for details.
-        """
+    def sleep(self) -> None:
+        """Pause CUDA memory for all tracked tensors."""
         if not self.args.offload_train:
             return
 
@@ -172,29 +164,15 @@ class FSDPTrainRayActor(TrainRayActor):
         # TODO: improve it later
         clear_memory()
 
-        if isinstance(tags, str):
-            tags = (tags,)
-
-        if torch_memory_saver is not None:
-            torch_memory_saver.pause()
+        torch_memory_saver.pause()
 
         torch.cuda.synchronize()
         dist.barrier(group=get_gloo_group())
 
-    def wake_up(self, tags: str | Iterable[str] | None) -> None:
-        """Resume CUDA memory for all tracked tensors via torch_memory_saver.
-
-        When offloading is enabled, this forwards tags to
-        `torch_memory_saver.resume`. If `tags` is a string, that tag is resumed.
-        If `tags` is an iterable of strings, each tag is resumed. If `tags` is
-        None, all registered regions are resumed. See the torch_memory_saver
-        tagged API for details.
-        """
+    def wake_up(self) -> None:
+        """Resume CUDA memory for all tracked tensors."""
         if not self.args.offload_train:
             return
-
-        if isinstance(tags, str):
-            tags = (tags,)
 
         # TODO this is copy-pasted from megatron side; should unify the two
         # there are weird times when sglang is not offloaded immediately, so we wait here.
@@ -206,8 +184,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 continue
             break
 
-        if torch_memory_saver is not None:
-            torch_memory_saver.resume()
+        torch_memory_saver.resume()
 
         torch.cuda.synchronize()
         dist.barrier(group=get_gloo_group())
@@ -358,7 +335,7 @@ class FSDPTrainRayActor(TrainRayActor):
         Timer().end("train_wait")
 
         if self.args.offload_train:
-            self.wake_up(("model"))
+            self.wake_up()
 
         world_size = dist.get_world_size()
         rank = dist.get_rank()
