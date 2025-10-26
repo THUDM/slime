@@ -11,7 +11,7 @@ from packaging import version
 from torch.distributed.tensor import DTensor
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
-from slime.utils.memory_utils import print_memory
+from slime.utils.memory_utils import clear_memory, print_memory
 
 # Import FSDP v2 components based on PyTorch version
 if version.parse(torch.__version__) >= version.parse("2.6"):
@@ -57,7 +57,11 @@ class FSDPTrainRayActor(TrainRayActor):
             from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
 
             print("FSDPTrainRayActor call enable_batch_invariant_mode for true-on-policy")
-            enable_batch_invariant_mode()
+            enable_batch_invariant_mode(
+                # In Qwen3, rope `inv_freq_expanded.float() @ position_ids_expanded.float()` uses bmm
+                # and disabling it will make it aligned
+                enable_bmm=False,
+            )
 
         # Update rank and world_size for wandb secondary initialization (using actual distributed values)
         args.rank = dist.get_rank()
@@ -70,10 +74,7 @@ class FSDPTrainRayActor(TrainRayActor):
         torch.manual_seed(args.seed)
 
         if args.record_memory_history:
-            profile_utils.attach_oom_dump_memory_history(
-                memory_snapshot_dir=args.memory_snapshot_dir,
-                memory_snapshot_path=args.memory_snapshot_path,
-            )
+            profile_utils.attach_oom_dump_memory_history(profile_utils.get_memory_snapshot_full_path(args))
 
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
@@ -164,6 +165,13 @@ class FSDPTrainRayActor(TrainRayActor):
         if not self.args.offload_train:
             return
 
+        # Try to avoid this case:
+        # * FSDP contains a lot of cached memory and sleep
+        # * SGLang resumes and allocate some memory
+        # * FSDP resumes but realize there is no enough memory, thus OOM currently, but indeed the cache can be (partially) freed to fulfill requirements
+        # TODO: improve it later
+        clear_memory()
+
         if isinstance(tags, str):
             tags = (tags,)
 
@@ -200,6 +208,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if torch_memory_saver is not None:
             torch_memory_saver.resume()
+
+        torch.cuda.synchronize()
+        dist.barrier(group=get_gloo_group())
 
     def save_model(self, iteration: int) -> None:
         """Save model state and optimizer state for the given iteration.
@@ -573,6 +584,9 @@ class FSDPTrainRayActor(TrainRayActor):
             if dist.get_rank() == 0:
                 print(f"Updating ref model at rollout_id {rollout_id}")
             self.update_cpu_params_dict(self.weights["ref"])
+
+        if self.args.record_memory_history and (rollout_id == self.args.memory_snapshot_num_steps - 1):
+            profile_utils.dump_snapshot_and_stop(profile_utils.get_memory_snapshot_full_path(self.args))
 
         Timer().start("train_wait")
         return

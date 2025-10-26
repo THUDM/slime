@@ -79,6 +79,16 @@ def execute_train(
                 "no_proxy": f"127.0.0.1,{master_addr}",
                 # This is needed by megatron / torch distributed in multi-node setup
                 "MASTER_ADDR": master_addr,
+                **(
+                    {
+                        "CUDA_ENABLE_COREDUMP_ON_EXCEPTION": "1",
+                        "CUDA_COREDUMP_SHOW_PROGRESS": "1",
+                        "CUDA_COREDUMP_GENERATION_FLAGS": "skip_nonrelocated_elf_images,skip_global_memory,skip_shared_memory,skip_local_memory,skip_constbank_memory",
+                        "CUDA_COREDUMP_FILE": "/tmp/cuda_coredump_%h.%p.%t",
+                    }
+                    if get_bool_env_var("SLIME_SCRIPT_ENABLE_CUDA_CORE_DUMP")
+                    else {}
+                ),
                 **extra_env_vars,
             }
         }
