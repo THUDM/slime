@@ -2,8 +2,10 @@ import datetime
 import json
 import os
 import random
+import time
 from pathlib import Path
 from typing import Optional
+
 from slime.utils.misc import exec_command
 
 _ = exec_command
@@ -166,3 +168,10 @@ def get_bool_env_var(name: str, default: str = "false") -> bool:
 
 def get_env_enable_infinite_run():
     return get_bool_env_var("SLIME_TEST_ENABLE_INFINITE_RUN", "false")
+
+
+def save_to_temp_file(text: str, ext: str):
+    path = Path(f"/tmp/slime_temp_file_{time.time()}_{random.randrange(0, 10000000)}.{ext}")
+    path.write_text(text)
+    print(f"Write the following content to {path=}: {text=}")
+    return str(path)
