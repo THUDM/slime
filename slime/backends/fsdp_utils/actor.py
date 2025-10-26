@@ -53,8 +53,10 @@ class FSDPTrainRayActor(TrainRayActor):
     def init(self, args: Namespace, role: str, wandb_run_id: str, with_ref: bool = False) -> int:  # type: ignore[override]
         super().init(args, role, wandb_run_id, with_ref)
 
+        # TODO extract to function
         if args.true_on_policy_mode:
             from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
+            from transformers.models.qwen3 import modeling_qwen3
 
             print("FSDPTrainRayActor call enable_batch_invariant_mode for true-on-policy")
             enable_batch_invariant_mode(
@@ -62,6 +64,8 @@ class FSDPTrainRayActor(TrainRayActor):
                 # and disabling it will make it aligned
                 enable_bmm=False,
             )
+
+            modeling_qwen3.apply_rotary_pos_emb = torch.compile(dynamic=True)(modeling_qwen3.apply_rotary_pos_emb)
 
         # Update rank and world_size for wandb secondary initialization (using actual distributed values)
         args.rank = dist.get_rank()
