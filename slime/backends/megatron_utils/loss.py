@@ -436,8 +436,9 @@ def policy_loss_function(
             metrics = {
                 "tis": tis.clone().detach(),
                 "tis_clipfrac": tis_clipfrac.clone().detach(),
+                "tis_abs": (1 - tis).abs().clone().detach(),
             }
-            return tis, tis_weights, metrics
+            return tis_weights, metrics
 
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
 
@@ -455,7 +456,7 @@ def policy_loss_function(
             tis_func = load_function(args.custom_tis_function_path)
         else:
             tis_func = vanilla_tis_function
-        tis, tis_weights, tis_metrics = tis_func(**tis_kwargs)
+        tis_weights, tis_metrics = tis_func(**tis_kwargs)
 
         pg_loss = pg_loss * tis_weights
 
@@ -499,7 +500,6 @@ def policy_loss_function(
 
     if args.use_tis:
         reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
-        reported_loss["tis_abs"] = sum_of_sample_mean((1 - tis).abs()).clone().detach()
         # Assume all metrics are already cloned and detached
         for metric_key, metric_value in tis_metrics.items():
             key_name = f"{metric_key}"
