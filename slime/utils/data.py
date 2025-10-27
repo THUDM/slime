@@ -57,6 +57,7 @@ class Dataset:
         metadata_key="metadata",
         seed=42,
         apply_chat_template=False,
+        apply_chat_template_kwargs=None,
     ):
         self.origin_samples = []
         for data in read_file(path):
@@ -83,7 +84,11 @@ class Dataset:
                     tools = None
                 template_input = [{"role": "user", "content": prompt_content}] if multimodal_keys else prompt_content
                 prompt = tokenizer.apply_chat_template(
-                    template_input, tools, tokenize=False, add_generation_prompt=True
+                    template_input,
+                    tools,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    **apply_chat_template_kwargs,
                 )
 
             else:

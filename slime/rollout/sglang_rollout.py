@@ -481,6 +481,7 @@ async def eval_rollout_single_dataset(
             metadata_key=metadata_key,
             tool_key=tool_key,
             apply_chat_template=args.apply_chat_template,
+            apply_chat_template_kwargs=args.apply_chat_template_kwargs,
         )
     dataset = EVAL_PROMPT_DATASET[cache_key]
 
@@ -551,7 +552,12 @@ async def eval_rollout_single_dataset(
     for coro in asyncio.as_completed(tasks):
         sample = await coro
         if do_print:
-            print([str(sample.prompt) + sample.response], sample.reward, flush=True)
+            print(
+                "eval_rollout_single_dataset example data:",
+                [str(sample.prompt) + sample.response],
+                f"reward={sample.reward}",
+                flush=True,
+            )
             do_print = False
         if isinstance(sample, list):
             data.extend(sample)
