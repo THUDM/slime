@@ -431,12 +431,13 @@ def policy_loss_function(
             rollout_log_probs = torch.cat(rollout_log_probs, dim=0)
             old_log_probs = torch.cat(train_log_probs, dim=0)
             tis = torch.exp(old_log_probs - rollout_log_probs)
+            tis_abs = torch.exp((old_log_probs - rollout_log_probs).abs())
             tis_weights = torch.clamp(tis, min=args.tis_clip_low, max=args.tis_clip)
             tis_clipfrac = (tis_weights != tis).float()
             metrics = {
                 "tis": tis.clone().detach(),
                 "tis_clipfrac": tis_clipfrac.clone().detach(),
-                "tis_abs": (1 - tis).abs().clone().detach(),
+                "tis_abs": tis_abs.clone().detach(),
             }
             return tis_weights, metrics
 
