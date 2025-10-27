@@ -377,7 +377,7 @@ def policy_loss_function(
         are enabled.
     """
     advantages = torch.cat(batch["advantages"], dim=0)
-    old_log_probs = batch["log_probs"]
+    old_log_probs = batch["rollout_log_probs"] if args.use_rollout_logprobs else batch["log_probs"]
 
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
@@ -412,7 +412,7 @@ def policy_loss_function(
         ppo_kl = torch.cat(ppo_kl, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
     else:
-        old_log_probs = torch.cat(batch["log_probs"], dim=0)
+        old_log_probs = torch.cat(old_log_probs, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
         ppo_kl = old_log_probs - log_probs
 
@@ -437,7 +437,7 @@ def policy_loss_function(
                 "tis": tis.clone().detach(),
                 "tis_clipfrac": tis_clipfrac.clone().detach(),
             }
-            return tis_weights, metrics
+            return tis, tis_weights, metrics
 
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
 
@@ -455,7 +455,7 @@ def policy_loss_function(
             tis_func = load_function(args.custom_tis_function_path)
         else:
             tis_func = vanilla_tis_function
-        tis_weights, tis_metrics = tis_func(**tis_kwargs)
+        tis, tis_weights, tis_metrics = tis_func(**tis_kwargs)
 
         pg_loss = pg_loss * tis_weights
 
@@ -499,6 +499,7 @@ def policy_loss_function(
 
     if args.use_tis:
         reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
+        reported_loss["tis_abs"] = sum_of_sample_mean((1 - tis).abs()).clone().detach()
         # Assume all metrics are already cloned and detached
         for metric_key, metric_value in tis_metrics.items():
             key_name = f"{metric_key}"
