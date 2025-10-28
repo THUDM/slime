@@ -4,7 +4,7 @@ import time
 from argparse import Namespace
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional
 
 import ray
 import torch
@@ -74,7 +74,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if role == "critic":
             if self.args.offload_train:
-                self.sleep(("model"))
+                self.sleep()
             Timer().start("train_wait")
             return
 
@@ -109,7 +109,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.offload_train:
             # recover to actor in the end.
             self.update_gpu_params_dict(self.weights["actor"])
-            self.sleep(("model"))
+            self.sleep()
 
         self.rollout_engines = None
 
@@ -155,11 +155,8 @@ class MegatronTrainRayActor(TrainRayActor):
         torch.cuda.synchronize()
 
     @timer
-    def sleep(self, tags: Union[str, Tuple[str, ...]]) -> None:
+    def sleep(self) -> None:
         assert self.args.offload_train
-        assert "model" in tags
-        if isinstance(tags, str):
-            tags = (tags,)
 
         clear_memory()
         print_memory("before offload model")
@@ -170,7 +167,7 @@ class MegatronTrainRayActor(TrainRayActor):
         print_memory("after offload model")
 
     @timer
-    def wake_up(self, tags: Union[str, Tuple[str, ...]]) -> None:
+    def wake_up(self) -> None:
         assert self.args.offload_train
 
         # there are weird times when sglang is not offloaded immediately, so we wait here.
@@ -181,9 +178,6 @@ class MegatronTrainRayActor(TrainRayActor):
                 time.sleep(1)
                 continue
             break
-
-        if isinstance(tags, str):
-            tags = (tags,)
 
         torch_memory_saver.resume()
 
@@ -244,7 +238,7 @@ class MegatronTrainRayActor(TrainRayActor):
         Timer().end("train_wait")
 
         if self.args.offload_train:
-            self.wake_up(("model"))
+            self.wake_up()
 
         with timer("data_preprocess"):
             rollout_data = self._get_rollout_data(rollout_data_ref)

@@ -1,15 +1,22 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 _EMPTY_VALUES = (None, [], {})
 
 
-@dataclass
-class EvalDatasetConfig:
+def _ensure_metadata_overrides(value: Any) -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise TypeError("metadata_overrides must be a mapping.")
+    return value
+
+
+class EvalDatasetConfig(BaseModel):
     """Configuration for a single evaluation dataset."""
 
     name: str
@@ -33,11 +40,13 @@ class EvalDatasetConfig:
     stop: Optional[Sequence[str]] = None
     stop_token_ids: Optional[Sequence[int]] = None
 
-    metadata_overrides: Dict[str, Any] = field(default_factory=dict)
+    metadata_overrides: Dict[str, Any] = Field(default_factory=dict)
 
-    def __post_init__(self) -> None:
-        if self.metadata_overrides is None:
-            self.metadata_overrides = {}
+    model_config = ConfigDict(validate_assignment=True, extra="forbid")
+
+    @field_validator("metadata_overrides", mode="before")
+    def _validate_metadata_overrides(cls, value: Any) -> Dict[str, Any]:
+        return _ensure_metadata_overrides(value)
 
     def apply_defaults(self, defaults: Dict[str, Any]) -> None:
         for key, value in defaults.items():

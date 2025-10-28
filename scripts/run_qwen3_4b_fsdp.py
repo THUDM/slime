@@ -9,6 +9,8 @@ import command_utils as U
 MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-4B")
 NUM_GPUS = 8
 
+EXTRA_ARGS = os.environ.get("SLIME_SCRIPT_EXTRA_ARGS", "")
+MULTI_EVAL = bool(int(os.environ.get("SLIME_SCRIPT_MULTI_EVAL", "1")))
 
 MODE = os.environ.get("SLIME_SCRIPT_MODE", "normal")
 assert MODE in {"normal", "debug_minimal"}
@@ -21,6 +23,8 @@ def prepare():
     U.exec_command(f"huggingface-cli download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
     U.hf_download_dataset("zhuzilin/aime-2024")
+    U.hf_download_dataset("zyzshishui0627/gpqa_diamond")
+    U.hf_download_dataset("zyzshishui0627/IFBench")
 
 
 def execute():
@@ -52,15 +56,38 @@ def execute():
             "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "
         )
 
+    # sometimes disable eval to speed up debugging
     eval_args = ""
-    if MODE != "debug_minimal":
-        eval_args += (
-            "--eval-interval 20 "
-            "--eval-prompt-data aime /root/datasets/aime-2024/aime-2024.jsonl "
-            "--n-samples-per-eval-prompt 16 "
-            "--eval-max-response-len 16384 "
-            "--eval-top-p 0.7 "
-        )
+    if (MODE != "debug_minimal") and bool(int(os.environ.get("SLIME_SCRIPT_ENABLE_EVAL", "1"))):
+        eval_args += "--eval-interval 20 "
+        if MULTI_EVAL:
+            eval_config_text = """
+eval:
+  defaults:
+    max_response_len: 16384
+    top_p: 0.7
+  datasets:
+    - name: aime
+      path: /root/datasets/aime-2024/aime-2024.jsonl
+      rm_type: deepscaler
+      n_samples_per_eval_prompt: 16
+    - name: gpqa
+      path: /root/datasets/gpqa_diamond/gpqa_eval.jsonl
+      rm_type: gpqa
+      n_samples_per_eval_prompt: 2
+    - name: ifbench
+      path: /root/datasets/IFBench/IFBench_eval.jsonl
+      rm_type: ifbench
+      n_samples_per_eval_prompt: 1
+""".strip()
+            eval_args += f"--eval-config {U.save_to_temp_file(eval_config_text, 'yaml')} "
+        else:
+            eval_args += (
+                "--eval-prompt-data aime /root/datasets/aime-2024/aime-2024.jsonl "
+                "--n-samples-per-eval-prompt 16 "
+                "--eval-max-response-len 16384 "
+                "--eval-top-p 0.7 "
+            )
 
     perf_args = "--use-dynamic-batch-size " "--max-tokens-per-gpu 9216 "
 
@@ -85,7 +112,10 @@ def execute():
     )
 
     # TODO improve mem-frac
-    sglang_args = "--rollout-num-gpus-per-engine 1 " "--sglang-mem-fraction-static 0.6 "
+    sglang_args = (
+        "--rollout-num-gpus-per-engine 1 "
+        f"--sglang-mem-fraction-static {os.environ.get('SLIME_SCRIPT_SGLANG_MEM_FRACTION_STATIC' ,'0.6')} "
+    )
 
     fsdp_args = (
         "--train-backend fsdp "
@@ -94,7 +124,7 @@ def execute():
         f"--update-weights-bucket-size {512 * 1024 * 1024} "  # 512MB
     )
 
-    misc_args = "--actor-num-nodes 1 " "--actor-num-gpus-per-node 8 " "--colocate "
+    misc_args = "--actor-num-nodes 1 " "--actor-num-gpus-per-node 8 " "--colocate " "--use-fault-tolerance "
 
     true_on_policy_args = ""
     true_on_policy_envs = {}
@@ -127,6 +157,7 @@ def execute():
         f"{fsdp_args} "
         f"{misc_args} "
         f"{true_on_policy_args} "
+        f"{EXTRA_ARGS} "
     )
 
     U.execute_train(

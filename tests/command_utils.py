@@ -2,8 +2,10 @@ import datetime
 import json
 import os
 import random
+import time
 from pathlib import Path
 from typing import Optional
+
 from slime.utils.misc import exec_command
 
 _ = exec_command
@@ -79,6 +81,16 @@ def execute_train(
                 "no_proxy": f"127.0.0.1,{master_addr}",
                 # This is needed by megatron / torch distributed in multi-node setup
                 "MASTER_ADDR": master_addr,
+                **(
+                    {
+                        "CUDA_ENABLE_COREDUMP_ON_EXCEPTION": "1",
+                        "CUDA_COREDUMP_SHOW_PROGRESS": "1",
+                        "CUDA_COREDUMP_GENERATION_FLAGS": "skip_nonrelocated_elf_images,skip_global_memory,skip_shared_memory,skip_local_memory,skip_constbank_memory",
+                        "CUDA_COREDUMP_FILE": "/tmp/cuda_coredump_%h.%p.%t",
+                    }
+                    if get_bool_env_var("SLIME_SCRIPT_ENABLE_CUDA_CORE_DUMP")
+                    else {}
+                ),
                 **extra_env_vars,
             }
         }
@@ -156,3 +168,10 @@ def get_bool_env_var(name: str, default: str = "false") -> bool:
 
 def get_env_enable_infinite_run():
     return get_bool_env_var("SLIME_TEST_ENABLE_INFINITE_RUN", "false")
+
+
+def save_to_temp_file(text: str, ext: str):
+    path = Path(f"/tmp/slime_temp_file_{time.time()}_{random.randrange(0, 10000000)}.{ext}")
+    path.write_text(text)
+    print(f"Write the following content to {path=}: {text=}")
+    return str(path)
