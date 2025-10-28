@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import dataclasses
 import importlib
 import logging
 import os
@@ -83,41 +82,21 @@ def _ensure_ifbench_dependencies(repo_path: Path) -> None:
         sentinel.write_text("installed\n")
 
 
-def _load_instructions_registry():
+def _load_evaluation_lib():
     repo_path = _ensure_ifbench_repo()
     try:
-        return importlib.import_module("instructions_registry")
+        return importlib.import_module("evaluation_lib")
     except ImportError:
         _ensure_ifbench_dependencies(repo_path)
-        return importlib.import_module("instructions_registry")
+        return importlib.import_module("evaluation_lib")
 
 
-instructions_registry = _load_instructions_registry()
+evaluation_lib = _load_evaluation_lib()
+InputExample = evaluation_lib.InputExample
 
 
 JsonDict = Dict[str, Any]
 KwargsDict = Dict[str, Optional[Union[str, int, float]]]
-
-
-@dataclasses.dataclass
-class InputExample:
-    """Subset of the official InputExample schema needed for evaluation."""
-
-    key: int
-    instruction_id_list: List[str]
-    prompt: str
-    kwargs: List[KwargsDict]
-
-
-@dataclasses.dataclass
-class OutputExample:
-    """Official output structure for readability and parity."""
-
-    instruction_id_list: List[str]
-    prompt: str
-    response: str
-    follow_all_instructions: bool
-    follow_instruction_list: List[bool]
 
 
 def _normalize_instruction_ids(raw_ids: Sequence[Any]) -> List[str]:
@@ -188,47 +167,6 @@ def _build_input_example(metadata: JsonDict) -> Optional[InputExample]:
     )
 
 
-def test_instruction_following_strict(inp: InputExample, response: str) -> OutputExample:
-    """Official strict evaluation copied from evaluation_lib.py."""
-
-    response = response or ""
-    instruction_list = inp.instruction_id_list
-    is_following_list: List[bool] = []
-
-    for index, instruction_id in enumerate(instruction_list):
-        instruction_cls = instructions_registry.INSTRUCTION_DICT.get(instruction_id)
-        if instruction_cls is None:
-            logger.warning("Unknown instruction id '%s'; marking as failed.", instruction_id)
-            is_following_list.append(False)
-            continue
-
-        instruction = instruction_cls(instruction_id)
-        kwargs = inp.kwargs[index] if index < len(inp.kwargs) else {}
-
-        try:
-            instruction.build_description(**kwargs)
-        except Exception as exc:  # pragma: no cover - parity with official logic
-            logger.debug("build_description failed for %s with kwargs %s: %s", instruction_id, kwargs, exc)
-            instruction.build_description()
-
-        args = instruction.get_instruction_args()
-        if args and "prompt" in args:
-            instruction.build_description(prompt=inp.prompt)
-
-        if response.strip() and instruction.check_following(response):
-            is_following_list.append(True)
-        else:
-            is_following_list.append(False)
-
-    return OutputExample(
-        instruction_id_list=inp.instruction_id_list,
-        prompt=inp.prompt,
-        response=response,
-        follow_all_instructions=all(is_following_list),
-        follow_instruction_list=is_following_list,
-    )
-
-
 def compute_ifbench_reward(response: str, label: Any, metadata: Optional[JsonDict] = None) -> float:
     """Score a model response using the official IFBench rules."""
 
@@ -243,5 +181,6 @@ def compute_ifbench_reward(response: str, label: Any, metadata: Optional[JsonDic
     if inp is None:
         return 0.0
 
-    output = test_instruction_following_strict(inp, str(response))
+    prompt_to_response = {inp.prompt: str(response or "")}
+    output = evaluation_lib.test_instruction_following_strict(inp, prompt_to_response)
     return 1.0 if output.follow_all_instructions else 0.0
