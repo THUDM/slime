@@ -1289,7 +1289,7 @@ def slime_validate_args(args):
     del args.offload
 
     if args.debug_rollout_only:
-        if args.colocate and args.rollout_num_gpus is None:
+        if args.colocate and (not args.rollout_num_gpus):
             args.rollout_num_gpus = args.actor_num_gpus_per_node * args.actor_num_nodes
         else:
             args.actor_num_gpus_per_node = min(8, args.rollout_num_gpus)
