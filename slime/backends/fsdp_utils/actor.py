@@ -420,165 +420,13 @@ class FSDPTrainRayActor(TrainRayActor):
         reported_accum: dict[str, list[torch.Tensor]] = {}
         self.optimizer.zero_grad(set_to_none=True)
         for mbs_id, packed_batch in enumerate(packed_batches):
-            with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = self.model(
-                    input_ids=packed_batch["tokens"].unsqueeze(0),
-                    attention_mask=None,
-                    position_ids=packed_batch["position_ids"].unsqueeze(0),
-                ).logits
-
-            # Handle packed sequences
-            log_probs = gather_log_probs_packed(
-                logits,
-                packed_batch["tokens"],
-                allow_compile=not self.args.true_on_policy_mode,
-                cu_seqlens=packed_batch["cu_seqlens"],
-                temperature=self.args.rollout_temperature,
+            self._train_step(
+                packed_batch=packed_batch,
+                world_size=world_size,
+                reported_accum=reported_accum,
+                mbs_id=mbs_id,
+                grad_accum=grad_accum,
             )
-            packed_batch["cur_log_probs"] = log_probs
-            unpacked_batches = unpack_sequences(packed_batch)
-
-            old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
-            log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
-            advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
-            loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
-            response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
-
-            advantages = advantages.to(device=log_probs.device)
-            ppo_kl = old_log_probs.to(device=log_probs.device) - log_probs
-
-            if self.args.advantage_estimator == "gspo":
-                log_ratio_splits = torch.split(ppo_kl, response_lengths, dim=0)
-
-                seq_kls = [
-                    ((log_ratio_i * mask_i).sum() / mask_i.sum().clamp_min(1))
-                    for log_ratio_i, mask_i in zip(log_ratio_splits, loss_masks)
-                ]
-
-                ppo_kl_list = []
-                for seq_kl, length in zip(seq_kls, response_lengths):
-                    ppo_kl_list.append(seq_kl.expand(length))
-
-                ppo_kl = torch.cat(ppo_kl_list)
-
-            pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, self.args.eps_clip, self.args.eps_clip_high)
-
-            rollout_log_probs = torch.cat([batch["rollout_log_probs"] for batch in unpacked_batches], dim=0)
-            rollout_log_probs = rollout_log_probs.to(device=log_probs.device)
-
-            # Apply TIS before sample mean calculation
-            if self.args.use_tis:
-                # Initialize TIS variables
-                tis = None
-                tis_clipfrac = None
-                ois = None
-                # Apply TIS off-policy correction using importance sampling
-                assert all(
-                    "rollout_log_probs" in batch
-                    and isinstance(batch["rollout_log_probs"], torch.Tensor)
-                    and batch["rollout_log_probs"].numel() > 0
-                    for batch in unpacked_batches
-                ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS"
-
-                tis = torch.exp(old_log_probs - rollout_log_probs)
-                ois = (-ppo_kl).exp()
-                tis_clip = torch.clamp(
-                    tis, min=getattr(self.args, "tis_clip_low", 0.1), max=getattr(self.args, "tis_clip", 2.0)
-                )
-                tis_clipfrac = tis_clip != tis
-
-                pg_loss = pg_loss * tis_clip
-
-            pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
-            pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
-            ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
-
-            train_rollout_logprob_abs_diff = (old_log_probs - rollout_log_probs).abs()
-            train_rollout_logprob_abs_diff = sum_of_sample_mean(
-                train_rollout_logprob_abs_diff, response_lengths, loss_masks
-            ).detach()
-
-            loss = pg_loss
-
-            if self.args.entropy_coef != 0:
-                raise NotImplementedError("implement entropy bonus")
-
-            if self.args.use_kl_loss:
-                ref_log_probs = torch.cat([batch["ref_log_probs"] for batch in unpacked_batches], dim=0)
-                kl = compute_approx_kl(
-                    log_probs,
-                    ref_log_probs,
-                    kl_loss_type=self.args.kl_loss_type,
-                )
-                kl_loss = sum_of_sample_mean(kl, response_lengths, loss_masks)
-
-                loss = loss + self.args.kl_loss_coef * kl_loss
-
-            # TODO: report entropy
-
-            reported = {
-                "loss": loss.detach(),
-                "pg_loss": pg_loss.detach(),
-                "pg_clipfrac": pg_clipfrac.detach(),
-                "ppo_kl": ppo_kl.detach(),
-                "train_rollout_logprob_abs_diff": train_rollout_logprob_abs_diff,
-            }
-
-            if self.args.use_kl_loss:
-                reported["kl_loss"] = kl_loss.detach()
-
-            if self.args.use_tis and tis is not None:
-                reported["tis"] = sum_of_sample_mean(tis, response_lengths, loss_masks).detach()
-                reported["ois"] = sum_of_sample_mean(ois, response_lengths, loss_masks).detach()
-                reported["tis_clipfrac"] = sum_of_sample_mean(
-                    tis_clipfrac.float(), response_lengths, loss_masks
-                ).detach()
-
-            # Scale loss for gradient accumulation
-            loss = loss * dist.get_world_size() / self.args.global_batch_size
-            loss.backward()
-
-            # Accumulate reported metrics (store tensors for later mean)
-            for k, v in reported.items():
-                reported_accum.setdefault(k, []).append(v)
-
-            if (mbs_id + 1) in grad_accum:
-                # TODO: check if the grad norm is global grad norm.
-                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
-                # the grad norm used to be of DTensor
-                grad_norm = float(grad_norm)
-
-                self.optimizer.step()
-                self.optimizer.zero_grad(set_to_none=True)
-                # Aggregate logs
-                aggregated = {k: torch.stack(v).sum().item() for k, v in reported_accum.items()}
-                # TODO: change this, this is slow.
-                reduced_aggregated = [None] * world_size
-                dist.all_gather_object(reduced_aggregated, aggregated)
-                aggregated = {}
-                for k in reported_accum.keys():
-                    aggregated[k] = sum([r[k] for r in reduced_aggregated]) / (self.args.global_batch_size)
-                reported_accum = {}
-                if dist.get_rank() == 0:
-                    log_dict = {
-                        f"train/{k}": (val.item() if torch.is_tensor(val) else val) for k, val in aggregated.items()
-                    }
-                    log_dict["train/grad_norm"] = grad_norm
-
-                    for gid, group in enumerate(self.optimizer.param_groups):
-                        if "lr" in group:
-                            log_dict[f"train/lr-pg_{gid}"] = group["lr"]
-
-                    kl_info = ""
-                    if self.args.use_kl_loss and "kl_loss" in aggregated:
-                        kl_info = f", kl_loss: {aggregated['kl_loss']:.4f}, kl_penalty: {aggregated['kl_loss'] * self.args.kl_loss_coef:.4f}"
-                        print(kl_info)
-                    print(f"step {self.global_step}: {log_dict}")
-
-                    if self.args.use_wandb and wandb is not None:
-                        log_dict["train/step"] = self.global_step
-                        wandb.log(log_dict)
-                self.global_step += 1
 
         self.update_cpu_params_dict(self.weights["actor"])
 
@@ -601,6 +449,165 @@ class FSDPTrainRayActor(TrainRayActor):
 
         Timer().start("train_wait")
         return
+
+    def _train_step(self, packed_batch, world_size, reported_accum, mbs_id, grad_accum):
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            logits = self.model(
+                input_ids=packed_batch["tokens"].unsqueeze(0),
+                attention_mask=None,
+                position_ids=packed_batch["position_ids"].unsqueeze(0),
+            ).logits
+
+        # Handle packed sequences
+        log_probs = gather_log_probs_packed(
+            logits,
+            packed_batch["tokens"],
+            allow_compile=not self.args.true_on_policy_mode,
+            cu_seqlens=packed_batch["cu_seqlens"],
+            temperature=self.args.rollout_temperature,
+        )
+        packed_batch["cur_log_probs"] = log_probs
+        unpacked_batches = unpack_sequences(packed_batch)
+
+        old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
+        log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
+        advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
+        loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
+        response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
+
+        advantages = advantages.to(device=log_probs.device)
+        ppo_kl = old_log_probs.to(device=log_probs.device) - log_probs
+
+        if self.args.advantage_estimator == "gspo":
+            log_ratio_splits = torch.split(ppo_kl, response_lengths, dim=0)
+
+            seq_kls = [
+                ((log_ratio_i * mask_i).sum() / mask_i.sum().clamp_min(1))
+                for log_ratio_i, mask_i in zip(log_ratio_splits, loss_masks)
+            ]
+
+            ppo_kl_list = []
+            for seq_kl, length in zip(seq_kls, response_lengths):
+                ppo_kl_list.append(seq_kl.expand(length))
+
+            ppo_kl = torch.cat(ppo_kl_list)
+
+        pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, self.args.eps_clip, self.args.eps_clip_high)
+
+        rollout_log_probs = torch.cat([batch["rollout_log_probs"] for batch in unpacked_batches], dim=0)
+        rollout_log_probs = rollout_log_probs.to(device=log_probs.device)
+
+        # Apply TIS before sample mean calculation
+        if self.args.use_tis:
+            # Initialize TIS variables
+            tis = None
+            tis_clipfrac = None
+            ois = None
+            # Apply TIS off-policy correction using importance sampling
+            assert all(
+                "rollout_log_probs" in batch
+                and isinstance(batch["rollout_log_probs"], torch.Tensor)
+                and batch["rollout_log_probs"].numel() > 0
+                for batch in unpacked_batches
+            ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS"
+
+            tis = torch.exp(old_log_probs - rollout_log_probs)
+            ois = (-ppo_kl).exp()
+            tis_clip = torch.clamp(
+                tis, min=getattr(self.args, "tis_clip_low", 0.1), max=getattr(self.args, "tis_clip", 2.0)
+            )
+            tis_clipfrac = tis_clip != tis
+
+            pg_loss = pg_loss * tis_clip
+
+        pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
+        pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
+        ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
+
+        train_rollout_logprob_abs_diff = (old_log_probs - rollout_log_probs).abs()
+        train_rollout_logprob_abs_diff = sum_of_sample_mean(
+            train_rollout_logprob_abs_diff, response_lengths, loss_masks
+        ).detach()
+
+        loss = pg_loss
+
+        if self.args.entropy_coef != 0:
+            raise NotImplementedError("implement entropy bonus")
+
+        if self.args.use_kl_loss:
+            ref_log_probs = torch.cat([batch["ref_log_probs"] for batch in unpacked_batches], dim=0)
+            kl = compute_approx_kl(
+                log_probs,
+                ref_log_probs,
+                kl_loss_type=self.args.kl_loss_type,
+            )
+            kl_loss = sum_of_sample_mean(kl, response_lengths, loss_masks)
+
+            loss = loss + self.args.kl_loss_coef * kl_loss
+
+        # TODO: report entropy
+
+        reported = {
+            "loss": loss.detach(),
+            "pg_loss": pg_loss.detach(),
+            "pg_clipfrac": pg_clipfrac.detach(),
+            "ppo_kl": ppo_kl.detach(),
+            "train_rollout_logprob_abs_diff": train_rollout_logprob_abs_diff,
+        }
+
+        if self.args.use_kl_loss:
+            reported["kl_loss"] = kl_loss.detach()
+
+        if self.args.use_tis and tis is not None:
+            reported["tis"] = sum_of_sample_mean(tis, response_lengths, loss_masks).detach()
+            reported["ois"] = sum_of_sample_mean(ois, response_lengths, loss_masks).detach()
+            reported["tis_clipfrac"] = sum_of_sample_mean(tis_clipfrac.float(), response_lengths, loss_masks).detach()
+
+        # Scale loss for gradient accumulation
+        loss = loss * dist.get_world_size() / self.args.global_batch_size
+        loss.backward()
+
+        # Accumulate reported metrics (store tensors for later mean)
+        for k, v in reported.items():
+            reported_accum.setdefault(k, []).append(v)
+
+        if (mbs_id + 1) in grad_accum:
+            # TODO: check if the grad norm is global grad norm.
+            grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
+            # the grad norm used to be of DTensor
+            grad_norm = float(grad_norm)
+
+            self.optimizer.step()
+            self.optimizer.zero_grad(set_to_none=True)
+            # Aggregate logs
+            aggregated = {k: torch.stack(v).sum().item() for k, v in reported_accum.items()}
+            # TODO: change this, this is slow.
+            reduced_aggregated = [None] * world_size
+            dist.all_gather_object(reduced_aggregated, aggregated)
+            aggregated = {}
+            for k in reported_accum.keys():
+                aggregated[k] = sum([r[k] for r in reduced_aggregated]) / (self.args.global_batch_size)
+            reported_accum.clear()
+            if dist.get_rank() == 0:
+                log_dict = {
+                    f"train/{k}": (val.item() if torch.is_tensor(val) else val) for k, val in aggregated.items()
+                }
+                log_dict["train/grad_norm"] = grad_norm
+
+                for gid, group in enumerate(self.optimizer.param_groups):
+                    if "lr" in group:
+                        log_dict[f"train/lr-pg_{gid}"] = group["lr"]
+
+                kl_info = ""
+                if self.args.use_kl_loss and "kl_loss" in aggregated:
+                    kl_info = f", kl_loss: {aggregated['kl_loss']:.4f}, kl_penalty: {aggregated['kl_loss'] * self.args.kl_loss_coef:.4f}"
+                    print(kl_info)
+                print(f"step {self.global_step}: {log_dict}")
+
+                if self.args.use_wandb and wandb is not None:
+                    log_dict["train/step"] = self.global_step
+                    wandb.log(log_dict)
+            self.global_step += 1
 
     def update_weights(self) -> None:  # type: ignore[override]
         """Synchronize actor weights to rollout engines.
