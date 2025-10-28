@@ -6,26 +6,17 @@ from itertools import accumulate
 import ray
 import torch
 import torch.distributed as dist
+import wandb
 from packaging import version
 from torch.distributed.tensor import DTensor
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
-from slime.utils.memory_utils import clear_memory, print_memory
-
-# Import FSDP v2 components based on PyTorch version
-if version.parse(torch.__version__) >= version.parse("2.6"):
-    from torch.distributed.fsdp import fully_shard as FSDP
-elif version.parse(torch.__version__) >= version.parse("2.4"):
-    from torch.distributed._composable.fsdp import fully_shard as FSDP
-else:
-    raise ImportError("FSDP v2 not available")
-
-import wandb
 
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import profile_utils
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, timer
@@ -101,7 +92,7 @@ class FSDPTrainRayActor(TrainRayActor):
             model.gradient_checkpointing_enable()
 
         # Create FSDP v2 model using FSDP
-        self.model = FSDP(model)
+        self.model = apply_fsdp2(model)
 
         if args.optimizer == "deepspeed_cpu_adam":
             optimizer_config = {
@@ -787,3 +778,31 @@ def move_torch_optimizer(optimizer, device):
                     state[key] = value.to(device, non_blocking=True)
 
     torch.cuda.synchronize()
+
+
+def apply_fsdp2(model):
+    """ref: https://github.com/volcengine/verl/blob/main/verl/utils/fsdp_utils.py"""
+
+    # Import FSDP v2 components based on PyTorch version
+    if version.parse(torch.__version__) >= version.parse("2.6"):
+        from torch.distributed.fsdp import fully_shard
+    elif version.parse(torch.__version__) >= version.parse("2.4"):
+        from torch.distributed._composable.fsdp import fully_shard
+    else:
+        raise ImportError("FSDP v2 not available")
+
+    layer_cls_to_wrap = model._no_split_modules
+    assert len(layer_cls_to_wrap) > 0 and layer_cls_to_wrap[0] is not None
+
+    modules = [
+        module
+        for name, module in model.named_modules()
+        if module.__class__.__name__ in layer_cls_to_wrap
+        or (isinstance(module, torch.nn.Embedding) and not model.config.tie_word_embeddings)
+    ]
+
+    for idx, module in enumerate(modules):
+        fully_shard(module)
+    fully_shard(model)
+
+    return model
