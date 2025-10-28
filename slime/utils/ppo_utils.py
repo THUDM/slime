@@ -15,32 +15,27 @@ def compute_approx_kl(
     """
     Compute the approximate KL divergence between two distributions.
     Schulman blog: http://joschu.net/blog/kl-approx.html
-
+    
     Args:
         log_probs: Log probabilities of the new distribution.
         log_probs_base: Log probabilities of the base distribution.
-        action_mask: Mask for actions.
+        kl_loss_type: Type of KL approximation to use.
     """
-
     log_ratio = log_probs.float() - log_probs_base.float()
-
+    
     if kl_loss_type == "k1":
         return log_ratio
     elif kl_loss_type == "k2":
-        log_ratio = log_probs.float() - log_probs_base.float()
-        log_ratio = log_ratio**2 / 2.0
-        return log_ratio
+        return log_ratio**2 / 2.0
     elif kl_loss_type == "k3":
-        # The non negative kl approximation in
+        # The non-negative KL approximation in
         # http://joschu.net/blog/kl-approx.html
-        # Besides non negative, it is also unbiased and have lower variance.
-        log_ratio = -log_ratio
-        log_ratio = log_ratio.exp() - 1 - log_ratio
-        return log_ratio
+        # Besides being non-negative, it is also unbiased and has lower variance.
+        approx_kl = (-log_ratio).exp() - 1 - (-log_ratio)
+        return approx_kl
     elif kl_loss_type == "low_var_kl":
-        log_ratio = -log_ratio
-        log_ratio = log_ratio.exp() - 1 - log_ratio
-        return torch.clamp(log_ratio, min=-10, max=10)
+        approx_kl = (-log_ratio).exp() - 1 - (-log_ratio)
+        return torch.clamp(approx_kl, min=-10, max=10)
     else:
         raise ValueError(f"Unknown kl_loss_type: {kl_loss_type}")
 
