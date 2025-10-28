@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 _WORKSPACE_ROOT = Path(__file__).resolve().parents[3]
 _WORKSPACE_PARENT = _WORKSPACE_ROOT.parent
-_LOCAL_IFBENCH_REQUIREMENTS = _WORKSPACE_ROOT / "examples" / "eval_multi_task" / "requirements.txt"
+_LOCAL_IFBENCH_REQUIREMENTS = _WORKSPACE_ROOT / "examples" / "eval_multi_task" / "requirements_ifbench.txt"
 
 
 def _ensure_ifbench_repo() -> Path:
