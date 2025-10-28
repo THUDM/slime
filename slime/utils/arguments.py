@@ -124,6 +124,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=False,
                 help="Whether to enable true-on-policy mode.",
             )
+            parser.add_argument(
+                "--train-env-vars",
+                type=json.loads,
+                default="{}",
+                help="Extra environment variables for training process, e.g. PyTorch memory management ones.",
+            )
 
             return parser
 
