@@ -17,7 +17,6 @@ SEARCH_R1_CONFIGS = {
     "topk": 3,
     # Local search engine configuration
     "search_url": "http://127.0.0.1:8000/retrieve",  # URL of your local retrieval server
-    "snippet_only": False,  # Not used for local search, kept for compatibility
     "proxy": None,  # Typically not needed for local server
     "search_concurrency": 256,
     # rm
@@ -54,7 +53,6 @@ async def search(query: str) -> str:
         SEARCH_R1_CONFIGS["search_url"],  # search_url instead of api_key
         query,
         SEARCH_R1_CONFIGS["topk"],
-        snippet_only=SEARCH_R1_CONFIGS["snippet_only"],
         proxy=SEARCH_R1_CONFIGS["proxy"],
     )
     return _passages2string(result)

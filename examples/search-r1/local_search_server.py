@@ -31,7 +31,6 @@ async def local_search(
     top_k: int = 5,
     timeout: int = 60,
     proxy: Optional[str] = None,
-    snippet_only: bool = False
 ) -> List[Dict]:
     """
     Call local search engine server and format results to match google_search_server.py output.
@@ -76,42 +75,24 @@ async def local_search(
         return []
 
     # Parse retrieval results
-    # Format from retrieval_server.py: {"result": [[{"id": "...", "contents": "..."}]]}
+    # Format from retrieval_server.py: {"result": [[{"document": {"id": "...", "contents": "..."}}]]}
     retrieval_results = result.get("result", [[]])[0]
-
     # Format to match google_search_server.py output
     # Google format: [{"document": {"contents": '"<title>"\n<context>'}}]
     contexts = []
 
     for item in retrieval_results:
         # Extract contents from retrieval result
-        # retrieval_server returns: {"id": "...", "contents": '"Title"\nText...'}
+        # retrieval_server returns: {"document": {"id": "...", "contents": '"Title"\nText...'}}
         if isinstance(item, dict):
-            content = item.get("contents", "")
+            # Access the document dict first, then get contents
+            content = item.get('contents', "")
 
             if content:
-                # Parse title and text
-                # The contents from retrieval_server.py are formatted as: '"Title"\nText content...'
-                lines = content.split("\n", 1)
-                title = lines[0].strip() if lines else "No title."
-                text = lines[1].strip() if len(lines) > 1 else ""
-
-                # Ensure title is quoted (remove existing quotes first to avoid double-quoting)
-                title = title.strip('"')
-                if title:
-                    title = f'"{title}"'
-                else:
-                    title = '"No title."'
-
-                # Ensure we have some content
-                if not text:
-                    text = "No snippet available."
-
-                # Combine title and text
-                formatted_content = f"{title}\n{text}"
-
+                # The contents are already in the correct format: '"Title"\nText content...'
+                # Just pass through as-is to match google_search format
                 contexts.append({
-                    "document": {"contents": formatted_content}
+                    "document": {"contents": content}
                 })
             else:
                 # Empty content case - provide default values
