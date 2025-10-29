@@ -14,12 +14,13 @@ from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTo
 
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import profile_utils
+from slime.utils.context_utils import with_defer
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.ray_utils import Box
-from slime.utils.timer import Timer, timer
+from slime.utils.timer import Timer, inverse_timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
 from .data_packing import pack_sequences, unpack_sequences
@@ -40,6 +41,7 @@ class FSDPTrainRayActor(TrainRayActor):
       * For small models this is fine; for larger models consider sharded state_dict type.
     """
 
+    @with_defer(lambda: Timer().start("train_wait"))
     def init(self, args: Namespace, role: str, wandb_run_id: str, with_ref: bool = False) -> int:  # type: ignore[override]
         super().init(args, role, wandb_run_id, with_ref)
 
@@ -142,11 +144,11 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.offload_train:
             self.sleep()
 
-        Timer().start("train_wait")
         self.global_step = 0
         self.micro_step = 0
         return 0
 
+    @timer
     def sleep(self) -> None:
         """Pause CUDA memory for all tracked tensors."""
         if not self.args.offload_train:
@@ -175,6 +177,7 @@ class FSDPTrainRayActor(TrainRayActor):
         dist.barrier(group=get_gloo_group())
         print_memory("after offload model")
 
+    @timer
     def wake_up(self) -> None:
         """Resume CUDA memory for all tracked tensors."""
         if not self.args.offload_train:
@@ -349,11 +352,20 @@ class FSDPTrainRayActor(TrainRayActor):
                 `rollout_log_probs`, etc.). It will be fetched and partitioned
                 by `process_rollout_data` based on data-parallel rank/size.
         """
-        Timer().end("train_wait")
-
         if self.args.offload_train:
             self.wake_up()
 
+        with inverse_timer("train_wait"), timer("train"):
+            self._train_core(rollout_id=rollout_id, rollout_data_ref=rollout_data_ref)
+
+        if (
+            self.args.record_memory_history
+            and ((s := self.args.memory_snapshot_num_steps) is not None)
+            and (rollout_id == s - 1)
+        ):
+            profile_utils.dump_snapshot_and_stop(profile_utils.get_memory_snapshot_full_path(self.args))
+
+    def _train_core(self, rollout_id: int, rollout_data_ref: Box) -> None:
         world_size = dist.get_world_size()
         rank = dist.get_rank()
 
@@ -408,16 +420,17 @@ class FSDPTrainRayActor(TrainRayActor):
                 )
                 wandb.log(log_dict)
 
-        reported_accum: dict[str, list[torch.Tensor]] = {}
-        self.optimizer.zero_grad(set_to_none=True)
-        for mbs_id, packed_batch in enumerate(packed_batches):
-            self._train_step(
-                packed_batch=packed_batch,
-                world_size=world_size,
-                reported_accum=reported_accum,
-                mbs_id=mbs_id,
-                grad_accum=grad_accum,
-            )
+        with timer("actor_train"):
+            reported_accum: dict[str, list[torch.Tensor]] = {}
+            self.optimizer.zero_grad(set_to_none=True)
+            for mbs_id, packed_batch in enumerate(packed_batches):
+                self._train_step(
+                    packed_batch=packed_batch,
+                    world_size=world_size,
+                    reported_accum=reported_accum,
+                    mbs_id=mbs_id,
+                    grad_accum=grad_accum,
+                )
 
         self.update_cpu_params_dict(self.weights["actor"])
 
@@ -430,16 +443,6 @@ class FSDPTrainRayActor(TrainRayActor):
             if dist.get_rank() == 0:
                 print(f"Updating ref model at rollout_id {rollout_id}")
             self.update_cpu_params_dict(self.weights["ref"])
-
-        if (
-            self.args.record_memory_history
-            and ((s := self.args.memory_snapshot_num_steps) is not None)
-            and (rollout_id == s - 1)
-        ):
-            profile_utils.dump_snapshot_and_stop(profile_utils.get_memory_snapshot_full_path(self.args))
-
-        Timer().start("train_wait")
-        return
 
     def _train_step(self, packed_batch, world_size, reported_accum, mbs_id, grad_accum):
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
@@ -600,6 +603,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     wandb.log(log_dict)
             self.global_step += 1
 
+    @timer
     def update_weights(self) -> None:  # type: ignore[override]
         """Synchronize actor weights to rollout engines.
 
