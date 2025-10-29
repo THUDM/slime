@@ -78,14 +78,16 @@ def convert_qwen3_next_to_hf(args, name, param):
         elif rest == "self_attention.linear_qgkv.weight":
 
             param = param.view(args.num_query_groups, -1, head_dim, args.hidden_size)
-            q_param, g_param, k_param, v_param = torch.split(
-                param, split_size_or_sections=[value_num_per_group, value_num_per_group, 1, 1], dim=1
+            q_param, k_param, v_param = torch.split(
+                param, split_size_or_sections=[2 * value_num_per_group, 1, 1], dim=1
             )
-            q_param = q_param.reshape(-1, args.hidden_size)
-            g_param = g_param.reshape(-1, args.hidden_size)
+            q_param = (
+                q_param.reshape(args.num_query_groups, 2, value_num_per_group, head_dim, args.hidden_size)
+                .transpose(1, 2)
+                .reshape(-1, args.hidden_size)
+            )
             k_param = k_param.reshape(-1, args.hidden_size)
             v_param = v_param.reshape(-1, args.hidden_size)
-            q_param = torch.cat([q_param, g_param], dim=0)
             return [
                 (f"model.layers.{layer_idx}.self_attn.q_proj.weight", q_param),
                 (f"model.layers.{layer_idx}.self_attn.k_proj.weight", k_param),

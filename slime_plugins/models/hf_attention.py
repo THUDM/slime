@@ -106,12 +106,13 @@ class HuggingfaceAttention(MegatronModule, ABC):
                 seqlen = cu_seqlens[i + 1] - cu_seqlens[i]
                 chunk_size = seqlen // 2
 
+        output = output.permute(1, 0, 2)  # [seq_len, bsz, hidden_dim]
+
         if self.args.sequence_parallel:
             output = tensor_parallel.scatter_to_sequence_parallel_region(
-                hidden_states, group=mpu.get_tensor_model_parallel_group()
+                output, group=mpu.get_tensor_model_parallel_group()
             )
 
-        output = output.permute(1, 0, 2)  # [seq_len, bsz, hidden_dim]
         return output, bias
 
     @abstractmethod

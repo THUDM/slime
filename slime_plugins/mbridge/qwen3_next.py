@@ -47,31 +47,30 @@ class Qwen3NextBridge(Qwen2MoEBridge):
             num_key_value_heads = self.hf_config.num_key_value_heads
             hidden_dim = self.hf_config.hidden_size
             num_attention_heads = self.hf_config.num_attention_heads
+            num_querys_per_group = num_attention_heads // self.hf_config.num_key_value_heads
             head_dim = getattr(self.hf_config, "head_dim", hidden_dim // num_attention_heads)
             group_dim = head_dim * num_attention_heads // num_key_value_heads
             q, k, v = hf_weights
-            q, g = q.chunk(2, dim=0)
             # q k v might be tp split
-            real_num_key_value_heads = q.shape[0] // group_dim
-            q = q.view(
-                [
-                    real_num_key_value_heads,
-                    group_dim,
-                    -1,
-                ]
-            )
-            g = g.view(
-                [
-                    real_num_key_value_heads,
-                    group_dim,
-                    -1,
-                ]
+            real_num_key_value_heads = q.shape[0] // (2 * group_dim)
+            q = (
+                q.view(
+                    [
+                        real_num_key_value_heads,
+                        num_querys_per_group,
+                        2,
+                        head_dim,
+                        -1,
+                    ]
+                )
+                .transpose(1, 2)
+                .flatten(1, 3)
             )
             k = k.view([real_num_key_value_heads, head_dim, -1])
             v = v.view([real_num_key_value_heads, head_dim, -1])
             out_shape = [-1, hidden_dim] if ".bias" not in mcore_weights_name else [-1]
 
-            qgkv = torch.cat([q, g, k, v], dim=1).view(*out_shape).contiguous()
+            qgkv = torch.cat([q, k, v], dim=1).view(*out_shape).contiguous()
             return qgkv
 
         return super()._weight_to_mcore_format(mcore_weights_name, hf_weights)
