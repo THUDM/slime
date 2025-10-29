@@ -97,6 +97,8 @@ class RolloutManager:
             if monitor_started:
                 self._health_monitor.stop()
                 self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
+            else:
+                self.num_new_engines = 0
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
