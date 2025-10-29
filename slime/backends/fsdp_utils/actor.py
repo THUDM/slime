@@ -6,6 +6,7 @@ from itertools import accumulate
 import ray
 import torch
 import torch.distributed as dist
+import transformers
 from packaging import version
 from torch.distributed.tensor import DTensor
 from torch_memory_saver import torch_memory_saver
@@ -90,7 +91,23 @@ class FSDPTrainRayActor(TrainRayActor):
 
         # Load model
         with torch.autocast(device_type=f"cuda:{torch.cuda.current_device()}"):
-            model = AutoModelForCausalLM.from_pretrained(
+            # Use VLM-specific model class if multimodal_keys is set
+            if self.args.multimodal_keys:
+                # Version-aware model class selection
+                if version.parse(transformers.__version__) >= version.parse("4.54.0"):
+                    # transformers >= 4.54.0 uses AutoModelForImageTextToText
+                    from transformers import AutoModelForImageTextToText
+
+                    auto_model_cls = AutoModelForImageTextToText
+                else:
+                    # transformers < 4.54.0 uses AutoModelForVision2Seq
+                    from transformers import AutoModelForVision2Seq
+
+                    auto_model_cls = AutoModelForVision2Seq
+            else:
+                auto_model_cls = AutoModelForCausalLM
+
+            model = auto_model_cls.from_pretrained(
                 self.args.hf_checkpoint,
                 trust_remote_code=True,
                 attn_implementation=self.args.attn_implementation,
@@ -339,6 +356,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     rollout_log_probs=(
                         rollout_data["rollout_log_probs"][start:end] if "rollout_log_probs" in rollout_data else None
                     ),
+                    pixel_values=(rollout_data["pixel_values"][start:end] if "pixel_values" in rollout_data else None),
                     num_packs=mbs_size,
                 )
             )
@@ -421,11 +439,14 @@ class FSDPTrainRayActor(TrainRayActor):
         self.optimizer.zero_grad(set_to_none=True)
         for mbs_id, packed_batch in enumerate(packed_batches):
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                logits = self.model(
-                    input_ids=packed_batch["tokens"].unsqueeze(0),
-                    attention_mask=None,
-                    position_ids=packed_batch["position_ids"].unsqueeze(0),
-                ).logits
+                model_kwargs = {
+                    "input_ids": packed_batch["tokens"].unsqueeze(0),
+                    "attention_mask": None,
+                    "position_ids": packed_batch["position_ids"].unsqueeze(0),
+                }
+                if "pixel_values" in packed_batch:
+                    model_kwargs["pixel_values"] = packed_batch["pixel_values"]
+                logits = self.model(**model_kwargs).logits
 
             # Handle packed sequences
             log_probs = gather_log_probs_packed(

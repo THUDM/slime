@@ -8,7 +8,7 @@ from typing import Any, Callable, Optional, Union
 
 from PIL import Image
 from tqdm import tqdm
-from transformers import AutoTokenizer
+from transformers import AutoProcessor, AutoTokenizer
 
 from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from slime.rollout.filter_hub.base_types import DynamicFilterOutput
@@ -44,6 +44,13 @@ class GenerateState(metaclass=SingletonMeta):
         # persistant state for the generation process
         self.args = args
         self.tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+
+        # Load processor for VLM if multimodal_keys is set
+        if getattr(args, "multimodal_keys", None):
+            self.processor = AutoProcessor.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        else:
+            self.processor = None
+
         self.semaphore = asyncio.Semaphore(
             args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
         )
@@ -97,6 +104,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
     # Process prompt to create text and image payload
     image_data = []
+    images_for_training = []
     if isinstance(sample.prompt, str):
         text_prompt = sample.prompt
     else:  # Multimodal prompt (list of dicts)
@@ -111,6 +119,9 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
                 try:
                     img_b64 = await asyncio.to_thread(_load_and_encode_image, part["path"])
                     image_data.append(img_b64)
+                    # Also load PIL image for training
+                    img_pil = await asyncio.to_thread(lambda: Image.open(part["path"]).convert("RGB"))
+                    images_for_training.append(img_pil)
                 except Exception as e:
                     print(f"Error processing image {part['path']}: {e}")
                     sample.status = Sample.Status.ABORTED
@@ -144,6 +155,11 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         payload["input_ids"] = prompt_token_ids
         if not sample.tokens:  # Initialize sample.tokens for the first turn
             sample.tokens = prompt_token_ids
+
+            # Process images for training (like tokenization for images)
+            if images_for_training and state.processor is not None:
+                processed = state.processor(images=images_for_training, return_tensors="pt")
+                sample.pixel_values = processed["pixel_values"]
 
     output = await post(url, payload)
 
