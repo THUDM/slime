@@ -884,6 +884,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--load-debug-rollout-data-subsample",
+                type=float,
+                default=None,
+                help="Subsample a portion of the debug rollout data for faster debugging.",
+            )
+            parser.add_argument(
                 "--debug-rollout-only",
                 action="store_true",
                 default=False,

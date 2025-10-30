@@ -131,6 +131,13 @@ class RolloutManager:
                 open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
+            if (ratio := self.args.load_debug_rollout_data_subsample) is not None:
+                original_num_rows = len(data)
+                rough_subsample_num_rows = int(original_num_rows * ratio)
+                data = data[: rough_subsample_num_rows // 2] + data[-rough_subsample_num_rows // 2 :]
+                print(
+                    f"Subsample loaded debug rollout data using {ratio=} and change num rows {original_num_rows} -> {len(data)}"
+                )
             metrics = None
         else:
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
