@@ -156,7 +156,6 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.offload_train:
             self.sleep()
 
-        Timer().start("train_wait")
         return int(getattr(self.args, "start_rollout_id", 0))
 
     @timer
