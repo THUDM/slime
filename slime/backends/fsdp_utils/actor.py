@@ -22,6 +22,7 @@ from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
+from . import checkpoint
 from .data_packing import pack_sequences, unpack_sequences
 from .fsdp_cpu_adam_wrapper import FSDPCPUAdamWrapper
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
@@ -67,6 +68,9 @@ class FSDPTrainRayActor(TrainRayActor):
         self.args = args
         torch.manual_seed(args.seed)
 
+        if getattr(self.args, "start_rollout_id", None) is None:
+            self.args.start_rollout_id = 0
+
         if args.record_memory_history:
             profile_utils.attach_oom_dump_memory_history(profile_utils.get_memory_snapshot_full_path(args))
 
@@ -90,6 +94,11 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if args.gradient_checkpointing:
             model.gradient_checkpointing_enable()
+
+        checkpoint_payload = checkpoint.load(self)
+        if checkpoint_payload is not None and checkpoint_payload.get("model") is not None:
+            model.load_state_dict(checkpoint_payload["model"], strict=True)
+            checkpoint_payload["model"] = None
 
         # Create FSDP v2 model using FSDP
         self.model = apply_fsdp2(model)
@@ -120,8 +129,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam', 'deepspeed_cpu_adam'"
             )
 
-        # TODO: load
-
+        self.global_step = 0
+        self.micro_step = 0
+        self._latest_checkpoint_iteration: int | None = None
         self.weights = {"actor": {}}
 
         self.ref_model = None
@@ -136,6 +146,8 @@ class FSDPTrainRayActor(TrainRayActor):
             else UpdateWeightFromDistributed(self.args, self.model, self.weights)
         )
 
+        checkpoint.finalize_load(self, checkpoint_payload)
+
         # Initialize data packing parameters
         self.max_tokens_per_gpu = args.max_tokens_per_gpu  # From main arguments
 
@@ -143,9 +155,7 @@ class FSDPTrainRayActor(TrainRayActor):
             self.sleep()
 
         Timer().start("train_wait")
-        self.global_step = 0
-        self.micro_step = 0
-        return 0
+        return int(getattr(self.args, "start_rollout_id", 0))
 
     def sleep(self) -> None:
         """Pause CUDA memory for all tracked tensors."""
@@ -204,16 +214,11 @@ class FSDPTrainRayActor(TrainRayActor):
         print_memory("after wake_up model")
 
     def save_model(self, iteration: int) -> None:
-        """Save model state and optimizer state for the given iteration.
-
-        Parameters:
-            iteration: Global training step to associate with the checkpoint.
-
-        """
-        if self.args.debug_rollout_only:
+        """Delegate checkpoint saving to the shared checkpoint utilities."""
+        if self.args.debug_rollout_only or self.args.save is None:
             return
 
-        raise NotImplementedError()
+        checkpoint.save(self, iteration)
 
     def compute_log_prob(
         self,
