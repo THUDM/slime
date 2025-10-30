@@ -1284,7 +1284,7 @@ def slime_validate_args(args):
     if args.load_debug_rollout_data is not None:
         print(
             f"load_debug_rollout_data {args.load_debug_rollout_data} is set, "
-            "will not instantiate sglang servers and will only run the rollout generation."
+            "will not instantiate sglang servers and will only run the training process."
         )
         args.debug_train_only = True
 
