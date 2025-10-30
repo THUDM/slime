@@ -122,7 +122,6 @@ class MegatronTrainRayActor(TrainRayActor):
 
         self.prof = TrainProfiler(args)
 
-        Timer().start("train_wait")
         return start_rollout_id
 
     @torch.no_grad()
