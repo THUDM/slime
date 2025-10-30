@@ -574,7 +574,8 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 <span class="w">    </span>--save<span class="w"> </span>/root/GLM-Z1-9B-0414_torch_dist
 </pre></div>
 </div>
-<p>For larger models, you can use <code class="docutils literal notranslate"><span class="pre">torchrun</span></code> to start the covnersion script to convert with multi-gpus or even multi-nodes.</p>
+<p>For larger models, you can use <code class="docutils literal notranslate"><span class="pre">torchrun</span></code> to start the covnersion script to convert with multi-gpus or even multi-nodes.
+Note: When converting the kimi-k2 model weights, you need to open config.json in the model path and change “model_type”: “kimi_k2” to “model_type”: “deepseek_v3”.</p>
 </section>
 <section id="convert-from-megatron-format-to-hugging-face-format">
 <h3>Convert from Megatron Format to Hugging Face Format<a class="headerlink" href="#convert-from-megatron-format-to-hugging-face-format" title="Link to this heading">#</a></h3>

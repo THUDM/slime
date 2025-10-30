@@ -569,7 +569,8 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 <span class="w">    </span>--save<span class="w"> </span>/root/GLM-Z1-9B-0414_torch_dist
 </pre></div>
 </div>
-<p>对于更大的模型，可以使用 <code class="docutils literal notranslate"><span class="pre">torchrun</span></code> 来启动转换脚本，从而使用多张 GPU 甚至多机进行权重转换。</p>
+<p>对于更大的模型，可以使用 <code class="docutils literal notranslate"><span class="pre">torchrun</span></code> 来启动转换脚本，从而使用多张 GPU 甚至多机进行权重转换。
+注意：kimi-k2模型权重转换时，需打开模型路径中的config.json，将&quot;model_type&quot;: &quot;kimi_k2&quot;修改为&quot;model_type&quot;: &quot;deepseek_v3&quot;。</p>
 </section>
 <section id="megatron-hugging-face">
 <h3>Megatron 格式 转换为 Hugging Face 格式<a class="headerlink" href="#megatron-hugging-face" title="Link to this heading">#</a></h3>
