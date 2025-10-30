@@ -424,6 +424,7 @@ def policy_loss_function(
         def vanilla_tis_function(
             args,
             *,
+            pg_loss: torch.Tensor,
             train_log_probs: list[torch.Tensor],
             rollout_log_probs: list[torch.Tensor],
             **kwargs: Any,
@@ -439,13 +440,15 @@ def policy_loss_function(
                 "tis_clipfrac": tis_clipfrac.clone().detach(),
                 "tis_abs": tis_abs.clone().detach(),
             }
-            return tis_weights, metrics
+            pg_loss = pg_loss * tis_weights
+            return pg_loss, metrics
 
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
 
         ois = (-ppo_kl).exp()
         tis_kwargs = {
             "args": args,
+            "pg_loss": pg_loss,
             "train_log_probs": batch["log_probs"],
             "rollout_log_probs": batch["rollout_log_probs"],
             "loss_masks": batch["loss_masks"],
@@ -457,9 +460,7 @@ def policy_loss_function(
             tis_func = load_function(args.custom_tis_function_path)
         else:
             tis_func = vanilla_tis_function
-        tis_weights, tis_metrics = tis_func(**tis_kwargs)
-
-        pg_loss = pg_loss * tis_weights
+        pg_loss, tis_metrics = tis_func(**tis_kwargs)
 
     pg_loss = sum_of_sample_mean(pg_loss)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)

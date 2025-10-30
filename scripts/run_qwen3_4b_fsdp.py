@@ -6,7 +6,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1] / "tests"))
 
 import command_utils as U
 
-MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-4B")
+MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-4B-Instruct-2507")
 NUM_GPUS = 8
 
 EXTRA_ARGS = os.environ.get("SLIME_SCRIPT_EXTRA_ARGS", "")
@@ -28,9 +28,11 @@ def prepare():
 
 
 def execute():
+    run_id = U.create_run_id()
+
     ckpt_args = (
         f"--hf-checkpoint /root/models/{MODEL_NAME} "
-        # "--ref-load /root/models/{MODEL_NAME} "
+        # f"--ref-load /root/models/{MODEL_NAME} "
     )
 
     rollout_args = (
@@ -38,33 +40,37 @@ def execute():
         "--input-key prompt "
         "--label-key label "
         "--apply-chat-template "
+        # By default it is thinking mode
+        # """--apply-chat-template-kwargs '{"enable_thinking":false}' """
         "--rollout-shuffle "
         "--rm-type deepscaler "
         "--num-rollout 3000 "
         "--rollout-batch-size 32 "
         "--n-samples-per-prompt 8 "
-        f"--rollout-max-response-len {100 if MODE == 'debug_minimal' else 8192} "
+        f"--rollout-max-response-len {100 if MODE == 'debug_minimal' else 32768} "
         "--rollout-temperature 0.8 "
         "--global-batch-size 256 "
         "--balance-data "
     )
 
-    # when using tiny response len, cannot do dynamic sampling
-    if MODE != "debug_minimal":
-        rollout_args += (
-            "--over-sampling-batch-size 64 "
-            "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "
-        )
+    # We disable dynamic sampling currently
+    # # when using tiny response len, cannot do dynamic sampling
+    # if MODE != "debug_minimal":
+    #     rollout_args += (
+    #         "--over-sampling-batch-size 64 "
+    #         "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "
+    #     )
 
     # sometimes disable eval to speed up debugging
     eval_args = ""
     if (MODE != "debug_minimal") and bool(int(os.environ.get("SLIME_SCRIPT_ENABLE_EVAL", "1"))):
+        eval_max_response_len = 32768
         eval_args += "--eval-interval 20 "
         if MULTI_EVAL:
-            eval_config_text = """
+            eval_config_text = f"""
 eval:
   defaults:
-    max_response_len: 16384
+    max_response_len: {eval_max_response_len}
     top_p: 0.7
   datasets:
     - name: aime
@@ -85,7 +91,7 @@ eval:
             eval_args += (
                 "--eval-prompt-data aime /root/datasets/aime-2024/aime-2024.jsonl "
                 "--n-samples-per-eval-prompt 16 "
-                "--eval-max-response-len 16384 "
+                f"--eval-max-response-len {eval_max_response_len} "
                 "--eval-top-p 0.7 "
             )
 
@@ -132,6 +138,7 @@ eval:
         "--offload-train-mode move "
         """--train-env-vars '{"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}' """
         "--use-fault-tolerance "
+        f"--save-debug-rollout-data /root/shared_data/{run_id}/{{rollout_id}}.pt "
     )
 
     true_on_policy_args = ""
@@ -158,7 +165,7 @@ eval:
         f"{rollout_args} "
         f"{optimizer_args} "
         f"{grpo_args} "
-        f"{U.get_default_wandb_args(__file__)} "
+        f"{U.get_default_wandb_args(__file__, run_id=run_id)} "
         f"{perf_args} "
         f"{eval_args} "
         f"{sglang_args} "

@@ -65,7 +65,7 @@ ray start --head --node-ip-address 127.0.0.1 --num-gpus 4 --disable-usage-stats
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
      "env_vars": {
-        "no_proxy": "localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}",
+        "no_proxy": "localhost,127.0.0.1,0.0.0.0,${MASTER_ADDR}"
      }
    }' \
    -- python3 train.py \
