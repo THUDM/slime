@@ -412,9 +412,7 @@ document.write(`
   </button>
 `);
 </script>
-<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
-    <span class="fa-solid fa-list"></span>
-</button>
+
 </div></div>
       
     </div>
@@ -430,19 +428,6 @@ document.write(`
     <div id="print-main-content">
         <div id="jb-print-toc">
             
-            <div>
-                <h2> Contents </h2>
-            </div>
-            <nav aria-label="Page">
-                <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#known-issues">Known Issues</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-issue-9888-or-sglang-issue-9521">SGLang issue #9888 or SGLang issue #9521</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-issue-9481">SGLang issue #9481</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-pr-9388">SGLang PR #9388</a></li>
-</ul>
-</li>
-</ul>
-            </nav>
         </div>
     </div>
 </div>
@@ -467,55 +452,6 @@ document.write(`
 </pre></div>
 </div>
 <p>For details on parameter meanings and configuration, see the <a class="reference external" href="https://docs.sglang.ai/advanced_features/speculative_decoding.html">SGLang speculative decoding documentation</a>.</p>
-<section id="known-issues">
-<h2>Known Issues<a class="headerlink" href="#known-issues" title="Link to this heading">#</a></h2>
-<section id="sglang-issue-9888-or-sglang-issue-9521">
-<h3><a class="reference external" href="https://github.com/sgl-project/sglang/issues/9888">SGLang issue #9888</a> or <a class="reference external" href="https://github.com/sgl-project/sglang/issues/9521">SGLang issue #9521</a><a class="headerlink" href="#sglang-issue-9888-or-sglang-issue-9521" title="Link to this heading">#</a></h3>
-<ul class="simple">
-<li><p>Error occurs during CUDA graph padding in the speculative decoding draft stage.</p></li>
-<li><p>Workarounds:</p>
-<ol class="arabic simple">
-<li><p>Switch the inference backend to <strong>fa3 Triton</strong> (bug only occurs in <strong>flashInfer</strong>).</p></li>
-<li><p>Specify a broader range for <code class="docutils literal notranslate"><span class="pre">--sglang-cuda-graph-bs</span></code> to avoid batch sizes that trigger CUDA graph padding.</p></li>
-<li><p>Disable CUDA graph (not recommended due to significant performance loss).</p></li>
-<li><p><strong>Notice:</strong> Disabling CUDA graph padding with <code class="docutils literal notranslate"><span class="pre">--sglang-disable-cuda-graph-padding</span></code> is currently ineffective for speculative decoding. See <a class="reference internal" href="#tbd"><span class="xref myst">SGLang <code class="docutils literal notranslate"><span class="pre">cuda_graph_runner.py</span></code></span></a>.</p></li>
-</ol>
-</li>
-<li><p>For debugging, enable slime’s <code class="docutils literal notranslate"><span class="pre">--debug-rollout-only</span></code> flag to isolate rollout behavior from parameter updates or model offloading.</p></li>
-</ul>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># If speculative decoding fails, this can help debug</span>
---debug-rollout-only
-
-<span class="c1"># If flashInfer causes issues with speculative decoding, use fa3 or triton instead</span>
---sglang-attention-backend<span class="w"> </span>fa3
-
-<span class="c1"># If CUDA graph fails due to padding, extend the CUDA graph batch size</span>
---sglang-cuda-graph-bs<span class="w"> </span><span class="k">$(</span>seq<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">32</span><span class="k">)</span><span class="w"> </span><span class="k">$(</span>seq<span class="w"> </span><span class="m">40</span><span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="m">64</span><span class="k">)</span><span class="w"> </span><span class="k">$(</span>seq<span class="w"> </span><span class="m">80</span><span class="w"> </span><span class="m">16</span><span class="w"> </span><span class="m">160</span><span class="k">)</span>
-
-<span class="c1"># Improve performance by enlarging the running batch size limit</span>
---sglang-max-running-requests<span class="w"> </span><span class="m">128</span>
-</pre></div>
-</div>
-</section>
-<section id="sglang-issue-9481">
-<h3><a class="reference external" href="https://github.com/sgl-project/sglang/issues/9481">SGLang issue #9481</a><a class="headerlink" href="#sglang-issue-9481" title="Link to this heading">#</a></h3>
-<ul class="simple">
-<li><p>Solution:</p>
-<ol class="arabic simple">
-<li><p>Apply the latest SGLang patch.</p></li>
-<li><p>See <a class="reference external" href="https://github.com/sgl-project/sglang/pull/9687">PR #9687</a> for reference changes.</p></li>
-</ol>
-</li>
-</ul>
-</section>
-<section id="sglang-pr-9388">
-<h3><a class="reference external" href="https://github.com/sgl-project/sglang/pull/9388">SGLang PR #9388</a><a class="headerlink" href="#sglang-pr-9388" title="Link to this heading">#</a></h3>
-<ul class="simple">
-<li><p>If using an external draft model results in <strong>illegal memory access</strong>, it may be caused by a context length mismatch between the draft and target models.</p></li>
-<li><p>Please update to <strong>SGLang ≥ 0.5.1</strong> (and update <code class="docutils literal notranslate"><span class="pre">sgl-kernel</span></code>) to apply this fix.</p></li>
-</ul>
-</section>
-</section>
 </section>
 
 
@@ -553,26 +489,6 @@ document.write(`
             </div>
             
             
-              
-                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
-
-
-  <div class="sidebar-secondary-item">
-  <div class="page-toc tocsection onthispage">
-    <i class="fa-solid fa-list"></i> Contents
-  </div>
-  <nav class="bd-toc-nav page-toc">
-    <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#known-issues">Known Issues</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-issue-9888-or-sglang-issue-9521">SGLang issue #9888 or SGLang issue #9521</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-issue-9481">SGLang issue #9481</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-pr-9388">SGLang PR #9388</a></li>
-</ul>
-</li>
-</ul>
-  </nav></div>
-
-</div></div>
               
             
           </div>

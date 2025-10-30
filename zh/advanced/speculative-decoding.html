@@ -407,9 +407,7 @@ document.write(`
   </button>
 `);
 </script>
-<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
-    <span class="fa-solid fa-list"></span>
-</button>
+
 </div></div>
       
     </div>
@@ -425,14 +423,6 @@ document.write(`
     <div id="print-main-content">
         <div id="jb-print-toc">
             
-            <div>
-                <h2> 目录 </h2>
-            </div>
-            <nav aria-label="Page">
-                <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">已知问题</a></li>
-</ul>
-            </nav>
         </div>
     </div>
 </div>
@@ -444,7 +434,6 @@ document.write(`
                   
   <section class="tex2jax_ignore mathjax_ignore" id="id1">
 <h1>投机采样<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
-<p>Speculative decoding is an important optimization for making faster rollout during RL training. Currently slime only supports speculative decoding without training.</p>
 <p>投机采样是加速 rollout 的重要优化手段，目前 slime 支持不通过训练更新 draft model 式的投机采样。</p>
 <p>对于有 MTP 层支持的模型（例如，GLM-4.6、Deepseek-V3/R1），只需要添加：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-speculative-algorithm<span class="w"> </span>EAGLE
@@ -458,47 +447,6 @@ document.write(`
 </pre></div>
 </div>
 <p>详细参数含义及配置方法，请参考 SGLang 的 speculative decoding <a class="reference external" href="https://docs.sglang.ai/advanced_features/speculative_decoding.html">文档</a></p>
-<section id="id2">
-<h2>已知问题<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
-<p><a class="reference external" href="https://github.com/sgl-project/sglang/issues/9888">SGLang issue #9888</a> 或 <a class="reference external" href="https://github.com/sgl-project/sglang/issues/9521">SGLang issue #9521</a></p>
-<ul class="simple">
-<li><p>报错发生在 speculative decoding draft 阶段的 cuda graph padding</p></li>
-<li><p>解决方法:</p>
-<ol class="arabic simple">
-<li><p>切换推理后端为 fa3 triton。该 bug 仅发生在 flashInfer 。</p></li>
-<li><p>覆盖更宽的 <code class="docutils literal notranslate"><span class="pre">--sglang-cuda-graph-bs</span></code> 来避免某些 batch size 做 cuda graph padding</p></li>
-<li><p>禁用 cuda graph（性能损失太大，不推荐）</p></li>
-<li><p>Notice：禁用 cuda graph padding <code class="docutils literal notranslate"><span class="pre">--sglang-disable-cuda-graph-padding</span></code> 目前对 speculative decoding 不生效。参考 <a class="reference internal" href="#tbd"><span class="xref myst">SGLang cuda_graph_runner.py</span></a></p></li>
-</ol>
-</li>
-<li><p>如需 debug，可尝试开启 slime 的 <code class="docutils literal notranslate"><span class="pre">--debug-rollout-only</span></code> 参数，来排除参数更新或模型 offload 的影响</p></li>
-</ul>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># if speculative decoding has bug, this can help debug</span>
---debug-rollout-only
-
-<span class="c1"># If flashInfer has bug with speculative decoding, use fa3 or triton instead</span>
---sglang-attention-backend<span class="w"> </span>fa3
-
-<span class="c1"># If bug exists when cuda graph do padding, extend the cuda graph batch size</span>
---sglang-cuda-graph-bs<span class="w"> </span><span class="k">$(</span>seq<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">32</span><span class="k">)</span><span class="w"> </span><span class="k">$(</span>seq<span class="w"> </span><span class="m">40</span><span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="m">64</span><span class="k">)</span><span class="w"> </span><span class="k">$(</span>seq<span class="w"> </span><span class="m">80</span><span class="w"> </span><span class="m">16</span><span class="w"> </span><span class="m">160</span><span class="k">)</span>
-
-<span class="c1"># Improve performance by enlarging running batch size limit</span>
---sglang-max-running-requests<span class="w"> </span><span class="m">128</span>
-</pre></div>
-</div>
-<p><a class="reference external" href="https://github.com/sgl-project/sglang/issues/9481">SGLang issue #9481</a></p>
-<ul class="simple">
-<li><p>解决方法：</p>
-<ol class="arabic simple">
-<li><p>应用最新的 sglang patch。</p></li>
-<li><p>参考这个 pr 修改 sglang https://github.com/sgl-project/sglang/pull/9687
-<a class="reference external" href="https://github.com/sgl-project/sglang/pull/9388">SGLang PR #9388</a></p></li>
-</ol>
-</li>
-<li><p>如果使用外部 draft model 出现 illegal memory access，可能是由于 draft model 和 target model 的 context length 不匹配导致的 bug。</p></li>
-<li><p>请更新 SGLang &gt;= 0.5.1 来应用这个 PR。（并更新 <code class="docutils literal notranslate"><span class="pre">sgl-kernel</span></code>）</p></li>
-</ul>
-</section>
 </section>
 
 
@@ -536,21 +484,6 @@ document.write(`
             </div>
             
             
-              
-                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
-
-
-  <div class="sidebar-secondary-item">
-  <div class="page-toc tocsection onthispage">
-    <i class="fa-solid fa-list"></i> 目录
-  </div>
-  <nav class="bd-toc-nav page-toc">
-    <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">已知问题</a></li>
-</ul>
-  </nav></div>
-
-</div></div>
               
             
           </div>
