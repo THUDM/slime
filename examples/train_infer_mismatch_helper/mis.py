@@ -218,6 +218,7 @@ def compute_mis_weights(
 def compute_mis_weights_with_cp(
     args,
     *,
+    pg_loss: torch.Tensor,
     train_log_probs: list[torch.Tensor],
     rollout_log_probs: list[torch.Tensor],
     loss_masks: list[torch.Tensor],
@@ -274,7 +275,9 @@ def compute_mis_weights_with_cp(
         values = slice_cp_and_concat(values, total_lengths, response_lengths)
         result_metrics[key_name] = values
 
-    return is_weights, result_metrics
+    pg_loss = pg_loss * is_weights
+
+    return pg_loss, result_metrics
 
 
 def add_ppl_metrics(
