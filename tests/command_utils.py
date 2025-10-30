@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Optional
 
 from slime.utils.misc import exec_command
+from slime.utils.typer_utils import dataclass_cli
 
-_ = exec_command
+_ = exec_command, dataclass_cli
 
 repo_base_dir = Path(os.path.abspath(__file__)).resolve().parents[1]
 
@@ -36,6 +37,7 @@ def hf_download_dataset(full_name: str):
 
 def execute_train(
     train_args: str,
+    # TODO rename to "num_gpus_per_node"
     num_gpus: int,
     model_type: Optional[str],
     train_script: str = "train.py",
@@ -144,7 +146,7 @@ def get_default_wandb_args(test_file: str, run_name_prefix: Optional[str] = None
 
 
 def create_run_id() -> str:
-    return datetime.datetime.now().strftime("%y%m%d-%H%M%S") + f"-{random.Random().randint(0, 999):03d}"
+    return datetime.datetime.utcnow().strftime("%y%m%d-%H%M%S") + f"-{random.Random().randint(0, 999):03d}"
 
 
 _warned_bool_env_var_keys = set()
