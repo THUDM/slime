@@ -73,21 +73,19 @@ class HuggingfaceAttention(MegatronModule, ABC):
             # TODO: preprocess this for each batch to prevent tolist in the training step
             whole_hidden_states_list = []
 
+            local_cu_seqlens = cu_seqlens // cp_size
             for i in range(len(cu_seqlens) - 1):
                 seqlen = cu_seqlens[i + 1] - cu_seqlens[i]
                 chunk_size = seqlen // 2
-                whole_hidden_states_list.append(
-                    torch.cat(
-                        [
-                            hidden_states_list[cp_rank][cu_seqlens[i] : cu_seqlens[i] + chunk_size]
-                            for cp_rank in range(cp_size)
-                        ]
-                        + [
-                            hidden_states_list[cp_rank][cu_seqlens[i] + chunk_size : cu_seqlens[i + 1]]
-                            for cp_rank in range(cp_size)
-                        ][::-1],
-                        dim=0,
-                    )
+                whole_hidden_states_list.extend(
+                    [
+                        hidden_states_list[cp_rank][local_cu_seqlens[i] : local_cu_seqlens[i] + chunk_size]
+                        for cp_rank in range(cp_size)
+                    ]
+                    + [
+                        hidden_states_list[cp_rank][local_cu_seqlens[i] + chunk_size : local_cu_seqlens[i + 1]]
+                        for cp_rank in range(cp_size)
+                    ][::-1],
                 )
             hidden_states = torch.cat(whole_hidden_states_list, dim=0)
 
@@ -102,12 +100,19 @@ class HuggingfaceAttention(MegatronModule, ABC):
         output = self.hf_forward(hidden_states, position_ids, packed_seq_params)
         bias = None
 
-        if self.args.sequence_parallel:
-            output = tensor_parallel.scatter_to_sequence_parallel_region(
-                hidden_states, group=mpu.get_tensor_model_parallel_group()
-            )
+        if mpu.get_context_parallel_world_size() > 1:
+            output_list = []
+            for i in range(len(cu_seqlens) - 1):
+                seqlen = cu_seqlens[i + 1] - cu_seqlens[i]
+                chunk_size = seqlen // 2
 
         output = output.permute(1, 0, 2)  # [seq_len, bsz, hidden_dim]
+
+        if self.args.sequence_parallel:
+            output = tensor_parallel.scatter_to_sequence_parallel_region(
+                output, group=mpu.get_tensor_model_parallel_group()
+            )
+
         return output, bias
 
     @abstractmethod

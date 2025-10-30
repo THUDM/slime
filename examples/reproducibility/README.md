@@ -2,7 +2,7 @@
 
 Reproducibility is a bedrock of scientific progress. By combining the [deterministic inference](https://lmsys.org/blog/2025-09-22-sglang-deterministic/) of SGLang and the deterministic mode of Megatron-LM, slime supports bitwise experiment reproduction.
 
-To enable deterministic training, you need to set:
+To enable deterministic training, you need to first uninstall the flash attention 3 in the docker with `pip uninstall flash_attn_3 -y` and set:
 ```bash
   # sglang config
   --sglang-enable-deterministic-inference
@@ -22,8 +22,6 @@ And set the following environment variables:
         "CUBLAS_WORKSPACE_CONFIG": ":4096:8"
      }
 ```
-
-We also need to set `--use-slime-router` until the pypi whl of sglang-router updates.
 
 Here we provide the script to do RL training on Qwen2.5 0.5B model and GSM8K dataset with full deterministic.
 

@@ -3,14 +3,14 @@ FROM lmsysorg/sglang:${SGLANG_VERSION} AS sglang
 
 # we need to write this again after from
 ARG SGLANG_VERSION
-ARG MEGATRON_COMMIT=main
+ARG MEGATRON_COMMIT=core_v0.14.0
 
 RUN apt update
-RUN apt install -y nvtop
+RUN apt install -y nvtop rsync
 
 # TODO: change to pip install sglang-router after it has a new release
 RUN pip install sglang-router --force-reinstall
-RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git --no-cache-dir --force-reinstall
+RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@5d48a5f6858d80c10f088a4613a68485ec330532 --no-cache-dir --force-reinstall
 RUN pip install ray[default]
 RUN pip install httpx[http2] wandb pylatexenc blobfile accelerate "mcp[cli]"
 
@@ -30,6 +30,12 @@ RUN pip install pybind11
 RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1
 RUN pip install flash-linear-attention
 RUN pip -v install --no-build-isolation transformer_engine[pytorch]
+
+RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
+    cd flash-attention/ && git submodule update --init && cd hopper/ && python setup.py install && \
+    export python_path=`python -c "import site; print(site.getsitepackages()[0])"` && \
+    mkdir -p $python_path/flash_attn_3 && \
+    cp flash_attn_interface.py $python_path/flash_attn_3/flash_attn_interface.py
 
 WORKDIR /root/
 RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \

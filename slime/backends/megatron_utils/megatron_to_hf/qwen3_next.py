@@ -75,11 +75,17 @@ def convert_qwen3_next_to_hf(args, name, param):
 
         if rest == "self_attention.linear_proj.weight":
             return [(f"model.layers.{layer_idx}.self_attn.o_proj.weight", param)]
-        elif rest == "self_attention.linear_qkv.weight":
+        elif rest == "self_attention.linear_qgkv.weight":
 
             param = param.view(args.num_query_groups, -1, head_dim, args.hidden_size)
-            q_param, k_param, v_param = torch.split(param, split_size_or_sections=[value_num_per_group, 1, 1], dim=1)
-            q_param = q_param.reshape(-1, args.hidden_size)
+            q_param, k_param, v_param = torch.split(
+                param, split_size_or_sections=[2 * value_num_per_group, 1, 1], dim=1
+            )
+            q_param = (
+                q_param.reshape(args.num_query_groups, 2, value_num_per_group, head_dim, args.hidden_size)
+                .transpose(1, 2)
+                .reshape(-1, args.hidden_size)
+            )
             k_param = k_param.reshape(-1, args.hidden_size)
             v_param = v_param.reshape(-1, args.hidden_size)
             return [
@@ -87,7 +93,7 @@ def convert_qwen3_next_to_hf(args, name, param):
                 (f"model.layers.{layer_idx}.self_attn.k_proj.weight", k_param),
                 (f"model.layers.{layer_idx}.self_attn.v_proj.weight", v_param),
             ]
-        elif rest == "self_attention.linear_qkv.bias":
+        elif rest == "self_attention.linear_qgkv.bias":
             param = param.view(args.num_query_groups, -1)
             q_bias, k_bias, v_bias = torch.split(
                 param,
@@ -110,7 +116,7 @@ def convert_qwen3_next_to_hf(args, name, param):
             ]
         elif rest == "mlp.linear_fc2.weight":
             return [(f"model.layers.{layer_idx}.mlp.down_proj.weight", param)]
-        elif rest == "self_attention.linear_qkv.layer_norm_weight":
+        elif rest == "self_attention.linear_qgkv.layer_norm_weight":
             return [(f"model.layers.{layer_idx}.input_layernorm.weight", param)]
         elif rest == "mlp.linear_fc1.layer_norm_weight":
             return [(f"model.layers.{layer_idx}.post_attention_layernorm.weight", param)]

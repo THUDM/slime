@@ -27,7 +27,6 @@ pkill -9 ray
 pkill -9 python
 
 set -ex
-
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
 
@@ -64,6 +63,8 @@ GRPO_ARGS=(
 
 OPTIMIZER_ARGS=(
    --optimizer adam
+   # Uncomment to use DeepSpeed CPU Adam
+   # --optimizer deepspeed_cpu_adam
    --lr 1e-6
    --lr-decay-style constant
    --weight-decay 0.1
@@ -80,7 +81,7 @@ SGLANG_ARGS=(
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-project "gsm8k_async_rl"
+   --wandb-project "slime-fsdp"
    --wandb-group "fsdp-2gpu-colocated"
    --wandb-mode "online"  # Change to "offline" for local logging only
 )

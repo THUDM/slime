@@ -1,0 +1,6 @@
+emoji
+nltk
+spacy==3.7.4
+syllapy
+numpy==1.26.4
+immutabledict

@@ -4,7 +4,7 @@ import time
 from argparse import Namespace
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Dict, Optional, Tuple, Union
+from typing import Dict, Optional
 
 import ray
 import torch
@@ -19,6 +19,8 @@ from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.ray_utils import Box
+from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
+from slime.utils.routing_replay import RoutingReplay
 from slime.utils.timer import Timer, timer
 from slime.utils.types import RolloutBatch
 from slime.utils.wandb_utils import init_wandb_secondary
@@ -40,6 +42,8 @@ class MegatronTrainRayActor(TrainRayActor):
         wandb_run_id: str,
         with_ref: bool = False,
     ) -> Optional[int]:
+        monkey_patch_torch_dist()
+
         super().init(args, role, wandb_run_id, with_ref)
 
         init(args)
@@ -62,14 +66,15 @@ class MegatronTrainRayActor(TrainRayActor):
             self.args.load = self.args.critic_load
             self.args.save = self.args.critic_save
             self.args.lr = self.args.critic_lr
+            self.args.lr_warmup_iters = self.args.critic_lr_warmup_iters
 
         (self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id) = initialize_model_and_optimizer(
             args, role
         )
 
         if role == "critic":
-            if self.args.offload:
-                self.sleep(("model"))
+            if self.args.offload_train:
+                self.sleep()
             Timer().start("train_wait")
             return
 
@@ -101,10 +106,10 @@ class MegatronTrainRayActor(TrainRayActor):
         # empty cache after initialization
         clear_memory()
 
-        if self.args.offload:
+        if self.args.offload_train:
             # recover to actor in the end.
             self.update_gpu_params_dict(self.weights["actor"])
-            self.sleep(("model"))
+            self.sleep()
 
         self.rollout_engines = None
 
@@ -150,24 +155,20 @@ class MegatronTrainRayActor(TrainRayActor):
         torch.cuda.synchronize()
 
     @timer
-    def sleep(self, tags: Union[str, Tuple[str, ...]]) -> None:
-        assert self.args.offload
-        assert "model" in tags
-        if isinstance(tags, str):
-            tags = (tags,)
+    def sleep(self) -> None:
+        assert self.args.offload_train
 
         clear_memory()
         print_memory("before offload model")
-        if hasattr(mpu, "destroy_process_groups"):
-            mpu.destroy_process_groups()
+        destroy_process_groups()
 
         torch_memory_saver.pause()
 
         print_memory("after offload model")
 
     @timer
-    def wake_up(self, tags: Union[str, Tuple[str, ...]]) -> None:
-        assert self.args.offload
+    def wake_up(self) -> None:
+        assert self.args.offload_train
 
         # there are weird times when sglang is not offloaded immediately, so we wait here.
         mem_fraction_static = self.args.sglang_mem_fraction_static or 0.8
@@ -178,14 +179,10 @@ class MegatronTrainRayActor(TrainRayActor):
                 continue
             break
 
-        if isinstance(tags, str):
-            tags = (tags,)
-
         torch_memory_saver.resume()
 
         clear_memory()
-        if hasattr(mpu, "reload_process_groups"):
-            mpu.reload_process_groups()
+        reload_process_groups()
         print_memory("after wake_up model")
 
     def _get_rollout_data(self, rollout_data_ref: Box) -> RolloutBatch:
@@ -240,8 +237,8 @@ class MegatronTrainRayActor(TrainRayActor):
     def train(self, rollout_id: int, rollout_data_ref: Box) -> None:
         Timer().end("train_wait")
 
-        if self.args.offload:
-            self.wake_up(("model"))
+        if self.args.offload_train:
+            self.wake_up()
 
         with timer("data_preprocess"):
             rollout_data = self._get_rollout_data(rollout_data_ref)
@@ -375,8 +372,6 @@ class MegatronTrainRayActor(TrainRayActor):
             )
 
         if self.args.use_routing_replay:
-            from megatron.core.transformer.moe.moe_utils import RoutingReplay
-
             RoutingReplay.clear_all()
 
         # update the cpu actor weight to the latest model
@@ -407,8 +402,8 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
-        if self.args.offload and hasattr(mpu, "reload_process_groups"):
-            mpu.reload_process_groups()
+        if self.args.offload_train:
+            reload_process_groups()
 
         rollout_engines, rollout_engine_lock, num_new_engines = ray.get(
             self.rollout_manager.get_rollout_engines_and_lock.remote()
@@ -417,7 +412,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
-        with torch_memory_saver.disable() if self.args.offload else nullcontext():
+        with torch_memory_saver.disable() if self.args.offload_train else nullcontext():
             print_memory("before update_weights")
             self.weight_updater.update_weights()
             print_memory("after update_weights")
@@ -434,8 +429,8 @@ class MegatronTrainRayActor(TrainRayActor):
                 else:
                     self.update_cpu_params_dict(self.weights["old_actor"])
 
-        if self.args.offload and hasattr(mpu, "destroy_process_groups"):
-            mpu.destroy_process_groups()
+        if self.args.offload_train:
+            destroy_process_groups()
 
     def load_other_checkpoint(self, model_tag: str, path: str) -> None:
         old_args = self.args.load, self.args.no_load_optim, self.args.no_load_rng, self.args.finetune

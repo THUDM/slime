@@ -1,6 +1,6 @@
 import os
 
-import command_utils as U
+import command_utils_v0 as U
 
 MODEL_NAME = "GLM-Z1-9B-0414"
 MODEL_TYPE = "glm4-9B"
