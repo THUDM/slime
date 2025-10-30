@@ -10,6 +10,7 @@ import wandb
 from packaging import version
 from torch.distributed.tensor import DTensor
 from torch_memory_saver import torch_memory_saver
+from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
@@ -23,6 +24,7 @@ from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, inverse_timer, timer
 from slime.utils.wandb_utils import init_wandb_secondary
 
+from ...utils.profile_utils import TrainProfiler
 from . import checkpoint
 from .data_packing import pack_sequences, unpack_sequences
 from .fsdp_cpu_adam_wrapper import FSDPCPUAdamWrapper
@@ -156,6 +158,8 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.offload_train:
             self.sleep()
 
+        self.prof = TrainProfiler(args)
+
         return int(getattr(self.args, "start_rollout_id", 0))
 
     @timer
@@ -256,8 +260,8 @@ class FSDPTrainRayActor(TrainRayActor):
 
         try:
             rollout_data = {f"{store_prefix}log_probs": []}
-            with timer(f"{store_prefix}log_probs") and torch.no_grad():
-                for batch in packed_batches:
+            with timer(f"{store_prefix}log_probs"), torch.no_grad():
+                for batch in tqdm(packed_batches, desc=f"{store_prefix}log_probs", disable=dist.get_rank() != 0):
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                         model_args = {
                             "input_ids": batch["tokens"].unsqueeze(0),
@@ -425,10 +429,14 @@ class FSDPTrainRayActor(TrainRayActor):
                 )
                 wandb.log(log_dict)
 
+        self.prof.before_actor_train_step()
+
         with timer("actor_train"):
             reported_accum: dict[str, list[torch.Tensor]] = {}
             self.optimizer.zero_grad(set_to_none=True)
-            for mbs_id, packed_batch in enumerate(packed_batches):
+            for mbs_id, packed_batch in enumerate(
+                tqdm(packed_batches, desc="actor_train", disable=dist.get_rank() != 0)
+            ):
                 self._train_step(
                     packed_batch=packed_batch,
                     world_size=world_size,
@@ -436,6 +444,8 @@ class FSDPTrainRayActor(TrainRayActor):
                     mbs_id=mbs_id,
                     grad_accum=grad_accum,
                 )
+
+        self.prof.after_actor_train_step(rollout_id=rollout_id)
 
         self.update_cpu_params_dict(self.weights["actor"])
 
