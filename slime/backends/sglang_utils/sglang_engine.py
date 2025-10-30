@@ -221,9 +221,11 @@ class SGLangEngine(RayActor):
         if self.args.rollout_external:
             return
 
-        requests.post(
-            f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
-        )
+        print(f"Shutdown engine {self.server_host}:{self.server_port}...")
+        if self.node_rank == 0:
+            requests.post(
+                f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
+            )
         kill_process_tree(self.process.pid)
 
     def get_weight_version(self):
@@ -334,7 +336,7 @@ def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
         "trust_remote_code": True,
         "random_seed": args.seed + rank,
         # memory
-        "enable_memory_saver": args.offload,
+        "enable_memory_saver": args.offload_rollout,
         # distributed
         "host": host,
         "port": port,

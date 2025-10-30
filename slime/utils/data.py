@@ -1,5 +1,7 @@
 import json
 import random
+import re
+
 import numpy as np
 import pandas as pd
 import ray
@@ -14,14 +16,31 @@ __all__ = ["Dataset"]
 
 # TODO: don't read the whole file into memory.
 def read_file(path):
+    path, row_slice = _parse_generalized_path(path)
+
     if path.endswith(".jsonl"):
         df = pd.read_json(path, lines=True, dtype={"label": str})
     elif path.endswith(".parquet"):
         df = pd.read_parquet(path, dtype_backend="pyarrow")
     else:
         raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
+
+    if row_slice is not None:
+        print(f"read_file path={path} slice {len(df)=} rows into {row_slice=}")
+        df = df.iloc[row_slice]
+
     for _, row in df.iterrows():
         yield row.to_dict()
+
+
+def _parse_generalized_path(s: str):
+    if (m := re.match(r"^(?P<real_path>.*)@\[(?P<start>-?\d*):(?P<end>-?\d*)\]$", s)) is not None:
+        path = m.group("real_path")
+        start = int(x) if (x := m.group("start")) != "" else None
+        end = int(x) if (x := m.group("end")) != "" else None
+        return path, slice(start, end)
+
+    return s, None
 
 
 class Dataset:
@@ -38,6 +57,7 @@ class Dataset:
         metadata_key="metadata",
         seed=42,
         apply_chat_template=False,
+        apply_chat_template_kwargs=None,
     ):
         self.origin_samples = []
         for data in read_file(path):
@@ -64,7 +84,11 @@ class Dataset:
                     tools = None
                 template_input = [{"role": "user", "content": prompt_content}] if multimodal_keys else prompt_content
                 prompt = tokenizer.apply_chat_template(
-                    template_input, tools, tokenize=False, add_generation_prompt=True
+                    template_input,
+                    tools,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    **apply_chat_template_kwargs,
                 )
 
             else:
@@ -72,8 +96,9 @@ class Dataset:
 
             # TODO: this is slow.
             if max_length is not None:
+                raw_prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
                 if not multimodal_keys:
-                    if len(prompt) > max_length:
+                    if len(raw_prompt_ids) > max_length:
                         continue
 
             self.origin_samples.append(

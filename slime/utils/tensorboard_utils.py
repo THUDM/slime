@@ -9,7 +9,6 @@ except:
 
 
 class _TensorboardAdapter(metaclass=SingletonMeta):
-    _instance = None
     _writer = None
 
     """
@@ -30,7 +29,7 @@ class _TensorboardAdapter(metaclass=SingletonMeta):
         if tb_project_name is not None or os.environ.get("TENSORBOARD_DIR", None):
             if tb_project_name is not None and tb_experiment_name is None:
                 tb_experiment_name = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-            self._instance._initialize(tb_project_name, tb_experiment_name)
+            self._initialize(tb_project_name, tb_experiment_name)
         else:
             raise ValueError("tb_project_name and tb_experiment_name, or TENSORBOARD_DIR are required")
 

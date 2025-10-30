@@ -67,7 +67,9 @@ class RolloutHealthMonitor:
         try:
             ray.get(engine.health_generate.remote(timeout=self._check_timeout))
         except Exception as e:
-            print(f"Health check timed out for rollout engine {rollout_engine_id} (ray timeout). Killing actor.")
+            print(
+                f"Health check timed out for rollout engine {rollout_engine_id} (ray timeout). Killing actor. (original exception: {e})"
+            )
             self._kill_engine(rollout_engine_id=rollout_engine_id)
 
     def _kill_engine(self, rollout_engine_id: int):
@@ -77,6 +79,7 @@ class RolloutHealthMonitor:
         ):
             engine = self._rollout_manager.all_rollout_engines[i]
             try:
+                ray.get(engine.shutdown.remote())
                 ray.kill(engine)
             except Exception as e:
                 print(f"Fail to kill engine and skip (e: {e})")

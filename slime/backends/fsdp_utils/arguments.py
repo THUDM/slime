@@ -32,6 +32,11 @@ class FSDPArgs:
     # FSDP configuration
     fsdp_full_params: bool = False  # If True, use full_tensor; if False, use shard_tensor
 
+    deterministic_mode: bool = False  # This name must be the same as Megatron's
+    # Profile
+    record_memory_history: bool = False
+    memory_snapshot_path: str = "snapshot.pickle"
+
     # YAML bookkeeping
     config: str | None = None
 

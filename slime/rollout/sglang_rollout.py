@@ -14,6 +14,7 @@ from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from slime.rollout.filter_hub.base_types import DynamicFilterOutput
 from slime.utils.async_utils import run
 from slime.utils.data import Dataset
+from slime.utils.eval_config import EvalDatasetConfig
 from slime.utils.http_utils import get, post
 from slime.utils.mask_utils import get_response_lengths
 from slime.utils.misc import SingletonMeta, load_function
@@ -421,67 +422,120 @@ EVAL_PROMPT_DATASET = {}
 async def eval_rollout(args: Namespace, rollout_id: int) -> tuple[dict[str, dict[str, list[Any]]], list[list[Sample]]]:
     assert not args.group_rm, "Group RM is not supported for eval rollout"
     results = {}
-    for i in range(0, len(args.eval_prompt_data), 2):
-        name, path = args.eval_prompt_data[i : i + 2]
-        results.update(await eval_rollout_single_dataset(args, rollout_id, name, path))
+    for dataset_cfg in getattr(args, "eval_datasets", []) or []:
+        results.update(await eval_rollout_single_dataset(args, rollout_id, dataset_cfg))
     return RolloutFnEvalOutput(data=results), []
 
 
 async def eval_rollout_single_dataset(
-    args: Namespace, rollout_id: int, name: str, path: str
+    args: Namespace, rollout_id: int, dataset_cfg: EvalDatasetConfig
 ) -> dict[str, dict[str, list[Any]]]:
     """An example to implement the eval_rollout function for an rule based rm rollout generation.
 
     Args:
         args: the whole args
         rollout_id: int, the id of the rollout, used for deterministic data generation
-        name: str, the name of the dataset
-        path: str, the path of the dataset
+        dataset_cfg: configuration of the dataset
     """
     assert not args.group_rm, "Group RM is not supported for eval rollout"
 
     global EVAL_PROMPT_DATASET
 
-    if name not in EVAL_PROMPT_DATASET:
+    name = dataset_cfg.name
+    path = dataset_cfg.path
+
+    def _resolve_dataset_setting(dataset_value, eval_value, rollout_value):
+        if dataset_value is not None:
+            return dataset_value
+        if eval_value is not None:
+            return eval_value
+        return rollout_value
+
+    prompt_key = _resolve_dataset_setting(
+        dataset_cfg.prompt_key,
+        args.eval_input_key,
+        args.input_key,
+    )
+    label_key = _resolve_dataset_setting(
+        dataset_cfg.label_key,
+        args.eval_label_key,
+        args.label_key,
+    )
+    tool_key = _resolve_dataset_setting(
+        dataset_cfg.tool_key,
+        args.eval_tool_key,
+        args.tool_key,
+    )
+    metadata_key = dataset_cfg.metadata_key or getattr(args, "metadata_key", "metadata")
+
+    cache_key = dataset_cfg.cache_key + (args.hf_checkpoint, args.apply_chat_template)
+    if cache_key not in EVAL_PROMPT_DATASET:
         tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
-        EVAL_PROMPT_DATASET[name] = Dataset(
+        EVAL_PROMPT_DATASET[cache_key] = Dataset(
             path,
             tokenizer=tokenizer,
             max_length=args.rollout_max_prompt_len,
-            prompt_key=args.input_key if args.eval_input_key is None else args.eval_input_key,
-            label_key=args.label_key if args.eval_label_key is None else args.eval_label_key,
+            prompt_key=prompt_key,
+            label_key=label_key,
             multimodal_keys=args.multimodal_keys,
-            metadata_key=args.metadata_key,
-            tool_key=args.tool_key if args.eval_tool_key is None else args.eval_tool_key,
+            metadata_key=metadata_key,
+            tool_key=tool_key,
             apply_chat_template=args.apply_chat_template,
+            apply_chat_template_kwargs=args.apply_chat_template_kwargs,
         )
-    dataset = EVAL_PROMPT_DATASET[name]
+    dataset = EVAL_PROMPT_DATASET[cache_key]
 
-    sampling_params = dict(
-        temperature=args.rollout_temperature if args.eval_temperature is None else args.eval_temperature,
-        top_p=args.rollout_top_p if args.eval_top_p is None else args.eval_top_p,
-        top_k=args.rollout_top_k if args.eval_top_k is None else args.eval_top_k,
-        max_new_tokens=(
-            args.rollout_max_response_len if args.eval_max_response_len is None else args.eval_max_response_len
+    base_sampling_params = dict(
+        temperature=_resolve_dataset_setting(dataset_cfg.temperature, args.eval_temperature, args.rollout_temperature),
+        top_p=_resolve_dataset_setting(
+            dataset_cfg.top_p,
+            args.eval_top_p,
+            args.rollout_top_p,
         ),
-        stop=args.rollout_stop,
-        stop_token_ids=args.rollout_stop_token_ids,
+        top_k=_resolve_dataset_setting(
+            dataset_cfg.top_k,
+            args.eval_top_k,
+            args.rollout_top_k,
+        ),
+        max_new_tokens=_resolve_dataset_setting(
+            dataset_cfg.max_response_len,
+            args.eval_max_response_len,
+            args.rollout_max_response_len,
+        ),
+        stop=dataset_cfg.stop if dataset_cfg.stop is not None else args.rollout_stop,
+        stop_token_ids=(
+            dataset_cfg.stop_token_ids if dataset_cfg.stop_token_ids is not None else args.rollout_stop_token_ids
+        ),
         skip_special_tokens=args.rollout_skip_special_tokens,
         no_stop_trim=True,
         spaces_between_special_tokens=False,
+    )
+
+    min_new_tokens = dataset_cfg.min_new_tokens
+    if min_new_tokens is None:
+        min_new_tokens = getattr(args, "eval_min_new_tokens", None)
+    if min_new_tokens is not None:
+        base_sampling_params["min_new_tokens"] = min_new_tokens
+
+    n_samples_per_prompt = (
+        dataset_cfg.n_samples_per_eval_prompt
+        if dataset_cfg.n_samples_per_eval_prompt is not None
+        else args.n_samples_per_eval_prompt
     )
 
     tasks = []
     # do multiple samples for eval prompts
     sample_index = 0
     for i, prompt_sample in enumerate(dataset.samples):
-        for j in range(args.n_samples_per_eval_prompt):
+        for j in range(n_samples_per_prompt):
             # use the same prompt for multiple samples
             sample = copy.deepcopy(prompt_sample)
             sample.index = sample_index
             sample_index += 1
+            sample.metadata = dataset_cfg.inject_metadata(getattr(sample, "metadata", None))
+            sampling_params = base_sampling_params
             if getattr(args, "sglang_enable_deterministic_inference", False):
-                sampling_params = sampling_params.copy()
+                sampling_params = base_sampling_params.copy()
                 sampling_params["sampling_seed"] = args.rollout_seed + j
             tasks.append(
                 generate_and_rm(
@@ -498,7 +552,12 @@ async def eval_rollout_single_dataset(
     for coro in asyncio.as_completed(tasks):
         sample = await coro
         if do_print:
-            print([str(sample.prompt) + sample.response], sample.reward, flush=True)
+            print(
+                "eval_rollout_single_dataset example data:",
+                [str(sample.prompt) + sample.response],
+                f"reward={sample.reward}",
+                flush=True,
+            )
             do_print = False
         if isinstance(sample, list):
             data.extend(sample)
@@ -514,6 +573,7 @@ async def eval_rollout_single_dataset(
         name: {
             "rewards": [sample.reward if not reward_key else sample.reward[reward_key] for sample in data],
             "truncated": [sample.status == Sample.Status.TRUNCATED for sample in data],
+            "samples": data,
         }
     }
 

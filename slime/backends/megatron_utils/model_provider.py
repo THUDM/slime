@@ -15,6 +15,7 @@ from megatron.core.models.gpt.gpt_layer_specs import (
 from megatron.core.transformer.spec_utils import import_module
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.training.arguments import core_transformer_config_from_args
+from slime.utils import profile_utils
 
 
 # Adapt from https://github.com/volcengine/verl/blob/c3b20575d2bc815fcccd84bddb4c0401fc4b632b/verl/models/llama/megatron/layers/parallel_linear.py#L82
@@ -70,28 +71,9 @@ def get_model_provider_func(
         """
         use_te = args.transformer_impl == "transformer_engine"
 
+        # TODO maybe move this to other parts
         if args.record_memory_history:
-            torch.cuda.memory._record_memory_history(
-                # True,
-                # keep 100,000 alloc/free events from before the snapshot
-                max_entries=100000,
-                # record stack information for the trace events
-                # trace_alloc_record_context=True,
-                stacks="all",
-            )
-
-            def oom_observer(device, alloc, device_alloc, device_free):
-                # snapshot right after an OOM happened
-                print("saving allocated state during OOM")
-                snapshot = torch.cuda.memory._snapshot()
-                from pickle import dump
-
-                dump(
-                    snapshot,
-                    open(f"oom_rank-{torch.distributed.get_rank()}_{args.memory_snapshot_path}", "wb"),
-                )
-
-            torch._C._cuda_attach_out_of_memory_observer(oom_observer)
+            profile_utils.attach_oom_dump_memory_history(profile_utils.get_memory_snapshot_full_path(args))
 
         # Experimental loading arguments from yaml
         config: TransformerConfig = core_transformer_config_from_args(args)

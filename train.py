@@ -23,16 +23,20 @@ def train(args):
     # create the actor and critic models
     actor_model, critic_model = create_training_models(args, pgs, rollout_manager, wandb_run_id=wandb_run_id)
 
-    if args.offload:
+    if args.offload_rollout:
         ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
 
     # always update weight first so that sglang has the loaded weights from training.
     actor_model.update_weights()
 
-    if args.offload:
+    if args.offload_rollout:
         if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
             ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
         ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
+
+    # special case for eval-only
+    if args.num_rollout == 0 and args.eval_interval is not None:
+        ray.get(rollout_manager.eval.remote(rollout_id=0))
 
     # train loop.
     # note that for async training, one can change the position of the sync operation(ray.get).
@@ -43,7 +47,7 @@ def train(args):
 
         rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
 
-        if args.offload:
+        if args.offload_rollout:
             ray.get(rollout_manager.offload.remote())
 
         if args.use_critic:
@@ -58,13 +62,14 @@ def train(args):
             (rollout_id + 1) % args.save_interval == 0
             or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
         ):
-            actor_model.save_model(rollout_id)
+            if (not args.use_critic) or (rollout_id >= args.num_critic_only_steps):
+                actor_model.save_model(rollout_id)
             if args.use_critic:
                 critic_model.save_model(rollout_id)
             if args.rollout_global_dataset:
                 ray.get(rollout_manager.save.remote(rollout_id))
 
-        if args.offload:
+        if args.offload_train:
             if args.use_critic:
                 critic_model.offload()
                 if rollout_id >= args.num_critic_only_steps:
@@ -72,11 +77,14 @@ def train(args):
             else:
                 actor_model.offload()
 
+        if args.offload_rollout:
+            if not args.offload_train:
+                actor_model.clear_memory()
             ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
 
         actor_model.update_weights()
 
-        if args.offload:
+        if args.offload_rollout:
             if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
                 ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
             ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))

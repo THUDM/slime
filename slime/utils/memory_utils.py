@@ -10,17 +10,30 @@ def clear_memory():
 
 
 def available_memory():
-    free, total = torch.cuda.mem_get_info(torch.cuda.current_device())
+    device = torch.cuda.current_device()
+    free, total = torch.cuda.mem_get_info(device)
     return {
-        "gpu": str(torch.cuda.current_device()),
-        "total_GB": round(total / (1024**3), 2),
-        "free_GB": round(free / (1024**3), 2),
-        "used_GB": round((total - free) / (1024**3), 2),
+        "gpu": str(device),
+        "total_GB": _byte_to_gb(total),
+        "free_GB": _byte_to_gb(free),
+        "used_GB": _byte_to_gb(total - free),
+        "allocated_GB": _byte_to_gb(torch.cuda.memory_allocated(device)),
+        "reserved_GB": _byte_to_gb(torch.cuda.memory_reserved(device)),
     }
 
 
-def print_memory(msg):
+def _byte_to_gb(n: int):
+    return round(n / (1024**3), 2)
+
+
+def print_memory(msg, clear_before_print: bool = False):
+    if clear_before_print:
+        clear_memory()
+
     memory_info = available_memory()
-    if dist.get_rank() == 0:
-        print(f"Memory-Usage {msg}:", memory_info)
+    # Need to print for all ranks, b/c different rank can have different behaviors
+    print(
+        f"[Rank {dist.get_rank()}] Memory-Usage {msg}{' (cleared before print)' if clear_before_print else ''}:",
+        memory_info,
+    )
     return memory_info

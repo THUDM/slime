@@ -1,6 +1,6 @@
 import os
 
-import command_utils as U
+import command_utils_v0 as U
 
 MODEL_NAME = "Qwen3-30B-A3B"
 MODEL_TYPE = "qwen3-30B-A3B"

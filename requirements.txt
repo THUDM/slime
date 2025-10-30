@@ -1,6 +1,7 @@
 datasets
 httpx[http2]
 mcp[cli]
+omegaconf
 pillow
 pylatexenc
 pyyaml

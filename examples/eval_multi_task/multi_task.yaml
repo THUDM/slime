@@ -1,0 +1,17 @@
+eval:
+  defaults:
+    max_response_len: 16384
+    top_p: 0.7
+  datasets:
+    - name: aime
+      path: /root/aime-2024/aime-2024.jsonl
+      rm_type: deepscaler
+      n_samples_per_eval_prompt: 16
+    - name: gpqa    # huggingface-cli download --repo-type dataset zyzshishui0627/gpqa_diamond --local-dir /root/gpqa
+      path: /root/gpqa/gpqa_eval.jsonl
+      rm_type: gpqa
+      n_samples_per_eval_prompt: 2
+    - name: ifbench   # huggingface-cli download --repo-type dataset zyzshishui0627/IFBench --local-dir /root/ifbench
+      path: /root/ifbench/IFBench_eval.jsonl
+      rm_type: ifbench
+      n_samples_per_eval_prompt: 1

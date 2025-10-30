@@ -6,11 +6,11 @@ ARG SGLANG_VERSION
 ARG MEGATRON_COMMIT=core_v0.14.0
 
 RUN apt update
-RUN apt install -y nvtop
+RUN apt install -y nvtop rsync
 
 # TODO: change to pip install sglang-router after it has a new release
 RUN pip install sglang-router --force-reinstall
-RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git --no-cache-dir --force-reinstall
+RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@5d48a5f6858d80c10f088a4613a68485ec330532 --no-cache-dir --force-reinstall
 RUN pip install ray[default]
 RUN pip install httpx[http2] wandb pylatexenc blobfile accelerate "mcp[cli]"
 
