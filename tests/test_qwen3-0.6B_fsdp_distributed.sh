@@ -27,13 +27,13 @@ ROLLOUT_ARGS=(
    --apply-chat-template
    --rollout-shuffle
    --rm-type deepscaler
-   --num-rollout 3000
+   --num-rollout 1000
    --rollout-batch-size 16
    --n-samples-per-prompt 16
-   --rollout-max-response-len 8192
+   --rollout-max-response-len 4096
    --rollout-temperature 0.8
 
-   --global-batch-size 128
+   --global-batch-size 256
 )
 
 GRPO_ARGS=(
@@ -49,6 +49,8 @@ GRPO_ARGS=(
 
 OPTIMIZER_ARGS=(
    --optimizer adam
+   # Uncomment to use DeepSpeed CPU Adam
+   # --optimizer deepspeed_cpu_adam
    --lr 1e-6
    --lr-decay-style constant
    --weight-decay 0.1
@@ -58,6 +60,13 @@ OPTIMIZER_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
+)
+
+WANDB_ARGS=(
+   --use-wandb
+   --wandb-project slime-fsdp
+   --wandb-group fsdp-distributed
+   --wandb-key ${WANDB_KEY}
 )
 
 # launch the master node of ray in container
@@ -78,4 +87,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
-   ${SGLANG_ARGS[@]}
+   ${SGLANG_ARGS[@]} \
+   ${WANDB_ARGS[@]} 
