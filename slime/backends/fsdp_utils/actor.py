@@ -1,5 +1,6 @@
 import time
 from argparse import Namespace
+from collections.abc import Mapping
 from contextlib import nullcontext
 from itertools import accumulate
 
@@ -673,34 +674,7 @@ class FSDPTrainRayActor(TrainRayActor):
         Parameters:
             params_dict: Source mapping from parameter names to CPU tensors.
         """
-        state_dict = self.model.state_dict()
-
-        for name, param in state_dict.items():
-            if name not in params_dict:
-                continue
-            cpu_tensor = params_dict[name]
-
-            target_tensor = param
-
-            if isinstance(target_tensor, DTensor):
-                src_tensor = cpu_tensor
-                if src_tensor.dtype != target_tensor.dtype:
-                    src_tensor = src_tensor.to(target_tensor.dtype)
-                if src_tensor.device.type != "cpu":
-                    src_tensor = src_tensor.to(device=torch.device("cpu"))
-
-                distributed = distribute_tensor(
-                    src_tensor.contiguous(),
-                    device_mesh=target_tensor.device_mesh,
-                    placements=target_tensor.placements,
-                )
-                target_tensor.copy_(distributed)
-            else:
-                tensor_to_load = cpu_tensor
-                if tensor_to_load.dtype != target_tensor.dtype:
-                    tensor_to_load = tensor_to_load.to(target_tensor.dtype)
-                target_tensor.copy_(tensor_to_load.to(target_tensor.device, non_blocking=True))
-
+        self._load_cpu_state_dict(params_dict)
         torch.cuda.synchronize()
 
     def load_ref_model(self, ref_load_path: str | None) -> None:
@@ -745,6 +719,45 @@ class FSDPTrainRayActor(TrainRayActor):
 
         finally:
             self.update_gpu_params_dict(current_weights)
+
+    @torch.no_grad()
+    def _load_cpu_state_dict(self, full_state_dict: Mapping[str, torch.Tensor]) -> None:
+        """Load a CPU full-state dict into the model, handling DTensor shards."""
+
+        if not hasattr(self, "_fsdp_param_map"):
+            self._fsdp_param_map = dict(self.model.named_parameters())
+            self._fsdp_buffer_map = dict(self.model.named_buffers())
+
+        param_map = self._fsdp_param_map
+        buffer_map = self._fsdp_buffer_map
+
+        for name, src in full_state_dict.items():
+            if not torch.is_tensor(src):
+                continue
+
+            target_param = param_map.get(name)
+            if target_param is None:
+                target_param = buffer_map.get(name)
+                if target_param is None:
+                    continue
+
+            dst_tensor = target_param.data
+
+            src_tensor = src.detach()
+            if src_tensor.device.type != "cpu":
+                src_tensor = src_tensor.to(device=torch.device("cpu"))
+            if src_tensor.dtype != dst_tensor.dtype:
+                src_tensor = src_tensor.to(dtype=dst_tensor.dtype)
+
+            if isinstance(dst_tensor, DTensor):
+                distributed = distribute_tensor(
+                    src_tensor.contiguous(),
+                    device_mesh=dst_tensor.device_mesh,
+                    placements=dst_tensor.placements,
+                )
+                dst_tensor.copy_(distributed)
+            else:
+                dst_tensor.copy_(src_tensor.to(device=dst_tensor.device, non_blocking=True))
 
 
 def selective_log_softmax_raw(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
