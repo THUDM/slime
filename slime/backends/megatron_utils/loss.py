@@ -418,8 +418,10 @@ def policy_loss_function(
 
     pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
 
-    # Apply off-policy correction using importance sampling if enabled
-    if args.use_tis:
+    # Compute TIS metrics if rollout_log_probs is available
+    has_rollout_log_probs = "rollout_log_probs" in batch and batch["rollout_log_probs"] is not None
+
+    if has_rollout_log_probs:
 
         def vanilla_tis_function(
             args,
@@ -441,8 +443,6 @@ def policy_loss_function(
             }
             return tis_weights, metrics
 
-        assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
-
         ois = (-ppo_kl).exp()
         tis_kwargs = {
             "args": args,
@@ -459,7 +459,9 @@ def policy_loss_function(
             tis_func = vanilla_tis_function
         tis_weights, tis_metrics = tis_func(**tis_kwargs)
 
-        pg_loss = pg_loss * tis_weights
+        # Only apply TIS correction when explicitly enabled
+        if args.use_tis:
+            pg_loss = pg_loss * tis_weights
 
     pg_loss = sum_of_sample_mean(pg_loss)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
@@ -499,7 +501,8 @@ def policy_loss_function(
     if args.use_kl_loss:
         reported_loss["kl_loss"] = kl_loss.clone().detach()
 
-    if args.use_tis:
+    # Report TIS metrics if they were computed
+    if has_rollout_log_probs:
         reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
         # Assume all metrics are already cloned and detached
         for metric_key, metric_value in tis_metrics.items():

@@ -177,7 +177,7 @@ def slice_log_prob_with_cp(
     total_length: int,
     response_length: int,
 ) -> Union[list[float], torch.Tensor]:
-    assert len(log_prob) == response_length
+    assert len(log_prob) == response_length, print(f'log p length is {len(log_prob)} and response length is {response_length}')
 
     cp_size = mpu.get_context_parallel_world_size()
 

@@ -7,13 +7,14 @@ import re
 from local_search_server import local_search
 from qa_em_format import compute_score_em
 
+from slime import rollout
 from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.http_utils import post
 from slime.utils.types import Sample
 
 # Configuration for Search-R1 with local search engine
 SEARCH_R1_CONFIGS = {
-    "max_turns": 3,
+    "max_turns": 2,
     "topk": 3,
     # Local search engine configuration
     "search_url": "http://127.0.0.1:8000/retrieve",  # URL of your local retrieval server
@@ -60,6 +61,10 @@ async def search(query: str) -> str:
 
 def postprocess_responses(resp: str) -> str:
     return (
+        # <search> text <search>
+        # <search> 1, 0 + 2
+        # [1,2,1,2,0,2]
+        
         resp.split("</search>")[0] + "</search>"
         if "</search>" in resp
         else resp.split("</answer>")[0] + "</answer>" if "</answer>" in resp else resp
@@ -113,10 +118,12 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     response = ""
     response_token_ids = []
     loss_mask = []
+    rollout_log_probs = []
     for _ in range(SEARCH_R1_CONFIGS["max_turns"]):
         payload = {
             "text": prompt + response,
             "sampling_params": sampling_params,
+            "return_logprob": True,
         }
         output = await post(url, payload)
 
@@ -124,11 +131,30 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         if output["meta_info"]["finish_reason"]["type"] == "abort":
             sample.status = Sample.Status.ABORTED
             return sample
-
+        
         cur_response = output["text"]
         cur_response = postprocess_responses(cur_response)
 
+        # <endoftext> = <end + oftext> 0, 1 -> log_p0, logp_1
+        # 2 
         cur_response_token_ids = state.tokenizer(cur_response, add_special_tokens=False)["input_ids"]
+
+        # Extract log probs from output - required for TIS metrics
+        if "output_token_logprobs" not in output["meta_info"]:
+            raise RuntimeError(
+                "output_token_logprobs not found in output meta_info. "
+                "Make sure 'return_logprob': True is set in the payload."
+            )
+        cur_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
+        assert len(cur_response_token_ids) <= len(cur_response_log_probs), (
+            f"Token-logprob length mismatch: "
+            f"len(cur_response_token_ids)={len(cur_response_token_ids)}, "
+            f"len(cur_response_log_probs)={len(cur_response_log_probs)}. "
+            f"{output}\n"
+            f'cur_response {cur_response}'
+        )
+        rollout_log_probs += cur_response_log_probs[:len(cur_response_token_ids)]
+
         response += cur_response
         response_token_ids += cur_response_token_ids
         loss_mask += [1] * len(cur_response_token_ids)
@@ -145,11 +171,15 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         response += next_obs
         response_token_ids += obs_tokens_ids
         loss_mask += [0] * len(obs_tokens_ids)
+        # Add dummy log probs for observation tokens (they won't be used due to loss_mask=0)
+        rollout_log_probs += [0.0] * len(obs_tokens_ids)
 
+        assert len(response_token_ids) == len(rollout_log_probs), f'log p length is {len(response_token_ids)} and response length is {len(rollout_log_probs)}'
     sample.tokens = prompt_tokens_ids + response_token_ids
     sample.response_length = len(response_token_ids)
     sample.response = response
     sample.loss_mask = loss_mask
+    sample.rollout_log_probs = rollout_log_probs if rollout_log_probs else None
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":
             sample.status = Sample.Status.TRUNCATED
