@@ -1,5 +1,5 @@
 # Enable importance sampling, details refer to the comments of compute_mis_weights in mis.py
-use_mis: false
+use_tis: true
 
 # Aggregation level for importance sampling weights: 
 # token: per-token
