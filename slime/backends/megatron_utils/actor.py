@@ -1,6 +1,5 @@
 import os
 import socket
-import time
 from argparse import Namespace
 from contextlib import nullcontext
 from pathlib import Path
@@ -154,16 +153,6 @@ class MegatronTrainRayActor(TrainRayActor):
     @timer
     def wake_up(self) -> None:
         assert self.args.offload_train
-
-        # there are weird times when sglang is not offloaded immediately, so we wait here.
-        mem_fraction_static = self.args.sglang_mem_fraction_static or 0.8
-        for _ in range(60):
-            memory_info = print_memory("before wake_up model")
-            if memory_info["used_GB"] >= mem_fraction_static * memory_info["total_GB"]:
-                time.sleep(1)
-                continue
-            break
-
         torch_memory_saver.resume()
 
         clear_memory()

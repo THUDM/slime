@@ -126,6 +126,11 @@ MISC_ARGS=(
    --attention-backend flash
 )
 
+SPEC_ARGS=(
+   --enable-mtp-training
+   --mtp-loss-scaling-factor 0.2
+)
+
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats
@@ -154,4 +159,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
-   ${MISC_ARGS[@]}
+   ${MISC_ARGS[@]} \
+   ${SPEC_ARGS[@]}

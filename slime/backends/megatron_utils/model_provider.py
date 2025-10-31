@@ -147,7 +147,7 @@ def get_model_provider_func(
         if vp_stage is not None:
             kwargs["vp_stage"] = vp_stage
 
-        if getattr(args, "mtp_num_layers", None):
+        if args.mtp_num_layers:
             from megatron.core.models.gpt.gpt_layer_specs import get_gpt_mtp_block_spec
 
             mtp_kwargs = {
