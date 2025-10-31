@@ -435,25 +435,8 @@ def train_one_step(
         loss_mask = None
         mtp_kwargs = {}
 
-        # If enabling MTP training: trigger MTP loss inside Megatron while returning logits
-        # for the target model's loss.
-        if getattr(args, "enable_mtp_training", False):
-            loss_mask = build_loss_mask_for_mtp(batch)
-            if loss_mask is not None:
-                assert (
-                    loss_mask.shape == batch["tokens"].shape
-                ), f"loss_mask shape {loss_mask.shape} mismatches token shape {batch['tokens'].shape}"
-            mtp_kwargs = {
-                # We have to set labels to tokens for MTP training, to point out samples to train.
-                "mtp_labels": batch["tokens"],
-                # TODO: Detach hidden states on target model.
-                # "mtp_detach_hidden_states": True,
-            }
-
         if return_schedule_plan:
-            assert (
-                args.overlap_moe_expert_parallel_comm
-            ), "overlap_moe_expert_parallel_comm must be enabled to return the schedule plan"
+            assert not args.enable_mtp_training, "MTP training should not be enabled when using combined 1f1b"
             output_tensor = model.build_schedule_plan(
                 input_ids=batch["tokens"],
                 position_ids=None,
@@ -462,6 +445,18 @@ def train_one_step(
                 packed_seq_params=batch["packed_seq_params"],
             )
         else:
+            # If enabling MTP training: trigger MTP loss inside Megatron while returning logits
+            # for the target model's loss.
+            if args.enable_mtp_training:
+                loss_mask = build_loss_mask_for_mtp(batch)
+                assert (
+                    loss_mask.shape == batch["tokens"].shape
+                ), f"loss_mask shape {loss_mask.shape} mismatches token shape {batch['tokens'].shape}"
+                mtp_kwargs = {
+                    # We have to set labels to tokens for MTP training, to point out samples to train.
+                    "mtp_labels": batch["tokens"],
+                }
+
             output_tensor = model(
                 input_ids=batch["tokens"],
                 position_ids=None,
@@ -639,6 +634,21 @@ def train(
                 config.param_sync_func = param_sync_func
                 pre_hook_enabled = True
 
+        if args.enable_mtp_training:
+            from megatron.core.transformer.multi_token_prediction import MTPLossLoggingHelper
+
+            mtp_loss_scale = 1 / num_microbatches[step_id]
+            tracker = MTPLossLoggingHelper.tracker
+            if "values" in tracker:
+                values = tracker["values"]
+                if tracker.get("reduce_group") is not None:
+                    torch.distributed.all_reduce(values, group=tracker.get("reduce_group"))
+                if tracker.get("avg_group") is not None:
+                    torch.distributed.all_reduce(values, group=tracker["avg_group"], op=torch.distributed.ReduceOp.AVG)
+                # here we assume only one mtp layer
+                mtp_losses = (tracker["values"] * mtp_loss_scale).item()
+                MTPLossLoggingHelper.clean_loss_in_tracker()
+
         # per train step log.
         if (
             mpu.get_data_parallel_rank(with_context_parallel=True) == 0
@@ -653,6 +663,8 @@ def train(
                 for key, val in loss_dict.items()
             }
             log_dict[f"train/{role_tag}grad_norm"] = grad_norm
+            if args.enable_mtp_training:
+                log_dict[f"train/{role_tag}mtp_loss"] = mtp_losses
 
             for param_group_id, param_group in enumerate(optimizer.param_groups):
                 log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)

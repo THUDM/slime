@@ -120,10 +120,10 @@ class RolloutManager:
         self.data_source.load(rollout_id)
 
     def offload(self):
-        return [engine.release_memory_occupation.remote() for engine in self.rollout_engines]
+        return ray.get([engine.release_memory_occupation.remote() for engine in self.rollout_engines])
 
     def onload(self, tags: List[str] = None):
-        return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines]
+        return ray.get([engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines])
 
     def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:

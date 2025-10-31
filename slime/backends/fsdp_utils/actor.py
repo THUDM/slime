@@ -1,4 +1,3 @@
-import time
 from argparse import Namespace
 from contextlib import nullcontext
 from itertools import accumulate
@@ -195,16 +194,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
         match self.args.offload_train_mode:
             case "tms":
-                # TODO this is copy-pasted from megatron side; should unify the two
-                # there are weird times when sglang is not offloaded immediately, so we wait here.
-                mem_fraction_static = self.args.sglang_mem_fraction_static or 0.8
-                for _ in range(60):
-                    memory_info = print_memory("before wake_up model")
-                    if memory_info["used_GB"] >= mem_fraction_static * memory_info["total_GB"]:
-                        time.sleep(1)
-                        continue
-                    break
-
                 torch_memory_saver.resume()
             case "move":
                 self.model.cuda()

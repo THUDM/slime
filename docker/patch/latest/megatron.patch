@@ -94,7 +94,7 @@ index 860ee64a9..80944b702 100755
                      "mlp.0.weight": "mlp.linear_fc1.layer_norm_weight",
                      "mlp.0.bias": "mlp.linear_fc1.layer_norm_bias",
 diff --git a/megatron/core/models/gpt/gpt_model.py b/megatron/core/models/gpt/gpt_model.py
-index 6aec66e6d..d1d2fef17 100644
+index 6aec66e6d..7aa4b2f7d 100644
 --- a/megatron/core/models/gpt/gpt_model.py
 +++ b/megatron/core/models/gpt/gpt_model.py
 @@ -355,6 +355,7 @@ class GPTModel(LanguageModule):
@@ -130,7 +130,7 @@ index 6aec66e6d..d1d2fef17 100644
              hidden_states = self.mtp(
                  input_ids=input_ids,
                  position_ids=position_ids,
-@@ -465,8 +468,8 @@ class GPTModel(LanguageModule):
+@@ -465,8 +468,10 @@ class GPTModel(LanguageModule):
          if not self.post_process:
              return hidden_states
  
@@ -138,10 +138,12 @@ index 6aec66e6d..d1d2fef17 100644
 -            mtp_labels = labels.clone()
 +        if self.mtp_process and mtp_kwargs.get('mtp_labels', None) is not None:
 +            mtp_labels = mtp_kwargs['mtp_labels'].clone()
++            mtp_labels, _ = roll_tensor(mtp_labels, shifts=-1, dims=-1, cp_group=self.cp_group, packed_seq_params=packed_seq_params)
++
              hidden_states_list = torch.chunk(hidden_states, 1 + self.config.mtp_num_layers, dim=0)
              hidden_states = hidden_states_list[0]
              if loss_mask is None:
-@@ -480,9 +483,9 @@ class GPTModel(LanguageModule):
+@@ -480,9 +485,9 @@ class GPTModel(LanguageModule):
                      runtime_gather_output=runtime_gather_output,
                  )
                  # Calc loss for the current Multi-Token Prediction (MTP) layers.
@@ -367,7 +369,7 @@ index 6b20b8622..459e65921 100644
          """
          Maintain the expert bias in float32.
 diff --git a/megatron/core/transformer/multi_token_prediction.py b/megatron/core/transformer/multi_token_prediction.py
-index b7884e18e..8ef95c5df 100755
+index b7884e18e..153682618 100755
 --- a/megatron/core/transformer/multi_token_prediction.py
 +++ b/megatron/core/transformer/multi_token_prediction.py
 @@ -6,6 +6,7 @@ from typing import Callable, List, Optional, Union
@@ -538,7 +540,7 @@ index b7884e18e..8ef95c5df 100755
      ):
          """
          Preprocesses input data for the Multi-Token Prediction (MTP) layers.
-@@ -499,8 +608,18 @@ class MultiTokenPredictionLayer(MegatronModule):
+@@ -499,12 +608,23 @@ class MultiTokenPredictionLayer(MegatronModule):
                  sequence length, b is the batch size, and h is the hidden size.
          """
          # Calc logits for the current Multi-Token Prediction (MTP) layers.
@@ -558,8 +560,14 @@ index b7884e18e..8ef95c5df 100755
 +        )
          # embedding
          decoder_input = embedding(input_ids=input_ids, position_ids=position_ids)
++        decoder_input = make_viewless_tensor(inp=decoder_input, requires_grad=False, keep_graph=False)
  
-@@ -604,22 +723,66 @@ class MultiTokenPredictionLayer(MegatronModule):
+-        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
++        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=False, keep_graph=False)
+ 
+         return input_ids, position_ids, decoder_input, hidden_states
+ 
+@@ -604,22 +724,66 @@ class MultiTokenPredictionLayer(MegatronModule):
          return hidden_states
  
      def _checkpointed_forward(self, forward_func, *args, **kwargs):
@@ -631,16 +639,13 @@ index b7884e18e..8ef95c5df 100755
                  )
  
          if self.config.recompute_method == 'uniform':
-@@ -681,15 +844,16 @@ class MultiTokenPredictionLayer(MegatronModule):
+@@ -681,15 +845,13 @@ class MultiTokenPredictionLayer(MegatronModule):
              [s, b, h], and optionally the updated context tensor if cross-attention is used.
          """
          assert context is None, f"multi token prediction + cross attention is not yet supported."
 -        assert (
 -            packed_seq_params is None
 -        ), f"multi token prediction + sequence packing is not yet supported."
-+        # assert (
-+        #     packed_seq_params is None
-+        # ), f"multi token prediction + sequence packing is not yet supported."
  
          input_ids, position_ids, decoder_input, hidden_states = self._get_embeddings(
              input_ids=input_ids,
