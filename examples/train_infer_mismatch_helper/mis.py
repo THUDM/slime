@@ -278,10 +278,6 @@ def compute_mis_weights_with_cp(
 
     result_metrics = {}
     is_weights = slice_cp_and_concat(is_weights, total_lengths, response_lengths)
-    modified_masks = [
-        slice_log_prob_with_cp(modified_masks[i], total_lengths[i], response_lengths[i])
-        for i in range(len(modified_masks))
-    ]
     
     for key, values in is_metrics.items():
         key_name = f"mis_{key}"
