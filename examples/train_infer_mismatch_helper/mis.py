@@ -278,7 +278,7 @@ def compute_mis_weights_with_cp(
 
     result_metrics = {}
     is_weights = slice_cp_and_concat(is_weights, total_lengths, response_lengths)
-    
+
     for key, values in is_metrics.items():
         key_name = f"mis_{key}"
         values = slice_cp_and_concat(values, total_lengths, response_lengths)

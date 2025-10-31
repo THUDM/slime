@@ -461,7 +461,7 @@ def policy_loss_function(
         else:
             tis_func = vanilla_tis_function
         pg_loss, modified_response_masks, tis_metrics = tis_func(**tis_kwargs)
-        
+
         # [decouple IS and rejection] Rebuild sum_of_sample_mean with modified_response_masks for denominator correction
         # modified_response_masks will be sliced with cp in get_sum_of_sample_mean
         sum_of_sample_mean = get_sum_of_sample_mean(
