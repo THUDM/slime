@@ -8,7 +8,11 @@ import torch
 import torch.distributed as dist
 import wandb
 from packaging import version
-from torch.distributed.tensor import DTensor
+from torch.distributed.checkpoint.state_dict import (
+    StateDictOptions,
+    get_model_state_dict,
+)
+from torch.distributed.tensor import DTensor, distribute_tensor
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 
@@ -68,6 +72,9 @@ class FSDPTrainRayActor(TrainRayActor):
             init_wandb_secondary(args, wandb_run_id)
 
         self.args = args
+        self.fsdp_full_state_dict_opts = StateDictOptions(
+            full_state_dict=True, cpu_offload=getattr(self.args, "fsdp_state_dict_cpu_offload", False)
+        )
         torch.manual_seed(args.seed)
 
         if getattr(self.args, "start_rollout_id", None) is None:
@@ -648,11 +655,11 @@ class FSDPTrainRayActor(TrainRayActor):
                 Missing entries are allocated with matching shapes and dtypes.
         """
 
-        state_dict = self.model.state_dict()
+        state_dict = get_model_state_dict(self.model, options=self.fsdp_full_state_dict_opts)
 
         for name, param in state_dict.items():
-            if isinstance(param, DTensor):
-                param = param.full_tensor()
+            if not torch.is_tensor(param):
+                continue
 
             if name not in params_dict:
                 params_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
@@ -666,9 +673,34 @@ class FSDPTrainRayActor(TrainRayActor):
         Parameters:
             params_dict: Source mapping from parameter names to CPU tensors.
         """
-        # FSDP v2 doesn't need context managers - load state dict directly
-        gpu_state_dict = {name: param.cuda(non_blocking=True) for name, param in params_dict.items()}
-        self.model.load_state_dict(gpu_state_dict, strict=True)
+        state_dict = self.model.state_dict()
+
+        for name, param in state_dict.items():
+            if name not in params_dict:
+                continue
+            cpu_tensor = params_dict[name]
+
+            target_tensor = param
+
+            if isinstance(target_tensor, DTensor):
+                src_tensor = cpu_tensor
+                if src_tensor.dtype != target_tensor.dtype:
+                    src_tensor = src_tensor.to(target_tensor.dtype)
+                if src_tensor.device.type != "cpu":
+                    src_tensor = src_tensor.to(device=torch.device("cpu"))
+
+                distributed = distribute_tensor(
+                    src_tensor.contiguous(),
+                    device_mesh=target_tensor.device_mesh,
+                    placements=target_tensor.placements,
+                )
+                target_tensor.copy_(distributed)
+            else:
+                tensor_to_load = cpu_tensor
+                if tensor_to_load.dtype != target_tensor.dtype:
+                    tensor_to_load = tensor_to_load.to(target_tensor.dtype)
+                target_tensor.copy_(tensor_to_load.to(target_tensor.device, non_blocking=True))
+
         torch.cuda.synchronize()
 
     def load_ref_model(self, ref_load_path: str | None) -> None:
@@ -692,18 +724,22 @@ class FSDPTrainRayActor(TrainRayActor):
                     ref_load_path,
                     trust_remote_code=True,
                     torch_dtype=torch.bfloat16,
+                    device_map="cpu",
                 )
 
-                # FSDP v2 doesn't need context managers - load state dict directly
-                self.model.load_state_dict(temp_ref_model.state_dict(), strict=True)
+                ref_state_dict = temp_ref_model.state_dict()
+                self.weights["ref"] = {}
+
+                for name, tensor in ref_state_dict.items():
+                    actor_tensor = current_weights.get(name)
+                    target_dtype = actor_tensor.dtype if actor_tensor is not None else tensor.dtype
+                    cpu_tensor = tensor.detach().to(device="cpu", dtype=target_dtype, copy=True)
+                    self.weights["ref"][name] = cpu_tensor.pin_memory()
 
                 del temp_ref_model
                 torch.cuda.empty_cache()
             else:
                 raise NotImplementedError(f"Loading from checkpoint file {ref_load_path} not yet implemented")
-
-            self.weights["ref"] = {}
-            self.update_cpu_params_dict(self.weights["ref"])
 
             print("Reference model parameters loaded and stored in CPU memory")
 
