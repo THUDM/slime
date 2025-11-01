@@ -675,7 +675,6 @@ class FSDPTrainRayActor(TrainRayActor):
             if not torch.is_tensor(src):
                 continue
 
-            # Find the target parameter or buffer
             target_param = param_map.get(name)
             if target_param is None:
                 target_param = buffer_map.get(name)
@@ -684,14 +683,12 @@ class FSDPTrainRayActor(TrainRayActor):
 
             dst_tensor = target_param.data
 
-            # Ensure source tensor is on CPU with correct dtype
             src_tensor = src.detach()
             if src_tensor.device.type != "cpu":
                 src_tensor = src_tensor.to(device=torch.device("cpu"))
             if src_tensor.dtype != dst_tensor.dtype:
                 src_tensor = src_tensor.to(dtype=dst_tensor.dtype)
 
-            # Handle DTensor: distribute the full tensor to shards
             if isinstance(dst_tensor, DTensor):
                 distributed = distribute_tensor(
                     src_tensor.contiguous(),
