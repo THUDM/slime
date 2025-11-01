@@ -641,10 +641,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 Missing entries are allocated with matching shapes and dtypes.
         """
 
-        state_dict = get_model_state_dict(
-            self.model, 
-            options=self.fsdp_full_state_dict_opts
-        )
+        state_dict = get_model_state_dict(self.model, options=self.fsdp_full_state_dict_opts)
 
         for name, param in state_dict.items():
             if not torch.is_tensor(param):
@@ -661,7 +658,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         Parameters:
             params_dict: Source mapping from parameter names to CPU tensors.
-            
+
         Note:
             This method handles both regular Tensors and DTensors. For DTensors,
             it properly distributes the full tensor according to FSDP sharding.
@@ -686,7 +683,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     continue
 
             dst_tensor = target_param.data
-            
+
             # Ensure source tensor is on CPU with correct dtype
             src_tensor = src.detach()
             if src_tensor.device.type != "cpu":
@@ -705,7 +702,7 @@ class FSDPTrainRayActor(TrainRayActor):
             else:
                 # Regular tensor: just move to GPU
                 dst_tensor.copy_(src_tensor.to(device=dst_tensor.device, non_blocking=True))
-        
+
         torch.cuda.synchronize()
 
     def load_ref_model(self, ref_load_path: str | None) -> None:
@@ -746,7 +743,7 @@ class FSDPTrainRayActor(TrainRayActor):
             raise NotImplementedError(f"Loading from checkpoint file {ref_load_path} not yet implemented")
 
         print("Reference model parameters loaded and stored in CPU memory")
-            
+
 
 def selective_log_softmax_raw(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
     """Fused version of the common `log_softmax -> gather` operation.
