@@ -130,6 +130,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default="{}",
                 help="Extra environment variables for training process, e.g. PyTorch memory management ones.",
             )
+            parser.add_argument(
+                "--train-memory-margin-bytes",
+                type=int,
+                default=0,
+                help="Add margin for train memory allocation.",
+            )
 
             return parser
 

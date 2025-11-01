@@ -6,6 +6,7 @@ from datetime import timedelta
 import ray
 import torch
 import torch.distributed as dist
+from torch_memory_saver import torch_memory_saver
 
 from slime.ray.ray_actor import RayActor
 from slime.utils.distributed_utils import init_gloo_group
@@ -44,6 +45,11 @@ class TrainRayActor(RayActor):
         self.args = args
         self.role = role
         self.with_ref = with_ref
+
+        if (x := args.train_memory_margin_bytes) > 0:
+            print(f"Set torch_memory_saver.memory_margin_bytes to {x}")
+            assert args.offload_train
+            torch_memory_saver.memory_margin_bytes = x
 
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         torch.cuda.set_device(f"cuda:{local_rank}")
