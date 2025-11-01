@@ -46,9 +46,16 @@ def quantize_params(args, megatron_name, converted_named_params, quantization_co
     match = re.match(decoder_layers_pattern, megatron_name)
 
     if not match:
-        return converted_named_params
+        # check mtp layers
+        mtp_layer_pattern = r"module\.module\.mtp\.layers\.(\d+)\.(.+)"
+        match = re.match(mtp_layer_pattern, megatron_name)
+        if not match:
+            return converted_named_params
+        layer_idx, rest = match.groups()
+        rest = rest.replace("transformer_layer.", "")
+    else:
+        layer_idx, rest = match.groups()
 
-    layer_idx, rest = match.groups()
     # experts
     expert_pattern = r"mlp.experts\.(.+)\.weight(\d+)"
     match = re.match(expert_pattern, rest)

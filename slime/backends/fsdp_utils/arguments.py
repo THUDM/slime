@@ -31,11 +31,16 @@ class FSDPArgs:
 
     # FSDP configuration
     fsdp_full_params: bool = False  # If True, use full_tensor; if False, use shard_tensor
+    fsdp_state_dict_cpu_offload: bool = True  # If True, offload full state dict to CPU during collection.
 
     deterministic_mode: bool = False  # This name must be the same as Megatron's
     # Profile
     record_memory_history: bool = False
     memory_snapshot_path: str = "snapshot.pickle"
+    use_pytorch_profiler: bool = False
+    profile_step_start: int = 10
+    profile_step_end: int = 12
+    tensorboard_dir: str | None = None
 
     # YAML bookkeeping
     config: str | None = None
