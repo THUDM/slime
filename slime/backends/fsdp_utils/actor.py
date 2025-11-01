@@ -531,6 +531,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
             pg_loss = pg_loss * tis_clip
 
+        assert not self.args.calculate_per_token_loss, "calculate_per_token_loss not yet implemented"
         pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
         pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
         ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
