@@ -427,8 +427,9 @@ def policy_loss_function(
             pg_loss: torch.Tensor,
             train_log_probs: list[torch.Tensor],
             rollout_log_probs: list[torch.Tensor],
+            loss_masks: list[torch.Tensor],
             **kwargs: Any,
-        ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        ) -> Tuple[torch.Tensor, list[torch.Tensor], Dict[str, torch.Tensor]]:
             rollout_log_probs = torch.cat(rollout_log_probs, dim=0)
             old_log_probs = torch.cat(train_log_probs, dim=0)
             tis = torch.exp(old_log_probs - rollout_log_probs)
@@ -441,7 +442,7 @@ def policy_loss_function(
                 "tis_abs": tis_abs.clone().detach(),
             }
             pg_loss = pg_loss * tis_weights
-            return pg_loss, metrics
+            return pg_loss, loss_masks, metrics
 
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
 
@@ -460,7 +461,13 @@ def policy_loss_function(
             tis_func = load_function(args.custom_tis_function_path)
         else:
             tis_func = vanilla_tis_function
-        pg_loss, tis_metrics = tis_func(**tis_kwargs)
+        pg_loss, modified_response_masks, tis_metrics = tis_func(**tis_kwargs)
+
+        # [decouple IS and rejection] Rebuild sum_of_sample_mean with modified_response_masks for denominator correction
+        # modified_response_masks will be sliced with cp in get_sum_of_sample_mean
+        sum_of_sample_mean = get_sum_of_sample_mean(
+            total_lengths, response_lengths, modified_response_masks, args.calculate_per_token_loss
+        )
 
     pg_loss = sum_of_sample_mean(pg_loss)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)

@@ -1,5 +1,5 @@
 # Enable importance sampling, details refer to the comments of compute_mis_weights in mis.py
-use_mis: false
+use_tis: true
 
 # Aggregation level for importance sampling weights: 
 # token: per-token
@@ -11,7 +11,7 @@ mis_level: "token"
 # truncate: cap to upper bound, TIS
 # mask: zero outside [lower, upper], MIS
 # clip: clip to [lower, upper], CIS
-mis_mode: "truncate"
+mis_mode: "mask"
 
 # For mask or clip mode, the lower bound of the IS weights.
 # For truncate mode, it will not be used.
