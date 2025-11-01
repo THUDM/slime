@@ -933,6 +933,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=int,
                 default=None,
             )
+            parser.add_argument(
+                "--profile-target",
+                type=str,
+                choices=["train_overall", "train_actor", "train_log_probs"],
+                default=["train_overall"],
+                nargs="+",
+            )
             return parser
 
         def add_network_arguments(parser):
