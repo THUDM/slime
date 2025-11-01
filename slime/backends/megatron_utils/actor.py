@@ -316,19 +316,20 @@ class MegatronTrainRayActor(TrainRayActor):
                 )
 
             self.prof.after_actor_train_step(rollout_id=rollout_id)
-
-        # TODO extract to a function during refactor
+        
         if (path_template := self.args.save_debug_train_data) is not None:
-            rank = torch.distributed.get_rank()
+            from pathlib import Path
+        
+            rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
             path = Path(path_template.format(rollout_id=rollout_id, rank=rank))
-            print(f"Save debug train data to {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
+        
             torch.save(
-                dict(
-                    rollout_id=rollout_id,
-                    rank=rank,
-                    rollout_data=rollout_data,
-                ),
+                {
+                    "rollout_id": rollout_id,
+                    "rank": rank,
+                    "rollout_data": rollout_data,
+                },
                 path,
             )
 
