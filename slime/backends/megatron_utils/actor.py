@@ -2,7 +2,6 @@ import os
 import socket
 from argparse import Namespace
 from contextlib import nullcontext
-from pathlib import Path
 from typing import Dict, Optional
 
 import ray
@@ -14,6 +13,7 @@ from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
+from slime.utils import train_dump_utils
 from slime.utils.context_utils import with_defer
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
@@ -317,20 +317,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
             self.prof.after_actor_train_step(rollout_id=rollout_id)
 
-        # TODO extract to a function during refactor
-        if (path_template := self.args.save_debug_train_data) is not None:
-            rank = torch.distributed.get_rank()
-            path = Path(path_template.format(rollout_id=rollout_id, rank=rank))
-            print(f"Save debug train data to {path}")
-            path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(
-                dict(
-                    rollout_id=rollout_id,
-                    rank=rank,
-                    rollout_data=rollout_data,
-                ),
-                path,
-            )
+        train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
 
         if self.args.use_routing_replay:
             RoutingReplay.clear_all()

@@ -14,7 +14,7 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
-from slime.utils import profile_utils, train_metric_utils
+from slime.utils import profile_utils, train_dump_utils, train_metric_utils
 from slime.utils.context_utils import with_defer
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
@@ -446,6 +446,8 @@ class FSDPTrainRayActor(TrainRayActor):
                 )
 
         self.prof.after_actor_train_step(rollout_id=rollout_id)
+
+        train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
 
         self.update_cpu_params_dict(self.weights["actor"])
 
