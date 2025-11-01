@@ -427,8 +427,9 @@ def policy_loss_function(
             pg_loss: torch.Tensor,
             train_log_probs: list[torch.Tensor],
             rollout_log_probs: list[torch.Tensor],
+            loss_masks: list[torch.Tensor],
             **kwargs: Any,
-        ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor]]:
+        ) -> Tuple[torch.Tensor, list[torch.Tensor], Dict[str, torch.Tensor]]:
             rollout_log_probs = torch.cat(rollout_log_probs, dim=0)
             old_log_probs = torch.cat(train_log_probs, dim=0)
             tis = torch.exp(old_log_probs - rollout_log_probs)
@@ -441,7 +442,7 @@ def policy_loss_function(
                 "tis_abs": tis_abs.clone().detach(),
             }
             pg_loss = pg_loss * tis_weights
-            return pg_loss, metrics
+            return pg_loss, loss_masks, metrics
 
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
 
