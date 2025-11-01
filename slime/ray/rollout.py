@@ -5,7 +5,6 @@ import time
 from pathlib import Path
 from typing import List, Union
 
-import numpy as np
 import ray
 import torch
 import wandb
@@ -18,7 +17,7 @@ from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
 from slime.utils.iter_utils import group_by
 from slime.utils.metric_checker import MetricChecker
-from slime.utils.metric_utils import compute_pass_rate, compute_statistics, dict_add_prefix, has_repetition
+from slime.utils.metric_utils import compute_pass_rate, compute_statistics, dict_add_prefix
 from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
 from slime.utils.types import Sample
