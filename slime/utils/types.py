@@ -68,6 +68,10 @@ class Sample:
     def get_reward_value(self, args) -> float:
         return self.reward if not args.reward_key else self.reward[args.reward_key]
 
+    @property
+    def effective_response_length(self):
+        return sum(self.loss_mask) if self.loss_mask is not None else self.response_length
+
 
 @dataclass
 class ParamInfo:

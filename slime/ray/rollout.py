@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import List, Union
 
+import numpy as np
 import ray
 import torch
 import wandb
@@ -17,7 +18,7 @@ from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
 from slime.utils.iter_utils import group_by
 from slime.utils.metric_checker import MetricChecker
-from slime.utils.metric_utils import compute_pass_rate, compute_statistics, dict_add_prefix
+from slime.utils.metric_utils import compute_pass_rate, compute_statistics, dict_add_prefix, has_repetition
 from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
 from slime.utils.types import Sample
@@ -447,7 +448,7 @@ def _log_eval_rollout_data(rollout_id, args, data):
         rewards = data[key]["rewards"]
         log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
         if (samples := data[key].get("samples")) is not None:
-            log_dict |= dict_add_prefix(_compute_reward_cat_metrics(args, samples), f"eval/{key}-")
+            log_dict |= dict_add_prefix(_compute_metrics_from_samples(args, samples), f"eval/{key}/")
         if "truncated" in data[key]:
             truncated = data[key]["truncated"]
             log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
@@ -485,17 +486,12 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
         return
 
     log_dict = {**(rollout_extra_metrics or {})}
-    response_lengths = [
-        sum(sample.loss_mask) if sample.loss_mask is not None else sample.response_length for sample in samples
-    ]
+    response_lengths = [sample.effective_response_length for sample in samples]
     log_dict["perf/rollout_time"] = rollout_time
     if args.rollout_num_gpus:
         log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
-    log_dict |= dict_add_prefix(compute_statistics(response_lengths), f"rollout/response_len/")
-    log_dict |= _compute_zero_std_metrics(args, samples)
-    log_dict |= _compute_spec_metrics(args, samples)
-    log_dict |= dict_add_prefix(_compute_reward_cat_metrics(args, samples), f"rollout/")
+    log_dict |= dict_add_prefix(_compute_metrics_from_samples(args, samples), f"rollout/")
     print(f"perf {rollout_id}: {log_dict}")
     step = (
         rollout_id
@@ -513,6 +509,17 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
         tb.log(data=log_dict, step=step)
 
 
+def _compute_metrics_from_samples(args, samples):
+    response_lengths = [sample.effective_response_length for sample in samples]
+
+    log_dict = {}
+    log_dict |= dict_add_prefix(compute_statistics(response_lengths), f"response_len/")
+    log_dict |= _compute_zero_std_metrics(args, samples)
+    log_dict |= _compute_spec_metrics(args, samples)
+    log_dict |= _compute_reward_cat_metrics(args, samples)
+    return log_dict
+
+
 def _compute_zero_std_metrics(args, all_samples: List[Sample]):
     # only compute in GRPO-like algorithms where one prompt has multiple responses
     if args.advantage_estimator == "ppo":
@@ -527,7 +534,7 @@ def _compute_zero_std_metrics(args, all_samples: List[Sample]):
 
     interesting_rewards = [str(round(g[0].get_reward_value(args), 1)) for g in interesting_sample_groups]
 
-    return {f"rollout/zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
+    return {f"zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
 
 
 def _compute_spec_metrics(args, all_samples: List[Sample]):
