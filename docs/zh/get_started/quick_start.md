@@ -93,6 +93,7 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 ```
 
 对于更大的模型，可以使用 `torchrun` 来启动转换脚本，从而使用多张 GPU 甚至多机进行权重转换。
+注意：kimi-k2模型权重转换时，需打开模型路径中的config.json，将"model_type": "kimi_k2"修改为"model_type": "deepseek_v3"。
 
 ### Megatron 格式 转换为 Hugging Face 格式
 
@@ -521,7 +522,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     # 7. 填充并返回 Sample 对象
     sample.response = full_response
     sample.tokens = ...
-    sample.loss_masks = loss_masks
+    sample.loss_mask = loss_masks
     return sample
 ```
 

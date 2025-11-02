@@ -100,7 +100,6 @@ def _next_actor():
 
 
 async def _post(client, url, payload, max_retries=60):
-    max_retries = 60
     retry_count = 0
     while retry_count < max_retries:
         try:
@@ -112,9 +111,9 @@ async def _post(client, url, payload, max_retries=60):
                 output = response.text
         except Exception as e:
             retry_count += 1
-            print(f"Error: {e}, retrying... (attempt {retry_count}/{max_retries})")
+            print(f"Error: {e}, retrying... (attempt {retry_count}/{max_retries}, url={url})")
             if retry_count >= max_retries:
-                print(f"Max retries ({max_retries}) reached, failing...")
+                print(f"Max retries ({max_retries}) reached, failing... (url={url})")
                 raise e
             await asyncio.sleep(1)
             continue
@@ -126,7 +125,7 @@ async def _post(client, url, payload, max_retries=60):
 def init_http_client(args):
     """Initialize HTTP client and optionally enable distributed POST via Ray."""
     global _http_client, _client_concurrency, _distributed_post_enabled
-    if args.rollout_num_gpus is None:
+    if not args.rollout_num_gpus:
         return
 
     _client_concurrency = args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
@@ -207,7 +206,7 @@ async def post(url, payload, max_retries=60):
                 obj_ref = actor.do_post.remote(url, payload, max_retries)
                 return await asyncio.to_thread(ray.get, obj_ref)
         except Exception as e:
-            print(f"[http_utils] Distributed POST failed, falling back to local: {e}")
+            print(f"[http_utils] Distributed POST failed, falling back to local: {e} (url={url})")
             # fall through to local
 
     return await _post(_http_client, url, payload, max_retries)

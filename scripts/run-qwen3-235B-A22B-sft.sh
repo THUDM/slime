@@ -80,10 +80,9 @@ PERF_ARGS=(
 OPTIMIZER_ARGS=(
    --optimizer adam
    --lr 1e-5
-   --lr-warmup-iters 128
    --lr-decay-style cosine
    --min-lr 1e-6
-   --lr-warmup-fraction 0.9
+   --lr-warmup-fraction 0.1
    --weight-decay 0.1
    --adam-beta1 0.9
    --adam-beta2 0.98
@@ -131,7 +130,8 @@ RUNTIME_ENV_JSON="{
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
     \"no_proxy\": \"${no_proxy}\",
-    \"MASTER_ADDR\": \"${MASTER_ADDR}\"
+    \"MASTER_ADDR\": \"${MASTER_ADDR}\",
+    \"PYTORCH_CUDA_ALLOC_CONF\": \"expandable_segments:True\"
   }
 }"
 

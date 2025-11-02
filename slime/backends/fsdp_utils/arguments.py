@@ -1,7 +1,6 @@
 import argparse
 import dataclasses
 from dataclasses import dataclass
-from typing import Optional
 
 import yaml
 
@@ -9,7 +8,7 @@ import yaml
 @dataclass
 class FSDPArgs:
     # Optim
-    optimizer: str = "adam"
+    optimizer: str = "adam"  # Options: "adam" (GPU-based AdamW), "deepspeed_cpu_adam" (CPU-offloaded optimizer states)
     lr: float = 2e-5
     lr_decay_style: str = "constant"
     weight_decay: float = 0.0
@@ -25,13 +24,26 @@ class FSDPArgs:
 
     # Logging
     wandb_project: str = "slime-fsdp"
-    wandb_run_name: Optional[str] = None
+    wandb_run_name: str | None = None
 
     # Precision
     gradient_checkpointing: bool = False
 
+    # FSDP configuration
+    fsdp_full_params: bool = False  # If True, use full_tensor; if False, use shard_tensor
+    fsdp_state_dict_cpu_offload: bool = True  # If True, offload full state dict to CPU during collection.
+
+    deterministic_mode: bool = False  # This name must be the same as Megatron's
+    # Profile
+    record_memory_history: bool = False
+    memory_snapshot_path: str = "snapshot.pickle"
+    use_pytorch_profiler: bool = False
+    profile_step_start: int = 10
+    profile_step_end: int = 12
+    tensorboard_dir: str | None = None
+
     # YAML bookkeeping
-    config: Optional[str] = None
+    config: str | None = None
 
 
 def parse_fsdp_cli(extra_args_provider=None):
@@ -40,7 +52,9 @@ def parse_fsdp_cli(extra_args_provider=None):
     for f in dataclasses.fields(FSDPArgs):
         if f.name == "config":
             continue
-        arg_type = f.type if f.type != Optional[str] else str
+
+        arg_type = str if f.type == (str | None) else f.type
+
         if arg_type is bool:
             parser.add_argument(f"--{f.name.replace('_', '-')}", action="store_true")
         else:

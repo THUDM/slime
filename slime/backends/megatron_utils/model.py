@@ -2,6 +2,8 @@ import dataclasses
 import gc
 import math
 import os
+from argparse import Namespace
+from collections.abc import Callable, Sequence
 from functools import partial
 
 import torch
@@ -12,6 +14,7 @@ from megatron.core.distributed import DistributedDataParallelConfig, finalize_mo
 from megatron.core.enums import ModelType
 from megatron.core.models.gpt import GPTModel
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
+from megatron.core.optimizer.optimizer import MegatronOptimizer
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.core.utils import get_model_config
@@ -21,13 +24,25 @@ from megatron.training.training import get_model
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
-from .data import get_batch
+from .cp_utils import slice_with_cp
+from .data import DataIterator, get_batch
 from .loss import loss_function
 from .model_provider import get_model_provider_func
 
 
-def get_optimizer_param_scheduler(args, optimizer):
-    """Build the learning rate scheduler."""
+def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer) -> OptimizerParamScheduler:
+    """Create and configure the optimizer learning-rate/weight-decay scheduler.
+
+    This configures iteration-based schedules derived from the global batch size
+    and run-time arguments.
+
+    Args:
+        args (Namespace): Training/runtime arguments (argparse namespace).
+        optimizer (MegatronOptimizer): Megatron optimizer bound to the model.
+
+    Returns:
+        OptimizerParamScheduler: Initialized scheduler bound to ``optimizer``.
+    """
     # Iteration-based training.
     args.train_iters = args.num_rollout * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
     if args.lr_decay_iters is None:
@@ -64,13 +79,29 @@ def get_optimizer_param_scheduler(args, optimizer):
 
 
 def setup_model_and_optimizer(
-    args,
+    args: Namespace,
     role: str = "actor",
-    no_wd_decay_cond=None,
-    scale_lr_cond=None,
-    lr_mult=1.0,
-):
-    """Setup model and optimizer."""
+    no_wd_decay_cond: Callable[..., bool] | None = None,
+    scale_lr_cond: Callable[..., bool] | None = None,
+    lr_mult: float = 1.0,
+) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler]:
+    """Build model(s), wrap with DDP, and construct optimizer and scheduler.
+
+    Args:
+        args (Namespace): Training/runtime arguments (argparse namespace).
+        role (str): Logical role of the model (e.g., "actor", "critic").
+        no_wd_decay_cond (Callable[..., bool] | None): Predicate to exclude
+            parameters from weight decay.
+        scale_lr_cond (Callable[..., bool] | None): Predicate to scale LR for
+            selected parameter groups.
+        lr_mult (float): Global learning-rate multiplier for the optimizer.
+
+    Returns:
+        tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler]:
+            - List of model chunks wrapped by ``DDP``.
+            - The constructed ``MegatronOptimizer`` instance.
+            - The learning-rate/weight-decay scheduler tied to the optimizer.
+    """
     assert not args.moe_use_upcycling
     assert args.load is not None or args.pretrained_checkpoint is not None
 
@@ -138,21 +169,60 @@ def setup_model_and_optimizer(
     return model, optimizer, opt_param_scheduler
 
 
-def enable_forward_pre_hook(model_chunks):
+def enable_forward_pre_hook(model_chunks: Sequence[DDP]) -> None:
+    """Enable forward pre-hooks for provided DDP-wrapped model chunks.
+
+    Args:
+        model_chunks (Sequence[DDP]): Sequence of DDP modules to enable hooks on.
+    """
     for model_chunk in model_chunks:
         assert isinstance(model_chunk, DDP)
         model_chunk.enable_forward_pre_hook()
 
 
-def disable_forward_pre_hook(model_chunks, param_sync=True):
+def disable_forward_pre_hook(model_chunks: Sequence[DDP], param_sync: bool = True) -> None:
+    """Disable forward pre-hooks for provided DDP-wrapped model chunks.
+
+    Args:
+        model_chunks (Sequence[DDP]): Sequence of DDP modules to disable hooks on.
+        param_sync (bool): Whether to synchronize parameters when disabling.
+    """
     for model_chunk in model_chunks:
         assert isinstance(model_chunk, DDP)
         model_chunk.disable_forward_pre_hook(param_sync=param_sync)
 
 
 @torch.no_grad()
-def forward_only(f, args, model, data_iterator, num_microbatches, store_prefix=""):
-    """Only do the forward pass and calculate the logprob."""
+def forward_only(
+    f: Callable[..., dict[str, list[torch.Tensor]]],
+    args: Namespace,
+    model: Sequence[DDP],
+    data_iterator: Sequence[DataIterator],
+    num_microbatches: Sequence[int],
+    store_prefix: str = "",
+) -> dict[str, list[torch.Tensor]]:
+    """Run forward passes only and collect non-loss outputs (e.g., logprobs).
+
+    The model is put into evaluation mode, a forward-only pipeline pass is
+    executed, and relevant outputs are aggregated and returned.
+
+    Args:
+        f (Callable[..., dict[str, list[torch.Tensor]]]): Post-forward callback used to
+            compute and package outputs to collect. This should accept a logits
+            tensor as its first positional argument and additional keyword-only
+            arguments; see ``get_log_probs_and_entropy``/``get_values`` in
+            ``megatron_utils.loss`` for examples. It will be partially applied
+            so that the callable returned from the internal forward step only
+            requires the logits tensor.
+        args (Namespace): Runtime arguments.
+        model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
+        data_iterator (Sequence[DataIterator]): Iterable(s) yielding batches for inference.
+        num_microbatches (Sequence[int]): Number of microbatches per rollout step.
+        store_prefix (str): Prefix to prepend to stored output keys.
+
+    Returns:
+        dict[str, list[torch.Tensor]]: Aggregated outputs keyed by ``store_prefix + key``.
+    """
 
     # reset data iterator
     for iterator in data_iterator:
@@ -160,13 +230,22 @@ def forward_only(f, args, model, data_iterator, num_microbatches, store_prefix="
 
     config = get_model_config(model[0])
 
-    def forward_step(data_iterator, model: GPTModel):
-        """Forward training step.
+    def forward_step(
+        data_iterator: DataIterator, model: GPTModel, return_schedule_plan: bool = False
+    ) -> tuple[torch.Tensor, Callable[[torch.Tensor], dict[str, list[torch.Tensor]]]]:
+        """Forward step used by Megatron's pipeline engine.
 
         Args:
-            data_iterator : Input data iterator
-            model (GPTModel): The GPT Model
+            data_iterator (DataIterator): Input data iterator.
+            model (GPTModel): The GPT model chunk to execute.
+
+        Returns:
+            tuple[torch.Tensor, Callable[[torch.Tensor], dict[str, list[torch.Tensor]]]]:
+            Output tensor(s) and a callable that computes and packages results
+            to be collected by the engine.
         """
+
+        assert not return_schedule_plan, "forward_only step should never return schedule plan"
 
         # Get the batch.
         batch = get_batch(data_iterator, ["tokens", "total_lengths", "response_lengths"])
@@ -246,8 +325,35 @@ def forward_only(f, args, model, data_iterator, num_microbatches, store_prefix="
     return rollout_data
 
 
-def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, opt_param_scheduler, num_microbatches):
-    """Single training step."""
+def train_one_step(
+    args: Namespace,
+    rollout_id: int,
+    step_id: int,
+    data_iterator: Sequence[DataIterator],
+    model: Sequence[DDP],
+    optimizer: MegatronOptimizer,
+    opt_param_scheduler: OptimizerParamScheduler,
+    num_microbatches: int,
+) -> tuple[dict[str, float], float]:
+    """Execute a single pipeline-parallel training step.
+
+    Runs forward/backward over ``num_microbatches``, applies optimizer step and
+    one scheduler step when gradients are valid.
+
+    Args:
+        args (Namespace): Runtime arguments.
+        rollout_id (int): Rollout identifier.
+        step_id (int): Step index within the current rollout.
+        data_iterator (Sequence[DataIterator]): Iterable(s) yielding training batches.
+        model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
+        optimizer (MegatronOptimizer): Optimizer instance.
+        opt_param_scheduler (OptimizerParamScheduler): LR/WD scheduler.
+        num_microbatches (int): Number of microbatches to process.
+
+    Returns:
+        tuple[dict[str, float], float]: Reduced loss dictionary (last stage only)
+        and gradient norm for logging.
+    """
     args = get_args()
 
     # Set grad to zero.
@@ -261,12 +367,20 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
         custom_before_train_step_hook = load_function(args.custom_megatron_before_train_step_hook_path)
         custom_before_train_step_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler)
 
-    def forward_step(data_iterator, model: GPTModel):
-        """Forward training step.
+    def forward_step(data_iterator: DataIterator, model: GPTModel, return_schedule_plan: bool = False) -> tuple[
+        torch.Tensor,
+        Callable[[torch.Tensor], tuple[torch.Tensor, int, dict[str, torch.Tensor | list[str]]]],
+    ]:
+        """Forward step used by Megatron's pipeline engine during training.
 
         Args:
-            data_iterator : Input data iterator
-            model (GPTModel): The GPT Model
+            data_iterator (DataIterator): Input data iterator.
+            model (GPTModel): The GPT model chunk to execute.
+
+        Returns:
+            tuple[torch.Tensor, Callable[[torch.Tensor], tuple[torch.Tensor, int, dict[str, torch.Tensor | list[str]]]]]:
+            Output tensor(s) and the loss function, which returns
+            (loss, num_elems, {"keys": list[str], "values": torch.Tensor}).
         """
 
         # Get the batch.
@@ -291,13 +405,67 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
             old_stage = os.environ["ROUTING_REPLAY_STAGE"]
             os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
 
-        output_tensor = model(
-            input_ids=batch["tokens"],
-            position_ids=None,
-            attention_mask=None,
-            labels=None,
-            packed_seq_params=batch["packed_seq_params"],
-        )
+        def build_loss_mask_for_mtp(batch: dict[str, object]) -> torch.Tensor | None:
+            tokens_tensor: torch.Tensor = batch["tokens"]
+
+            mask_chunks: list[torch.Tensor] = []
+            for total_len, response_len, resp_mask in zip(
+                batch["total_lengths"], batch["response_lengths"], batch["loss_masks"]
+            ):
+                assert (
+                    resp_mask.numel() == response_len
+                ), f"Unexpected loss mask size {resp_mask.numel()} (expected {response_len} or {total_len})."
+                prompt_len = total_len - response_len
+                full_mask = resp_mask.new_zeros(total_len)
+                full_mask[prompt_len:] = resp_mask
+
+                mask_chunks.append(slice_with_cp(full_mask, 0.0))
+
+            flattened_mask = torch.cat(mask_chunks, dim=0)
+            seq_len = tokens_tensor.size(-1)
+            assert (
+                flattened_mask.numel() <= seq_len
+            ), f"MTP loss mask ({flattened_mask.numel()}) exceeds token length ({seq_len})."
+
+            # token tensor may be padded by 128, so pad loss mask to the same length
+            loss_mask_tensor = flattened_mask.new_zeros(seq_len)
+            loss_mask_tensor[: flattened_mask.numel()] = flattened_mask
+            return loss_mask_tensor.unsqueeze(0)
+
+        loss_mask = None
+        mtp_kwargs = {}
+
+        if return_schedule_plan:
+            assert not args.enable_mtp_training, "MTP training should not be enabled when using combined 1f1b"
+            output_tensor = model.build_schedule_plan(
+                input_ids=batch["tokens"],
+                position_ids=None,
+                attention_mask=None,
+                labels=None,
+                packed_seq_params=batch["packed_seq_params"],
+            )
+        else:
+            # If enabling MTP training: trigger MTP loss inside Megatron while returning logits
+            # for the target model's loss.
+            if args.enable_mtp_training:
+                loss_mask = build_loss_mask_for_mtp(batch)
+                assert (
+                    loss_mask.shape == batch["tokens"].shape
+                ), f"loss_mask shape {loss_mask.shape} mismatches token shape {batch['tokens'].shape}"
+                mtp_kwargs = {
+                    # We have to set labels to tokens for MTP training, to point out samples to train.
+                    "mtp_labels": batch["tokens"],
+                }
+
+            output_tensor = model(
+                input_ids=batch["tokens"],
+                position_ids=None,
+                attention_mask=None,
+                labels=None,
+                packed_seq_params=batch["packed_seq_params"],
+                loss_mask=loss_mask,
+                mtp_kwargs=mtp_kwargs,
+            )
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             os.environ["ROUTING_REPLAY_STAGE"] = old_stage
@@ -363,13 +531,32 @@ def train_one_step(args, rollout_id, step_id, data_iterator, model, optimizer, o
     return {}, grad_norm
 
 
-def should_disable_forward_pre_hook(args):
+def should_disable_forward_pre_hook(args: Namespace) -> bool:
     """Block forward pre-hook for certain configurations."""
     return args.use_distributed_optimizer and args.overlap_param_gather
 
 
-def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_microbatches):
-    """Training function: run train_step desired number of times."""
+def train(
+    rollout_id: int,
+    model: Sequence[DDP],
+    optimizer: MegatronOptimizer,
+    opt_param_scheduler: OptimizerParamScheduler,
+    data_iterator: Sequence[DataIterator],
+    num_microbatches: Sequence[int],
+) -> None:
+    """Run training over a rollout consisting of multiple steps.
+
+    The model is switched to train mode, training hooks are configured, and
+    ``train_one_step`` is invoked for each step in the rollout.
+
+    Args:
+        rollout_id (int): Rollout identifier.
+        model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
+        optimizer (MegatronOptimizer): Optimizer instance.
+        opt_param_scheduler (OptimizerParamScheduler): LR/WD scheduler.
+        data_iterator (Sequence[DataIterator]): Iterable(s) yielding training batches.
+        num_microbatches (Sequence[int]): Microbatches per step in the rollout.
+    """
     args = get_args()
 
     for iterator in data_iterator:
@@ -447,6 +634,21 @@ def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_
                 config.param_sync_func = param_sync_func
                 pre_hook_enabled = True
 
+        if args.enable_mtp_training:
+            from megatron.core.transformer.multi_token_prediction import MTPLossLoggingHelper
+
+            mtp_loss_scale = 1 / num_microbatches[step_id]
+            tracker = MTPLossLoggingHelper.tracker
+            if "values" in tracker:
+                values = tracker["values"]
+                if tracker.get("reduce_group") is not None:
+                    torch.distributed.all_reduce(values, group=tracker.get("reduce_group"))
+                if tracker.get("avg_group") is not None:
+                    torch.distributed.all_reduce(values, group=tracker["avg_group"], op=torch.distributed.ReduceOp.AVG)
+                # here we assume only one mtp layer
+                mtp_losses = (tracker["values"] * mtp_loss_scale).item()
+                MTPLossLoggingHelper.clean_loss_in_tracker()
+
         # per train step log.
         if (
             mpu.get_data_parallel_rank(with_context_parallel=True) == 0
@@ -461,6 +663,8 @@ def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_
                 for key, val in loss_dict.items()
             }
             log_dict[f"train/{role_tag}grad_norm"] = grad_norm
+            if args.enable_mtp_training:
+                log_dict[f"train/{role_tag}mtp_loss"] = mtp_losses
 
             for param_group_id, param_group in enumerate(optimizer.param_groups):
                 log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
@@ -487,7 +691,17 @@ def train(rollout_id, model, optimizer, opt_param_scheduler, data_iterator, num_
         disable_forward_pre_hook(model)
 
 
-def save(iteration, model, optimizer, opt_param_scheduler):
+def save(
+    iteration: int, model: Sequence[DDP], optimizer: MegatronOptimizer, opt_param_scheduler: OptimizerParamScheduler
+) -> None:
+    """Persist a training checkpoint safely with forward hooks disabled.
+
+    Args:
+        iteration (int): Current global iteration number.
+        model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
+        optimizer (MegatronOptimizer): Optimizer instance.
+        opt_param_scheduler (OptimizerParamScheduler): LR/WD scheduler.
+    """
     args = get_args()
     if should_disable_forward_pre_hook(args):
         disable_forward_pre_hook(model)
@@ -505,7 +719,19 @@ def save(iteration, model, optimizer, opt_param_scheduler):
         enable_forward_pre_hook(model)
 
 
-def initialize_model_and_optimizer(args, role: str = "actor"):
+def initialize_model_and_optimizer(
+    args: Namespace, role: str = "actor"
+) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
+    """Initialize model(s), optimizer, scheduler, and load from checkpoint.
+
+    Args:
+        args (Namespace): Runtime arguments.
+        role (str): Logical role of the model (e.g., "actor", "critic").
+
+    Returns:
+        tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
+            DDP-wrapped model chunks, optimizer, scheduler, and iteration index.
+    """
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args, role)
     setattr(model[0], "role", role)
     clear_memory()

@@ -137,8 +137,7 @@ MISC_ARGS=(
    # should be good for model performance
    --accumulate-allreduce-grads-in-fp32
    --attention-softmax-in-fp32
-   # need to comment this when using model with MLA
-   # --attention-backend flash
+   --attention-backend flash
 
    # use deepep for megatron
    --moe-enable-deepep

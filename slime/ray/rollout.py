@@ -15,7 +15,9 @@ from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
+from slime.utils.iter_utils import group_by
 from slime.utils.metric_checker import MetricChecker
+from slime.utils.metric_utils import compute_pass_rate, compute_statistics, dict_add_prefix
 from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
 from slime.utils.types import Sample
@@ -62,7 +64,8 @@ class RolloutManager:
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
 
         self._metric_checker = MetricChecker.maybe_create(args)
-        self._health_monitor = RolloutHealthMonitor(self, args)
+        if self.args.use_fault_tolerance:
+            self._health_monitor = RolloutHealthMonitor(self, args)
 
     def dispose(self):
         if self._metric_checker is not None:
@@ -82,11 +85,11 @@ class RolloutManager:
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
     def generate(self, rollout_id):
-        monitor_started = self._health_monitor.start()
+        monitor_started = self.args.use_fault_tolerance and self._health_monitor.start()
         start_time = time.time()
         try:
             data, metrics = self._get_rollout_data(rollout_id=rollout_id)
-            self._save_debug_rollout_data(data, rollout_id=rollout_id)
+            self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
             _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
             data = self._convert_samples_to_train_data(data)
             return Box(ray.put(data))
@@ -94,6 +97,8 @@ class RolloutManager:
             if monitor_started:
                 self._health_monitor.stop()
                 self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
+            else:
+                self.num_new_engines = 0
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
@@ -103,6 +108,7 @@ class RolloutManager:
         data = call_rollout_fn(
             self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True
         ).data
+        self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=True)
         metrics = _log_eval_rollout_data(rollout_id, self.args, data)
         if self._metric_checker is not None:
             self._metric_checker.on_eval(metrics)
@@ -114,10 +120,10 @@ class RolloutManager:
         self.data_source.load(rollout_id)
 
     def offload(self):
-        return [engine.release_memory_occupation.remote() for engine in self.rollout_engines]
+        return ray.get([engine.release_memory_occupation.remote() for engine in self.rollout_engines])
 
     def onload(self, tags: List[str] = None):
-        return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines]
+        return ray.get([engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines])
 
     def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
@@ -125,6 +131,13 @@ class RolloutManager:
                 open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
+            if (ratio := self.args.load_debug_rollout_data_subsample) is not None:
+                original_num_rows = len(data)
+                rough_subsample_num_rows = int(original_num_rows * ratio)
+                data = data[: rough_subsample_num_rows // 2] + data[-rough_subsample_num_rows // 2 :]
+                print(
+                    f"Subsample loaded debug rollout data using {ratio=} and change num rows {original_num_rows} -> {len(data)}"
+                )
             metrics = None
         else:
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
@@ -141,19 +154,24 @@ class RolloutManager:
                 print(f"trim number of samples from {origin_data_length} to {trim_len}")
         return data, metrics
 
-    def _save_debug_rollout_data(self, data, rollout_id):
+    def _save_debug_rollout_data(self, data, rollout_id, evaluation: bool):
         # TODO to be refactored (originally Buffer._set_data)
         if (path_template := self.args.save_debug_rollout_data) is not None:
-            path = Path(path_template.format(rollout_id=rollout_id))
+            path = Path(path_template.format(rollout_id=("eval_" if evaluation else "") + str(rollout_id)))
             print(f"Save debug rollout data to {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
-            torch.save(
-                dict(
-                    rollout_id=rollout_id,
+
+            # TODO may improve the format
+            if evaluation:
+                dump_data = dict(
+                    samples=[sample.to_dict() for dataset_name, info in data.items() for sample in info["samples"]]
+                )
+            else:
+                dump_data = dict(
                     samples=[sample.to_dict() for sample in data],
-                ),
-                path,
-            )
+                )
+
+            torch.save(dict(rollout_id=rollout_id, **dump_data), path)
 
     def _post_process_rewards(self, samples: Union[list[Sample], list[list[Sample]]]):
         if self.custom_reward_post_process_func is not None:
@@ -270,6 +288,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
                     "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
                     "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                     "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                    "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
                 }
             },
         ).remote(args, rank=i)
@@ -384,7 +403,8 @@ def _start_router(args):
         return
 
     args.sglang_router_ip = get_host_info()[1]
-    args.sglang_router_port = find_available_port(random.randint(3000, 4000))
+    if args.sglang_router_port is None:
+        args.sglang_router_port = find_available_port(random.randint(3000, 4000))
 
     if args.use_slime_router:
         from slime.router.router import run_router
@@ -395,9 +415,6 @@ def _start_router(args):
         from sglang_router.launch_router import RouterArgs
 
         from slime.utils.http_utils import run_router
-
-        args.sglang_router_ip = get_host_info()[1]
-        args.sglang_router_port = find_available_port(random.randint(3000, 4000))
 
         router_args = RouterArgs(
             host=args.sglang_router_ip,
@@ -429,9 +446,19 @@ def _log_eval_rollout_data(rollout_id, args, data):
     for key in data.keys():
         rewards = data[key]["rewards"]
         log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
+        if (samples := data[key].get("samples")) is not None:
+            log_dict |= dict_add_prefix(_compute_reward_cat_metrics(args, samples), f"eval/{key}-")
         if "truncated" in data[key]:
             truncated = data[key]["truncated"]
             log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
+        if args.log_passrate:
+            log_dict |= dict_add_prefix(
+                compute_pass_rate(
+                    flat_rewards=rewards,
+                    group_size=args.n_samples_per_eval_prompt,
+                ),
+                f"eval/{key}-",
+            )
 
     print(f"eval {rollout_id}: {log_dict}")
 
@@ -462,9 +489,13 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
         sum(sample.loss_mask) if sample.loss_mask is not None else sample.response_length for sample in samples
     ]
     log_dict["perf/rollout_time"] = rollout_time
-    if args.rollout_num_gpus is not None:
+    if args.rollout_num_gpus:
         log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+    log_dict |= dict_add_prefix(compute_statistics(response_lengths), f"rollout/response_len/")
+    log_dict |= _compute_zero_std_metrics(args, samples)
+    log_dict |= _compute_spec_metrics(args, samples)
+    log_dict |= dict_add_prefix(_compute_reward_cat_metrics(args, samples), f"rollout/")
     print(f"perf {rollout_id}: {log_dict}")
     step = (
         rollout_id
@@ -480,3 +511,44 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
 
         tb = _TensorboardAdapter(args)
         tb.log(data=log_dict, step=step)
+
+
+def _compute_zero_std_metrics(args, all_samples: List[Sample]):
+    # only compute in GRPO-like algorithms where one prompt has multiple responses
+    if args.advantage_estimator == "ppo":
+        return {}
+
+    def _is_zero_std(samples: List[Sample]):
+        rewards = [sample.get_reward_value(args) for sample in samples]
+        return len(rewards) == 0 or all(rewards[0] == r for r in rewards)
+
+    all_sample_groups = group_by(all_samples, lambda s: s.group_index)
+    interesting_sample_groups = [g for g in all_sample_groups.values() if _is_zero_std(g)]
+
+    interesting_rewards = [str(round(g[0].get_reward_value(args), 1)) for g in interesting_sample_groups]
+
+    return {f"rollout/zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
+
+
+def _compute_spec_metrics(args, all_samples: List[Sample]):
+    if args.sglang_speculative_algorithm is None:
+        return {}
+    num_samples = len(all_samples)
+    metrics = {}
+    metrics["rollout/spec_accept_rate"] = (
+        sum(sample.spec_info.spec_accept_rate for sample in all_samples) / num_samples
+    )
+    metrics["rollout/spec_accept_length"] = (
+        sum(sample.spec_info.spec_accept_length for sample in all_samples) / num_samples
+    )
+    return metrics
+
+
+def _compute_reward_cat_metrics(args, all_samples: List[Sample]):
+    reward_cat_key = args.log_reward_category
+    if reward_cat_key is None:
+        return {}
+
+    samples_of_reward_cat = group_by(all_samples, lambda s: s.reward[reward_cat_key])
+
+    return {f"error_cat/{reward_cat}": len(s) / len(all_samples) for reward_cat, s in samples_of_reward_cat.items()}

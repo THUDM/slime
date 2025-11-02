@@ -9,6 +9,7 @@ import torch.distributed as dist
 
 from slime.ray.ray_actor import RayActor
 from slime.utils.distributed_utils import init_gloo_group
+from slime.utils.memory_utils import clear_memory, print_memory
 
 
 def get_local_gpu_id():
@@ -77,6 +78,11 @@ class TrainRayActor(RayActor):
             print(f"Warning: pynvml not available, skipping NUMA affinity setup")
         except Exception as e:
             print(f"Warning: Failed to set NUMA affinity: {e}")
+
+    def clear_memory(self):
+        print_memory("before TrainRayActor.clear_memory")
+        clear_memory()
+        print_memory("after TrainRayActor.clear_memory")
 
     @abc.abstractmethod
     def sleep(self, tags):

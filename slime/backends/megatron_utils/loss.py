@@ -1,4 +1,6 @@
-from typing import Union
+from argparse import Namespace
+from collections.abc import Callable, Iterator
+from typing import Any, Dict, Tuple, Union
 
 import torch
 from megatron.core import mpu
@@ -14,6 +16,7 @@ from slime.utils.ppo_utils import (
     get_reinforce_plus_plus_baseline_advantages,
     get_reinforce_plus_plus_returns,
 )
+from slime.utils.types import RolloutBatch
 
 from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
 
@@ -21,11 +24,32 @@ from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, 
 def get_responses(
     logits: torch.Tensor,
     *,
-    args,
+    args: Namespace,
     unconcat_tokens: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
-):
+) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+    """Yield response-aligned `(logits_chunk, tokens_chunk)` pairs per sample.
+
+    After squeezing batch dimension and applying temperature scaling, this
+    function extracts the logits and tokens corresponding to response segments
+    for each sample. When context parallelism is disabled, it slices directly
+    from the concatenated sequence. With context parallelism enabled, it
+    handles split sequences across ranks.
+
+    Args:
+        logits: Model outputs with shape `[1, T, V]` (policy) or `[1, T, 1]`
+            (value). Must be float32.
+        args: Configuration containing `rollout_temperature` for scaling.
+        unconcat_tokens: List of token tensors (prompt+response) per sample.
+        total_lengths: Total sequence lengths (prompt+response) per sample.
+        response_lengths: Response segment lengths per sample.
+
+    Yields:
+        Tuple of `(logits_chunk, tokens_chunk)` where `logits_chunk` is shape
+        `[R, V]` (policy) or `[R, 1]` (value) and `tokens_chunk` is shape `[R]`
+        (1D int64), both aligned to response tokens for one sample.
+    """
     assert logits.size(0) == 1, f"{logits.shape}"
     assert logits.dtype == torch.float32, f"{logits.dtype}"
 
@@ -67,13 +91,36 @@ def get_responses(
 def get_log_probs_and_entropy(
     logits: torch.Tensor,
     *,
-    args,
+    args: Namespace,
     unconcat_tokens: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
     with_entropy: bool = False,
     non_loss_data: bool = True,
 ) -> dict[str, list[torch.Tensor]]:
+    """Compute per-token log-probabilities (and optionally entropy) on responses.
+
+    For each sample, extracts response-aligned logits and tokens, then computes
+    log-probabilities via softmax across the tensor-parallel group. Log-probs
+    are squeezed from `[R, 1]` to `[R]`. Entropy values are always appended
+    (even when `with_entropy=False`), but only included in the result dict
+    when requested.
+
+    Args:
+        logits: Policy logits with shape `[1, T, V]`.
+        args: Configuration (temperature applied in `get_responses`).
+        unconcat_tokens: List of token tensors per sample.
+        total_lengths: Total sequence lengths per sample.
+        response_lengths: Response segment lengths per sample.
+        with_entropy: If True, include "entropy" key in result.
+        non_loss_data: Unused; kept for API compatibility.
+
+    Returns:
+        Dict with key "log_probs" mapping to a list of `[R]` tensors per
+        sample. If `with_entropy` is True, also includes "entropy" key with
+        a list of `[R]` tensors.
+    """
+    assert non_loss_data
     log_probs_list = []
     entropy_list = []
     for logits_chunk, tokens_chunk in get_responses(
@@ -101,13 +148,31 @@ def get_log_probs_and_entropy(
 def get_values(
     logits: torch.Tensor,
     *,
-    args,
+    args: Namespace,
     unconcat_tokens: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
-    with_entropy: bool = False,
     non_loss_data: bool = True,
 ) -> dict[str, list[torch.Tensor]]:
+    """Extract per-token value predictions over response tokens.
+
+    For each sample, extracts response-aligned chunks from the value head
+    output and squeezes the final dimension from `[R, 1]` to `[R]`.
+
+    Args:
+        logits: Value head output with shape `[1, T, 1]`.
+        args: Configuration (passed to `get_responses` which uses
+            `rollout_temperature` even though values don't need temperature).
+        unconcat_tokens: List of token tensors per sample.
+        total_lengths: Total sequence lengths per sample.
+        response_lengths: Response segment lengths per sample.
+        with_entropy: Unused; kept for signature compatibility.
+        non_loss_data: Unused; kept for signature compatibility.
+
+    Returns:
+        Dict with key "values" mapping to a list of `[R]` value tensors
+        per sample.
+    """
     value_list = []
     for logits_chunk, _ in get_responses(
         logits,
@@ -124,14 +189,34 @@ def get_values(
     }
 
 
-def compute_advantages_and_returns(args, rollout_data):
-    log_probs: list[torch.Tensor] = rollout_data.get("log_probs", None)
-    ref_log_probs: list[torch.Tensor] = rollout_data.get("ref_log_probs", None)
-    rewards: list[float] = rollout_data.get("rewards", None)
-    values: Union[None, list[torch.Tensor]] = rollout_data.get("values", None)
-    response_lengths: list[int] = rollout_data.get("response_lengths", None)
-    loss_masks: list[torch.Tensor] = rollout_data.get("loss_masks", None)
-    total_lengths: list[int] = rollout_data.get("total_lengths", None)
+def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) -> None:
+    """Compute advantages and returns in-place based on `args.advantage_estimator`.
+
+    This function extracts rewards, log-probs, values, and masks from
+    `rollout_data`, computes KL divergences, then applies the chosen advantage
+    estimator. Supported methods: "grpo", "gspo", "ppo", "reinforce_plus_plus",
+    and "reinforce_plus_plus_baseline". When `args.normalize_advantages` is
+    True, advantages are whitened across the data-parallel group using masked
+    statistics.
+
+    Early returns if both `log_probs` and `values` are None (intermediate
+    pipeline stages).
+
+    Args:
+        args: Configuration specifying estimator type, KL coefficient,
+            normalization settings, and other hyperparameters.
+        rollout_data: Dict containing input lists ("log_probs", "ref_log_probs",
+            "rewards", "values", "response_lengths", "loss_masks",
+            "total_lengths"). Modified in-place to add "advantages" and
+            "returns" keys, each mapping to lists of tensors per sample.
+    """
+    log_probs: list[torch.Tensor] = rollout_data.get("log_probs")
+    ref_log_probs: list[torch.Tensor] = rollout_data.get("ref_log_probs")
+    rewards: list[float] = rollout_data.get("rewards")
+    values: Union[None, list[torch.Tensor]] = rollout_data.get("values")
+    response_lengths: list[int] = rollout_data.get("response_lengths")
+    loss_masks: list[torch.Tensor] = rollout_data.get("loss_masks")
+    total_lengths: list[int] = rollout_data.get("total_lengths")
 
     # return when not the last pp stage.
     if log_probs is None and values is None:
@@ -261,9 +346,38 @@ def compute_advantages_and_returns(args, rollout_data):
     rollout_data["returns"] = returns
 
 
-def policy_loss_function(args, batch, logits, sum_of_sample_mean):
+def policy_loss_function(
+    args: Namespace,
+    batch: RolloutBatch,
+    logits: torch.Tensor,
+    sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Compute policy loss (PPO/GSPO) and metrics.
+
+    Computes current log-probabilities and entropy from model logits, then
+    calculates PPO-style clipped policy gradient loss. For GSPO, gathers
+    full sequences via context-parallel all-gather before computing per-sample
+    KL. Optionally applies TIS (Temporal Importance Sampling) correction and
+    adds KL loss term if configured.
+
+    Args:
+        args: Configuration controlling advantage estimator, clipping thresholds,
+            entropy/KL coefficients, and TIS settings.
+        batch: Mini-batch containing "advantages", "log_probs" (old policy),
+            "unconcat_tokens", "response_lengths", "total_lengths", "loss_masks",
+            and optionally "ref_log_probs" and "rollout_log_probs".
+        logits: Policy logits with shape `[1, T, V]`.
+        sum_of_sample_mean: Reduction function that averages per-sample values.
+
+    Returns:
+        Tuple of `(loss, metrics)` where `loss` is a scalar tensor and `metrics`
+        is a dict containing detached scalars: "loss", "pg_loss",
+        "entropy_loss", "pg_clipfrac", "ppo_kl". Additional keys "kl_loss",
+        "tis", "ois", "tis_clipfrac" are included when the respective features
+        are enabled.
+    """
     advantages = torch.cat(batch["advantages"], dim=0)
-    old_log_probs = batch["log_probs"]
+    old_log_probs = batch["rollout_log_probs"] if args.use_rollout_logprobs else batch["log_probs"]
 
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
@@ -298,24 +412,62 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
         ppo_kl = torch.cat(ppo_kl, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
     else:
-        old_log_probs = torch.cat(batch["log_probs"], dim=0)
+        old_log_probs = torch.cat(old_log_probs, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
         ppo_kl = old_log_probs - log_probs
 
     pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
 
-    # Apply TIS off-policy correction using importance sampling if enabled
+    # Apply off-policy correction using importance sampling if enabled
     if args.use_tis:
+
+        def vanilla_tis_function(
+            args,
+            *,
+            pg_loss: torch.Tensor,
+            train_log_probs: list[torch.Tensor],
+            rollout_log_probs: list[torch.Tensor],
+            loss_masks: list[torch.Tensor],
+            **kwargs: Any,
+        ) -> Tuple[torch.Tensor, list[torch.Tensor], Dict[str, torch.Tensor]]:
+            rollout_log_probs = torch.cat(rollout_log_probs, dim=0)
+            old_log_probs = torch.cat(train_log_probs, dim=0)
+            tis = torch.exp(old_log_probs - rollout_log_probs)
+            tis_abs = torch.exp((old_log_probs - rollout_log_probs).abs())
+            tis_weights = torch.clamp(tis, min=args.tis_clip_low, max=args.tis_clip)
+            tis_clipfrac = (tis_weights != tis).float()
+            metrics = {
+                "tis": tis.clone().detach(),
+                "tis_clipfrac": tis_clipfrac.clone().detach(),
+                "tis_abs": tis_abs.clone().detach(),
+            }
+            pg_loss = pg_loss * tis_weights
+            return pg_loss, loss_masks, metrics
+
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
-        rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
-        old_log_probs = torch.cat(batch["log_probs"], dim=0)
 
-        tis = torch.exp(old_log_probs - rollout_log_probs)
         ois = (-ppo_kl).exp()
-        tis_clip = torch.clamp(tis, min=args.tis_clip_low, max=args.tis_clip)
-        tis_clipfrac = tis_clip != tis
+        tis_kwargs = {
+            "args": args,
+            "pg_loss": pg_loss,
+            "train_log_probs": batch["log_probs"],
+            "rollout_log_probs": batch["rollout_log_probs"],
+            "loss_masks": batch["loss_masks"],
+            "total_lengths": total_lengths,
+            "response_lengths": response_lengths,
+        }
 
-        pg_loss = pg_loss * tis_clip
+        if args.custom_tis_function_path is not None:
+            tis_func = load_function(args.custom_tis_function_path)
+        else:
+            tis_func = vanilla_tis_function
+        pg_loss, modified_response_masks, tis_metrics = tis_func(**tis_kwargs)
+
+        # [decouple IS and rejection] Rebuild sum_of_sample_mean with modified_response_masks for denominator correction
+        # modified_response_masks will be sliced with cp in get_sum_of_sample_mean
+        sum_of_sample_mean = get_sum_of_sample_mean(
+            total_lengths, response_lengths, modified_response_masks, args.calculate_per_token_loss
+        )
 
     pg_loss = sum_of_sample_mean(pg_loss)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
@@ -344,6 +496,11 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
     if log_probs.numel() == 0:
         loss += 0 * logits.sum()
 
+    train_rollout_logprob_abs_diff = None
+    if "rollout_log_probs" in batch:
+        rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
+        train_rollout_logprob_abs_diff = sum_of_sample_mean((old_log_probs - rollout_log_probs).abs())
+
     reported_loss = {
         "loss": loss.clone().detach(),
         "pg_loss": pg_loss.clone().detach(),
@@ -352,18 +509,45 @@ def policy_loss_function(args, batch, logits, sum_of_sample_mean):
         "ppo_kl": ppo_kl.clone().detach(),
     }
 
+    if train_rollout_logprob_abs_diff is not None:
+        reported_loss["train_rollout_logprob_abs_diff"] = train_rollout_logprob_abs_diff.clone().detach()
+
     if args.use_kl_loss:
         reported_loss["kl_loss"] = kl_loss.clone().detach()
 
     if args.use_tis:
-        reported_loss["tis"] = sum_of_sample_mean(tis).clone().detach()
         reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
-        reported_loss["tis_clipfrac"] = sum_of_sample_mean(tis_clipfrac).clone().detach()
+        # Assume all metrics are already cloned and detached
+        for metric_key, metric_value in tis_metrics.items():
+            key_name = f"{metric_key}"
+            reported_loss[key_name] = sum_of_sample_mean(metric_value)
 
     return loss, reported_loss
 
 
-def value_loss_function(args, batch, logits, sum_of_sample_mean):
+def value_loss_function(
+    args: Namespace,
+    batch: RolloutBatch,
+    logits: torch.Tensor,
+    sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Compute clipped value loss and metrics.
+
+    Extracts current value predictions from `logits`, compares them against
+    stored old values with clipping, and computes the maximum of clipped and
+    unclipped squared errors (PPO-style value clipping).
+
+    Args:
+        args: Configuration containing `value_clip` threshold.
+        batch: Mini-batch with "values" (old predictions), "returns",
+            "unconcat_tokens", "total_lengths", and "response_lengths".
+        logits: Value head output with shape `[1, T, 1]`.
+        sum_of_sample_mean: Reduction function that averages per-sample values.
+
+    Returns:
+        Tuple of `(loss, metrics)` where `loss` is a scalar tensor and
+        `metrics` contains detached scalars "value_loss" and "value_clipfrac".
+    """
     old_values = torch.cat(batch["values"], dim=0)
 
     values = get_values(
@@ -398,7 +582,28 @@ def value_loss_function(args, batch, logits, sum_of_sample_mean):
     return loss, reported_loss
 
 
-def sft_loss_function(args, batch, logits, sum_of_sample_mean):
+def sft_loss_function(
+    args: Namespace,
+    batch: RolloutBatch,
+    logits: torch.Tensor,
+    sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Compute supervised fine-tuning loss over response tokens.
+
+    Computes log-probabilities of the ground-truth tokens in the response
+    segments and returns the negative log-likelihood as the loss.
+
+    Args:
+        args: Configuration (passed through to helpers).
+        batch: Mini-batch with "unconcat_tokens", "response_lengths", and
+            "total_lengths".
+        logits: Policy logits with shape `[1, T, V]`.
+        sum_of_sample_mean: Reduction function that averages per-sample values.
+
+    Returns:
+        Tuple of `(loss, metrics)` where `metrics` contains a single detached
+        scalar "loss".
+    """
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
 
@@ -427,7 +632,35 @@ def sft_loss_function(args, batch, logits, sum_of_sample_mean):
     )
 
 
-def loss_function(args, batch, num_microbatches, logits):
+def loss_function(
+    args: Namespace,
+    batch: RolloutBatch,
+    num_microbatches: int,
+    logits: torch.Tensor,
+) -> tuple[torch.Tensor, int | torch.Tensor, dict[str, list[str] | torch.Tensor]]:
+    """Dispatch to the configured loss and rescale for Megatron integration.
+
+    Selects one of "policy_loss", "value_loss", "sft_loss", or a custom loss
+    function based on `args.loss_type`, computes the loss and metrics, then
+    rescales the loss by micro-batch and parallelism factors to integrate with
+    Megatron's gradient accumulation.
+
+    Args:
+        args: Configuration specifying `loss_type`, `calculate_per_token_loss`,
+            `global_batch_size`, and optionally `custom_loss_function_path`.
+        batch: Mini-batch with "loss_masks", "response_lengths", and other
+            keys required by the selected loss function.
+        num_microbatches: Number of gradient accumulation steps.
+        logits: Model outputs (policy or value head).
+
+    Returns:
+        Tuple of `(scaled_loss, normalizer, logging_dict)` where:
+        - `scaled_loss` is the loss tensor (scalar) rescaled for Megatron.
+        - `normalizer` is `num_tokens` (scalar tensor) if
+          `args.calculate_per_token_loss` is True, else `1` (int).
+        - `logging_dict` has keys "keys" (list of str metric names) and
+          "values" (1D tensor: [count, metric1, metric2, ...]).
+    """
     num_tokens = sum([torch.clamp_min(loss_mask.sum(), 1) for loss_mask in batch["loss_masks"]])
     num_samples = len(batch["response_lengths"])
 

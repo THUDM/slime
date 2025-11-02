@@ -93,6 +93,7 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 ```
 
 For larger models, you can use `torchrun` to start the covnersion script to convert with multi-gpus or even multi-nodes.
+Note: When converting the kimi-k2 model weights, you need to open config.json in the model path and change "model_type": "kimi_k2" to "model_type": "deepseek_v3".
 
 ### Convert from Megatron Format to Hugging Face Format
 
@@ -515,7 +516,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     # 7. Fill and return Sample object
     sample.response = full_response
     sample.tokens = ...
-    sample.loss_masks = loss_masks
+    sample.loss_mask = loss_masks
     return sample
 ```
 
@@ -534,10 +535,10 @@ Finally, in the training script, enable the above custom functions through the f
 ```bash
 CUSTOM_ARGS=(
    # Specify the path of custom generation function (format: path.to.your.file:function_name)
-   --custom-generate-function-path your_module.multiturn_logic:generate
+   --custom-generate-function-path your_module.multiturn_logic.generate
 
    # Specify the path of custom reward function
-   --custom-rm-path your_module.multiturn_logic:reward_func
+   --custom-rm-path your_module.multiturn_logic.reward_func
 )
 ```
 

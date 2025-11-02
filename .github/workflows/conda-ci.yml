@@ -14,7 +14,7 @@ jobs:
     runs-on: self-hosted
     container:
       image: lmsysorg/sglang:v0.5.0rc0-cu126
-      options: --gpus all --ipc=host --shm-size=16g --ulimit memlock=-1 --ulimit stack=67108864 --memory=0 --memory-swap=0 -v /data/models:/root/models -v /data/datasets:/root/datasets
+      options: --gpus all --ipc=host --shm-size=16g --ulimit memlock=-1 --ulimit stack=67108864 --memory=0 --memory-swap=0 -v /mnt/nvme0n1/models:/root/models -v /mnt/nvme0n1/datasets:/root/datasets
 
     defaults:
       run:

@@ -120,18 +120,7 @@ def allocate_train_group(args, num_nodes, num_gpus_per_node, pg, wandb_run_id):
     )
 
 
-def create_training_group(args, pg, wandb_run_id):
-    actor_model = allocate_train_group(
-        args=args,
-        num_nodes=args.actor_num_nodes,
-        num_gpus_per_node=args.actor_num_gpus_per_node,
-        pg=pg,
-        wandb_run_id=wandb_run_id,
-    )
-    return actor_model
-
-
-def create_training_models(args, pgs, wandb_run_id):
+def create_training_models(args, pgs, rollout_manager, wandb_run_id):
     actor_model = allocate_train_group(
         args=args,
         num_nodes=args.actor_num_nodes,
@@ -163,6 +152,10 @@ def create_training_models(args, pgs, wandb_run_id):
         ray.get(critic_init_handle)
         actor_model.connect(critic_model)
 
+    actor_model.set_rollout_manager(rollout_manager)
+    if args.rollout_global_dataset:
+        ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
+
     return actor_model, critic_model
 
 
@@ -172,17 +165,14 @@ def create_rollout_manager(args, pg, wandb_run_id):
         num_gpus=0,
     ).remote(args, pg, wandb_run_id=wandb_run_id)
 
-    if args.rollout_global_dataset:
-        ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
-
     # calculate num_rollout from num_epoch
     num_rollout_per_epoch = None
     if args.num_rollout is None:
         num_rollout_per_epoch = ray.get(rollout_manager.get_num_rollout_per_epoch.remote())
         args.num_rollout = num_rollout_per_epoch * args.num_epoch
-    assert args.num_rollout > 0
+        assert args.num_rollout > 0
 
-    if args.offload:
+    if args.offload_rollout:
         ray.get(rollout_manager.offload.remote())
 
     return rollout_manager, num_rollout_per_epoch

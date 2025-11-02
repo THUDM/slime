@@ -1,10 +1,9 @@
-import collections
 import inspect
 import re
 import socket
 import time
 from argparse import Namespace
-from typing import Any, Iterator, List, Mapping, Optional, Sequence, Tuple
+from collections.abc import Iterator, Mapping, Sequence
 
 import ray
 import torch
@@ -27,7 +26,10 @@ from slime.utils.types import ParamInfo
 from .megatron_to_hf import convert_to_hf  # noqa: F401
 
 try:
-    from sglang.srt.model_executor.model_runner import FlattenedTensorBucket
+    try:
+        from sglang.srt.weight_sync.tensor_bucket import FlattenedTensorBucket  # type: ignore[import]
+    except ImportError:
+        from sglang.srt.model_executor.model_runner import FlattenedTensorBucket  # type: ignore[import]
 
     use_flattened_tensor_bucket = True
 except Exception:
@@ -71,7 +73,7 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
 
 
 def all_gather_params_async(
-    param_infos_and_params: list[tuple[ParamInfo, torch.nn.Parameter]],
+    param_infos_and_params: list[tuple[ParamInfo, torch.Tensor]],
 ) -> list[torch.Tensor]:
     """
     Parallel TP all-gather for multiple params. Loop 1: for each TP param, allocate buffers +
@@ -144,7 +146,7 @@ def remove_padding(name: str, param: torch.Tensor, vocab_size: int) -> torch.Ten
     return param
 
 
-def named_parameters(args: Namespace, model: Sequence[torch.nn.Module]) -> Iterator[tuple[str, torch.nn.Parameter]]:
+def named_parameters(args: Namespace, model: Sequence[torch.nn.Module]) -> Iterator[tuple[str, torch.Tensor]]:
     """
     Yield (global_name, param/buffer) with consistent names across PP/EP. Adjusts indices for
     virtual PP + EP offsets. Handles decoder.layers, mtp.layers (Multi-Token Prediction), expert_bias.
@@ -343,7 +345,7 @@ class UpdateWeightFromTensor:
         weights: Mapping[str, Mapping[str, torch.Tensor]],
         *,
         model_name: str,
-        quantization_config: Optional[dict[str, Any]],
+        quantization_config: dict[str, int | str | list[str]] | None,
         vocab_size: int,
     ) -> None:
         """
@@ -422,48 +424,16 @@ class UpdateWeightFromTensor:
         dist.barrier(group=get_gloo_group())
 
         num_buckets = len(self.param_info_buckets)
-
-        # Define the window size for the pipeline. This controls how many update tasks
-        # can be in-flight simultaneously to manage memory usage and concurrency.
-        pipeline_window_size = 4
-
-        ray_refs = collections.deque()
-
-        # Create a separate CUDA stream for pre-fetching the next bucket of parameters.
-        side_stream = torch.cuda.Stream()
-
-        current_params, current_infos = self._gather_bucket_params(self.param_info_buckets[0])
-
-        for i in tqdm(range(num_buckets), disable=rank != 0, desc="Update weights (pipelined)"):
-            if i + 1 < num_buckets:
-                with torch.cuda.stream(side_stream):
-                    next_params, next_infos = self._gather_bucket_params(self.param_info_buckets[i + 1])
-
+        for i in tqdm(range(num_buckets), disable=rank != 0, desc="Update weights"):
+            current_params, current_infos = self._gather_bucket_params(self.param_info_buckets[i])
             refs = self._update_converted_params_from_tensor(current_params, current_infos)
-            ray_refs.append(refs)
-
-            # Prevents OOM errors and ensures smooth pipeline execution
-            if rank == self._ipc_gather_src:
-                while len(ray_refs) >= pipeline_window_size:
-                    oldest_refs_list = ray_refs.popleft()
-                    if oldest_refs_list:
-                        ray.get(oldest_refs_list)
-
-            if i + 1 < num_buckets:
-                torch.cuda.current_stream().wait_stream(side_stream)
-                current_params = next_params
-                current_infos = next_infos
-
-        if rank == self._ipc_gather_src and ray_refs:
-            all_remaining_refs = sum(ray_refs, [])
-            if all_remaining_refs:
-                ray.get(all_remaining_refs)
+            ray.get(refs)
 
         dist.barrier(group=get_gloo_group())
 
     def _gather_bucket_params(
         self, param_infos: Sequence[ParamInfo]
-    ) -> Tuple[Sequence[torch.Tensor], Sequence[ParamInfo]]:
+    ) -> tuple[Sequence[torch.Tensor], Sequence[ParamInfo]]:
         monkey_patch_torch_reductions()
         pp_size = mpu.get_pipeline_model_parallel_world_size()
         ep_size = mpu.get_expert_model_parallel_world_size()
@@ -524,8 +494,8 @@ class UpdateWeightFromTensor:
         return gathered_params, param_infos
 
     def _update_converted_params_from_tensor(
-        self, gathered_params: Sequence[tuple[str, torch.Tensor]], param_infos: List[ParamInfo]
-    ) -> Optional[List[ObjectRef]]:
+        self, gathered_params: Sequence[torch.Tensor], param_infos: list[ParamInfo]
+    ) -> list[ObjectRef]:
 
         converted_named_tensors = []
         for info, param in zip(param_infos, gathered_params):
@@ -553,9 +523,7 @@ class UpdateWeightFromTensor:
 
         return all_refs
 
-    def _send_to_colocated_engine(
-        self, converted_named_tensors: List[Tuple[str, torch.Tensor]]
-    ) -> Optional[List[ObjectRef]]:
+    def _send_to_colocated_engine(self, converted_named_tensors: list[tuple[str, torch.Tensor]]) -> list[ObjectRef]:
         if use_flattened_tensor_bucket:
             converted_named_tensors_by_dtypes = {}
             for name, tensor in converted_named_tensors:
@@ -621,7 +589,7 @@ class UpdateWeightFromDistributed:
         weights: Mapping[str, Mapping[str, torch.Tensor]],
         *,
         model_name: str,
-        quantization_config: Optional[dict[str, Any]],
+        quantization_config: dict[str, int | str | list[str]] | None,
         vocab_size: int,
     ) -> None:
         """
@@ -715,8 +683,8 @@ class UpdateWeightFromDistributed:
         param: torch.nn.Parameter,
         converted_named_tensors: list[tuple[str, torch.Tensor]],
         buffer_size: int,
-        pbar: Optional[Any] = None,
-    ) -> Optional[int]:
+        pbar: tqdm | None = None,
+    ) -> int | None:
         """
         Non-expert: gather TP → rm pad → HF → buffer (flush if full). All gather, PP source buffers.
         Returns updated bytes on source, None on non-source.
@@ -740,7 +708,7 @@ class UpdateWeightFromDistributed:
         param: torch.nn.Parameter,
         named_tensors: list[tuple[str, torch.Tensor]],
         buffer_size: int,
-        pbar: Optional[Any] = None,
+        pbar: tqdm | None = None,
     ) -> int:
         """
         Expert: gather TP → rm pad → buffer. EP gather + HF deferred. Threshold × EP size.
@@ -760,7 +728,7 @@ class UpdateWeightFromDistributed:
         return buffer_size
 
     def _update_expert_bucket_weights_from_distributed(
-        self, named_tensors: list[tuple[str, torch.Tensor]], pbar: Optional[Any] = None
+        self, named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
     ) -> None:
         """
         Gather EP → HF → broadcast. Clears buffer.
@@ -798,7 +766,7 @@ class UpdateWeightFromDistributed:
         self._update_bucket_weights_from_distributed(converted_hf_tensors, pbar)
 
     def _update_bucket_weights_from_distributed(
-        self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: Optional[Any] = None
+        self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
     ) -> None:
         """
         Lock → broadcast → clear → unlock → pbar++. Lock prevents NCCL deadlock.

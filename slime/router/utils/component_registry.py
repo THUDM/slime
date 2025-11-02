@@ -12,8 +12,8 @@ Design Principles:
 """
 
 import threading
-from typing import Any, Dict, Optional, Callable
 from contextlib import contextmanager
+from typing import Any, Callable, Dict, Optional
 
 
 class ComponentRegistry:
@@ -54,8 +54,7 @@ class ComponentRegistry:
             # Protect against overwriting existing components
             if name in self._components:
                 raise RuntimeError(
-                    f"Component '{name}' already registered. "
-                    f"Use remove() first if you want to replace it."
+                    f"Component '{name}' already registered. " f"Use remove() first if you want to replace it."
                 )
 
             self._components[name] = instance
@@ -89,8 +88,7 @@ class ComponentRegistry:
                 # Only raise if no default provided
                 available_components = list(self._components.keys())
                 raise RuntimeError(
-                    f"Required component '{name}' not found. "
-                    f"Available components: {available_components}"
+                    f"Required component '{name}' not found. " f"Available components: {available_components}"
                 )
 
             return self._components[name]
@@ -194,5 +192,5 @@ class ComponentRegistry:
             return {
                 "total_components": len(self._components),
                 "components_with_destructors": len(self._destructors),
-                "component_names": list(self._components.keys())
+                "component_names": list(self._components.keys()),
             }
