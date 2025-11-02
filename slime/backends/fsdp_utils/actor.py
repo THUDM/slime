@@ -12,6 +12,7 @@ from torch.distributed.tensor import DTensor, distribute_tensor
 from torch_memory_saver import torch_memory_saver
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from ring_flash_attn import substitute_hf_flash_attn, update_ring_flash_attn_params
 
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import train_dump_utils, train_metric_utils
@@ -26,7 +27,7 @@ from slime.utils.wandb_utils import init_wandb_secondary
 
 from ...utils.profile_utils import TrainProfiler
 from . import checkpoint
-from .data_packing import pack_sequences, unpack_sequences
+from .data_packing import pack_sequences, unpack_sequences, pad_packed_sequence_with_cp
 from .fsdp_cpu_adam_wrapper import FSDPCPUAdamWrapper
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
@@ -104,6 +105,9 @@ class FSDPTrainRayActor(TrainRayActor):
         # Create FSDP v2 model using FSDP
         self.model = apply_fsdp2(model)
 
+        if self.args.enable_cp:
+            self.setup_context_parallelism()
+
         if args.optimizer == "deepspeed_cpu_adam":
             optimizer_config = {
                 "lr": args.lr,
@@ -159,6 +163,15 @@ class FSDPTrainRayActor(TrainRayActor):
         self.prof.on_init_end()
 
         return int(getattr(self.args, "start_rollout_id", 0))
+    
+    def setup_context_parallelism(self) -> None:
+        world_size = dist.get_world_size()
+        all_ranks = list(range(world_size))
+        self.cp_group = dist.new_group(ranks=all_ranks, backend="nccl")
+        self.cp_size = world_size
+        self.cp_rank = dist.get_rank(group=self.cp_group)
+        substitute_hf_flash_attn(self.cp_group, heads_k_stride=1)
+        print(f"[Rank {self.cp_rank}] Context Parallelism initialized - CP group size: {self.cp_size}")
 
     @timer
     def sleep(self) -> None:
@@ -215,6 +228,27 @@ class FSDPTrainRayActor(TrainRayActor):
 
         checkpoint.save(self, iteration)
 
+    def _get_model_inputs_args(self, packed_sequence: dict) -> dict:
+        input_ids = packed_sequence["tokens"].unsqueeze(0)
+        position_ids = packed_sequence["position_ids"].unsqueeze(0)
+        print(f"CP Rank:{self.cp_rank}, input_ids shape before: {input_ids.shape}, CP Size: {self.cp_size}")
+        if self.args.enable_cp:
+            packed_sequence = pad_packed_sequence_with_cp(packed_sequence, self.cp_size)
+            print(f"CP Rank:{self.cp_rank}, input_ids shape after padding: {packed_sequence["tokens"].shape}")
+            if not packed_sequence["cu_seqlens"].is_cuda:
+                packed_sequence["cu_seqlens"] = packed_sequence["cu_seqlens"].cuda()
+            cu_seqlens = packed_sequence["cu_seqlens"]
+            update_ring_flash_attn_params(cu_seqlens, self.cp_group)
+            input_ids = torch.chunk(packed_sequence["tokens"].unsqueeze(0), self.cp_size, dim=1)[self.cp_rank]
+            position_ids = torch.chunk(packed_sequence["position_ids"].unsqueeze(0), self.cp_size, dim=1)[self.cp_rank]
+            print(f"CP Rank:{self.cp_rank}, input_ids shape after chunked: {input_ids.shape}")
+        model_args = {
+            "input_ids": input_ids,
+            "position_ids": position_ids,
+            "attention_mask": None,
+        }
+        return model_args
+
     def compute_log_prob(
         self,
         model_tag: str,
@@ -253,14 +287,16 @@ class FSDPTrainRayActor(TrainRayActor):
                     tqdm(packed_batches, desc=f"{store_prefix}log_probs", disable=dist.get_rank() != 0)
                 ):
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                        model_args = {
-                            "input_ids": batch["tokens"].unsqueeze(0),
-                            "position_ids": batch["position_ids"].unsqueeze(0),
-                            "attention_mask": None,
-                        }
+                        model_args = self._get_model_inputs_args(batch)
                         if "pixel_values" in batch:
                             model_args["pixel_values"] = batch["pixel_values"]
                         logits = self.model(**model_args).logits
+                        
+                        # Gather logits from all CP ranks if CP is enabled (with gradient support)
+                        if self.args.enable_cp:
+                            gathered_logits_list = torch.distributed.nn.functional.all_gather(logits, group=self.cp_group)
+                            logits = torch.cat(gathered_logits_list, dim=1)
+                    
                     batch[f"{store_prefix}log_probs"] = gather_log_probs_packed(
                         logits,
                         batch["tokens"],
@@ -457,11 +493,16 @@ class FSDPTrainRayActor(TrainRayActor):
 
     def _train_step(self, packed_batch, world_size, reported_accum, mbs_id, grad_accum):
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+            # Prepare model inputs
+            model_args = self._get_model_inputs_args(packed_batch)
             logits = self.model(
-                input_ids=packed_batch["tokens"].unsqueeze(0),
-                attention_mask=None,
-                position_ids=packed_batch["position_ids"].unsqueeze(0),
+                **model_args,
             ).logits
+            
+            # Gather logits from all CP ranks if CP is enabled (with gradient support)
+            if self.args.enable_cp:
+                gathered_logits_list = torch.distributed.nn.functional.all_gather(logits, group=self.cp_group)
+                logits = torch.cat(gathered_logits_list, dim=1)
 
         # Handle packed sequences
         log_probs = gather_log_probs_packed(
