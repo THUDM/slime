@@ -211,6 +211,8 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         "sample_indices",
         "rollout_log_probs",
         "prompt",
+        "teacher_log_probs",
+        "teacher_token_ids",
     ]:
         if key not in data:
             continue
