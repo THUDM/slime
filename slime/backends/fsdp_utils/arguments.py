@@ -42,7 +42,7 @@ class FSDPArgs:
     use_pytorch_profiler: bool = False
     profile_step_start: int = 10
     profile_step_end: int = 12
-    tensorboard_dir: Optional[str] = None
+    tensorboard_dir: str | None = None
 
     # YAML bookkeeping
     config: str | None = None
