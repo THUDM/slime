@@ -1,10 +1,13 @@
-# Adapted form https://github.com/PeterGriffinJin/Search-R1/blob/ceee7b89655ed52f205b9beb98e1190c3eedcfb0/search_r1/llm_agent/generation.py
+# Adapted from generate_with_search.py to use local search engine
+# This is an example showing how to use local_search_server.py instead of google_search_server.py
+
 import asyncio
 import re
 
 from local_search_server import local_search
 from qa_em_format import compute_score_em
 
+from slime import rollout
 from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.http_utils import post
 from slime.utils.types import Sample
@@ -26,9 +29,12 @@ SEMAPHORE = asyncio.Semaphore(SEARCH_R1_CONFIGS["search_concurrency"])
 
 
 def _passages2string(retrieval_result):
+    """
+    Convert retrieval results to a formatted string.
+    This function works with both google_search and local_search results.
+    """
     format_reference = ""
     for idx, doc_item in enumerate(retrieval_result):
-
         content = doc_item["document"]["contents"]
         title = content.split("\n")[0]
         text = "\n".join(content.split("\n")[1:])
@@ -55,6 +61,10 @@ async def search(query: str) -> str:
 
 def postprocess_responses(resp: str) -> str:
     return (
+        # <search> text <search>
+        # <search> 1, 0 + 2
+        # [1,2,1,2,0,2]
+        
         resp.split("</search>")[0] + "</search>"
         if "</search>" in resp
         else resp.split("</answer>")[0] + "</answer>" if "</answer>" in resp else resp
@@ -108,10 +118,12 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     response = ""
     response_token_ids = []
     loss_mask = []
+    rollout_log_probs = []
     for _ in range(SEARCH_R1_CONFIGS["max_turns"]):
         payload = {
             "text": prompt + response,
             "sampling_params": sampling_params,
+            "return_logprob": True,
         }
         output = await post(url, payload)
 
@@ -119,13 +131,26 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         if output["meta_info"]["finish_reason"]["type"] == "abort":
             sample.status = Sample.Status.ABORTED
             return sample
-
+        
         cur_response = output["text"]
         cur_response = postprocess_responses(cur_response)
 
-        cur_response_token_ids = state.tokenizer(cur_response, add_special_tokens=False)["input_ids"]
+        # Extract log probs from output - required for TIS metrics
+        if "output_token_logprobs" not in output["meta_info"]:
+            raise RuntimeError(
+                "output_token_logprobs not found in output meta_info. "
+                "Make sure 'return_logprob': True is set in the payload."
+            )
+
+        # Use token IDs and log probs directly from output_token_logprobs
+        # This ensures perfect alignment between tokens and log probs
+        # output_token_logprobs format: [[log_prob, token_id, ...], ...]
+        cur_response_token_ids = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
+        cur_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
+
         response += cur_response
         response_token_ids += cur_response_token_ids
+        rollout_log_probs += cur_response_log_probs
         loss_mask += [1] * len(cur_response_token_ids)
 
         if output["meta_info"]["finish_reason"]["type"] == "length":
@@ -140,11 +165,15 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         response += next_obs
         response_token_ids += obs_tokens_ids
         loss_mask += [0] * len(obs_tokens_ids)
+        # Add dummy log probs for observation tokens (they won't be used due to loss_mask=0)
+        rollout_log_probs += [0.0] * len(obs_tokens_ids)
 
+        assert len(response_token_ids) == len(rollout_log_probs), f'log p length is {len(response_token_ids)} and response length is {len(rollout_log_probs)}'
     sample.tokens = prompt_tokens_ids + response_token_ids
     sample.response_length = len(response_token_ids)
     sample.response = response
     sample.loss_mask = loss_mask
+    sample.rollout_log_probs = rollout_log_probs if rollout_log_probs else None
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":
             sample.status = Sample.Status.TRUNCATED

@@ -326,3 +326,24 @@ def add_ppl_metrics(
     # Note: log_ppl_diff = log(ppl_ratio), so ppl_ratio = exp(log_ppl_diff)
     ppl_ratio = torch.exp(log_ppl_diff)
     metrics_append(metrics, "ppl_ratio", ppl_ratio)
+
+    # 4a. Token-level chi-squared divergence
+    # χ²(π_training || π_rollout) = E[ρ²] - 1, where ρ = π_training / π_rollout
+    # This measures the second moment of the importance weights
+    SAFETY_BOUND = 20.0
+    log_ratio = train_log_prob - rollout_log_prob
+    log_ratio_safe = torch.clamp(log_ratio, min=-SAFETY_BOUND, max=SAFETY_BOUND)
+    rho_token = torch.exp(log_ratio_safe)  # ρ = π_training / π_rollout
+    rho_squared_token = rho_token.square()
+    chi2_token_value = masked_mean(rho_squared_token, loss_mask) - 1.0
+    chi2_token = chi2_token_value.expand_as(train_log_prob)
+    metrics_append(metrics, "chi2_token", chi2_token)
+
+    # 4b. Sequence-level chi-squared divergence
+    # Computes (Π ρ_t)² - 1 for the entire sequence
+    # This captures the squared product of importance ratios
+    log_ratio_sum = masked_sum(log_ratio, loss_mask, expand=True)
+    log_ratio_sum_safe = torch.clamp(log_ratio_sum, min=-SAFETY_BOUND, max=SAFETY_BOUND)
+    rho_squared_seq = torch.exp(2.0 * log_ratio_sum_safe)  # (Π ρ_t)²
+    chi2_seq = rho_squared_seq - 1.0
+    metrics_append(metrics, "chi2_seq", chi2_seq)

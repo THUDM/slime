@@ -81,8 +81,8 @@ OPTIMIZER_ARGS=(
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-project searh-r1-base
-   --wandb-group search-r1_qwen2.5-3B-sequence 
+   --wandb-project searh-r1-base-v2
+   --wandb-group search-r1_qwen2.5-3B-geometric-mis
    --wandb-key ${WANDB_KEY}
 )
 
@@ -103,7 +103,7 @@ MISC_ARGS=(
 )
 
 CUSTOM_ARGS=(
-   --custom-generate-function-path generate_with_local_search.generate
+   --custom-generate-function-path generate_with_local_search_logp.generate
    --custom-rm-path generate_with_search.reward_func
    --custom-config-path examples/train_infer_mismatch_helper/mis.yaml
    --custom-tis-function-path examples.train_infer_mismatch_helper.mis.compute_mis_weights_with_cp

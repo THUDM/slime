@@ -21,9 +21,9 @@ source "${SCRIPT_DIR}/../../scripts/models/qwen2.5-3B.sh"
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen2.5-3B/
    --ref-load /root/Qwen2.5-3B_torch_dist/
-   # --load /root/Qwen2.5-3B_slime/
-   # --save /root/Qwen2.5-3B_slime/
-   # --save-interval 20
+   --load /root/Qwen2.5-3B_slime_base_1/
+   --save /root/Qwen2.5-3B_slime_base_1/
+   --save-interval 100
 )
 
 ROLLOUT_ARGS=(
@@ -35,7 +35,7 @@ ROLLOUT_ARGS=(
    --num-rollout 3000
    --rollout-batch-size 64
    --n-samples-per-prompt 8
-   --rollout-max-response-len 3000
+   --rollout-max-response-len 500
    --rollout-temperature 1.0
 
    --global-batch-size 512
@@ -73,16 +73,15 @@ OPTIMIZER_ARGS=(
    --optimizer adam
    --lr 1e-6
    --lr-decay-style constant
-   --lr-warmup-fraction 0.285
-   --weight-decay 0.01
+   --weight-decay 0.1
    --adam-beta1 0.9
    --adam-beta2 0.98
 )
 
 WANDB_ARGS=(
-   # --use-wandb
+   --use-wandb
    --wandb-project searh-r1-base-v2
-   --wandb-group search-r1_qwen2.5-3B-base
+   --wandb-group search-r1_qwen2.5-3B-base-new
    --wandb-key ${WANDB_KEY}
 )
 
@@ -103,13 +102,15 @@ MISC_ARGS=(
 )
 
 CUSTOM_ARGS=(
-   --custom-generate-function-path generate_with_local_search.generate
+   --custom-generate-function-path generate_with_local_search_logp.generate
    --custom-rm-path generate_with_search.reward_func
+   --custom-config-path examples/train_infer_mismatch_helper/mis.yaml
+   --custom-tis-function-path examples.train_infer_mismatch_helper.mis.compute_mis_weights_with_cp
 )
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --port 8848 
 
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
@@ -135,4 +136,3 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${SGLANG_ARGS[@]} \
    ${MISC_ARGS[@]} \
    ${CUSTOM_ARGS[@]} \
-   --debug-rollout-only \
