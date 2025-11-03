@@ -92,8 +92,14 @@ FSDP_ARGS=(
    # Set to true for FULL_STATE_DICT mode, false for SHARDED_STATE_DICT mode (default)
    # --fsdp-full-params  # Uncomment this line to enable full params mode
 
-   # Set the bucket size for weight update
-   --update-weights-buffer-size $((512 * 1024 * 1024)) # 512MB
+   # Set the bucket size for weight update (note: singular 'weight', not 'weights')
+   --update-weight-buffer-size $((512 * 1024 * 1024)) # 512MB
+)
+
+CHECKPOINT_ARGS=(
+   --save /root/test_checkpoints/qwen3_fsdp_colocated_2gpu
+   --load /root/test_checkpoints/qwen3_fsdp_colocated_2gpu
+   --save-interval 5  # Save checkpoint every 5 rollouts
 )
 
 # launch the master node of ray in container
@@ -115,4 +121,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
-   ${WANDB_ARGS[@]} 
+   ${WANDB_ARGS[@]} \
+   ${FSDP_ARGS[@]} \
+   ${CHECKPOINT_ARGS[@]} 
