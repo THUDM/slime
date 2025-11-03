@@ -15,18 +15,34 @@ from torch.distributed.checkpoint.stateful import Stateful
 logger = logging.getLogger(__name__)
 
 
-class AppState(Stateful):
-    def __init__(self, model, optimizer=None):
+class ModelState(Stateful):
+    """Wrapper for model state only."""
+    def __init__(self, model):
+        self.model = model
+
+    def state_dict(self):
+        model_state_dict, _ = get_state_dict(self.model, optimizers=None)
+        return {"model": model_state_dict}
+
+    def load_state_dict(self, state_dict):
+        set_state_dict(
+            self.model, optimizers=None, model_state_dict=state_dict["model"], optim_state_dict=None
+        )
+
+
+class OptimizerState(Stateful):
+    """Wrapper for optimizer state only."""
+    def __init__(self, model, optimizer):
         self.model = model
         self.optimizer = optimizer
 
     def state_dict(self):
-        model_state_dict, optimizer_state_dict = get_state_dict(self.model, self.optimizer)
-        return {"model": model_state_dict, "optim": optimizer_state_dict}
+        _, optimizer_state_dict = get_state_dict(self.model, optimizers=self.optimizer)
+        return {"optim": optimizer_state_dict}
 
     def load_state_dict(self, state_dict):
         set_state_dict(
-            self.model, self.optimizer, model_state_dict=state_dict["model"], optim_state_dict=state_dict["optim"]
+            self.model, optimizers=self.optimizer, model_state_dict=None, optim_state_dict=state_dict["optim"]
         )
 
 
@@ -47,6 +63,11 @@ def _write_checkpoint_metadata(path: Path, metadata: dict[str, Any]) -> None:
 
 
 def load(actor: Any) -> dict[str, Any] | None:
+    """Load checkpoint from disk.
+    
+    Loads model weights and optionally optimizer state from separate directories.
+    This allows loading weights without optimizer or deleting optimizer before loading.
+    """
     load_root = getattr(actor.args, "load", None)
     if load_root is None:
         return None
@@ -66,18 +87,36 @@ def load(actor: Any) -> dict[str, Any] | None:
         target_step = int(tracker_text)
 
     checkpoint_dir = root_path / f"iter_{target_step:07d}"
-    if not checkpoint_dir.exists():
-        logger.info(f"[FSDP] Checkpoint {checkpoint_dir} not found; skipping load.")
+    model_dir = checkpoint_dir / "model"
+    optimizer_dir = checkpoint_dir / "optimizer"
+    
+    if not model_dir.exists():
+        logger.info(f"[FSDP] Model checkpoint {model_dir} not found; skipping load.")
         return None
 
-    app_state = AppState(actor.model, actor.optimizer if not getattr(actor.args, "no_load_optim", False) else None)
-    state_dict = {"app": app_state}
+    # Load model weights (always)
+    model_state = ModelState(actor.model)
+    state_dict = {"model_state": model_state}
 
     try:
-        dcp.load(state_dict=state_dict, checkpoint_id=str(checkpoint_dir))
+        dcp.load(state_dict=state_dict, checkpoint_id=str(model_dir))
+        logger.info(f"[FSDP] Loaded model from {model_dir}")
     except Exception as e:
-        logger.error(f"[FSDP] Failed to load checkpoint from {checkpoint_dir}: {e}")
+        logger.error(f"[FSDP] Failed to load model from {model_dir}: {e}")
         return None
+
+    # Load optimizer state (optional)
+    load_optimizer = not getattr(actor.args, "no_load_optim", False) and hasattr(actor, "optimizer")
+    if load_optimizer and optimizer_dir.exists():
+        optimizer_state = OptimizerState(actor.model, actor.optimizer)
+        optim_state_dict = {"optim_state": optimizer_state}
+        try:
+            dcp.load(state_dict=optim_state_dict, checkpoint_id=str(optimizer_dir))
+            logger.info(f"[FSDP] Loaded optimizer from {optimizer_dir}")
+        except Exception as e:
+            logger.warning(f"[FSDP] Failed to load optimizer from {optimizer_dir}: {e}")
+    elif load_optimizer:
+        logger.info(f"[FSDP] Optimizer checkpoint not found at {optimizer_dir}, skipping optimizer load.")
 
     rng_state = None
     rng_path = checkpoint_dir / "rng.pt"
@@ -122,20 +161,35 @@ def finalize_load(actor: Any, checkpoint_payload: dict[str, Any] | None) -> None
 
 
 def save(actor: Any, iteration: int) -> None:
+    """Save checkpoint to disk.
+    
+    Saves model weights and optimizer state to separate directories.
+    This allows loading weights without optimizer or deleting optimizer before loading.
+    """
     torch.cuda.synchronize()
 
     base_dir = Path(actor.args.save).expanduser()
     step_id = iteration + 1
     checkpoint_dir = base_dir / f"iter_{step_id:07d}"
+    model_dir = checkpoint_dir / "model"
+    optimizer_dir = checkpoint_dir / "optimizer"
 
     if dist.get_rank() == 0:
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        model_dir.mkdir(parents=True, exist_ok=True)
+        optimizer_dir.mkdir(parents=True, exist_ok=True)
     dist.barrier()
 
-    app_state = AppState(actor.model, actor.optimizer)
-    state_dict = {"app": app_state}
-
-    dcp.save(state_dict, checkpoint_id=str(checkpoint_dir))
+    # Save model weights
+    model_state = ModelState(actor.model)
+    state_dict = {"model_state": model_state}
+    dcp.save(state_dict, checkpoint_id=str(model_dir))
+    
+    # Save optimizer state
+    if hasattr(actor, "optimizer") and actor.optimizer is not None:
+        optimizer_state = OptimizerState(actor.model, actor.optimizer)
+        optim_state_dict = {"optim_state": optimizer_state}
+        dcp.save(optim_state_dict, checkpoint_id=str(optimizer_dir))
 
     if dist.get_rank() == 0:
         rng_state = {"torch": torch.get_rng_state()}
