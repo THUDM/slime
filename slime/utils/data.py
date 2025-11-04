@@ -8,6 +8,7 @@ import ray
 import torch.distributed as dist
 
 from slime.utils.types import Sample
+
 from .seqlen_balancing import get_seqlen_balanced_partitions
 from .timer import Timer
 
@@ -43,6 +44,20 @@ def _parse_generalized_path(s: str):
     return s, None
 
 
+def _batch_tokenize_and_filter(batch_args):
+    """Helper function for multiprocessing: tokenize prompts and return valid indices."""
+    prompts, tokenizer, max_length, multimodal_keys = batch_args
+    valid_indices = []
+    for idx, prompt in enumerate(prompts):
+        try:
+            raw_prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+            if multimodal_keys or len(raw_prompt_ids) <= max_length:
+                valid_indices.append(idx)
+        except Exception:
+            pass  # Skip invalid prompts
+    return valid_indices
+
+
 class Dataset:
     def __init__(
         self,
@@ -58,8 +73,9 @@ class Dataset:
         seed=42,
         apply_chat_template=False,
         apply_chat_template_kwargs=None,
+        num_workers=None,  # Number of processes for parallel tokenization
     ):
-        self.origin_samples = []
+        temp_samples = []
         for data in read_file(path):
             if multimodal_keys:
                 prompt_content = []
@@ -94,20 +110,49 @@ class Dataset:
             else:
                 prompt = prompt_content
 
-            # TODO: this is slow.
-            if max_length is not None:
-                raw_prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
-                if not multimodal_keys:
-                    if len(raw_prompt_ids) > max_length:
-                        continue
-
-            self.origin_samples.append(
-                Sample(
-                    prompt=prompt,
-                    label=data[label_key] if label_key is not None else None,
-                    metadata=data.get(metadata_key) or {},
-                )
+            temp_samples.append(
+                (prompt, data[label_key] if label_key is not None else None, data.get(metadata_key) or {})
             )
+
+        # Optimized: use multiprocessing for length filtering to avoid GIL
+        self.origin_samples = []
+        # Only use multiprocessing for large datasets (>100 samples) to amortize overhead
+        if max_length is not None and len(temp_samples) > 100 and not multimodal_keys:
+            import os
+            from concurrent.futures import ProcessPoolExecutor
+
+            # Use half of CPU cores with a maximum of 8 workers
+            if num_workers is None:
+                num_workers = min(os.cpu_count() // 2 or 1, 8)
+            prompts = [s[0] for s in temp_samples]
+            chunk_size = (len(prompts) + num_workers - 1) // num_workers
+            chunks = [
+                (prompts[i : i + chunk_size], tokenizer, max_length, multimodal_keys)
+                for i in range(0, len(prompts), chunk_size)
+            ]
+
+            with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                results = list(executor.map(_batch_tokenize_and_filter, chunks))
+
+            valid_indices = set()
+            offset = 0
+            for chunk_valid in results:
+                valid_indices.update(idx + offset for idx in chunk_valid)
+                offset += chunk_size
+
+            for idx, (prompt, label, metadata) in enumerate(temp_samples):
+                if idx in valid_indices:
+                    self.origin_samples.append(Sample(prompt=prompt, label=label, metadata=metadata))
+        else:
+            # Original sequential logic for small datasets or multimodal
+            for prompt, label, metadata in temp_samples:
+                if max_length is not None:
+                    raw_prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+                    if not multimodal_keys:
+                        if len(raw_prompt_ids) > max_length:
+                            continue
+
+                self.origin_samples.append(Sample(prompt=prompt, label=label, metadata=metadata))
 
         self.epoch_id = -1
         self.seed = seed
