@@ -53,8 +53,10 @@ def _batch_tokenize_and_filter(batch_args):
             raw_prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
             if multimodal_keys or len(raw_prompt_ids) <= max_length:
                 valid_indices.append(idx)
-        except Exception:
-            pass  # Skip invalid prompts
+        except Exception as e:
+            # Log tokenization failures but continue processing
+            print(f"Warning: Failed to tokenize prompt at index {idx}: {type(e).__name__}: {e}")
+            continue  # Skip invalid prompts
     return valid_indices
 
 
