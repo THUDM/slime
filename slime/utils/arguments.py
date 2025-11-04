@@ -1290,8 +1290,8 @@ def slime_validate_args(args):
             "require advantage normalization. Please add `--normalize-advantages` to your command."
         )
 
-    if args.use_rollout_logprobs:
-        assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
+    # if args.use_rollout_logprobs:
+    #     assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
 
     if args.use_dynamic_batch_size:
         assert args.max_tokens_per_gpu is not None, "max_tokens_per_gpu must be set when use_dynamic_batch_size is set"
