@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Optional
 
 from slime.utils.misc import exec_command
+from slime.utils.typer_utils import dataclass_cli
 
-_ = exec_command
+_ = exec_command, dataclass_cli
 
 repo_base_dir = Path(os.path.abspath(__file__)).resolve().parents[1]
 
@@ -36,7 +37,9 @@ def hf_download_dataset(full_name: str):
 
 def execute_train(
     train_args: str,
+    # TODO rename to "num_gpus_per_node"
     num_gpus: int,
+    # TODO rename to "megatron_model_type"
     model_type: Optional[str],
     train_script: str = "train.py",
     before_ray_job_submit=None,
@@ -44,6 +47,9 @@ def execute_train(
 ):
     external_ray = bool(int(os.environ.get("SLIME_SCRIPT_EXTERNAL_RAY", "0")))
     master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
+
+    train_backend_fsdp = "--train-backend fsdp" in train_args
+    assert train_backend_fsdp == (model_type is None)
 
     exec_command(
         "pkill -9 sglang; "
@@ -76,7 +82,14 @@ def execute_train(
         {
             "env_vars": {
                 "PYTHONPATH": "/root/Megatron-LM/",
-                "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+                # If setting this in FSDP, the computation communication overlapping may have issues
+                **(
+                    {}
+                    if train_backend_fsdp
+                    else {
+                        "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+                    }
+                ),
                 "NCCL_NVLS_ENABLE": str(int(check_has_nvlink())),
                 "no_proxy": f"127.0.0.1,{master_addr}",
                 # This is needed by megatron / torch distributed in multi-node setup
@@ -144,7 +157,7 @@ def get_default_wandb_args(test_file: str, run_name_prefix: Optional[str] = None
 
 
 def create_run_id() -> str:
-    return datetime.datetime.now().strftime("%y%m%d-%H%M%S") + f"-{random.Random().randint(0, 999):03d}"
+    return datetime.datetime.utcnow().strftime("%y%m%d-%H%M%S") + f"-{random.Random().randint(0, 999):03d}"
 
 
 _warned_bool_env_var_keys = set()

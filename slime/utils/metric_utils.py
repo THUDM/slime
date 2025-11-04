@@ -1,5 +1,5 @@
 import math
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 
@@ -51,3 +51,62 @@ def _estimate_pass_at_k(num_samples, num_correct, k):
         return 1.0 - np.prod(1.0 - k / np.arange(n - c + 1, n + 1))
 
     return np.array([estimator(int(n), int(c), k) for n, c in zip(num_samples, num_correct)])
+
+
+def compute_statistics(values: List[float]) -> Dict[str, float]:
+    values = np.array(values)
+    return {
+        "mean": np.mean(values).item(),
+        "median": np.median(values).item(),
+    }
+
+
+def compression_ratio(
+    data: Union[str, bytes],
+    *,
+    encoding: str = "utf-8",
+    algorithm: Literal["zlib", "gzip", "bz2", "lzma"] = "zlib",
+    level: int = 9,
+) -> Tuple[float, float]:
+    if isinstance(data, str):
+        raw = data.encode(encoding)
+    else:
+        raw = data
+
+    original = len(raw)
+    if original == 0:
+        return float("inf"), 0.0
+
+    if algorithm == "zlib":
+        import zlib
+
+        compressed = zlib.compress(raw, level)
+    elif algorithm == "gzip":
+        import gzip
+
+        compressed = gzip.compress(raw, compresslevel=level)
+    elif algorithm == "bz2":
+        import bz2
+
+        compressed = bz2.compress(raw, compresslevel=level)
+    elif algorithm == "lzma":
+        import lzma
+
+        compressed = lzma.compress(raw, preset=level)
+    else:
+        raise ValueError(f"Unsupported algorithm: {algorithm}")
+
+    comp_len = len(compressed)
+    if comp_len == 0:
+        return float("inf"), 100.0
+
+    ratio = original / comp_len
+    savings_pct = 100.0 * (1.0 - comp_len / original)
+    return ratio, savings_pct
+
+
+def has_repetition(text: str = None):
+    if len(text) > 10000 and compression_ratio(text[-10000:])[0] > 10:
+        return True
+    else:
+        return False

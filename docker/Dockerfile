@@ -10,14 +10,14 @@ RUN apt install -y nvtop rsync
 
 # TODO: change to pip install sglang-router after it has a new release
 RUN pip install sglang-router --force-reinstall
-RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@5d48a5f6858d80c10f088a4613a68485ec330532 --no-cache-dir --force-reinstall
+RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git --no-cache-dir --force-reinstall
 RUN pip install ray[default]
 RUN pip install httpx[http2] wandb pylatexenc blobfile accelerate "mcp[cli]"
 
 # mbridge
 RUN pip install git+https://github.com/ISEEKYAN/mbridge.git --no-deps
 
-RUN TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0;9.0a" pip install git+https://github.com/fanshiqing/grouped_gemm@v1.1.4
+RUN TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0;9.0a" pip install git+https://github.com/fanshiqing/grouped_gemm@v1.1.4 --no-build-isolation
 # apex
 RUN NVCC_APPEND_FLAGS="--threads 4" \
   pip -v install --disable-pip-version-check --no-cache-dir \
@@ -27,7 +27,7 @@ RUN NVCC_APPEND_FLAGS="--threads 4" \
 RUN pip install pybind11
 # flash attn
 # the newest version megatron supports is v2.7.4
-RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1
+RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
 RUN pip install flash-linear-attention
 RUN pip -v install --no-build-isolation transformer_engine[pytorch]
 
@@ -39,16 +39,12 @@ RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
 
 WORKDIR /root/
 RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
-    cd Megatron-LM && \
+    cd Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
     pip install -e .
-
-# remove the cudnn installed by megatron
-RUN pip uninstall nvidia-cudnn-cu12 -y
 
 # sandwitch norm for GLM models
 COPY patch/${SGLANG_VERSION}/megatron.patch /root/Megatron-LM/
 RUN cd Megatron-LM && \
-    git checkout ${MEGATRON_COMMIT} && \
     git apply megatron.patch --3way && \
     if grep -R -n '^<<<<<<< ' .; then \
       echo "Patch failed to apply cleanly. Please resolve conflicts." && \

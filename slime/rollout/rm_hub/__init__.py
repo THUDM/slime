@@ -9,7 +9,6 @@ from slime.utils.types import Sample
 from .deepscaler import get_deepscaler_rule_based_reward
 from .f1 import f1_score
 from .gpqa import compute_gpqa_reward
-from .ifbench import compute_ifbench_reward
 from .math_dapo_utils import compute_score as compute_score_dapo
 from .math_utils import extract_answer as extract_boxed_answer
 from .math_utils import grade_answer_verl
@@ -56,6 +55,8 @@ async def async_rm(args, sample: Sample, **kwargs):
     elif rm_type == "gpqa":
         return compute_gpqa_reward(response, label, metadata=metadata)
     elif rm_type == "ifbench":
+        from .ifbench import compute_ifbench_reward
+
         return compute_ifbench_reward(response, label, metadata=metadata)
     elif rm_type:
         raise NotImplementedError(f"Rule-based RM for {rm_type} is not implemented.")

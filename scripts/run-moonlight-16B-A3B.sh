@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 # for rerun the task
@@ -10,6 +9,7 @@ pkill -9 python
 sleep 3
 pkill -9 ray
 pkill -9 python
+pkill -9 redis
 
 set -ex
 
@@ -25,15 +25,14 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/models/mimo-7B-rl.sh"
+source "${SCRIPT_DIR}/models/moonlight.sh"
 
- CKPT_ARGS=(
-   --hf-checkpoint /root/MiMo-7B-RL
-   #--hf-checkpoint /root/Qwen3-4B-FP8
-   --ref-load /root/MiMo-7B-RL_torch_dist
-   --load /root/MiMo-7B-RL-mtp_slime/
-   --save /root/MiMo-7B-RL-mtp_slime/
-   --save-interval 2000
+CKPT_ARGS=(
+   --hf-checkpoint /root/Moonlight-16B-A3B
+   --ref-load /root/Moonlight-16B-A3B_torch_dist
+   --load /root/Moonlight-16B-A3B_slime/
+   --save /root/Moonlight-16B-A3B_slime/
+   --save-interval 20
 )
 
 ROLLOUT_ARGS=(
@@ -42,31 +41,35 @@ ROLLOUT_ARGS=(
    --label-key label
    --apply-chat-template
    --rollout-shuffle
-   --rm-type deepscaler
+   --rm-type math
    --num-rollout 3000
-   --rollout-batch-size 32
+   --rollout-batch-size 128
    --n-samples-per-prompt 8
-   --rollout-max-response-len 8192
+   --rollout-max-response-len 4096
    --rollout-temperature 0.8
 
-   --global-batch-size 256
-   --balance-data
+   --over-sampling-batch-size 256
+   --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
+
+   --num-steps-per-rollout 4
+   # --global-batch-size 256
+   --balance-data   
 )
 
 EVAL_ARGS=(
    --eval-interval 20
    --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
-   --n-samples-per-eval-prompt 1
-   --eval-max-response-len 8192
+   --n-samples-per-eval-prompt 8
+   --eval-max-response-len 4096
    --eval-top-p 0.7
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 2
+   --tensor-model-parallel-size 4
    --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
-   --expert-model-parallel-size 1
+   --expert-model-parallel-size 8
    --expert-tensor-parallel-size 1
 
    --recompute-granularity full
@@ -75,7 +78,7 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 9216
+   --max-tokens-per-gpu 8192
 )
 
 GRPO_ARGS=(
@@ -95,24 +98,23 @@ OPTIMIZER_ARGS=(
    --weight-decay 0.1
    --adam-beta1 0.9
    --adam-beta2 0.98
+
+   --optimizer-cpu-offload
+   --overlap-cpu-optimizer-d2h-h2d
+   --use-precision-aware-optimizer
 )
 
 WANDB_ARGS=(
    # --use-wandb
    # --wandb-project slime-dev
-   # --wandb-group mimo-7B-rl-test
-   # --wandb-key ${WANDB_API_KEY}
+   # --wandb-group moomlight-16B-A3B-test
+   # --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 1
+   --rollout-num-gpus-per-engine 8
    --sglang-mem-fraction-static 0.7
-
-   # for speculative decoding
-   --sglang-speculative-algorithm EAGLE
-   --sglang-speculative-num-steps 3
-   --sglang-speculative-eagle-topk 1
-   --sglang-speculative-num-draft-tokens 4
+   --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
 )
 
 MISC_ARGS=(
@@ -123,17 +125,16 @@ MISC_ARGS=(
    --accumulate-allreduce-grads-in-fp32
    --attention-softmax-in-fp32
    # need to comment this when using model with MLA
-   --attention-backend flash
-)
+   # --attention-backend flash
 
-SPEC_ARGS=(
-   --enable-mtp-training
-   --mtp-loss-scaling-factor 0.2
+   # use deepep for megatron
+   --moe-enable-deepep
+   --moe-token-dispatcher-type flex
 )
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 # Build the runtime environment JSON with proper variable substitution
 RUNTIME_ENV_JSON="{
@@ -159,5 +160,4 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
-   ${MISC_ARGS[@]} \
-   ${SPEC_ARGS[@]}
+   ${MISC_ARGS[@]}
