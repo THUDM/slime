@@ -17,7 +17,7 @@ from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
 from slime.utils.iter_utils import group_by
 from slime.utils.metric_checker import MetricChecker
-from slime.utils.metric_utils import compute_pass_rate, dict_add_prefix
+from slime.utils.metric_utils import compute_pass_rate, compute_statistics, dict_add_prefix
 from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
 from slime.utils.types import Sample
@@ -120,17 +120,25 @@ class RolloutManager:
         self.data_source.load(rollout_id)
 
     def offload(self):
-        return [engine.release_memory_occupation.remote() for engine in self.rollout_engines]
+        return ray.get([engine.release_memory_occupation.remote() for engine in self.rollout_engines])
 
     def onload(self, tags: List[str] = None):
-        return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines]
+        return ray.get([engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines])
 
     def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
             data = torch.load(
                 open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
+                weights_only=False,
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
+            if (ratio := self.args.load_debug_rollout_data_subsample) is not None:
+                original_num_rows = len(data)
+                rough_subsample_num_rows = int(original_num_rows * ratio)
+                data = data[: rough_subsample_num_rows // 2] + data[-rough_subsample_num_rows // 2 :]
+                print(
+                    f"Subsample loaded debug rollout data using {ratio=} and change num rows {original_num_rows} -> {len(data)}"
+                )
             metrics = None
         else:
             data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
@@ -485,7 +493,9 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
     if args.rollout_num_gpus:
         log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+    log_dict |= dict_add_prefix(compute_statistics(response_lengths), f"rollout/response_len/")
     log_dict |= _compute_zero_std_metrics(args, samples)
+    log_dict |= _compute_spec_metrics(args, samples)
     log_dict |= dict_add_prefix(_compute_reward_cat_metrics(args, samples), f"rollout/")
     print(f"perf {rollout_id}: {log_dict}")
     step = (
@@ -519,6 +529,20 @@ def _compute_zero_std_metrics(args, all_samples: List[Sample]):
     interesting_rewards = [str(round(g[0].get_reward_value(args), 1)) for g in interesting_sample_groups]
 
     return {f"rollout/zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
+
+
+def _compute_spec_metrics(args, all_samples: List[Sample]):
+    if args.sglang_speculative_algorithm is None:
+        return {}
+    num_samples = len(all_samples)
+    metrics = {}
+    metrics["rollout/spec_accept_rate"] = (
+        sum(sample.spec_info.spec_accept_rate for sample in all_samples) / num_samples
+    )
+    metrics["rollout/spec_accept_length"] = (
+        sum(sample.spec_info.spec_accept_length for sample in all_samples) / num_samples
+    )
+    return metrics
 
 
 def _compute_reward_cat_metrics(args, all_samples: List[Sample]):

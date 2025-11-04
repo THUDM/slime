@@ -53,6 +53,14 @@ def _estimate_pass_at_k(num_samples, num_correct, k):
     return np.array([estimator(int(n), int(c), k) for n, c in zip(num_samples, num_correct)])
 
 
+def compute_statistics(values: List[float]) -> Dict[str, float]:
+    values = np.array(values)
+    return {
+        "mean": np.mean(values).item(),
+        "median": np.median(values).item(),
+    }
+
+
 def compression_ratio(
     data: Union[str, bytes],
     *,

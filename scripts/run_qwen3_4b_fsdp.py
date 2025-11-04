@@ -36,9 +36,13 @@ def prepare(args: ScriptArgs):
 def execute(args: ScriptArgs):
     run_id = U.create_run_id()
 
+    load_save_path = f"/root/shared_data/{run_id}/checkpoints"
     ckpt_args = (
         f"--hf-checkpoint /root/models/{args.model_name} "
         # "--ref-load /root/models/{args.model_name} "
+        f"--load {load_save_path} "
+        f"--save {load_save_path} "
+        "--save-interval 20 "
     )
 
     rollout_args = (
@@ -49,7 +53,7 @@ def execute(args: ScriptArgs):
         # By default it is thinking mode
         # """--apply-chat-template-kwargs '{"enable_thinking":false}' """
         "--rollout-shuffle "
-        "--rm-type deepscaler "
+        "--rm-type math "
         "--num-rollout 3000 "
         "--rollout-batch-size 64 "
         "--n-samples-per-prompt 16 "
@@ -79,7 +83,7 @@ eval:
   datasets:
     - name: aime
       path: /root/datasets/aime-2024/aime-2024.jsonl
-      rm_type: deepscaler
+      rm_type: math
       n_samples_per_eval_prompt: 16
     - name: gpqa
       path: /root/datasets/gpqa_diamond/gpqa_eval.jsonl
@@ -139,7 +143,7 @@ eval:
         "--offload-train-mode move "
         """--train-env-vars '{"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}' """
         "--use-fault-tolerance "
-        f"--save-debug-rollout-data /root/shared_data/{run_id}/{{rollout_id}}.pt "
+        f"--dump-details /root/shared_data/{run_id}/dump_details "
     )
 
     true_on_policy_args = ""
