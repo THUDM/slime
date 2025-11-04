@@ -17,21 +17,21 @@ logger = logging.getLogger(__name__)
 
 class ModelState(Stateful):
     """Wrapper for model state only."""
+
     def __init__(self, model):
         self.model = model
 
     def state_dict(self):
-        model_state_dict, _ = get_state_dict(self.model, optimizers=None)
+        model_state_dict, _ = get_state_dict(self.model, optimizers=[])
         return {"model": model_state_dict}
 
     def load_state_dict(self, state_dict):
-        set_state_dict(
-            self.model, optimizers=None, model_state_dict=state_dict["model"], optim_state_dict=None
-        )
+        set_state_dict(self.model, optimizers=[], model_state_dict=state_dict["model"], optim_state_dict=None)
 
 
 class OptimizerState(Stateful):
     """Wrapper for optimizer state only."""
+
     def __init__(self, model, optimizer):
         self.model = model
         self.optimizer = optimizer
@@ -64,7 +64,7 @@ def _write_checkpoint_metadata(path: Path, metadata: dict[str, Any]) -> None:
 
 def load(actor: Any) -> dict[str, Any] | None:
     """Load checkpoint from disk.
-    
+
     Loads model weights and optionally optimizer state from separate directories.
     This allows loading weights without optimizer or deleting optimizer before loading.
     """
@@ -89,7 +89,7 @@ def load(actor: Any) -> dict[str, Any] | None:
     checkpoint_dir = root_path / f"iter_{target_step:07d}"
     model_dir = checkpoint_dir / "model"
     optimizer_dir = checkpoint_dir / "optimizer"
-    
+
     if not model_dir.exists():
         logger.info(f"[FSDP] Model checkpoint {model_dir} not found; skipping load.")
         return None
@@ -162,7 +162,7 @@ def finalize_load(actor: Any, checkpoint_payload: dict[str, Any] | None) -> None
 
 def save(actor: Any, iteration: int) -> None:
     """Save checkpoint to disk.
-    
+
     Saves model weights and optimizer state to separate directories.
     This allows loading weights without optimizer or deleting optimizer before loading.
     """
@@ -184,7 +184,7 @@ def save(actor: Any, iteration: int) -> None:
     model_state = ModelState(actor.model)
     state_dict = {"model_state": model_state}
     dcp.save(state_dict, checkpoint_id=str(model_dir))
-    
+
     # Save optimizer state
     if hasattr(actor, "optimizer") and actor.optimizer is not None:
         optimizer_state = OptimizerState(actor.model, actor.optimizer)
