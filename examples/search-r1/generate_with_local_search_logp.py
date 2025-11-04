@@ -59,16 +59,16 @@ async def search(query: str) -> str:
     return _passages2string(result)
 
 
-def postprocess_responses(resp: str) -> str:
-    return (
-        # <search> text <search>
-        # <search> 1, 0 + 2
-        # [1,2,1,2,0,2]
+# def postprocess_responses(resp: str) -> str:
+#     return (
+#         # <search> text <search>
+#         # <search> 1, 0 + 2
+#         # [1,2,1,2,0,2]
         
-        resp.split("</search>")[0] + "</search>"
-        if "</search>" in resp
-        else resp.split("</answer>")[0] + "</answer>" if "</answer>" in resp else resp
-    )
+#         resp.split("</search>")[0] + "</search>"
+#         if "</search>" in resp
+#         else resp.split("</answer>")[0] + "</answer>" if "</answer>" in resp else resp
+#     )
 
 
 def postprocess_predictions(prediction: str):
@@ -133,7 +133,6 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             return sample
         
         cur_response = output["text"]
-        cur_response = postprocess_responses(cur_response)
 
         # Extract log probs from output - required for TIS metrics
         if "output_token_logprobs" not in output["meta_info"]:

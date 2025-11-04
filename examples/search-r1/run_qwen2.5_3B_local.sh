@@ -21,9 +21,9 @@ source "${SCRIPT_DIR}/../../scripts/models/qwen2.5-3B.sh"
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen2.5-3B/
    --ref-load /root/Qwen2.5-3B_torch_dist/
-   --load /root/Qwen2.5-3B_slime_base_1/
-   --save /root/Qwen2.5-3B_slime_base_1/
-   --save-interval 100
+   # --load /root/Qwen2.5-3B_slime_base_1/
+   # --save /root/Qwen2.5-3B_slime_base_1/
+   # --save-interval 100
 )
 
 ROLLOUT_ARGS=(
@@ -37,6 +37,10 @@ ROLLOUT_ARGS=(
    --n-samples-per-prompt 8
    --rollout-max-response-len 500
    --rollout-temperature 1.0
+   --eval-interval 10
+   --eval-prompt-data nq_test /root/nq_search/test.parquet
+   --eval-input-key prompt
+   --eval-label-key reward_model
 
    --global-batch-size 512
    --balance-data
@@ -135,4 +139,4 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${PERF_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
    ${MISC_ARGS[@]} \
-   ${CUSTOM_ARGS[@]} \
+   ${CUSTOM_ARGS[@]} 
