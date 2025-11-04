@@ -157,11 +157,16 @@ class ChatCompletionHandler:
                     status_code=400, detail=f"Invalid request: message at index {i} must be a dictionary"
                 )
 
-            if "role" not in message or "content" not in message:
+            if "role" not in message:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Invalid request: message at index {i} must have 'role' and 'content' fields",
+                    detail=f"Invalid request: message at index {i} must have 'role' field",
                 )
+
+            # Normalize content to empty string if None/missing (following SGLang serving_chat.py:261-262)
+            # This allows assistant messages with tool_calls to have null content per OpenAI spec
+            if "content" not in message or message["content"] is None:
+                message["content"] = ""
 
     def _parse_generated_output(
         self, generated_text: str, request_data: dict
