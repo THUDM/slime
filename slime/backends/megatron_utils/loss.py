@@ -210,7 +210,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             "total_lengths"). Modified in-place to add "advantages" and
             "returns" keys, each mapping to lists of tensors per sample.
     """
-    log_probs: list[torch.Tensor] = rollout_data.get("log_probs")
+    log_probs: list[torch.Tensor] = rollout_data.get("rollout_log_probs" if args.use_rollout_logprobs else "log_probs")
     ref_log_probs: list[torch.Tensor] = rollout_data.get("ref_log_probs")
     rewards: list[float] = rollout_data.get("rewards")
     values: Union[None, list[torch.Tensor]] = rollout_data.get("values")
@@ -393,30 +393,38 @@ def policy_loss_function(
 
     log_probs = log_probs_and_entropy["log_probs"]
 
-    if args.advantage_estimator == "gspo":
-        full_log_probs = [
-            all_gather_with_cp(log_prob, total_length, response_length)
-            for log_prob, total_length, response_length in zip(log_probs, total_lengths, response_lengths)
-        ]
-        full_old_log_probs = [
-            all_gather_with_cp(old_log_prob, total_length, response_length)
-            for old_log_prob, total_length, response_length in zip(old_log_probs, total_lengths, response_lengths)
-        ]
-
-        loss_masks = batch["loss_masks"]
-        ppo_kl = [
-            ((old_logprob - log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
-            for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks)
-        ]
-        ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, log_probs)]
-        ppo_kl = torch.cat(ppo_kl, dim=0)
+    if args.use_tis and args.use_rollout_logprobs:
+        # skipping clip, use pure reinforce + rollout correction
+        # https://github.com/szrlee/verl/blob/yingru/rollout_correction/docs/advance/rollout_corr_math.md#311-pure-is-pure_is
         log_probs = torch.cat(log_probs, dim=0)
+        pg_loss = -log_probs * advantages
+        pg_clipfrac = None
+        ppo_kl = None
     else:
-        old_log_probs = torch.cat(old_log_probs, dim=0)
-        log_probs = torch.cat(log_probs, dim=0)
-        ppo_kl = old_log_probs - log_probs
+        if args.advantage_estimator == "gspo":
+            full_log_probs = [
+                all_gather_with_cp(log_prob, total_length, response_length)
+                for log_prob, total_length, response_length in zip(log_probs, total_lengths, response_lengths)
+            ]
+            full_old_log_probs = [
+                all_gather_with_cp(old_log_prob, total_length, response_length)
+                for old_log_prob, total_length, response_length in zip(old_log_probs, total_lengths, response_lengths)
+            ]
 
-    pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
+            loss_masks = batch["loss_masks"]
+            ppo_kl = [
+                ((old_logprob - log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+                for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks)
+            ]
+            ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, log_probs)]
+            ppo_kl = torch.cat(ppo_kl, dim=0)
+            log_probs = torch.cat(log_probs, dim=0)
+        else:
+            old_log_probs = torch.cat(old_log_probs, dim=0)
+            log_probs = torch.cat(log_probs, dim=0)
+            ppo_kl = old_log_probs - log_probs
+
+        pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
 
     # Apply off-policy correction using importance sampling if enabled
     if args.use_tis:
@@ -446,11 +454,11 @@ def policy_loss_function(
 
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
 
-        ois = (-ppo_kl).exp()
+        ois = (-ppo_kl).exp() if not args.use_rollout_logprobs else None
         tis_kwargs = {
             "args": args,
             "pg_loss": pg_loss,
-            "train_log_probs": batch["log_probs"],
+            "train_log_probs": log_probs_and_entropy["log_probs"] if args.use_rollout_logprobs else batch["log_probs"],
             "rollout_log_probs": batch["rollout_log_probs"],
             "loss_masks": batch["loss_masks"],
             "total_lengths": total_lengths,
@@ -470,8 +478,10 @@ def policy_loss_function(
         )
 
     pg_loss = sum_of_sample_mean(pg_loss)
-    pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
-    ppo_kl = sum_of_sample_mean(ppo_kl)
+    if pg_clipfrac is not None:
+        pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
+    if ppo_kl is not None:
+        ppo_kl = sum_of_sample_mean(ppo_kl)
 
     # entropy loss
     entropy = log_probs_and_entropy["entropy"]
@@ -499,14 +509,14 @@ def policy_loss_function(
     train_rollout_logprob_abs_diff = None
     if "rollout_log_probs" in batch:
         rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
-        train_rollout_logprob_abs_diff = sum_of_sample_mean((old_log_probs - rollout_log_probs).abs())
+        train_rollout_logprob_abs_diff = sum_of_sample_mean(((log_probs if args.use_rollout_logprobs else old_log_probs) - rollout_log_probs).abs())
 
     reported_loss = {
         "loss": loss.clone().detach(),
         "pg_loss": pg_loss.clone().detach(),
         "entropy_loss": entropy_loss.clone().detach(),
-        "pg_clipfrac": pg_clipfrac.clone().detach(),
-        "ppo_kl": ppo_kl.clone().detach(),
+        "pg_clipfrac": pg_clipfrac.clone().detach() if pg_clipfrac else None,
+        "ppo_kl": ppo_kl.clone().detach() if ppo_kl else None,
     }
 
     if train_rollout_logprob_abs_diff is not None:
@@ -516,7 +526,7 @@ def policy_loss_function(
         reported_loss["kl_loss"] = kl_loss.clone().detach()
 
     if args.use_tis:
-        reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
+        reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach() if ois is not None else None
         # Assume all metrics are already cloned and detached
         for metric_key, metric_value in tis_metrics.items():
             key_name = f"{metric_key}"

@@ -271,14 +271,15 @@ class MegatronTrainRayActor(TrainRayActor):
 
                 if self.args.use_routing_replay:
                     os.environ["ROUTING_REPLAY_STAGE"] = "record"
-                rollout_data.update(
-                    self.compute_log_prob(
-                        "old_actor" if self.args.keep_old_actor else "actor",
-                        data_iterator,
-                        num_microbatches,
-                        store_prefix="",
+                if not self.args.use_rollout_logprobs:
+                    rollout_data.update(
+                        self.compute_log_prob(
+                            "old_actor" if self.args.keep_old_actor else "actor",
+                            data_iterator,
+                            num_microbatches,
+                            store_prefix="",
+                        )
                     )
-                )
 
                 if self.args.use_critic:
                     sync_actor_critic_data(
