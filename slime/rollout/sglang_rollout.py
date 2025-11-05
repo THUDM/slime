@@ -97,24 +97,20 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
     # Process prompt to create text and image payload
     image_data = []
-    if isinstance(sample.prompt, str):
-        text_prompt = sample.prompt
-    else:  # Multimodal prompt (list of dicts)
-        text_prompt = ""
-        # sglang uses a placeholder to insert image features
-        image_token = state.tokenizer.special_tokens_map.get("image_token", "<image>")
-        for part in sample.prompt:
-            if part["type"] == "text":
-                text_prompt += part["text"]
-            elif part["type"] == "image":
-                text_prompt += image_token
-                try:
-                    img_b64 = await asyncio.to_thread(_load_and_encode_image, part["path"])
-                    image_data.append(img_b64)
-                except Exception as e:
-                    print(f"Error processing image {part['path']}: {e}")
-                    sample.status = Sample.Status.ABORTED
-                    return sample
+    if sample.multimodal_input:
+        for multimodal_type, multimodal_paths in sample.multimodal_input.items():
+            if not isinstance(multimodal_paths, list):
+                multimodal_paths = [multimodal_paths]
+            for multimodal_path in multimodal_paths:
+                if multimodal_type == "image":
+                    try:
+                        img_b64 = await asyncio.to_thread(_load_and_encode_image, multimodal_path)
+                        image_data.append(img_b64)
+                    except Exception as e:
+                        print(f"Error processing image {multimodal_path}: {e}")
+                        sample.status = Sample.Status.ABORTED
+                        return sample
+    text_prompt = sample.prompt
 
     if len(sample.response) > 0:
         # Adjust max_new_tokens for subsequent generation turns
