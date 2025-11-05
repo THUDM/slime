@@ -96,7 +96,7 @@ CHECKPOINT_ARGS=(
    --ref-load /root/Qwen3-0.6B
    --save /root/test_checkpoints/qwen3_fsdp_colocated_2gpu
    --load /root/test_checkpoints/qwen3_fsdp_colocated_2gpu
-   --save-interval 1  # Save checkpoint every 5 rollouts
+   --save-interval 5
 )
 
 # launch the master node of ray in container
