@@ -411,6 +411,7 @@ def policy_loss_function(
         ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, log_probs)]
         ppo_kl = torch.cat(ppo_kl, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
+        old_log_probs = torch.cat(old_log_probs, dim=0)
     else:
         old_log_probs = torch.cat(old_log_probs, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
