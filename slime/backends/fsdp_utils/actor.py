@@ -105,8 +105,18 @@ class FSDPTrainRayActor(TrainRayActor):
         # Create FSDP v2 model using FSDP
         self.model = apply_fsdp2(model)
 
+        checkpoint_payload = checkpoint.load(self)
+        if checkpoint_payload is not None and checkpoint_payload.get("model") is not None:
+            model.load_state_dict(checkpoint_payload["model"], strict=True)
+            checkpoint_payload["model"] = None
+
+        # Setup context parallelism before FSDP to ensure correct gradient synchronization
         if self.args.enable_cp:
             self.setup_context_parallelism()
+
+        # Apply FSDP with DP mesh to avoid averaging gradients across CP ranks
+        mesh = self._create_fsdp_mesh() if self.args.enable_cp else None
+        self.model = apply_fsdp2(model, mesh=mesh)
 
         if args.optimizer == "deepspeed_cpu_adam":
             optimizer_config = {
@@ -191,6 +201,24 @@ class FSDPTrainRayActor(TrainRayActor):
         substitute_hf_flash_attn(self.cp_group, heads_k_stride=1)
         print(f"[Rank {rank}] CP initialized: dp_rank={self.dp_rank}, cp_rank={self.cp_rank}")
 
+    def _create_fsdp_mesh(self):
+        """Create a 2D DeviceMesh and return the DP submesh for FSDP.
+        
+        FSDP will only sync gradients across DP dimension (same CP rank).
+        """
+        from torch.distributed.device_mesh import init_device_mesh
+        
+        # Create 2D mesh: (cp_size, dp_size)
+        # Dim 0 (CP): ranks with same dp_rank, different cp_rank
+        # Dim 1 (DP): ranks with same cp_rank, different dp_rank
+        mesh = init_device_mesh(
+            "cuda",
+            mesh_shape=(self.cp_size, self.dp_size),
+            mesh_dim_names=("cp", "dp")
+        )
+        
+        return mesh["dp"]
+
     @timer
     def sleep(self) -> None:
         """Pause CUDA memory for all tracked tensors."""
@@ -250,16 +278,27 @@ class FSDPTrainRayActor(TrainRayActor):
         input_ids = packed_sequence["tokens"].unsqueeze(0)
         position_ids = packed_sequence["position_ids"].unsqueeze(0)
         if self.args.enable_cp:
-            print(f"CP Rank:{self.cp_rank}, input_ids shape before: {input_ids.shape}, CP Size: {self.cp_size}")
+            if dist.get_rank() == 0:
+                print(f"[CP] Before padding: tokens.shape={packed_sequence['tokens'].shape}, "
+                      f"cu_seqlens={packed_sequence['cu_seqlens'].tolist()}")
+            
             packed_sequence = pad_packed_sequence_with_cp(packed_sequence, self.cp_size)
-            print(f"CP Rank:{self.cp_rank}, input_ids shape after padding: {packed_sequence["tokens"].shape}")
+            
+            if dist.get_rank() == 0:
+                print(f"[CP] After padding: tokens.shape={packed_sequence['tokens'].shape}, "
+                      f"cu_seqlens={packed_sequence['cu_seqlens'].tolist()}")
+            
             if not packed_sequence["cu_seqlens"].is_cuda:
                 packed_sequence["cu_seqlens"] = packed_sequence["cu_seqlens"].cuda()
             cu_seqlens = packed_sequence["cu_seqlens"]
             update_ring_flash_attn_params(cu_seqlens, self.cp_group)
+            
             input_ids = torch.chunk(packed_sequence["tokens"].unsqueeze(0), self.cp_size, dim=1)[self.cp_rank]
             position_ids = torch.chunk(packed_sequence["position_ids"].unsqueeze(0), self.cp_size, dim=1)[self.cp_rank]
-            print(f"CP Rank:{self.cp_rank}, input_ids shape after chunked: {input_ids.shape}")
+            
+            if dist.get_rank() == 0:
+                print(f"[CP] After chunking: chunk_size={input_ids.shape[1]}, cp_size={self.cp_size}")
+        
         model_args = {
             "input_ids": input_ids,
             "position_ids": position_ids,
@@ -312,15 +351,23 @@ class FSDPTrainRayActor(TrainRayActor):
                         
                         # Gather logits from all CP ranks if CP is enabled (with gradient support)
                         if self.args.enable_cp:
+                            if dist.get_rank() == 0:
+                                print(f"[CP Gather] Before all_gather: logits shape={logits.shape}")
                             gathered_logits_list = torch.distributed.nn.functional.all_gather(logits, group=self.cp_group)
                             logits = torch.cat(gathered_logits_list, dim=1)
+                            if dist.get_rank() == 0:
+                                print(f"[CP Gather] After all_gather: logits shape={logits.shape} (gathered from {self.cp_size} ranks)")
                     
-                    batch[f"{store_prefix}log_probs"] = gather_log_probs_packed(
+                    log_probs_result = gather_log_probs_packed(
                         logits,
                         batch["tokens"],
                         allow_compile=not self.args.true_on_policy_mode,
                         temperature=self.args.rollout_temperature,
                     )
+                    if dist.get_rank() == 0:
+                        print(f"[CP Log Probs] logits.shape={logits.shape}, tokens.shape={batch['tokens'].shape}, "
+                              f"log_probs.shape={log_probs_result.shape}, cu_seqlens={batch['cu_seqlens'].tolist()}")
+                    batch[f"{store_prefix}log_probs"] = log_probs_result
                     if store_prefix == "":
                         shifted_logits = logits.squeeze(0)[:-1]
                         log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
@@ -523,8 +570,12 @@ class FSDPTrainRayActor(TrainRayActor):
             
             # Gather logits from all CP ranks if CP is enabled (with gradient support)
             if self.args.enable_cp:
+                if dist.get_rank() == 0:
+                    print(f"[CP Train Gather] Before all_gather: logits shape={logits.shape}")
                 gathered_logits_list = torch.distributed.nn.functional.all_gather(logits, group=self.cp_group)
                 logits = torch.cat(gathered_logits_list, dim=1)
+                if dist.get_rank() == 0:
+                    print(f"[CP Train Gather] After all_gather: logits shape={logits.shape} (gathered from {self.cp_size} ranks)")
 
         # Handle packed sequences
         log_probs = gather_log_probs_packed(
@@ -534,6 +585,9 @@ class FSDPTrainRayActor(TrainRayActor):
             cu_seqlens=packed_batch["cu_seqlens"],
             temperature=self.args.rollout_temperature,
         )
+        if dist.get_rank() == 0:
+            print(f"[CP Train Log Probs] logits.shape={logits.shape}, tokens.shape={packed_batch['tokens'].shape}, "
+                  f"log_probs.shape={log_probs.shape}, cu_seqlens={packed_batch['cu_seqlens'].tolist()}")
         packed_batch["cur_log_probs"] = log_probs
 
         shifted_logits = logits.squeeze(0)[:-1]
@@ -910,9 +964,15 @@ def move_torch_optimizer(optimizer, device):
     torch.cuda.synchronize()
 
 
-def apply_fsdp2(model):
-    """ref: https://github.com/volcengine/verl/blob/main/verl/utils/fsdp_utils.py"""
-
+def apply_fsdp2(model, mesh=None):
+    """Apply FSDP v2 to the model.
+    
+    Args:
+        model: The model to wrap with FSDP
+        mesh: Optional DeviceMesh for FSDP. If None, uses all ranks.
+    
+    Ref: https://github.com/volcengine/verl/blob/main/verl/utils/fsdp_utils.py
+    """
     # Import FSDP v2 components based on PyTorch version
     if version.parse(torch.__version__) >= version.parse("2.6"):
         from torch.distributed.fsdp import fully_shard
@@ -932,7 +992,7 @@ def apply_fsdp2(model):
     ]
 
     for idx, module in enumerate(modules):
-        fully_shard(module)
-    fully_shard(model)
+        fully_shard(module, mesh=mesh)
+    fully_shard(model, mesh=mesh)
 
     return model

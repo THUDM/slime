@@ -31,10 +31,10 @@ set -ex
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
 export CUDA_VISIBLE_DEVICES=4,5,6,7
-export WANDB_API_KEY="a37f4796e6205800c4212556a38e1319b5f144b7"
 
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-0.6B
+   --ref-load /root/Qwen3-0.6B
 )
 
 ROLLOUT_ARGS=(
@@ -84,7 +84,7 @@ WANDB_ARGS=(
    --use-wandb
    --wandb-project "slime-fsdp"
    --wandb-group "fsdp-4B200-colocated-cp"
-   --wandb-key ${WANDB_API_KEY}
+   --wandb-key ${WANDB_KEY}
 )
 
 # Context Parallelism Arguments
