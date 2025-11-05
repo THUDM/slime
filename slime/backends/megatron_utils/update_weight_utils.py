@@ -1,3 +1,4 @@
+import collections
 import inspect
 import re
 import socket
@@ -424,10 +425,48 @@ class UpdateWeightFromTensor:
         dist.barrier(group=get_gloo_group())
 
         num_buckets = len(self.param_info_buckets)
-        for i in tqdm(range(num_buckets), disable=rank != 0, desc="Update weights"):
-            current_params, current_infos = self._gather_bucket_params(self.param_info_buckets[i])
-            refs = self._update_converted_params_from_tensor(current_params, current_infos)
-            ray.get(refs)
+
+        if self.args.enable_pipelined_updates:
+            # Define the window size for the pipeline. This controls how many update tasks
+            # can be in-flight simultaneously to manage memory usage and concurrency.
+            pipeline_window_size = 4
+
+            ray_refs = collections.deque()
+
+            # Create a separate CUDA stream for pre-fetching the next bucket of parameters.
+            side_stream = torch.cuda.Stream()
+
+            current_params, current_infos = self._gather_bucket_params(self.param_info_buckets[0])
+
+            for i in tqdm(range(num_buckets), disable=rank != 0, desc="Update weights (pipelined)"):
+                if i + 1 < num_buckets:
+                    with torch.cuda.stream(side_stream):
+                        next_params, next_infos = self._gather_bucket_params(self.param_info_buckets[i + 1])
+
+                refs = self._update_converted_params_from_tensor(current_params, current_infos)
+                ray_refs.append(refs)
+
+                # Prevents OOM errors and ensures smooth pipeline execution
+                if rank == self._ipc_gather_src:
+                    while len(ray_refs) >= pipeline_window_size:
+                        oldest_refs_list = ray_refs.popleft()
+                        if oldest_refs_list:
+                            ray.get(oldest_refs_list)
+
+                if i + 1 < num_buckets:
+                    torch.cuda.current_stream().wait_stream(side_stream)
+                    current_params = next_params
+                    current_infos = next_infos
+
+            if rank == self._ipc_gather_src and ray_refs:
+                all_remaining_refs = sum(ray_refs, [])
+                if all_remaining_refs:
+                    ray.get(all_remaining_refs)
+        else: 
+            for i in tqdm(range(num_buckets), disable=rank != 0, desc="Update weights"):
+                current_params, current_infos = self._gather_bucket_params(self.param_info_buckets[i])
+                refs = self._update_converted_params_from_tensor(current_params, current_infos)
+                ray.get(refs)
 
         dist.barrier(group=get_gloo_group())
 
@@ -464,6 +503,7 @@ class UpdateWeightFromTensor:
                     )
             for handle in handles:
                 handle.wait()
+        torch.cuda.synchronize()
 
         # broadcast params across ep ranks
         if ep_size > 1:
@@ -482,6 +522,7 @@ class UpdateWeightFromTensor:
                     )
             for handle in handles:
                 handle.wait()
+        torch.cuda.synchronize()
 
         # Set tp attrs for all params
         for info, param in zip(param_infos, params):
@@ -518,6 +559,7 @@ class UpdateWeightFromTensor:
                 self.distributed_rollout_engines,
                 converted_named_tensors,
             )
+            torch.cuda.synchronize()
             if refs_distributed:
                 all_refs.extend(refs_distributed)
 

@@ -330,6 +330,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--enable-pipelined-updates",
+                action="store_true",
+                help=(
+                    "Enable pipelined weight updates to improve throughput. "
+                    "This overlaps the data preparation of the next batch with the computation "
+                    "of the current batch. Recommended for performance-critical runs."
+                ),
+            )
+            parser.add_argument(
                 "--update-weights-interval",
                 type=int,
                 default=1,
