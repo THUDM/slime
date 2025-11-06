@@ -214,10 +214,13 @@ class FSDPTrainRayActor(TrainRayActor):
         # Dim 1 (DP): ranks with same cp_rank, different dp_rank
         mesh = init_device_mesh(
             "cuda",
-            mesh_shape=(self.cp_size, self.dp_size),
-            mesh_dim_names=("cp", "dp")
+            mesh_shape=(self.dp_size, self.cp_size),
+            mesh_dim_names=("dp", "cp")
         )
-        
+        print(f"[Rank {dist.get_rank()}] mesh[dp].mesh: {mesh['dp'].mesh}")
+        print(f"[Rank {dist.get_rank()}] mesh[dp].size: {mesh['dp'].size}")
+        print(f"[Rank {dist.get_rank()}] mesh[cp].mesh: {mesh['cp'].mesh}")
+        print(f"[Rank {dist.get_rank()}] mesh[cp].size: {mesh['cp'].size}")
         return mesh["dp"]
 
     @timer
