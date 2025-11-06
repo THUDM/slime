@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 import ray
 import torch.distributed as dist
+from tqdm import tqdm
 
 from slime.utils.types import Sample
 
@@ -134,7 +135,14 @@ class Dataset:
             ]
 
             with ProcessPoolExecutor(max_workers=num_workers) as executor:
-                results = list(executor.map(_batch_tokenize_and_filter, chunks))
+                results = list(
+                    tqdm(
+                        executor.map(_batch_tokenize_and_filter, chunks),
+                        total=len(chunks),
+                        desc="Filtering long prompts (parallel)",
+                        unit="batch",
+                    )
+                )
 
             valid_indices = set()
             offset = 0
