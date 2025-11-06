@@ -111,6 +111,7 @@ class FSDPTrainRayActor(TrainRayActor):
             checkpoint_payload["model"] = None
 
         # Setup context parallelism before FSDP to ensure correct gradient synchronization
+        self.dp_size = dist.get_world_size()
         if self.args.enable_cp:
             self.setup_context_parallelism()
 
@@ -402,11 +403,10 @@ class FSDPTrainRayActor(TrainRayActor):
 
         packed_batches = []
         mbs_size_list = []
-        dp_size = self.dp_size if self.args.enable_cp else dist.get_world_size()
-        local_batch_size = self.args.global_batch_size // dp_size
+        local_batch_size = self.args.global_batch_size // self.dp_size
         assert (
-            self.args.global_batch_size % dp_size == 0
-        ), f"global_batch_size {self.args.global_batch_size} is not divisible by dp_world_size {dp_size}"
+            self.args.global_batch_size % self.dp_size == 0
+        ), f"global_batch_size {self.args.global_batch_size} is not divisible by dp_world_size {self.dp_size}"
         # Use global_batch_size for splitting when max_tokens_per_gpu is enabled
         if self.args.use_dynamic_batch_size:
             for i in range(0, len(tokens), local_batch_size):
@@ -422,7 +422,7 @@ class FSDPTrainRayActor(TrainRayActor):
             num_microbatches = num_microbatches.tolist()
         else:
             num_microbatches = [
-                self.args.global_batch_size // (self.args.micro_batch_size * dp_size)
+                self.args.global_batch_size // (self.args.micro_batch_size * self.dp_size)
             ] * (len(tokens) // local_batch_size)
 
         start = 0
@@ -473,12 +473,10 @@ class FSDPTrainRayActor(TrainRayActor):
         )
 
     def _train_core(self, rollout_id: int, rollout_data_ref: Box) -> None:
-        world_size = dist.get_world_size()
         rank = dist.get_rank()
 
         dp_rank = self.dp_rank if self.args.enable_cp else rank
-        dp_size = self.dp_size if self.args.enable_cp else world_size
-        rollout_data = process_rollout_data(self.args, rollout_data_ref, dp_rank, dp_size)
+        rollout_data = process_rollout_data(self.args, rollout_data_ref, dp_rank, self.dp_size)
         if self.args.advantage_estimator in ["grpo", "gspo"]:
             rollout_data["advantages"] = rollout_data["returns"] = [
                 torch.tensor([rollout_data["rewards"][i]] * rollout_data["response_lengths"][i])
@@ -538,7 +536,6 @@ class FSDPTrainRayActor(TrainRayActor):
             ):
                 self._train_step(
                     packed_batch=packed_batch,
-                    world_size=dp_size,
                     reported_accum=reported_accum,
                     mbs_id=mbs_id,
                     grad_accum=grad_accum,
@@ -560,7 +557,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 print(f"Updating ref model at rollout_id {rollout_id}")
             self.update_cpu_params_dict(self.weights["ref"])
 
-    def _train_step(self, packed_batch, world_size, reported_accum, mbs_id, grad_accum):
+    def _train_step(self, packed_batch, reported_accum, mbs_id, grad_accum):
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             # Prepare model inputs
             model_args = self._get_model_inputs_args(packed_batch)
@@ -692,8 +689,7 @@ class FSDPTrainRayActor(TrainRayActor):
             reported["tis_clipfrac"] = sum_of_sample_mean(tis_clipfrac.float(), response_lengths, loss_masks).detach()
 
         # Scale loss for gradient accumulation
-        # Use world_size (passed from _train_core, which is dp_size when CP is enabled)
-        loss = loss * world_size / self.args.global_batch_size
+        loss = loss * self.dp_size / self.args.global_batch_size
         loss.backward()
 
         # Accumulate reported metrics (store tensors for later mean)
@@ -711,7 +707,7 @@ class FSDPTrainRayActor(TrainRayActor):
             # Aggregate logs
             aggregated = {k: torch.stack(v).sum().item() for k, v in reported_accum.items()}
             # TODO: change this, this is slow.
-            reduced_aggregated = [None] * world_size
+            reduced_aggregated = [None] * self.dp_size
             dp_group = self.dp_group if self.args.enable_cp else None
             dist.all_gather_object(reduced_aggregated, aggregated, group=dp_group)
             aggregated = {}
