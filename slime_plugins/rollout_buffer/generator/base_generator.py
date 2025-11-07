@@ -47,6 +47,7 @@ def query_single_turn(client, messages, sampling_params, tools=None):
 
     text = None
     accumulated_tokens = 0
+    finish_reason = "stop"
 
     for attempt in range(6):
         try:

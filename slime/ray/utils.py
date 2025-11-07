@@ -3,6 +3,7 @@ import os
 
 import ray
 import torch
+from slime.ray.ray_actor import RayActor
 
 
 # Refer to
@@ -35,7 +36,7 @@ def get_physical_gpu_id():
 
 
 @ray.remote
-class Lock:
+class Lock(RayActor):
     def __init__(self):
         self._locked = False  # False: unlocked, True: locked
 

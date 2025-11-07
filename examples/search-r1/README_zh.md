@@ -1,4 +1,4 @@
-# 示例：Search-R1 lite
+# Search-R1 lite
 
 [English](./README.md)
 
@@ -6,7 +6,7 @@
 
 ## 配置环境
 
-使用 `zhuzilin/slime:latest` 镜像，并初始化 Search-R1 需要的环境：
+使用 `slimerl/slime:latest` 镜像，并初始化 Search-R1 需要的环境：
 
 ```bash
 cd /root/

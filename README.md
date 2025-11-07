@@ -2,32 +2,33 @@
 
 [中文版](./README_zh.md)
 
+[![Documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg?style=flat)](https://thudm.github.io/slime/)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/THUDM/slime)
+
 **slime** is an LLM post-training framework for RL scaling, providing two core capabilities:
 
 1.  **High-Performance Training**: Supports efficient training in various modes by connecting Megatron with SGLang;
 2.  **Flexible Data Generation**: Enables arbitrary training data generation workflows through custom data generation interfaces and server-based engines.
 
+slime is the RL-framework behind [GLM-4.5](https://z.ai/blog/glm-4.5) and [GLM-4.6](https://z.ai/blog/glm-4.6) and apart from models from Z.ai, we also supports the following models:
+- Qwen3 series (Qwen3Next, Qwen3MoE, Qwen3), Qwen2.5 series;
+- DeepSeek V3 series (DeepSeek V3, V3.1, DeepSeek R1);
+- Llama 3.
+
 ## Blogs
 
 - Our vision: [slime: An SGLang-Native Post-Training Framework for RL Scaling](https://lmsys.org/blog/2025-07-09-slime/).
-- Our ideas on agentic training: [Agent-Oriented Design: An Asynchronous and Decoupled Framework for Agentic RL](https://www.notion.so/Agent-Oriented-Design-An-Asynchronous-and-Decoupled-Framework-for-Agentic-RL-2278e692d081802cbdd5d37cef76a547).
-- slime has served as the RL framework for GLM-4.5: [GLM-4.5: Reasoning, Coding, and Agentic Abililties](https://z.ai/blog/glm-4.5)
+- Our ideas on agentic training: [Agent-Oriented Design: An Asynchronous and Decoupled Framework for Agentic RL](https://www.notion.so/Agent-Oriented-Design-An-Asynchronous-and-Decoupled-Framework-for-Agentic-RL-2278e692d081802cbdd5d37cef76a547)
+- v0.1.0 release note: [v0.1.0: Redefining High-Performance RL Training Frameworks](https://thudm.github.io/slime/blogs/release_v0.1.0.html)
 
 ## Table of Contents
 
-  - [Architecture Overview](#architecture-overview)
-  - [Quick Start](#quick-start)
-      - [Environment Setup](#environment-setup)
-      - [Examples](#examples)
-        - [Dense Model Examples: GLM-4-9B and Qwen3-4B](#Dense-Model-Examples-GLM-4-9B-and-Qwen3-4B)
-        - [MoE Model Examples: GLM-4.5, Qwen3-30B-A3B and DeepSeek-R1](#MoE-Model-Examples-GLM-45-Qwen3-30B-A3B-and-DeepSeek-R1)
-        - [Multi-Turn + Tool Calling Example: Search-R1 lite](#Multi-Turn--Tool-Calling-Example-Search-R1-lite)
-        - [SFT Example: Qwen3-4B-Base with OpenHermes-2.5](#SFT-Example-Qwen3-4B-Base-with-OpenHermes-25)
-  - [Checkpoint Format Conversion](#checkpoint-format-conversion)
-  - [Starting the Training Process](#starting-the-training-process)
-  - [Argument Descriptions](#argument-descriptions)
-  - [Developer Guide](#developer-guide)
-  - [FAQ & Acknowledgements](#faq--acknowledgements)
+- [Architecture Overview](#architecture-overview)
+- [Quick Start](#quick-start)
+- [Projects Built with slime](#projects-built-with-slime)
+- [Arguments Walkthrough](#arguments-walkthrough)
+- [Developer Guide](#developer-guide)
+- [FAQ & Acknowledgements](#faq--acknowledgements)
 
 ## Architecture Overview
 
@@ -35,194 +36,70 @@
 
 **Module Descriptions**:
 
-  - **training (Megatron)**: Responsible for the main training process, reads data from the Data Buffer, and synchronizes parameters to the rollout module after training.
-  - **rollout (SGLang + router)**: Generates new data (including rewards/verifier outputs) and stores it in the Data Buffer.
-  - **data buffer**: A bridge module that manages prompt initialization, custom data, and rollout generation methods.
+- **training (Megatron)**: Responsible for the main training process, reads data from the Data Buffer, and synchronizes parameters to the rollout module after training.
+- **rollout (SGLang + router)**: Generates new data (including rewards/verifier outputs) and stores it in the Data Buffer.
+- **data buffer**: A bridge module that manages prompt initialization, custom data, and rollout generation methods.
 
 ## Quick Start
 
-### Environment Setup
+For a comprehensive quick start guide covering environment setup, data preparation, training startup, and key code analysis, please refer to:
+- [Quick Start Guide](./docs/en/get_started/quick_start.md)
 
-Based on the `zhuzilin/slime:latest` image (pre-installed with latest SGLang and Megatron):
+We also provide examples for some use cases not covered in the quick start guide; please check [examples](examples/).
 
-```bash
-docker run --rm --gpus all --ipc=host --shm-size=16g \
-  --ulimit memlock=-1 --ulimit stack=67108864 \
-  -p 8265:8265 \
-  -it zhuzilin/slime:latest /bin/bash
+## Projects Built upon slime
 
-git clone https://github.com/THUDM/slime.git
-cd slime
-pip install -e .
-```
+slime has powered several novel research projects and production systems. Here are some notable examples:
 
-- If you prefer not to use Docker, or if it's inconvenient, please refer to [Setting up the Environment from Scratch](./docs/en/build.md).
-- For AMD support, please refer to [AMD Tutorial](./docs/en/amd_tutorial.md).
+### ⚡ TritonForge: Agentic RL Training Framework for Kernel Generation
 
-### Examples
+[**TritonForge**](https://github.com/RLsys-Foundation/TritonForge) leverages slime's SFT & RL capabilities to train LLMs that automatically generate optimized GPU kernels. By using a two-stage training approach—supervised fine-tuning followed by reinforcement learning with multi-turn compilation feedback—TritonForge achieves remarkable results in converting PyTorch operations into high-performance Triton kernels.
 
-#### Dense Model Examples: GLM-4-9B and Qwen3-4B
+### 🚀 APRIL: Accelerating RL Training with Active Partial Rollouts
 
-We provide examples to use [GLM-4-9B](https://huggingface.co/THUDM/GLM-Z1-9B-0414) and [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B), please refer to:
+[**APRIL**](https://github.com/RLsys-Foundation/APRIL) introduces a system-level optimization that seamlessly integrates with slime to accelerate the rollout generation phase in RL training. By intelligently over-provisioning requests and actively managing partial completions, APRIL addresses the long-tail generation bottleneck that typically consumes over 90% of RL training time.
 
-- [Example: GLM-4-9B](docs/en/models/glm4-9B.md).
-- [Example: Qwen3-4B](docs/en/models/qwen3-4B.md).
+These projects showcase slime's versatility—from training code-generation models to optimizing RL training systems—making it a powerful foundation for both research and production deployments.
 
-#### MoE Model Examples: GLM-4.5, Qwen3-30B-A3B and DeepSeek-R1
+## Arguments Walkthrough
 
-For MoE example, please refer to:
-
-- [Example: Training GLM-4.5 wtih 64xH100](docs/en/models/glm4.5-355B-A32B.md)
-- [Example: Training Qwen3-30B-A3B with 8xH100](docs/en/models/qwen3-30B-A3B.md).
-- [Example: Training DeepSeek R1 with 128xH100](docs/en/models/deepseek-r1.md)
-
-#### Multi-Turn + Tool Calling Example: Search-R1 lite
-
-For multi-turn and tool calling, we also provides an minimal reimplenmentation of Search-R1, please refer to:
-
-- [Example: Search-R1 lite](examples/search-r1/README.md).
-
-#### SFT Example: Qwen3-4B-Base with OpenHermes-2.5
-
-slime is not just a RL framework, we support a diverse set of post-training setups. For an SFT example, please refer to:
-
-- [Example: Qwen3-4B-Base with OpenHermes-2.5](docs/en/sft.md).
-
-### Checkpoint Format Conversion
-
-Since slime uses Megatron, and Megatron does not support loading Hugging Face checkpoints directly, we need to convert the model to the `torch_dist` format that Megatron supports.
-
-#### HF → Megatron torch\_dist ckpt
-
-We are using [mbridge](https://github.com/ISEEKYAN/mbridge.git) for conversion:
-
-```bash
-cd slime/
-
-source scripts/models/glm4-9B.sh
-PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
-    ${MODEL_ARGS[@]} \
-    --hf-checkpoint /root/GLM-Z1-9B-0414 \
-    --save /root/GLM-Z1-9B-0414_torch_dist
-```
-
-This conversion requires GPU, so for large models, you can use the following methods to convert with multiple GPUS, note that you can add parallel config the same way as training:
-
-```bash
-source scripts/models/glm4.5-355B-A32B.sh
-PYTHONPATH=/root/Megatron-LM/ torchrun \
-   --nproc-per-node 8 \
-   --master-addr ${MASTER_ADDR} --master-port 12345 \
-   --nnodes=2 --node-rank ${NODE_RANK} \
-   tools/convert_hf_to_torch_dist.py \
-   ${MODEL_ARGS[@]} \
-   --hf-checkpoint $BASE_DIR/GLM-4.5-355B-A32B/ \
-   --save $BASE_DIR/GLM-4.5-355B-A32B_torch_dist/
-```
-
-⚠️ If you encounter an issue where slime cannot be found, please run `pip install -e .` in the slime directory.
-
-#### Megatron torch\_dist → HF ckpt
-
-To convert a `torch_dist` checkpoint saved during training back to a Hugging Face checkpoint:
-
-```bash
-cd slime/
-PYTHONPATH=/root/Megatron-LM python tools/convert_torch_dist_to_hf.py \
-  --input-dir /path/to/torch_dist_ckpt/iter_xxx/ \
-  --output-dir /root/GLM-Z1-9B-0414-iter_xxx \
-  --origin-hf-dir /root/GLM-Z1-9B-0414
-```
-
-There are times when Megatron padded embedding, you can pass `--vocab-size` to make sure the embedding size of the converted HF ckpt is correct.
-
-⚠️ Since the `torch_dist` checkpoint converted by mbridge does not currently save args, you cannot convert the checkpoint from the previous step back to HF format.
-
-#### Any Megatron ckpt → HF
-
-Applicable for custom save formats (e.g., `--ckpt-format torch`).
-
-The principle behind this conversion method is to reuse the function that updates parameters from Megatron to SGLang during training. This means reusing the training script and changing the original command from:
-
-```bash
-ray job submit --address="http://127.0.0.1:8265" \
-   --runtime-env-json='{
-     "env_vars": { ...}
-   }' \
-   -- python3 train.py \
-   ... # Other training args
-```
-
-To:
-
-```bash
-torchrun --nproc_per_node ${NUM_GPU} tools/convert_to_hf.py \
-   --load /your/saved/megatron_ckpt \
-   --output-dir /your/converted/hf_ckpt \
-   ... # Other training args
-```
-
-That is, keep all other arguments the same, and:
-
-1.  Change the task launcher from `ray` to `torchrun`. Set the number of GPUs to the minimum required for Megatron's parallelism without data parallelism (DP). For example, if you are using `tp4`, set it to 4.
-2.  Make sure to change `--load` to the path of the checkpoint you want to load.
-3.  Add the `--output-dir` argument to specify where the converted Hugging Face checkpoint should be saved.
-
-## Starting the Training Process
-
-The entire program needs to be launched using Ray. First, you need to start a Ray cluster. On node 0, run:
-
-```bash
-# Node0 (HEAD)
-ray start --head --node-ip-address ${MASTER_ADDR} \
-  --num-gpus 8 --disable-usage-stats
-
-# Other Nodes
-ray start --address=${MASTER_ADDR}:6379 --num-gpus 8
-```
-
-After the Ray cluster has started, you can submit a job from node 0, for example:
-
-```bash
-ray job submit --address="http://127.0.0.1:8265" \
-   --runtime-env-json='{
-     "env_vars": {
-        "PYTHONPATH": "/root/Megatron-LM/",
-        ... # e.g., no_proxy, API variables, etc.
-     }
-   }' \
-   -- python3 train.py \
-   --... # Other Megatron/SGLang/slime arguments
-```
-
-### Argument Descriptions
-
-Arguments are divided into three categories:
+Arguments in slime are divided into three categories:
 
 1.  **Megatron arguments**: slime reads all arguments set in Megatron via `PYTHONPATH`. You can configure Megatron by passing arguments like `--tensor-model-parallel-size 2`.
 2.  **SGLang arguments**: All arguments for the installed SGLang are supported. These arguments must be prefixed with `--sglang-`. For example, `--mem-fraction-static` should be passed as `--sglang-mem-fraction-static`.
 3.  **slime-specific arguments**: Please refer to: [slime/utils/arguments.py](slime/utils/arguments.py)
 
-For complete usage instructions, please refer to the [Usage Documentation](docs/en/usage.md).
+For complete usage instructions, please refer to the [Usage Documentation](docs/en/get_started/usage.md).
 
 ## Developer Guide
 
-  - **Contributions are welcome\!** If you have suggestions for new features, performance tuning, or feedback on user experience, feel free to submit an Issue or PR 😊
+- **Contributions are welcome\!** If you have suggestions for new features, performance tuning, or feedback on user experience, feel free to submit an Issue or PR 😊
 
-  - Use [pre-commit](https://pre-commit.com/) to ensure code style consistency for your commits:
+- Use [pre-commit](https://pre-commit.com/) to ensure code style consistency for your commits:
 
-    ```bash
-    apt install pre-commit -y
-    pre-commit install
-    ```
+```bash
+apt install pre-commit -y
+pre-commit install
 
-  - For debugging tips, please refer to the [Debugging Guide](docs/en/debug.md)
+# run pre-commit to ensure code style consistency
+pre-commit run --all-files --show-diff-on-failure --color=always
+```
 
-## Hardware Support
-- Nvidia: refer to this repo README
-- AMD: refer to the [tutorial](docs/en/amd_tutorial.md)
+- For debugging tips, please refer to the [Debugging Guide](docs/en/developer_guide/debug.md)
 
 ## FAQ & Acknowledgements
 
-  - For frequently asked questions, please see the [Q\&A](docs/en/qa.md)
-  - Special thanks to the following projects & communities: SGLang, Megatron‑LM, mbridge, OpenRLHF, veRL, Pai-Megatron-Patch and others.
+- For frequently asked questions, please see the [Q\&A](docs/en/get_started/qa.md)
+- Special thanks to the following projects & communities: SGLang, Megatron‑LM, mbridge, OpenRLHF, veRL, Pai-Megatron-Patch and others.
+- To quote slime, please use:
+
+```bibtext
+@misc{slime_github,
+  author       = {Zilin Zhu and Chengxing Xie and Xin Lv and slime Contributors},
+  title        = {slime: An LLM post-training framework for RL Scaling},
+  year         = {2025},
+  howpublished = {\url{https://github.com/THUDM/slime}},
+  note         = {GitHub repository. Corresponding author: Xin Lv},
+  urldate      = {2025-06-19}
+}
+```

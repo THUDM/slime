@@ -1,7 +1,7 @@
 from megatron.core.models.gpt.gpt_layer_specs import get_gpt_layer_with_transformer_engine_spec
 
 
-def get_glm_spec(args):
+def get_glm_spec(args, config, vp_stage):
     transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec(
         args.num_experts,
         args.moe_grouped_gemm,

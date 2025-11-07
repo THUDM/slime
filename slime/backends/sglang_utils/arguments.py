@@ -1,6 +1,6 @@
+import sglang
 from packaging.version import parse
 from sglang.srt.server_args import ServerArgs
-import sglang
 
 
 # TODO: use all sglang router arguments with `--sglang-router` prefix

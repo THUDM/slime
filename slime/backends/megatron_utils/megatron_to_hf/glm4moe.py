@@ -1,7 +1,8 @@
 import re
+
+import sglang
 import torch
 from packaging.version import parse
-import sglang
 
 
 def convert_glm4moe_to_hf(args, name, param):
@@ -145,7 +146,7 @@ def convert_glm4moe_to_hf(args, name, param):
             return [(f"model.layers.{layer_idx}.shared_head.norm.weight", param)]
         else:
             name = f"module.module.decoder.layers.{layer_idx}.{rest}"
-            name = name.replace(".transformer_layer", "")
+            name = name.replace("transformer_layer.", "")
             return convert_glm4moe_to_hf(args, name, param)
 
     raise ValueError(f"Unknown parameter name: {name}")

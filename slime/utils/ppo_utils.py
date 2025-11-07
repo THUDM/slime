@@ -1,12 +1,9 @@
 # Adapt from https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/models/utils.py
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
-from megatron.core import mpu
-
-from slime.backends.megatron_utils.cp_utils import get_logits_and_tokens_offset_with_cp
 
 
 @torch.compile(dynamic=True)
@@ -27,20 +24,20 @@ def compute_approx_kl(
 
     log_ratio = log_probs.float() - log_probs_base.float()
 
-    if kl_loss_type == "kl":
+    if kl_loss_type == "k1":
         return log_ratio
     elif kl_loss_type == "k2":
         log_ratio = log_probs.float() - log_probs_base.float()
         log_ratio = log_ratio**2 / 2.0
         return log_ratio
     elif kl_loss_type == "k3":
+        # The non negative kl approximation in
+        # http://joschu.net/blog/kl-approx.html
+        # Besides non negative, it is also unbiased and have lower variance.
         log_ratio = -log_ratio
         log_ratio = log_ratio.exp() - 1 - log_ratio
         return log_ratio
     elif kl_loss_type == "low_var_kl":
-        # The non negative kl approximation in
-        # http://joschu.net/blog/kl-approx.html
-        # Besides non negative, it is also unbiased and have lower variance.
         log_ratio = -log_ratio
         log_ratio = log_ratio.exp() - 1 - log_ratio
         return torch.clamp(log_ratio, min=-10, max=10)
@@ -159,48 +156,21 @@ def get_reinforce_plus_plus_returns(
         List[torch.Tensor]: A list of return (G_t) tensors for the
                             local sequence chunks owned by the current GPU rank.
     """
+    from megatron.core import mpu
+
     cp_size = mpu.get_context_parallel_world_size()
     cp_rank = mpu.get_context_parallel_rank()
 
     final_returns_chunks = []
     for i in range(len(rewards)):
         local_kl_chunk = kl[i]
-        device, dtype = local_kl_chunk.device, local_kl_chunk.dtype
         total_len, response_len = total_lengths[i], response_lengths[i]
-        prompt_len = total_len - response_len
 
         if cp_size > 1:
-            # Step 1: Gather all KL chunks and token_offsets from all ranks
-            _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(total_len, response_len)
+            # Step 1,2:Gather all chunks and token_offsets from all ranks and reconstruct the full response tensor by splitting and placing each part
+            from slime.backends.megatron_utils.cp_utils import all_gather_with_cp
 
-            object_to_gather = {"kl_chunk": local_kl_chunk.cpu(), "offsets": token_offsets}
-            gathered_objects = [None] * cp_size
-            dist.all_gather_object(gathered_objects, object_to_gather, group=mpu.get_context_parallel_group())
-
-            # Step 2: Reconstruct the full response tensor by splitting and placing each part.
-            full_kl_response = torch.zeros(response_len, device=device, dtype=dtype)
-            for obj in gathered_objects:
-                kl_chunk = obj["kl_chunk"].to(device)
-                global_offsets = obj["offsets"]
-
-                # Calculate the lengths of part_0 and part_1 for this specific chunk.
-                s0, e0 = global_offsets[0]
-                s1, e1 = global_offsets[1]
-                res_s0, res_e0 = max(0, s0 - prompt_len), max(0, e0 - prompt_len)
-                res_s1, res_e1 = max(0, s1 - prompt_len), max(0, e1 - prompt_len)
-                len0 = res_e0 - res_s0
-                len1 = res_e1 - res_s1
-
-                if kl_chunk.numel() > 0:
-                    # Split the received contiguous chunk back into its zigzag parts.
-                    kl_part_0, kl_part_1 = torch.split(kl_chunk, [len0, len1])
-
-                    # Place each part in its own correct location.
-                    if kl_part_0.numel() > 0:
-                        full_kl_response[res_s0:res_e0] = kl_part_0
-                    if kl_part_1.numel() > 0:
-                        full_kl_response[res_s1:res_e1] = kl_part_1
-
+            full_kl_response = all_gather_with_cp(local_kl_chunk, total_len, response_len)
         else:
             full_kl_response = local_kl_chunk
 
@@ -220,23 +190,9 @@ def get_reinforce_plus_plus_returns(
 
         # Step 4: Pick up the results corresponding to our local chunk's parts.
         if cp_size > 1:
-            local_returns_chunk_parts = []
-            local_s0, local_e0 = token_offsets[0]
-            local_s1, local_e1 = token_offsets[1]
-            local_res_s0, local_res_e0 = max(0, local_s0 - prompt_len), max(0, local_e0 - prompt_len)
-            local_res_s1, local_res_e1 = max(0, local_s1 - prompt_len), max(0, local_e1 - prompt_len)
+            from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
 
-            if local_res_e0 > local_res_s0:
-                local_returns_chunk_parts.append(returns_for_seq[local_res_s0:local_res_e0])
-            if local_res_e1 > local_res_s1:
-                local_returns_chunk_parts.append(returns_for_seq[local_res_s1:local_res_e1])
-
-            local_returns_chunk = (
-                torch.cat(local_returns_chunk_parts)
-                if local_returns_chunk_parts
-                else torch.tensor([], device=device, dtype=dtype)
-            )
-
+            local_returns_chunk = slice_log_prob_with_cp(returns_for_seq, total_len, response_len)
         else:
             local_returns_chunk = returns_for_seq
 
@@ -272,3 +228,86 @@ def get_reinforce_plus_plus_baseline_advantages(
     ]
 
     return unwhitened_advantages
+
+
+def get_advantages_and_returns(
+    total_len: int,
+    response_len: int,
+    values: torch.Tensor,
+    rewards: torch.Tensor,
+    gamma: float,
+    lambd: float,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Function that computes advantages and returns from rewards and values.
+    Calculated as in the original PPO paper: https://arxiv.org/abs/1707.06347
+    Note that rewards may include a KL divergence loss term.
+
+    Advantages looks like this:
+    Adv1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
+            - V1 + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
+
+    Returns looks like this:
+    Ret1 =  R1 + γ * λ * R2     + γ^2 * λ^2 * R3       + ...
+                + γ * (1 - λ) V2 + γ^2 * λ * (1 - λ) V3 + ...
+
+    Input:
+    - values: Tensor of shape (response_size,)
+    - rewards: Tensor of shape (response_size,)
+
+    Output:
+    - advantages: Tensor of shape (response_size,)
+    - returns: Tensor of shape (response_size,)
+    """
+    from megatron.core import mpu
+
+    cp_size = mpu.get_context_parallel_world_size()
+    if cp_size > 1:
+        from slime.backends.megatron_utils.cp_utils import all_gather_with_cp
+
+        full_rewards = all_gather_with_cp(rewards, total_len, response_len)
+        full_values = all_gather_with_cp(values, total_len, response_len)
+    else:
+        full_rewards = rewards
+        full_values = values
+
+    lastgaelam = 0
+    advantages_reversed = []
+
+    for t in reversed(range(response_len)):
+        nextvalues = full_values[t + 1] if t < response_len - 1 else 0.0
+        delta = full_rewards[t] + gamma * nextvalues - full_values[t]
+        lastgaelam = delta + gamma * lambd * lastgaelam
+        advantages_reversed.append(lastgaelam)
+    full_advantages = torch.tensor(advantages_reversed[::-1], dtype=full_values.dtype, device=full_values.device)
+    full_returns = full_advantages + full_values
+
+    if cp_size > 0:
+        from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
+
+        advantages = slice_log_prob_with_cp(full_advantages, total_len, response_len)
+        returns = slice_log_prob_with_cp(full_returns, total_len, response_len)
+    else:
+        advantages = full_advantages
+        returns = full_returns
+
+    return advantages.detach(), returns
+
+
+def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool = False):
+    logits = logits.contiguous()
+    # TODO: not sure why we need to clone the logits here.
+    # Without the clone, the backward will trigger inplace edit error.
+    # It seems that the function with tp will modify the logits inplace.
+    if logits.size(0) != 0:
+        log_prob = compute_log_probs(logits.clone(), tokens, tp_group)
+    else:
+        log_prob = logits.new_zeros((0,))
+
+    if with_entropy:
+        if logits.size(0) != 0:
+            entropy = compute_entropy_from_logits(logits.clone(), tp_group)
+        else:
+            entropy = logits.new_zeros((0,))
+    else:
+        entropy = None
+    return log_prob, entropy

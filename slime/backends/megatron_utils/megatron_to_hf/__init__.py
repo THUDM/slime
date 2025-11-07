@@ -1,14 +1,17 @@
 import re
+
 import torch
+
+from slime.utils.fp8_kernel import blockwise_cast_to_fp8_triton
 
 from .deepseekv3 import convert_deepseekv3_to_hf
 from .glm4 import convert_glm4_to_hf
 from .glm4moe import convert_glm4moe_to_hf
 from .llama import convert_llama_to_hf
+from .mimo import convert_mimo_to_hf
 from .qwen2 import convert_qwen2_to_hf
+from .qwen3_next import convert_qwen3_next_to_hf
 from .qwen3moe import convert_qwen3moe_to_hf
-
-from slime.utils.fp8_kernel import blockwise_cast_to_fp8_triton
 
 
 def ceildiv(a, b):
@@ -43,9 +46,16 @@ def quantize_params(args, megatron_name, converted_named_params, quantization_co
     match = re.match(decoder_layers_pattern, megatron_name)
 
     if not match:
-        return converted_named_params
+        # check mtp layers
+        mtp_layer_pattern = r"module\.module\.mtp\.layers\.(\d+)\.(.+)"
+        match = re.match(mtp_layer_pattern, megatron_name)
+        if not match:
+            return converted_named_params
+        layer_idx, rest = match.groups()
+        rest = rest.replace("transformer_layer.", "")
+    else:
+        layer_idx, rest = match.groups()
 
-    layer_idx, rest = match.groups()
     # experts
     expert_pattern = r"mlp.experts\.(.+)\.weight(\d+)"
     match = re.match(expert_pattern, rest)
@@ -112,6 +122,8 @@ def convert_to_hf(args, model_name, name, param, quantization_config=None):
         converted_named_tensors = convert_glm4_to_hf(args, name, param)
     elif "qwen3moe" in model_name:
         converted_named_tensors = convert_qwen3moe_to_hf(args, name, param)
+    elif "qwen3next" in model_name:
+        converted_named_tensors = convert_qwen3_next_to_hf(args, name, param)
     elif "qwen2" in model_name or "qwen3" in model_name:
         converted_named_tensors = convert_qwen2_to_hf(args, name, param)
     elif "deepseekv3" in model_name:
@@ -146,6 +158,8 @@ def convert_to_hf(args, model_name, name, param, quantization_config=None):
 
     elif "llama" in model_name:
         converted_named_tensors = convert_llama_to_hf(args, name, param)
+    elif "mimo" in model_name:
+        converted_named_tensors = convert_mimo_to_hf(args, name, param)
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 

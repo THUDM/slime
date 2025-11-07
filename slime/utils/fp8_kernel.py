@@ -1,7 +1,8 @@
+from typing import Tuple
+
 import torch
 import triton
 import triton.language as tl
-from typing import Tuple
 
 fp8_dtype = torch.float8_e4m3fn
 fp8_max = torch.finfo(fp8_dtype).max

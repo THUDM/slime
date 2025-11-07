@@ -2,28 +2,9 @@ import random
 
 import numpy as np
 import torch
-import torch.distributed as dist
 from megatron.core import mpu, tensor_parallel
 from megatron.core.num_microbatches_calculator import init_num_microbatches_calculator
 from megatron.training.global_vars import _build_tokenizer, set_args
-
-GLOO_GROUP = None
-
-
-def _init_gloo_group():
-    """Initialize Gloo group for distributed communication."""
-    global GLOO_GROUP
-    if GLOO_GROUP is None:
-        GLOO_GROUP = dist.new_group(backend="gloo")
-    return GLOO_GROUP
-
-
-def get_gloo_group():
-    """Get the Gloo group for distributed communication."""
-    global GLOO_GROUP
-    if GLOO_GROUP is None:
-        raise RuntimeError("Gloo group has not been initialized. Call _init_gloo_group() first.")
-    return GLOO_GROUP
 
 
 def _set_random_seed(
@@ -72,7 +53,6 @@ def init(args):
     set_args(args)
     # Pytorch distributed.
     _initialize_distributed(args)
-    _init_gloo_group()
 
     # https://github.com/NVIDIA/Megatron-LM/issues/1563
     assert np.__version__.startswith("1."), "Megatron does not support numpy 2.x"
@@ -96,6 +76,18 @@ def init(args):
         args.data_parallel_size,
         args.decrease_batch_size_if_needed,
     )
+
+    if args.deterministic_mode:
+        if args.rank == 0:
+            print("> running in deterministic mode")
+        torch.backends.cudnn.deterministic = True
+        torch.backends.cudnn.benchmark = False
+        torch.use_deterministic_algorithms(True, warn_only=False)
+
+    if args.tp_comm_overlap:
+        from megatron.training.initialize import _initialize_tp_communicators
+
+        _initialize_tp_communicators()
 
     if getattr(args, "custom_megatron_init_path", None):
         from slime.utils.misc import load_function

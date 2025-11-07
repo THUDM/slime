@@ -14,6 +14,9 @@ py_version = 310  # python 3.10 as a target version
 sections = ["FUTURE", "STDLIB", "THIRDPARTY", "FIRSTPARTY", "LOCALFOLDER"]
 default_section = "THIRDPARTY"
 extend_skip = ["setup.py", "docs/source/conf.py"]
+known_first_party = ["slime", "slime_plugins"]
+known_third_party = ["megatron", "wandb", "ray", "transformers"]
+src_paths = ["slime", "slime_plugins"]
 
 
 [tool.black]
