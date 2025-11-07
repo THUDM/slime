@@ -1,17 +1,33 @@
-# Training-Inference Mismatch Correction on `pg_loss`
-Training-Inference Mismatch Correction through **Importance Sampling**.
+# Rollout Correction Methods
+Rollout correction (e.g, training-inference mismatch correction) through algorithmic methods.
 
+The designs follow the algorithms in [Mathematical Formulations of Rollout Correction Methods in verl (Yingru Li)](https://github.com/szrlee/verl/blob/yingru/rollout_correction/docs/advance/rollout_corr_math.md). You may check this article for more math details and principles.
 
 
 ## Summary
-This function is used to solve **training-inference mismatch** through algorithmic adapations, e.g. TIS, MIS.
+This function is used to solve offline scenarios through algorithmic adaptations, e.g. TIS/MIS.
 
-We included 3 rollout correction algorithms, (1) decoupled, 3-policies PPO with training-inference importance sampling, (2) direct policy overwriting in standard PPO  (3) pure REINFORCE loss (with out PPO clipping) with training-inference importance sampling. You may use **loss algorithm selection** APIs `--use_rollout_log_probs` and `--use-tis` to select one of the rollout correction loss (details in **III. Algorithms**).
+Applicable scenarios may include:
 
-When training-inference importance sampling is enabled (`--use-tis`), You can also specify the **TIS settings** with selection on `tis_mode = {truncate, mask, clip}`, and `tis_level = {token, sequence, geometric}`. We will also provide some recommended settings on each mode. (details in **IV. recommended settings**)
+- Policy mismatch: Different precision (FP8 vs FP16 vs BF16 vs FP32), different backends (vLLM vs SGLang vs FSDP vs Megatron)
+- Temporal lag: Model staleness, asynchronous rollout workers
+- Replay buffers: Training on historical trajectories from earlier policy versions
+- Off-policy algorithms: Behavioral cloning, DAPO, expert demonstrations
+- Data filtering: Reweighting, preference learning, curriculum learning
+
+
+We included 3 rollout correction algorithms: \
+(1) decoupled, 3-policies PPO with rollout importance sampling, \
+(2) direct rollout policy overwriting in standard PPO, \
+(3) pure REINFORCE loss (without PPO clipping) with rollout importance sampling. \
+You may use **loss algorithm selection** APIs `--use_rollout_log_probs` and `--use-tis` to select one of the rollout correction loss (details in **III. Algorithms**).
+
+When training-inference importance sampling is enabled (`--use-tis`), you can also specify the **TIS settings** with selection on `tis_mode = {truncate, mask, clip}`, and `tis_level = {token, sequence, geometric}`. We will also provide some recommended settings for each mode. (details in **IV. recommended settings**)
 
 
 ## I. Algorithms
+
+We give examples of the algorithms for solving the training-inference mismatch issue.
 
 ### 0. [Baseline: No Mismatch Correction] Standard PPO
 This is the basic PPO algorithm with potentially training-inference mismatch issue when the output of SGLang and Megatron does not exactly match.
@@ -162,8 +178,10 @@ Characteristics: Biased but low variance, balances bias and variance
 
 ## Reference
 
+
+
 We thank the materials below for their excellent findings and theories.
 1. [Your Efficient RL Framework Secretly Brings You Off-Policy RL Training](https://fengyao.notion.site/off-policy-rl)
 2. [When Speed Kills Stability: Demystifying RL Collapse from the Training-Inference Mismatch](https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda)
-3. [Mathematical Formulations of Rollout Correction Methods in verl](https://github.com/szrlee/verl/blob/yingru/rollout_correction/docs/advance/rollout_corr_math.md)
+
 
