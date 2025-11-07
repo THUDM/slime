@@ -63,7 +63,7 @@ class HuggingfaceAttention(MegatronModule, ABC):
             hidden_states_list = [
                 torch.empty_like(hidden_states) for _ in range(mpu.get_context_parallel_world_size())
             ]
-            dist.nn.all_gather(
+            dist.all_gather(
                 hidden_states_list,
                 hidden_states,
                 group=mpu.get_context_parallel_group(),
