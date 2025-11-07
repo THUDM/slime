@@ -93,7 +93,7 @@ FSDP_ARGS=(
    # --fsdp-full-params  # Uncomment this line to enable full params mode
 
    # Set the bucket size for weight update
-   --update-weights-buffer-size $((512 * 1024 * 1024)) # 512MB
+   --update-weights-bucket-size $((512 * 1024 * 1024)) # 512MB
 )
 
 # launch the master node of ray in container
