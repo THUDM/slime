@@ -4,7 +4,7 @@ Training-Inference Mismatch Correction through **Importance Sampling**.
 
 
 ## Summary
-This function is used to solve **training-inference mismatch** through algorithmic adapations, e.g. TIS, MIS. (Reference: [training-inference mismatch]())
+This function is used to solve **training-inference mismatch** through algorithmic adapations, e.g. TIS, MIS.
 
 We included 3 rollout correction algorithms, (1) decoupled, 3-policies PPO with training-inference importance sampling, (2) direct policy overwriting in standard PPO  (3) pure REINFORCE loss (with out PPO clipping) with training-inference importance sampling. You may use **loss algorithm selection** APIs `--use_rollout_log_probs` and `--use-tis` to select one of the rollout correction loss (details in **III. Algorithms**).
 
@@ -15,14 +15,15 @@ When training-inference importance sampling is enabled (`--use-tis`), You can al
 
 ### 0. [Baseline: No Mismatch Correction] Standard PPO
 This is the basic PPO algorithm with potentially training-inference mismatch issue when the output of SGLang and Megatron does not exactly match.
+
 $$
 L_{\text{PPO}}(\theta)
-= - \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_{\textcolor{red}{\text{SGLang}}}} \left[
+= - \mathbb{E}_{x \sim \mathcal{D},\, y \sim \pi_{\textcolor{red}{\text{SGLang}}}} \left[
   \min \left(
-    \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{blue}{\text{Megatron}}}(y \mid x)} A_t,\;
-    \operatorname{clip}\!\left(
+    \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{blue}{\text{Megatron}}}(y \mid x)} A_t,
+    \mathrm{clip}\left(
       \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{blue}{\text{Megatron}}}(y \mid x)},
-      1 - \epsilon,\;
+      1 - \epsilon,
       1 + \epsilon
     \right) A_t
   \right)
@@ -34,13 +35,13 @@ $$
 In this method, we directly use rollout engine's log probs as the old policy in offline PPO's importance sampling, instead of the recomputed log_probs in training engine.
 
 $$
-L_{\text{PPO\_bypass}}(\theta)
+L_{\text{PPO-bypass}}(\theta)
 = - \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_{\textcolor{red}{\text{SGLang}}}} \left[
   \min \left(
-    \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{red}{\text{SGLang}}}(y \mid x)} A_t,\;
-    \operatorname{clip}\!\left(
+    \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{red}{\text{SGLang}}}(y \mid x)} A_t,
+    \mathrm{clip}\left(
       \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{red}{\text{SGLang}}}(y \mid x)},
-      1 - \epsilon,\;
+      1 - \epsilon,
       1 + \epsilon
     \right) A_t
   \right)
@@ -59,14 +60,14 @@ Advantages:
 
 
 $$
-L_{\text{PPO\_bypass}}(\theta)
+L_{\text{PPO-decoupled}}(\theta)
 = - \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_{\textcolor{red}{\text{SGLang}}}} \left[
     \frac{\pi_{\textcolor{blue}{\text{old}}}(y \mid x)}{\pi_{\textcolor{red}{\text{SGLang}}}(y \mid x)}
   \min \left(
-    \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{blue}{\text{old}}}(y \mid x)} A_t,\;
-    \operatorname{clip}\!\left(
+    \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{blue}{\text{old}}}(y \mid x)} A_t,
+    \mathrm{clip}\left(
       \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{blue}{\text{old}}}(y \mid x)},
-      1 - \epsilon,\;
+      1 - \epsilon,
       1 + \epsilon
     \right) A_t
   \right)
@@ -83,7 +84,7 @@ Advantages:
 REINFORCE + pure IS is a simple and efficient method by directly apply TIS/MIS to REINFORCE loss, without PPO clipping.
 
 $$
-L_{\text{REINFORCE\_IS}}(\theta)
+L_{\text{REINFORCE-IS}}(\theta)
 = - \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_{\textcolor{red}{\text{SGLang}}}} \left[
     \frac{\pi_{\theta}(y \mid x)}{\pi_{\textcolor{red}{\text{SGLang}}}(y \mid x)}
     \cdot \Sigma_t \log \pi_\theta \cdot A_t
@@ -149,9 +150,7 @@ Characteristics: Unbiased but high variance, suitable for sequence-level optimiz
 **Geometric Level**:
 
 Uses geometric mean to compute sequence weight:
-$
-w_{\text{seq}} = \exp\left( \frac{1}{n} \sum_{i=1}^{n} \left( \log \pi_{\text{train}}(x_i) - \log \pi_{\text{rollout}}(x_i) \right) \right)
-$
+$w_{\text{seq}} = \exp\left( \frac{1}{n} \sum_{i=1}^{n} \left( \log \pi_{\text{train}}(x_i) - \log \pi_{\text{rollout}}(x_i) \right) \right)$
 
 Characteristics: Biased but low variance, balances bias and variance
 
