@@ -21,26 +21,30 @@ source "${SCRIPT_DIR}/../../scripts/models/qwen2.5-3B.sh"
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen2.5-3B/
    --ref-load /root/Qwen2.5-3B_torch_dist/
-   # --load /root/Qwen2.5-3B_slime_base_1/
-   # --save /root/Qwen2.5-3B_slime_base_1/
-   # --save-interval 100
+   # 3是个500步的新dataset的
+   --load /root/Qwen2.5-3B_slime_base_4/
+   --save /root/Qwen2.5-3B_slime_base_4/
+   --save-interval 100
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /root/nq_search/train.parquet
+   --prompt-data /root/Search-R1/data/nq_hotpotqa_train/train.parquet
+   # --prompt-data /root/nq_search/train.parquet
    --input-key prompt
    --label-key reward_model
    --apply-chat-template
    --rollout-shuffle
    --num-rollout 3000
-   --rollout-batch-size 64
-   --n-samples-per-prompt 8
-   --rollout-max-response-len 500
+   --rollout-batch-size 128
+   --n-samples-per-prompt 4
+   --rollout-max-response-len 2000
    --rollout-temperature 1.0
-   --eval-interval 10
-   --eval-prompt-data nq_test /root/nq_search/test.parquet
+   --eval-interval 25
+   --eval-prompt-data nq_test /root/Search-R1/data/nq_hotpotqa_train/test.parquet@[0:3000]
+   # --eval-prompt-data nq_test /root/nq_search/test.parquet
    --eval-input-key prompt
    --eval-label-key reward_model
+   --n-samples-per-eval-prompt 1
 
    --global-batch-size 512
    --balance-data
@@ -77,7 +81,7 @@ OPTIMIZER_ARGS=(
    --optimizer adam
    --lr 1e-6
    --lr-decay-style constant
-   --weight-decay 0.1
+   --weight-decay 0.01
    --adam-beta1 0.9
    --adam-beta2 0.98
 )
@@ -85,7 +89,7 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=(
    --use-wandb
    --wandb-project searh-r1-base-v2
-   --wandb-group search-r1_qwen2.5-3B-base-new
+   --wandb-group search-r1_qwen2.5-3B-base-3000-WD
    --wandb-key ${WANDB_KEY}
 )
 
