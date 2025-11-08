@@ -55,7 +55,7 @@ ROLLOUT_ARGS=(
 
 GRPO_ARGS=(
    --advantage-estimator grpo
-   #--use-kl-loss
+    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    --kl-coef 0.00
@@ -96,6 +96,18 @@ CP_ARGS=(
    --context-parallel-size 2
 )
 
+# Profiling Arguments
+# Enable torch profiler to analyze performance bottlenecks
+PROFILE_ARGS=(
+   --use-pytorch-profiler             # Enable pytorch profiler
+   --profile-target train_overall     # Profile the overall training loop
+   --profile-target train_actor       # Profile each actor training step
+   --profile-target train_log_probs   # Profile log probability computation
+   --profile-step-start 1             # Start profiling at step 1
+   --profile-step-end 3               # End profiling at step 3
+   --tensorboard-dir ./tb_logs        # Directory to save profiler output
+)
+
 # launch the master node of ray in container
 ray start --head --node-ip-address 127.0.0.1 --num-gpus 4 --disable-usage-stats
 
@@ -116,4 +128,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${GRPO_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
    ${WANDB_ARGS[@]} \
-   ${CP_ARGS[@]} 
+   ${CP_ARGS[@]} \
+   ${PROFILE_ARGS[@]} 
