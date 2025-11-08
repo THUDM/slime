@@ -110,14 +110,11 @@ class FSDPTrainRayActor(TrainRayActor):
             model.load_state_dict(checkpoint_payload["model"], strict=True)
             checkpoint_payload["model"] = None
 
-        # Setup context parallelism before FSDP to ensure correct gradient synchronization
-        self.dp_size = dist.get_world_size()
-        if self.args.enable_cp:
-            self.setup_context_parallelism()
+        # Setup device mesh for parallelism (handles both CP and non-CP cases)
+        self.setup_device_mesh()
 
-        # Apply FSDP with DP mesh to avoid averaging gradients across CP ranks
-        mesh = self._create_fsdp_mesh() if self.args.enable_cp else None
-        self.model = apply_fsdp2(model, mesh=mesh)
+        # Apply FSDP with DP mesh
+        self.model = apply_fsdp2(model, mesh=self.dp_mesh)
 
         if args.optimizer == "deepspeed_cpu_adam":
             optimizer_config = {
@@ -175,54 +172,75 @@ class FSDPTrainRayActor(TrainRayActor):
 
         return int(getattr(self.args, "start_rollout_id", 0))
     
-    def setup_context_parallelism(self) -> None:
-        world_size = dist.get_world_size()
-        rank = dist.get_rank()
-        self.cp_size = getattr(self.args, "context_parallel_size", 2)
-        self.dp_size = world_size // self.cp_size
-        self.dp_rank = rank // self.cp_size
-        self.cp_rank = rank % self.cp_size
+    def setup_device_mesh(self) -> None:
+        """Setup device mesh for parallelism (always called, handles both CP and non-CP cases).
         
-        print(f"[Rank {rank}] Setting up CP: world_size={world_size}, cp_size={self.cp_size}, dp_size={self.dp_size}")
+        Creates either:
+        - 2D mesh (dp_size, cp_size) when CP is enabled
+        - 1D mesh (world_size,) when CP is disabled (pure DP)
         
-        # Create CP groups
-        for dp_r in range(self.dp_size):
-            cp_ranks = [dp_r * self.cp_size + cp_r for cp_r in range(self.cp_size)]
-            group = dist.new_group(ranks=cp_ranks, backend="nccl")
-            if rank in cp_ranks:
-                self.cp_group = group
-        
-        # Create DP groups
-        for cp_r in range(self.cp_size):
-            dp_ranks = [dp_r * self.cp_size + cp_r for dp_r in range(self.dp_size)]
-            group = dist.new_group(ranks=dp_ranks, backend="nccl")
-            if rank in dp_ranks:
-                self.dp_group = group
-        
-        substitute_hf_flash_attn(self.cp_group, heads_k_stride=1)
-        print(f"[Rank {rank}] CP initialized: dp_rank={self.dp_rank}, cp_rank={self.cp_rank}")
-
-    def _create_fsdp_mesh(self):
-        """Create a 2D DeviceMesh and return the DP submesh for FSDP.
-        
-        FSDP will only sync gradients across DP dimension (same CP rank).
+        This ensures consistent group management across all parallelism modes.
         """
         from torch.distributed.device_mesh import init_device_mesh
         
-        # Create 2D mesh: (cp_size, dp_size)
-        # Dim 0 (CP): ranks with same dp_rank, different cp_rank
-        # Dim 1 (DP): ranks with same cp_rank, different dp_rank
-        mesh = init_device_mesh(
-            "cuda",
-            mesh_shape=(self.dp_size, self.cp_size),
-            mesh_dim_names=("dp", "cp")
-        )
-        print(f"[Rank {dist.get_rank()}] mesh[dp].mesh: {mesh['dp'].mesh}")
-        print(f"[Rank {dist.get_rank()}] mesh[dp].size: {mesh['dp'].size}")
-        print(f"[Rank {dist.get_rank()}] mesh[cp].mesh: {mesh['cp'].mesh}")
-        print(f"[Rank {dist.get_rank()}] mesh[cp].size: {mesh['cp'].size}")
-        return mesh["dp"]
-
+        world_size = dist.get_world_size()
+        rank = dist.get_rank()
+        
+        if self.args.enable_cp:
+            # 2D mesh: (dp_size, cp_size) for hybrid CP + DP
+            self.cp_size = getattr(self.args, "context_parallel_size", 2)
+            self.dp_size = world_size // self.cp_size
+            
+            # Create 2D device mesh: (dp_size, cp_size)
+            # Ranks laid out in row-major: mesh[dp_idx, cp_idx] = dp_idx * cp_size + cp_idx
+            # - CP groups: consecutive ranks along dim 1, e.g., [0,1], [2,3], [4,5], [6,7]
+            # - DP groups: striped ranks along dim 0, e.g., [0,2,4,6], [1,3,5,7]
+            self.mesh = init_device_mesh(
+                "cuda",
+                mesh_shape=(self.dp_size, self.cp_size),
+                mesh_dim_names=("dp", "cp")
+            )
+            
+            # Extract process groups from mesh
+            self.dp_group = self.mesh.get_group("dp")  # For FSDP gradient sync, metric reduction
+            self.cp_group = self.mesh.get_group("cp")  # For Ring Flash Attention, logit gathering
+            self.dp_mesh = self.mesh["dp"]  # For FSDP
+            
+            # Compute local ranks within each dimension
+            self.dp_rank = rank // self.cp_size
+            self.cp_rank = rank % self.cp_size
+            
+            print(f"[Rank {rank}] Device mesh (2D): world_size={world_size}, "
+                  f"cp_size={self.cp_size}, dp_size={self.dp_size}")
+            print(f"[Rank {rank}] Mesh shape: {self.mesh.shape}, "
+                  f"dp_rank={self.dp_rank}, cp_rank={self.cp_rank}")
+            
+            # Setup Ring Flash Attention with CP group from mesh
+            substitute_hf_flash_attn(self.cp_group, heads_k_stride=1)
+            print(f"[Rank {rank}] CP initialized via device mesh")
+            
+        else:
+            # 1D mesh: pure data parallelism
+            self.cp_size = 1
+            self.dp_size = world_size
+            self.dp_rank = rank
+            self.cp_rank = 0
+            
+            # Create 1D device mesh for DP only
+            self.mesh = init_device_mesh(
+                "cuda",
+                mesh_shape=(self.dp_size,),
+                mesh_dim_names=("dp",)
+            )
+            
+            # For 1D mesh, dp_group is the only group (all ranks)
+            self.dp_group = self.mesh.get_group("dp")
+            self.cp_group = None  # No CP group in pure DP mode
+            self.dp_mesh = self.mesh  # Use the full mesh for FSDP
+            
+            print(f"[Rank {rank}] Device mesh (1D): world_size={world_size}, dp_size={self.dp_size}")
+            print(f"[Rank {rank}] Pure DP mode (no context parallelism)")
+    
     @timer
     def sleep(self) -> None:
         """Pause CUDA memory for all tracked tensors."""
