@@ -5,6 +5,7 @@ from itertools import accumulate
 import ray
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 import wandb
 from packaging import version
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
@@ -369,32 +370,71 @@ class FSDPTrainRayActor(TrainRayActor):
                         model_args = self._get_model_inputs_args(batch)
                         if "pixel_values" in batch:
                             model_args["pixel_values"] = batch["pixel_values"]
-                        logits = self.model(**model_args).logits
-                        
-                        # Gather logits from all CP ranks if CP is enabled (with gradient support)
+                        logits = self.model(**model_args).logits.squeeze(0)
                         if self.args.enable_cp:
-                            if dist.get_rank() == 0:
-                                print(f"[CP Gather] Before all_gather: logits shape={logits.shape}")
-                            gathered_logits_list = torch.distributed.nn.functional.all_gather(logits, group=self.cp_group)
-                            logits = torch.cat(gathered_logits_list, dim=1)
-                            if dist.get_rank() == 0:
-                                print(f"[CP Gather] After all_gather: logits shape={logits.shape} (gathered from {self.cp_size} ranks)")
-                    
-                    log_probs_result = gather_log_probs_packed(
-                        logits,
-                        batch["tokens"],
-                        allow_compile=not self.args.true_on_policy_mode,
-                        temperature=self.args.rollout_temperature,
-                    )
-                    if dist.get_rank() == 0:
-                        print(f"[CP Log Probs] logits.shape={logits.shape}, tokens.shape={batch['tokens'].shape}, "
-                              f"log_probs.shape={log_probs_result.shape}, cu_seqlens={batch['cu_seqlens'].tolist()}")
+                            # if dist.get_rank() == 0:
+                            #     print(f"[CP Log Probs] Before all_gather: logits shape={logits.shape}, tokens shape={batch['tokens'].shape}")
+                            chunk_size = logits.shape[0]
+                            tokens_start_index = chunk_size * self.cp_rank
+                            tokens_end_index = tokens_start_index + chunk_size + 1 if self.cp_rank < self.cp_size - 1 else tokens_start_index + chunk_size
+                            logits = logits if self.cp_rank < self.cp_size - 1 else logits[:-1, :]
+                            local_tokens = batch["tokens"][tokens_start_index:tokens_end_index] if not self.cp_rank == self.cp_size - 1 else model_args["input_ids"].squeeze(0)
+                            # if dist.get_rank() == 0:
+                            #     print(f"[CP Log Probs] cp rank {self.cp_rank} Before gather: local_tokens shape={local_tokens.shape}")
+                            local_log_probs = gather_log_probs_packed(
+                                logits, 
+                                local_tokens, 
+                                allow_compile=not self.args.true_on_policy_mode,
+                                temperature=self.args.rollout_temperature,
+                                use_cp=True
+                            )
+                            # if dist.get_rank() == 0:
+                            #     print(f"[CP Log Probs] After gather: log_probs shape={local_log_probs.shape}")
+                            # Pad local probs to the chunk size
+                            if self.cp_rank == self.cp_size - 1:
+                                local_log_probs = F.pad(local_log_probs, (0, chunk_size - local_log_probs.shape[0]), value=0)
+                            # if dist.get_rank() == 0:
+                            #     print(f"[CP Log Probs] After pad: log_probs shape={local_log_probs.shape}")
+                            gathered_log_probs_list = torch.distributed.nn.functional.all_gather(local_log_probs, group=self.cp_group)
+                            log_probs_result = torch.cat(gathered_log_probs_list, dim=0)
+                            log_probs_result = log_probs_result[:len(batch["tokens"])]
+                            # if dist.get_rank() == 0:
+                            #     print(f"[CP Log Probs] After all_gather: log_probs shape={log_probs_result.shape}")
+                            if store_prefix == "":
+                                shifted_logits = logits[:-1, :] if self.cp_rank == self.cp_size - 1 else logits
+                                log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
+                                probs = torch.softmax(shifted_logits, dim=-1)
+                                entropy = -(probs * log_probs_full).sum(dim=-1)
+                                # if dist.get_rank() == 0:
+                                #     print(f"[CP Log Probs] Before all_gather: entropy shape={entropy.shape}")
+                                if self.cp_rank == self.cp_size - 1:
+                                    entropy = F.pad(entropy, (0, chunk_size - entropy.shape[0]), value=0)
+                                    # print(f"[CP Log Probs] After pad: entropy shape={entropy.shape}")
+                                gathered_entropy_list = torch.distributed.nn.functional.all_gather(entropy, group=self.cp_group)
+                                entropy_result = torch.cat(gathered_entropy_list, dim=0)
+                                # if dist.get_rank() == 0:
+                                #     print(f"[CP Log Probs] After all_gather: entropy shape={entropy_result.shape}")
+                                entropy_result = entropy_result[:len(batch["tokens"])]
+                                batch["entropy"] = entropy_result
+                                # if dist.get_rank() == 0:
+                                #     print(f"[CP Log Probs] After all_gather: entropy shape={entropy_result.shape}")
+                        else:
+                            log_probs_result = gather_log_probs_packed(
+                                logits,
+                                batch["tokens"],
+                                allow_compile=not self.args.true_on_policy_mode,
+                                temperature=self.args.rollout_temperature
+                            )
+                        
+                    # if dist.get_rank() == 0:
+                    #     print(f"[CP Log Probs] logits.shape={logits.shape}, tokens.shape={batch['tokens'].shape}, "
+                    #           f"log_probs.shape={log_probs_result.shape}, cu_seqlens={batch['cu_seqlens'].tolist()}")
                     batch[f"{store_prefix}log_probs"] = log_probs_result
                     if store_prefix == "":
-                        shifted_logits = logits.squeeze(0)[:-1]
-                        log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
-                        probs = torch.softmax(shifted_logits, dim=-1)
-                        entropy = -(probs * log_probs_full).sum(dim=-1)
+                        # shifted_logits = logits.squeeze(0)[:-1]
+                        # log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
+                        # probs = torch.softmax(shifted_logits, dim=-1)
+                        # entropy = -(probs * log_probs_full).sum(dim=-1)
                         batch["entropy"] = entropy
             return rollout_data
 
@@ -584,35 +624,76 @@ class FSDPTrainRayActor(TrainRayActor):
             model_args = self._get_model_inputs_args(packed_batch)
             logits = self.model(
                 **model_args,
-            ).logits
+            ).logits.squeeze(0)
             
             # Gather logits from all CP ranks if CP is enabled (with gradient support)
             if self.args.enable_cp:
                 if dist.get_rank() == 0:
                     print(f"[CP Train Gather] Before all_gather: logits shape={logits.shape}")
-                gathered_logits_list = torch.distributed.nn.functional.all_gather(logits, group=self.cp_group)
-                logits = torch.cat(gathered_logits_list, dim=1)
-                if dist.get_rank() == 0:
-                    print(f"[CP Train Gather] After all_gather: logits shape={logits.shape} (gathered from {self.cp_size} ranks)")
-
-        # Handle packed sequences
-        log_probs = gather_log_probs_packed(
-            logits,
-            packed_batch["tokens"],
-            allow_compile=not self.args.true_on_policy_mode,
-            cu_seqlens=packed_batch["cu_seqlens"],
-            temperature=self.args.rollout_temperature,
-        )
+                # gathered_logits_list = torch.distributed.nn.functional.all_gather(logits, group=self.cp_group)
+                # logits = torch.cat(gathered_logits_list, dim=1)
+                # if dist.get_rank() == 0:
+                chunk_size = logits.shape[0]
+                tokens_start_index = chunk_size * self.cp_rank
+                tokens_end_index = tokens_start_index + chunk_size + 1 if self.cp_rank < self.cp_size - 1 else tokens_start_index + chunk_size
+                logits = logits if self.cp_rank < self.cp_size - 1 else logits[:-1, :]
+                local_tokens = packed_batch["tokens"][tokens_start_index:tokens_end_index] if not self.cp_rank == self.cp_size - 1 else model_args["input_ids"].squeeze(0)
+                # if dist.get_rank() == 0:
+                #     print(f"[CP Log Probs] cp rank {self.cp_rank} Before gather: local_tokens shape={local_tokens.shape}")
+                local_log_probs = gather_log_probs_packed(
+                    logits, 
+                    local_tokens, 
+                    allow_compile=not self.args.true_on_policy_mode,
+                    temperature=self.args.rollout_temperature,
+                    use_cp=True
+                )
+                # if dist.get_rank() == 0:
+                #     print(f"[CP Log Probs] After gather: log_probs shape={local_log_probs.shape}")
+                # Pad local probs to the chunk size
+                if self.cp_rank == self.cp_size - 1:
+                    local_log_probs = F.pad(local_log_probs, (0, chunk_size - local_log_probs.shape[0]), value=0)
+                
+                shifted_logits = logits[:-1, :] if self.cp_rank == self.cp_size - 1 else logits
+                log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
+                probs = torch.softmax(shifted_logits, dim=-1)
+                entropy = -(probs * log_probs_full).sum(dim=-1)
+                if self.cp_rank == self.cp_size - 1:
+                    entropy = F.pad(entropy, (0, chunk_size - entropy.shape[0]), value=0)
+                # 合并一次 all_gather：堆叠为 [2, chunk_size]
+                stacked_local = torch.stack([local_log_probs, entropy], dim=0)
+                gathered_stacked = torch.distributed.nn.functional.all_gather(stacked_local, group=self.cp_group)
+                # 按有效长度拼接（非末 rank=chunk_size，末 rank=chunk_size-1）
+                lp_parts, ent_parts = [], []
+                for r in range(self.cp_size):
+                    eff_len = chunk_size if r < self.cp_size - 1 else max(0, chunk_size - 1)
+                    if eff_len > 0:
+                        lp_parts.append(gathered_stacked[r][0][:eff_len])
+                        ent_parts.append(gathered_stacked[r][1][:eff_len])
+                log_probs = torch.cat(lp_parts, dim=0) if lp_parts else local_log_probs.new_zeros((0,))
+                entropy_result = torch.cat(ent_parts, dim=0) if ent_parts else entropy.new_zeros((0,))
+                # 截到全局有效长度 T-1（packed tokens 长度即为 T）
+                log_probs = log_probs[: len(packed_batch["tokens"]) - 1]
+                entropy_result = entropy_result[: len(packed_batch["tokens"]) - 1]
+                packed_batch["entropy"] = entropy_result
+            else:
+                # Handle packed sequences
+                log_probs = gather_log_probs_packed(
+                    logits,
+                    packed_batch["tokens"],
+                    allow_compile=not self.args.true_on_policy_mode,
+                    cu_seqlens=packed_batch["cu_seqlens"],
+                    temperature=self.args.rollout_temperature,
+                )
         if dist.get_rank() == 0:
             print(f"[CP Train Log Probs] logits.shape={logits.shape}, tokens.shape={packed_batch['tokens'].shape}, "
                   f"log_probs.shape={log_probs.shape}, cu_seqlens={packed_batch['cu_seqlens'].tolist()}")
         packed_batch["cur_log_probs"] = log_probs
-
-        shifted_logits = logits.squeeze(0)[:-1]
-        log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
-        probs = torch.softmax(shifted_logits, dim=-1)
-        entropy = -(probs * log_probs_full).sum(dim=-1)
-        packed_batch["entropy"] = entropy
+        if not self.args.enable_cp:
+            shifted_logits = logits.squeeze(0)[:-1]
+            log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
+            probs = torch.softmax(shifted_logits, dim=-1)
+            entropy = -(probs * log_probs_full).sum(dim=-1)
+            packed_batch["entropy"] = entropy
         unpacked_batches = unpack_sequences(packed_batch)
 
         old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
@@ -915,6 +996,7 @@ def gather_log_probs_packed(
     allow_compile: bool,
     cu_seqlens: torch.Tensor | float | None = None,
     temperature: torch.Tensor | None = None,
+    use_cp: bool = False,
 ) -> torch.Tensor:
     """Gather next-token log probabilities for packed sequences.
 
@@ -937,7 +1019,7 @@ def gather_log_probs_packed(
         logits = logits.div(temperature)
 
     # Shift for next-token prediction: logits[:-1] predicts input_ids[1:]
-    shifted_logits = logits[:-1]
+    shifted_logits = logits[:-1] if not use_cp else logits
     targets = input_ids[1:].to(device=shifted_logits.device)
 
     # Gather log probs for targets
