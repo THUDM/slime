@@ -59,6 +59,12 @@ async def search(query: str) -> str:
     return _passages2string(result)
 
 
+# IMPORTANT: When we need to collect log probabilities (logp), we CANNOT do any postprocessing
+# on the strings returned from the inference engine (sglang). This is because:
+# 1. We don't know how to truncate the corresponding tokens/logp arrays to match the modified string
+# 2. Re-tokenizing the postprocessed string may produce different tokens than what the engine generated,
+#    leading to misalignment between tokens and their log probabilities
+# Therefore, postprocess_responses is commented out when using this logp-enabled version.
 # def postprocess_responses(resp: str) -> str:
 #     return (
 #         # <search> text <search>
