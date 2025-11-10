@@ -1,6 +1,7 @@
 # Adapted form https://github.com/PeterGriffinJin/Search-R1/blob/ceee7b89655ed52f205b9beb98e1190c3eedcfb0/search_r1/llm_agent/generation.py
 import asyncio
 import json
+import os
 
 import httpx
 from qa_em_format import compute_score_em
@@ -12,7 +13,7 @@ from slime.utils.types import Sample
 SEARCH_R1_CONFIGS = {
     "max_turns": 3,
     "topk": 3,
-    "retrieval_server_url": "http://localhost:8000",  # Local dense retriever
+    "retrieval_server_url": os.getenv("RETRIEVAL_SERVER_URL", "http://localhost:8000"),  # Local dense retriever
     "search_concurrency": 256,
     # rm
     "format_score": 0.2,
