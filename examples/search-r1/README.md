@@ -14,13 +14,32 @@ pip install -e .
 pip install chardet
 ```
 
-Please refer to the script provided in Search-R1 to download the data:
+Download and prepare the training data:
 
 ```bash
+cd /root/
 git clone https://github.com/PeterGriffinJin/Search-R1.git
 cd Search-R1/
-python scripts/data_process/nq_search.py --local_dir /root/nq_search/
+
+# Set your working directory
+WORK_DIR=/root/Search-R1
+LOCAL_DIR=$WORK_DIR/data/nq_hotpotqa_train
+
+# Process multiple dataset search format train file
+DATA=nq,hotpotqa
+python $WORK_DIR/scripts/data_process/qa_search_train_merge.py \
+    --local_dir $LOCAL_DIR \
+    --data_sources $DATA
+
+# (Optional) Process multiple dataset search format test file
+# Note: the final file is not shuffled
+DATA=nq,triviaqa,popqa,hotpotqa,2wikimultihopqa,musique,bamboogle
+python $WORK_DIR/scripts/data_process/qa_search_test_merge.py \
+    --local_dir $LOCAL_DIR \
+    --data_sources $DATA
 ```
+
+**Note:** If you plan to use local search backend, see the [Appendix](#appendix-setting-up-local-retriever) for instructions on setting up the local retrieval server.
 
 Initialize the Qwen2.5-3B model:
 
@@ -155,9 +174,9 @@ CUSTOM_ARGS=(
 
 These are the `generate` and `reward_func` functions in `generate_with_search.py`.
 
-## Appendix: Setting up Local Retriever and Data Preparation
+## Appendix: Setting up Local Retriever
 
-This section provides detailed instructions for setting up the local dense retriever and preparing training data for use with the local search backend.
+This section provides detailed instructions for setting up the local dense retriever for use with the local search backend.
 
 ### Prerequisites
 
@@ -216,32 +235,7 @@ cat $save_path/part_* > $save_path/e5_Flat.index
 gzip -d $save_path/wiki-18.jsonl.gz
 ```
 
-### Step 4: Prepare Training Data
-
-```bash
-cd /root/
-git clone https://github.com/PeterGriffinJin/Search-R1.git
-cd Search-R1/
-
-# Set your working directory
-WORK_DIR=/root/Search-R1
-LOCAL_DIR=$WORK_DIR/data/nq_hotpotqa_train
-
-# Process multiple dataset search format train file
-DATA=nq,hotpotqa
-python $WORK_DIR/scripts/data_process/qa_search_train_merge.py \
-    --local_dir $LOCAL_DIR \
-    --data_sources $DATA
-
-# (Optional) Process multiple dataset search format test file
-# Note: the final file is not shuffled
-DATA=nq,triviaqa,popqa,hotpotqa,2wikimultihopqa,musique,bamboogle
-python $WORK_DIR/scripts/data_process/qa_search_test_merge.py \
-    --local_dir $LOCAL_DIR \
-    --data_sources $DATA
-```
-
-### Step 5: Start Local Retrieval Server
+### Step 4: Start Local Retrieval Server
 
 ```bash
 # If you encounter "conda not found" error, run:
@@ -276,7 +270,7 @@ python /root/slime/examples/search-r1/local_dense_retriever/retrieval_server.py 
 - The local search engine's Python process will not terminate when the shell closes
 - To restart the server: `lsof -i :8000` to find the PID, then kill it and restart
 
-### Step 6: Start Training
+### Step 5: Start Training
 
 Make sure you're **NOT** in the retriever conda environment. If you are, run `conda deactivate`.
 

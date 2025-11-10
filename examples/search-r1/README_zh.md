@@ -16,13 +16,32 @@ pip install -e .
 pip install chardet
 ```
 
-请参照 Search-R1 中提供的脚本下载数据：
+下载并准备训练数据：
 
 ```bash
+cd /root/
 git clone https://github.com/PeterGriffinJin/Search-R1.git
 cd Search-R1/
-python scripts/data_process/nq_search.py --local_dir /root/nq_search/
+
+# 设置工作目录
+WORK_DIR=/root/Search-R1
+LOCAL_DIR=$WORK_DIR/data/nq_hotpotqa_train
+
+# 处理多个数据集的搜索格式训练文件
+DATA=nq,hotpotqa
+python $WORK_DIR/scripts/data_process/qa_search_train_merge.py \
+    --local_dir $LOCAL_DIR \
+    --data_sources $DATA
+
+# （可选）处理多个数据集的搜索格式测试文件
+# 注意：最终文件未经过打乱
+DATA=nq,triviaqa,popqa,hotpotqa,2wikimultihopqa,musique,bamboogle
+python $WORK_DIR/scripts/data_process/qa_search_test_merge.py \
+    --local_dir $LOCAL_DIR \
+    --data_sources $DATA
 ```
+
+**注意：** 如果您计划使用本地搜索后端，请参阅[附录](#附录配置本地检索器)了解如何设置本地检索服务器。
 
 初始化 Qwen2.5-3B 模型：
 
@@ -157,9 +176,9 @@ CUSTOM_ARGS=(
 
 也就是 `generate_with_search.py` 中的 `generate` 和 `reward_func` 两个函数。
 
-## 附录：配置本地检索器和数据准备
+## 附录：配置本地检索器
 
-本节提供详细的本地密集检索器设置和训练数据准备说明，用于本地搜索后端。
+本节提供详细的本地密集检索器设置说明，用于本地搜索后端。
 
 ### 前置条件
 
@@ -218,32 +237,7 @@ cat $save_path/part_* > $save_path/e5_Flat.index
 gzip -d $save_path/wiki-18.jsonl.gz
 ```
 
-### 步骤 4：准备训练数据
-
-```bash
-cd /root/
-git clone https://github.com/PeterGriffinJin/Search-R1.git
-cd Search-R1/
-
-# 设置工作目录
-WORK_DIR=/root/Search-R1
-LOCAL_DIR=$WORK_DIR/data/nq_hotpotqa_train
-
-# 处理多个数据集的搜索格式训练文件
-DATA=nq,hotpotqa
-python $WORK_DIR/scripts/data_process/qa_search_train_merge.py \
-    --local_dir $LOCAL_DIR \
-    --data_sources $DATA
-
-# （可选）处理多个数据集的搜索格式测试文件
-# 注意：最终文件未经过打乱
-DATA=nq,triviaqa,popqa,hotpotqa,2wikimultihopqa,musique,bamboogle
-python $WORK_DIR/scripts/data_process/qa_search_test_merge.py \
-    --local_dir $LOCAL_DIR \
-    --data_sources $DATA
-```
-
-### 步骤 5：启动本地检索服务器
+### 步骤 4：启动本地检索服务器
 
 ```bash
 # 如果遇到 "conda not found" 错误，运行：
@@ -278,7 +272,7 @@ python /root/slime/examples/search-r1/local_dense_retriever/retrieval_server.py 
 - 本地搜索引擎的 Python 进程不会随着 shell 关闭而终止
 - 重启服务器：使用 `lsof -i :8000` 找到 PID，然后 kill 并重启
 
-### 步骤 6：启动训练
+### 步骤 5：启动训练
 
 确保您**不在** retriever conda 环境中。如果在，请运行 `conda deactivate`。
 
