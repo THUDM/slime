@@ -5,8 +5,6 @@
 
 set -e
 
-pkill -9 python
-
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 RETRIEVER_DIR="${SCRIPT_DIR}/local_dense_retriever"
 TMUX_SESSION="slime-search-r1"
