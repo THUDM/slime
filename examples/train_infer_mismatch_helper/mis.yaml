@@ -5,7 +5,7 @@ use_tis: true
 # token: per-token
 # sequence: product over tokens
 # geometric: geometric mean
-mis_level: "sequence"
+mis_level: "token"
 
 # Handling mode for IS weights: 
 # truncate: cap to upper bound, TIS
