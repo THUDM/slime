@@ -418,10 +418,8 @@ def policy_loss_function(
 
     pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
 
-    # Compute TIS metrics if rollout_log_probs is available
-    has_rollout_log_probs = "rollout_log_probs" in batch and batch["rollout_log_probs"] is not None
-
-    if has_rollout_log_probs:
+    # Apply off-policy correction using importance sampling if enabled
+    if args.use_tis:
 
         def vanilla_tis_function(
             args,
@@ -443,9 +441,7 @@ def policy_loss_function(
                 "tis_clipfrac": tis_clipfrac.clone().detach(),
                 "tis_abs": tis_abs.clone().detach(),
             }
-
-            if args.use_tis:
-                pg_loss = pg_loss * tis_weights
+            pg_loss = pg_loss * tis_weights
             return pg_loss, loss_masks, metrics
 
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
@@ -459,7 +455,6 @@ def policy_loss_function(
             "loss_masks": batch["loss_masks"],
             "total_lengths": total_lengths,
             "response_lengths": response_lengths,
-            "use_tis": args.use_tis,
         }
 
         if args.custom_tis_function_path is not None:
@@ -468,12 +463,11 @@ def policy_loss_function(
             tis_func = vanilla_tis_function
         pg_loss, modified_response_masks, tis_metrics = tis_func(**tis_kwargs)
 
-        if args.use_tis:
-            # [decouple IS and rejection] Rebuild sum_of_sample_mean with modified_response_masks for denominator correction
-            # modified_response_masks will be sliced with cp in get_sum_of_sample_mean
-            sum_of_sample_mean = get_sum_of_sample_mean(
-                total_lengths, response_lengths, modified_response_masks, args.calculate_per_token_loss
-            )
+        # [decouple IS and rejection] Rebuild sum_of_sample_mean with modified_response_masks for denominator correction
+        # modified_response_masks will be sliced with cp in get_sum_of_sample_mean
+        sum_of_sample_mean = get_sum_of_sample_mean(
+            total_lengths, response_lengths, modified_response_masks, args.calculate_per_token_loss
+        )
 
     pg_loss = sum_of_sample_mean(pg_loss)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
@@ -521,8 +515,7 @@ def policy_loss_function(
     if args.use_kl_loss:
         reported_loss["kl_loss"] = kl_loss.clone().detach()
 
-    # Report TIS metrics if they were computed
-    if has_rollout_log_probs:
+    if args.use_tis:
         reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
         # Assume all metrics are already cloned and detached
         for metric_key, metric_value in tis_metrics.items():
