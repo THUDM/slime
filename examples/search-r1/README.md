@@ -154,3 +154,160 @@ CUSTOM_ARGS=(
 ```
 
 These are the `generate` and `reward_func` functions in `generate_with_search.py`.
+
+## Appendix: Setting up Local Retriever and Data Preparation
+
+This section provides detailed instructions for setting up the local dense retriever and preparing training data for use with the local search backend.
+
+### Prerequisites
+
+The local retriever requires a separate conda environment to avoid conflicts with the training environment. It uses GPU for efficient retrieval.
+
+### Step 1: Install Conda
+
+If you don't have conda installed, run the following commands:
+
+```bash
+# Download and install conda
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh
+bash ~/miniconda.sh -b -p $HOME/miniconda3
+source ~/miniconda3/etc/profile.d/conda.sh
+conda init
+source ~/.bashrc
+
+# Accept conda terms of service
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+```
+
+### Step 2: Create Retriever Environment
+
+Create and activate a conda environment with Python 3.10:
+
+```bash
+# Create environment
+conda create -n retriever python=3.10 -y
+conda activate retriever
+
+# Install PyTorch with CUDA support
+conda install pytorch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 pytorch-cuda=12.1 -c pytorch -c nvidia -y
+
+# Install required packages
+pip install transformers datasets pyserini huggingface_hub
+conda install faiss-gpu=1.8.0 -c pytorch -c nvidia -y
+pip install uvicorn fastapi
+```
+
+### Step 3: Download Index and Corpus
+
+**Note:** The local retrieval files are large. You'll need approximately **60-70 GB** for download and **132 GB** after extraction. Make sure you have sufficient disk space.
+
+```bash
+# Set your save path
+save_path=/root/Index
+
+# Download the index and corpus files
+python /root/slime/examples/search-r1/local_dense_retriever/download.py --save_path $save_path
+
+# Combine split index files
+cat $save_path/part_* > $save_path/e5_Flat.index
+
+# Decompress the corpus
+gzip -d $save_path/wiki-18.jsonl.gz
+```
+
+### Step 4: Prepare Training Data
+
+```bash
+cd /root/
+git clone https://github.com/PeterGriffinJin/Search-R1.git
+cd Search-R1/
+
+# Set your working directory
+WORK_DIR=/root/Search-R1
+LOCAL_DIR=$WORK_DIR/data/nq_hotpotqa_train
+
+# Process multiple dataset search format train file
+DATA=nq,hotpotqa
+python $WORK_DIR/scripts/data_process/qa_search_train_merge.py \
+    --local_dir $LOCAL_DIR \
+    --data_sources $DATA
+
+# (Optional) Process multiple dataset search format test file
+# Note: the final file is not shuffled
+DATA=nq,triviaqa,popqa,hotpotqa,2wikimultihopqa,musique,bamboogle
+python $WORK_DIR/scripts/data_process/qa_search_test_merge.py \
+    --local_dir $LOCAL_DIR \
+    --data_sources $DATA
+```
+
+### Step 5: Start Local Retrieval Server
+
+```bash
+# If you encounter "conda not found" error, run:
+# source ~/miniconda3/etc/profile.d/conda.sh
+# conda init
+# source ~/.bashrc
+
+# Activate retriever environment
+conda activate retriever
+
+# Set paths
+save_path=/root/Index
+index_file=$save_path/e5_Flat.index
+corpus_file=$save_path/wiki-18.jsonl
+retriever_name=e5
+retriever_path=intfloat/e5-base-v2
+
+# Start the retrieval server
+python /root/slime/examples/search-r1/local_dense_retriever/retrieval_server.py \
+    --index_path $index_file \
+    --corpus_path $corpus_file \
+    --topk 3 \
+    --retriever_name $retriever_name \
+    --retriever_model $retriever_path \
+    --faiss_gpu
+```
+
+**Important Notes:**
+- First startup will download the model and load the index, which may take a few minutes
+- Normal startup time (excluding downloads): 1-2 minutes
+- GPU memory usage per GPU: approximately 5-7 GB
+- The local search engine's Python process will not terminate when the shell closes
+- To restart the server: `lsof -i :8000` to find the PID, then kill it and restart
+
+### Step 6: Start Training
+
+Make sure you're **NOT** in the retriever conda environment. If you are, run `conda deactivate`.
+
+```bash
+cd /root/slime
+
+# Set your wandb key (optional)
+export WANDB_KEY="your_wandb_key_here"
+
+# If ray process is stuck, try:
+# rm -rf /root/.cache
+# rm -rf /root/.*
+
+# Run the training script
+bash /root/slime/examples/search-r1/run_qwen2.5_3B.sh
+```
+
+### Troubleshooting
+
+**Ray process stuck:**
+```bash
+rm -rf /root/.cache
+# If still stuck:
+rm -rf /root/.*
+```
+
+**Conda environment issues:**
+- Make sure you deactivate the retriever environment before running training
+- Verify you're using the base Python environment for training
+
+**Retrieval server not responding:**
+- Check if the server is running: `lsof -i :8000`
+- Verify GPU availability: `nvidia-smi`
+- Check logs for any error messages

@@ -156,3 +156,160 @@ CUSTOM_ARGS=(
 ```
 
 也就是 `generate_with_search.py` 中的 `generate` 和 `reward_func` 两个函数。
+
+## 附录：配置本地检索器和数据准备
+
+本节提供详细的本地密集检索器设置和训练数据准备说明，用于本地搜索后端。
+
+### 前置条件
+
+本地检索器需要单独的 conda 环境，以避免与训练环境冲突。它使用 GPU 进行高效检索。
+
+### 步骤 1：安装 Conda
+
+如果您还没有安装 conda，运行以下命令：
+
+```bash
+# 下载并安装 conda
+wget https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh -O ~/miniconda.sh
+bash ~/miniconda.sh -b -p $HOME/miniconda3
+source ~/miniconda3/etc/profile.d/conda.sh
+conda init
+source ~/.bashrc
+
+# 接受 conda 服务条款
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/main
+conda tos accept --override-channels --channel https://repo.anaconda.com/pkgs/r
+```
+
+### 步骤 2：创建检索器环境
+
+创建并激活一个 Python 3.10 的 conda 环境：
+
+```bash
+# 创建环境
+conda create -n retriever python=3.10 -y
+conda activate retriever
+
+# 安装带 CUDA 支持的 PyTorch
+conda install pytorch==2.4.0 torchvision==0.19.0 torchaudio==2.4.0 pytorch-cuda=12.1 -c pytorch -c nvidia -y
+
+# 安装所需的包
+pip install transformers datasets pyserini huggingface_hub
+conda install faiss-gpu=1.8.0 -c pytorch -c nvidia -y
+pip install uvicorn fastapi
+```
+
+### 步骤 3：下载索引和语料库
+
+**注意：** 本地检索文件体积较大。下载需要约 **60-70 GB** 空间，解压后约 **132 GB**。请确保有足够的磁盘空间。
+
+```bash
+# 设置保存路径
+save_path=/root/Index
+
+# 下载索引和语料库文件
+python /root/slime/examples/search-r1/local_dense_retriever/download.py --save_path $save_path
+
+# 合并分割的索引文件
+cat $save_path/part_* > $save_path/e5_Flat.index
+
+# 解压语料库
+gzip -d $save_path/wiki-18.jsonl.gz
+```
+
+### 步骤 4：准备训练数据
+
+```bash
+cd /root/
+git clone https://github.com/PeterGriffinJin/Search-R1.git
+cd Search-R1/
+
+# 设置工作目录
+WORK_DIR=/root/Search-R1
+LOCAL_DIR=$WORK_DIR/data/nq_hotpotqa_train
+
+# 处理多个数据集的搜索格式训练文件
+DATA=nq,hotpotqa
+python $WORK_DIR/scripts/data_process/qa_search_train_merge.py \
+    --local_dir $LOCAL_DIR \
+    --data_sources $DATA
+
+# （可选）处理多个数据集的搜索格式测试文件
+# 注意：最终文件未经过打乱
+DATA=nq,triviaqa,popqa,hotpotqa,2wikimultihopqa,musique,bamboogle
+python $WORK_DIR/scripts/data_process/qa_search_test_merge.py \
+    --local_dir $LOCAL_DIR \
+    --data_sources $DATA
+```
+
+### 步骤 5：启动本地检索服务器
+
+```bash
+# 如果遇到 "conda not found" 错误，运行：
+# source ~/miniconda3/etc/profile.d/conda.sh
+# conda init
+# source ~/.bashrc
+
+# 激活检索器环境
+conda activate retriever
+
+# 设置路径
+save_path=/root/Index
+index_file=$save_path/e5_Flat.index
+corpus_file=$save_path/wiki-18.jsonl
+retriever_name=e5
+retriever_path=intfloat/e5-base-v2
+
+# 启动检索服务器
+python /root/slime/examples/search-r1/local_dense_retriever/retrieval_server.py \
+    --index_path $index_file \
+    --corpus_path $corpus_file \
+    --topk 3 \
+    --retriever_name $retriever_name \
+    --retriever_model $retriever_path \
+    --faiss_gpu
+```
+
+**重要注意事项：**
+- 首次启动会下载模型和加载索引，可能需要几分钟
+- 正常启动时间（不包括下载）：1-2 分钟
+- 每张 GPU 显存占用：约 5-7 GB
+- 本地搜索引擎的 Python 进程不会随着 shell 关闭而终止
+- 重启服务器：使用 `lsof -i :8000` 找到 PID，然后 kill 并重启
+
+### 步骤 6：启动训练
+
+确保您**不在** retriever conda 环境中。如果在，请运行 `conda deactivate`。
+
+```bash
+cd /root/slime
+
+# 设置您的 wandb key（可选）
+export WANDB_KEY="your_wandb_key_here"
+
+# 如果 ray 进程卡住，尝试：
+# rm -rf /root/.cache
+# rm -rf /root/.*
+
+# 运行训练脚本
+bash /root/slime/examples/search-r1/run_qwen2.5_3B.sh
+```
+
+### 故障排查
+
+**Ray 进程卡住：**
+```bash
+rm -rf /root/.cache
+# 如果仍然卡住：
+rm -rf /root/.*
+```
+
+**Conda 环境问题：**
+- 确保在运行训练前退出 retriever 环境
+- 验证训练使用的是基础 Python 环境
+
+**检索服务器无响应：**
+- 检查服务器是否运行：`lsof -i :8000`
+- 验证 GPU 可用性：`nvidia-smi`
+- 检查日志查看错误信息
