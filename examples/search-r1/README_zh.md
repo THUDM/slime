@@ -39,24 +39,105 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     --save /root/Qwen2.5-3B_torch_dist
 ```
 
-## 运行脚本
+## 配置说明
 
-需要将你的 serper.dev API 配置在 `generate_with_search.py` 中：
+### 搜索后端配置
+
+`generate_with_search.py` 文件支持**本地搜索**和 **Google 搜索**两种后端。通过 `SEARCH_R1_CONFIGS` 字典进行配置：
 
 ```python
 SEARCH_R1_CONFIGS = {
-    "max_turns": 3,
+    # ============== 通用配置 ==============
+    "max_turns": 2,
     "topk": 3,
-    "google_api_key": "YOUR_API_KEY",  # Replace with your actual API key
-    "snippet_only": True,  # Set to True to only return snippets
-    "proxy": None,  # Set to your proxy if needed
     "search_concurrency": 256,
-    # rm
+
+    # ============== 搜索后端选择 ==============
+    "search_backend": "local",  # 选项："local" 或 "google"
+
+    # ============== 本地搜索配置 ==============
+    # (仅当 search_backend="local" 时使用)
+    "local": {
+        "search_url": "http://127.0.0.1:8000/retrieve",  # 本地检索服务器的 URL
+        "proxy": None,
+    },
+
+    # ============== Google 搜索配置 ==============
+    # (仅当 search_backend="google" 时使用)
+    "google": {
+        "api_key": "your_api_key_here",  # 替换为你的 serper.dev API key
+        "snippet_only": True,
+        "proxy": None,
+    },
+
+    # ============== 日志概率收集 ==============
+    "return_logprob": True,  # 设置为 True 以收集日志概率（TIS 所需）
+
+    # ============== 奖励模型配置 ==============
     "format_score": 0.2,
 }
 ```
 
-并运行：
+#### 使用本地搜索
+
+1. 设置 `"search_backend": "local"`
+2. 在 `"local"` 部分配置本地检索服务器 URL
+3. 运行训练脚本前先启动本地搜索服务器
+
+#### 使用 Google 搜索
+
+1. 设置 `"search_backend": "google"`
+2. 在 `"google"` 部分配置你的 serper.dev API key
+3. 从 [serper.dev](https://serper.dev) 获取 API key
+
+### 启用 TIS（轨迹重要性采样）
+
+TIS 需要收集日志概率。启用 TIS 的步骤：
+
+**1. 在 `generate_with_search.py` 中：**
+```python
+SEARCH_R1_CONFIGS = {
+    # ... 其他配置
+    "return_logprob": True,  # TIS 必须设置为 True
+}
+```
+
+**2. 在 `run_qwen2.5_3B.sh` 中：**
+
+在 `GRPO_ARGS` 中取消注释 TIS 相关参数：
+```bash
+GRPO_ARGS=(
+   --advantage-estimator grpo
+   --use-kl-loss
+   --kl-loss-coef 0.001
+   --kl-loss-type low_var_kl
+   --entropy-coef 0.00
+   --eps-clip 0.2
+   --eps-clip-high 0.28
+
+   # 取消注释以启用 TIS
+   --use-tis
+)
+```
+
+并在 `CUSTOM_ARGS` 中取消注释 TIS 配置路径：
+```bash
+CUSTOM_ARGS=(
+   --custom-generate-function-path generate_with_search.generate
+   --custom-rm-path generate_with_search.reward_func
+
+   # 取消注释以启用 TIS
+   --custom-config-path examples/train_infer_mismatch_helper/mis.yaml
+   --custom-tis-function-path examples.train_infer_mismatch_helper.mis.compute_mis_weights_with_cp
+)
+```
+
+**重要注意事项：**
+- TIS 需要在 `SEARCH_R1_CONFIGS` 中设置 `return_logprob=True`
+- 收集日志概率时，响应后处理会自动禁用以保持 token/logp 对齐
+- TIS 会增加计算开销，但可以提高训练效率
+
+## 运行脚本
 
 ```bash
 cd slime/
