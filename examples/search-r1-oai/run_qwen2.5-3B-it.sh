@@ -32,7 +32,7 @@ ROLLOUT_ARGS=(
    --input-key prompt
    --label-key reward_model
    --tool-key tools
-   --apply-chat-template
+   #--apply-chat-template
    --rollout-shuffle
    --num-rollout 3000
    --rollout-batch-size 32
