@@ -129,6 +129,7 @@ class RolloutManager:
         if self.args.load_debug_rollout_data:
             data = torch.load(
                 open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
+                weights_only=False,
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
             if (ratio := self.args.load_debug_rollout_data_subsample) is not None:

@@ -8,6 +8,7 @@ import torch
 import torch.distributed as dist
 from torch_memory_saver import torch_memory_saver
 
+import slime.utils.eval_config
 from slime.ray.ray_actor import RayActor
 from slime.utils.distributed_utils import init_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
@@ -50,6 +51,8 @@ class TrainRayActor(RayActor):
             print(f"Set torch_memory_saver.memory_margin_bytes to {x}")
             assert args.offload_train
             torch_memory_saver.memory_margin_bytes = x
+
+        torch.serialization.add_safe_globals([slime.utils.eval_config.EvalDatasetConfig])
 
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         torch.cuda.set_device(f"cuda:{local_rank}")
