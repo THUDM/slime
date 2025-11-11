@@ -175,9 +175,11 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                         assistant_token_ids.append(token_ids[0])
         else:
             # Fallback: manually tokenize content
-            assistant_content = message.get("content") or ""
-            if assistant_content:
-                assistant_token_ids = tokenizer(assistant_content, add_special_tokens=False)["input_ids"]
+            # Skip retokenization if tool_calls exist (to avoid prefix instability)
+            if not tool_calls:
+                assistant_content = message.get("content") or ""
+                if assistant_content:
+                    assistant_token_ids = tokenizer(assistant_content, add_special_tokens=False)["input_ids"]
 
         # Update tracking for assistant message
         if assistant_token_ids:
@@ -186,7 +188,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             loss_mask.extend([1] * len(assistant_token_ids))  # Assistant content: loss_mask=1
 
         assistant_content = message.get("content") or ""
-        response_text += assistant_content
+        response_text = assistant_content
 
         # Check for tool calls
         tool_calls = message.get("tool_calls")
@@ -202,7 +204,8 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         # Add assistant message (with tool_calls) to conversation
         messages.append(message)
 
-        # Execute tool calls
+        # Execute tool calls and collect tool messages
+        tool_messages = []
         for tool_call in tool_calls:
             func_name = tool_call["function"]["name"]
             arguments_str = tool_call["function"]["arguments"]
@@ -231,28 +234,30 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                     "content": search_results,
                 }
 
-                # Use apply_chat_template incremental method to get accurate tokens
-                # Calculate tokens before adding tool message
-                text_before = tokenizer.apply_chat_template(
-                    messages, tools=tools, add_generation_prompt=True, tokenize=False
-                )
-                tokens_before = tokenizer(text_before, add_special_tokens=False)["input_ids"]
+                # Add to tool response messages list
+                tool_messages.append(tool_message)
 
-                # Add tool message and recalculate
-                messages.append(tool_message)
-                text_after = tokenizer.apply_chat_template(
-                    messages, tools=tools, add_generation_prompt=True, tokenize=False
-                )
-                tokens_after = tokenizer(text_after, add_special_tokens=False)["input_ids"]
+        # Process all tool messages as a unit using delta-based approach
+        if tool_messages:
+            # Calculate text before adding THIS tool message
+            text_before = tokenizer.apply_chat_template(
+                messages, tools=tools, add_generation_prompt=True, tokenize=False
+            )
 
-                # Extract new tokens (tool message tokens)
-                tool_token_ids = tokens_after[len(tokens_before) :]
+            # Add tool messages and calculate delta tokens
+            messages.append(tool_messages)
 
-                # Update tracking for tool message
-                response_token_ids.extend(tool_token_ids)
-                all_token_ids.extend(tool_token_ids)
-                loss_mask.extend([0] * len(tool_token_ids))  # Tool content: loss_mask=0
-                response_text += search_results
+            # Calculate delta for this tool message
+            text_after = tokenizer.apply_chat_template(
+                messages, tools=tools, add_generation_prompt=True, tokenize=False
+            )
+            delta_tool_text = text_after[len(text_before):]
+            delta_tool_tokens = tokenizer(delta_tool_text, add_special_tokens=False)["input_ids"]
+
+            # Update tracking for tool message
+            response_token_ids.extend(delta_tool_tokens)
+            all_token_ids.extend(delta_tool_tokens)
+            loss_mask.extend([0] * len(delta_tool_tokens))  # Tool content: loss_mask=0
 
         # Check for length truncation
         if finish_reason == "length":
@@ -282,7 +287,7 @@ async def reward_func(args, sample, **kwargs):
         raise TypeError("Sample must be an instance of Sample class.")
 
     score = compute_score_em(
-        solution_str=sample.prompt + sample.response,
+        solution_str=sample.response,
         ground_truth=sample.label["ground_truth"],
         format_score=SEARCH_R1_CONFIGS["format_score"],
     )
