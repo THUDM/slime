@@ -503,7 +503,6 @@ class UpdateWeightFromTensor:
                     )
             for handle in handles:
                 handle.wait()
-        torch.cuda.synchronize()
 
         # broadcast params across ep ranks
         if ep_size > 1:
