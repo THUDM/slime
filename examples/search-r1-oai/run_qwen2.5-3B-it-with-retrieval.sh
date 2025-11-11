@@ -78,6 +78,7 @@ RETRIEVER_PORT="8000"
 RETRIEVER_TOPK=3
 RETRIEVER_MODEL="intfloat/e5-base-v2"
 RETRIEVER_LOG="/tmp/retrieval_server_$(date +%Y%m%d_%H%M%S).log"
+TRAINING_LOG="/tmp/training_$(date +%Y%m%d_%H%M%S).log"
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-"4,5,6,7"}
 
 echo "Retrieval server configuration:"
@@ -87,6 +88,9 @@ echo "  Port: ${RETRIEVER_PORT}"
 echo "  Top-K: ${RETRIEVER_TOPK}"
 echo "  Model: ${RETRIEVER_MODEL}"
 echo "  Log file: ${RETRIEVER_LOG}"
+echo ""
+echo "Training configuration:"
+echo "  Log file: ${TRAINING_LOG}"
 
 # 3. Kill any existing retrieval server
 echo "Cleaning up any existing retrieval server..."
@@ -128,8 +132,8 @@ tmux send-keys -t ${TMUX_SESSION}:0 "bash ${START_SCRIPT} ${INDEX_PATH} ${CORPUS
 sleep 5
 
 # 7. Wait for retrieval server to be ready
-echo "Waiting for retrieval server to start (loading index and model, may take up to 90 seconds)..."
-MAX_WAIT=90
+echo "Waiting for retrieval server to start (loading index and model, may take up to 120 seconds)..."
+MAX_WAIT=120
 WAIT_COUNT=0
 START_TIME=$(date +%s)
 
@@ -182,7 +186,7 @@ PROJECT_ROOT="${SCRIPT_DIR}/../.."
 tmux send-keys -t ${TMUX_SESSION}:1 "export RETRIEVAL_SERVER_URL=${RETRIEVAL_SERVER_URL}" C-m
 tmux send-keys -t ${TMUX_SESSION}:1 "export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}" C-m
 tmux send-keys -t ${TMUX_SESSION}:1 "cd ${PROJECT_ROOT}" C-m
-tmux send-keys -t ${TMUX_SESSION}:1 "bash examples/search-r1-oai/run_qwen2.5-3B-it.sh" C-m
+tmux send-keys -t ${TMUX_SESSION}:1 "bash examples/search-r1-oai/run_qwen2.5-3B-it.sh |& tee ${TRAINING_LOG}" C-m
 
 echo ""
 echo -e "${GREEN}=== Training started ===${NC}"
@@ -191,7 +195,9 @@ echo "Tmux session '${TMUX_SESSION}' created with two windows:"
 echo "  Window 0 (retrieval-server): Retrieval server running"
 echo "  Window 1 (training): Training job"
 echo ""
-echo "Retrieval server log: ${RETRIEVER_LOG}"
+echo "Log files:"
+echo "  Retrieval server: ${RETRIEVER_LOG}"
+echo "  Training: ${TRAINING_LOG}"
 echo ""
 echo "To view the session:"
 echo "  tmux attach -t ${TMUX_SESSION}"
