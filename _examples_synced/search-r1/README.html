@@ -54,7 +54,7 @@
     <link rel="prev" title="SFT Qwen3-4B-Base" href="../../examples/qwen3-4b-base-openhermes.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Nov 02, 2025"/>
+    <meta name="docbuild:last-update" content="Nov 11, 2025"/>
   </head>
   
   
@@ -436,8 +436,27 @@ document.write(`
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#environment-setup">Environment Setup</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#search-backend-configuration">Search Backend Configuration</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#using-local-search">Using Local Search</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#using-google-search">Using Google Search</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#enabling-tis-trajectory-importance-sampling">Enabling TIS (Trajectory Importance Sampling)</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-script">Running the Script</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#code-structure">Code Structure</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#appendix-setting-up-local-retriever">Appendix: Setting up Local Retriever</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">Prerequisites</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-1-install-conda">Step 1: Install Conda</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-2-create-retriever-environment">Step 2: Create Retriever Environment</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-3-download-index-and-corpus">Step 3: Download Index and Corpus</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-4-start-local-retrieval-server">Step 4: Start Local Retrieval Server</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-5-start-training">Step 5: Start Training</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#troubleshooting">Troubleshooting</a></li>
+</ul>
+</li>
 </ul>
             </nav>
         </div>
@@ -462,12 +481,30 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 pip<span class="w"> </span>install<span class="w"> </span>chardet
 </pre></div>
 </div>
-<p>Please refer to the script provided in Search-R1 to download the data:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/PeterGriffinJin/Search-R1.git
+<p>Download and prepare the training data:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/
+git<span class="w"> </span>clone<span class="w"> </span>https://github.com/PeterGriffinJin/Search-R1.git
 <span class="nb">cd</span><span class="w"> </span>Search-R1/
-python<span class="w"> </span>scripts/data_process/nq_search.py<span class="w"> </span>--local_dir<span class="w"> </span>/root/nq_search/
+
+<span class="c1"># Set your working directory</span>
+<span class="nv">WORK_DIR</span><span class="o">=</span>/root/Search-R1
+<span class="nv">LOCAL_DIR</span><span class="o">=</span><span class="nv">$WORK_DIR</span>/data/nq_hotpotqa_train
+
+<span class="c1"># Process multiple dataset search format train file</span>
+<span class="nv">DATA</span><span class="o">=</span>nq,hotpotqa
+python<span class="w"> </span><span class="nv">$WORK_DIR</span>/scripts/data_process/qa_search_train_merge.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--local_dir<span class="w"> </span><span class="nv">$LOCAL_DIR</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--data_sources<span class="w"> </span><span class="nv">$DATA</span>
+
+<span class="c1"># (Optional) Process multiple dataset search format test file</span>
+<span class="c1"># Note: the final file is not shuffled</span>
+<span class="nv">DATA</span><span class="o">=</span>nq,triviaqa,popqa,hotpotqa,2wikimultihopqa,musique,bamboogle
+python<span class="w"> </span><span class="nv">$WORK_DIR</span>/scripts/data_process/qa_search_test_merge.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--local_dir<span class="w"> </span><span class="nv">$LOCAL_DIR</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--data_sources<span class="w"> </span><span class="nv">$DATA</span>
 </pre></div>
 </div>
+<p><strong>Note:</strong> If you plan to use local search backend, see the <a class="reference internal" href="#appendix-setting-up-local-retriever"><span class="std std-ref">Appendix</span></a> for instructions on setting up the local retrieval server.</p>
 <p>Initialize the Qwen2.5-3B model:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># hf checkpoint</span>
 huggingface-cli<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-3B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen2.5-3B
@@ -482,22 +519,107 @@ huggingface-cli<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen
 </pre></div>
 </div>
 </section>
-<section id="running-the-script">
-<h2>Running the Script<a class="headerlink" href="#running-the-script" title="Link to this heading">#</a></h2>
-<p>You need to configure your serper.dev API in <code class="docutils literal notranslate"><span class="pre">generate_with_search.py</span></code>:</p>
+<section id="configuration">
+<h2>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">#</a></h2>
+<section id="search-backend-configuration">
+<h3>Search Backend Configuration<a class="headerlink" href="#search-backend-configuration" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">generate_with_search.py</span></code> file supports both <strong>local search</strong> and <strong>Google search</strong> backends. Configure via the <code class="docutils literal notranslate"><span class="pre">SEARCH_R1_CONFIGS</span></code> dictionary:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">SEARCH_R1_CONFIGS</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">&quot;max_turns&quot;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="c1"># ============== General Configuration ==============</span>
+    <span class="s2">&quot;max_turns&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
     <span class="s2">&quot;topk&quot;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
-    <span class="s2">&quot;google_api_key&quot;</span><span class="p">:</span> <span class="s2">&quot;YOUR_API_KEY&quot;</span><span class="p">,</span>  <span class="c1"># Replace with your actual API key</span>
-    <span class="s2">&quot;snippet_only&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>  <span class="c1"># Set to True to only return snippets</span>
-    <span class="s2">&quot;proxy&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># Set to your proxy if needed</span>
     <span class="s2">&quot;search_concurrency&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
-    <span class="c1"># rm</span>
+
+    <span class="c1"># ============== Search Backend Selection ==============</span>
+    <span class="s2">&quot;search_backend&quot;</span><span class="p">:</span> <span class="s2">&quot;local&quot;</span><span class="p">,</span>  <span class="c1"># Options: &quot;local&quot; or &quot;google&quot;</span>
+
+    <span class="c1"># ============== Local Search Configuration ==============</span>
+    <span class="c1"># (Only used when search_backend=&quot;local&quot;)</span>
+    <span class="s2">&quot;local&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;search_url&quot;</span><span class="p">:</span> <span class="s2">&quot;http://127.0.0.1:8000/retrieve&quot;</span><span class="p">,</span>  <span class="c1"># URL of your local retrieval server</span>
+        <span class="s2">&quot;proxy&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">},</span>
+
+    <span class="c1"># ============== Google Search Configuration ==============</span>
+    <span class="c1"># (Only used when search_backend=&quot;google&quot;)</span>
+    <span class="s2">&quot;google&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;api_key&quot;</span><span class="p">:</span> <span class="s2">&quot;your_api_key_here&quot;</span><span class="p">,</span>  <span class="c1"># Replace with your actual serper.dev API key</span>
+        <span class="s2">&quot;snippet_only&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="s2">&quot;proxy&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">},</span>
+
+    <span class="c1"># ============== Log Probability Collection ==============</span>
+    <span class="s2">&quot;return_logprob&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>  <span class="c1"># Set to True to collect log probabilities (required for TIS)</span>
+
+    <span class="c1"># ============== Reward Model Configuration ==============</span>
     <span class="s2">&quot;format_score&quot;</span><span class="p">:</span> <span class="mf">0.2</span><span class="p">,</span>
 <span class="p">}</span>
 </pre></div>
 </div>
-<p>And run:</p>
+<section id="using-local-search">
+<h4>Using Local Search<a class="headerlink" href="#using-local-search" title="Link to this heading">#</a></h4>
+<ol class="arabic simple">
+<li><p>Set <code class="docutils literal notranslate"><span class="pre">&quot;search_backend&quot;:</span> <span class="pre">&quot;local&quot;</span></code></p></li>
+<li><p>Configure <code class="docutils literal notranslate"><span class="pre">&quot;local&quot;</span></code> section with your local retrieval server URL</p></li>
+<li><p>Start your local search server before running the training script</p></li>
+</ol>
+</section>
+<section id="using-google-search">
+<h4>Using Google Search<a class="headerlink" href="#using-google-search" title="Link to this heading">#</a></h4>
+<ol class="arabic simple">
+<li><p>Set <code class="docutils literal notranslate"><span class="pre">&quot;search_backend&quot;:</span> <span class="pre">&quot;google&quot;</span></code></p></li>
+<li><p>Configure <code class="docutils literal notranslate"><span class="pre">&quot;google&quot;</span></code> section with your serper.dev API key</p></li>
+<li><p>Get your API key from <a class="reference external" href="https://serper.dev">serper.dev</a></p></li>
+</ol>
+</section>
+</section>
+<section id="enabling-tis-trajectory-importance-sampling">
+<h3>Enabling TIS (Trajectory Importance Sampling)<a class="headerlink" href="#enabling-tis-trajectory-importance-sampling" title="Link to this heading">#</a></h3>
+<p>TIS requires log probability collection. To enable TIS:</p>
+<p><strong>1. In <code class="docutils literal notranslate"><span class="pre">generate_with_search.py</span></code>:</strong></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">SEARCH_R1_CONFIGS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="c1"># ... other configs</span>
+    <span class="s2">&quot;return_logprob&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>  <span class="c1"># Must be True for TIS</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>2. In <code class="docutils literal notranslate"><span class="pre">run_qwen2.5_3B.sh</span></code>:</strong></p>
+<p>Uncomment the TIS-related arguments in <code class="docutils literal notranslate"><span class="pre">GRPO_ARGS</span></code>:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">GRPO_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--advantage-estimator<span class="w"> </span>grpo
+<span class="w">   </span>--use-kl-loss
+<span class="w">   </span>--kl-loss-coef<span class="w"> </span><span class="m">0</span>.001
+<span class="w">   </span>--kl-loss-type<span class="w"> </span>low_var_kl
+<span class="w">   </span>--entropy-coef<span class="w"> </span><span class="m">0</span>.00
+<span class="w">   </span>--eps-clip<span class="w"> </span><span class="m">0</span>.2
+<span class="w">   </span>--eps-clip-high<span class="w"> </span><span class="m">0</span>.28
+
+<span class="w">   </span><span class="c1"># Uncomment to enable TIS</span>
+<span class="w">   </span>--use-tis
+<span class="o">)</span>
+</pre></div>
+</div>
+<p>And uncomment the TIS configuration paths in <code class="docutils literal notranslate"><span class="pre">CUSTOM_ARGS</span></code>:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CUSTOM_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--custom-generate-function-path<span class="w"> </span>generate_with_search.generate
+<span class="w">   </span>--custom-rm-path<span class="w"> </span>generate_with_search.reward_func
+
+<span class="w">   </span><span class="c1"># Uncomment to enable TIS</span>
+<span class="w">   </span>--custom-config-path<span class="w"> </span>examples/train_infer_mismatch_helper/mis.yaml
+<span class="w">   </span>--custom-tis-function-path<span class="w"> </span>examples.train_infer_mismatch_helper.mis.compute_mis_weights_with_cp
+<span class="o">)</span>
+</pre></div>
+</div>
+<p><strong>Important Notes:</strong></p>
+<ul class="simple">
+<li><p>TIS requires <code class="docutils literal notranslate"><span class="pre">return_logprob=True</span></code> in <code class="docutils literal notranslate"><span class="pre">SEARCH_R1_CONFIGS</span></code></p></li>
+<li><p>When collecting log probabilities, response postprocessing is automatically disabled to maintain token/logp alignment</p></li>
+<li><p>TIS adds computational overhead but can improve training efficiency</p></li>
+</ul>
+</section>
+</section>
+<section id="running-the-script">
+<h2>Running the Script<a class="headerlink" href="#running-the-script" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>slime/
 bash<span class="w"> </span>examples/search-r1/run_qwen2.5_3B.sh
 </pre></div>
@@ -513,6 +635,137 @@ bash<span class="w"> </span>examples/search-r1/run_qwen2.5_3B.sh
 </pre></div>
 </div>
 <p>These are the <code class="docutils literal notranslate"><span class="pre">generate</span></code> and <code class="docutils literal notranslate"><span class="pre">reward_func</span></code> functions in <code class="docutils literal notranslate"><span class="pre">generate_with_search.py</span></code>.</p>
+</section>
+<section id="appendix-setting-up-local-retriever">
+<h2>Appendix: Setting up Local Retriever<a class="headerlink" href="#appendix-setting-up-local-retriever" title="Link to this heading">#</a></h2>
+<p>This section provides detailed instructions for setting up the local dense retriever for use with the local search backend.</p>
+<section id="prerequisites">
+<h3>Prerequisites<a class="headerlink" href="#prerequisites" title="Link to this heading">#</a></h3>
+<p>The local retriever requires a separate conda environment to avoid conflicts with the training environment. It uses GPU for efficient retrieval.</p>
+</section>
+<section id="step-1-install-conda">
+<h3>Step 1: Install Conda<a class="headerlink" href="#step-1-install-conda" title="Link to this heading">#</a></h3>
+<p>If you don’t have conda installed, run the following commands:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Download and install conda</span>
+wget<span class="w"> </span>https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh<span class="w"> </span>-O<span class="w"> </span>~/miniconda.sh
+bash<span class="w"> </span>~/miniconda.sh<span class="w"> </span>-b<span class="w"> </span>-p<span class="w"> </span><span class="nv">$HOME</span>/miniconda3
+<span class="nb">source</span><span class="w"> </span>~/miniconda3/etc/profile.d/conda.sh
+conda<span class="w"> </span>init
+<span class="nb">source</span><span class="w"> </span>~/.bashrc
+
+<span class="c1"># Accept conda terms of service</span>
+conda<span class="w"> </span>tos<span class="w"> </span>accept<span class="w"> </span>--override-channels<span class="w"> </span>--channel<span class="w"> </span>https://repo.anaconda.com/pkgs/main
+conda<span class="w"> </span>tos<span class="w"> </span>accept<span class="w"> </span>--override-channels<span class="w"> </span>--channel<span class="w"> </span>https://repo.anaconda.com/pkgs/r
+</pre></div>
+</div>
+</section>
+<section id="step-2-create-retriever-environment">
+<h3>Step 2: Create Retriever Environment<a class="headerlink" href="#step-2-create-retriever-environment" title="Link to this heading">#</a></h3>
+<p>Create and activate a conda environment with Python 3.10:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Create environment</span>
+conda<span class="w"> </span>create<span class="w"> </span>-n<span class="w"> </span>retriever<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.10<span class="w"> </span>-y
+conda<span class="w"> </span>activate<span class="w"> </span>retriever
+
+<span class="c1"># Install PyTorch with CUDA support</span>
+conda<span class="w"> </span>install<span class="w"> </span><span class="nv">pytorch</span><span class="o">==</span><span class="m">2</span>.4.0<span class="w"> </span><span class="nv">torchvision</span><span class="o">==</span><span class="m">0</span>.19.0<span class="w"> </span><span class="nv">torchaudio</span><span class="o">==</span><span class="m">2</span>.4.0<span class="w"> </span>pytorch-cuda<span class="o">=</span><span class="m">12</span>.1<span class="w"> </span>-c<span class="w"> </span>pytorch<span class="w"> </span>-c<span class="w"> </span>nvidia<span class="w"> </span>-y
+
+<span class="c1"># Install required packages</span>
+pip<span class="w"> </span>install<span class="w"> </span>transformers<span class="w"> </span>datasets<span class="w"> </span>pyserini<span class="w"> </span>huggingface_hub
+conda<span class="w"> </span>install<span class="w"> </span>faiss-gpu<span class="o">=</span><span class="m">1</span>.8.0<span class="w"> </span>-c<span class="w"> </span>pytorch<span class="w"> </span>-c<span class="w"> </span>nvidia<span class="w"> </span>-y
+pip<span class="w"> </span>install<span class="w"> </span>uvicorn<span class="w"> </span>fastapi
+</pre></div>
+</div>
+</section>
+<section id="step-3-download-index-and-corpus">
+<h3>Step 3: Download Index and Corpus<a class="headerlink" href="#step-3-download-index-and-corpus" title="Link to this heading">#</a></h3>
+<p><strong>Note:</strong> The local retrieval files are large. You’ll need approximately <strong>60-70 GB</strong> for download and <strong>132 GB</strong> after extraction. Make sure you have sufficient disk space.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Set your save path</span>
+<span class="nv">save_path</span><span class="o">=</span>/root/Index
+
+<span class="c1"># Download the index and corpus files</span>
+python<span class="w"> </span>/root/slime/examples/search-r1/local_dense_retriever/download.py<span class="w"> </span>--save_path<span class="w"> </span><span class="nv">$save_path</span>
+
+<span class="c1"># Combine split index files</span>
+cat<span class="w"> </span><span class="nv">$save_path</span>/part_*<span class="w"> </span>&gt;<span class="w"> </span><span class="nv">$save_path</span>/e5_Flat.index
+
+<span class="c1"># Decompress the corpus</span>
+gzip<span class="w"> </span>-d<span class="w"> </span><span class="nv">$save_path</span>/wiki-18.jsonl.gz
+</pre></div>
+</div>
+</section>
+<section id="step-4-start-local-retrieval-server">
+<h3>Step 4: Start Local Retrieval Server<a class="headerlink" href="#step-4-start-local-retrieval-server" title="Link to this heading">#</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># If you encounter &quot;conda not found&quot; error, run:</span>
+<span class="c1"># source ~/miniconda3/etc/profile.d/conda.sh</span>
+<span class="c1"># conda init</span>
+<span class="c1"># source ~/.bashrc</span>
+
+<span class="c1"># Activate retriever environment</span>
+conda<span class="w"> </span>activate<span class="w"> </span>retriever
+
+<span class="c1"># Set paths</span>
+<span class="nv">save_path</span><span class="o">=</span>/root/Index
+<span class="nv">index_file</span><span class="o">=</span><span class="nv">$save_path</span>/e5_Flat.index
+<span class="nv">corpus_file</span><span class="o">=</span><span class="nv">$save_path</span>/wiki-18.jsonl
+<span class="nv">retriever_name</span><span class="o">=</span>e5
+<span class="nv">retriever_path</span><span class="o">=</span>intfloat/e5-base-v2
+
+<span class="c1"># Start the retrieval server</span>
+python<span class="w"> </span>/root/slime/examples/search-r1/local_dense_retriever/retrieval_server.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--index_path<span class="w"> </span><span class="nv">$index_file</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--corpus_path<span class="w"> </span><span class="nv">$corpus_file</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--topk<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--retriever_name<span class="w"> </span><span class="nv">$retriever_name</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--retriever_model<span class="w"> </span><span class="nv">$retriever_path</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--faiss_gpu
+</pre></div>
+</div>
+<p><strong>Important Notes:</strong></p>
+<ul class="simple">
+<li><p>First startup will download the model and load the index, which may take a few minutes</p></li>
+<li><p>Normal startup time (excluding downloads): 1-2 minutes</p></li>
+<li><p>GPU memory usage per GPU: approximately 5-7 GB</p></li>
+<li><p>The local search engine’s Python process will not terminate when the shell closes</p></li>
+<li><p>To restart the server: <code class="docutils literal notranslate"><span class="pre">lsof</span> <span class="pre">-i</span> <span class="pre">:8000</span></code> to find the PID, then kill it and restart</p></li>
+</ul>
+</section>
+<section id="step-5-start-training">
+<h3>Step 5: Start Training<a class="headerlink" href="#step-5-start-training" title="Link to this heading">#</a></h3>
+<p>Make sure you’re <strong>NOT</strong> in the retriever conda environment. If you are, run <code class="docutils literal notranslate"><span class="pre">conda</span> <span class="pre">deactivate</span></code>.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
+
+<span class="c1"># Set your wandb key (optional)</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">WANDB_KEY</span><span class="o">=</span><span class="s2">&quot;your_wandb_key_here&quot;</span>
+
+<span class="c1"># If ray process is stuck, try:</span>
+<span class="c1"># rm -rf /root/.cache</span>
+<span class="c1"># rm -rf /root/.*</span>
+
+<span class="c1"># Run the training script</span>
+bash<span class="w"> </span>/root/slime/examples/search-r1/run_qwen2.5_3B.sh
+</pre></div>
+</div>
+</section>
+<section id="troubleshooting">
+<h3>Troubleshooting<a class="headerlink" href="#troubleshooting" title="Link to this heading">#</a></h3>
+<p><strong>Ray process stuck:</strong></p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>rm<span class="w"> </span>-rf<span class="w"> </span>/root/.cache
+<span class="c1"># If still stuck:</span>
+rm<span class="w"> </span>-rf<span class="w"> </span>/root/.*
+</pre></div>
+</div>
+<p><strong>Conda environment issues:</strong></p>
+<ul class="simple">
+<li><p>Make sure you deactivate the retriever environment before running training</p></li>
+<li><p>Verify you’re using the base Python environment for training</p></li>
+</ul>
+<p><strong>Retrieval server not responding:</strong></p>
+<ul class="simple">
+<li><p>Check if the server is running: <code class="docutils literal notranslate"><span class="pre">lsof</span> <span class="pre">-i</span> <span class="pre">:8000</span></code></p></li>
+<li><p>Verify GPU availability: <code class="docutils literal notranslate"><span class="pre">nvidia-smi</span></code></p></li>
+<li><p>Check logs for any error messages</p></li>
+</ul>
+</section>
 </section>
 </section>
 
@@ -562,8 +815,27 @@ bash<span class="w"> </span>examples/search-r1/run_qwen2.5_3B.sh
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#environment-setup">Environment Setup</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#search-backend-configuration">Search Backend Configuration</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#using-local-search">Using Local Search</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#using-google-search">Using Google Search</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#enabling-tis-trajectory-importance-sampling">Enabling TIS (Trajectory Importance Sampling)</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-script">Running the Script</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#code-structure">Code Structure</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#appendix-setting-up-local-retriever">Appendix: Setting up Local Retriever</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">Prerequisites</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-1-install-conda">Step 1: Install Conda</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-2-create-retriever-environment">Step 2: Create Retriever Environment</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-3-download-index-and-corpus">Step 3: Download Index and Corpus</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-4-start-local-retrieval-server">Step 4: Start Local Retrieval Server</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#step-5-start-training">Step 5: Start Training</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#troubleshooting">Troubleshooting</a></li>
+</ul>
+</li>
 </ul>
   </nav></div>
 
@@ -597,7 +869,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 02, 2025.
+  Last updated on Nov 11, 2025.
   <br/>
 </p>
   </div>

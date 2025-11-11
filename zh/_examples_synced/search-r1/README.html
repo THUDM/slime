@@ -54,7 +54,7 @@
     <link rel="prev" title="SFT Qwen3-4B-Base" href="../../examples/qwen3-4b-base-openhermes.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2025 年 11 月 02 日"/>
+    <meta name="docbuild:last-update" content="2025 年 11 月 11 日"/>
   </head>
   
   
@@ -431,8 +431,27 @@ document.write(`
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">配置环境</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">运行脚本</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">代码结构</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">配置说明</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">搜索后端配置</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">使用本地搜索</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#google">使用 Google 搜索</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tis">启用 TIS（轨迹重要性采样）</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">运行脚本</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">代码结构</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">附录：配置本地检索器</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">前置条件</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#conda">步骤 1：安装 Conda</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">步骤 2：创建检索器环境</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">步骤 3：下载索引和语料库</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">步骤 4：启动本地检索服务器</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">步骤 5：启动训练</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id13">故障排查</a></li>
+</ul>
+</li>
 </ul>
             </nav>
         </div>
@@ -458,12 +477,30 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 pip<span class="w"> </span>install<span class="w"> </span>chardet
 </pre></div>
 </div>
-<p>请参照 Search-R1 中提供的脚本下载数据：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/PeterGriffinJin/Search-R1.git
+<p>下载并准备训练数据：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/
+git<span class="w"> </span>clone<span class="w"> </span>https://github.com/PeterGriffinJin/Search-R1.git
 <span class="nb">cd</span><span class="w"> </span>Search-R1/
-python<span class="w"> </span>scripts/data_process/nq_search.py<span class="w"> </span>--local_dir<span class="w"> </span>/root/nq_search/
+
+<span class="c1"># 设置工作目录</span>
+<span class="nv">WORK_DIR</span><span class="o">=</span>/root/Search-R1
+<span class="nv">LOCAL_DIR</span><span class="o">=</span><span class="nv">$WORK_DIR</span>/data/nq_hotpotqa_train
+
+<span class="c1"># 处理多个数据集的搜索格式训练文件</span>
+<span class="nv">DATA</span><span class="o">=</span>nq,hotpotqa
+python<span class="w"> </span><span class="nv">$WORK_DIR</span>/scripts/data_process/qa_search_train_merge.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--local_dir<span class="w"> </span><span class="nv">$LOCAL_DIR</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--data_sources<span class="w"> </span><span class="nv">$DATA</span>
+
+<span class="c1"># （可选）处理多个数据集的搜索格式测试文件</span>
+<span class="c1"># 注意：最终文件未经过打乱</span>
+<span class="nv">DATA</span><span class="o">=</span>nq,triviaqa,popqa,hotpotqa,2wikimultihopqa,musique,bamboogle
+python<span class="w"> </span><span class="nv">$WORK_DIR</span>/scripts/data_process/qa_search_test_merge.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--local_dir<span class="w"> </span><span class="nv">$LOCAL_DIR</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--data_sources<span class="w"> </span><span class="nv">$DATA</span>
 </pre></div>
 </div>
+<p><strong>注意：</strong> 如果您计划使用本地搜索后端，请参阅附录了解如何设置本地检索服务器。</p>
 <p>初始化 Qwen2.5-3B 模型：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># hf checkpoint</span>
 huggingface-cli<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-3B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen2.5-3B
@@ -479,28 +516,113 @@ huggingface-cli<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen
 </div>
 </section>
 <section id="id2">
-<h2>运行脚本<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
-<p>需要将你的 serper.dev API 配置在 <code class="docutils literal notranslate"><span class="pre">generate_with_search.py</span></code> 中：</p>
+<h2>配置说明<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<section id="id3">
+<h3>搜索后端配置<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">generate_with_search.py</span></code> 文件支持<strong>本地搜索</strong>和 <strong>Google 搜索</strong>两种后端。通过 <code class="docutils literal notranslate"><span class="pre">SEARCH_R1_CONFIGS</span></code> 字典进行配置：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">SEARCH_R1_CONFIGS</span> <span class="o">=</span> <span class="p">{</span>
-    <span class="s2">&quot;max_turns&quot;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
+    <span class="c1"># ============== 通用配置 ==============</span>
+    <span class="s2">&quot;max_turns&quot;</span><span class="p">:</span> <span class="mi">2</span><span class="p">,</span>
     <span class="s2">&quot;topk&quot;</span><span class="p">:</span> <span class="mi">3</span><span class="p">,</span>
-    <span class="s2">&quot;google_api_key&quot;</span><span class="p">:</span> <span class="s2">&quot;YOUR_API_KEY&quot;</span><span class="p">,</span>  <span class="c1"># Replace with your actual API key</span>
-    <span class="s2">&quot;snippet_only&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>  <span class="c1"># Set to True to only return snippets</span>
-    <span class="s2">&quot;proxy&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>  <span class="c1"># Set to your proxy if needed</span>
     <span class="s2">&quot;search_concurrency&quot;</span><span class="p">:</span> <span class="mi">256</span><span class="p">,</span>
-    <span class="c1"># rm</span>
+
+    <span class="c1"># ============== 搜索后端选择 ==============</span>
+    <span class="s2">&quot;search_backend&quot;</span><span class="p">:</span> <span class="s2">&quot;local&quot;</span><span class="p">,</span>  <span class="c1"># 选项：&quot;local&quot; 或 &quot;google&quot;</span>
+
+    <span class="c1"># ============== 本地搜索配置 ==============</span>
+    <span class="c1"># (仅当 search_backend=&quot;local&quot; 时使用)</span>
+    <span class="s2">&quot;local&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;search_url&quot;</span><span class="p">:</span> <span class="s2">&quot;http://127.0.0.1:8000/retrieve&quot;</span><span class="p">,</span>  <span class="c1"># 本地检索服务器的 URL</span>
+        <span class="s2">&quot;proxy&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">},</span>
+
+    <span class="c1"># ============== Google 搜索配置 ==============</span>
+    <span class="c1"># (仅当 search_backend=&quot;google&quot; 时使用)</span>
+    <span class="s2">&quot;google&quot;</span><span class="p">:</span> <span class="p">{</span>
+        <span class="s2">&quot;api_key&quot;</span><span class="p">:</span> <span class="s2">&quot;your_api_key_here&quot;</span><span class="p">,</span>  <span class="c1"># 替换为你的 serper.dev API key</span>
+        <span class="s2">&quot;snippet_only&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+        <span class="s2">&quot;proxy&quot;</span><span class="p">:</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="p">},</span>
+
+    <span class="c1"># ============== 日志概率收集 ==============</span>
+    <span class="s2">&quot;return_logprob&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>  <span class="c1"># 设置为 True 以收集日志概率（TIS 所需）</span>
+
+    <span class="c1"># ============== 奖励模型配置 ==============</span>
     <span class="s2">&quot;format_score&quot;</span><span class="p">:</span> <span class="mf">0.2</span><span class="p">,</span>
 <span class="p">}</span>
 </pre></div>
 </div>
-<p>并运行：</p>
+<section id="id4">
+<h4>使用本地搜索<a class="headerlink" href="#id4" title="Link to this heading">#</a></h4>
+<ol class="arabic simple">
+<li><p>设置 <code class="docutils literal notranslate"><span class="pre">&quot;search_backend&quot;:</span> <span class="pre">&quot;local&quot;</span></code></p></li>
+<li><p>在 <code class="docutils literal notranslate"><span class="pre">&quot;local&quot;</span></code> 部分配置本地检索服务器 URL</p></li>
+<li><p>运行训练脚本前先启动本地搜索服务器</p></li>
+</ol>
+</section>
+<section id="google">
+<h4>使用 Google 搜索<a class="headerlink" href="#google" title="Link to this heading">#</a></h4>
+<ol class="arabic simple">
+<li><p>设置 <code class="docutils literal notranslate"><span class="pre">&quot;search_backend&quot;:</span> <span class="pre">&quot;google&quot;</span></code></p></li>
+<li><p>在 <code class="docutils literal notranslate"><span class="pre">&quot;google&quot;</span></code> 部分配置你的 serper.dev API key</p></li>
+<li><p>从 <a class="reference external" href="https://serper.dev">serper.dev</a> 获取 API key</p></li>
+</ol>
+</section>
+</section>
+<section id="tis">
+<h3>启用 TIS（轨迹重要性采样）<a class="headerlink" href="#tis" title="Link to this heading">#</a></h3>
+<p>TIS 需要收集日志概率。启用 TIS 的步骤：</p>
+<p><strong>1. 在 <code class="docutils literal notranslate"><span class="pre">generate_with_search.py</span></code> 中：</strong></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">SEARCH_R1_CONFIGS</span> <span class="o">=</span> <span class="p">{</span>
+    <span class="c1"># ... 其他配置</span>
+    <span class="s2">&quot;return_logprob&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>  <span class="c1"># TIS 必须设置为 True</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>2. 在 <code class="docutils literal notranslate"><span class="pre">run_qwen2.5_3B.sh</span></code> 中：</strong></p>
+<p>在 <code class="docutils literal notranslate"><span class="pre">GRPO_ARGS</span></code> 中取消注释 TIS 相关参数：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">GRPO_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--advantage-estimator<span class="w"> </span>grpo
+<span class="w">   </span>--use-kl-loss
+<span class="w">   </span>--kl-loss-coef<span class="w"> </span><span class="m">0</span>.001
+<span class="w">   </span>--kl-loss-type<span class="w"> </span>low_var_kl
+<span class="w">   </span>--entropy-coef<span class="w"> </span><span class="m">0</span>.00
+<span class="w">   </span>--eps-clip<span class="w"> </span><span class="m">0</span>.2
+<span class="w">   </span>--eps-clip-high<span class="w"> </span><span class="m">0</span>.28
+
+<span class="w">   </span><span class="c1"># 取消注释以启用 TIS</span>
+<span class="w">   </span>--use-tis
+<span class="o">)</span>
+</pre></div>
+</div>
+<p>并在 <code class="docutils literal notranslate"><span class="pre">CUSTOM_ARGS</span></code> 中取消注释 TIS 配置路径：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CUSTOM_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--custom-generate-function-path<span class="w"> </span>generate_with_search.generate
+<span class="w">   </span>--custom-rm-path<span class="w"> </span>generate_with_search.reward_func
+
+<span class="w">   </span><span class="c1"># 取消注释以启用 TIS</span>
+<span class="w">   </span>--custom-config-path<span class="w"> </span>examples/train_infer_mismatch_helper/mis.yaml
+<span class="w">   </span>--custom-tis-function-path<span class="w"> </span>examples.train_infer_mismatch_helper.mis.compute_mis_weights_with_cp
+<span class="o">)</span>
+</pre></div>
+</div>
+<p><strong>重要注意事项：</strong></p>
+<ul class="simple">
+<li><p>TIS 需要在 <code class="docutils literal notranslate"><span class="pre">SEARCH_R1_CONFIGS</span></code> 中设置 <code class="docutils literal notranslate"><span class="pre">return_logprob=True</span></code></p></li>
+<li><p>收集日志概率时，响应后处理会自动禁用以保持 token/logp 对齐</p></li>
+<li><p>TIS 会增加计算开销，但可以提高训练效率</p></li>
+</ul>
+</section>
+</section>
+<section id="id5">
+<h2>运行脚本<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>slime/
 bash<span class="w"> </span>examples/search-r1/run_qwen2.5_3B.sh
 </pre></div>
 </div>
 </section>
-<section id="id3">
-<h2>代码结构<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<section id="id6">
+<h2>代码结构<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
 <p>为了实现多轮 + 工具调用，在 slime 中只需要实现一个自定义的数据生成函数，以及一个任务所需的 reward model，对应启动脚本中的这 2 个配置项：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CUSTOM_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--custom-generate-function-path<span class="w"> </span>generate_with_search.generate
@@ -509,6 +631,137 @@ bash<span class="w"> </span>examples/search-r1/run_qwen2.5_3B.sh
 </pre></div>
 </div>
 <p>也就是 <code class="docutils literal notranslate"><span class="pre">generate_with_search.py</span></code> 中的 <code class="docutils literal notranslate"><span class="pre">generate</span></code> 和 <code class="docutils literal notranslate"><span class="pre">reward_func</span></code> 两个函数。</p>
+</section>
+<section id="id7">
+<h2>附录：配置本地检索器<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
+<p>本节提供详细的本地密集检索器设置说明，用于本地搜索后端。</p>
+<section id="id8">
+<h3>前置条件<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
+<p>本地检索器需要单独的 conda 环境，以避免与训练环境冲突。它使用 GPU 进行高效检索。</p>
+</section>
+<section id="conda">
+<h3>步骤 1：安装 Conda<a class="headerlink" href="#conda" title="Link to this heading">#</a></h3>
+<p>如果您还没有安装 conda，运行以下命令：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 下载并安装 conda</span>
+wget<span class="w"> </span>https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh<span class="w"> </span>-O<span class="w"> </span>~/miniconda.sh
+bash<span class="w"> </span>~/miniconda.sh<span class="w"> </span>-b<span class="w"> </span>-p<span class="w"> </span><span class="nv">$HOME</span>/miniconda3
+<span class="nb">source</span><span class="w"> </span>~/miniconda3/etc/profile.d/conda.sh
+conda<span class="w"> </span>init
+<span class="nb">source</span><span class="w"> </span>~/.bashrc
+
+<span class="c1"># 接受 conda 服务条款</span>
+conda<span class="w"> </span>tos<span class="w"> </span>accept<span class="w"> </span>--override-channels<span class="w"> </span>--channel<span class="w"> </span>https://repo.anaconda.com/pkgs/main
+conda<span class="w"> </span>tos<span class="w"> </span>accept<span class="w"> </span>--override-channels<span class="w"> </span>--channel<span class="w"> </span>https://repo.anaconda.com/pkgs/r
+</pre></div>
+</div>
+</section>
+<section id="id9">
+<h3>步骤 2：创建检索器环境<a class="headerlink" href="#id9" title="Link to this heading">#</a></h3>
+<p>创建并激活一个 Python 3.10 的 conda 环境：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 创建环境</span>
+conda<span class="w"> </span>create<span class="w"> </span>-n<span class="w"> </span>retriever<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.10<span class="w"> </span>-y
+conda<span class="w"> </span>activate<span class="w"> </span>retriever
+
+<span class="c1"># 安装带 CUDA 支持的 PyTorch</span>
+conda<span class="w"> </span>install<span class="w"> </span><span class="nv">pytorch</span><span class="o">==</span><span class="m">2</span>.4.0<span class="w"> </span><span class="nv">torchvision</span><span class="o">==</span><span class="m">0</span>.19.0<span class="w"> </span><span class="nv">torchaudio</span><span class="o">==</span><span class="m">2</span>.4.0<span class="w"> </span>pytorch-cuda<span class="o">=</span><span class="m">12</span>.1<span class="w"> </span>-c<span class="w"> </span>pytorch<span class="w"> </span>-c<span class="w"> </span>nvidia<span class="w"> </span>-y
+
+<span class="c1"># 安装所需的包</span>
+pip<span class="w"> </span>install<span class="w"> </span>transformers<span class="w"> </span>datasets<span class="w"> </span>pyserini<span class="w"> </span>huggingface_hub
+conda<span class="w"> </span>install<span class="w"> </span>faiss-gpu<span class="o">=</span><span class="m">1</span>.8.0<span class="w"> </span>-c<span class="w"> </span>pytorch<span class="w"> </span>-c<span class="w"> </span>nvidia<span class="w"> </span>-y
+pip<span class="w"> </span>install<span class="w"> </span>uvicorn<span class="w"> </span>fastapi
+</pre></div>
+</div>
+</section>
+<section id="id10">
+<h3>步骤 3：下载索引和语料库<a class="headerlink" href="#id10" title="Link to this heading">#</a></h3>
+<p><strong>注意：</strong> 本地检索文件体积较大。下载需要约 <strong>60-70 GB</strong> 空间，解压后约 <strong>132 GB</strong>。请确保有足够的磁盘空间。</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 设置保存路径</span>
+<span class="nv">save_path</span><span class="o">=</span>/root/Index
+
+<span class="c1"># 下载索引和语料库文件</span>
+python<span class="w"> </span>/root/slime/examples/search-r1/local_dense_retriever/download.py<span class="w"> </span>--save_path<span class="w"> </span><span class="nv">$save_path</span>
+
+<span class="c1"># 合并分割的索引文件</span>
+cat<span class="w"> </span><span class="nv">$save_path</span>/part_*<span class="w"> </span>&gt;<span class="w"> </span><span class="nv">$save_path</span>/e5_Flat.index
+
+<span class="c1"># 解压语料库</span>
+gzip<span class="w"> </span>-d<span class="w"> </span><span class="nv">$save_path</span>/wiki-18.jsonl.gz
+</pre></div>
+</div>
+</section>
+<section id="id11">
+<h3>步骤 4：启动本地检索服务器<a class="headerlink" href="#id11" title="Link to this heading">#</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 如果遇到 &quot;conda not found&quot; 错误，运行：</span>
+<span class="c1"># source ~/miniconda3/etc/profile.d/conda.sh</span>
+<span class="c1"># conda init</span>
+<span class="c1"># source ~/.bashrc</span>
+
+<span class="c1"># 激活检索器环境</span>
+conda<span class="w"> </span>activate<span class="w"> </span>retriever
+
+<span class="c1"># 设置路径</span>
+<span class="nv">save_path</span><span class="o">=</span>/root/Index
+<span class="nv">index_file</span><span class="o">=</span><span class="nv">$save_path</span>/e5_Flat.index
+<span class="nv">corpus_file</span><span class="o">=</span><span class="nv">$save_path</span>/wiki-18.jsonl
+<span class="nv">retriever_name</span><span class="o">=</span>e5
+<span class="nv">retriever_path</span><span class="o">=</span>intfloat/e5-base-v2
+
+<span class="c1"># 启动检索服务器</span>
+python<span class="w"> </span>/root/slime/examples/search-r1/local_dense_retriever/retrieval_server.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--index_path<span class="w"> </span><span class="nv">$index_file</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--corpus_path<span class="w"> </span><span class="nv">$corpus_file</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--topk<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--retriever_name<span class="w"> </span><span class="nv">$retriever_name</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--retriever_model<span class="w"> </span><span class="nv">$retriever_path</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--faiss_gpu
+</pre></div>
+</div>
+<p><strong>重要注意事项：</strong></p>
+<ul class="simple">
+<li><p>首次启动会下载模型和加载索引，可能需要几分钟</p></li>
+<li><p>正常启动时间（不包括下载）：1-2 分钟</p></li>
+<li><p>每张 GPU 显存占用：约 5-7 GB</p></li>
+<li><p>本地搜索引擎的 Python 进程不会随着 shell 关闭而终止</p></li>
+<li><p>重启服务器：使用 <code class="docutils literal notranslate"><span class="pre">lsof</span> <span class="pre">-i</span> <span class="pre">:8000</span></code> 找到 PID，然后 kill 并重启</p></li>
+</ul>
+</section>
+<section id="id12">
+<h3>步骤 5：启动训练<a class="headerlink" href="#id12" title="Link to this heading">#</a></h3>
+<p>确保您<strong>不在</strong> retriever conda 环境中。如果在，请运行 <code class="docutils literal notranslate"><span class="pre">conda</span> <span class="pre">deactivate</span></code>。</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
+
+<span class="c1"># 设置您的 wandb key（可选）</span>
+<span class="nb">export</span><span class="w"> </span><span class="nv">WANDB_KEY</span><span class="o">=</span><span class="s2">&quot;your_wandb_key_here&quot;</span>
+
+<span class="c1"># 如果 ray 进程卡住，尝试：</span>
+<span class="c1"># rm -rf /root/.cache</span>
+<span class="c1"># rm -rf /root/.*</span>
+
+<span class="c1"># 运行训练脚本</span>
+bash<span class="w"> </span>/root/slime/examples/search-r1/run_qwen2.5_3B.sh
+</pre></div>
+</div>
+</section>
+<section id="id13">
+<h3>故障排查<a class="headerlink" href="#id13" title="Link to this heading">#</a></h3>
+<p><strong>Ray 进程卡住：</strong></p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>rm<span class="w"> </span>-rf<span class="w"> </span>/root/.cache
+<span class="c1"># 如果仍然卡住：</span>
+rm<span class="w"> </span>-rf<span class="w"> </span>/root/.*
+</pre></div>
+</div>
+<p><strong>Conda 环境问题：</strong></p>
+<ul class="simple">
+<li><p>确保在运行训练前退出 retriever 环境</p></li>
+<li><p>验证训练使用的是基础 Python 环境</p></li>
+</ul>
+<p><strong>检索服务器无响应：</strong></p>
+<ul class="simple">
+<li><p>检查服务器是否运行：<code class="docutils literal notranslate"><span class="pre">lsof</span> <span class="pre">-i</span> <span class="pre">:8000</span></code></p></li>
+<li><p>验证 GPU 可用性：<code class="docutils literal notranslate"><span class="pre">nvidia-smi</span></code></p></li>
+<li><p>检查日志查看错误信息</p></li>
+</ul>
+</section>
 </section>
 </section>
 
@@ -558,8 +811,27 @@ bash<span class="w"> </span>examples/search-r1/run_qwen2.5_3B.sh
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">配置环境</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">运行脚本</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">代码结构</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">配置说明</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">搜索后端配置</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">使用本地搜索</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#google">使用 Google 搜索</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tis">启用 TIS（轨迹重要性采样）</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">运行脚本</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">代码结构</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">附录：配置本地检索器</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">前置条件</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#conda">步骤 1：安装 Conda</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">步骤 2：创建检索器环境</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">步骤 3：下载索引和语料库</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">步骤 4：启动本地检索服务器</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">步骤 5：启动训练</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id13">故障排查</a></li>
+</ul>
+</li>
 </ul>
   </nav></div>
 
@@ -593,7 +865,7 @@ bash<span class="w"> </span>examples/search-r1/run_qwen2.5_3B.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2025 年 11 月 02 日.
+  最后更新于 2025 年 11 月 11 日.
   <br/>
 </p>
   </div>
