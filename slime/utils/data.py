@@ -48,6 +48,7 @@ class Dataset:
         self,
         path,
         tokenizer,
+        processor,
         max_length,
         *,
         prompt_key="text",

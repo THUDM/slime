@@ -8,7 +8,6 @@ from typing import Any, Callable, Optional, Union
 
 from PIL import Image
 from tqdm import tqdm
-from transformers import AutoTokenizer
 
 from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from slime.rollout.filter_hub.base_types import DynamicFilterOutput
@@ -18,22 +17,12 @@ from slime.utils.eval_config import EvalDatasetConfig
 from slime.utils.http_utils import get, post
 from slime.utils.mask_utils import get_response_lengths
 from slime.utils.misc import SingletonMeta, load_function
+from slime.utils.tokenizer_utils import load_processor, load_tokenizer
 from slime.utils.types import Sample
 
 from .rm_hub import async_rm, batched_async_rm
 
 __all__ = ["generate_rollout"]
-
-
-def _load_and_encode_image(path: str) -> str:
-    """Load an image from path, ensure RGB, encode as JPEG base64 string."""
-    with Image.open(path) as image:
-        buffer = io.BytesIO()
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-        image.save(buffer, format="JPEG")
-        return base64.b64encode(buffer.getvalue()).decode("utf-8")
-
 
 class GenerateState(metaclass=SingletonMeta):
     """
@@ -43,7 +32,14 @@ class GenerateState(metaclass=SingletonMeta):
     def __init__(self, args: Namespace) -> None:
         # persistant state for the generation process
         self.args = args
-        self.tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
+
+        # Load processor for VLM if multimodal_keys is set
+        if getattr(args, "multimodal_keys", None):
+            self.processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
+        else:
+            self.processor = None
+
         self.semaphore = asyncio.Semaphore(
             args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
         )
@@ -86,6 +82,20 @@ class GenerateState(metaclass=SingletonMeta):
         self.remaining_batch_size += len(samples)
 
 
+def get_generate_inputs(prompt, tokenizer, processor):
+    # temporary solution, will write image utils for slime later
+    from qwen_vl_utils import process_vision_info
+
+    image_inputs, video_inputs = process_vision_info(prompt)
+
+    text = tokenizer.apply_chat_template(prompt, tokenize=False)
+    if processor and (image_inputs or video_inputs):
+        prompt_ids = processor(text, images=image_inputs, videos=video_inputs, return_tensors="pt")["input_ids"]
+    else:
+        prompt_ids = tokenizer.encode(text, add_special_tokens=False)
+    return prompt_ids, image_inputs, video_inputs
+
+
 async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, Any]) -> Sample:
     """Generate using traditional SGLang router with token-based workflow"""
     state = GenerateState(args)
@@ -95,31 +105,9 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
     ), f"Sample status is {sample.status}"
 
-    # Process prompt to create text and image payload
-    image_data = []
-    if isinstance(sample.prompt, str):
-        text_prompt = sample.prompt
-    else:  # Multimodal prompt (list of dicts)
-        text_prompt = ""
-        # sglang uses a placeholder to insert image features
-        image_token = state.tokenizer.special_tokens_map.get("image_token", "<image>")
-        for part in sample.prompt:
-            if part["type"] == "text":
-                text_prompt += part["text"]
-            elif part["type"] == "image":
-                text_prompt += image_token
-                try:
-                    img_b64 = await asyncio.to_thread(_load_and_encode_image, part["path"])
-                    image_data.append(img_b64)
-                except Exception as e:
-                    print(f"Error processing image {part['path']}: {e}")
-                    sample.status = Sample.Status.ABORTED
-                    return sample
-
+    prompt_ids, image_inputs, video_inputs = get_generate_inputs(sample.prompt, state.tokenizer, state.processor)
     if len(sample.response) > 0:
-        # Adjust max_new_tokens for subsequent generation turns
-        prompt_len = len(state.tokenizer(text_prompt, add_special_tokens=False)["input_ids"])
-        sampling_params["max_new_tokens"] -= len(sample.tokens) - prompt_len
+        sampling_params["max_new_tokens"] -= len(sample.tokens) - len(prompt_ids)
 
     assert (
         sampling_params["max_new_tokens"] >= 0
@@ -133,17 +121,17 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         "sampling_params": sampling_params,
         "return_logprob": True,
     }
-    if image_data:
-        payload["image_data"] = image_data
+    if image_inputs or video_inputs:
+        payload["image_data"] = image_inputs
+        payload["video_data"] = video_inputs
 
     # Use existing tokens for multi-turn or tokenize the new prompt
     if len(sample.response) > 0:
         payload["input_ids"] = sample.tokens
     else:
-        prompt_token_ids = state.tokenizer(text_prompt, add_special_tokens=False)["input_ids"]
-        payload["input_ids"] = prompt_token_ids
+        payload["input_ids"] = prompt_ids
         if not sample.tokens:  # Initialize sample.tokens for the first turn
-            sample.tokens = prompt_token_ids
+            sample.tokens = prompt_ids
 
     output = await post(url, payload)
 
@@ -478,10 +466,12 @@ async def eval_rollout_single_dataset(
 
     cache_key = dataset_cfg.cache_key + (args.hf_checkpoint, args.apply_chat_template)
     if cache_key not in EVAL_PROMPT_DATASET:
-        tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
+        processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
         EVAL_PROMPT_DATASET[cache_key] = Dataset(
             path,
             tokenizer=tokenizer,
+            processor=processor,
             max_length=args.rollout_max_prompt_len,
             prompt_key=prompt_key,
             label_key=label_key,
