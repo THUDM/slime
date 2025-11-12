@@ -6,6 +6,7 @@ set -ex
 
 
 # Start the teacher model server
+TEACHER_IP="127.0.0.1" # Use localhost here, you can change it to your IP
 TEACHER_PORT=13141
 LOG_FILE="/tmp/sglang_$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 6).log"
 
@@ -22,13 +23,13 @@ CUDA_VISIBLE_DEVICES=7 python3 -m sglang.launch_server \
 echo "Starting teacher model server..."
 
 ## Wait for the teacher model server to be ready
-until curl -sf http://127.0.0.1:$TEACHER_PORT/health_generate > /dev/null; do
+until curl -sf http://$TEACHER_IP:$TEACHER_PORT/health_generate > /dev/null; do
     echo "Waiting for the teacher model server to start..."
     tail -n 10 "$LOG_FILE"
     sleep 5
 done
 
-echo "Teacher model server is up and running at port $TEACHER_PORT."
+echo "Teacher model server is up and running at $TEACHER_IP:$TEACHER_PORT."
 sleep 10
 
 
@@ -71,7 +72,7 @@ ROLLOUT_ARGS=(
 RM_ARGS=(
    --custom-rm-path examples.on_policy_distillation.on_policy_distillation.reward_func
    --custom-reward-post-process-path examples.on_policy_distillation.on_policy_distillation.post_process_rewards
-   --rm-url http://127.0.0.1:$TEACHER_PORT/generate
+   --rm-url http://$TEACHER_IP:$TEACHER_PORT/generate
 )
 
 EVAL_ARGS=(
