@@ -672,7 +672,14 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--advantage-estimator",
                 type=str,
-                choices=["grpo", "gspo", "reinforce_plus_plus", "reinforce_plus_plus_baseline", "ppo", "on_policy_distillation"],
+                choices=[
+                    "grpo",
+                    "gspo",
+                    "reinforce_plus_plus",
+                    "reinforce_plus_plus_baseline",
+                    "ppo",
+                    "on_policy_distillation",
+                ],
                 default="grpo",
             )
             parser.add_argument(

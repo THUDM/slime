@@ -292,8 +292,13 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         response_lengths = rollout_data.get("response_lengths")
         device = student_log_probs[0].device
         teacher_log_probs = [t_log_prob.to(device=device) for t_log_prob in teacher_log_probs]
-        teacher_log_probs = [t_log_prob[-response_length:] for t_log_prob, response_length in zip(teacher_log_probs, response_lengths)]
-        advantages = [teacher_log_prob - student_log_prob for teacher_log_prob, student_log_prob in zip(teacher_log_probs, student_log_probs)]
+        teacher_log_probs = [
+            t_log_prob[-response_length:] for t_log_prob, response_length in zip(teacher_log_probs, response_lengths)
+        ]
+        advantages = [
+            teacher_log_prob - student_log_prob
+            for teacher_log_prob, student_log_prob in zip(teacher_log_probs, student_log_probs)
+        ]
         returns = advantages
 
     else:
