@@ -21,7 +21,7 @@ CUDA_VISIBLE_DEVICES=7 python3 -m sglang.launch_server \
 
 echo "Starting teacher model server..."
 
-## Wait for the server to be ready
+## Wait for the teacher model server to be ready
 until curl -sf http://127.0.0.1:$TEACHER_PORT/health_generate > /dev/null; do
     echo "Waiting for the teacher model server to start..."
     tail -n 10 "$LOG_FILE"
@@ -29,7 +29,7 @@ until curl -sf http://127.0.0.1:$TEACHER_PORT/health_generate > /dev/null; do
 done
 
 echo "Teacher model server is up and running at port $TEACHER_PORT."
-
+sleep 10
 
 
 export PYTHONBUFFERED=16
@@ -42,8 +42,7 @@ else
 fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/models/qwen3-8B.sh"
+source "/root/slime/scripts/models/qwen3-8B.sh"
 
 
 CKPT_ARGS=(

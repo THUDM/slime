@@ -315,7 +315,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
         total_lengths = rollout_data["total_lengths"]
 
         for key, val in rollout_data.items():
-            if key == "tokens" or key == "loss_masks" or key == "sample_indices" or key == "teacher_token_ids" or key == "rewards":
+            if key == "tokens" or key == "loss_masks" or key == "sample_indices":
                 continue
             # Upload per sample mean for each rollout value
             # There are the following assumptions:
