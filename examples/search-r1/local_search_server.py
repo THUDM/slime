@@ -19,9 +19,8 @@ Usage:
         }
 """
 
-import asyncio
-import argparse
-from typing import List, Dict, Optional
+from typing import Dict, List, Optional
+
 import aiohttp
 
 
@@ -55,7 +54,7 @@ async def local_search(
     payload = {
         "queries": [query],
         "topk": top_k,
-        "return_scores": False  # We don't need scores for compatibility with google_search_server
+        "return_scores": False,  # We don't need scores for compatibility with google_search_server
     }
 
     # Send async request to local retrieval server
@@ -86,19 +85,15 @@ async def local_search(
         # retrieval_server returns: {"document": {"id": "...", "contents": '"Title"\nText...'}}
         if isinstance(item, dict):
             # Access the document dict first, then get contents
-            content = item.get('contents', "")
+            content = item.get("contents", "")
 
             if content:
                 # The contents are already in the correct format: '"Title"\nText content...'
                 # Just pass through as-is to match google_search format
-                contexts.append({
-                    "document": {"contents": content}
-                })
+                contexts.append({"document": {"contents": content}})
             else:
                 # Empty content case - provide default values
-                contexts.append({
-                    "document": {"contents": '"No title."\nNo snippet available.'}
-                })
+                contexts.append({"document": {"contents": '"No title."\nNo snippet available.'}})
 
     # If no results found, return empty list (consistent with google_search_server.py)
     return contexts
