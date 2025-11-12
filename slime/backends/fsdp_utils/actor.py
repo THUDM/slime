@@ -484,7 +484,7 @@ class FSDPTrainRayActor(TrainRayActor):
             temperature=self.args.rollout_temperature,
         )
         packed_batch["cur_log_probs"] = log_probs
-        
+
         shifted_logits = logits.squeeze(0)[:-1]
         log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
         probs = torch.softmax(shifted_logits, dim=-1)
@@ -554,7 +554,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         entropy = torch.cat([batch["entropy"] for batch in unpacked_batches], dim=0)
         entropy_loss = sum_of_sample_mean(entropy, response_lengths, loss_masks)
-        
+
         loss = pg_loss - self.args.entropy_coef * entropy_loss
 
         if self.args.use_kl_loss:

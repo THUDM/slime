@@ -72,6 +72,57 @@ def compute_policy_loss(
     return pg_losses, clipfrac
 
 
+@torch.compile(dynamic=True)
+def compute_cispo_loss(
+    ppo_kl: torch.Tensor,
+    log_probs: torch.Tensor,
+    advantages: torch.Tensor,
+    eps_clip_high: float,
+):
+    """Compute CISPO (Clipped IS-weight Policy Optimization) loss.
+
+    CISPO applies upper truncation on the importance sampling ratio with
+    stop-gradient, preventing the ratio itself from being learned. This differs
+    from PPO which uses both upper and lower clipping without stop-gradient.
+
+    The key formula from the paper:
+        ratio = exp(log π_current - log π_old)
+        ratio_truncated = min(ratio, ε_max)
+        loss = -sg(ratio_truncated) * advantages * log(π_current)
+
+    Note: log_probs is explicitly multiplied so gradient flows through it,
+    while ratio_sg is detached to prevent learning the ratio itself.
+
+    Args:
+        ppo_kl: Log-ratio (log π_old - log π_current) for each token
+        log_probs: Current policy log probabilities (requires gradient)
+        advantages: Advantage estimates for each token
+        eps_clip_high: Upper bound for clipping (ε_max), typically 5.0 (absolute value)
+
+    Returns:
+        Tuple of (pg_losses, clipfrac) where:
+            - pg_losses: Per-token CISPO policy gradient losses
+            - clipfrac: Fraction of ratios that were clipped
+    """
+    # Compute importance sampling ratio: π_current / π_old
+    ratio = (-ppo_kl).exp()
+
+    # Upper truncation: min(ratio, ε_max) where ε_max is absolute value
+    ratio_truncated = torch.clamp(ratio, max=eps_clip_high)
+
+    # Stop-gradient: prevent the ratio from being learned (CISPO's key feature)
+    ratio_sg = ratio_truncated.detach()
+
+    # CISPO formula: sg(ratio) * advantages * log_probs
+    # This ensures gradient flows through log_probs but not through ratio
+    pg_losses = -ratio_sg * advantages * log_probs
+
+    # Track clipping fraction for monitoring
+    clipfrac = (ratio > eps_clip_high).float()
+
+    return pg_losses, clipfrac
+
+
 def compute_log_probs(logits: torch.Tensor, tokens: torch.Tensor, process_group: Optional[dist.ProcessGroup]):
     from megatron.core.fusions.fused_cross_entropy import fused_vocab_parallel_cross_entropy
 
