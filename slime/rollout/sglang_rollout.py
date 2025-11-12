@@ -33,12 +33,7 @@ class GenerateState(metaclass=SingletonMeta):
         # persistant state for the generation process
         self.args = args
         self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
-
-        # Load processor for VLM if multimodal_keys is set
-        if getattr(args, "multimodal_keys", None):
-            self.processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
-        else:
-            self.processor = None
+        self.processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
         self.semaphore = asyncio.Semaphore(
             args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
@@ -88,7 +83,7 @@ def get_generate_inputs(prompt, tokenizer, processor):
 
     image_inputs, video_inputs = process_vision_info(prompt)
 
-    text = tokenizer.apply_chat_template(prompt, tokenize=False)
+    text = tokenizer.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True)
     if processor and (image_inputs or video_inputs):
         prompt_ids = processor(text, images=image_inputs, videos=video_inputs, return_tensors="pt")["input_ids"]
     else:
