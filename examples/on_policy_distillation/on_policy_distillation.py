@@ -24,15 +24,11 @@ async def reward_func(args, sample, **kwargs):
             return await resp.json()
 
 
-
-
 def post_process_rewards(args, samples: list[Sample], **kwargs):
     rewards = [sample.get_reward_value(args) for sample in samples]
     teacher_log_probs = [torch.tensor([item[0] for item in reward["meta_info"]["input_token_logprobs"][1:]], dtype=torch.float32) for reward in rewards]
-    teacher_token_ids = [torch.tensor([item[1] for item in reward["meta_info"]["input_token_logprobs"][1:]], dtype=torch.int32) for reward in rewards]
 
-    for sample, t_log_probs, t_token_ids in zip(samples, teacher_log_probs, teacher_token_ids):
+    for sample, t_log_probs in zip(samples, teacher_log_probs):
         sample.teacher_log_probs = t_log_probs
-        sample.teacher_token_ids = t_token_ids
 
-    return teacher_log_probs, teacher_token_ids
+    return teacher_log_probs, teacher_log_probs

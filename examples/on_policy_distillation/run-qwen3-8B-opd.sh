@@ -4,17 +4,9 @@
 
 set -ex
 
-pkill -9 sglang
-sleep 3
-ray stop --force
-pkill -9 ray
-pkill -9 python
-sleep 3
-pkill -9 ray
-pkill -9 python
 
 # Start the teacher model server
-TEACHER_PORT=13141   # ← set your port number here
+TEACHER_PORT=13141
 LOG_FILE="/tmp/sglang_$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 6).log"
 
 ## Launch the teacher model server in the background
@@ -32,12 +24,11 @@ echo "Starting teacher model server..."
 ## Wait for the server to be ready
 until curl -sf http://127.0.0.1:$TEACHER_PORT/health_generate > /dev/null; do
     echo "Waiting for the teacher model server to start..."
-    tail -n 10 "$LOG_FILE" | sed 's/^/│ /'
+    tail -n 10 "$LOG_FILE"
     sleep 5
 done
 
 echo "Teacher model server is up and running at port $TEACHER_PORT."
-
 
 
 
@@ -68,7 +59,7 @@ ROLLOUT_ARGS=(
    --input-key prompt
    --apply-chat-template
    --rollout-shuffle
-   --num-rollout 3000
+   --num-rollout 300
    --rollout-batch-size 16
    --n-samples-per-prompt 4
    --rollout-max-response-len 16384
@@ -152,9 +143,7 @@ MISC_ARGS=(
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-
-NUM_GPUS=$(echo ${HIP_VISIBLE_DEVICES} | tr ',' '\n' | wc -l)
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 
 ray job submit --address="http://127.0.0.1:8265" \

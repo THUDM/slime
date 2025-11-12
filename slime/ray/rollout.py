@@ -251,9 +251,6 @@ class RolloutManager:
         if "teacher_log_probs" in samples[0].__dict__:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
 
-        if "teacher_token_ids" in samples[0].__dict__:
-            train_data["teacher_token_ids"] = [sample.teacher_token_ids for sample in samples]
-
         return train_data
 
 
