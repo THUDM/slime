@@ -301,15 +301,8 @@ class FSDPTrainRayActor(TrainRayActor):
         input_ids = packed_sequence["tokens"].unsqueeze(0)
         position_ids = packed_sequence["position_ids"].unsqueeze(0)
         if self.args.enable_cp:
-            if dist.get_rank() == 0:
-                print(f"[CP] Before padding: tokens.shape={packed_sequence['tokens'].shape}, "
-                      f"cu_seqlens={packed_sequence['cu_seqlens'].tolist()}")
             
             packed_sequence = pad_packed_sequence_with_cp(packed_sequence, self.cp_size)
-            
-            if dist.get_rank() == 0:
-                print(f"[CP] After padding: tokens.shape={packed_sequence['tokens'].shape}, "
-                      f"cu_seqlens={packed_sequence['cu_seqlens'].tolist()}")
             
             if not packed_sequence["cu_seqlens"].is_cuda:
                 packed_sequence["cu_seqlens"] = packed_sequence["cu_seqlens"].cuda()
@@ -319,8 +312,6 @@ class FSDPTrainRayActor(TrainRayActor):
             input_ids = torch.chunk(packed_sequence["tokens"].unsqueeze(0), self.cp_size, dim=1)[self.cp_rank]
             position_ids = torch.chunk(packed_sequence["position_ids"].unsqueeze(0), self.cp_size, dim=1)[self.cp_rank]
             
-            if dist.get_rank() == 0:
-                print(f"[CP] After chunking: chunk_size={input_ids.shape[1]}, cp_size={self.cp_size}")
         
         model_args = {
             "input_ids": input_ids,
@@ -628,8 +619,6 @@ class FSDPTrainRayActor(TrainRayActor):
             
             # Gather logits from all CP ranks if CP is enabled (with gradient support)
             if self.args.enable_cp:
-                if dist.get_rank() == 0:
-                    print(f"[CP Train Gather] Before all_gather: logits shape={logits.shape}")
                 # gathered_logits_list = torch.distributed.nn.functional.all_gather(logits, group=self.cp_group)
                 # logits = torch.cat(gathered_logits_list, dim=1)
                 # if dist.get_rank() == 0:
@@ -684,9 +673,6 @@ class FSDPTrainRayActor(TrainRayActor):
                     cu_seqlens=packed_batch["cu_seqlens"],
                     temperature=self.args.rollout_temperature,
                 )
-        if dist.get_rank() == 0:
-            print(f"[CP Train Log Probs] logits.shape={logits.shape}, tokens.shape={packed_batch['tokens'].shape}, "
-                  f"log_probs.shape={log_probs.shape}, cu_seqlens={packed_batch['cu_seqlens'].tolist()}")
         packed_batch["cur_log_probs"] = log_probs
         if not self.args.enable_cp:
             shifted_logits = logits.squeeze(0)[:-1]
