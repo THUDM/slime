@@ -764,6 +764,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--use-routing-replay",
                 action="store_true",
                 default=False,
+                help="The routing replay technique from https://arxiv.org/abs/2507.18071",
+            )
+            parser.add_argument(
+                "--use-rollout-routing-replay",
+                action="store_true",
+                default=False,
+                help="The rollout routing replay technique from https://arxiv.org/abs/2510.11370",
             )
             return parser
 
@@ -1409,6 +1416,9 @@ def slime_validate_args(args):
 
     if args.enable_mtp_training:
         assert args.mtp_num_layers, "mtp_num_layers must be set when enable_mtp_training is set"
+
+    if args.use_rollout_routing_replay:
+        args.use_routing_replay = True
 
     if args.custom_config_path:
         with open(args.custom_config_path, "r") as f:
