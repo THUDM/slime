@@ -10,15 +10,20 @@ sleep 3
 pkill -9 ray
 pkill -9 python
 
+# Clean up Ray's persisted state to avoid session conflicts
+rm -rf /tmp/ray/*
+rm -rf ~/.ray/*
+
 set -ex
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
+export CUDA_VISIBLE_DEVICES=0,1,2,3
 
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-0.6B
-   --ref-load /root/Qwen3-0.6B
+   --hf-checkpoint /root/Qwen3-4B
+   --ref-load /root/Qwen3-4B
 )
 
 ROLLOUT_ARGS=(
@@ -29,12 +34,12 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 1000
-   --rollout-batch-size 16
-   --n-samples-per-prompt 16
+   --rollout-batch-size 8
+   --n-samples-per-prompt 8
    --rollout-max-response-len 4096
    --rollout-temperature 0.8
 
-   --global-batch-size 256
+   --global-batch-size 64
 )
 
 GRPO_ARGS=(
@@ -66,7 +71,7 @@ SGLANG_ARGS=(
 WANDB_ARGS=(
    --use-wandb
    --wandb-project slime-fsdp-distributed-test
-   --wandb-group fsdp-distributed
+   --wandb-group fsdp-Qwen3-4B-distributed
    --wandb-key ${WANDB_KEY}
 )
 
@@ -90,3 +95,4 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${GRPO_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
    ${WANDB_ARGS[@]} 
+

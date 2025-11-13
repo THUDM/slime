@@ -160,7 +160,7 @@ eval:
                 "--train-backend fsdp "
                 "--attn-implementation flash_attention_2 "
                 "--gradient-checkpointing "
-                f"--update-weights-bucket-size {512 * 1024 * 1024} "  # 512MB
+                f"--update-weight-buffer-size {512 * 1024 * 1024} "  # 512MB
                 "--offload-train-mode move "
                 """--train-env-vars '{"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}' """
             )

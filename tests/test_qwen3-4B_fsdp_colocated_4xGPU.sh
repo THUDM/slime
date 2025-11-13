@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# FSDP Colocated 2GPU Training Script with Weights & Biases Support
+# FSDP Colocated 4GPU Training Script with Weights & Biases Support
 # 
 # This script runs FSDP training with wandb logging enabled.
 # 
@@ -26,15 +26,15 @@ sleep 3
 pkill -9 ray
 pkill -9 python
 
+
 set -ex
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
-export CUDA_VISIBLE_DEVICES=2,3
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-0.6B
-   --ref-load /root/Qwen3-0.6B
+   --hf-checkpoint /root/Qwen3-4B
+   --ref-load /root/Qwen3-4B
 )
 
 ROLLOUT_ARGS=(
@@ -45,12 +45,12 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 1000
-   --rollout-batch-size 4
-   --n-samples-per-prompt 4
+   --rollout-batch-size 16
+   --n-samples-per-prompt 16
    --rollout-max-response-len 4096
    --rollout-temperature 0.8
 
-   --global-batch-size 16
+   --global-batch-size 256
 )
 
 GRPO_ARGS=(
@@ -77,7 +77,7 @@ OPTIMIZER_ARGS=(
 
 SGLANG_ARGS=(
    # Set equal to the number of GPUs per node for colocated mode
-   --rollout-num-gpus-per-engine 2
+   --rollout-num-gpus-per-engine 4
    --sglang-decode-log-interval 1000
 )
 
@@ -98,7 +98,7 @@ FSDP_ARGS=(
 )
 
 # launch the master node of ray in container
-ray start --head --node-ip-address 127.0.0.1 --num-gpus 2 --disable-usage-stats
+ray start --head --node-ip-address 127.0.0.1 --num-gpus 4 --disable-usage-stats
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
@@ -108,13 +108,14 @@ ray job submit --address="http://127.0.0.1:8265" \
    }' \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 2 \
+   --actor-num-gpus-per-node 4 \
    --colocate \
    --train-backend fsdp \
+   ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
    ${WANDB_ARGS[@]} \
-   ${FSDP_ARGS[@]} \
-   ${CHECKPOINT_ARGS[@]} 
+   ${FSDP_ARGS[@]}
+
