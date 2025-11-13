@@ -30,4 +30,6 @@ After running the training, you can see in wandb that the metric `train/train_ro
 
 The core idea is to make each and every operation in training and inference be bitwise equal.
 
-TODO: tools
+TODO: what is done eventually
+
+In order to more easily align the two parts, we use SGLang's [dumper](https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/debug_utils/dumper.py) tool for quick comparisons. (Need [#12622](https://github.com/sgl-project/sglang/pull/12622) and [#12623](https://github.com/sgl-project/sglang/pull/12623) for most convenience)
