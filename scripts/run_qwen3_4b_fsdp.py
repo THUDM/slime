@@ -18,7 +18,7 @@ class ScriptArgs:
     num_gpus_per_node: int = 8
     hardware: Literal["H100"] = "H100"
     extra_args: str = ""
-    multi_eval: bool = False
+    multi_eval: bool = True
     true_on_policy: bool = False
     dynamic_sampling: bool = False
     enable_eval: bool = True
