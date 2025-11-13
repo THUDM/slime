@@ -24,7 +24,7 @@ In order to quickly see the curve, you may use `--mode debug_minimal`, which wil
 
 ### What is Expected to Observe
 
-After running the training, you can see in wandb that the metric `train/train_rollout_logprob_abs_diff` should be exactly `0`. This indicates that there is no difference between the log probabilities from the training and the inference.
+After running the training, you can see in wandb that the metric `train/train_rollout_logprob_abs_diff` should be exactly `0`. This indicates that there is no difference between the log probabilities from the training and the inference. Without the feature enabled, this value should be nonzero.
 
 ## How it is Implemented
 
