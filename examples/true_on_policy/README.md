@@ -41,3 +41,10 @@ Briefly speaking, we handled the following components to make them aligned:
 * For other kernels, we align numeric operation details between the two systems for simplicity, such as op dtype, detailed kernels, etc, besides using batch-invariant kernels as a prerequisite. Some operations can also be compiled to speedup ([#603](https://github.com/THUDM/slime/pull/603), [SGLang#12161](https://github.com/sgl-project/sglang/pull/12161)).
 
 In order to more easily align the two parts, we use SGLang's [dumper](https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/debug_utils/dumper.py) tool for quick comparisons. (Need [#12622](https://github.com/sgl-project/sglang/pull/12622) and [#12623](https://github.com/sgl-project/sglang/pull/12623) for most convenience.)
+
+## Future Works
+
+We will keep maintaining and enhancing this feature. More specifically, we will:
+
+* Further validate it with more experiments, and compare it with algorithmic fixes such as TIS.
+* Potentially scale it to larger scale models if it is proven to be effective.
