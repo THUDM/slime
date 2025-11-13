@@ -22,6 +22,10 @@ python scripts/run_qwen3_4b_fsdp.py --true-on-policy
 
 In order to quickly see the curve, you may use `--mode debug_minimal`, which will skip evaluation and run generation with a very short output sequence length. Since true on policy is unrelated to OSL or answer correctness, this can be used for quick experiments.
 
+### Other Cases
+
+In order to support true on policy for other cases, please refer to the flags changed in the examples above.
+
 ### What is Expected to Observe
 
 After running the training, you can see in wandb that the metric `train/train_rollout_logprob_abs_diff` should be exactly `0`. This indicates that there is no difference between the log probabilities from the training and the inference. Without the feature enabled, this value should be nonzero.
