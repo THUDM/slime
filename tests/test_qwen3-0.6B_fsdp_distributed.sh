@@ -65,7 +65,7 @@ SGLANG_ARGS=(
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-project slime-fsdp-distributed-test
+   --wandb-project slime-fsdp
    --wandb-group fsdp-distributed
    --wandb-key ${WANDB_KEY}
 )

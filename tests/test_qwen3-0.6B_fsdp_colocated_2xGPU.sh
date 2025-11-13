@@ -30,7 +30,6 @@ set -ex
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
-export CUDA_VISIBLE_DEVICES=2,3
 
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-0.6B
