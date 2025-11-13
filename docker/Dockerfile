@@ -9,7 +9,7 @@ RUN apt update
 RUN apt install -y nvtop rsync
 
 # TODO: change to pip install sglang-router after it has a new release
-RUN pip install sglang-router --force-reinstall
+RUN pip install sglang-router==0.2.1 --force-reinstall
 RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git --no-cache-dir --force-reinstall
 RUN pip install ray[default]
 RUN pip install httpx[http2] wandb pylatexenc blobfile accelerate "mcp[cli]"
@@ -17,7 +17,6 @@ RUN pip install httpx[http2] wandb pylatexenc blobfile accelerate "mcp[cli]"
 # mbridge
 RUN pip install git+https://github.com/ISEEKYAN/mbridge.git --no-deps
 
-RUN TORCH_CUDA_ARCH_LIST="8.0;8.9;9.0;9.0a" pip install git+https://github.com/fanshiqing/grouped_gemm@v1.1.4 --no-build-isolation
 # apex
 RUN NVCC_APPEND_FLAGS="--threads 4" \
   pip -v install --disable-pip-version-check --no-cache-dir \
@@ -31,13 +30,14 @@ RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
 RUN pip install flash-linear-attention
 RUN pip -v install --no-build-isolation transformer_engine[pytorch]
 
+WORKDIR /root/
 RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
     cd flash-attention/ && git submodule update --init && cd hopper/ && python setup.py install && \
     export python_path=`python -c "import site; print(site.getsitepackages()[0])"` && \
     mkdir -p $python_path/flash_attn_3 && \
     cp flash_attn_interface.py $python_path/flash_attn_3/flash_attn_interface.py
+RUN rm -rf flash-attention/
 
-WORKDIR /root/
 RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
     cd Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
     pip install -e .

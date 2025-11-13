@@ -94,7 +94,7 @@ index 860ee64a9..80944b702 100755
                      "mlp.0.weight": "mlp.linear_fc1.layer_norm_weight",
                      "mlp.0.bias": "mlp.linear_fc1.layer_norm_bias",
 diff --git a/megatron/core/models/gpt/gpt_model.py b/megatron/core/models/gpt/gpt_model.py
-index 6aec66e6d..7aa4b2f7d 100644
+index 6aec66e6d..b660a2002 100644
 --- a/megatron/core/models/gpt/gpt_model.py
 +++ b/megatron/core/models/gpt/gpt_model.py
 @@ -355,6 +355,7 @@ class GPTModel(LanguageModule):
@@ -143,8 +143,24 @@ index 6aec66e6d..7aa4b2f7d 100644
              hidden_states_list = torch.chunk(hidden_states, 1 + self.config.mtp_num_layers, dim=0)
              hidden_states = hidden_states_list[0]
              if loss_mask is None:
-@@ -480,9 +485,9 @@ class GPTModel(LanguageModule):
-                     runtime_gather_output=runtime_gather_output,
+@@ -474,15 +479,21 @@ class GPTModel(LanguageModule):
+                 loss_mask = torch.ones_like(mtp_labels)
+             for mtp_layer_number in range(self.config.mtp_num_layers):
+                 # output
+-                mtp_logits, _ = self.output_layer(
+-                    hidden_states_list[mtp_layer_number + 1],
+-                    weight=output_weight,
+-                    runtime_gather_output=runtime_gather_output,
++                output_layer_params = {k: v.detach() for k, v in self.output_layer.named_parameters()}
++                output_layer_buffers = dict(self.output_layer.named_buffers())
++                mtp_logits, _ = torch.func.functional_call(
++                    self.output_layer,
++                    {**output_layer_params, **output_layer_buffers},
++                    (hidden_states_list[mtp_layer_number + 1],),
++                    {
++                        "weight": output_weight.detach() if output_weight else None,
++                        "runtime_gather_output": runtime_gather_output,
++                    },
                  )
                  # Calc loss for the current Multi-Token Prediction (MTP) layers.
 -                mtp_labels, _ = roll_tensor(mtp_labels, shifts=-1, dims=-1, cp_group=self.cp_group)

@@ -272,6 +272,12 @@ class FSDPTrainRayActor(TrainRayActor):
                         allow_compile=not self.args.true_on_policy_mode,
                         temperature=self.args.rollout_temperature,
                     )
+                    if store_prefix == "":
+                        shifted_logits = logits.squeeze(0)[:-1]
+                        log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
+                        probs = torch.softmax(shifted_logits, dim=-1)
+                        entropy = -(probs * log_probs_full).sum(dim=-1)
+                        batch["entropy"] = entropy
             return rollout_data
 
         finally:
@@ -401,7 +407,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.compute_log_prob("actor", packed_batches)
 
-        for metric_key in ["log_probs", "ref_log_probs", "advantages", "returns", "raw_rewards"]:
+        for metric_key in ["log_probs", "ref_log_probs", "advantages", "returns", "raw_reward"]:
             if metric_key not in packed_batches[0]:
                 continue
             val = torch.tensor([0.0], device=torch.cuda.current_device())
@@ -478,6 +484,12 @@ class FSDPTrainRayActor(TrainRayActor):
             temperature=self.args.rollout_temperature,
         )
         packed_batch["cur_log_probs"] = log_probs
+
+        shifted_logits = logits.squeeze(0)[:-1]
+        log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
+        probs = torch.softmax(shifted_logits, dim=-1)
+        entropy = -(probs * log_probs_full).sum(dim=-1)
+        packed_batch["entropy"] = entropy
         unpacked_batches = unpack_sequences(packed_batch)
 
         old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
@@ -531,6 +543,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
             pg_loss = pg_loss * tis_clip
 
+        assert not self.args.calculate_per_token_loss, "calculate_per_token_loss not yet implemented"
         pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
         pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
         ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
@@ -540,10 +553,10 @@ class FSDPTrainRayActor(TrainRayActor):
             train_rollout_logprob_abs_diff, response_lengths, loss_masks
         ).detach()
 
-        loss = pg_loss
+        entropy = torch.cat([batch["entropy"] for batch in unpacked_batches], dim=0)
+        entropy_loss = sum_of_sample_mean(entropy, response_lengths, loss_masks)
 
-        if self.args.entropy_coef != 0:
-            raise NotImplementedError("implement entropy bonus")
+        loss = pg_loss - self.args.entropy_coef * entropy_loss
 
         if self.args.use_kl_loss:
             ref_log_probs = torch.cat([batch["ref_log_probs"] for batch in unpacked_batches], dim=0)
@@ -556,13 +569,12 @@ class FSDPTrainRayActor(TrainRayActor):
 
             loss = loss + self.args.kl_loss_coef * kl_loss
 
-        # TODO: report entropy
-
         reported = {
             "loss": loss.detach(),
             "pg_loss": pg_loss.detach(),
             "pg_clipfrac": pg_clipfrac.detach(),
             "ppo_kl": ppo_kl.detach(),
+            "entropy_loss": entropy_loss.detach(),
             "train_rollout_logprob_abs_diff": train_rollout_logprob_abs_diff,
         }
 

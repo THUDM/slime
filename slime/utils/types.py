@@ -22,6 +22,7 @@ class Sample:
     loss_mask: Optional[list[int]] = None
     weight_versions: list[str] = field(default_factory=list)
     rollout_log_probs: Optional[list[float]] = None  # Log probabilities from rollout engine
+    rollout_routed_experts: Optional[list[list[int]]] = None  # Routed experts from rollout engine
 
     class Status(Enum):
         PENDING = "pending"

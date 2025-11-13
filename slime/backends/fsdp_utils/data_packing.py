@@ -87,7 +87,7 @@ def pack_sequences(
                 "position_ids": torch.tensor(flat_positionids, dtype=torch.int),
                 "cu_seqlens": torch.tensor(cu_seqlens, dtype=torch.int32),
                 "rewards": torch.tensor([rewards[i] for i in indices], dtype=torch.float32),
-                "raw_rewards": [raw_rewards[i] for i in indices],
+                "raw_reward": [raw_rewards[i] for i in indices],
                 "response_lengths": [response_lengths[i] for i in indices],
                 "advantages": torch.tensor(flat_advantages, dtype=torch.float32),
                 "returns": torch.tensor(flat_returns, dtype=torch.float32),
@@ -125,7 +125,7 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
             if key not in instance:
                 # For tensor attributes, we need to slice them appropriately
                 if isinstance(value, torch.Tensor):
-                    if key in ["log_probs", "ref_log_probs", "cur_log_probs"]:
+                    if key in ["log_probs", "ref_log_probs", "cur_log_probs", "entropy"]:
                         # These are computed from logits[:-1] so they have length seq_len-1
                         instance[key] = value[end_idx - 1 - response_lengths[i] : end_idx - 1]
                     elif key == "rollout_log_probs":
