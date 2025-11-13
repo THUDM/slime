@@ -435,6 +435,9 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#example-2">Example 2</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#other-cases">Other Cases</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-expected-to-observe">What is Expected to Observe</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#setup-results">Setup &amp; Results</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#observations">Observations</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reproduction">Reproduction</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-is-implemented">How it is Implemented</a></li>
@@ -477,6 +480,20 @@ document.write(`
 <section id="what-is-expected-to-observe">
 <h3>What is Expected to Observe<a class="headerlink" href="#what-is-expected-to-observe" title="Link to this heading">#</a></h3>
 <p>After running the training, you can see in wandb that the metric <code class="docutils literal notranslate"><span class="pre">train/train_rollout_logprob_abs_diff</span></code> should be exactly <code class="docutils literal notranslate"><span class="pre">0</span></code>. This indicates that there is no difference between the log probabilities from the training and the inference. Without the feature enabled, this value should be nonzero.</p>
+</section>
+<section id="setup-results">
+<h3>Setup &amp; Results<a class="headerlink" href="#setup-results" title="Link to this heading">#</a></h3>
+<p>We fine-tune Qwen3-4B-Base on dapo-math-17k dataset with max_new_tokens = 2048, and evaluate on aime-2024 dataset with max_new_tokens = 8192.
+Global batch size is 64 × 16. Results are summarized below.</p>
+<p align="center"> <img width="450" alt="raw_rewards" src="src/raw_reward.png" /> <img width="450" alt="diff" src="src/train_rollout_abs_diff.png" /> <img width="450" alt="rollout_time" src="src/rollout_time.png" /> <img width="450" alt="eval" src="src/aime.png" /> </p>
+</section>
+<section id="observations">
+<h3>Observations<a class="headerlink" href="#observations" title="Link to this heading">#</a></h3>
+<p>Train–inference-diff is strictly 0, verifying full numerical equivalence between training and inference forward passes. Raw rewards perfectly match the baseline, and rollout time shows an acceptable slowdown.</p>
+</section>
+<section id="reproduction">
+<h3>Reproduction<a class="headerlink" href="#reproduction" title="Link to this heading">#</a></h3>
+<p>Detailed reproduction refers to <a class="reference external" href="https://gist.github.com/fzyzcjy/46f9fc096258cf6fb4516ad2ffcefa8c">this</a>.</p>
 </section>
 </section>
 <section id="how-it-is-implemented">
@@ -532,6 +549,9 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#example-2">Example 2</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#other-cases">Other Cases</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-expected-to-observe">What is Expected to Observe</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#setup-results">Setup &amp; Results</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#observations">Observations</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reproduction">Reproduction</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-is-implemented">How it is Implemented</a></li>

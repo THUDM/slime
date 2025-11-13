@@ -30,6 +30,19 @@ In order to support true on policy for other cases, please refer to the flags ch
 
 After running the training, you can see in wandb that the metric `train/train_rollout_logprob_abs_diff` should be exactly `0`. This indicates that there is no difference between the log probabilities from the training and the inference. Without the feature enabled, this value should be nonzero.
 
+### Setup & Results
+We fine-tune Qwen3-4B-Base on dapo-math-17k dataset with max_new_tokens = 2048, and evaluate on aime-2024 dataset with max_new_tokens = 8192.
+Global batch size is 64 × 16. Results are summarized below.
+<p align="center"> <img width="450" alt="raw_rewards" src="src/raw_reward.png" /> <img width="450" alt="diff" src="src/train_rollout_abs_diff.png" /> <img width="450" alt="rollout_time" src="src/rollout_time.png" /> <img width="450" alt="eval" src="src/aime.png" /> </p>
+
+### Observations
+
+Train–inference-diff is strictly 0, verifying full numerical equivalence between training and inference forward passes. Raw rewards perfectly match the baseline, and rollout time shows an acceptable slowdown.
+
+### Reproduction
+
+Detailed reproduction refers to [this](https://gist.github.com/fzyzcjy/46f9fc096258cf6fb4516ad2ffcefa8c).
+
 ## How it is Implemented
 
 The core idea is to make each and every operation in training and inference be bitwise equal. The main code is implemented in [#566](https://github.com/THUDM/slime/pull/566) and [SGLang#12058](https://github.com/sgl-project/sglang/pull/12058).
