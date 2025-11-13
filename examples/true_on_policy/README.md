@@ -28,4 +28,6 @@ After running the training, you can see in wandb that the metric `train/train_ro
 
 ## How it is Implemented
 
-TODO
+The core idea is to make each and every operation in training and inference be bitwise equal.
+
+TODO: tools
