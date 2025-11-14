@@ -102,11 +102,15 @@ class UpdateWeightFromTensor:
         self.weights = weights  # CPU parameter storage
         self.full_params = full_params
 
+        # Validate weights initialization
+        if self.weights is None:
+            raise RuntimeError("weights cannot be None - CPU parameter storage is required for weight updates")
+
         # Bucket-based loading is automatically enabled when full_params=False
         # This provides the Megatron-style optimization for sharded mode
 
         # Create parameter info buckets once during initialization (like Megatron)
-        if not self.full_params and self.weights is not None:
+        if not self.full_params:
             self.param_info_buckets = get_param_info_buckets(self.args, self.weights)
         else:
             self.param_info_buckets = None
@@ -303,11 +307,12 @@ class UpdateWeightFromDistributed:
         self.model = model
         self.weights = weights  # CPU parameter storage
 
+        # Validate weights initialization
+        if self.weights is None:
+            raise RuntimeError("weights cannot be None - CPU parameter storage is required for weight updates")
+
         # Create parameter info buckets for bucket-based loading
-        if self.weights is not None:
-            self.param_info_buckets = get_param_info_buckets(self.args, self.weights)
-        else:
-            self.param_info_buckets = None
+        self.param_info_buckets = get_param_info_buckets(self.args, self.weights)
 
     def connect_rollout_engines(
         self,
