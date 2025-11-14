@@ -130,7 +130,8 @@ class SGLangEngine(RayActor):
         self.process = launch_server_process(ServerArgs(**server_args_dict))
         if self.node_rank == 0 and self.router_ip and self.router_port:
             requests.post(
-                f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}"
+                f"http://{self.router_ip}:{self.router_port}/workers",
+                json={"url": f"http://{self.server_host}:{self.server_port}"},
             )
 
     def _make_request(self, endpoint: str, payload: Optional[dict] = None):
@@ -223,8 +224,9 @@ class SGLangEngine(RayActor):
 
         print(f"Shutdown engine {self.server_host}:{self.server_port}...")
         if self.node_rank == 0:
-            requests.post(
-                f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
+            worker_url = f"http://{self.server_host}:{self.server_port}"
+            requests.delete(
+                f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}"
             )
         kill_process_tree(self.process.pid)
 
