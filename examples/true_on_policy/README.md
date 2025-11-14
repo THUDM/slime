@@ -54,6 +54,8 @@ Briefly speaking, we handled the following components to make them aligned:
 * Batch invariant kernels: This is a prerequisite for true on-policy, and we use [the ones](https://github.com/thinking-machines-lab/batch_invariant_ops) from the Thinking Machines Lab.
 * We align numeric operation details between the two systems for simplicity, such as op dtype, detailed kernels, etc. Some operations can also be compiled to speedup ([#603](https://github.com/THUDM/slime/pull/603), [SGLang#12161](https://github.com/sgl-project/sglang/pull/12161)).
 
+In order to more easily align the two parts, we use SGLang's [dumper](https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/debug_utils/dumper.py) tool for quick comparisons. (Need [#12622](https://github.com/sgl-project/sglang/pull/12622) and [#12623](https://github.com/sgl-project/sglang/pull/12623) for most convenience.)
+
 ## Future Works
 
 We will keep maintaining and enhancing this feature. More specifically, we will:
