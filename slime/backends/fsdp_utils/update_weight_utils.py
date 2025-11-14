@@ -362,19 +362,13 @@ class UpdateWeightFromDistributed:
             raise RuntimeError("Parameter info buckets not initialized for distributed mode")
 
         for param_infos in tqdm(
-            self.param_info_buckets,
-            desc="[broadcast weight buckets]",
-            disable=not self._is_src_rank
+            self.param_info_buckets, desc="[broadcast weight buckets]", disable=not self._is_src_rank
         ):
             # Load all parameters in this bucket from CPU to GPU
             bucket_state_dict = {}
             for param_info in param_infos:
                 cpu_param = self.weights["actor"][param_info.name]
-                gpu_param = cpu_param.to(
-                    device=torch.cuda.current_device(),
-                    dtype=torch.bfloat16,
-                    non_blocking=True
-                )
+                gpu_param = cpu_param.to(device=torch.cuda.current_device(), dtype=torch.bfloat16, non_blocking=True)
                 bucket_state_dict[param_info.name] = gpu_param
 
             torch.cuda.synchronize()
