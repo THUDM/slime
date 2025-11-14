@@ -43,6 +43,29 @@ def _parse_generalized_path(s: str):
     return s, None
 
 
+def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
+    messages: list = data.get(prompt_key)
+
+    if multimodal_keys and any(value in data for _, value in multimodal_keys.items()):
+        flag_type_map = {f"<{key}>": key for key in multimodal_keys.keys()}
+        multimodal_inputs = {multimodal_type: data.get(multimodal_key) for multimodal_type, multimodal_key in multimodal_keys.items()}
+        pattern = "(" + "|".join(flag_type_map.keys()) + ")"
+        for message in messages:
+            content = message["content"]
+            content_list = []
+            segments = re.split(pattern, content)
+            segments = [item for item in segments if item != ""]
+            for segment in segments:
+                if segment in flag_type_map:
+                    content_list.append({"type": flag_type_map[segment], f"{flag_type_map[segment]}": multimodal_inputs[flag_type_map[segment]].pop(0)})
+                else:
+                    content_list.append({"type": "text", "text": segment})
+
+            message["content"] = content_list
+
+    return messages
+
+
 class Dataset:
     def __init__(
         self,
@@ -62,16 +85,7 @@ class Dataset:
     ):
         self.origin_samples = []
         for data in read_file(path):
-            if multimodal_keys:
-                prompt_content = []
-                if prompt_key in data:
-                    prompt_content.append({"type": "text", "text": data[prompt_key]})
-                for media_type, data_key in multimodal_keys.items():
-                    if data_key in data:
-                        media_path = data[data_key]
-                        prompt_content.append({"type": media_type, "path": media_path})
-            else:
-                prompt_content = data.get(prompt_key)
+            prompt = _build_messages(data, prompt_key, multimodal_keys)
 
             if apply_chat_template:
                 if tool_key is not None:
@@ -83,17 +97,14 @@ class Dataset:
                     assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
                 else:
                     tools = None
-                template_input = [{"role": "user", "content": prompt_content}] if multimodal_keys else prompt_content
+
                 prompt = tokenizer.apply_chat_template(
-                    template_input,
+                    prompt,
                     tools,
                     tokenize=False,
                     add_generation_prompt=True,
                     **apply_chat_template_kwargs,
                 )
-
-            else:
-                prompt = prompt_content
 
             # TODO: this is slow.
             if max_length is not None:
