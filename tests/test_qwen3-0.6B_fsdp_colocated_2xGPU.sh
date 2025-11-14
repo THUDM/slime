@@ -30,12 +30,7 @@ set -ex
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
-
-CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-0.6B
-   --ref-load /root/Qwen3-0.6B
-)
-
+export CUDA_VISIBLE_DEVICES=2,3
 ROLLOUT_ARGS=(
    --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
@@ -83,7 +78,7 @@ SGLANG_ARGS=(
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-project slime-fsdp-distributed-test
+   --wandb-project slime-fsdp
    --wandb-group fsdp-2gpu-colocated
    --wandb-key ${WANDB_KEY}
 )
@@ -92,8 +87,16 @@ FSDP_ARGS=(
    # Set to true for FULL_STATE_DICT mode, false for SHARDED_STATE_DICT mode (default)
    # --fsdp-full-params  # Uncomment this line to enable full params mode
 
-   # Set the buffer size for weight update
+   # Set the bucket size for weight update (note: singular 'weight', not 'weights')
    --update-weight-buffer-size $((512 * 1024 * 1024)) # 512MB
+)
+
+CHECKPOINT_ARGS=(
+   --hf-checkpoint /root/Qwen3-0.6B
+   --ref-load /root/Qwen3-0.6B
+   # --save /root/test_checkpoints/qwen3_fsdp_colocated_2gpu
+   # --load /root/test_checkpoints/qwen3_fsdp_colocated_2gpu
+   # --save-interval 5
 )
 
 # launch the master node of ray in container

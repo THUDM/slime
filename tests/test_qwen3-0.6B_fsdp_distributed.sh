@@ -70,6 +70,10 @@ WANDB_ARGS=(
    --wandb-key ${WANDB_KEY}
 )
 
+FSDP_ARGS=(
+   --update-weight-buffer-size $((512 * 1024 * 1024)) # 512MB
+)
+
 # launch the master node of ray in container
 ray start --head --node-ip-address 127.0.0.1 --num-gpus 4 --disable-usage-stats
 
