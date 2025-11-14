@@ -18,7 +18,7 @@ from slime.utils.ppo_utils import (
 )
 from slime.utils.types import RolloutBatch
 
-from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
+from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean, slice_log_prob_with_cp
 
 
 def get_responses(
@@ -346,6 +346,98 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     rollout_data["returns"] = returns
 
 
+def get_rollout_training_metrics(
+    train_log_probs: torch.Tensor,
+    rollout_log_probs: torch.Tensor,
+    loss_masks: torch.Tensor,
+) -> dict[str, torch.Tensor]:
+
+    def masked_mean(x: torch.Tensor) -> torch.Tensor:
+        return ((x * loss_masks).sum() / torch.clamp_min(loss_masks.sum(), 1)).expand_as(x)
+    
+    # 1. Training policy perplexity metrics
+    mean_log_prob_training = masked_mean(train_log_probs)
+    training_log_ppl = -mean_log_prob_training
+
+    # 2. Rollout policy perplexity metrics
+    mean_log_prob_rollout = masked_mean(rollout_log_probs)
+    rollout_log_ppl = -mean_log_prob_rollout
+
+    # 3a. kl: Direct estimator for KL(π_rollout || π_training)
+    # This is the standard KL divergence: E[log(π_rollout) - log(π_training)]
+    # Positive value means rollout policy is more confident than training policy
+    kl_per_token = rollout_log_probs - train_log_probs
+    
+    # 3b. K3 KL estimator for improved stability
+    # More stable for small KL values using: E[exp(log_ratio) - log_ratio - 1]
+    # Formula: KL ≈ E[r - log(r) - 1] where r = π_training/π_rollout
+    log_ratio = train_log_probs - rollout_log_probs
+    k3_kl_per_token = torch.exp(log_ratio) - log_ratio - 1
+
+    # 3c. Log PPL difference (sequence-level perplexity difference)
+    # log_ppl_diff = mean_log_prob_rollout - mean_log_prob_training
+    # Since ppl = exp(-log_prob), we have:
+    #   log(ppl_ratio) = log(training_ppl/rollout_ppl) = log_ppl_diff
+    # Positive value means training assigns lower probability (higher PPL) than rollout
+    log_ppl_diff = mean_log_prob_rollout - mean_log_prob_training
+    
+    # 3d. PPL ratio (how much higher is training PPL vs rollout PPL)
+    # For numerical stability, compute in log space using log_ppl_diff
+    # Note: log_ppl_diff = log(ppl_ratio), so ppl_ratio = exp(log_ppl_diff) 
+    ppl_ratio = torch.exp(log_ppl_diff)
+
+    return {
+        "mismatch_training_log_ppl": training_log_ppl,
+        "mismatch_training_ppl": torch.exp(training_log_ppl),
+        "mismatch_rollout_log_ppl": rollout_log_ppl,
+        "mismatch_rollout_ppl": torch.exp(rollout_log_ppl),
+        "mismatch_kl": kl_per_token,
+        "mismatch_k3_kl": k3_kl_per_token,
+        "mismatch_log_ppl_diff": log_ppl_diff,
+        "mismatch_log_ppl_abs_diff": log_ppl_diff.abs(),
+        "mismatch_ppl_ratio": ppl_ratio,
+    }
+
+
+def _compute_metrics_with_cp(
+    train_log_probs_list: list[torch.Tensor],
+    rollout_log_probs_list: list[torch.Tensor],
+    loss_masks_list: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+) -> dict[str, torch.Tensor]:
+    """Compute metrics with context parallelism handling.
+    
+    Gathers full sequences, computes metrics, then slices back to current CP rank.
+    """
+    # Gather cp slice from other cp ranks
+    full_train_log_probs = [
+        all_gather_with_cp(lp, tl, rl)
+        for lp, tl, rl in zip(train_log_probs_list, total_lengths, response_lengths)
+    ]
+    full_rollout_log_probs = [
+        all_gather_with_cp(lp, tl, rl)
+        for lp, tl, rl in zip(rollout_log_probs_list, total_lengths, response_lengths)
+    ]
+    
+    all_metrics_per_seq = [
+        get_rollout_training_metrics(train_lp, rollout_lp, loss_mask.float())
+        for train_lp, rollout_lp, loss_mask in zip(full_train_log_probs, full_rollout_log_probs, loss_masks_list)
+    ]
+    
+    # Slice out the value shards for this CP rank and concat them into a 1D tensor along dim=0 for loss.py computation.
+    final_metrics = {}
+    for key in all_metrics_per_seq[0].keys():
+        metric_values = [m[key] for m in all_metrics_per_seq]
+        sliced_values = [
+            slice_log_prob_with_cp(metric_values[i], total_lengths[i], response_lengths[i])
+            for i in range(len(metric_values))
+        ]
+        final_metrics[key] = torch.cat(sliced_values, dim=0)
+    
+    return final_metrics
+
+
 def policy_loss_function(
     args: Namespace,
     batch: RolloutBatch,
@@ -531,6 +623,18 @@ def policy_loss_function(
         for metric_key, metric_value in tis_metrics.items():
             key_name = f"{metric_key}"
             reported_loss[key_name] = sum_of_sample_mean(metric_value)
+
+    # Always return metrics about rollout & training log probs (e.g. training-inference KL), no matter whether TIS is used.
+    if "rollout_log_probs" in batch and batch["rollout_log_probs"]:
+        final_metrics = _compute_metrics_with_cp(
+            batch["log_probs"], batch["rollout_log_probs"], batch["loss_masks"],
+            total_lengths, response_lengths
+        )
+        for key, value in final_metrics.items():
+            reported_loss[key] = sum_of_sample_mean(value).clone().detach()
+    else:
+        if torch.distributed.get_rank() == 0:
+            print("[INFO] rollout_log_probs not available, skipping train-inference mismatch metrics computation.")
 
     return loss, reported_loss
 

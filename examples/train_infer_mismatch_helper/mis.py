@@ -157,7 +157,6 @@ def compute_mis_weights(
     # handle each sequence independently
     for train_log_prob, rollout_log_prob, loss_mask in zip(train_log_probs, rollout_log_probs, loss_masks):
         loss_mask = loss_mask.float()
-        add_ppl_metrics(train_log_prob, rollout_log_prob, loss_mask, metrics)
         raw_log_ratio_diff = train_log_prob - rollout_log_prob
 
         # level: The aggregation level for the importance sampling weights.
@@ -219,6 +218,32 @@ def compute_mis_weights(
         modified_mask = modified_mask.detach()
         all_weights.append(weights)
         all_modified_masks.append(modified_mask)
+
+    # Apply batch normalization if enabled (normalize to mean=1.0 across entire batch)
+    if args.mis_batch_normalize:
+        # Compute mean based on aggregation level
+        if level == "token":
+            # Token-level: normalize over all token weights
+            total_weights_sum = sum(masked_sum(w, m) for w, m in zip(all_weights, loss_masks))
+            total_mask_count = sum(m.sum() for m in loss_masks)
+            weights_mean = total_weights_sum / torch.clamp_min(total_mask_count, 1)
+        elif level == "sequence":
+            # Sequence-level: normalize over sequence weights (one weight per sequence)
+            # For each sequence, compute mean over valid tokens (they all have the same weight)
+            # then average across sequences
+            seq_weights_means = [masked_mean(w, m) for w, m in zip(all_weights, loss_masks)]
+            weights_mean = sum(seq_weights_means) / len(seq_weights_means)
+        else:
+            raise ValueError(f"Unsupported mis_level: {level}")
+
+        # Normalize to mean=1.0 (avoid division by zero)
+        if weights_mean > 1e-8:
+            all_weights = [w / weights_mean for w in all_weights]
+            for w in all_weights:
+                metrics_append(metrics, "batch_norm_factor", weights_mean.expand_as(w))
+        else:
+            for w in all_weights:
+                metrics_append(metrics, "batch_norm_factor", torch.ones_like(w))
 
     return all_weights, all_modified_masks, metrics
 
@@ -287,54 +312,3 @@ def compute_mis_weights_with_cp(
     pg_loss = pg_loss * is_weights
 
     return pg_loss, modified_masks, result_metrics
-
-
-def add_ppl_metrics(
-    train_log_prob: torch.Tensor,
-    rollout_log_prob: torch.Tensor,
-    loss_mask: torch.Tensor,
-    metrics: Dict[str, list[torch.Tensor]],
-):
-    loss_mask = loss_mask.float()
-
-    # 1. Training policy perplexity metrics
-    mean_log_prob_training = masked_mean(train_log_prob, loss_mask, expand=True)
-    training_log_ppl = -mean_log_prob_training
-    training_ppl = torch.exp(training_log_ppl)
-    metrics_append(metrics, "training_log_ppl", training_log_ppl)
-    metrics_append(metrics, "training_ppl", training_ppl)
-
-    # 2. Rollout policy perplexity metrics
-    mean_log_prob_rollout = masked_mean(rollout_log_prob, loss_mask, expand=True)
-    rollout_log_ppl = -mean_log_prob_rollout
-    rollout_ppl = torch.exp(rollout_log_ppl)
-    metrics_append(metrics, "rollout_log_ppl", rollout_log_ppl)
-    metrics_append(metrics, "rollout_ppl", rollout_ppl)
-
-    # 3a. kl: Direct estimator for KL(π_rollout || π_training)
-    # This is the standard KL divergence: E[log(π_rollout) - log(π_training)]
-    # Positive value means rollout policy is more confident than training policy
-    kl_per_token = rollout_log_prob - train_log_prob
-    metrics_append(metrics, "kl", kl_per_token)
-
-    # 3b. K3 KL estimator for improved stability
-    # More stable for small KL values using: E[exp(log_ratio) - log_ratio - 1]
-    # Formula: KL ≈ E[r - log(r) - 1] where r = π_training/π_rollout
-    log_ratio = train_log_prob - rollout_log_prob
-    k3_kl_matrix = torch.exp(log_ratio) - log_ratio - 1
-    metrics_append(metrics, "k3_kl", k3_kl_matrix)
-
-    # 3c. Log PPL difference (sequence-level perplexity difference)
-    # log_ppl_diff = mean_log_prob_rollout - mean_log_prob_training
-    # Since ppl = exp(-log_prob), we have:
-    #   log(ppl_ratio) = log(training_ppl/rollout_ppl) = log_ppl_diff
-    # Positive value means training assigns lower probability (higher PPL) than rollout
-    log_ppl_diff = mean_log_prob_rollout - mean_log_prob_training
-    metrics_append(metrics, "log_ppl_diff", log_ppl_diff)
-    metrics_append(metrics, "log_ppl_abs_diff", log_ppl_diff.abs())
-
-    # 3d. PPL ratio (how much higher is training PPL vs rollout PPL)
-    # For numerical stability, compute in log space using log_ppl_diff
-    # Note: log_ppl_diff = log(ppl_ratio), so ppl_ratio = exp(log_ppl_diff)
-    ppl_ratio = torch.exp(log_ppl_diff)
-    metrics_append(metrics, "ppl_ratio", ppl_ratio)

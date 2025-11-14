@@ -24,3 +24,7 @@ mis_upper_bound: 2.0
 # Per-token veto threshold. If any token ratio < this, zero the entire sequence weight, the sequences won't have gradient
 # Note: float number must be written with dot e.g. 1.0e-4, not 1e-4
 mis_veto_threshold: 1.0e-4
+
+# Batch normalization: normalize IS weights to mean=1.0 across entire batch
+# This reduces variance in gradient updates
+mis_batch_normalize: Fals
