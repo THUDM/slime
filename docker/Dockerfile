@@ -28,7 +28,7 @@ RUN pip install pybind11
 # the newest version megatron supports is v2.7.4
 RUN MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
 RUN pip install flash-linear-attention==0.4.0
-RUN pip -v install --no-build-isolation 'transformer_engine[pytorch]==2.9.0'
+RUN pip -v install --no-build-isolation 'transformer_engine[pytorch]==2.8.0'
 
 WORKDIR /root/
 RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
