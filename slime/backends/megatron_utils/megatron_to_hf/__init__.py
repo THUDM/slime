@@ -18,12 +18,12 @@ def ceildiv(a, b):
     return -(-a // b)
 
 
-def quantize_param(name, weight, weight_block_size):
+def quantize_param(name, weight, weight_block_size, force_pow_2_scale=False):
     assert name.endswith(".weight"), f"Expected weight parameter, got {name}"
     FP8_MIN = torch.finfo(torch.float8_e4m3fn).min
     FP8_MAX = torch.finfo(torch.float8_e4m3fn).max
     if weight_block_size is not None:
-        qweight, scale = blockwise_cast_to_fp8_triton(weight, weight_block_size)
+        qweight, scale = blockwise_cast_to_fp8_triton(weight, weight_block_size, force_pow_2_scale)
         scale_name = name.replace(".weight", ".weight_scale_inv")
     else:
         # per tensor quant
@@ -40,6 +40,10 @@ def quantize_params(args, megatron_name, converted_named_params, quantization_co
     assert quantization_config["quant_method"] == "fp8"
     assert quantization_config["fmt"] == "e4m3"
     assert quantization_config["activation_scheme"] == "dynamic"
+    if quantization_config.get("scale_fmt") == "ue8m0":
+        force_pow_2_scale = True
+    else:
+        force_pow_2_scale = False
     weight_block_size = quantization_config.get("weight_block_size", None)
 
     decoder_layers_pattern = r"module\.module\.decoder\.layers\.(\d+)\.(.+)"
@@ -71,7 +75,7 @@ def quantize_params(args, megatron_name, converted_named_params, quantization_co
                 # TODO: find a clearer way.
                 if converted_name.endswith("_scale"):
                     continue
-                quantize_named_params.extend(quantize_param(converted_name, param, weight_block_size))
+                quantize_named_params.extend(quantize_param(converted_name, param, weight_block_size, force_pow_2_scale))
 
             return quantize_named_params
 
@@ -86,7 +90,7 @@ def quantize_params(args, megatron_name, converted_named_params, quantization_co
         ]:
             quantize_named_params = []
             for converted_name, param in converted_named_params:
-                quantize_named_params.extend(quantize_param(converted_name, param, weight_block_size))
+                quantize_named_params.extend(quantize_param(converted_name, param, weight_block_size, force_pow_2_scale))
 
             return quantize_named_params
 

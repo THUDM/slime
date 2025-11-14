@@ -39,8 +39,11 @@ def _blockwise_cast_to_fp8_triton(
     eps,
     fp8_min,
     fp8_max,
+    bf16_max,
     BLOCK_M: tl.constexpr = 32,
     BLOCK_N: tl.constexpr = 128,
+    force_pow_2_scale: tl.constexpr = True,
+    INF : tl.constexpr= 3.4e38,
 ):
     pid_m = tl.cast(tl.program_id(axis=0), tl.int64)
     pid_n = tl.cast(tl.program_id(axis=1), tl.int64)
@@ -52,7 +55,17 @@ def _blockwise_cast_to_fp8_triton(
 
     x = tl.load(X + off_m[:, None] * stride_xm + off_n[None, :] * stride_xn, mask=mask, other=0.0).to(tl.float32)
     _absmax = tl.maximum(tl.max(tl.abs(x)), eps)
-    x_s = _absmax / fp8_max
+
+    if (_absmax > INF) | (_absmax == 0.0) | (_absmax != _absmax):
+        x_s = 1.0
+    else:
+        x_s = _absmax / fp8_max
+        if x_s > INF:
+            x_s = bf16_max
+
+        if force_pow_2_scale:
+            x_s = tl.exp2(tl.ceil(tl.log2(x_s)))
+
     s_inv = 1.0 / x_s
     y_q = tl.clamp(x * s_inv, fp8_min, fp8_max).to(Y.dtype.element_ty)
 
@@ -60,7 +73,7 @@ def _blockwise_cast_to_fp8_triton(
     tl.store(S + pid_m * stride_sm + pid_n * stride_sn, x_s)
 
 
-def blockwise_cast_to_fp8_triton(x: torch.Tensor, block_size=None) -> Tuple[torch.Tensor, torch.Tensor]:
+def blockwise_cast_to_fp8_triton(x: torch.Tensor, block_size=None, force_pow_2_scale=False) -> Tuple[torch.Tensor, torch.Tensor]:
     BLOCK_M, BLOCK_N = 128, 128
     if block_size:
         BLOCK_M, BLOCK_N = block_size[0], block_size[1]
@@ -72,7 +85,10 @@ def blockwise_cast_to_fp8_triton(x: torch.Tensor, block_size=None) -> Tuple[torc
         kwargs = {"BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "num_warps": 8, "num_stages": 2}
     else:
         kwargs = {"BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "num_warps": 1, "num_stages": 4}
+
+    kwargs["force_pow_2_scale"] = force_pow_2_scale
+
     _blockwise_cast_to_fp8_triton[grid](
-        x, y, s, *x.stride(), *y.stride(), *s.stride(), M, N, 1e-10, fp8_min, fp8_max, **kwargs
+        x, y, s, *x.stride(), *y.stride(), *s.stride(), M, N, 1e-10, fp8_min, fp8_max, bf16_max, **kwargs
     )
     return y, s
