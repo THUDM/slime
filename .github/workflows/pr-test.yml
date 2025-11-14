@@ -38,9 +38,9 @@ jobs:
         --ulimit stack=67108864
         --memory=0
         --memory-swap=0
-        -v /data/slime_ci:/data/slime_ci
-        -v /data/slime_ci/models:/root/models
-        -v /data/slime_ci/datasets:/root/datasets
+        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
+        -v /mnt/nvme0n1/slime_ci/models:/root/models
+        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
     strategy:
       fail-fast: false
       matrix:
@@ -78,9 +78,9 @@ jobs:
         --ulimit stack=67108864
         --memory=0
         --memory-swap=0
-        -v /data/slime_ci:/data/slime_ci
-        -v /data/slime_ci/models:/root/models
-        -v /data/slime_ci/datasets:/root/datasets
+        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
+        -v /mnt/nvme0n1/slime_ci/models:/root/models
+        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
     strategy:
       fail-fast: false
       matrix:
