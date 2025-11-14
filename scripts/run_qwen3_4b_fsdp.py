@@ -164,10 +164,10 @@ eval:
 
         case "megatron":
             train_backend_args = (
-                "--tensor-model-parallel-size 1 "
+                "--tensor-model-parallel-size 2 "
                 "--sequence-parallel "
                 "--pipeline-model-parallel-size 1 "
-                "--context-parallel-size 8 "
+                "--context-parallel-size 4 "
                 "--expert-model-parallel-size 1 "
                 "--expert-tensor-parallel-size 1 "
                 "--recompute-granularity full "
@@ -181,10 +181,11 @@ eval:
                 "--attention-softmax-in-fp32 "
                 # need to comment this when using model with MLA
                 "--attention-backend flash "
+                "--train-memory-margin-bytes 3221225472 "
             )
             # TODO improve
             sglang_args += f"--sglang-mem-fraction-static 0.7 "
-            perf_args = "--use-dynamic-batch-size " "--max-tokens-per-gpu 8192 "
+            perf_args = "--use-dynamic-batch-size " "--max-tokens-per-gpu 9216 "
 
         case _:
             raise NotImplementedError
