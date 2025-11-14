@@ -3,6 +3,7 @@ import json
 import os
 import random
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -35,12 +36,18 @@ def hf_download_dataset(full_name: str):
     exec_command(f"hf download --repo-type dataset {full_name} --local-dir /root/datasets/{partial_name}")
 
 
+@dataclass
+class ExecuteTrainConfig:
+    cuda_core_dump: bool = False
+
+
 def execute_train(
     train_args: str,
     # TODO rename to "num_gpus_per_node"
     num_gpus: int,
     # TODO rename to "megatron_model_type"
     model_type: Optional[str],
+    config: ExecuteTrainConfig = ExecuteTrainConfig(),
     train_script: str = "train.py",
     before_ray_job_submit=None,
     extra_env_vars={},
@@ -101,7 +108,7 @@ def execute_train(
                         "CUDA_COREDUMP_GENERATION_FLAGS": "skip_nonrelocated_elf_images,skip_global_memory,skip_shared_memory,skip_local_memory,skip_constbank_memory",
                         "CUDA_COREDUMP_FILE": "/tmp/cuda_coredump_%h.%p.%t",
                     }
-                    if get_bool_env_var("SLIME_SCRIPT_ENABLE_CUDA_CORE_DUMP")
+                    if config.cuda_core_dump
                     else {}
                 ),
                 **extra_env_vars,
