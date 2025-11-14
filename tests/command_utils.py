@@ -84,7 +84,7 @@ def execute_train(
     if not external_ray:
         exec_command(
             # will prevent ray from buffering stdout/stderr
-            f"export PYTHONBUFFERED=16 && "
+            f"export PYTHONUNBUFFERED=1 && "
             f"ray start --head --node-ip-address {master_addr} --num-gpus {num_gpus} --disable-usage-stats"
         )
 
@@ -128,7 +128,7 @@ def execute_train(
 
     if bool(int(os.environ.get("SLIME_SCRIPT_ENABLE_RAY_SUBMIT", "1"))):
         exec_command(
-            f"export PYTHONBUFFERED=16 && "
+            f"export PYTHONUNBUFFERED=1 && "
             f"{source_cmd}"
             # TODO should this 127.0.0.1 be `master_addr` instead
             f'ray job submit --address="http://127.0.0.1:8265" '

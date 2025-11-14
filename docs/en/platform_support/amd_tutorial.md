@@ -1,6 +1,6 @@
 # AMD
 
-⚠️ If you encounter problems on AMD instinct, feel free to reach out [Yusheng Su](https://yushengsu-thu.github.io/). 
+⚠️ If you encounter problems on AMD instinct, feel free to reach out [Yusheng Su](https://yushengsu-thu.github.io/).
 
 
 ## Introduction
@@ -12,7 +12,7 @@ If you are running slime on AMD's Instinct, please refer to the following materi
 
 ## Docker
 
-You can download the prebuilt image from DockerHub: [rlsys/slime](https://hub.docker.com/r/rlsys/slime/tags). 
+You can download the prebuilt image from DockerHub: [rlsys/slime](https://hub.docker.com/r/rlsys/slime/tags).
 ```bash
 docker pull rlsys/slime:latest
 ```
@@ -84,15 +84,15 @@ Note: You might encounter some issue in the current model convert script on AMD 
 ### Example: Qwen3-4B
 
 We provide examples to use [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B), please refer to:
-- [Example: Qwen3-4B Model](scripts/run-qwen3-4B-amd.sh): Just run `scripts/run-qwen3-4B-amd.sh` 
+- [Example: Qwen3-4B Model](scripts/run-qwen3-4B-amd.sh): Just run `scripts/run-qwen3-4B-amd.sh`
 
 ⚠️ TODO: The [ROCm-version torch_memory_saver](https://github.com/yushengsu-thu/torch_memory_saver.git) does not seem to clear memory properly; thus, we set `--sglang-mem-fraction-static` as `0.4` currently. We will continue investigating and focus on ROCm's virtual memory management for further modifications.
 
-⚠️ TODO: ROCM seems to not support `apex` yet. Thus, we need to disable `--no-gradient-accumulation-fusion` currently. We will continue investigating how to enable this. 
+⚠️ TODO: ROCM seems to not support `apex` yet. Thus, we need to disable `--no-gradient-accumulation-fusion` currently. We will continue investigating how to enable this.
 
 ⚠️ Note: The main difference between ROCm's training script and NVIDIA's script is that you need to set `RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES` and `HIP_VISIBLE_DEVICES` for ray to function properly on AMD GPUs.
 
-- We show the training script below: 
+- We show the training script below:
 
 ```bash
 #!/bin/bash
@@ -125,7 +125,7 @@ export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"} #You can ch
 ####################
 
 # will prevent ray from buffering stdout/stderr
-export PYTHONBUFFERED=16
+export PYTHONUNBUFFERED=1
 
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
@@ -211,7 +211,7 @@ WANDB_ARGS=(
 )
 
 ### AMD Support ###
-# Need to fix some issue with torch_memory_saver in rocm to support larger  --sglang-mem-fraction-static 
+# Need to fix some issue with torch_memory_saver in rocm to support larger  --sglang-mem-fraction-static
 # SGLANG_ARGS=(
 #    --rollout-num-gpus-per-engine 2
 #    --sglang-mem-fraction-static 0.7

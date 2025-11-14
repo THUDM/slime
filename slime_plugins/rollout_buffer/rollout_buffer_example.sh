@@ -12,7 +12,7 @@ pkill -9 python
 
 set -ex
 
-export PYTHONBUFFERED=16
+export PYTHONUNBUFFERED=1
 
 # DeepSeek-R1-Distill-Qwen-7B
 MODEL_ARGS=(
