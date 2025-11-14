@@ -49,7 +49,7 @@ def execute_train(
 
     exec_command(
         # will prevent ray from buffering stdout/stderr
-        f"export PYTHONBUFFERED=16 && "
+        f"export PYTHONUNBUFFERED=1 && "
         f"ray start --head --node-ip-address {master_addr} --num-gpus {num_gpus} --disable-usage-stats"
     )
 
@@ -65,7 +65,7 @@ def execute_train(
     )
 
     exec_command(
-        f"export no_proxy=127.0.0.1 && export PYTHONBUFFERED=16 && "
+        f"export no_proxy=127.0.0.1 && export PYTHONUNBUFFERED=1 && "
         f'source "{repo_base_dir}/scripts/models/{model_type}.sh" && '
         # TODO should this 127.0.0.1 be `master_addr` instead
         f'ray job submit --address="http://127.0.0.1:8265" '
@@ -93,12 +93,7 @@ def get_default_wandb_args(test_file: str):
         run_name += f"_{x}"
 
     # do not put wandb_api_key value here to avoid leaking to logs explicitly
-    return (
-        "--use-wandb "
-        f"--wandb-project slime-ci-{test_name} "
-        f"--wandb-group {run_name} "
-        f"--wandb-key ${{WANDB_API_KEY}} "
-    )
+    return f"--use-wandb --wandb-project slime-ci-{test_name} --wandb-group {run_name} --wandb-key ${{WANDB_API_KEY}} "
 
 
 def exec_command(cmd: str, capture_output: bool = False):
