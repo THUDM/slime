@@ -1,5 +1,5 @@
 # Enable importance sampling, details refer to the comments of compute_mis_weights in mis.py
-use_mis: false
+use_tis: true
 
 # Aggregation level for importance sampling weights: 
 # token: per-token
@@ -11,14 +11,16 @@ mis_level: "token"
 # truncate: cap to upper bound, TIS
 # mask: zero outside [lower, upper], MIS
 # clip: clip to [lower, upper], CIS
-mis_mode: "truncate"
+mis_mode: "mask"
 
 # For mask or clip mode, the lower bound of the IS weights.
 # For truncate mode, it will not be used.
 # If not set, it will be set to 1.0 / mis_upper_bound
+# For Geometry level, the lower bound should be 0.9999
 mis_lower_bound: 0.5
 
 # For truncate, mask, or clip mode, the upper bound of the IS weights
+# For Geometry level, the upper bound should be 1.0001
 mis_upper_bound: 2.0
 
 # Per-token veto threshold. If any token ratio < this, zero the entire sequence weight, the sequences won't have gradient

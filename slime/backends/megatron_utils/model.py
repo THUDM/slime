@@ -433,7 +433,7 @@ def train_one_step(
             return loss_mask_tensor.unsqueeze(0)
 
         loss_mask = None
-        mtp_kwargs = {}
+        mtp_kwargs = None
 
         if return_schedule_plan:
             assert not args.enable_mtp_training, "MTP training should not be enabled when using combined 1f1b"
@@ -464,7 +464,7 @@ def train_one_step(
                 labels=None,
                 packed_seq_params=batch["packed_seq_params"],
                 loss_mask=loss_mask,
-                mtp_kwargs=mtp_kwargs,
+                **(dict(mtp_kwargs=mtp_kwargs) if mtp_kwargs is not None else {}),
             )
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":

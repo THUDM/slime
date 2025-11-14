@@ -129,6 +129,7 @@ class RolloutManager:
         if self.args.load_debug_rollout_data:
             data = torch.load(
                 open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
+                weights_only=False,
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
             if (ratio := self.args.load_debug_rollout_data_subsample) is not None:
@@ -245,8 +246,14 @@ class RolloutManager:
         if samples[0].rollout_log_probs is not None:
             train_data["rollout_log_probs"] = [sample.rollout_log_probs for sample in samples]
 
+        if samples[0].rollout_routed_experts is not None:
+            train_data["rollout_routed_experts"] = [sample.rollout_routed_experts for sample in samples]
+
         if samples[0].train_metadata is not None:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
+
+        if "teacher_log_probs" in samples[0].__dict__:
+            train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
 
         return train_data
 
@@ -289,6 +296,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
                     "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                     "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                     "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
+                    "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
                 }
             },
         ).remote(args, rank=i)
@@ -447,7 +455,7 @@ def _log_eval_rollout_data(rollout_id, args, data):
         rewards = data[key]["rewards"]
         log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
         if (samples := data[key].get("samples")) is not None:
-            log_dict |= dict_add_prefix(_compute_reward_cat_metrics(args, samples), f"eval/{key}-")
+            log_dict |= dict_add_prefix(_compute_metrics_from_samples(args, samples), f"eval/{key}/")
         if "truncated" in data[key]:
             truncated = data[key]["truncated"]
             log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
@@ -485,17 +493,12 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
         return
 
     log_dict = {**(rollout_extra_metrics or {})}
-    response_lengths = [
-        sum(sample.loss_mask) if sample.loss_mask is not None else sample.response_length for sample in samples
-    ]
+    response_lengths = [sample.effective_response_length for sample in samples]
     log_dict["perf/rollout_time"] = rollout_time
     if args.rollout_num_gpus:
         log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
-    log_dict |= dict_add_prefix(compute_statistics(response_lengths), f"rollout/response_len/")
-    log_dict |= _compute_zero_std_metrics(args, samples)
-    log_dict |= _compute_spec_metrics(args, samples)
-    log_dict |= dict_add_prefix(_compute_reward_cat_metrics(args, samples), f"rollout/")
+    log_dict |= dict_add_prefix(_compute_metrics_from_samples(args, samples), f"rollout/")
     print(f"perf {rollout_id}: {log_dict}")
     step = (
         rollout_id
@@ -513,6 +516,19 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
         tb.log(data=log_dict, step=step)
 
 
+def _compute_metrics_from_samples(args, samples):
+    response_lengths = [sample.effective_response_length for sample in samples]
+
+    log_dict = {}
+    log_dict |= dict_add_prefix(compute_statistics(response_lengths), f"response_len/")
+    log_dict |= _compute_zero_std_metrics(args, samples)
+    log_dict |= _compute_spec_metrics(args, samples)
+    log_dict |= _compute_reward_cat_metrics(args, samples)
+    log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
+    log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
+    return log_dict
+
+
 def _compute_zero_std_metrics(args, all_samples: List[Sample]):
     # only compute in GRPO-like algorithms where one prompt has multiple responses
     if args.advantage_estimator == "ppo":
@@ -527,7 +543,7 @@ def _compute_zero_std_metrics(args, all_samples: List[Sample]):
 
     interesting_rewards = [str(round(g[0].get_reward_value(args), 1)) for g in interesting_sample_groups]
 
-    return {f"rollout/zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
+    return {f"zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
 
 
 def _compute_spec_metrics(args, all_samples: List[Sample]):

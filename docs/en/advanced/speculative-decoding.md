@@ -1,8 +1,10 @@
 # Speculative Decoding
 
-Speculative decoding is an important optimization for making faster rollout during RL training. Currently slime only supports speculative decoding without training.
+Speculative decoding is a key optimization for speeding up rollouts. Instead of having the expensive target model decode token by token during inference, a lightweight draft model first decodes ahead to produce several tokens, and then the target model verifies them in a batch.
 
-For model with MTP layer (e.g. GLM-4.6, Deepseek-V3/R1), you can run with:
+## Accelerating Inference with Speculative Decoding
+
+For models with MTP layers (e.g., GLM-4.6, DeepSeek-V3/R1), simply add:
 
 ```bash
 --sglang-speculative-algorithm EAGLE
@@ -11,10 +13,23 @@ For model with MTP layer (e.g. GLM-4.6, Deepseek-V3/R1), you can run with:
 --sglang-speculative-num-draft-tokens 4
 ```
 
-And for external draft model (e.g. draft models from [SpecForge](https://docs.sglang.ai/SpecForge/)), you need also pass:
+If you want to use a separately trained draft model (e.g., one trained with [SpecForge](https://docs.sglang.ai/SpecForge/)), also set:
 
 ```bash
---speculative-draft-model-path /your/draft/model/path
+--sglang-speculative-draft-model-path /your/draft/model/path
 ```
 
-For details on parameter meanings and configuration, see the [SGLang speculative decoding documentation](https://docs.sglang.ai/advanced_features/speculative_decoding.html).
+For detailed parameter meanings and configuration, see SGLang’s speculative decoding [documentation](https://docs.sglang.ai/advanced_features/speculative_decoding.html).
+
+## Online SFT for the Draft Model
+
+As RL progresses, the sampling distributions of the draft and target models can drift apart. Fewer draft tokens pass verification, and speculative decoding can even yield negative returns.
+
+Slime currently supports online training of the MTP layers during RL, updating the draft model in sync with training to consistently improve sampling speed. See the related rationale in this [blog](https://www.notion.so/jiajunli-guapisolo/Power-Up-Speculative-Decoding-In-Reinforcement-Learning-2a92d24a293b802d9c73dbae429e581e). Use it as follows:
+
+```bash
+--enable-mtp-training
+--mtp-loss-scaling-factor 0.2
+```
+
+Training external draft models is still a WIP.
