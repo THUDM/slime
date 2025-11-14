@@ -1,3 +1,16 @@
+diff --git a/megatron/core/dist_checkpointing/strategies/common.py b/megatron/core/dist_checkpointing/strategies/common.py
+index 41c21d93d..ef80f72d6 100644
+--- a/megatron/core/dist_checkpointing/strategies/common.py
++++ b/megatron/core/dist_checkpointing/strategies/common.py
+@@ -86,7 +86,7 @@ class TorchCommonLoadStrategy(LoadCommonStrategy):
+                 msc = MultiStorageClientFeature.import_package()
+                 return msc.torch.load(load_path, map_location='cpu')
+             else:
+-                return torch.load(load_path, map_location='cpu')
++                return torch.load(load_path, map_location='cpu', weights_only=False)
+         except FileNotFoundError as e:
+             err_msg = f'Common file {load_path} does not exist'
+             if MultiStorageClientFeature.is_enabled():
 diff --git a/megatron/core/dist_checkpointing/strategies/torch.py b/megatron/core/dist_checkpointing/strategies/torch.py
 index ccf5242a2..807959da5 100644
 --- a/megatron/core/dist_checkpointing/strategies/torch.py
@@ -385,7 +398,7 @@ index 6b20b8622..459e65921 100644
          """
          Maintain the expert bias in float32.
 diff --git a/megatron/core/transformer/multi_token_prediction.py b/megatron/core/transformer/multi_token_prediction.py
-index b7884e18e..153682618 100755
+index b7884e18e..f0104f861 100755
 --- a/megatron/core/transformer/multi_token_prediction.py
 +++ b/megatron/core/transformer/multi_token_prediction.py
 @@ -6,6 +6,7 @@ from typing import Callable, List, Optional, Union
@@ -576,10 +589,10 @@ index b7884e18e..153682618 100755
 +        )
          # embedding
          decoder_input = embedding(input_ids=input_ids, position_ids=position_ids)
-+        decoder_input = make_viewless_tensor(inp=decoder_input, requires_grad=False, keep_graph=False)
++        decoder_input = decoder_input.detach()
  
 -        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
-+        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=False, keep_graph=False)
++        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=False)
  
          return input_ids, position_ids, decoder_input, hidden_states
  
