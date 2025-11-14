@@ -13,6 +13,7 @@ class Sample:
     index: Optional[int] = None
     # prompt
     prompt: Union[str, list[dict[str, str]]] = ""
+    multimodal_input: Optional[dict[str, str | list[str]]] = None
     tokens: list[int] = field(default_factory=list)
     # response
     response: str = ""
