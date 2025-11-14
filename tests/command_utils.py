@@ -39,6 +39,12 @@ def hf_download_dataset(full_name: str):
 @dataclass
 class ExecuteTrainConfig:
     cuda_core_dump: bool = False
+    num_nodes: int = 1
+    extra_env_vars: str = ""
+
+    def __post_init__(self):
+        if (x := os.environ.get("SLURM_JOB_NUM_NODES")) is not None:
+            self.num_nodes = int(x)
 
 
 def execute_train(
@@ -112,6 +118,7 @@ def execute_train(
                     else {}
                 ),
                 **extra_env_vars,
+                **_parse_extra_env_vars(config.extra_env_vars),
             }
         }
     )
@@ -130,6 +137,13 @@ def execute_train(
             f"{model_args_str} "
             f"{train_args}"
         )
+
+
+def _parse_extra_env_vars(text: str):
+    try:
+        return json.loads(text)
+    except ValueError:
+        return {kv[0]: kv[1] for item in text.split(" ") if item.strip() != "" if (kv := item.split("=")) or True}
 
 
 def check_has_nvlink():
