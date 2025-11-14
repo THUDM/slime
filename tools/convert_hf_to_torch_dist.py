@@ -37,7 +37,7 @@ def get_args():
 
     assert world_size <= args.num_layers, (
         f"World size {world_size} must be less than or equal to number of layers {args.num_layers}. "
-        "You are using to much GPUs for this conversion."
+        "You are using too much GPUs for this conversion."
     )
 
     ceildiv = lambda a, b: -(a // -b)  # Ceiling division
