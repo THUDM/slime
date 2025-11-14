@@ -412,7 +412,9 @@ document.write(`
   </button>
 `);
 </script>
-
+<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
 </div></div>
       
     </div>
@@ -428,6 +430,15 @@ document.write(`
     <div id="print-main-content">
         <div id="jb-print-toc">
             
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#accelerating-inference-with-speculative-decoding">Accelerating Inference with Speculative Decoding</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#online-sft-for-the-draft-model">Online SFT for the Draft Model</a></li>
+</ul>
+            </nav>
         </div>
     </div>
 </div>
@@ -439,19 +450,32 @@ document.write(`
                   
   <section class="tex2jax_ignore mathjax_ignore" id="speculative-decoding">
 <h1>Speculative Decoding<a class="headerlink" href="#speculative-decoding" title="Link to this heading">#</a></h1>
-<p>Speculative decoding is an important optimization for making faster rollout during RL training. Currently slime only supports speculative decoding without training.</p>
-<p>For model with MTP layer (e.g. GLM-4.6, Deepseek-V3/R1), you can run with:</p>
+<p>Speculative decoding is a key optimization for speeding up rollouts. Instead of having the expensive target model decode token by token during inference, a lightweight draft model first decodes ahead to produce several tokens, and then the target model verifies them in a batch.</p>
+<section id="accelerating-inference-with-speculative-decoding">
+<h2>Accelerating Inference with Speculative Decoding<a class="headerlink" href="#accelerating-inference-with-speculative-decoding" title="Link to this heading">#</a></h2>
+<p>For models with MTP layers (e.g., GLM-4.6, DeepSeek-V3/R1), simply add:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-speculative-algorithm<span class="w"> </span>EAGLE
 --sglang-speculative-num-steps<span class="w"> </span><span class="m">3</span>
 --sglang-speculative-eagle-topk<span class="w"> </span><span class="m">1</span>
 --sglang-speculative-num-draft-tokens<span class="w"> </span><span class="m">4</span>
 </pre></div>
 </div>
-<p>And for external draft model (e.g. draft models from <a class="reference external" href="https://docs.sglang.ai/SpecForge/">SpecForge</a>), you need also pass:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--speculative-draft-model-path<span class="w"> </span>/your/draft/model/path
+<p>If you want to use a separately trained draft model (e.g., one trained with <a class="reference external" href="https://docs.sglang.ai/SpecForge/">SpecForge</a>), also set:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-speculative-draft-model-path<span class="w"> </span>/your/draft/model/path
 </pre></div>
 </div>
-<p>For details on parameter meanings and configuration, see the <a class="reference external" href="https://docs.sglang.ai/advanced_features/speculative_decoding.html">SGLang speculative decoding documentation</a>.</p>
+<p>For detailed parameter meanings and configuration, see SGLang’s speculative decoding <a class="reference external" href="https://docs.sglang.ai/advanced_features/speculative_decoding.html">documentation</a>.</p>
+</section>
+<section id="online-sft-for-the-draft-model">
+<h2>Online SFT for the Draft Model<a class="headerlink" href="#online-sft-for-the-draft-model" title="Link to this heading">#</a></h2>
+<p>As RL progresses, the sampling distributions of the draft and target models can drift apart. Fewer draft tokens pass verification, and speculative decoding can even yield negative returns.</p>
+<p>Slime currently supports online training of the MTP layers during RL, updating the draft model in sync with training to consistently improve sampling speed. See the related rationale in this <a class="reference external" href="https://www.notion.so/jiajunli-guapisolo/Power-Up-Speculative-Decoding-In-Reinforcement-Learning-2a92d24a293b802d9c73dbae429e581e">blog</a>. Use it as follows:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--enable-mtp-training
+--mtp-loss-scaling-factor<span class="w"> </span><span class="m">0</span>.2
+</pre></div>
+</div>
+<p>Training external draft models is still a WIP.</p>
+</section>
 </section>
 
 
@@ -489,6 +513,22 @@ document.write(`
             </div>
             
             
+              
+                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+  <div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav class="bd-toc-nav page-toc">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#accelerating-inference-with-speculative-decoding">Accelerating Inference with Speculative Decoding</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#online-sft-for-the-draft-model">Online SFT for the Draft Model</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
               
             
           </div>
