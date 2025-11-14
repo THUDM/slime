@@ -33,7 +33,11 @@ After running the training, you can see in wandb that the metric `train/train_ro
 ### Setup & Results
 We fine-tune Qwen3-4B-Base on dapo-math-17k dataset with max_new_tokens = 2048, and evaluate on aime-2024 dataset with max_new_tokens = 8192.
 Global batch size is 64 × 16. Results are summarized below.
-<p align="center"> <img width="450" alt="raw_rewards" src="src/raw_reward.png" /> <img width="450" alt="diff" src="src/train_rollout_abs_diff.png" /> <img width="450" alt="rollout_time" src="src/rollout_time.png" /> <img width="450" alt="eval" src="src/aime.png" /> </p>
+<p align="center">
+  <img width="320" alt="raw_rewards" src="src/raw_reward.png" />
+  <img width="320" alt="diff" src="src/train_rollout_abs_diff.png" />
+  <img width="320" alt="rollout_time" src="src/rollout_time.png" />
+</p>
 
 ### Observations
 
