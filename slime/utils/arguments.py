@@ -963,7 +963,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--memory-recorder",
                 type=str,
-                choices=["torch"],
+                choices=["torch", "memray"],
                 default="torch",
             )
             return parser

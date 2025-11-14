@@ -77,6 +77,7 @@ class _BaseMemoryProfiler:
     def create(args):
         c = {
             "torch": _TorchMemoryProfiler,
+            "memray": _MemrayMemoryProfiler,
         }[args.memory_recorder]
         return c(args)
 
@@ -116,3 +117,23 @@ class _TorchMemoryProfiler(_BaseMemoryProfiler):
         print(f"Dump memory snapshot to: {self._path_dump}")
         torch.cuda.memory._dump_snapshot(self._path_dump)
         torch.cuda.memory._record_memory_history(enabled=None)
+
+
+class _MemrayMemoryProfiler(_BaseMemoryProfiler):
+    def __init__(self, args):
+        super().__init__(args)
+        assert args.memory_snapshot_num_steps is not None, f"In memray, must provide --memory-snapshot-num-steps"
+
+    def start(self):
+        print("Memray tracker started.")
+        import memray
+
+        self._tracker = memray.Tracker(
+            file_name=self._path_dump,
+            native_traces=True,
+        )
+        self._tracker.__enter__()
+
+    def stop(self):
+        print(f"Memray tracker stopped and dump snapshot to: {self._path_dump}")
+        self._tracker.__exit__(None, None, None)
