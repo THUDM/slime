@@ -93,7 +93,7 @@ pre-commit run --all-files --show-diff-on-failure --color=always
 - Special thanks to the following projects & communities: SGLang, Megatron‑LM, mbridge, OpenRLHF, veRL, Pai-Megatron-Patch and others.
 - To quote slime, please use:
 
-```bibtext
+```bibtex
 @misc{slime_github,
   author       = {Zilin Zhu and Chengxing Xie and Xin Lv and slime Contributors},
   title        = {slime: An LLM post-training framework for RL Scaling},
