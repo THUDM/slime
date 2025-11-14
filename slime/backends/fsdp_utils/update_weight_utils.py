@@ -6,6 +6,7 @@ import ray
 import torch
 import torch.distributed as dist
 from ray.actor import ActorHandle
+from torch.distributed.tensor import DTensor
 
 try:
     from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions  # type: ignore[import]
@@ -397,7 +398,7 @@ class UpdateWeightFromDistributed:
             param_data = param.data.contiguous()
 
             # avoid `DTensor._op_dispatcher.dispatch` has `assert compute_mesh is not None` error
-            if dist.get_world_size() == 1:
+            if dist.get_world_size() == 1 and isinstance(param_data, DTensor):
                 param_data = param_data.full_tensor()
 
             # Synchronous broadcast to avoid memory buildup

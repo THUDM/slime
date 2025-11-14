@@ -102,11 +102,6 @@ class FSDPTrainRayActor(TrainRayActor):
         if args.gradient_checkpointing:
             model.gradient_checkpointing_enable()
 
-        checkpoint_payload = checkpoint.load(self)
-        if checkpoint_payload is not None and checkpoint_payload.get("model") is not None:
-            model.load_state_dict(checkpoint_payload["model"], strict=True)
-            checkpoint_payload["model"] = None
-
         # Create FSDP v2 model using FSDP
         self.model = apply_fsdp2(model)
 
@@ -138,8 +133,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.global_step = 0
         self.micro_step = 0
-        self._latest_checkpoint_iteration: int | None = None
         self.weights = {"actor": {}}
+
+        checkpoint_payload = checkpoint.load(self)
 
         self.ref_model = None
         if with_ref:
@@ -740,8 +736,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if os.path.isdir(ref_load_path):
             # Get actor weights for dtype matching
-            actor_weights = {}
-            self.update_cpu_params_dict(actor_weights)
+            actor_weights = self.weights["actor"]
 
             temp_ref_model = AutoModelForCausalLM.from_pretrained(
                 ref_load_path,
