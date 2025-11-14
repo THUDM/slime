@@ -1,4 +1,3 @@
-import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,13 +13,12 @@ import command_utils as U
 @dataclass
 class ScriptArgs(U.ExecuteTrainConfig):
     mode: Literal["normal", "debug_minimal"] = "normal"
+    run_id: str = U.create_run_id()
     model_name: str = "Qwen3-4B-Instruct-2507"
     megatron_model_type: Optional[str] = None
-    num_nodes: int = 1
-    num_gpus_per_node: int = 8
-    hardware: Literal["H100"] = "H100"
+    num_gpus_per_node: Optional[int] = None
+    hardware: Literal["H100", "GB300"] = "H100"
     extra_args: str = ""
-    extra_env_vars: str = "{}"
     multi_eval: bool = False
     true_on_policy: bool = False
     dynamic_sampling: bool = False
@@ -28,11 +26,19 @@ class ScriptArgs(U.ExecuteTrainConfig):
     train_backend: Literal["fsdp", "megatron"] = "fsdp"
 
     def __post_init__(self):
+        super().__post_init__()
+
         if self.train_backend == "megatron":
             self.megatron_model_type = {
                 "Qwen3-4B-Instruct-2507": "qwen3-4B-Instruct-2507",
                 "Qwen3-4B-Base": "qwen3-4B",
             }[self.model_name]
+
+        if self.num_gpus_per_node is None:
+            self.num_gpus_per_node = {
+                "H100": 8,
+                "GB300": 4,
+            }[self.hardware]
 
 
 def prepare(args: ScriptArgs):
@@ -53,14 +59,13 @@ def prepare(args: ScriptArgs):
 
 
 def execute(args: ScriptArgs):
-    run_id = U.create_run_id()
-
-    load_save_path = f"/root/shared_data/{run_id}/checkpoints"
+    load_save_path = f"/root/shared_data/{args.run_id}/checkpoints"
     ckpt_args = (
         f"--hf-checkpoint /root/models/{args.model_name} "
         f"--load {load_save_path} "
         f"--save {load_save_path} "
-        "--save-interval 20 "
+        f"--save-interval {2 if args.mode == 'debug_minimal' else 20} "
+        f"--save-retain-interval {2 if args.mode == 'debug_minimal' else 20} "
     )
     if args.train_backend == "megatron":
         ckpt_args += (
@@ -164,10 +169,10 @@ eval:
 
         case "megatron":
             train_backend_args = (
-                "--tensor-model-parallel-size 2 "
+                f"--tensor-model-parallel-size {2 if args.num_gpus_per_node == 8 else 1} "
                 "--sequence-parallel "
                 "--pipeline-model-parallel-size 1 "
-                "--context-parallel-size 4 "
+                f"--context-parallel-size {4 if args.num_gpus_per_node == 8 else 1} "
                 "--expert-model-parallel-size 1 "
                 "--expert-tensor-parallel-size 1 "
                 "--recompute-granularity full "
@@ -193,9 +198,10 @@ eval:
     misc_args = (
         f"--actor-num-nodes {args.num_nodes} "
         f"--actor-num-gpus-per-node {args.num_gpus_per_node} "
+        f"--num-gpus-per-node {args.num_gpus_per_node} "
         "--colocate "
         "--use-fault-tolerance "
-        f"--dump-details /root/shared_data/{run_id}/dump_details "
+        f"--dump-details /root/shared_data/{args.run_id}/dump_details "
     )
 
     misc_env_vars = {}
@@ -228,7 +234,7 @@ eval:
         f"{rollout_args} "
         f"{optimizer_args} "
         f"{grpo_args} "
-        f"{U.get_default_wandb_args(__file__, run_id=run_id)} "
+        f"{U.get_default_wandb_args(__file__, run_id=args.run_id)} "
         f"{perf_args} "
         f"{eval_args} "
         f"{sglang_args} "
@@ -247,7 +253,6 @@ eval:
         extra_env_vars={
             **misc_env_vars,
             **true_on_policy_envs,
-            **json.loads(args.extra_env_vars),
         },
     )
 
