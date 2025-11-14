@@ -28,8 +28,11 @@
 目前，slime 支持了在 RL 流程中在线训练 MTP 层，随着训练的进行同步更新 draft model，稳定提高了采样速度，相关原理可参见 [blog](https://www.notion.so/jiajunli-guapisolo/Power-Up-Speculative-Decoding-In-Reinforcement-Learning-2a92d24a293b802d9c73dbae429e581e)。使用方法如下：
 
 ```bash
+--mtp-num-layers 1
 --enable-mtp-training
 --mtp-loss-scaling-factor 0.2
 ```
+
+注意 MTP 训练需要一个包含了 MTP 权重的 checkpoint，所以在将 huggingface checkpoint 转为 torch dist 时，也需要加上 `--mtp-num-layers 1`。
 
 外部 draft model 的训练还在 WIP。

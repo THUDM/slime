@@ -469,11 +469,13 @@ document.write(`
 <section id="online-sft-for-the-draft-model">
 <h2>Online SFT for the Draft Model<a class="headerlink" href="#online-sft-for-the-draft-model" title="Link to this heading">#</a></h2>
 <p>As RL progresses, the sampling distributions of the draft and target models can drift apart. Fewer draft tokens pass verification, and speculative decoding can even yield negative returns.</p>
-<p>Slime currently supports online training of the MTP layers during RL, updating the draft model in sync with training to consistently improve sampling speed. See the related rationale in this <a class="reference external" href="https://www.notion.so/jiajunli-guapisolo/Power-Up-Speculative-Decoding-In-Reinforcement-Learning-2a92d24a293b802d9c73dbae429e581e">blog</a>. Use it as follows:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--enable-mtp-training
+<p>slime currently supports online training of the MTP layers during RL, updating the draft model in sync with training to consistently improve sampling speed. See the related rationale in this <a class="reference external" href="https://www.notion.so/jiajunli-guapisolo/Power-Up-Speculative-Decoding-In-Reinforcement-Learning-2a92d24a293b802d9c73dbae429e581e">blog</a>. Use it as follows:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--mtp-num-layers<span class="w"> </span><span class="m">1</span>
+--enable-mtp-training
 --mtp-loss-scaling-factor<span class="w"> </span><span class="m">0</span>.2
 </pre></div>
 </div>
+<p>And note that this requires a torch dist checkpoint with the MTP weight, you need to add <code class="docutils literal notranslate"><span class="pre">--mtp-num-layers</span> <span class="pre">1</span></code> during the checkpoint conversion from huggingface to torch dist.</p>
 <p>Training external draft models is still a WIP.</p>
 </section>
 </section>

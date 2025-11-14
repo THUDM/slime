@@ -465,10 +465,12 @@ document.write(`
 <h2>在线 SFT draft model<a class="headerlink" href="#sft-draft-model" title="Link to this heading">#</a></h2>
 <p>随着 RL 流程的进行，draft model 和 target model 的采样概率差异逐渐增大，能通过验证的 draft token 逐渐减少，spec 甚至可能造成负收益。</p>
 <p>目前，slime 支持了在 RL 流程中在线训练 MTP 层，随着训练的进行同步更新 draft model，稳定提高了采样速度，相关原理可参见 <a class="reference external" href="https://www.notion.so/jiajunli-guapisolo/Power-Up-Speculative-Decoding-In-Reinforcement-Learning-2a92d24a293b802d9c73dbae429e581e">blog</a>。使用方法如下：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--enable-mtp-training
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--mtp-num-layers<span class="w"> </span><span class="m">1</span>
+--enable-mtp-training
 --mtp-loss-scaling-factor<span class="w"> </span><span class="m">0</span>.2
 </pre></div>
 </div>
+<p>注意 MTP 训练需要一个包含了 MTP 权重的 checkpoint，所以在将 huggingface checkpoint 转为 torch dist 时，也需要加上 <code class="docutils literal notranslate"><span class="pre">--mtp-num-layers</span> <span class="pre">1</span></code>。</p>
 <p>外部 draft model 的训练还在 WIP。</p>
 </section>
 </section>
