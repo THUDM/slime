@@ -27,4 +27,4 @@ mis_veto_threshold: 1.0e-4
 
 # Batch normalization: normalize IS weights to mean=1.0 across entire batch
 # This reduces variance in gradient updates
-mis_batch_normalize: Fals
+mis_batch_normalize: False
