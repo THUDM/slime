@@ -286,6 +286,21 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         )
         returns = advantages
 
+    elif args.advantage_estimator == "on_policy_distillation":
+        student_log_probs = log_probs
+        teacher_log_probs = rollout_data.get("teacher_log_probs")
+        response_lengths = rollout_data.get("response_lengths")
+        device = student_log_probs[0].device
+        teacher_log_probs = [t_log_prob.to(device=device) for t_log_prob in teacher_log_probs]
+        teacher_log_probs = [
+            t_log_prob[-response_length:] for t_log_prob, response_length in zip(teacher_log_probs, response_lengths)
+        ]
+        advantages = [
+            teacher_log_prob - student_log_prob
+            for teacher_log_prob, student_log_prob in zip(teacher_log_probs, student_log_probs)
+        ]
+        returns = advantages
+
     else:
         raise NotImplementedError(f"advantage_estimator {args.advantage_estimator} is not supported. ")
 
@@ -410,6 +425,7 @@ def policy_loss_function(
         ]
         ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, log_probs)]
         ppo_kl = torch.cat(ppo_kl, dim=0)
+        old_log_probs = torch.cat(old_log_probs, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
         old_log_probs = torch.cat(old_log_probs, dim=0)
     else:

@@ -353,7 +353,10 @@ def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
         "ep_size": args.sglang_ep_size,
         # always skip warmup to prevent warmup timeout.
         "skip_server_warmup": True,
+        "enable_return_routed_experts": args.use_rollout_routing_replay,
     }
+    if args.fp16:
+        kwargs["dtype"] = "float16"
 
     external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
 

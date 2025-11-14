@@ -6,6 +6,7 @@ from argparse import Namespace
 from collections import defaultdict
 from typing import Any, Callable, Optional, Union
 
+import numpy as np
 from PIL import Image
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -133,6 +134,10 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         "sampling_params": sampling_params,
         "return_logprob": True,
     }
+
+    if args.use_rollout_routing_replay:
+        payload["return_routed_experts"] = True
+
     if image_data:
         payload["image_data"] = image_data
 
@@ -186,6 +191,10 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
     if "weight_version" in output["meta_info"]:
         sample.weight_versions.append(output["meta_info"]["weight_version"])
+
+    if "routed_experts" in output["meta_info"]:
+        assert len(output["meta_info"]["routed_experts"]) == len(sample.tokens)
+        sample.rollout_routed_experts = np.array(output["meta_info"]["routed_experts"])
 
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":
