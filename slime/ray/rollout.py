@@ -298,6 +298,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
                     "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                     "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                     "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
+                    "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
                 }
             },
         ).remote(args, rank=i)
