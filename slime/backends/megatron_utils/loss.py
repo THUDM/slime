@@ -386,6 +386,10 @@ def get_rollout_training_metrics(
     # Note: log_ppl_diff = log(ppl_ratio), so ppl_ratio = exp(log_ppl_diff) 
     ppl_ratio = torch.exp(log_ppl_diff)
 
+    # 4. Absolute log probability difference (token-level)
+    # This measures the absolute difference between training and rollout log probs
+    train_rollout_logprob_abs_diff = (train_log_probs - rollout_log_probs).abs()
+
     return {
         "mismatch_training_log_ppl": training_log_ppl,
         "mismatch_training_ppl": torch.exp(training_log_ppl),
@@ -396,6 +400,7 @@ def get_rollout_training_metrics(
         "mismatch_log_ppl_diff": log_ppl_diff,
         "mismatch_log_ppl_abs_diff": log_ppl_diff.abs(),
         "mismatch_ppl_ratio": ppl_ratio,
+        "train_rollout_logprob_abs_diff": train_rollout_logprob_abs_diff,
     }
 
 
@@ -598,11 +603,6 @@ def policy_loss_function(
     if log_probs.numel() == 0:
         loss += 0 * logits.sum()
 
-    train_rollout_logprob_abs_diff = None
-    if "rollout_log_probs" in batch:
-        rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
-        train_rollout_logprob_abs_diff = sum_of_sample_mean(((log_probs if args.use_rollout_logprobs else old_log_probs) - rollout_log_probs).abs())
-
     reported_loss = {
         "loss": loss.clone().detach(),
         "pg_loss": pg_loss.clone().detach(),
@@ -610,9 +610,6 @@ def policy_loss_function(
         "pg_clipfrac": pg_clipfrac.clone().detach() if pg_clipfrac else None,
         "ppo_kl": ppo_kl.clone().detach() if ppo_kl else None,
     }
-
-    if train_rollout_logprob_abs_diff is not None:
-        reported_loss["train_rollout_logprob_abs_diff"] = train_rollout_logprob_abs_diff.clone().detach()
 
     if args.use_kl_loss:
         reported_loss["kl_loss"] = kl_loss.clone().detach()
