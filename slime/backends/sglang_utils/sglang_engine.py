@@ -354,6 +354,10 @@ def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
         # always skip warmup to prevent warmup timeout.
         "skip_server_warmup": True,
     }
+    if args.use_rollout_routing_replay:
+        kwargs["enable_return_routed_experts"] = True
+    if args.fp16:
+        kwargs["dtype"] = "float16"
 
     external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
 

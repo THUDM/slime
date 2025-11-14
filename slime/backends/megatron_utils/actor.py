@@ -7,6 +7,7 @@ from typing import Dict, Optional
 import ray
 import torch
 import torch.distributed as dist
+import torch.nn.functional as F
 from megatron.core import mpu
 from ray.actor import ActorHandle
 from torch_memory_saver import torch_memory_saver
@@ -27,7 +28,7 @@ from slime.utils.wandb_utils import init_wandb_secondary
 
 from ...utils.profile_utils import TrainProfiler
 from .checkpoint import load_checkpoint
-from .cp_utils import slice_log_prob_with_cp
+from .cp_utils import slice_log_prob_with_cp, slice_with_cp
 from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data, sync_actor_critic_data
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
@@ -52,6 +53,8 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if is_megatron_main_rank():
             init_wandb_secondary(args, wandb_run_id)
+
+        self.prof = TrainProfiler(args)
 
         # read config and tokenizer serialized to prevent concurrent writing bug.
         for i in range(dist.get_world_size()):
@@ -119,7 +122,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
             self.rollout_data_postprocess = load_function(self.args.rollout_data_postprocess_path)
 
-        self.prof = TrainProfiler(args)
+        self.prof.on_init_end()
 
         return start_rollout_id
 
@@ -187,7 +190,64 @@ class MegatronTrainRayActor(TrainRayActor):
                     rollout_data["rollout_log_probs"], rollout_data["total_lengths"], rollout_data["response_lengths"]
                 )
             ]
+        if "rollout_routed_experts" in rollout_data:
+            rollout_data["rollout_routed_experts"] = [
+                torch.from_numpy(r) for r in rollout_data["rollout_routed_experts"]
+            ]
         return rollout_data
+
+    def fill_routing_replay(self, data_iterator, num_microbatches, rollout_data):
+        if "rollout_routed_experts" not in rollout_data:
+            raise ValueError(
+                "rollout_routed_experts is required in rollout_data when use_rollout_routing_replay is set."
+            )
+
+        from megatron.core.transformer.transformer_block import get_num_layers_to_build
+        from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
+        from slime.utils.routing_replay import RoutingReplay
+
+        for iterator in data_iterator:
+            iterator.reset()
+
+        tp_rank = mpu.get_tensor_model_parallel_rank()
+        tp_size = mpu.get_tensor_model_parallel_world_size()
+
+        for _ in range(sum(num_microbatches)):
+            batch = data_iterator[0].get_next(["rollout_routed_experts", "tokens"])
+            rollout_routed_experts = batch["rollout_routed_experts"]
+            tokens = batch["tokens"]
+            assert len(rollout_routed_experts) == len(tokens)
+            for a, b in zip(rollout_routed_experts, tokens):
+                assert a.shape[0] == b.shape[0], f"{a.shape}, {b.shape}"
+
+            # TODO: maybe extract a common process function for here and get_batch?
+            rollout_routed_experts = [slice_with_cp(r, 0) for r in rollout_routed_experts]
+            rollout_routed_experts = torch.cat(rollout_routed_experts, dim=0)
+            pad = (128 - rollout_routed_experts.size(0) % 128) % 128
+            if pad != 0:
+                rollout_routed_experts = F.pad(rollout_routed_experts, (0, 0, 0, 0, 0, pad), value=0)
+
+            if self.args.sequence_parallel:
+                seqlen = rollout_routed_experts.size(0)
+                assert seqlen % tp_size == 0
+                start, end = seqlen // tp_size * tp_rank, seqlen // tp_size * (tp_rank + 1)
+                rollout_routed_experts = rollout_routed_experts[start:end]
+
+            routing_replay_offset = 0
+            for vp_stage, model in enumerate(self.model):
+                config = model.module.config
+                num_layers_to_build = get_num_layers_to_build(config, vp_stage=vp_stage)
+                offset = get_transformer_layer_offset(config, vp_stage=vp_stage)
+                for layer_id in range(offset, offset + num_layers_to_build):
+                    layer_routed_experts = rollout_routed_experts[:, layer_id]
+                    RoutingReplay.all_routing_replays[routing_replay_offset].record(layer_routed_experts)
+                    routing_replay_offset += 1
+            assert routing_replay_offset == len(RoutingReplay.all_routing_replays)
+
+        del rollout_data["rollout_routed_experts"]
+
+        for iterator in data_iterator:
+            iterator.reset()
 
     def compute_log_prob(
         self,
@@ -255,6 +315,9 @@ class MegatronTrainRayActor(TrainRayActor):
         # Create data iterator for log_probs and train.
         data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
 
+        if self.args.use_rollout_routing_replay:
+            self.fill_routing_replay(data_iterator, num_microbatches, rollout_data)
+
         with inverse_timer("train_wait"), timer("train"):
             if self.args.compute_advantages_and_returns:
                 if "ref" in self.weights:
@@ -269,9 +332,12 @@ class MegatronTrainRayActor(TrainRayActor):
                         )
                     )
 
-                if self.args.use_routing_replay:
-                    os.environ["ROUTING_REPLAY_STAGE"] = "record"
                 if not self.args.use_rollout_logprobs:
+                    if self.args.use_routing_replay:
+                        if self.args.use_rollout_routing_replay:
+                            os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
+                        else:
+                            os.environ["ROUTING_REPLAY_STAGE"] = "record"
                     rollout_data.update(
                         self.compute_log_prob(
                             "old_actor" if self.args.keep_old_actor else "actor",
@@ -280,6 +346,8 @@ class MegatronTrainRayActor(TrainRayActor):
                             store_prefix="",
                         )
                     )
+                    if self.args.use_rollout_routing_replay:
+                        RoutingReplay.clear_all_forward()
 
                 if self.args.use_critic:
                     sync_actor_critic_data(
@@ -314,7 +382,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     num_microbatches,
                 )
 
-            self.prof.step()
+            self.prof.step(rollout_id=rollout_id)
 
         train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
 

@@ -286,6 +286,21 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         )
         returns = advantages
 
+    elif args.advantage_estimator == "on_policy_distillation":
+        student_log_probs = log_probs
+        teacher_log_probs = rollout_data.get("teacher_log_probs")
+        response_lengths = rollout_data.get("response_lengths")
+        device = student_log_probs[0].device
+        teacher_log_probs = [t_log_prob.to(device=device) for t_log_prob in teacher_log_probs]
+        teacher_log_probs = [
+            t_log_prob[-response_length:] for t_log_prob, response_length in zip(teacher_log_probs, response_lengths)
+        ]
+        advantages = [
+            teacher_log_prob - student_log_prob
+            for teacher_log_prob, student_log_prob in zip(teacher_log_probs, student_log_probs)
+        ]
+        returns = advantages
+
     else:
         raise NotImplementedError(f"advantage_estimator {args.advantage_estimator} is not supported. ")
 
@@ -352,8 +367,17 @@ def get_rollout_training_metrics(
     loss_masks: torch.Tensor,
 ) -> dict[str, torch.Tensor]:
 
+    def masked_sum(x: torch.Tensor, expand: bool = False) -> torch.Tensor:
+        result = (x * loss_masks).sum()
+        return result.expand_as(x) if expand else result
+
     def masked_mean(x: torch.Tensor) -> torch.Tensor:
-        return ((x * loss_masks).sum() / torch.clamp_min(loss_masks.sum(), 1)).expand_as(x)
+        result = masked_sum(x) / torch.clamp_min(masked_sum(loss_masks), 1)
+        return result.expand_as(x)
+    
+    # 0. Absolute log probability difference (token-level)
+    # This measures the absolute difference between training and rollout log probs
+    train_rollout_logprob_abs_diff = (train_log_probs - rollout_log_probs).abs()
     
     # 1. Training policy perplexity metrics
     mean_log_prob_training = masked_mean(train_log_probs)
@@ -386,11 +410,26 @@ def get_rollout_training_metrics(
     # Note: log_ppl_diff = log(ppl_ratio), so ppl_ratio = exp(log_ppl_diff) 
     ppl_ratio = torch.exp(log_ppl_diff)
 
-    # 4. Absolute log probability difference (token-level)
-    # This measures the absolute difference between training and rollout log probs
-    train_rollout_logprob_abs_diff = (train_log_probs - rollout_log_probs).abs()
+    # 4a. Token-level chi-squared divergence
+    # χ²(π_training || π_rollout) = E[ρ²] - 1, where ρ = π_training / π_rollout
+    # This measures the second moment of the importance weights
+    SAFETY_BOUND = 20.0
+    log_ratio_safe = torch.clamp(log_ratio, min=-SAFETY_BOUND, max=SAFETY_BOUND)
+    rho_token = torch.exp(log_ratio_safe)  # ρ = π_training / π_rollout
+    rho_squared_token = rho_token.square()
+    chi2_token_value = masked_mean(rho_squared_token) - 1.0
+    chi2_token = chi2_token_value.expand_as(train_log_probs)
+
+    # 4b. Sequence-level chi-squared divergence
+    # Computes (Π ρ_t)² - 1 for the entire sequence
+    # This captures the squared product of importance ratios
+    log_ratio_sum = masked_sum(log_ratio, expand=True)
+    log_ratio_sum_safe = torch.clamp(log_ratio_sum, min=-SAFETY_BOUND, max=SAFETY_BOUND)
+    rho_squared_seq = torch.exp(2.0 * log_ratio_sum_safe)  # (Π ρ_t)²
+    chi2_seq = rho_squared_seq - 1.0
 
     return {
+        "train_rollout_logprob_abs_diff": train_rollout_logprob_abs_diff,
         "mismatch_training_log_ppl": training_log_ppl,
         "mismatch_training_ppl": torch.exp(training_log_ppl),
         "mismatch_rollout_log_ppl": rollout_log_ppl,
@@ -400,7 +439,8 @@ def get_rollout_training_metrics(
         "mismatch_log_ppl_diff": log_ppl_diff,
         "mismatch_log_ppl_abs_diff": log_ppl_diff.abs(),
         "mismatch_ppl_ratio": ppl_ratio,
-        "train_rollout_logprob_abs_diff": train_rollout_logprob_abs_diff,
+        "mismatch_chi2_token": chi2_token,
+        "mismatch_chi2_seq": chi2_seq,
     }
 
 
@@ -515,6 +555,7 @@ def policy_loss_function(
             ]
             ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, log_probs)]
             ppo_kl = torch.cat(ppo_kl, dim=0)
+            old_log_probs = torch.cat(old_log_probs, dim=0)
             log_probs = torch.cat(log_probs, dim=0)
         else:
             old_log_probs = torch.cat(old_log_probs, dim=0)
