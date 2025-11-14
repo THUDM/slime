@@ -353,8 +353,9 @@ def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
         "ep_size": args.sglang_ep_size,
         # always skip warmup to prevent warmup timeout.
         "skip_server_warmup": True,
-        "enable_return_routed_experts": args.use_rollout_routing_replay,
     }
+    if args.use_rollout_routing_replay:
+        kwargs["enable_return_routed_experts"] = True
     if args.fp16:
         kwargs["dtype"] = "float16"
 
