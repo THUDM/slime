@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from typing import List, Union
 
+import numpy as np
 import ray
 import torch
 import wandb
@@ -23,6 +24,7 @@ from slime.utils.ray_utils import Box
 from slime.utils.types import Sample
 from slime.utils.wandb_utils import init_wandb_secondary
 
+from ..utils.metric_utils import has_repetition
 from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -296,7 +298,6 @@ def init_rollout_engines(args, pg, all_rollout_engines):
                     "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                     "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                     "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
-                    "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
                 }
             },
         ).remote(args, rank=i)
