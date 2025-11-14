@@ -14,7 +14,7 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
-from slime.utils import profile_utils, train_dump_utils, train_metric_utils
+from slime.utils import train_dump_utils, train_metric_utils
 from slime.utils.context_utils import with_defer
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
@@ -78,8 +78,7 @@ class FSDPTrainRayActor(TrainRayActor):
         if getattr(self.args, "start_rollout_id", None) is None:
             self.args.start_rollout_id = 0
 
-        if args.record_memory_history:
-            profile_utils.attach_oom_dump_memory_history(profile_utils.get_memory_snapshot_full_path(args))
+        self.prof = TrainProfiler(args)
 
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
@@ -157,7 +156,7 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.offload_train:
             self.sleep()
 
-        self.prof = TrainProfiler(args)
+        self.prof.on_init_end()
 
         return int(getattr(self.args, "start_rollout_id", 0))
 
@@ -364,13 +363,6 @@ class FSDPTrainRayActor(TrainRayActor):
         with inverse_timer("train_wait"), timer("train"):
             self._train_core(rollout_id=rollout_id, rollout_data_ref=rollout_data_ref)
 
-        if (
-            self.args.record_memory_history
-            and ((s := self.args.memory_snapshot_num_steps) is not None)
-            and (rollout_id == s - 1)
-        ):
-            profile_utils.dump_snapshot_and_stop(profile_utils.get_memory_snapshot_full_path(self.args))
-
         train_metric_utils.log_perf_data_raw(
             rollout_id=rollout_id,
             args=self.args,
@@ -447,7 +439,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     grad_accum=grad_accum,
                 )
 
-        self.prof.step()
+        self.prof.step(rollout_id=rollout_id)
 
         train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
 
