@@ -565,7 +565,7 @@ def policy_loss_function(
         pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
 
     # Apply off-policy correction using importance sampling if enabled
-    if args.use_tis:
+    if args.use_rollout_correction or args.use_tis:
 
         def vanilla_tis_function(
             args,
@@ -606,6 +606,11 @@ def policy_loss_function(
         if args.custom_tis_function_path is not None:
             tis_func = load_function(args.custom_tis_function_path)
         else:
+            if args.use_rollout_correction:
+                raise ValueError(
+                    "When using --use-rollout-correction, you must specify --custom-tis-function-path. "
+                    "Example: --custom-tis-function-path examples/train_infer_mismatch_helper/mis.py:compute_mis_weights_with_cp"
+                )
             tis_func = vanilla_tis_function
         pg_loss, modified_response_masks, tis_metrics = tis_func(**tis_kwargs)
 

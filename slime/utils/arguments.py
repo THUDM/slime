@@ -749,6 +749,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             # Off-Policy Correction using Importance Sampling: https://fengyao.notion.site/off-policy-rl
             parser.add_argument(
+                "--use-rollout-correction",
+                action="store_true",
+                default=False,
+                help="Enable rollout correction (TIS/RS). Specific correction strategies are configured via --custom-tis-function-path.",
+            )
+            parser.add_argument(
                 "--use-tis",
                 action="store_true",
                 default=False,
@@ -770,7 +776,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--custom-tis-function-path",
                 type=str,
                 default=None,
-                help="Path to the custom TIS function.",
+                help="Path to the custom TIS/RS function (e.g., examples/train_infer_mismatch_helper/mis.py:compute_mis_weights_with_cp).",
             )
 
             parser.add_argument(
