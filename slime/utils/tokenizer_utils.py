@@ -1,12 +1,9 @@
-from transformers import (
-    AutoTokenizer,
-    AutoProcessor,
-    ProcessorMixin,
-    PreTrainedTokenizerBase,
-)
+from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
+
 
 def load_tokenizer(name_or_path: str, **kwargs):
     return AutoTokenizer.from_pretrained(name_or_path, **kwargs)
+
 
 def load_processor(name_or_path: str, **kwargs):
     try:

@@ -48,7 +48,9 @@ def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
 
     if multimodal_keys and any(value in data for _, value in multimodal_keys.items()):
         flag_type_map = {f"<{key}>": key for key in multimodal_keys.keys()}
-        multimodal_inputs = {multimodal_type: data.get(multimodal_key) for multimodal_type, multimodal_key in multimodal_keys.items()}
+        multimodal_inputs = {
+            multimodal_type: data.get(multimodal_key) for multimodal_type, multimodal_key in multimodal_keys.items()
+        }
         pattern = "(" + "|".join(flag_type_map.keys()) + ")"
         for message in messages:
             content = message["content"]
@@ -57,7 +59,12 @@ def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
             segments = [item for item in segments if item != ""]
             for segment in segments:
                 if segment in flag_type_map:
-                    content_list.append({"type": flag_type_map[segment], f"{flag_type_map[segment]}": multimodal_inputs[flag_type_map[segment]].pop(0)})
+                    content_list.append(
+                        {
+                            "type": flag_type_map[segment],
+                            f"{flag_type_map[segment]}": multimodal_inputs[flag_type_map[segment]].pop(0),
+                        }
+                    )
                 else:
                     content_list.append({"type": "text", "text": segment})
 
@@ -106,7 +113,7 @@ class Dataset:
                 elif isinstance(tools, np.ndarray):
                     tools = tools.tolist()
                 assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
-                metadata['tools'] = tools
+                metadata["tools"] = tools
 
             self.origin_samples.append(
                 Sample(
