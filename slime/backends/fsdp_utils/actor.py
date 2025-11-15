@@ -106,11 +106,6 @@ class FSDPTrainRayActor(TrainRayActor):
         # Create FSDP v2 model using FSDP
         self.model = apply_fsdp2(model)
 
-        checkpoint_payload = checkpoint.load(self)
-        if checkpoint_payload is not None and checkpoint_payload.get("model") is not None:
-            model.load_state_dict(checkpoint_payload["model"], strict=True)
-            checkpoint_payload["model"] = None
-
         # Setup device mesh for parallelism (handles both CP and non-CP cases)
         self.setup_device_mesh()
 
