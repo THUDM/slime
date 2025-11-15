@@ -109,24 +109,23 @@ def create_placement_groups(args):
     }
 
 
-def allocate_train_group(args, num_nodes, num_gpus_per_node, pg, wandb_run_id):
+def allocate_train_group(args, num_nodes, num_gpus_per_node, pg):
     return RayTrainGroup(
         args=args,
         num_nodes=num_nodes,
         num_gpus_per_node=num_gpus_per_node,
         pg=pg,
-        wandb_run_id=wandb_run_id,
+        wandb_run_id=args.wandb_run_id,
         num_gpus_per_actor=0.4,
     )
 
 
-def create_training_models(args, pgs, rollout_manager, wandb_run_id):
+def create_training_models(args, pgs, rollout_manager):
     actor_model = allocate_train_group(
         args=args,
         num_nodes=args.actor_num_nodes,
         num_gpus_per_node=args.actor_num_gpus_per_node,
         pg=pgs["actor"],
-        wandb_run_id=wandb_run_id,
     )
     if args.use_critic:
         critic_model = allocate_train_group(
@@ -134,7 +133,6 @@ def create_training_models(args, pgs, rollout_manager, wandb_run_id):
             num_nodes=args.critic_num_nodes,
             num_gpus_per_node=args.critic_num_gpus_per_node,
             pg=pgs["critic"],
-            wandb_run_id=wandb_run_id,
         )
         critic_init_handle = critic_model.async_init(args, role="critic", with_ref=False)
     else:
@@ -159,11 +157,11 @@ def create_training_models(args, pgs, rollout_manager, wandb_run_id):
     return actor_model, critic_model
 
 
-def create_rollout_manager(args, pg, wandb_run_id):
+def create_rollout_manager(args, pg):
     rollout_manager = RolloutManager.options(
         num_cpus=1,
         num_gpus=0,
-    ).remote(args, pg, wandb_run_id=wandb_run_id)
+    ).remote(args, pg, wandb_run_id=args.wandb_run_id)
 
     # calculate num_rollout from num_epoch
     num_rollout_per_epoch = None

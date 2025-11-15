@@ -18,7 +18,8 @@ def _is_offline_mode(args) -> bool:
 
 def init_wandb_primary(args):
     if not args.use_wandb:
-        return None
+        args.wandb_run_id = None
+        return
 
     # Set W&B mode if specified (overrides WANDB_MODE env var)
     if args.wandb_mode:
@@ -71,7 +72,8 @@ def init_wandb_primary(args):
 
     _init_wandb_common()
 
-    return wandb.run.id
+    # Set wandb_run_id in args for easy access throughout the training process
+    args.wandb_run_id = wandb.run.id
 
 
 def _compute_config_for_logging(args):
