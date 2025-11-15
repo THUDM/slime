@@ -46,8 +46,23 @@ L_{\text{PPO}}(\theta)
 \right].
 $$
 
+### 1. REINFORCE + pure importance sampling
 
-### 1. Bypassing PPO importance sampling  
+REINFORCE + pure IS is a simple and efficient method by directly apply TIS/MIS to REINFORCE loss, without PPO clipping.
+
+$$
+L_{\text{REINFORCE-IS}}(\theta)
+= - \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_{\textcolor{red}{\text{SGLang}}}} \left[
+    \frac{\pi_{\theta}(y \mid x)}{\pi_{\textcolor{red}{\text{SGLang}}}(y \mid x)}
+    \cdot \Sigma_t \log \pi_\theta \cdot A_t
+\right].
+$$
+
+Advantages: 
+- Efficiency: skip log_prob recomputation on training engine. Reduce one forward pass's computation.
+
+
+### 2. Bypassing PPO importance sampling  
 In this method, we directly use rollout engine's log probs as the old policy in offline PPO's importance sampling, instead of the recomputed log_probs in training engine.
 
 $$
@@ -69,7 +84,7 @@ Advantages:
 
 
 
-### 2. Decoupled, 3-policies PPO importance sampling  
+### 3. Decoupled, 3-policies PPO importance sampling  
 
 [Decoupled PPO](https://arxiv.org/pdf/2110.00641) achieves batch independent PPO by decoupling two roles: Proximal Policy (anchor policy for PPO clipping, control update size) and Behavior Policy (for off-policy correction in importance sampling). Therefore, there are totally 3 roles engaged in this mode, **target policy** $\pi_\theta$, **proximal policy** $\pi_{\textcolor{blue}{\text{old}}}$ and **behavior policy** $\pi_{\textcolor{red}{\text{SGLang}}}$. $\pi_{\textcolor{blue}{\text{old}}}$ is recomputed with Megatron at the beginning of each training step.
 
@@ -95,21 +110,7 @@ Advantages:
 - Enables accurate off-policy metrics monitoring
 
 
-### 3. REINFORCE + pure importance sampling
 
-REINFORCE + pure IS is a simple and efficient method by directly apply TIS/MIS to REINFORCE loss, without PPO clipping.
-
-$$
-L_{\text{REINFORCE-IS}}(\theta)
-= - \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_{\textcolor{red}{\text{SGLang}}}} \left[
-    \frac{\pi_{\theta}(y \mid x)}{\pi_{\textcolor{red}{\text{SGLang}}}(y \mid x)}
-    \cdot \Sigma_t \log \pi_\theta \cdot A_t
-\right].
-$$
-
-
-Advantages: 
-- Efficiency: skip log_prob recomputation on training engine. Reduce one forward pass's computation.
 
 
 ## II. APIs on algorithms
@@ -123,14 +124,66 @@ You may choose from above algorithms by specifying arguments below:
 | `use_rollout_log_probs` | `use_tis` | Algorithm | Policies |Compute old_log_probs | Batch Invariant | Recommended TIS Mode |
 |-----------------|-------------|-----------|--------------|---------------|-----------------|----------------------|
 | False | False | Standard PPO (Algorithm 0) | 2 ($\pi_\theta$, $\pi_{\textcolor{blue}{\text{old}}}$)|Yes | No | N/A |
-| True | False | Bypassing PPO (Algorithm 1) | 2 ($\pi_\theta$, $\pi_{\textcolor{red}{\text{SGLang}}}$) |🚀 Skipped | No | N/A |
+| True | False | Bypassing PPO (Algorithm 3) | 2 ($\pi_\theta$, $\pi_{\textcolor{red}{\text{SGLang}}}$) |🚀 Skipped | No | N/A |
 | False | True | Decoupled PPO (Algorithm 2) | 3 ($\pi_\theta$, $\pi_{\textcolor{blue}{\text{old}}}$, $\pi_{\textcolor{red}{\text{SGLang}}}$)  |Yes  | Yes | token/seq/geo |
-| True | True | REINFORCE+IS (Algorithm 3) | 2 ($\pi_\theta$, $\pi_{\textcolor{red}{\text{SGLang}}}$) |🚀 Skipped | No | seq |
+| True | True | REINFORCE+IS (Algorithm 1) | 2 ($\pi_\theta$, $\pi_{\textcolor{red}{\text{SGLang}}}$) |🚀 Skipped | No | seq |
 
 
 
 
-## III. Recommended Settings on TIS/MIS [In Construction]
+## III. Mismatch Metrics
+
+When rollout log probabilities are available, SLIME automatically tracks comprehensive metrics to monitor training-inference mismatch and importance sampling weights. These metrics help diagnose policy divergence and guide hyperparameter tuning.
+
+### A. Mismatch Monitoring Metrics
+
+These metrics quantify the difference between training and rollout policies. They are computed automatically when `rollout_log_probs` are provided, regardless of whether TIS/MIS correction is enabled.
+
+| Metric Name | Description |
+|------------|-------------|
+| `mismatch_training_log_ppl` | Negative mean log probability under training policy: $-\mathbb{E}[\log \pi_{\text{train}}]$ |
+| `mismatch_training_ppl` | Perplexity of training policy: $\exp(-\mathbb{E}[\log \pi_{\text{train}}])$ |
+| `mismatch_rollout_log_ppl` | Negative mean log probability under rollout policy: $-\mathbb{E}[\log \pi_{\text{rollout}}]$ |
+| `mismatch_rollout_ppl` | Perplexity of rollout policy: $\exp(-\mathbb{E}[\log \pi_{\text{rollout}}])$ |
+| `mismatch_kl` | Forward KL divergence estimator: $\mathbb{E}[\log \pi_{\text{rollout}} - \log \pi_{\text{train}}]$ |
+| `mismatch_k3_kl` | K3 KL estimator (more stable): $\mathbb{E}[\exp(r) - r - 1]$ where $r = \log \pi_{\text{train}} - \log \pi_{\text{rollout}}$ |
+| `mismatch_log_ppl_diff` | Log perplexity difference: $\log(\text{PPL}_{\text{train}} / \text{PPL}_{\text{rollout}})$ |
+| `mismatch_log_ppl_abs_diff` | Absolute log perplexity difference: $\|\log(\text{PPL}_{\text{train}} / \text{PPL}_{\text{rollout}})\|$ |
+| `mismatch_ppl_ratio` | Perplexity ratio: $\text{PPL}_{\text{train}} / \text{PPL}_{\text{rollout}}$ |
+| `train_rollout_logprob_abs_diff` | Token-level absolute log probability difference: $\|\log \pi_{\text{train}} - \log \pi_{\text{rollout}}\|$ |
+
+**Usage**: These metrics help you monitor policy drift. Large values indicate significant mismatch between training and rollout engines.
+
+
+### B. TIS/MIS Correction Metrics
+
+These metrics track importance sampling weights and corrections. They are only computed when `--use-tis` is enabled.
+
+When using `--custom-tis-function-path` pointing to MIS implementation (e.g., `mis.py`), additional fine-grained metrics become available:
+
+| Metric Name | Description | Required Args | Optional Control Args |
+|------------|-------------|---------------|----------------------|
+| `ois` | On-policy importance sampling ratio: $\exp(\log \pi_{\text{train}} - \log \pi_{\text{old}})$ | `--use-tis` | Only for Algorithm 2 (Decoupled PPO) |
+| `mis_mean_is_weight_before_clip` | Raw IS weights before any correction: $\exp(\text{log\_ratio})$ | `--use-tis` | `--mis-level` (token/sequence/geometric) |
+| `mis_ratio_mean_after_mis` | IS weights after correction (bounded or masked) | `--use-tis` | `--mis-mode`, bounds |
+| `mis_truncate_fraction` | Fraction of weights truncated (mode-specific) | `--use-tis`, `--mis-mode=truncate` | `--mis-upper-bound` |
+| `mis_clip_fraction_low` | Fraction of weights clipped below lower bound | `--use-tis`, `--mis-mode=clip` | `--mis-lower-bound`, `--mis-upper-bound` |
+| `mis_clip_fraction_high` | Fraction of weights clipped above upper bound | `--use-tis`, `--mis-mode=clip` | `--mis-lower-bound`, `--mis-upper-bound` |
+| `mis_mask_fraction_low` | Fraction of tokens rejected (below lower bound) | `--use-tis`, `--mis-mode=mask` | `--mis-lower-bound`, `--mis-upper-bound` |
+| `mis_mask_fraction_high` | Fraction of tokens rejected (above upper bound) | `--use-tis`, `--mis-mode=mask` | `--mis-lower-bound`, `--mis-upper-bound` |
+| `mis_catastrophic_token_fraction` | Fraction of catastrophic tokens (veto-specific) | `--use-tis`, `--mis-veto-threshold` set | Sequence-level rejection |
+| `mis_catastrophic_seq_fraction` | Fraction of sequences with catastrophic tokens | `--use-tis`, `--mis-veto-threshold` set | Sequence-level rejection |
+| `mis_batch_norm_factor` | Batch normalization factor applied to weights | `--use-tis`, `--mis-batch-normalize` | Normalizes mean to 1.0 |
+
+**MIS Configuration Parameters:**
+- `--mis-mode`: Choose from `truncate`, `clip`, or `mask`
+- `--mis-level`: Choose from `token` (default, biased), `sequence` (unbiased, high variance), or `geometric` (balanced)
+- `--mis-lower-bound`, `--mis-upper-bound`: Bounds for IS weights
+- `--mis-veto-threshold`: Sequence-level rejection threshold for catastrophic mismatches
+- `--mis-batch-normalize`: Normalize IS weights to mean=1.0 across batch
+
+
+## IV. Recommended Settings on TIS/MIS [In Construction]
 
 When choose to use importance sampling for mismatch correction (`use-tis` enabled, Algorithm 2 & 3), you may specify the IS modes and applied levels. 
 
@@ -139,15 +192,9 @@ We provided 3 modes: **truncate**, **clip** and **mask**.
 Truncate and clip is applied to **importance sampling weight**; 
 Mask is applied through **rejection sampling**.
 
-[Some examples here]
-```
-[Input]
-[truncate mode output]
-[clip mode output]
-[mask mode output]
-```
+### Importance Sampling
 
-And three levels: **token**, **sequence**, **geometric**.
+We provide three importance sampling levels: **token**, **sequence**, **geometric**.
 
 **Token Level (default)**:
 
@@ -170,9 +217,40 @@ $w_{\text{seq}} = \exp\left( \frac{1}{n} \sum_{i=1}^{n} \left( \log \pi_{\text{t
 
 Characteristics: Biased but low variance, balances bias and variance
 
+### Rejection Sampling
+
+**Token Level**: Reject tokens with IS weight out of threshold
+
+**Sequence Level:** Reject sequences with mean IS weight out of threshold
+
+**Geometric Level:** Reject sequences with geometric mean IS weight out of threshold
+Characteristics:
+- Extremely selective: Requires near-perfect policy match
+- High rejection rate: Only suitable for very slight distribution shifts
+
+**Veto Mechanism**:
+
+Veto mechanism rejects sequences with catastrophically low token probabilities.
+Reject entire sequence if $\exists t \in T$ such that $\rho_t < C_{\text{veto}}$
+
+- Prevents catastrophic updates from tokens with near-zero probability under $\pi_{\text{old}}$
+- Independent of IS/RS settings
+
+*Typical values: $10^{-4}$ to $10^{-6}$*
+
+
+
 **Recommendations**:
 
-[A table here]
+| Method | Theory | Policies | PPO Clip | IS Correction | Correctness | Speed |
+|--------|--------|----------|----------|---------------|-------------|-------|
+| `Naive LLM-RL` | Standard PPO | 2 (old, θ) | ✅ | ❌ | ⚠️ Incorrect | Standard |
+| `pure_is` | Off-policy REINFORCE | 2 (rollout, θ) | ❌ | Seq-level IS | ✅ Correct | Fast |
+| `ppo_is_bypass` | PPO (rollout as prox) | 2 (rollout, θ) | ✅ | ❌ | ✅ Correct | Fast |
+| `token_is` | Decoupled PPO | 3 (rollout, old, θ) | ✅ | Token-level IS | ✅ Correct | Standard |
+| `seq_is` | Decoupled PPO | 3 (rollout, old, θ) | ✅ | Seq-level IS | ✅ Correct | Standard |
+| `seq_is_rs` | Decoupled PPO + Rejection | 3 (rollout, old, θ) | ✅ | seq-level IS + seq-level RS | ✅ Correct | Standard |
+| `geo_rs` | Decoupled PPO + Geo Rejection | 3 (rollout, old, θ) | ✅ | Geo-level RS | ✅ Correct | Standard |
 
 
 
