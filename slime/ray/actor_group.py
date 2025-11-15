@@ -58,6 +58,7 @@ class RayTrainGroup:
             # because sglang will always set NCCL_CUMEM_ENABLE to 0
             # we need also set it to 0 to prevent nccl error.
             "NCCL_CUMEM_ENABLE": "0",
+            "NVTE_FP8_BLOCK_SCALING_FP32_SCALES": "1",
             **{name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST},
             **self.args.train_env_vars,
         }

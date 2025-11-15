@@ -10,7 +10,7 @@ import torch
 import wandb
 from megatron.core import mpu
 from megatron.core.distributed import DistributedDataParallel as DDP
-from megatron.core.distributed import DistributedDataParallelConfig, finalize_model_grads
+from megatron.core.distributed import finalize_model_grads
 from megatron.core.enums import ModelType
 from megatron.core.models.gpt import GPTModel
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
@@ -105,44 +105,7 @@ def setup_model_and_optimizer(
     assert not args.moe_use_upcycling
     assert args.load is not None or args.pretrained_checkpoint is not None
 
-    model = get_model(get_model_provider_func(args, role), ModelType.encoder_or_decoder, wrap_with_ddp=False)
-
-    config = get_model_config(model[0])
-
-    kwargs = {}
-    for f in dataclasses.fields(DistributedDataParallelConfig):
-        if hasattr(args, f.name):
-            kwargs[f.name] = getattr(args, f.name)
-    kwargs["grad_reduce_in_fp32"] = args.accumulate_allreduce_grads_in_fp32
-    kwargs["check_for_nan_in_grad"] = args.check_for_nan_in_loss_and_grad
-    kwargs["check_for_large_grads"] = args.check_for_large_grads
-    kwargs["bucket_size"] = args.ddp_bucket_size
-    kwargs["pad_buckets_for_high_nccl_busbw"] = args.ddp_pad_buckets_for_high_nccl_busbw
-    kwargs["average_in_collective"] = args.ddp_average_in_collective
-    ddp_config = DistributedDataParallelConfig(**kwargs)
-
-    # In the custom FSDP and DDP use path, we need to initialize the bucket size.
-    # If bucket_size is not provided as an input, use sane default.
-    # If using very large dp_sizes, make buckets larger to ensure that chunks used in NCCL
-    # ring-reduce implementations are large enough to remain bandwidth-bound rather than
-    # latency-bound.
-    if ddp_config.bucket_size is None:
-        ddp_config.bucket_size = max(40000000, 1000000 * mpu.get_data_parallel_world_size(with_context_parallel=True))
-    # Set bucket_size to infinity if overlap_grad_reduce is False.
-    if not ddp_config.overlap_grad_reduce:
-        ddp_config.bucket_size = None
-
-    model = [
-        DDP(
-            config=config,
-            ddp_config=ddp_config,
-            module=model_chunk,
-            # Turn off bucketing for model_chunk 2 onwards, since communication for these
-            # model chunks is overlapped with compute anyway.
-            disable_bucketing=(model_chunk_idx > 0) or args.overlap_param_gather_with_optimizer_step,
-        )
-        for (model_chunk_idx, model_chunk) in enumerate(model)
-    ]
+    model = get_model(get_model_provider_func(args, role), ModelType.encoder_or_decoder)
 
     # Optimizer
     kwargs = {}
