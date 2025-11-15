@@ -1,3 +1,16 @@
+diff --git a/megatron/core/dist_checkpointing/strategies/common.py b/megatron/core/dist_checkpointing/strategies/common.py
+index 41c21d93d..ef80f72d6 100644
+--- a/megatron/core/dist_checkpointing/strategies/common.py
++++ b/megatron/core/dist_checkpointing/strategies/common.py
+@@ -86,7 +86,7 @@ class TorchCommonLoadStrategy(LoadCommonStrategy):
+                 msc = MultiStorageClientFeature.import_package()
+                 return msc.torch.load(load_path, map_location='cpu')
+             else:
+-                return torch.load(load_path, map_location='cpu')
++                return torch.load(load_path, map_location='cpu', weights_only=False)
+         except FileNotFoundError as e:
+             err_msg = f'Common file {load_path} does not exist'
+             if MultiStorageClientFeature.is_enabled():
 diff --git a/megatron/core/dist_checkpointing/strategies/torch.py b/megatron/core/dist_checkpointing/strategies/torch.py
 index ccf5242a2..807959da5 100644
 --- a/megatron/core/dist_checkpointing/strategies/torch.py
@@ -94,7 +107,7 @@ index 860ee64a9..80944b702 100755
                      "mlp.0.weight": "mlp.linear_fc1.layer_norm_weight",
                      "mlp.0.bias": "mlp.linear_fc1.layer_norm_bias",
 diff --git a/megatron/core/models/gpt/gpt_model.py b/megatron/core/models/gpt/gpt_model.py
-index 6aec66e6d..b660a2002 100644
+index 6aec66e6d..6ca48b55f 100644
 --- a/megatron/core/models/gpt/gpt_model.py
 +++ b/megatron/core/models/gpt/gpt_model.py
 @@ -355,6 +355,7 @@ class GPTModel(LanguageModule):
@@ -130,7 +143,7 @@ index 6aec66e6d..b660a2002 100644
              hidden_states = self.mtp(
                  input_ids=input_ids,
                  position_ids=position_ids,
-@@ -465,8 +468,10 @@ class GPTModel(LanguageModule):
+@@ -465,25 +468,37 @@ class GPTModel(LanguageModule):
          if not self.post_process:
              return hidden_states
  
@@ -143,8 +156,11 @@ index 6aec66e6d..b660a2002 100644
              hidden_states_list = torch.chunk(hidden_states, 1 + self.config.mtp_num_layers, dim=0)
              hidden_states = hidden_states_list[0]
              if loss_mask is None:
-@@ -474,15 +479,21 @@ class GPTModel(LanguageModule):
+                 # if loss_mask is not provided, use all ones as loss_mask
                  loss_mask = torch.ones_like(mtp_labels)
++            else:
++                # Otherwise, roll the loss_mask to keep up with the mtp_labels
++                loss_mask, _ = roll_tensor(loss_mask, shifts=-1, dims=-1, cp_group=self.cp_group, packed_seq_params=packed_seq_params)
              for mtp_layer_number in range(self.config.mtp_num_layers):
                  # output
 -                mtp_logits, _ = self.output_layer(
@@ -164,13 +180,16 @@ index 6aec66e6d..b660a2002 100644
                  )
                  # Calc loss for the current Multi-Token Prediction (MTP) layers.
 -                mtp_labels, _ = roll_tensor(mtp_labels, shifts=-1, dims=-1, cp_group=self.cp_group)
-+                mtp_labels, _ = roll_tensor(mtp_labels, shifts=-1, dims=-1, cp_group=self.cp_group, packed_seq_params=packed_seq_params)
-                 loss_mask, num_tokens = roll_tensor(
+-                loss_mask, num_tokens = roll_tensor(
 -                    loss_mask, shifts=-1, dims=-1, cp_group=self.cp_group
++                mtp_labels, _ = roll_tensor(mtp_labels, shifts=-1, dims=-1, cp_group=self.cp_group, packed_seq_params=packed_seq_params)
++                new_loss_mask, num_tokens = roll_tensor(
 +                    loss_mask, shifts=-1, dims=-1, cp_group=self.cp_group, packed_seq_params=packed_seq_params
                  )
++                loss_mask = new_loss_mask * loss_mask
                  mtp_loss = self.compute_language_model_loss(mtp_labels, mtp_logits)
                  mtp_loss = loss_mask * mtp_loss
+                 if self.training:
 diff --git a/megatron/core/parallel_state.py b/megatron/core/parallel_state.py
 index a40c85a88..86688c331 100644
 --- a/megatron/core/parallel_state.py
@@ -385,7 +404,7 @@ index 6b20b8622..459e65921 100644
          """
          Maintain the expert bias in float32.
 diff --git a/megatron/core/transformer/multi_token_prediction.py b/megatron/core/transformer/multi_token_prediction.py
-index b7884e18e..153682618 100755
+index b7884e18e..f0104f861 100755
 --- a/megatron/core/transformer/multi_token_prediction.py
 +++ b/megatron/core/transformer/multi_token_prediction.py
 @@ -6,6 +6,7 @@ from typing import Callable, List, Optional, Union
@@ -576,10 +595,10 @@ index b7884e18e..153682618 100755
 +        )
          # embedding
          decoder_input = embedding(input_ids=input_ids, position_ids=position_ids)
-+        decoder_input = make_viewless_tensor(inp=decoder_input, requires_grad=False, keep_graph=False)
++        decoder_input = decoder_input.detach()
  
 -        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
-+        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=False, keep_graph=False)
++        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=False)
  
          return input_ids, position_ids, decoder_input, hidden_states
  

@@ -1,7 +1,7 @@
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 import typer
 
@@ -11,17 +11,34 @@ import command_utils as U
 
 
 @dataclass
-class ScriptArgs:
+class ScriptArgs(U.ExecuteTrainConfig):
     mode: Literal["normal", "debug_minimal"] = "normal"
+    run_id: str = U.create_run_id()
     model_name: str = "Qwen3-4B-Instruct-2507"
-    num_nodes: int = 1
-    num_gpus_per_node: int = 8
-    hardware: Literal["H100"] = "H100"
+    megatron_model_type: Optional[str] = None
+    num_gpus_per_node: Optional[int] = None
+    hardware: Literal["H100", "GB300"] = "H100"
     extra_args: str = ""
     multi_eval: bool = False
     true_on_policy: bool = False
     dynamic_sampling: bool = False
     enable_eval: bool = True
+    train_backend: Literal["fsdp", "megatron"] = "fsdp"
+
+    def __post_init__(self):
+        super().__post_init__()
+
+        if self.train_backend == "megatron":
+            self.megatron_model_type = {
+                "Qwen3-4B-Instruct-2507": "qwen3-4B-Instruct-2507",
+                "Qwen3-4B-Base": "qwen3-4B",
+            }[self.model_name]
+
+        if self.num_gpus_per_node is None:
+            self.num_gpus_per_node = {
+                "H100": 8,
+                "GB300": 4,
+            }[self.hardware]
 
 
 def prepare(args: ScriptArgs):
@@ -31,19 +48,30 @@ def prepare(args: ScriptArgs):
     U.hf_download_dataset("zhuzilin/aime-2024")
     U.hf_download_dataset("zyzshishui0627/gpqa_diamond")
     U.hf_download_dataset("zyzshishui0627/IFBench")
+    if args.train_backend == "megatron":
+        U.convert_checkpoint(
+            model_name=args.model_name,
+            model_type=args.megatron_model_type,
+            num_gpus=args.num_gpus_per_node,
+            # TODO unify
+            dir_dst="/root/models",
+        )
 
 
 def execute(args: ScriptArgs):
-    run_id = U.create_run_id()
-
-    load_save_path = f"/root/shared_data/{run_id}/checkpoints"
+    load_save_path = f"/root/shared_data/{args.run_id}/checkpoints"
     ckpt_args = (
         f"--hf-checkpoint /root/models/{args.model_name} "
-        # "--ref-load /root/models/{args.model_name} "
         f"--load {load_save_path} "
         f"--save {load_save_path} "
-        "--save-interval 20 "
+        f"--save-interval {2 if args.mode == 'debug_minimal' else 20} "
+        f"--save-retain-interval {2 if args.mode == 'debug_minimal' else 20} "
     )
+    if args.train_backend == "megatron":
+        ckpt_args += (
+            # FSDP does not support this
+            f"--ref-load /root/models/{args.model_name}_torch_dist "
+        )
 
     rollout_args = (
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
@@ -65,7 +93,8 @@ def execute(args: ScriptArgs):
 
     if args.dynamic_sampling and (args.true_on_policy != "debug_minimal"):
         rollout_args += (
-            "--over-sampling-batch-size 64 "
+            # Shall we increase this since we have to do 2 rounds now
+            "--over-sampling-batch-size 128 "
             "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "
         )
 
@@ -103,8 +132,6 @@ eval:
                 "--eval-top-p 0.7 "
             )
 
-    perf_args = "--use-dynamic-batch-size " "--max-tokens-per-gpu 32768 "
-
     grpo_args = (
         "--advantage-estimator grpo "
         # "--use-kl-loss "
@@ -125,26 +152,65 @@ eval:
         "--adam-beta2 0.98 "
     )
 
-    sglang_args = (
-        f"--rollout-num-gpus-per-engine 1 " f"--sglang-mem-fraction-static 0.75 " "--sglang-chunked-prefill-size 4096 "
-    )
+    sglang_args = f"--rollout-num-gpus-per-engine 1 " "--sglang-chunked-prefill-size 4096 "
 
-    fsdp_args = (
-        "--train-backend fsdp "
-        "--attn-implementation flash_attention_2 "
-        "--gradient-checkpointing "
-        f"--update-weights-bucket-size {512 * 1024 * 1024} "  # 512MB
-    )
+    match args.train_backend:
+        case "fsdp":
+            train_backend_args = (
+                "--train-backend fsdp "
+                "--attn-implementation flash_attention_2 "
+                "--gradient-checkpointing "
+                f"--update-weight-buffer-size {512 * 1024 * 1024} "  # 512MB
+                "--offload-train-mode move "
+                """--train-env-vars '{"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}' """
+            )
+            sglang_args += f"--sglang-mem-fraction-static 0.75 "
+            perf_args = "--use-dynamic-batch-size " "--max-tokens-per-gpu 32768 "
+
+        case "megatron":
+            train_backend_args = (
+                f"--tensor-model-parallel-size {2 if args.num_gpus_per_node == 8 else 1} "
+                "--sequence-parallel "
+                "--pipeline-model-parallel-size 1 "
+                f"--context-parallel-size {4 if args.num_gpus_per_node == 8 else 1} "
+                "--expert-model-parallel-size 1 "
+                "--expert-tensor-parallel-size 1 "
+                "--recompute-granularity full "
+                "--recompute-method uniform "
+                "--recompute-num-layers 1 "
+                # default dropout in megatron is 0.1
+                "--attention-dropout 0.0 "
+                "--hidden-dropout 0.0 "
+                # should be good for model performance
+                "--accumulate-allreduce-grads-in-fp32 "
+                "--attention-softmax-in-fp32 "
+                # need to comment this when using model with MLA
+                "--attention-backend flash "
+                "--train-memory-margin-bytes 3221225472 "
+            )
+            # TODO improve
+            sglang_args += f"--sglang-mem-fraction-static 0.7 "
+            perf_args = "--use-dynamic-batch-size " "--max-tokens-per-gpu 9216 "
+
+        case _:
+            raise NotImplementedError
 
     misc_args = (
         f"--actor-num-nodes {args.num_nodes} "
         f"--actor-num-gpus-per-node {args.num_gpus_per_node} "
+        f"--num-gpus-per-node {args.num_gpus_per_node} "
         "--colocate "
-        "--offload-train-mode move "
-        """--train-env-vars '{"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}' """
         "--use-fault-tolerance "
-        f"--dump-details /root/shared_data/{run_id}/dump_details "
+        f"--dump-details /root/shared_data/{args.run_id}/dump_details "
     )
+
+    misc_env_vars = {}
+
+    if args.model_name == "Qwen3-4B-Base":
+        misc_args += "--sglang-context-length 36000 "
+        misc_env_vars |= {
+            "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN": "1",
+        }
 
     true_on_policy_args = ""
     true_on_policy_envs = {}
@@ -168,11 +234,11 @@ eval:
         f"{rollout_args} "
         f"{optimizer_args} "
         f"{grpo_args} "
-        f"{U.get_default_wandb_args(__file__, run_id=run_id)} "
+        f"{U.get_default_wandb_args(__file__, run_id=args.run_id)} "
         f"{perf_args} "
         f"{eval_args} "
         f"{sglang_args} "
-        f"{fsdp_args} "
+        f"{train_backend_args} "
         f"{misc_args} "
         f"{true_on_policy_args} "
         f"{args.extra_args} "
@@ -180,9 +246,12 @@ eval:
 
     U.execute_train(
         train_args=train_args,
+        config=args,
+        # TODO may get it from `config`
         num_gpus=args.num_gpus_per_node,
-        model_type=None,
+        model_type=args.megatron_model_type,
         extra_env_vars={
+            **misc_env_vars,
             **true_on_policy_envs,
         },
     )

@@ -1,0 +1,12 @@
+release:
+    #!/bin/bash
+    set -euxo pipefail
+    cd ..
+
+    VERSION="$(cat docker/version.txt | tr -d '\n')"
+
+    docker build -f docker/Dockerfile . -t slimerl/slime:$VERSION
+    docker push slimerl/slime:$VERSION
+
+    docker tag slimerl/slime:$VERSION slimerl/slime:latest
+    docker push slimerl/slime:latest
