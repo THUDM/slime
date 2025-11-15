@@ -3,6 +3,7 @@ import json
 import os
 import random
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -35,12 +36,24 @@ def hf_download_dataset(full_name: str):
     exec_command(f"hf download --repo-type dataset {full_name} --local-dir /root/datasets/{partial_name}")
 
 
+@dataclass
+class ExecuteTrainConfig:
+    cuda_core_dump: bool = False
+    num_nodes: int = 1
+    extra_env_vars: str = ""
+
+    def __post_init__(self):
+        if (x := os.environ.get("SLURM_JOB_NUM_NODES")) is not None:
+            self.num_nodes = int(x)
+
+
 def execute_train(
     train_args: str,
     # TODO rename to "num_gpus_per_node"
     num_gpus: int,
     # TODO rename to "megatron_model_type"
     model_type: Optional[str],
+    config: ExecuteTrainConfig = ExecuteTrainConfig(),
     train_script: str = "train.py",
     before_ray_job_submit=None,
     extra_env_vars={},
@@ -101,10 +114,11 @@ def execute_train(
                         "CUDA_COREDUMP_GENERATION_FLAGS": "skip_nonrelocated_elf_images,skip_global_memory,skip_shared_memory,skip_local_memory,skip_constbank_memory",
                         "CUDA_COREDUMP_FILE": "/tmp/cuda_coredump_%h.%p.%t",
                     }
-                    if get_bool_env_var("SLIME_SCRIPT_ENABLE_CUDA_CORE_DUMP")
+                    if config.cuda_core_dump
                     else {}
                 ),
                 **extra_env_vars,
+                **_parse_extra_env_vars(config.extra_env_vars),
             }
         }
     )
@@ -114,7 +128,7 @@ def execute_train(
 
     if bool(int(os.environ.get("SLIME_SCRIPT_ENABLE_RAY_SUBMIT", "1"))):
         exec_command(
-            f"export PYTHONBUFFERED=16 && "
+            f"export no_proxy=127.0.0.1 && export PYTHONBUFFERED=16 && "
             f"{source_cmd}"
             # TODO should this 127.0.0.1 be `master_addr` instead
             f'ray job submit --address="http://127.0.0.1:8265" '
@@ -123,6 +137,13 @@ def execute_train(
             f"{model_args_str} "
             f"{train_args}"
         )
+
+
+def _parse_extra_env_vars(text: str):
+    try:
+        return json.loads(text)
+    except ValueError:
+        return {kv[0]: kv[1] for item in text.split(" ") if item.strip() != "" if (kv := item.split("=")) or True}
 
 
 def check_has_nvlink():

@@ -14,7 +14,7 @@ from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
-from slime.utils import profile_utils, train_dump_utils, train_metric_utils
+from slime.utils import train_dump_utils, train_metric_utils
 from slime.utils.context_utils import with_defer
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
@@ -78,8 +78,7 @@ class FSDPTrainRayActor(TrainRayActor):
         if getattr(self.args, "start_rollout_id", None) is None:
             self.args.start_rollout_id = 0
 
-        if args.record_memory_history:
-            profile_utils.attach_oom_dump_memory_history(profile_utils.get_memory_snapshot_full_path(args))
+        self.prof = TrainProfiler(args)
 
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
@@ -101,11 +100,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if args.gradient_checkpointing:
             model.gradient_checkpointing_enable()
-
-        checkpoint_payload = checkpoint.load(self)
-        if checkpoint_payload is not None and checkpoint_payload.get("model") is not None:
-            model.load_state_dict(checkpoint_payload["model"], strict=True)
-            checkpoint_payload["model"] = None
 
         # Create FSDP v2 model using FSDP
         self.model = apply_fsdp2(model)
@@ -138,8 +132,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.global_step = 0
         self.micro_step = 0
-        self._latest_checkpoint_iteration: int | None = None
         self.weights = {"actor": {}}
+
+        checkpoint_payload = checkpoint.load(self)
 
         self.ref_model = None
         if with_ref:
@@ -161,7 +156,7 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.offload_train:
             self.sleep()
 
-        self.prof = TrainProfiler(args)
+        self.prof.on_init_end()
 
         return int(getattr(self.args, "start_rollout_id", 0))
 
@@ -368,13 +363,6 @@ class FSDPTrainRayActor(TrainRayActor):
         with inverse_timer("train_wait"), timer("train"):
             self._train_core(rollout_id=rollout_id, rollout_data_ref=rollout_data_ref)
 
-        if (
-            self.args.record_memory_history
-            and ((s := self.args.memory_snapshot_num_steps) is not None)
-            and (rollout_id == s - 1)
-        ):
-            profile_utils.dump_snapshot_and_stop(profile_utils.get_memory_snapshot_full_path(self.args))
-
         train_metric_utils.log_perf_data_raw(
             rollout_id=rollout_id,
             args=self.args,
@@ -451,7 +439,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     grad_accum=grad_accum,
                 )
 
-        self.prof.step()
+        self.prof.step(rollout_id=rollout_id)
 
         train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
 
@@ -484,7 +472,7 @@ class FSDPTrainRayActor(TrainRayActor):
             temperature=self.args.rollout_temperature,
         )
         packed_batch["cur_log_probs"] = log_probs
-        
+
         shifted_logits = logits.squeeze(0)[:-1]
         log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
         probs = torch.softmax(shifted_logits, dim=-1)
@@ -543,6 +531,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
             pg_loss = pg_loss * tis_clip
 
+        assert not self.args.calculate_per_token_loss, "calculate_per_token_loss not yet implemented"
         pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
         pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
         ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
@@ -554,7 +543,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         entropy = torch.cat([batch["entropy"] for batch in unpacked_batches], dim=0)
         entropy_loss = sum_of_sample_mean(entropy, response_lengths, loss_masks)
-        
+
         loss = pg_loss - self.args.entropy_coef * entropy_loss
 
         if self.args.use_kl_loss:
@@ -739,8 +728,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if os.path.isdir(ref_load_path):
             # Get actor weights for dtype matching
-            actor_weights = {}
-            self.update_cpu_params_dict(actor_weights)
+            actor_weights = self.weights["actor"]
 
             temp_ref_model = AutoModelForCausalLM.from_pretrained(
                 ref_load_path,

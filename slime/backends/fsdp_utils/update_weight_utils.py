@@ -6,6 +6,7 @@ import ray
 import torch
 import torch.distributed as dist
 from ray.actor import ActorHandle
+from torch.distributed.tensor import DTensor
 
 try:
     from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions  # type: ignore[import]
@@ -33,7 +34,7 @@ except ImportError:
 def get_param_info_buckets(
     args: Namespace, weights: Mapping[str, Mapping[str, torch.Tensor]]
 ) -> list[list[ParamInfo]]:
-    """Build `ParamInfo` buckets capped by `args.update_weights_bucket_size`.
+    """Build `ParamInfo` buckets capped by `args.update_weight_buffer_size`.
 
     - Expects `weights["actor"]` to map parameter names to CPU tensors.
     - Each `ParamInfo.size` is computed in bytes (`numel * element_size`).
@@ -62,7 +63,7 @@ def get_param_info_buckets(
     # Create buckets based on buffer size (similar to Megatron)
     param_info_buckets = [[]]
     buffer_size = 0
-    buffer_size_limit = args.update_weights_bucket_size
+    buffer_size_limit = args.update_weight_buffer_size
 
     for info in param_infos:
         param_size = info.size
@@ -101,11 +102,15 @@ class UpdateWeightFromTensor:
         self.weights = weights  # CPU parameter storage
         self.full_params = full_params
 
+        # Validate weights initialization
+        if self.weights is None:
+            raise RuntimeError("weights cannot be None - CPU parameter storage is required for weight updates")
+
         # Bucket-based loading is automatically enabled when full_params=False
         # This provides the Megatron-style optimization for sharded mode
 
         # Create parameter info buckets once during initialization (like Megatron)
-        if not self.full_params and self.weights is not None:
+        if not self.full_params:
             self.param_info_buckets = get_param_info_buckets(self.args, self.weights)
         else:
             self.param_info_buckets = None
@@ -302,6 +307,13 @@ class UpdateWeightFromDistributed:
         self.model = model
         self.weights = weights  # CPU parameter storage
 
+        # Validate weights initialization
+        if self.weights is None:
+            raise RuntimeError("weights cannot be None - CPU parameter storage is required for weight updates")
+
+        # Create parameter info buckets for bucket-based loading
+        self.param_info_buckets = get_param_info_buckets(self.args, self.weights)
+
     def connect_rollout_engines(
         self,
         rollout_engines: Sequence[ActorHandle],
@@ -346,25 +358,30 @@ class UpdateWeightFromDistributed:
 
     @torch.no_grad()
     def update_weights(self) -> None:
-        """Cast params to bfloat16, then broadcast each synchronously to receivers."""
+        """Broadcast weights in buckets to minimize memory usage and reduce communication overhead."""
         model = self.model
         torch.cuda.empty_cache()
         clear_memory()
 
-        # Load parameters from CPU storage one by one to minimize GPU memory usage
-        param_names = list(self.weights["actor"].keys())
+        if self.param_info_buckets is None:
+            raise RuntimeError("Parameter info buckets not initialized for distributed mode")
 
-        for name in tqdm(param_names, desc="[broadcast weight]", disable=not self._is_src_rank):
-            # Load single parameter from CPU to GPU
-            cpu_param = self.weights["actor"][name]
-            gpu_param = cpu_param.to(device=torch.cuda.current_device(), dtype=torch.bfloat16, non_blocking=True)
+        for param_infos in tqdm(
+            self.param_info_buckets, desc="[broadcast weight buckets]", disable=not self._is_src_rank
+        ):
+            # Load all parameters in this bucket from CPU to GPU
+            bucket_state_dict = {}
+            for param_info in param_infos:
+                cpu_param = self.weights["actor"][param_info.name]
+                gpu_param = cpu_param.to(device=torch.cuda.current_device(), dtype=torch.bfloat16, non_blocking=True)
+                bucket_state_dict[param_info.name] = gpu_param
+
             torch.cuda.synchronize()
 
-            # Broadcast this single parameter
-            single_param_dict = {name: gpu_param}
-            self.request_update_params(single_param_dict)
+            self.request_update_params(bucket_state_dict)
 
-            del gpu_param
+            # Clean up bucket
+            del bucket_state_dict
             clear_memory()
 
         dist.barrier()
@@ -397,7 +414,7 @@ class UpdateWeightFromDistributed:
             param_data = param.data.contiguous()
 
             # avoid `DTensor._op_dispatcher.dispatch` has `assert compute_mesh is not None` error
-            if dist.get_world_size() == 1:
+            if dist.get_world_size() == 1 and isinstance(param_data, DTensor):
                 param_data = param_data.full_tensor()
 
             # Synchronous broadcast to avoid memory buildup

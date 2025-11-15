@@ -30,12 +30,7 @@ set -ex
 
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
-
-CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-0.6B
-   --ref-load /root/Qwen3-0.6B
-)
-
+export CUDA_VISIBLE_DEVICES=2,3
 ROLLOUT_ARGS=(
    --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
@@ -44,12 +39,12 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 1000
-   --rollout-batch-size 16
-   --n-samples-per-prompt 16
+   --rollout-batch-size 4
+   --n-samples-per-prompt 4
    --rollout-max-response-len 4096
    --rollout-temperature 0.8
 
-   --global-batch-size 256
+   --global-batch-size 16
 )
 
 GRPO_ARGS=(
@@ -110,9 +105,10 @@ ray job submit --address="http://127.0.0.1:8265" \
    --actor-num-gpus-per-node 2 \
    --colocate \
    --train-backend fsdp \
-   ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
-   ${WANDB_ARGS[@]} 
+   ${WANDB_ARGS[@]} \
+   ${FSDP_ARGS[@]} \
+   ${CHECKPOINT_ARGS[@]} 
