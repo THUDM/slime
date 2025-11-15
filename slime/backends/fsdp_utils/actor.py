@@ -292,29 +292,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
         checkpoint.save(self, iteration)
 
-    def _get_model_inputs_args(self, packed_sequence: dict) -> dict:
-        input_ids = packed_sequence["tokens"].unsqueeze(0)
-        position_ids = packed_sequence["position_ids"].unsqueeze(0)
-        if self.args.enable_cp:
-            
-            packed_sequence = pad_packed_sequence_with_cp(packed_sequence, self.cp_size)
-            
-            if not packed_sequence["cu_seqlens"].is_cuda:
-                packed_sequence["cu_seqlens"] = packed_sequence["cu_seqlens"].cuda()
-            cu_seqlens = packed_sequence["cu_seqlens"]
-            update_ring_flash_attn_params(cu_seqlens, self.cp_group)
-            
-            input_ids = torch.chunk(packed_sequence["tokens"].unsqueeze(0), self.cp_size, dim=1)[self.cp_rank]
-            position_ids = torch.chunk(packed_sequence["position_ids"].unsqueeze(0), self.cp_size, dim=1)[self.cp_rank]
-            
-        
-        model_args = {
-            "input_ids": input_ids,
-            "position_ids": position_ids,
-            "attention_mask": None,
-        }
-        return model_args
-
     def compute_log_prob(
         self,
         model_tag: str,
@@ -881,6 +858,30 @@ class FSDPTrainRayActor(TrainRayActor):
             raise NotImplementedError(f"Loading from checkpoint file {ref_load_path} not yet implemented")
 
         print("Reference model parameters loaded and stored in CPU memory")
+
+    def _get_model_inputs_args(self, packed_sequence: dict) -> dict:
+        input_ids = packed_sequence["tokens"].unsqueeze(0)
+        position_ids = packed_sequence["position_ids"].unsqueeze(0)
+        if self.args.enable_cp:
+            
+            packed_sequence = pad_packed_sequence_with_cp(packed_sequence, self.cp_size)
+            
+            if not packed_sequence["cu_seqlens"].is_cuda:
+                packed_sequence["cu_seqlens"] = packed_sequence["cu_seqlens"].cuda()
+            cu_seqlens = packed_sequence["cu_seqlens"]
+            update_ring_flash_attn_params(cu_seqlens, self.cp_group)
+            
+            input_ids = torch.chunk(packed_sequence["tokens"].unsqueeze(0), self.cp_size, dim=1)[self.cp_rank]
+            position_ids = torch.chunk(packed_sequence["position_ids"].unsqueeze(0), self.cp_size, dim=1)[self.cp_rank]
+            
+        
+        model_args = {
+            "input_ids": input_ids,
+            "position_ids": position_ids,
+            "attention_mask": None,
+        }
+        return model_args
+
 
 
 def selective_log_softmax_raw(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
