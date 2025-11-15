@@ -1,5 +1,7 @@
 import asyncio
+import base64
 import copy
+import io
 from argparse import Namespace
 from collections import defaultdict
 from typing import Any, Callable, Optional, Union
@@ -92,10 +94,21 @@ def get_generate_inputs(
         image_inputs, video_inputs = [], []
 
     if processor and (image_inputs or video_inputs):
-        prompt_ids = processor(text, images=image_inputs, videos=video_inputs, return_tensors="pt")["input_ids"]
+        prompt_ids = processor(text=text, images=image_inputs, videos=video_inputs, return_tensors="pt")["input_ids"][
+            0
+        ]
     else:
         prompt_ids = tokenizer.encode(text, add_special_tokens=False)
     return prompt_ids, image_inputs, video_inputs
+
+
+def _load_and_encode_image(image) -> str:
+    """Load an image from path, ensure RGB, encode as JPEG base64 string."""
+    buffer = io.BytesIO()
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    image.save(buffer, format="JPEG")
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")
 
 
 async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, Any]) -> Sample:
@@ -115,6 +128,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         args.apply_chat_template,
         args.apply_chat_template_kwargs,
     )
+    base64_image_inputs = [_load_and_encode_image(image) for image in image_inputs]
     if len(sample.response) > 0:
         sampling_params["max_new_tokens"] -= len(sample.tokens) - len(prompt_ids)
 
@@ -131,7 +145,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         "return_logprob": True,
     }
     if image_inputs or video_inputs:
-        payload["image_data"] = image_inputs
+        payload["image_data"] = base64_image_inputs
         payload["video_data"] = video_inputs
 
     # Use existing tokens for multi-turn or tokenize the new prompt

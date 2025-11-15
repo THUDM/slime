@@ -49,7 +49,8 @@ def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
     if multimodal_keys and any(value in data for _, value in multimodal_keys.items()):
         flag_type_map = {f"<{key}>": key for key in multimodal_keys.keys()}
         multimodal_inputs = {
-            multimodal_type: data.get(multimodal_key) for multimodal_type, multimodal_key in multimodal_keys.items()
+            multimodal_type: data.get(multimodal_key).tolist()
+            for multimodal_type, multimodal_key in multimodal_keys.items()
         }
         pattern = "(" + "|".join(flag_type_map.keys()) + ")"
         for message in messages:
