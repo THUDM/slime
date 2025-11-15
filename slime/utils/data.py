@@ -8,6 +8,7 @@ import ray
 import torch.distributed as dist
 
 from slime.utils.types import Sample
+
 from .seqlen_balancing import get_seqlen_balanced_partitions
 from .timer import Timer
 
@@ -92,7 +93,12 @@ class Dataset:
                 )
 
             else:
-                prompt = prompt_content
+                if isinstance(prompt_content, str):  # Already applied chat template data
+                    prompt = prompt_content
+                elif isinstance(prompt_content, np.ndarray):  # Convert raw messages ndarray to list
+                    prompt = prompt_content.tolist()
+                else:
+                    raise ValueError(f"Unsupported prompt content type: {type(prompt_content)}")
 
             # TODO: this is slow.
             if max_length is not None:
