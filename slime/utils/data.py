@@ -87,37 +87,32 @@ class Dataset:
         for data in read_file(path):
             prompt = _build_messages(data, prompt_key, multimodal_keys)
 
-            if apply_chat_template:
-                if tool_key is not None:
-                    tools = data[tool_key]
-                    if isinstance(tools, str):
-                        tools = json.loads(tools)
-                    elif isinstance(tools, np.ndarray):
-                        tools = tools.tolist()
-                    assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
-                else:
-                    tools = None
-
-                prompt = tokenizer.apply_chat_template(
-                    prompt,
-                    tools,
-                    tokenize=False,
-                    add_generation_prompt=True,
-                    **apply_chat_template_kwargs,
-                )
-
             # TODO: this is slow.
             if max_length is not None:
-                raw_prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+                if apply_chat_template:
+                    raw_prompt = tokenizer.apply_chat_template(prompt, tokenize=False, **apply_chat_template_kwargs)
+                else:
+                    raw_prompt = prompt
+                raw_prompt_ids = tokenizer.encode(raw_prompt, add_special_tokens=False)
                 if not multimodal_keys:
                     if len(raw_prompt_ids) > max_length:
                         continue
+
+            metadata = data.get(metadata_key) or {}
+            if tool_key is not None and tool_key in data:
+                tools = data[tool_key]
+                if isinstance(tools, str):
+                    tools = json.loads(tools)
+                elif isinstance(tools, np.ndarray):
+                    tools = tools.tolist()
+                assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
+                metadata['tools'] = tools
 
             self.origin_samples.append(
                 Sample(
                     prompt=prompt,
                     label=data[label_key] if label_key is not None else None,
-                    metadata=data.get(metadata_key) or {},
+                    metadata=metadata,
                 )
             )
 

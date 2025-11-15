@@ -77,13 +77,24 @@ class GenerateState(metaclass=SingletonMeta):
         self.remaining_batch_size += len(samples)
 
 
-def get_generate_inputs(prompt, tokenizer, processor):
+def get_generate_inputs(prompt, tokenizer, processor, metadata=None, apply_chat_template=False, apply_chat_template_kwargs=None):
     # temporary solution, will write image utils for slime later
     from qwen_vl_utils import process_vision_info
 
-    image_inputs, video_inputs = process_vision_info(prompt)
-
-    text = tokenizer.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True)
+    if apply_chat_template:
+        image_inputs, video_inputs = process_vision_info(prompt)
+        tools = metadata.get('tools', None) if metadata else None
+        text = tokenizer.apply_chat_template(
+            prompt, 
+            tools=tools,
+            tokenize=False, 
+            add_generation_prompt=True,
+            **apply_chat_template_kwargs
+        )
+    else:
+        text = prompt
+        image_inputs, video_inputs = [], []
+    
     if processor and (image_inputs or video_inputs):
         prompt_ids = processor(text, images=image_inputs, videos=video_inputs, return_tensors="pt")["input_ids"]
     else:
@@ -100,7 +111,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
     ), f"Sample status is {sample.status}"
 
-    prompt_ids, image_inputs, video_inputs = get_generate_inputs(sample.prompt, state.tokenizer, state.processor)
+    prompt_ids, image_inputs, video_inputs = get_generate_inputs(sample.prompt, state.tokenizer, state.processor, sample.metadata, args.apply_chat_template, args.apply_chat_template_kwargs)
     if len(sample.response) > 0:
         sampling_params["max_new_tokens"] -= len(sample.tokens) - len(prompt_ids)
 
