@@ -549,18 +549,16 @@ index e6f59e5b0..c199b987b 100644
          self._check_req_pool()
  
 diff --git a/python/sglang/srt/managers/scheduler_update_weights_mixin.py b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
-index 9bed7030d..f83b7e736 100644
+index 9bed7030d..6e64dc36f 100644
 --- a/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
-@@ -76,7 +76,10 @@ class SchedulerUpdateWeightsMixin:
+@@ -76,7 +76,8 @@ class SchedulerUpdateWeightsMixin:
  
      def update_weights_from_tensor(self, recv_req: UpdateWeightsFromTensorReqInput):
          """Update the online model parameter from tensors."""
 -        success, message = self.tp_worker.update_weights_from_tensor(recv_req)
-+        if self.draft_worker is not None:
-+            success, message = self.draft_worker.update_weights_from_tensor(recv_req)
-+        else:
-+            success, message = self.tp_worker.update_weights_from_tensor(recv_req)
++        worker = self.draft_worker or self.tp_worker
++        success, message = worker.update_weights_from_tensor(recv_req)
          # TODO extract common code b/t update_weights_from_distributed and update_weights_from_tensor later
          if success:
              if recv_req.flush_cache:
@@ -627,10 +625,32 @@ index c5a2e35ed..403cfcd9b 100644
      def _calculate_timing_metrics(
          self,
 diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
-index 739e28943..af3c78144 100644
+index 739e28943..73d88e9e9 100644
 --- a/python/sglang/srt/mem_cache/memory_pool.py
 +++ b/python/sglang/srt/mem_cache/memory_pool.py
-@@ -848,6 +848,7 @@ class HybridLinearKVPool(KVCache):
+@@ -357,12 +357,16 @@ class HybridReqToTokenPool(ReqToTokenPool):
+             device=device,
+             enable_memory_saver=enable_memory_saver,
+         )
+-        self._init_mamba_pool(
+-            size=mamba_size,
+-            cache_params=cache_params,
+-            device=device,
+-            speculative_num_draft_tokens=speculative_num_draft_tokens,
++        memory_saver_adapter = TorchMemorySaverAdapter.create(
++            enable=enable_memory_saver
+         )
++        with memory_saver_adapter.region(GPU_MEMORY_TYPE_KV_CACHE):
++            self._init_mamba_pool(
++                size=mamba_size,
++                cache_params=cache_params,
++                device=device,
++                speculative_num_draft_tokens=speculative_num_draft_tokens,
++            )
+ 
+     def _init_mamba_pool(
+         self,
+@@ -848,6 +852,7 @@ class HybridLinearKVPool(KVCache):
          enable_kvcache_transpose: bool,
          device: str,
          mamba_pool: MambaPool,
@@ -638,7 +658,7 @@ index 739e28943..af3c78144 100644
          # TODO: refactor mla related args
          use_mla: bool = False,
          kv_lora_rank: int = None,
-@@ -879,7 +880,7 @@ class HybridLinearKVPool(KVCache):
+@@ -879,7 +884,7 @@ class HybridLinearKVPool(KVCache):
                  head_dim=head_dim,
                  layer_num=self.full_layer_nums,
                  device=device,
@@ -647,7 +667,7 @@ index 739e28943..af3c78144 100644
              )
          else:
              TokenToKVPoolClass = MLATokenToKVPool
-@@ -891,7 +892,7 @@ class HybridLinearKVPool(KVCache):
+@@ -891,7 +896,7 @@ class HybridLinearKVPool(KVCache):
                  device=device,
                  kv_lora_rank=kv_lora_rank,
                  qk_rope_head_dim=qk_rope_head_dim,
