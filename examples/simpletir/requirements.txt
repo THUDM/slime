@@ -1,0 +1,7 @@
+aiohttp
+math-verify
+pandas
+pyarrow
+regex
+sympy
+word2number
