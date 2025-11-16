@@ -9,7 +9,7 @@ _SourceGetter = Callable[[], Iterable[Tuple[str, torch.Tensor]]]
 
 class TensorBackuper(ABC):
     @staticmethod
-    def create(source_getter, single_tag):
+    def create(source_getter):
         return _TensorBackuperNormal(source_getter=source_getter)
 
     def __init__(self, source_getter: _SourceGetter):
