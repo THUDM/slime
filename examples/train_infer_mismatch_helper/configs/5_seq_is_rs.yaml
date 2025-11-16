@@ -1,0 +1,28 @@
+# seq_is_rs: Decoupled PPO with Sequence-level IS and Rejection Sampling
+# Policy: 3 models (rollout, old, θ)
+# PPO: ✅ (clipping between old and θ)
+# Correction: Seq-level IS + Seq-level RS (between rollout and old)
+# Performance: Standard
+
+use_tis: true
+use_rs: true
+
+# Seq-level IS: product over all tokens in sequence
+tis_level: "sequence"
+tis_mode: "truncate"
+
+# Conservative bounds for sequence-level IS
+tis_lower_bound: null  # Will be set to 1.0 / tis_upper_bound
+tis_upper_bound: 2.0
+
+# Seq-level RS: reject sequences outside bounds
+rs_level: "sequence"
+rs_lower_bound: null  # Inherits from tis_lower_bound
+rs_upper_bound: null  # Inherits from tis_upper_bound
+
+# Per-token veto: reject sequence if any token has catastrophic mismatch
+rs_veto_threshold: 1.0e-4
+
+# Batch normalization
+tis_batch_normalize: false
+
