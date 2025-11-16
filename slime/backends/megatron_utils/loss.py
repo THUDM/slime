@@ -18,7 +18,12 @@ from slime.utils.ppo_utils import (
 )
 from slime.utils.types import RolloutBatch
 
-from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean, slice_log_prob_with_cp
+from .cp_utils import (
+    all_gather_with_cp,
+    get_logits_and_tokens_offset_with_cp,
+    get_sum_of_sample_mean,
+    slice_log_prob_with_cp,
+)
 
 
 def get_responses(
@@ -374,11 +379,11 @@ def get_rollout_training_metrics(
     def masked_mean(x: torch.Tensor) -> torch.Tensor:
         result = masked_sum(x) / torch.clamp_min(masked_sum(loss_masks), 1)
         return result.expand_as(x)
-    
+
     # 0. Absolute log probability difference (token-level)
     # This measures the absolute difference between training and rollout log probs
     train_rollout_logprob_abs_diff = (train_log_probs - rollout_log_probs).abs()
-    
+
     # 1. Training policy perplexity metrics
     mean_log_prob_training = masked_mean(train_log_probs)
     training_log_ppl = -mean_log_prob_training
@@ -391,7 +396,7 @@ def get_rollout_training_metrics(
     # This is the standard KL divergence: E[log(π_rollout) - log(π_training)]
     # Positive value means rollout policy is more confident than training policy
     kl_per_token = rollout_log_probs - train_log_probs
-    
+
     # 3b. K3 KL estimator for improved stability
     # More stable for small KL values using: E[exp(log_ratio) - log_ratio - 1]
     # Formula: KL ≈ E[r - log(r) - 1] where r = π_training/π_rollout
@@ -404,10 +409,10 @@ def get_rollout_training_metrics(
     #   log(ppl_ratio) = log(training_ppl/rollout_ppl) = log_ppl_diff
     # Positive value means training assigns lower probability (higher PPL) than rollout
     log_ppl_diff = mean_log_prob_rollout - mean_log_prob_training
-    
+
     # 3d. PPL ratio (how much higher is training PPL vs rollout PPL)
     # For numerical stability, compute in log space using log_ppl_diff
-    # Note: log_ppl_diff = log(ppl_ratio), so ppl_ratio = exp(log_ppl_diff) 
+    # Note: log_ppl_diff = log(ppl_ratio), so ppl_ratio = exp(log_ppl_diff)
     ppl_ratio = torch.exp(log_ppl_diff)
 
     # 4a. Token-level chi-squared divergence
@@ -452,24 +457,22 @@ def _compute_metrics_with_cp(
     response_lengths: list[int],
 ) -> dict[str, torch.Tensor]:
     """Compute metrics with context parallelism handling.
-    
+
     Gathers full sequences, computes metrics, then slices back to current CP rank.
     """
     # Gather cp slice from other cp ranks
     full_train_log_probs = [
-        all_gather_with_cp(lp, tl, rl)
-        for lp, tl, rl in zip(train_log_probs_list, total_lengths, response_lengths)
+        all_gather_with_cp(lp, tl, rl) for lp, tl, rl in zip(train_log_probs_list, total_lengths, response_lengths)
     ]
     full_rollout_log_probs = [
-        all_gather_with_cp(lp, tl, rl)
-        for lp, tl, rl in zip(rollout_log_probs_list, total_lengths, response_lengths)
+        all_gather_with_cp(lp, tl, rl) for lp, tl, rl in zip(rollout_log_probs_list, total_lengths, response_lengths)
     ]
-    
+
     all_metrics_per_seq = [
         get_rollout_training_metrics(train_lp, rollout_lp, loss_mask.float())
         for train_lp, rollout_lp, loss_mask in zip(full_train_log_probs, full_rollout_log_probs, loss_masks_list)
     ]
-    
+
     # Slice out the value shards for this CP rank and concat them into a 1D tensor along dim=0 for loss.py computation.
     final_metrics = {}
     for key in all_metrics_per_seq[0].keys():
@@ -479,7 +482,7 @@ def _compute_metrics_with_cp(
             for i in range(len(metric_values))
         ]
         final_metrics[key] = torch.cat(sliced_values, dim=0)
-    
+
     return final_metrics
 
 
@@ -673,7 +676,8 @@ def policy_loss_function(
             log_probs_and_entropy["log_probs"] if args.use_rollout_logprobs else batch["log_probs"],
             batch["rollout_log_probs"],
             batch["loss_masks"],
-            total_lengths, response_lengths
+            total_lengths,
+            response_lengths,
         )
         for key, value in final_metrics.items():
             reported_loss[key] = sum_of_sample_mean(value).clone().detach()
@@ -854,7 +858,7 @@ def loss_function(
     loss = (
         loss * num_microbatches / args.global_batch_size * mpu.get_data_parallel_world_size(with_context_parallel=True)
     )
-    
+
     log = {k: v for k, v in log.items() if v is not None}
 
     return (

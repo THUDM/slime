@@ -135,7 +135,7 @@ def compute_mis_weights(
     """
 
     metrics: Dict[str, list[torch.Tensor]] = {}
-    
+
     tis_lower_bound = args.tis_lower_bound if args.tis_lower_bound is not None else 1.0 / args.tis_upper_bound
     rs_lower_bound = args.rs_lower_bound if args.rs_lower_bound is not None else tis_lower_bound
     rs_upper_bound = args.rs_upper_bound if args.rs_upper_bound is not None else args.tis_upper_bound
@@ -169,7 +169,7 @@ def compute_mis_weights(
         loss_mask = loss_mask.float()
         raw_log_ratio_diff = train_log_prob - rollout_log_prob
         modified_mask = loss_mask.clone().float()
-        
+
         # IS (Importance Sampling): Modify IS weights
         if args.use_tis:
             log_ratio_tis = compute_log_ratio(raw_log_ratio_diff, loss_mask, args.tis_level)
@@ -185,24 +185,24 @@ def compute_mis_weights(
                 weights, modified_mask = mask(weights, loss_mask, metrics, tis_lower_bound, args.tis_upper_bound)
             else:
                 raise ValueError(f"Unsupported tis_mode: {args.tis_mode}")
-            
+
             metrics_append(metrics, "tis_weight_after_bound", weights)
         else:
             weights = torch.ones_like(raw_log_ratio_diff)
-        
+
         # RS (Rejection Sampling): Modify mask
         if args.use_rs:
             if args.use_tis and args.rs_level == args.tis_level:
                 log_ratio_rs = log_ratio_tis
             else:
                 log_ratio_rs = compute_log_ratio(raw_log_ratio_diff, loss_mask, args.rs_level)
-            
+
             log_ratio_safe_rs = torch.clamp(log_ratio_rs, min=-SAFETY_BOUND, max=SAFETY_BOUND)
             rs_weights = torch.exp(log_ratio_safe_rs)
-            
+
             # Apply mask-based rejection sampling
             _, modified_mask = mask(rs_weights, modified_mask, metrics, rs_lower_bound, rs_upper_bound)
-            
+
             # Veto on raw per-token ratios (sequence-wise rejection)
             if args.rs_veto_threshold is not None:
                 veto_mask = calculate_veto_mask(raw_log_ratio_diff, loss_mask, args.rs_veto_threshold, metrics)
