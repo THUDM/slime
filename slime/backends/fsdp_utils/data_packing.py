@@ -176,11 +176,5 @@ def pad_packed_sequence_with_cp(packed_sequence: dict, cp_size: int) -> dict:
         packed_sequence["tokens"] = F.pad(packed_sequence["tokens"], (0, pad_length), value=0)
         packed_sequence["position_ids"] = F.pad(packed_sequence["position_ids"], (0, pad_length), value=0)
         packed_sequence["loss_masks"] = F.pad(packed_sequence["loss_masks"], (0, pad_length), value=0)
-        # packed_sequence["advantages"] = F.pad(packed_sequence["advantages"], (0, pad_length), value=0.0)
-        # packed_sequence["returns"] = F.pad(packed_sequence["returns"], (0, pad_length), value=0.0)
-        # # Pad rollout_log_probs with 0
-        # if "rollout_log_probs" in packed_sequence and isinstance(packed_sequence["rollout_log_probs"], torch.Tensor):
-        #     packed_sequence["rollout_log_probs"] = F.pad(packed_sequence["rollout_log_probs"], (0, pad_length), value=0.0)
-        # Update cu_seqlens: extend the last sequence to include padding
         packed_sequence["cu_seqlens"][-1] += pad_length
     return packed_sequence
