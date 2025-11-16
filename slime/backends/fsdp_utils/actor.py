@@ -846,12 +846,11 @@ selective_log_softmax_compiled = torch.compile(dynamic=True)(selective_log_softm
 
 
 def gather_log_probs_packed(
-    logits: torch.Tensor,
+    shifted_logits: torch.Tensor,
     input_ids: torch.Tensor,
     allow_compile: bool,
     cu_seqlens: torch.Tensor | float | None = None,
-    temperature: torch.Tensor | None = None,
-    use_cp: bool = False,
+    temperature: torch.Tensor | None = None
 ) -> torch.Tensor:
     """Gather next-token log probabilities for packed sequences.
 
@@ -865,16 +864,14 @@ def gather_log_probs_packed(
         A tensor of shape [T-1] (or [B, T-1]) with log-probabilities of targets.
     """
     # Handle batch dimension - logits should be [batch_size, seq_len, vocab_size]
-    if logits.dim() == 3:
+    if shifted_logits.dim() == 3:
         # Remove batch dimension for packed sequences
-        logits = logits.squeeze(0)
+        shifted_logits = shifted_logits.squeeze(0)
         input_ids = input_ids.squeeze(0)
 
     if temperature is not None:
-        logits = logits.div(temperature)
+        shifted_logits = shifted_logits.div(temperature)
 
-    # Shift for next-token prediction: logits[:-1] predicts input_ids[1:]
-    shifted_logits = logits[:-1] if not use_cp else logits
     targets = input_ids[1:].to(device=shifted_logits.device)
 
     # Gather log probs for targets
@@ -912,11 +909,10 @@ def get_logprob_and_entropy_with_cp(
     if cp_size == 1:
         shifted_logits = logits[:-1, :]
         local_log_probs = gather_log_probs_packed(
-            logits,
+            shifted_logits,
             target_tokens,
             allow_compile=allow_compile,
-            temperature=temperature,
-            use_cp=False
+            temperature=temperature
         )
         log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
         probs = torch.softmax(shifted_logits, dim=-1)
@@ -938,8 +934,7 @@ def get_logprob_and_entropy_with_cp(
         logits, 
         local_tokens, 
         allow_compile=allow_compile,
-        temperature=temperature,
-        use_cp=True
+        temperature=temperature
     )
     
     # Pad for the last rank
