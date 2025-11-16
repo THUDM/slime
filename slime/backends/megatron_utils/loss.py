@@ -530,7 +530,7 @@ def policy_loss_function(
 
     log_probs = log_probs_and_entropy["log_probs"]
 
-    if args.use_tis and args.use_rollout_logprobs:
+    if args.use_rollout_correction and args.use_rollout_logprobs:
         # skipping clip, use pure reinforce + rollout correction
         # https://github.com/szrlee/verl/blob/yingru/rollout_correction/docs/advance/rollout_corr_math.md#311-pure-is-pure_is
         log_probs = torch.cat(log_probs, dim=0)
@@ -668,7 +668,7 @@ def policy_loss_function(
             reported_loss[key_name] = sum_of_sample_mean(metric_value)
 
     # Always return metrics about rollout & training log probs (e.g. training-inference KL), no matter whether TIS is used.
-    if "rollout_log_probs" in batch and batch["rollout_log_probs"]:
+    if "rollout_log_probs" in batch:
         final_metrics = _compute_metrics_with_cp(
             log_probs_and_entropy["log_probs"] if args.use_rollout_logprobs else batch["log_probs"],
             batch["rollout_log_probs"],
