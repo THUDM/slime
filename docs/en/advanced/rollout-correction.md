@@ -226,11 +226,11 @@ These metrics quantify the difference between training and rollout policies. The
 | `mismatch_rollout_log_ppl` | Negative mean log probability under rollout policy: $-\mathbb{E}[\log \pi_{\text{rollout}}]$ |
 | `mismatch_rollout_ppl` | Perplexity of rollout policy: $\exp(-\mathbb{E}[\log \pi_{\text{rollout}}])$ |
 | `mismatch_kl` | Forward KL divergence estimator: $\mathbb{E}[\log \pi_{\text{rollout}} - \log \pi_{\text{train}}]$ |
-| `mismatch_k3_kl` | K3 KL estimator (more stable): $\mathbb{E}[\exp(r) - r - 1]$ where $r = \log \pi_{\text{train}} - \log \pi_{\text{rollout}}$ |
-| `mismatch_log_ppl_diff` | Log perplexity difference: $\log(\text{PPL}_{\text{train}} / \text{PPL}_{\text{rollout}})$ |
-| `mismatch_log_ppl_abs_diff` | Absolute log perplexity difference: $\|\log(\text{PPL}_{\text{train}} / \text{PPL}_{\text{rollout}})\|$ |
-| `mismatch_ppl_ratio` | Perplexity ratio: $\text{PPL}_{\text{train}} / \text{PPL}_{\text{rollout}}$ |
-| `train_rollout_logprob_abs_diff` | Token-level absolute log probability difference: $\|\log \pi_{\text{train}} - \log \pi_{\text{rollout}}\|$ |
+| `mismatch_k3_kl` | K3 KL estimator: $\mathbb{E}[\exp(r) - r - 1]$ where $r = \log \pi_{\text{train}} - \log \pi_{\text{rollout}}$ |
+| `mismatch_log_ppl_diff` | Log perplexity difference|
+| `mismatch_log_ppl_abs_diff` | Absolute log perplexity difference |
+| `mismatch_ppl_ratio` | Perplexity ratio |
+| `train_rollout_logprob_abs_diff` | Token-level absolute log probability difference |
 
 **Usage**: These metrics help you monitor policy drift. Large values indicate significant mismatch between training and rollout engines.
 
@@ -244,7 +244,7 @@ When using `--custom-tis-function-path` pointing to MIS implementation (e.g., `m
 | Metric Name | Description | Required Args | Optional Control Args |
 |------------|-------------|---------------|----------------------|
 | `ois` | On-policy importance sampling ratio: $\exp(\log \pi_{\text{train}} - \log \pi_{\text{old}})$ | `--use-tis` | Only for Algorithm 2 (Decoupled PPO) |
-| `mis_mean_is_weight_before_clip` | Raw IS weights before any correction: $\exp(\text{log\_ratio})$ | `--use-tis` | `--mis-level` (token/sequence/geometric) |
+| `mis_mean_is_weight_before_clip` | Raw IS weights before any correction: $\exp(\text{log-ratio})$ | `--use-tis` | `--mis-level` (token/sequence/geometric) |
 | `mis_ratio_mean_after_mis` | IS weights after correction (bounded or masked) | `--use-tis` | `--mis-mode`, bounds |
 | `mis_truncate_fraction` | Fraction of weights truncated (mode-specific) | `--use-tis`, `--mis-mode=truncate` | `--mis-upper-bound` |
 | `mis_clip_fraction_low` | Fraction of weights clipped below lower bound | `--use-tis`, `--mis-mode=clip` | `--mis-lower-bound`, `--mis-upper-bound` |
