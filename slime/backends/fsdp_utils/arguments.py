@@ -34,8 +34,6 @@ class FSDPArgs:
     deterministic_mode: bool = False  # This name must be the same as Megatron's
 
     # Context Parallelism
-    enable_cp: bool = False                     # enable Context Parallelism or not
-    ring_flash_atten_type: str = "llama3"       # Ring attention specific implementation: "basic", "zigzag", "llama3"
     context_parallel_size: int = 1              # Context Parallelism size
     # Profile
     record_memory_history: bool = False

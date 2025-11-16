@@ -115,15 +115,15 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
     response_lengths = packed_batch["response_lengths"]
 
     instances = []
-    
-    # Hard code to get the pad_length(TODO refactor this)
+
+    # Calculate pad_length by counting trailing zeros
     tokens = packed_batch["tokens"]
-    pad_length = 0
-    for idx in range(len(tokens) - 1, -1, -1):
-        if tokens[idx].item() == 0:
-            pad_length += 1
-        else:
-            break
+    nonzero_indices = (tokens != 0).nonzero(as_tuple=True)[0]
+    if len(nonzero_indices) > 0:
+        # Last non-zero index, pad_length is everything after it
+        pad_length = len(tokens) - nonzero_indices[-1].item() - 1
+    else:
+        pad_length = 0  # No padding if no non-zero tokens (or all zeros)
     for i in range(num_sequences):
         start_idx = cu_seqlens[i].item()
         end_idx = cu_seqlens[i + 1].item()
