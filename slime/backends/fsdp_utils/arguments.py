@@ -32,6 +32,9 @@ class FSDPArgs:
     fsdp_state_dict_cpu_offload: bool = True  # If True, offload full state dict to CPU during collection.
 
     deterministic_mode: bool = False  # This name must be the same as Megatron's
+
+    # Context Parallelism
+    context_parallel_size: int = 1              # Context Parallelism size
     # Profile
     record_memory_history: bool = False
     memory_snapshot_path: str = "snapshot.pickle"
