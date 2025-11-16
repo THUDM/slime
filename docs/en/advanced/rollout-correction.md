@@ -20,7 +20,7 @@ We included 3 rollout correction algorithms: \
 (1) decoupled, 3-policies PPO with rollout importance sampling, \
 (2) direct rollout policy overwriting in standard PPO, \
 (3) pure REINFORCE loss (without PPO clipping) with rollout importance sampling. \
-You may use **loss algorithm selection** APIs `--use_rollout_log_probs` and `--use-rollout-correction` to select one of the rollout correction loss (details in **III. Algorithms**).
+You may use **loss algorithm selection** APIs `--use-rollout-log-probs` and `--use-rollout-correction` to select one of the rollout correction loss (details in **III. Algorithms**).
 
 When training-inference importance sampling / rejection sampling is enabled (`--use-rollout-correction`), you need to also specify the **IS/RS configs** with a config file using `--custom-config-path`. We will also provide some recommended settings for each mode. (details in **IV. recommended settings**)
 
@@ -117,7 +117,7 @@ Advantages:
 
 You may choose from above algorithms by specifying arguments below:
 
-`--use_rollout_log_probs`: True if only use `rollout_log_probs` to compute the loss, bypassing old_log_probs calculated by training engine;
+`--use-rollout-log-probs`: True if only use `rollout_log_probs` to compute the loss, bypassing old_log_probs calculated by training engine;
 
 `--use-rollout-correction`: True if apply importance sampling/rejection sampling to loss.
 

@@ -670,7 +670,9 @@ def policy_loss_function(
     # Always return metrics about rollout & training log probs (e.g. training-inference KL), no matter whether TIS is used.
     if "rollout_log_probs" in batch and batch["rollout_log_probs"]:
         final_metrics = _compute_metrics_with_cp(
-            batch["log_probs"], batch["rollout_log_probs"], batch["loss_masks"],
+            log_probs_and_entropy["log_probs"] if args.use_rollout_logprobs else batch["log_probs"],
+            batch["rollout_log_probs"],
+            batch["loss_masks"],
             total_lengths, response_lengths
         )
         for key, value in final_metrics.items():
