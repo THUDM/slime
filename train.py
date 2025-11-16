@@ -26,8 +26,12 @@ def train(args):
     if args.offload_rollout:
         ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
 
+    if args.offload_train and not args.enable_weights_backuper:
+        actor_model.onload()
     # always update weight first so that sglang has the loaded weights from training.
     actor_model.update_weights()
+    if args.offload_train and not args.enable_weights_backuper:
+        actor_model.offload()
 
     if args.offload_rollout:
         if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
@@ -84,9 +88,15 @@ def train(args):
             if args.rollout_global_dataset:
                 ray.get(rollout_manager.save.remote(rollout_id))
 
-        offload_train()
-        onload_rollout()
-        actor_model.update_weights()
+        if args.enable_weights_backuper:
+            offload_train()
+            onload_rollout()
+            actor_model.update_weights()
+        else:
+            actor_model.clear_memory()
+            onload_rollout()
+            actor_model.update_weights()
+            offload_train()
 
         if args.offload_rollout:
             if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:

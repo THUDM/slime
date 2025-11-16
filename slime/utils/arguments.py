@@ -136,6 +136,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=0,
                 help="Add margin for train memory allocation.",
             )
+            parser.add_argument(
+                "--disable-weights-backuper",
+                action="store_false",
+                dest="enable_weights_backuper",
+                help="Whether to disable weights backuper to save host memory.",
+            )
 
             return parser
 
