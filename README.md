@@ -51,6 +51,10 @@ We also provide examples for some use cases not covered in the quick start guide
 
 slime has powered several novel research projects and production systems. Here are some notable examples:
 
+### 📈RLVE: Scaling LM RL with Adaptive Verifiable Environments
+
+[**RLVE**](https://github.com/Zhiyuan-Zeng/RLVE) introduces an approach using verifiable environments that procedurally generate problems and provide algorithmically verifiable rewards, to scale up RL for language models (LMs). With joint training across 400 verifiable environments, RLVE enables each environment to dynamically adapt its problem difficulty distribution to the policy model's capabilities as training progresses.
+
 ### ⚡ TritonForge: Agentic RL Training Framework for Kernel Generation
 
 [**TritonForge**](https://github.com/RLsys-Foundation/TritonForge) leverages slime's SFT & RL capabilities to train LLMs that automatically generate optimized GPU kernels. By using a two-stage training approach—supervised fine-tuning followed by reinforcement learning with multi-turn compilation feedback—TritonForge achieves remarkable results in converting PyTorch operations into high-performance Triton kernels.
