@@ -136,7 +136,9 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
                 if isinstance(value, torch.Tensor):
                     if key in ["log_probs", "ref_log_probs", "cur_log_probs", "entropy"]:
                         # These are computed from logits[:-1] so they have length seq_len-1
-                        instance[key] = value[end_idx - 1 - response_lengths[i] - pad_length: end_idx - 1 - pad_length]
+                        instance[key] = value[
+                            end_idx - 1 - response_lengths[i] - pad_length : end_idx - 1 - pad_length
+                        ]
                     elif key == "rollout_log_probs":
                         # rollout_log_probs is packed based on response_lengths, so slice differently
                         instance[key] = value[sum(response_lengths[:i]) : sum(response_lengths[: i + 1])]
@@ -157,13 +159,14 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
 
     return instances
 
+
 def pad_packed_sequence_with_cp(packed_sequence: dict, cp_size: int) -> dict:
     """Pad packed sequence to make total length divisible by cp_size.
-    
+
     Args:
         packed_sequence: Packed sequence dict containing tokens, position_ids, cu_seqlens, etc.
         cp_size: Context parallelism world size
-        
+
     Returns:
         Padded packed sequence
     """
@@ -171,7 +174,7 @@ def pad_packed_sequence_with_cp(packed_sequence: dict, cp_size: int) -> dict:
     # Calculate padding needed: (cp_size - seq_length % cp_size) % cp_size
     remainder = seq_length % cp_size
     pad_length = (cp_size - remainder) % cp_size
-    
+
     if pad_length > 0:
         packed_sequence["tokens"] = F.pad(packed_sequence["tokens"], (0, pad_length), value=0)
         packed_sequence["position_ids"] = F.pad(packed_sequence["position_ids"], (0, pad_length), value=0)
