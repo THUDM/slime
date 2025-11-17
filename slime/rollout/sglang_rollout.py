@@ -8,6 +8,8 @@ from collections import defaultdict
 from typing import Any, Callable, Optional, Union
 
 import numpy as np
+import sglang_router
+from packaging.version import parse
 from PIL import Image
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -295,13 +297,19 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
     state = GenerateState(args)
     assert not state.aborted
     state.aborted = True
-    response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
 
-    # abort all the requests
-    for worker in response["workers"]:
-        url = worker["url"]
-        print(f"Abort request for {url}", flush=True)
-        await post(f"{url}/abort_request", {"abort_all": True})
+    if parse(sglang_router.__version__) <= parse("0.2.1"):
+        response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers")
+        # abort all the requests
+        for url in response["urls"]:
+            logger.info(f"Abort request for {url}")
+    else:
+        response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
+        # abort all the requests
+        for worker in response["workers"]:
+            url = worker["url"]
+            print(f"Abort request for {url}", flush=True)
+            await post(f"{url}/abort_request", {"abort_all": True})
 
     # make sure all the pending tasks are finished
     count = 0

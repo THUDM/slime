@@ -5,6 +5,8 @@ import time
 from typing import List, Optional
 
 import requests
+import sglang_router
+from packaging.version import parse
 from sglang.srt.entrypoints.http_server import launch_server
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import kill_process_tree
@@ -132,10 +134,15 @@ class SGLangEngine(RayActor):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
         self.process = launch_server_process(ServerArgs(**server_args_dict))
         if self.node_rank == 0 and self.router_ip and self.router_port:
-            requests.post(
-                f"http://{self.router_ip}:{self.router_port}/workers",
-                json={"url": f"http://{self.server_host}:{self.server_port}"},
-            )
+            if parse(sglang_router.__version__) <= parse("0.2.1"):
+                response = requests.post(
+                    f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}"
+                )
+            else:
+                response = requests.post(
+                    f"http://{self.router_ip}:{self.router_port}/workers",
+                    json={"url": f"http://{self.server_host}:{self.server_port}"},
+                )
             response.raise_for_status()
 
     def _make_request(self, endpoint: str, payload: Optional[dict] = None):
@@ -229,9 +236,12 @@ class SGLangEngine(RayActor):
         logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
         if self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
-            requests.delete(
-                f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}"
-            )
+            if parse(sglang_router.__version__) <= parse("0.2.1"):
+                response = requests.post(
+                    f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
+                )
+            else:
+                response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}")
             response.raise_for_status()
         kill_process_tree(self.process.pid)
 
