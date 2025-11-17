@@ -16,7 +16,7 @@ from slime.utils.eval_config import EvalDatasetConfig
 from slime.utils.http_utils import get, post
 from slime.utils.mask_utils import get_response_lengths
 from slime.utils.misc import SingletonMeta, load_function
-from slime.utils.tokenizer_utils import load_processor, load_tokenizer
+from slime.utils.tokenizer_utils import load_processor, load_tokenizer, prepare_model_inputs
 from slime.utils.types import Sample
 
 from .rm_hub import async_rm, batched_async_rm
@@ -77,31 +77,6 @@ class GenerateState(metaclass=SingletonMeta):
         self.remaining_batch_size += len(samples)
 
 
-def get_generate_inputs(
-    prompt, tokenizer, processor, metadata=None, apply_chat_template=False, apply_chat_template_kwargs=None
-):
-    # temporary solution, will write image utils for slime later
-    from qwen_vl_utils import process_vision_info
-
-    if apply_chat_template:
-        image_inputs, video_inputs = process_vision_info(prompt)
-        tools = metadata.get("tools", None) if metadata else None
-        text = tokenizer.apply_chat_template(
-            prompt, tools=tools, tokenize=False, add_generation_prompt=True, **apply_chat_template_kwargs
-        )
-    else:
-        text = prompt
-        image_inputs, video_inputs = [], []
-
-    if processor and (image_inputs or video_inputs):
-        prompt_ids = processor(text=text, images=image_inputs, videos=video_inputs, return_tensors="pt")["input_ids"][
-            0
-        ]
-    else:
-        prompt_ids = tokenizer.encode(text, add_special_tokens=False)
-    return prompt_ids, image_inputs, video_inputs
-
-
 def _load_and_encode_image(image) -> str:
     """Load an image from path, ensure RGB, encode as JPEG base64 string."""
     buffer = io.BytesIO()
@@ -120,15 +95,18 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
     ), f"Sample status is {sample.status}"
 
-    prompt_ids, image_inputs, video_inputs = get_generate_inputs(
+    prompt_ids, encoding_info = prepare_model_inputs(
         sample.prompt,
         state.tokenizer,
         state.processor,
         sample.metadata,
-        args.apply_chat_template,
         args.apply_chat_template_kwargs,
     )
-    base64_image_inputs = [_load_and_encode_image(image) for image in image_inputs]
+
+    image_data = encoding_info.get("images", [])
+    video_data = encoding_info.get("videos", [])
+    multimodal_encoding_info = encoding_info.get("multimodal_inputs", None)
+
     if len(sample.response) > 0:
         sampling_params["max_new_tokens"] -= len(sample.tokens) - len(prompt_ids)
 
@@ -144,9 +122,10 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         "sampling_params": sampling_params,
         "return_logprob": True,
     }
-    if image_inputs or video_inputs:
-        payload["image_data"] = base64_image_inputs
-        payload["video_data"] = video_inputs
+    if image_data or video_data:
+        payload["image_data"] = [_load_and_encode_image(image) for image in image_data]
+        payload["video_data"] = video_data
+        sample.multimodal_inputs = multimodal_encoding_info
 
     # Use existing tokens for multi-turn or tokenize the new prompt
     if len(sample.response) > 0:

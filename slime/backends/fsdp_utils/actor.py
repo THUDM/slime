@@ -11,7 +11,7 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_
 from torch.distributed.tensor import DTensor, distribute_tensor
 from torch_memory_saver import torch_memory_saver
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from transformers import AutoConfig
 
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import profile_utils, train_dump_utils, train_metric_utils
@@ -22,6 +22,7 @@ from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, inverse_timer, timer
+from slime.utils.tokenizer_utils import load_processor, load_tokenizer
 from slime.utils.wandb_utils import init_wandb_secondary
 
 from ...utils.profile_utils import TrainProfiler
@@ -84,19 +85,19 @@ class FSDPTrainRayActor(TrainRayActor):
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
                 self.hf_config = AutoConfig.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
-                self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
+                self.tokenizer = load_tokenizer(self.args.hf_checkpoint, trust_remote_code=True)
+                if self.args.multimodal_keys:
+                    self.processor = load_processor(self.args.hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
-
-        if self.args.multimodal_keys:
-            self.vlm_processor = AutoProcessor.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
 
         # Load model
         with torch.autocast(device_type=f"cuda:{torch.cuda.current_device()}"):
-            model = AutoModelForCausalLM.from_pretrained(
+            model = self.get_model_cls().from_pretrained(
                 self.args.hf_checkpoint,
                 trust_remote_code=True,
                 attn_implementation=self.args.attn_implementation,
             )
+
         model.train()
 
         if args.gradient_checkpointing:
@@ -164,6 +165,16 @@ class FSDPTrainRayActor(TrainRayActor):
         self.prof = TrainProfiler(args)
 
         return int(getattr(self.args, "start_rollout_id", 0))
+
+    def get_model_cls(self):
+        if self.args.multimodal_keys:
+            from transformers import AutoModelForVision2Seq
+
+            return AutoModelForVision2Seq
+        else:
+            from transformers import AutoModelForCausalLM
+
+            return AutoModelForCausalLM
 
     @timer
     def sleep(self) -> None:
@@ -263,8 +274,9 @@ class FSDPTrainRayActor(TrainRayActor):
                             "position_ids": batch["position_ids"].unsqueeze(0),
                             "attention_mask": None,
                         }
-                        if "pixel_values" in batch:
-                            model_args["pixel_values"] = batch["pixel_values"]
+                        # Add multimodal tokens if present
+                        if "multimodal_inputs" in batch:
+                            model_args.update(batch["multimodal_inputs"])
                         logits = self.model(**model_args).logits
                     batch[f"{store_prefix}log_probs"] = gather_log_probs_packed(
                         logits,
@@ -342,6 +354,9 @@ class FSDPTrainRayActor(TrainRayActor):
                     rollout_data["returns"][start:end],
                     rollout_log_probs=(
                         rollout_data["rollout_log_probs"][start:end] if "rollout_log_probs" in rollout_data else None
+                    ),
+                    multimodal_inputs=(
+                        rollout_data["multimodal_inputs"][start:end] if "multimodal_inputs" in rollout_data else None
                     ),
                     num_packs=mbs_size,
                 )
@@ -469,11 +484,15 @@ class FSDPTrainRayActor(TrainRayActor):
 
     def _train_step(self, packed_batch, world_size, reported_accum, mbs_id, grad_accum):
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            logits = self.model(
-                input_ids=packed_batch["tokens"].unsqueeze(0),
-                attention_mask=None,
-                position_ids=packed_batch["position_ids"].unsqueeze(0),
-            ).logits
+            model_args = {
+                "input_ids": packed_batch["tokens"].unsqueeze(0),
+                "attention_mask": None,
+                "position_ids": packed_batch["position_ids"].unsqueeze(0),
+            }
+            # Add multimodal tokens if present
+            if "multimodal_inputs" in packed_batch:
+                model_args.update(packed_batch["multimodal_inputs"])
+            logits = self.model(**model_args).logits
 
         # Handle packed sequences
         log_probs = gather_log_probs_packed(
@@ -484,7 +503,7 @@ class FSDPTrainRayActor(TrainRayActor):
             temperature=self.args.rollout_temperature,
         )
         packed_batch["cur_log_probs"] = log_probs
-        
+
         shifted_logits = logits.squeeze(0)[:-1]
         log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
         probs = torch.softmax(shifted_logits, dim=-1)
@@ -554,7 +573,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         entropy = torch.cat([batch["entropy"] for batch in unpacked_batches], dim=0)
         entropy_loss = sum_of_sample_mean(entropy, response_lengths, loss_masks)
-        
+
         loss = pg_loss - self.args.entropy_coef * entropy_loss
 
         if self.args.use_kl_loss:
@@ -742,7 +761,7 @@ class FSDPTrainRayActor(TrainRayActor):
             actor_weights = {}
             self.update_cpu_params_dict(actor_weights)
 
-            temp_ref_model = AutoModelForCausalLM.from_pretrained(
+            temp_ref_model = self.get_model_cls().from_pretrained(
                 ref_load_path,
                 trust_remote_code=True,
                 torch_dtype=torch.bfloat16,

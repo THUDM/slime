@@ -7,7 +7,8 @@ import pandas as pd
 import ray
 import torch.distributed as dist
 
-from slime.utils.types import Sample
+from slime.utils.types import MultimodalTypes, Sample
+
 from .seqlen_balancing import get_seqlen_balanced_partitions
 from .timer import Timer
 
@@ -43,33 +44,61 @@ def _parse_generalized_path(s: str):
     return s, None
 
 
+def _should_skip_prompt(prompt, tokenizer, processor, max_length, apply_chat_template_kwargs):
+    if max_length is None:
+        return False
+
+    from slime.utils.tokenizer_utils import prepare_model_inputs
+
+    input_ids, _ = prepare_model_inputs(prompt, tokenizer, processor, None, apply_chat_template_kwargs)
+    return len(input_ids) > max_length
+
+
 def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
-    messages: list = data.get(prompt_key)
+    messages = data.get(prompt_key)
 
-    if multimodal_keys and any(value in data for _, value in multimodal_keys.items()):
-        flag_type_map = {f"<{key}>": key for key in multimodal_keys.keys()}
-        multimodal_inputs = {
-            multimodal_type: data.get(multimodal_key).tolist()
-            for multimodal_type, multimodal_key in multimodal_keys.items()
-        }
-        pattern = "(" + "|".join(flag_type_map.keys()) + ")"
+    if isinstance(messages, str):
+        return [{"role": "user", "content": messages}]
+
+    if multimodal_keys:
+        # Build mapping: placeholder -> (MultimodalType, content_list)
+        multimodals = {}
+        for type_name, data_key in multimodal_keys.items():
+            mt = MultimodalTypes.get(type_name)
+            if mt:
+                multimodals[mt.placeholder] = (mt, data.get(data_key).tolist())
+
+        pattern = "(" + "|".join(re.escape(p) for p in multimodals.keys()) + ")"
+
         for message in messages:
-            content = message["content"]
-            content_list = []
-            segments = re.split(pattern, content)
-            segments = [item for item in segments if item != ""]
-            for segment in segments:
-                if segment in flag_type_map:
-                    content_list.append(
-                        {
-                            "type": flag_type_map[segment],
-                            f"{flag_type_map[segment]}": multimodal_inputs[flag_type_map[segment]].pop(0),
-                        }
-                    )
-                else:
-                    content_list.append({"type": "text", "text": segment})
+            if isinstance(message["content"], str):
+                content_list = []
+                for segment in re.split(pattern, message["content"]):
+                    if not segment:
+                        continue
+                    if segment in multimodals:
+                        mt, content = multimodals[segment]
+                        content_list.append({"type": mt.name, mt.name: content.pop(0)})
+                    else:
+                        content_list.append({"type": "text", "text": segment})
+                message["content"] = content_list
 
-            message["content"] = content_list
+            elif isinstance(message["content"], list):
+                # TODO: handle more general cases. where message['content'] is a dict and contains multiple types of content.
+                # e.g.
+                #  "content": [
+                #     {
+                #         "type": "image",
+                #         "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg",
+                #     },
+                #     {"type": "text", "text": "Describe this image."},
+                # ],
+                print("Warning: message['content'] is a list of dicts, no processing will be done.")
+                continue
+            else:
+                raise ValueError(
+                    f"Unsupported content type: {type(message['content'])}, expected str or list of dicts"
+                )
 
     return messages
 
@@ -95,17 +124,6 @@ class Dataset:
         for data in read_file(path):
             prompt = _build_messages(data, prompt_key, multimodal_keys)
 
-            # TODO: this is slow.
-            if max_length is not None:
-                if apply_chat_template:
-                    raw_prompt = tokenizer.apply_chat_template(prompt, tokenize=False, **apply_chat_template_kwargs)
-                else:
-                    raw_prompt = prompt
-                raw_prompt_ids = tokenizer.encode(raw_prompt, add_special_tokens=False)
-                if not multimodal_keys:
-                    if len(raw_prompt_ids) > max_length:
-                        continue
-
             metadata = data.get(metadata_key) or {}
             if tool_key is not None and tool_key in data:
                 tools = data[tool_key]
@@ -115,6 +133,10 @@ class Dataset:
                     tools = tools.tolist()
                 assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
                 metadata["tools"] = tools
+
+            # TODO: this is slow.
+            if _should_skip_prompt(prompt, tokenizer, processor, max_length, apply_chat_template_kwargs):
+                continue
 
             self.origin_samples.append(
                 Sample(
@@ -217,6 +239,7 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
 
     for key in [
         "tokens",
+        "multimodal_inputs",
         "total_lengths",
         "response_lengths",
         "rewards",

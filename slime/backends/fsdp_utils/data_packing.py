@@ -16,6 +16,7 @@ def pack_sequences(
     advantages: list[float],
     returns: list[float],
     rollout_log_probs: list[list[float]] | None = None,
+    multimodal_inputs: list[dict] | None = None,
     max_tokens_per_gpu: int | None = None,
     num_packs: int | None = None,
 ) -> list[dict]:
@@ -30,6 +31,8 @@ def pack_sequences(
         response_lengths: List of response lengths per sequence
         advantages: List of advantages per sequence
         returns: List of returns per sequence
+        rollout_log_probs: List of rollout log probabilities per sequence
+        multimodal_inputs: List of dict of multimodal tokens per sequence
         max_tokens_per_gpu: Maximum tokens per GPU pack
         num_packs: Explicit number of packs to create
 
@@ -66,6 +69,8 @@ def pack_sequences(
         flat_advantages = []
         flat_returns = []
         flat_rollout_log_probs = []
+        multimodal_data = {}  # key -> list of tensors to concatenate
+        multimodal_num_items = {}  # key -> list of item counts per sequence
 
         for i in indices:
             seq_tokens = tokens[i]
@@ -80,20 +85,35 @@ def pack_sequences(
             if rollout_log_probs:
                 flat_rollout_log_probs.extend(rollout_log_probs[i])
             cu_seqlens.append(cu_seqlens[-1] + len(seq_tokens))
-        result.append(
-            {
-                "tokens": torch.tensor(flat_tokens, dtype=torch.long),
-                "loss_masks": torch.tensor(flat_masks, dtype=torch.int),
-                "position_ids": torch.tensor(flat_positionids, dtype=torch.int),
-                "cu_seqlens": torch.tensor(cu_seqlens, dtype=torch.int32),
-                "rewards": torch.tensor([rewards[i] for i in indices], dtype=torch.float32),
-                "raw_reward": [raw_rewards[i] for i in indices],
-                "response_lengths": [response_lengths[i] for i in indices],
-                "advantages": torch.tensor(flat_advantages, dtype=torch.float32),
-                "returns": torch.tensor(flat_returns, dtype=torch.float32),
-                "rollout_log_probs": torch.tensor(flat_rollout_log_probs, dtype=torch.float32),
-            }
-        )
+
+            # Collect multimodal inputs for this sequence
+            if multimodal_inputs:
+                for key, tensor in multimodal_inputs[i].items():
+                    if key not in multimodal_data:
+                        multimodal_data[key] = []
+                        multimodal_num_items[key] = []
+                    multimodal_data[key].append(tensor)
+                    multimodal_num_items[key].append(tensor.size(0) if isinstance(tensor, torch.Tensor) else 1)
+
+        packed_result = {
+            "tokens": torch.tensor(flat_tokens, dtype=torch.long),
+            "loss_masks": torch.tensor(flat_masks, dtype=torch.int),
+            "position_ids": torch.tensor(flat_positionids, dtype=torch.int),
+            "cu_seqlens": torch.tensor(cu_seqlens, dtype=torch.int32),
+            "rewards": torch.tensor([rewards[i] for i in indices], dtype=torch.float32),
+            "raw_reward": [raw_rewards[i] for i in indices],
+            "response_lengths": [response_lengths[i] for i in indices],
+            "advantages": torch.tensor(flat_advantages, dtype=torch.float32),
+            "returns": torch.tensor(flat_returns, dtype=torch.float32),
+            "rollout_log_probs": torch.tensor(flat_rollout_log_probs, dtype=torch.float32),
+        }
+
+        # Concatenate multimodal inputs along dim=0
+        if multimodal_data:
+            packed_result["multimodal_inputs"] = {key: torch.cat(tensors, dim=0) for key, tensors in multimodal_data.items()}
+            packed_result["multimodal_num_items"] = multimodal_num_items
+
+        result.append(packed_result)
 
     return result
 
@@ -112,6 +132,7 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
     cu_seqlens = packed_batch["cu_seqlens"]
     num_sequences = len(cu_seqlens) - 1
     response_lengths = packed_batch["response_lengths"]
+    multimodal_num_items = packed_batch.get("multimodal_num_items", {})
 
     instances = []
 
@@ -123,8 +144,21 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
         # Copy any additional attributes that might exist in the packed batch
         for key, value in packed_batch.items():
             if key not in instance:
+                # Skip multimodal_num_items - it's metadata
+                if key == "multimodal_num_items":
+                    continue
+                # Handle multimodal_inputs dict: split each tensor using multimodal_num_items
+                elif key == "multimodal_inputs" and isinstance(value, dict):
+                    instance[key] = {}
+                    for mm_key, mm_tensor in value.items():
+                        if mm_key in multimodal_num_items:
+                            num_items_list = multimodal_num_items[mm_key]
+                            start_mm_idx = sum(num_items_list[:i])
+                            end_mm_idx = start_mm_idx + num_items_list[i]
+                            if num_items_list[i] > 0:
+                                instance[key][mm_key] = mm_tensor[start_mm_idx:end_mm_idx]
                 # For tensor attributes, we need to slice them appropriately
-                if isinstance(value, torch.Tensor):
+                elif isinstance(value, torch.Tensor):
                     if key in ["log_probs", "ref_log_probs", "cur_log_probs", "entropy"]:
                         # These are computed from logits[:-1] so they have length seq_len-1
                         instance[key] = value[end_idx - 1 - response_lengths[i] : end_idx - 1]

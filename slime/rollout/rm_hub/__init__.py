@@ -60,6 +60,7 @@ async def async_rm(args, sample: Sample, **kwargs):
         return compute_ifbench_reward(response, label, metadata=metadata)
     elif rm_type == "geo3k":
         from .geo3k import compute_score_geo3k
+
         return compute_score_geo3k(response, label)
     elif rm_type:
         raise NotImplementedError(f"Rule-based RM for {rm_type} is not implemented.")
