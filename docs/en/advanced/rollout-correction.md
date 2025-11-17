@@ -24,7 +24,7 @@ We included 3 rollout correction algorithms:
 
 You may use **loss algorithm selection** APIs `--use-rollout-log-probs` and `--use-rollout-correction` to select one of the rollout correction losses (details in **III. Algorithms**).
 
-When training-inference importance sampling / rejection sampling is enabled (`--use-rollout-correction`), you need to also specify the **IS/RS configs** with a config file using `--custom-config-path`. We will also provide some recommended settings for each mode. (details in **IV. recommended settings**)
+When training-inference importance sampling/rejection sampling is enabled (`--use-rollout-correction`), you also need to specify the **IS/RS configs** with a config file using `--custom-config-path`. We will also provide some recommended settings for each mode (details in **IV. recommended settings**).
 
 
 ## I. Algorithms
