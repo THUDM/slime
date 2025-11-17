@@ -106,7 +106,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
     image_data = encoding_info.get("images", [])
     video_data = encoding_info.get("videos", [])
-    multimodal_encoding_info = encoding_info.get("multimodal_inputs", None)
+    multimodal_inputs = encoding_info.get("multimodal_inputs", None)
 
     if len(sample.response) > 0:
         sampling_params["max_new_tokens"] -= len(sample.tokens) - len(prompt_ids)
@@ -123,13 +123,14 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         "sampling_params": sampling_params,
         "return_logprob": True,
     }
-    if image_data or video_data:
-        payload["image_data"] = [_load_and_encode_image(image) for image in image_data]
-        payload["video_data"] = video_data
-        sample.multimodal_inputs = multimodal_encoding_info
 
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
+
+    if image_data or video_data:
+        payload["image_data"] = [_load_and_encode_image(image) for image in image_data]
+        payload["video_data"] = video_data
+        sample.multimodal_inputs = multimodal_inputs
 
     # Use existing tokens for multi-turn or tokenize the new prompt
     if len(sample.response) > 0:
