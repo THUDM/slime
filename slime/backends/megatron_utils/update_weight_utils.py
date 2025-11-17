@@ -531,12 +531,15 @@ class UpdateWeightFromTensor:
 
     def _send_to_colocated_engine(self, converted_named_tensors: list[tuple[str, torch.Tensor]]) -> list[ObjectRef]:
         if use_flattened_tensor_bucket:
-            converted_named_tensors_by_dtypes = {}
-            for name, tensor in converted_named_tensors:
-                dtype = tensor.dtype
-                if dtype not in converted_named_tensors_by_dtypes:
-                    converted_named_tensors_by_dtypes[dtype] = []
-                converted_named_tensors_by_dtypes[dtype].append((name, tensor))
+            if getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
+                converted_named_tensors_by_dtypes = {"dtype": converted_named_tensors}
+            else:
+                converted_named_tensors_by_dtypes = {}
+                for name, tensor in converted_named_tensors:
+                    dtype = tensor.dtype
+                    if dtype not in converted_named_tensors_by_dtypes:
+                        converted_named_tensors_by_dtypes[dtype] = []
+                    converted_named_tensors_by_dtypes[dtype].append((name, tensor))
 
             serialized_tensors = []
             for dtype, named_tensors in converted_named_tensors_by_dtypes.items():
