@@ -134,7 +134,7 @@ class SGLangEngine(RayActor):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
         self.process = launch_server_process(ServerArgs(**server_args_dict))
         if self.node_rank == 0 and self.router_ip and self.router_port:
-            if parse(sglang_router.__version__) <= parse("0.2.1"):
+            if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}"
                 )
@@ -236,7 +236,7 @@ class SGLangEngine(RayActor):
         logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
         if self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
-            if parse(sglang_router.__version__) <= parse("0.2.1"):
+            if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
                 )
