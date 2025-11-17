@@ -58,6 +58,7 @@ class RayTrainGroup:
             # because sglang will always set NCCL_CUMEM_ENABLE to 0
             # we need also set it to 0 to prevent nccl error.
             "NCCL_CUMEM_ENABLE": "0",
+            "NVTE_FP8_BLOCK_SCALING_FP32_SCALES": "1",
             **{name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST},
             **self.args.train_env_vars,
         }
@@ -125,6 +126,9 @@ class RayTrainGroup:
     def update_weights(self):
         """Broadcast weights from rank 0 to all other ranks."""
         return ray.get([actor.update_weights.remote() for actor in self._actor_handlers])
+
+    def onload(self):
+        return ray.get([actor.wake_up.remote() for actor in self._actor_handlers])
 
     def offload(self):
         return ray.get([actor.sleep.remote() for actor in self._actor_handlers])

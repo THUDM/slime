@@ -1,4 +1,6 @@
 import os
+from copy import deepcopy
+
 import wandb
 
 
@@ -16,7 +18,8 @@ def _is_offline_mode(args) -> bool:
 
 def init_wandb_primary(args):
     if not args.use_wandb:
-        return None
+        args.wandb_run_id = None
+        return
 
     # Set W&B mode if specified (overrides WANDB_MODE env var)
     if args.wandb_mode:
@@ -49,7 +52,7 @@ def init_wandb_primary(args):
         "project": args.wandb_project,
         "group": group,
         "name": run_name,
-        "config": args.__dict__,
+        "config": _compute_config_for_logging(args),
     }
 
     # Configure settings based on offline/online mode
@@ -69,7 +72,20 @@ def init_wandb_primary(args):
 
     _init_wandb_common()
 
-    return wandb.run.id
+    # Set wandb_run_id in args for easy access throughout the training process
+    args.wandb_run_id = wandb.run.id
+
+
+def _compute_config_for_logging(args):
+    output = deepcopy(args.__dict__)
+
+    whitelist_env_vars = [
+        "SLURM_JOB_ID",
+        # We may insert more default values here, and may also allow users to configure a whitelist
+    ]
+    output["env_vars"] = {k: v for k, v in os.environ.items() if k in whitelist_env_vars}
+
+    return output
 
 
 # https://docs.wandb.ai/guides/track/log/distributed-training/#track-all-processes-to-a-single-run

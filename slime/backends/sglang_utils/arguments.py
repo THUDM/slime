@@ -55,6 +55,7 @@ def add_sglang_arguments(parser):
         "base_gpu_id",
         "nccl_port",
         "skip_server_warmup",
+        "enable_return_routed_experts",
     ]
 
     def new_add_argument_wrapper(*name_or_flags, **kwargs):

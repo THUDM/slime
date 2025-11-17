@@ -130,6 +130,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default="{}",
                 help="Extra environment variables for training process, e.g. PyTorch memory management ones.",
             )
+            parser.add_argument(
+                "--train-memory-margin-bytes",
+                type=int,
+                default=0,
+                help="Add margin for train memory allocation.",
+            )
+            parser.add_argument(
+                "--disable-weights-backuper",
+                action="store_false",
+                dest="enable_weights_backuper",
+                help="Whether to disable weights backuper to save host memory.",
+            )
 
             return parser
 
@@ -672,7 +684,14 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--advantage-estimator",
                 type=str,
-                choices=["grpo", "gspo", "reinforce_plus_plus", "reinforce_plus_plus_baseline", "ppo"],
+                choices=[
+                    "grpo",
+                    "gspo",
+                    "reinforce_plus_plus",
+                    "reinforce_plus_plus_baseline",
+                    "ppo",
+                    "on_policy_distillation",
+                ],
                 default="grpo",
             )
             parser.add_argument(
@@ -764,6 +783,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--use-routing-replay",
                 action="store_true",
                 default=False,
+                help="The routing replay technique from https://arxiv.org/abs/2507.18071",
+            )
+            parser.add_argument(
+                "--use-rollout-routing-replay",
+                action="store_true",
+                default=False,
+                help="The rollout routing replay technique from https://arxiv.org/abs/2510.11370",
             )
             return parser
 
@@ -939,6 +965,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 choices=["train_overall", "train_actor", "train_log_probs"],
                 default=["train_overall"],
                 nargs="+",
+            )
+            parser.add_argument(
+                "--memory-recorder",
+                type=str,
+                choices=["torch", "memray"],
+                default="torch",
             )
             return parser
 
@@ -1137,15 +1169,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
     return add_slime_arguments
 
 
-def warning_for_unfinished_backend(backend: str):
-    print("⚠️ " * 50)
-    print(
-        f"⚠️  SLIME_BACKEND {backend} is experimental and not yet verified.\n"
-        "⚠️  Please avoid using it unless you are actively developing it."
-    )
-    print("⚠️ " * 50)
-
-
 def parse_args(add_custom_arguments=None):
     add_slime_arguments = get_slime_extra_args_provider(add_custom_arguments)
 
@@ -1170,7 +1193,6 @@ def parse_args(add_custom_arguments=None):
         args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
         args = set_default_megatron_args(args)
     else:
-        warning_for_unfinished_backend(backend)
         from slime.backends.fsdp_utils.arguments import load_fsdp_args
 
         args = load_fsdp_args(extra_args_provider=add_slime_arguments)
@@ -1409,6 +1431,9 @@ def slime_validate_args(args):
 
     if args.enable_mtp_training:
         assert args.mtp_num_layers, "mtp_num_layers must be set when enable_mtp_training is set"
+
+    if args.use_rollout_routing_replay:
+        args.use_routing_replay = True
 
     if args.custom_config_path:
         with open(args.custom_config_path, "r") as f:

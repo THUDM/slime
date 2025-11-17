@@ -111,7 +111,15 @@ async def _post(client, url, payload, max_retries=60):
                 output = response.text
         except Exception as e:
             retry_count += 1
-            print(f"Error: {e}, retrying... (attempt {retry_count}/{max_retries}, url={url})")
+
+            if isinstance(e, httpx.HTTPStatusError):
+                response_text = e.response.text
+            else:
+                response_text = None
+
+            print(
+                f"Error: {e}, retrying... (attempt {retry_count}/{max_retries}, url={url}, response={response_text})"
+            )
             if retry_count >= max_retries:
                 print(f"Max retries ({max_retries}) reached, failing... (url={url})")
                 raise e

@@ -355,9 +355,7 @@ def retrieve_endpoint(request: QueryRequest):
         request.topk = config.retrieval_topk  # fallback to default
 
     # Perform batch retrieval
-    tmp = retriever.batch_search(
-        query_list=request.queries, num=request.topk, return_score=request.return_scores
-    )
+    tmp = retriever.batch_search(query_list=request.queries, num=request.topk, return_score=request.return_scores)
 
     scores = []
     try:
@@ -382,7 +380,10 @@ def retrieve_endpoint(request: QueryRequest):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Launch the local faiss retriever.")
     parser.add_argument(
-        "--index_path", type=str, default="/home/peterjin/mnt/index/wiki-18/e5_Flat.index", help="Corpus indexing file."
+        "--index_path",
+        type=str,
+        default="/home/peterjin/mnt/index/wiki-18/e5_Flat.index",
+        help="Corpus indexing file.",
     )
     parser.add_argument(
         "--corpus_path",
