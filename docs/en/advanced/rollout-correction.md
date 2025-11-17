@@ -1,10 +1,12 @@
 # Rollout Correction Methods
+
 Rollout correction (e.g, training-inference mismatch correction) through algorithmic methods.
 
 The designs follow the algorithms in [Mathematical Formulations of Rollout Correction Methods in verl (Yingru Li)](https://github.com/szrlee/verl/blob/yingru/rollout_correction/docs/advance/rollout_corr_math.md). You may check this article for more math details and principles.
 
 
-## Summary
+## Quick Takeaway
+
 This function is used to solve offline scenarios through algorithmic adaptations, e.g. TIS/MIS.
 
 Applicable scenarios may include:
@@ -22,16 +24,17 @@ We included 3 rollout correction algorithms:
 2. direct rollout policy overwriting in the standard PPO
 3. pure REINFORCE loss (without PPO clipping) with rollout importance sampling
 
-You may use **loss algorithm selection** APIs `--use-rollout-log-probs` and `--use-rollout-correction` to select one of the rollout correction losses (details in **III. Algorithms**).
+You may use **loss algorithm selection** APIs `--use-rollout-log-probs` and `--use-rollout-correction` to select one of the rollout correction losses (details in **Algorithms**).
 
-When training-inference importance sampling/rejection sampling is enabled (`--use-rollout-correction`), you also need to specify the **IS/RS configs** with a config file using `--custom-config-path`. We will also provide some recommended settings for each mode (details in **IV. recommended settings**).
+When training-inference importance sampling/rejection sampling is enabled (`--use-rollout-correction`), you also need to specify the **IS/RS configs** with a config file using `--custom-config-path`. We will also provide some recommended settings for each mode (details in **Configs and Recommended Settings**).
 
 
-## I. Algorithms
+## Algorithms
 
 We give examples of the algorithms for solving the training-inference mismatch issue.
 
-### 0. [Baseline: No Mismatch Correction] Standard PPO
+### [Baseline: No Mismatch Correction] Standard PPO
+
 This is the basic PPO algorithm with potentially training-inference mismatch issue when the output of SGLang and Megatron does not exactly match.
 
 $$
@@ -48,9 +51,9 @@ L_{\text{PPO}}(\theta)
 \right].
 $$
 
-### 1. REINFORCE + pure importance sampling
+### REINFORCE + pure importance sampling
 
-REINFORCE + pure IS is a simple and efficient method by directly apply TIS/MIS to REINFORCE loss, without PPO clipping.
+REINFORCE + pure IS is a simple and efficient method by directly applying TIS/MIS to REINFORCE loss, without PPO clipping.
 
 $$
 L_{\text{REINFORCE-IS}}(\theta)
@@ -61,11 +64,13 @@ L_{\text{REINFORCE-IS}}(\theta)
 $$
 
 Advantages: 
-- Efficiency: skip log_prob recomputation on training engine. Reduce one forward pass's computation.
+
+- Efficiency: skip `log_prob` recomputation on training engine. Reduce one expensive forward pass on all the generated trajectories.
 
 
-### 2. Bypassing PPO importance sampling  
-In this method, we directly use rollout engine's log probs as the old policy in offline PPO's importance sampling, instead of the recomputed log_probs in training engine.
+### Bypassing PPO importance sampling
+
+Like REINFORCE, we directly use the rollout engine's log probs as the old policy in offline PPO's importance sampling, rather than the recomputed log-probs from the training engine.
 
 $$
 L_{\text{PPO-bypass}}(\theta)
@@ -82,15 +87,12 @@ L_{\text{PPO-bypass}}(\theta)
 $$
 
 Advantages: 
-- Efficiency: skip log_prob recomputation on training engine. Reduce one forward pass's computation.
 
+- Efficiency: skip `log_prob` recomputation on training engine. Reduce one expensive forward pass on all the generated trajectories.
 
+### Decoupled, 3-policy PPO Importance Sampling  
 
-### 3. Decoupled, 3-policies PPO importance sampling  
-
-[Decoupled PPO](https://arxiv.org/pdf/2110.00641) achieves batch independent PPO by decoupling two roles: Proximal Policy (anchor policy for PPO clipping, control update size) and Behavior Policy (for off-policy correction in importance sampling). Therefore, there are totally 3 roles engaged in this mode, **target policy** $\pi_\theta$, **proximal policy** $\pi_{\textcolor{blue}{\text{old}}}$ and **behavior policy** $\pi_{\textcolor{red}{\text{SGLang}}}$. $\pi_{\textcolor{blue}{\text{old}}}$ is recomputed with Megatron at the beginning of each training step.
-
-
+[Decoupled PPO](https://arxiv.org/pdf/2110.00641) achieves batch-independent PPO by decoupling two roles: Proximal Policy (anchor policy for PPO clipping, control update size) and Behavior Policy (for off-policy correction in importance sampling). Therefore, there are totally 3 roles engaged in this mode, **target policy** $\pi_\theta$, **proximal policy** $\pi_{\textcolor{blue}{\text{old}}}$, and **behavior policy** $\pi_{\textcolor{red}{\text{SGLang}}}$. $\pi_{\textcolor{blue}{\text{old}}}$ is recomputed with Megatron at the beginning of each training step.
 
 $$
 L_{\text{PPO-decoupled}}(\theta)
@@ -107,15 +109,12 @@ L_{\text{PPO-decoupled}}(\theta)
 \right].
 $$
 
-Advantages: 
+Advantages:
+
 - Achieves batch size invariance and efficient stale data utilization
 - Enables accurate off-policy metrics monitoring
 
-
-
-
-
-## II. APIs on algorithms
+## APIs of Algorithms
 
 You may choose from above algorithms by specifying arguments below:
 
@@ -130,26 +129,25 @@ You may choose from above algorithms by specifying arguments below:
 | False | True | Decoupled PPO (Algorithm 2) | 3 ($\pi_\theta$, $\pi_{\textcolor{blue}{\text{old}}}$, $\pi_{\textcolor{red}{\text{SGLang}}}$)  |Yes  | Yes | token/seq/geo |
 | True | True | REINFORCE+IS (Algorithm 1) | 2 ($\pi_\theta$, $\pi_{\textcolor{red}{\text{SGLang}}}$) |🚀 Skipped | No | seq |
 
+## Configs and Recommended Settings
 
+When choosing to use importance sampling or rejection sampling for mismatch correction (`use-rollout-correction` enabled, Algorithm 2 & 3), you may specify the IS modes and applied levels. 
 
-## III. Configs and Recommended Settings
+### Arguments
 
-When choose to use importance sampling or rejection sampling for mismatch correction (`use-rollout-correction` enabled, Algorithm 2 & 3), you may specify the IS modes and applied levels. 
+`use-tis`: Enable importance sampling. The IS weight will be multiplied by the policy gradient loss. 
 
-### Arguments:
-
-`use-tis`: Enable importance sampling. The IS weight will be multiplied to the policy gradient loss. 
 - `--tis-mode`: Mode for IS. Allowed mode: **truncate**, **clip**.
 - `--tis-lower-bound`, `--tis-upper-bound`: Bounds for IS weights.
 - `--tis-level`: Allowed levels: **token**, **sequence**, **geometric**. See explanations below.
 - `--tis-batch-normalize`: Normalize IS weights to mean=1.0 across batch
 
 
-`use-rs`: Enable rejection sampling. When choose to use rejection sampling, the tokens/sequences with am IS weight out of threshold will be directly masked. Those rejected tokens/sequences will not be considered for loss averaging.
+`use-rs`: Enable rejection sampling. When choosing to use rejection sampling, the tokens/sequences with an IS weight out of threshold will be directly masked. Those rejected tokens/sequences will not be considered for loss averaging.
+
 - `--rs-lower-bound`, `--rs-upper-bound`: Bounds for RS
 - `--rs-level`: Allowed levels: **token**, **sequence**, **geometric**. See explanations below.
 - `--rs-veto-threshold`: Sequence-level rejection threshold for catastrophic mismatches
-
 
 ### Importance Sampling
 
@@ -183,7 +181,7 @@ Characteristics: Biased but low variance, balances bias and variance
 **Sequence Level:** Reject sequences with mean IS weight out of threshold
 
 **Geometric Level:** Reject sequences with geometric mean IS weight out of threshold
-Characteristics:
+
 - Extremely selective: Requires near-perfect policy match
 - High rejection rate: Only suitable for very slight distribution shifts
 
@@ -196,8 +194,6 @@ Reject entire sequence if $\exists t \in T$ such that $\rho_t < C_{\text{veto}}$
 - Independent of IS/RS settings
 
 *Typical values: $10^{-4}$ to $10^{-6}$*
-
-
 
 **Recommendations**:
 
@@ -212,12 +208,11 @@ Reject entire sequence if $\exists t \in T$ such that $\rho_t < C_{\text{veto}}$
 | `geo_rs` | Decoupled PPO + Geo Rejection | 3 (rollout, old, θ) | ✅ | Geo-level RS | ✅ Correct | Standard |
 
 
-
-## IV. Mismatch Metrics
+## Mismatch Metrics
 
 When rollout log probabilities are available, SLIME automatically tracks comprehensive metrics to monitor training-inference mismatch and importance sampling weights. These metrics help diagnose policy divergence and guide hyperparameter tuning.
 
-### A. Mismatch Monitoring Metrics
+### Mismatch Monitoring Metrics
 
 These metrics quantify the difference between training and rollout policies. They are computed automatically when `rollout_log_probs` are provided, regardless of whether TIS/MIS correction is enabled.
 
@@ -234,10 +229,9 @@ These metrics quantify the difference between training and rollout policies. The
 | `mismatch_ppl_ratio` | Perplexity ratio |
 | `train_rollout_logprob_abs_diff` | Token-level absolute log probability difference |
 
-**Usage**: These metrics help you monitor policy drift. Large values indicate significant mismatch between training and rollout engines.
+**Usage**: These metrics help you monitor policy drift. Large values indicate a significant mismatch between the training and rollout engines.
 
-
-### B. IS/RS Correction Metrics
+### IS/RS Correction Metrics
 
 These metrics track importance sampling weights and corrections. They are only computed when `--use-rollout-correction` is enabled.
 
@@ -257,14 +251,8 @@ When using `--custom-tis-function-path` pointing to MIS implementation (e.g., `m
 | `mis_catastrophic_seq_fraction` | Fraction of sequences with catastrophic tokens | `--use-tis`, `--mis-veto-threshold` set | Sequence-level rejection |
 | `mis_batch_norm_factor` | Batch normalization factor applied to weights | `--use-tis`, `--mis-batch-normalize` | Normalizes mean to 1.0 |
 
-
-
 ## Reference
-
-
 
 We thank the materials below for their excellent findings and theories.
 1. [Your Efficient RL Framework Secretly Brings You Off-Policy RL Training](https://fengyao.notion.site/off-policy-rl)
 2. [When Speed Kills Stability: Demystifying RL Collapse from the Training-Inference Mismatch](https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda)
-
-
