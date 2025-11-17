@@ -431,6 +431,7 @@ class UpdateWeightFromTensor:
             current_params, current_infos = self._gather_bucket_params(self.param_info_buckets[i], weights)
             refs = self._update_converted_params_from_tensor(current_params, current_infos)
             ray.get(refs)
+            del current_params, current_infos
 
         dist.barrier(group=get_gloo_group())
 
