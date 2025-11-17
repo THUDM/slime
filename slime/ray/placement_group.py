@@ -115,7 +115,6 @@ def allocate_train_group(args, num_nodes, num_gpus_per_node, pg):
         num_nodes=num_nodes,
         num_gpus_per_node=num_gpus_per_node,
         pg=pg,
-        wandb_run_id=args.wandb_run_id,
         num_gpus_per_actor=0.4,
     )
 
@@ -161,7 +160,7 @@ def create_rollout_manager(args, pg):
     rollout_manager = RolloutManager.options(
         num_cpus=1,
         num_gpus=0,
-    ).remote(args, pg, wandb_run_id=args.wandb_run_id)
+    ).remote(args, pg)
 
     # calculate num_rollout from num_epoch
     num_rollout_per_epoch = None

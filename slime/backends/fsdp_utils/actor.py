@@ -47,8 +47,8 @@ class FSDPTrainRayActor(TrainRayActor):
     """
 
     @with_defer(lambda: Timer().start("train_wait"))
-    def init(self, args: Namespace, role: str, wandb_run_id: str, with_ref: bool = False) -> int:  # type: ignore[override]
-        super().init(args, role, wandb_run_id, with_ref)
+    def init(self, args: Namespace, role: str, with_ref: bool = False) -> int:  # type: ignore[override]
+        super().init(args, role, with_ref)
 
         # TODO extract to function
         if args.true_on_policy_mode:
@@ -69,7 +69,7 @@ class FSDPTrainRayActor(TrainRayActor):
         args.world_size = dist.get_world_size()
 
         if dist.get_rank() == 0:
-            init_wandb_secondary(args, wandb_run_id)
+            init_wandb_secondary(args)
 
         self.args = args
         self.fsdp_full_state_dict_opts = StateDictOptions(

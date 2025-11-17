@@ -89,7 +89,8 @@ def _compute_config_for_logging(args):
 
 
 # https://docs.wandb.ai/guides/track/log/distributed-training/#track-all-processes-to-a-single-run
-def init_wandb_secondary(args, wandb_run_id, router_addr=None):
+def init_wandb_secondary(args, router_addr=None):
+    wandb_run_id = getattr(args, "wandb_run_id", None)
     if wandb_run_id is None:
         return
 

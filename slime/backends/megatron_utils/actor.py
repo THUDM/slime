@@ -43,17 +43,16 @@ class MegatronTrainRayActor(TrainRayActor):
         self,
         args: Namespace,
         role: str,
-        wandb_run_id: str,
         with_ref: bool = False,
     ) -> Optional[int]:
         monkey_patch_torch_dist()
 
-        super().init(args, role, wandb_run_id, with_ref)
+        super().init(args, role, with_ref)
 
         init(args)
 
         if is_megatron_main_rank():
-            init_wandb_secondary(args, wandb_run_id)
+            init_wandb_secondary(args)
 
         self.prof = TrainProfiler(args)
 

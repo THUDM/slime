@@ -1,5 +1,4 @@
 import os
-from typing import Optional
 
 import ray
 from ray.util.placement_group import PlacementGroup
@@ -19,7 +18,6 @@ class RayTrainGroup:
         num_gpus_per_node (int): Number of gpus for this actor group.
         pg (PlacementGroup, optional): Placement group to schedule actor on.
             If none, create new placement group automatically. Defaults to None.
-        wandb_run_id (str, optional): Weights and biases run id. Defaults to None.
         num_gpus_per_actor (float, optional): Number of gpus allocated for each actor.
             If < 1.0, multiple models can share same gpu. Defaults to 1.
         resources (Dict[str, float], optional): Custom resources to allocate for each actor.
@@ -34,20 +32,18 @@ class RayTrainGroup:
         num_nodes,
         num_gpus_per_node,
         pg: tuple[PlacementGroup, list[int]],
-        wandb_run_id: Optional[str] = None,
         num_gpus_per_actor: float = 1,
         role: str = "actor",
     ) -> None:
         self.args = args
         self._num_nodes = num_nodes
         self._num_gpus_per_node = num_gpus_per_node
-        self._wandb_run_id = wandb_run_id
         self.role = role
 
         # Allocate the GPUs for actors w/o instantiating them
-        self._allocate_gpus_for_actor(pg, num_gpus_per_actor, wandb_run_id=wandb_run_id)
+        self._allocate_gpus_for_actor(pg, num_gpus_per_actor)
 
-    def _allocate_gpus_for_actor(self, pg, num_gpus_per_actor, wandb_run_id: Optional[str]):
+    def _allocate_gpus_for_actor(self, pg, num_gpus_per_actor):
         world_size = self._num_nodes * self._num_gpus_per_node
 
         # Use placement group to lock resources for models of same type
@@ -103,7 +99,7 @@ class RayTrainGroup:
                     placement_group=pg,
                     placement_group_bundle_index=reordered_bundle_indices[rank],
                 ),
-            ).remote(world_size, rank, master_addr, master_port, wandb_run_id)
+            ).remote(world_size, rank, master_addr, master_port)
             if rank == 0:
                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())
             self._actor_handlers.append(actor)
@@ -113,7 +109,7 @@ class RayTrainGroup:
         Allocate GPU resourced and initialize model, optimzier, local ckpt, etc.
         """
         self.args = args
-        return [actor.init.remote(args, role, self._wandb_run_id, with_ref=with_ref) for actor in self._actor_handlers]
+        return [actor.init.remote(args, role, with_ref=with_ref) for actor in self._actor_handlers]
 
     def async_train(self, rollout_id, rollout_data_ref):
         """Do one rollout training"""
