@@ -1,7 +1,10 @@
 import time
+import traceback
 from pathlib import Path
 
 import torch
+
+from slime.utils.memory_utils import print_memory
 
 
 class TrainProfiler:
@@ -107,9 +110,11 @@ class _TorchMemoryProfiler(_BaseMemoryProfiler):
 
         def oom_observer(device, alloc, device_alloc, device_free):
             print(
-                f"Observe OOM, will dump snapshot to {self._path_dump}. ({device=} {alloc=} {device_alloc=} {device_free=})"
+                f"Observe OOM, will dump snapshot to {self._path_dump}. ({device=} {alloc=} {device_alloc=} {device_free=}; stacktrace is as follows)"
             )
+            traceback.print_stack()
             torch.cuda.memory._dump_snapshot(self._path_dump)
+            print_memory("when oom")
 
         torch._C._cuda_attach_out_of_memory_observer(oom_observer)
 
