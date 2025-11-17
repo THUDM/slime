@@ -1,4 +1,7 @@
+import logging
 import time
+
+logger = logging.getLogger(__name__)
 
 
 def sleep(args, rollout_id, data_source, evaluation=False):
@@ -6,4 +9,4 @@ def sleep(args, rollout_id, data_source, evaluation=False):
     while True:
         time.sleep(3600)
         count += 1
-        print(f"rollout sleep for {count} hours")
+        logger.info(f"rollout sleep for {count} hours")

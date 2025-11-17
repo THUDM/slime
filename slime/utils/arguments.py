@@ -1,5 +1,6 @@
 import argparse
 import json
+import logging
 import os
 from typing import Any, Dict
 
@@ -9,6 +10,8 @@ from transformers import AutoConfig
 from slime.backends.sglang_utils.arguments import add_sglang_arguments
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
+
+logger = logging.getLogger(__name__)
 
 
 def reset_arg(parser, name, **kwargs):
@@ -1207,7 +1210,7 @@ def parse_args(add_custom_arguments=None):
         # always use varlen
         args.variable_seq_lengths = True
         if getattr(args, "moe_token_dispatcher_type", None) == "allgather":
-            print(
+            logger.info(
                 "--moe-token-dispatcher-type allgather does not support variable sequence length, "
                 "please use alltoall dispatcher instead."
             )
@@ -1254,7 +1257,7 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
     elif args.eval_prompt_data:
         values = list(args.eval_prompt_data)
         if len(values) == 1:
-            print("[legacy] only one eval_prompt_data detected, will assume it is data for aime")
+            logger.info("[legacy] only one eval_prompt_data detected, will assume it is data for aime")
             values = ["aime", values[0]]
         if len(values) % 2 != 0:
             raise ValueError("eval prompt data must be provided as name/path pairs.")
@@ -1279,7 +1282,7 @@ def slime_validate_args(args):
             raise FileNotFoundError(f"ref_load {args.ref_load} does not exist, please check the path.")
 
         if not os.path.exists(os.path.join(args.ref_load, "latest_checkpointed_iteration.txt")):
-            print(
+            logger.info(
                 f"ref_load {args.ref_load} does not have latest_checkpointed_iteration.txt, "
                 "please make sure it is a valid megatron checkpoint directory."
             )
@@ -1331,7 +1334,7 @@ def slime_validate_args(args):
         args.save_debug_train_data = f"{args.dump_details}/train_data/{{rollout_id}}_{{rank}}.pt"
 
     if args.load_debug_rollout_data is not None:
-        print(
+        logger.info(
             f"load_debug_rollout_data {args.load_debug_rollout_data} is set, "
             "will not instantiate sglang servers and will only run the training process."
         )
@@ -1372,7 +1375,7 @@ def slime_validate_args(args):
         if args.offload_rollout is None:
             args.offload_rollout = True
         if args.rollout_num_gpus != args.actor_num_gpus_per_node * args.actor_num_nodes:
-            print(
+            logger.info(
                 f"rollout_num_gpus {args.rollout_num_gpus} != actor_num_gpus_per_node {args.actor_num_gpus_per_node} "
                 f"* actor_num_nodes {args.actor_num_nodes}, overriding rollout_num_gpus to match actor_num_gpus_per_node * actor_num_nodes."
             )
@@ -1405,7 +1408,7 @@ def slime_validate_args(args):
 
     if args.n_samples_per_prompt == 1:
         args.grpo_std_normalization = False
-        print("n_samples_per_prompt is set to 1, grpo_std_normalization will be set to False.")
+        logger.info("n_samples_per_prompt is set to 1, grpo_std_normalization will be set to False.")
 
     if args.over_sampling_batch_size is None:
         args.over_sampling_batch_size = args.rollout_batch_size
@@ -1417,7 +1420,7 @@ def slime_validate_args(args):
 
     if args.num_epoch is not None:
         if args.num_rollout is not None:
-            print("Both num_epoch and num_rollout are set, num_epoch will be ignored.")
+            logger.info("Both num_epoch and num_rollout are set, num_epoch will be ignored.")
         else:
             assert args.rollout_global_dataset, (
                 "num_epoch is set, but rollout_global_dataset is not set, "
@@ -1442,7 +1445,7 @@ def slime_validate_args(args):
             if not hasattr(args, k):
                 setattr(args, k, v)
             else:
-                print(f"Warning: Argument {k} is already set to {getattr(args, k)}, will not override with {v}.")
+                logger.info(f"Warning: Argument {k} is already set to {getattr(args, k)}, will not override with {v}.")
 
 
 def hf_validate_args(args, hf_config):

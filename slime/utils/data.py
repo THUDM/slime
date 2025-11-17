@@ -1,4 +1,5 @@
 import json
+import logging
 import random
 import re
 
@@ -13,6 +14,8 @@ from .timer import Timer
 
 __all__ = ["Dataset"]
 
+logger = logging.getLogger(__name__)
+
 
 # TODO: don't read the whole file into memory.
 def read_file(path):
@@ -26,7 +29,7 @@ def read_file(path):
         raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
 
     if row_slice is not None:
-        print(f"read_file path={path} slice {len(df)=} rows into {row_slice=}")
+        logger.info(f"read_file path={path} slice {len(df)=} rows into {row_slice=}")
         df = df.iloc[row_slice]
 
     for _, row in df.iterrows():

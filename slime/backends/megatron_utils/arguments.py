@@ -1,7 +1,11 @@
+import logging
+
 from megatron.training.arguments import parse_args, validate_args
 from megatron.training.tokenizer.tokenizer import _vocab_size_with_padding
 
 __all__ = ["validate_args", "parse_args", "set_default_megatron_args"]
+
+logger = logging.getLogger(__name__)
 
 
 def set_default_megatron_args(args):
@@ -20,7 +24,7 @@ def set_default_megatron_args(args):
         args.padded_vocab_size = _vocab_size_with_padding(args.vocab_size, args)
 
     if not args.tokenizer_model and not args.tokenizer_type:
-        print(f"--tokenizer-model not set, use --hf-checkpoint as tokenizer model.")
+        logger.info(f"--tokenizer-model not set, use --hf-checkpoint as tokenizer model.")
         args.tokenizer_model = args.hf_checkpoint
         args.tokenizer_type = "HuggingFaceTokenizer"
     return args

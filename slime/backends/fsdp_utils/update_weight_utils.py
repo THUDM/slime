@@ -1,3 +1,4 @@
+import logging
 import socket
 from argparse import Namespace
 from collections.abc import Mapping, Sequence
@@ -29,6 +30,9 @@ try:
     use_flattened_tensor_bucket = True
 except ImportError:
     use_flattened_tensor_bucket = False
+
+
+logger = logging.getLogger(__name__)
 
 
 def get_param_info_buckets(
@@ -156,7 +160,7 @@ class UpdateWeightFromTensor:
         monkey_patch_torch_reductions()
 
         if self.full_params:
-            print("Using FULL_STATE_DICT path with loading from CPU storage")
+            logger.info("Using FULL_STATE_DICT path with loading from CPU storage")
 
             # Load all parameters from CPU storage to GPU in one go
             # This is more memory intensive but faster than bucket-based approach
@@ -207,7 +211,7 @@ class UpdateWeightFromTensor:
                 clear_memory()
         else:
             # For sharded mode (full_params=False), automatically use bucket-based loading
-            print("Using SHARDED_STATE_DICT path with bucket-based loading from CPU storage")
+            logger.info("Using SHARDED_STATE_DICT path with bucket-based loading from CPU storage")
             if self.param_info_buckets is None:
                 raise RuntimeError("Parameter info buckets not initialized for sharded mode")
 
@@ -223,7 +227,7 @@ class UpdateWeightFromTensor:
 
                 # Use flattened bucket approach similar to Megatron and full_params=True
                 if use_flattened_tensor_bucket:
-                    print("Using flattened tensor bucket")
+                    logger.info("Using flattened tensor bucket")
                     # Group tensors by dtype (same as Megatron)
                     named_tensors_by_dtypes = {}
                     for name, tensor in named_tensors_batch:

@@ -1,5 +1,6 @@
 import dataclasses
 import gc
+import logging
 import math
 import os
 from argparse import Namespace
@@ -28,6 +29,8 @@ from .cp_utils import slice_with_cp
 from .data import DataIterator, get_batch
 from .loss import loss_function
 from .model_provider import get_model_provider_func
+
+logger = logging.getLogger(__name__)
 
 
 def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer) -> OptimizerParamScheduler:
@@ -648,7 +651,7 @@ def train(
                 if accumulated_step_id == 0 and "train/kl_loss" in log_dict:
                     assert log_dict["train/kl_loss"] == 0.0, f"{log_dict=}"
 
-            print(f"{role_tag}step {accumulated_step_id}: {log_dict}")
+            logger.info(f"{role_tag}step {accumulated_step_id}: {log_dict}")
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
     if pre_hook_enabled:
         disable_forward_pre_hook(model)

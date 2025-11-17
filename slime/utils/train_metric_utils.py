@@ -1,3 +1,4 @@
+import logging
 from argparse import Namespace
 from copy import deepcopy
 from typing import Callable
@@ -5,6 +6,8 @@ from typing import Callable
 import wandb
 
 from slime.utils.timer import Timer
+
+logger = logging.getLogger(__name__)
 
 
 def log_perf_data_raw(
@@ -38,7 +41,7 @@ def log_perf_data_raw(
             log_dict["perf/step_time"] = total_time
             log_dict["perf/wait_time_ratio"] = log_dict["perf/train_wait_time"] / total_time
 
-    print(f"perf {rollout_id}: {log_dict}")
+    logger.info(f"perf {rollout_id}: {log_dict}")
 
     step = (
         rollout_id

@@ -1,3 +1,4 @@
+import logging
 from argparse import Namespace
 from contextlib import nullcontext
 from itertools import accumulate
@@ -33,6 +34,9 @@ from .fsdp_cpu_adam_wrapper import FSDPCPUAdamWrapper
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
 
+logger = logging.getLogger(__name__)
+
+
 class FSDPTrainRayActor(TrainRayActor):
     """Simplified TrainRayActor for pure HF+FSDP training.
 
@@ -55,7 +59,7 @@ class FSDPTrainRayActor(TrainRayActor):
             from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
             from transformers.models.qwen3 import modeling_qwen3
 
-            print("FSDPTrainRayActor call enable_batch_invariant_mode for true-on-policy")
+            logger.info("FSDPTrainRayActor call enable_batch_invariant_mode for true-on-policy")
             enable_batch_invariant_mode(
                 # In Qwen3, rope `inv_freq_expanded.float() @ position_ids_expanded.float()` uses bmm
                 # and disabling it will make it aligned
@@ -199,18 +203,18 @@ class FSDPTrainRayActor(TrainRayActor):
         self.dp_rank = rank // self.cp_size
         self.cp_rank = rank % self.cp_size
 
-        print(
+        logger.info(
             f"[Rank {rank}] Device mesh (2D): world_size={world_size}, "
             f"cp_size={self.cp_size}, dp_size={self.dp_size}"
         )
-        print(f"[Rank {rank}] Mesh shape: {self.mesh.shape}, " f"dp_rank={self.dp_rank}, cp_rank={self.cp_rank}")
+        logger.info(f"[Rank {rank}] Mesh shape: {self.mesh.shape}, " f"dp_rank={self.dp_rank}, cp_rank={self.cp_rank}")
 
         # Setup Ring Flash Attention with CP group from mesh (only when cp_size > 1)
         if self.cp_size > 1:
             substitute_hf_flash_attn(self.cp_group, heads_k_stride=1)
-            print(f"[Rank {rank}] CP initialized via device mesh")
+            logger.info(f"[Rank {rank}] CP initialized via device mesh")
         else:
-            print(f"[Rank {rank}] Pure DP mode (cp_size=1)")
+            logger.info(f"[Rank {rank}] Pure DP mode (cp_size=1)")
 
     @timer
     def sleep(self) -> None:
@@ -460,7 +464,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 val / (self.args.n_samples_per_prompt * self.args.rollout_batch_size)
             ).item()
         if dist.get_rank() == 0:
-            print(f"rollout {rollout_id}: {log_dict}")
+            logger.info(f"rollout {rollout_id}: {log_dict}")
             if self.args.use_wandb:
                 log_dict["rollout/step"] = (
                     rollout_id
@@ -498,7 +502,7 @@ class FSDPTrainRayActor(TrainRayActor):
             and "ref" in self.weights
         ):
             if dist.get_rank() == 0:
-                print(f"Updating ref model at rollout_id {rollout_id}")
+                logger.info(f"Updating ref model at rollout_id {rollout_id}")
             self.update_cpu_params_dict(self.weights["ref"])
 
     def _train_step(self, packed_batch, reported_accum, mbs_id, grad_accum):
@@ -657,8 +661,8 @@ class FSDPTrainRayActor(TrainRayActor):
                 kl_info = ""
                 if self.args.use_kl_loss and "kl_loss" in aggregated:
                     kl_info = f", kl_loss: {aggregated['kl_loss']:.4f}, kl_penalty: {aggregated['kl_loss'] * self.args.kl_loss_coef:.4f}"
-                    print(kl_info)
-                print(f"step {self.global_step}: {log_dict}")
+                    logger.info(kl_info)
+                logger.info(f"step {self.global_step}: {log_dict}")
 
                 if self.args.use_wandb and wandb is not None:
                     log_dict["train/step"] = self.global_step
@@ -795,7 +799,7 @@ class FSDPTrainRayActor(TrainRayActor):
         else:
             raise NotImplementedError(f"Loading from checkpoint file {ref_load_path} not yet implemented")
 
-        print("Reference model parameters loaded and stored in CPU memory")
+        logger.info("Reference model parameters loaded and stored in CPU memory")
 
     def _get_model_inputs_args(self, packed_sequence: dict) -> dict:
         input_ids = packed_sequence["tokens"].unsqueeze(0)

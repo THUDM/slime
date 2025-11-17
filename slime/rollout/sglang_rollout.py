@@ -2,6 +2,7 @@ import asyncio
 import base64
 import copy
 import io
+import logging
 from argparse import Namespace
 from collections import defaultdict
 from typing import Any, Callable, Optional, Union
@@ -24,6 +25,8 @@ from slime.utils.types import Sample
 from .rm_hub import async_rm, batched_async_rm
 
 __all__ = ["generate_rollout"]
+
+logger = logging.getLogger(__name__)
 
 
 def _load_and_encode_image(path: str) -> str:
@@ -113,7 +116,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
                     img_b64 = await asyncio.to_thread(_load_and_encode_image, part["path"])
                     image_data.append(img_b64)
                 except Exception as e:
-                    print(f"Error processing image {part['path']}: {e}")
+                    logger.info(f"Error processing image {part['path']}: {e}")
                     sample.status = Sample.Status.ABORTED
                     return sample
 
@@ -296,7 +299,7 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
 
     # abort all the requests
     for url in response["urls"]:
-        print(f"Abort request for {url}", flush=True)
+        logger.info(f"Abort request for {url}")
         await post(f"{url}/abort_request", {"abort_all": True})
 
     # make sure all the pending tasks are finished
@@ -317,7 +320,7 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
             count += len(group)
 
     if args.partial_rollout:
-        print(f"Collected {count} partial samples into the data buffer", flush=True)
+        logger.info(f"Collected {count} partial samples into the data buffer")
 
     return aborted_samples
 
@@ -367,9 +370,8 @@ async def generate_rollout_async(
 
             if do_print:
                 sample = group[0][0] if isinstance(group[0], list) else group[0]
-                print(
+                logger.info(
                     f"First rollout sample: {[str(sample.prompt) + sample.response]}, label: {sample.label}, reward: {sample.reward}",
-                    flush=True,
                 )
                 do_print = False
 
@@ -388,9 +390,8 @@ async def generate_rollout_async(
 
     pbar.close()
     sample = data[-1][0][0] if isinstance(data[-1][0], list) else data[-1][0]
-    print(
+    logger.info(
         f"Finish rollout: {[str(sample.prompt) + sample.response]}, label: {sample.label}, reward: {sample.reward}",
-        flush=True,
     )
 
     # there are still some unfinished requests, abort them
@@ -569,11 +570,10 @@ async def eval_rollout_single_dataset(
     for coro in asyncio.as_completed(tasks):
         sample = await coro
         if do_print:
-            print(
+            logger.info(
                 "eval_rollout_single_dataset example data:",
                 [str(sample.prompt) + sample.response],
                 f"reward={sample.reward}",
-                flush=True,
             )
             do_print = False
         if isinstance(sample, list):

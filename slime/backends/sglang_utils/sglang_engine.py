@@ -1,4 +1,5 @@
 import dataclasses
+import logging
 import multiprocessing
 import time
 from typing import List, Optional
@@ -11,6 +12,8 @@ from urllib3.exceptions import NewConnectionError
 
 from slime.ray.ray_actor import RayActor
 from slime.utils.http_utils import get_host_info
+
+logger = logging.getLogger(__name__)
 
 
 def get_base_gpu_id(args, rank):
@@ -102,7 +105,7 @@ class SGLangEngine(RayActor):
             self._init_normal(server_args_dict)
 
     def _init_external(self, expect_server_args, external_engine_need_check_fields):
-        print(f"Use external SGLang engine (rank={self.rank}, expect_server_args={expect_server_args})")
+        logger.info(f"Use external SGLang engine (rank={self.rank}, expect_server_args={expect_server_args})")
 
         def _get_actual_server_args():
             response = requests.get(f"http://{self.server_host}:{self.server_port}/get_server_info")
@@ -126,7 +129,7 @@ class SGLangEngine(RayActor):
         _sanity_check_server_args(actual_server_args, expect_server_args)
 
     def _init_normal(self, server_args_dict):
-        print(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
+        logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
         self.process = launch_server_process(ServerArgs(**server_args_dict))
         if self.node_rank == 0 and self.router_ip and self.router_port:
             response = requests.post(
@@ -212,7 +215,7 @@ class SGLangEngine(RayActor):
             except NewConnectionError as e:
                 raise e
             except Exception as e:
-                print(f"Error flushing cache: {e}")
+                logger.info(f"Error flushing cache: {e}")
                 time.sleep(1)
                 continue
         else:
@@ -222,7 +225,7 @@ class SGLangEngine(RayActor):
         if self.args.rollout_external:
             return
 
-        print(f"Shutdown engine {self.server_host}:{self.server_port}...")
+        logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
         if self.node_rank == 0:
             response = requests.post(
                 f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
@@ -379,7 +382,7 @@ def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
 
     # for compatibility with old args
     if len(unused_keys) > 0:
-        print(f"Warning: The following arguments is not supported in the current sglang: {unused_keys}.")
+        logger.info(f"Warning: The following arguments is not supported in the current sglang: {unused_keys}.")
         for key in unused_keys:
             kwargs.pop(key)
 
