@@ -8,10 +8,12 @@ except ImportError:
 
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
+from slime.utils.logging_utils import configure_logger
 from slime.utils.wandb_utils import init_wandb_primary
 
 
 def train(args):
+    configure_logger()
     # allocate the GPUs
     pgs = create_placement_groups(args)
     init_wandb_primary(args)
