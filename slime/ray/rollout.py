@@ -8,12 +8,12 @@ from typing import List, Union
 import numpy as np
 import ray
 import torch
-import wandb
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
 from slime.rollout.base_types import call_rollout_fn
+from slime.utils import tracking_utils
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
 from slime.utils.iter_utils import group_by
@@ -22,8 +22,8 @@ from slime.utils.metric_checker import MetricChecker
 from slime.utils.metric_utils import compute_pass_rate, compute_statistics, dict_add_prefix
 from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
+from slime.utils.tracking_utils import init_tracking
 from slime.utils.types import Sample
-from slime.utils.wandb_utils import init_wandb_secondary
 
 from ..utils.metric_utils import has_repetition
 from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
@@ -45,7 +45,7 @@ class RolloutManager:
         self.pg = pg
         _start_router(args)
         # TODO make args immutable
-        init_wandb_secondary(args, router_addr=f"http://{args.sglang_router_ip}:{args.sglang_router_port}")
+        init_tracking(args, primary=False, router_addr=f"http://{args.sglang_router_ip}:{args.sglang_router_port}")
         init_http_client(args)
 
         self.data_source = RolloutDataSourceWithBuffer(args)
@@ -480,15 +480,8 @@ def _log_eval_rollout_data(rollout_id, args, data):
         if not args.wandb_always_use_train_step
         else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
     )
-    if args.use_wandb:
-        log_dict["eval/step"] = step
-        wandb.log(log_dict)
-
-    if args.use_tensorboard:
-        from slime.utils.tensorboard_utils import _TensorboardAdapter
-
-        tb = _TensorboardAdapter(args)
-        tb.log(data=log_dict, step=step)
+    log_dict["eval/step"] = step
+    tracking_utils.log(args, log_dict, step_key="eval/step")
 
     return log_dict
 
@@ -510,15 +503,8 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
         if not args.wandb_always_use_train_step
         else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
     )
-    if args.use_wandb:
-        log_dict["rollout/step"] = step
-        wandb.log(log_dict)
-
-    if args.use_tensorboard:
-        from slime.utils.tensorboard_utils import _TensorboardAdapter
-
-        tb = _TensorboardAdapter(args)
-        tb.log(data=log_dict, step=step)
+    log_dict["rollout/step"] = step
+    tracking_utils.log(args, log_dict, step_key="rollout/step")
 
 
 def _compute_metrics_from_samples(args, samples):

@@ -2,8 +2,8 @@ import logging
 from argparse import Namespace
 from copy import deepcopy
 from typing import Callable
+from slime.utils import tracking_utils
 
-import wandb
 
 from slime.utils.timer import Timer
 
@@ -48,12 +48,5 @@ def log_perf_data_raw(
         if not args.wandb_always_use_train_step
         else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
     )
-    if args.use_wandb:
-        log_dict["rollout/step"] = step
-        wandb.log(log_dict)
-
-    if args.use_tensorboard:
-        from slime.utils.tensorboard_utils import _TensorboardAdapter
-
-        tb = _TensorboardAdapter(args)
-        tb.log(data=log_dict, step=step)
+    log_dict["rollout/step"] = step
+    tracking_utils.log(args, log_dict, step_key="rollout/step")

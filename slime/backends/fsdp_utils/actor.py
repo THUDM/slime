@@ -7,7 +7,6 @@ import ray
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-import wandb
 from packaging import version
 from ring_flash_attn import substitute_hf_flash_attn, update_ring_flash_attn_params
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
@@ -25,8 +24,9 @@ from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, inverse_timer, timer
-from slime.utils.wandb_utils import init_wandb_secondary
+from slime.utils.tracking_utils import init_tracking
 
+from ...utils import tracking_utils
 from ...utils.profile_utils import TrainProfiler
 from . import checkpoint
 from .data_packing import pack_sequences, pad_packed_sequence_with_cp, unpack_sequences
@@ -73,7 +73,7 @@ class FSDPTrainRayActor(TrainRayActor):
         args.world_size = dist.get_world_size()
 
         if dist.get_rank() == 0:
-            init_wandb_secondary(args)
+            init_tracking(args, primary=False)
 
         self.args = args
         self.fsdp_full_state_dict_opts = StateDictOptions(
@@ -465,16 +465,15 @@ class FSDPTrainRayActor(TrainRayActor):
             ).item()
         if dist.get_rank() == 0:
             logger.info(f"rollout {rollout_id}: {log_dict}")
-            if self.args.use_wandb:
-                log_dict["rollout/step"] = (
-                    rollout_id
-                    if not self.args.wandb_always_use_train_step
-                    else rollout_id
-                    * self.args.rollout_batch_size
-                    * self.args.n_samples_per_prompt
-                    // self.args.global_batch_size
-                )
-                wandb.log(log_dict)
+            log_dict["rollout/step"] = (
+                rollout_id
+                if not self.args.wandb_always_use_train_step
+                else rollout_id
+                * self.args.rollout_batch_size
+                * self.args.n_samples_per_prompt
+                // self.args.global_batch_size
+            )
+            tracking_utils.log(self.args, log_dict, step_key="rollout/step")
 
         with timer("actor_train"):
             reported_accum: dict[str, list[torch.Tensor]] = {}
@@ -664,9 +663,8 @@ class FSDPTrainRayActor(TrainRayActor):
                     logger.info(kl_info)
                 logger.info(f"step {self.global_step}: {log_dict}")
 
-                if self.args.use_wandb and wandb is not None:
-                    log_dict["train/step"] = self.global_step
-                    wandb.log(log_dict)
+                log_dict["train/step"] = self.global_step
+                tracking_utils.log(self.args, log_dict, step_key="train/step")
             self.global_step += 1
 
     @timer

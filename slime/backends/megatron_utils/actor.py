@@ -24,8 +24,8 @@ from slime.utils.ray_utils import Box
 from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
 from slime.utils.routing_replay import RoutingReplay
 from slime.utils.timer import Timer, inverse_timer, timer
+from slime.utils.tracking_utils import init_tracking
 from slime.utils.types import RolloutBatch
-from slime.utils.wandb_utils import init_wandb_secondary
 
 from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
@@ -36,7 +36,6 @@ from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor, named_parameters
-
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,7 @@ class MegatronTrainRayActor(TrainRayActor):
         init(args)
 
         if is_megatron_main_rank():
-            init_wandb_secondary(args)
+            init_tracking(args, primary=False)
 
         self.prof = TrainProfiler(args)
 

@@ -6,7 +6,6 @@ import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-import wandb
 from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 
@@ -17,6 +16,7 @@ from slime.utils.metric_utils import compute_pass_rate
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.types import RolloutBatch
 
+from ...utils import tracking_utils
 from .cp_utils import get_sum_of_sample_mean, slice_with_cp
 
 logger = logging.getLogger(__name__)
@@ -124,15 +124,8 @@ def gather_log_data(
             if not args.wandb_always_use_train_step
             else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
         )
-        if args.use_wandb:
-            reduced_log_dict["rollout/step"] = step
-            wandb.log(reduced_log_dict)
-
-        if args.use_tensorboard:
-            from slime.utils.tensorboard_utils import _TensorboardAdapter
-
-            tb = _TensorboardAdapter(args)
-            tb.log(data=reduced_log_dict, step=step)
+        reduced_log_dict["rollout/step"] = step
+        tracking_utils.log(args, reduced_log_dict, step_key="rollout/step")
 
         return reduced_log_dict
     else:
