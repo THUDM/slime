@@ -89,34 +89,30 @@ def pack_sequences(
 
             # Collect multimodal inputs for this sequence
             if multimodal_inputs:
-                for key, tensor in multimodal_inputs[i].items():
+                for key, mm_tensor in multimodal_inputs[i].items():
                     if key not in multimodal_data:
-                        multimodal_data[key] = []
-                        multimodal_num_items[key] = []
-                    multimodal_data[key].append(tensor)
-                    multimodal_num_items[key].append(tensor.size(0) if isinstance(tensor, torch.Tensor) else 1)
+                        multimodal_data[key] = mm_tensor
+                        multimodal_num_items[key] = [mm_tensor.size(0)]
+                    else:
+                        multimodal_data[key] = torch.cat(multimodal_data[key], mm_tensor)
+                        multimodal_num_items[key].append(mm_tensor.size(0))
 
-        packed_result = {
-            "tokens": torch.tensor(flat_tokens, dtype=torch.long),
-            "loss_masks": torch.tensor(flat_masks, dtype=torch.int),
-            "position_ids": torch.tensor(flat_positionids, dtype=torch.int),
-            "cu_seqlens": torch.tensor(cu_seqlens, dtype=torch.int32),
-            "rewards": torch.tensor([rewards[i] for i in indices], dtype=torch.float32),
-            "raw_reward": [raw_rewards[i] for i in indices],
-            "response_lengths": [response_lengths[i] for i in indices],
-            "advantages": torch.tensor(flat_advantages, dtype=torch.float32),
-            "returns": torch.tensor(flat_returns, dtype=torch.float32),
-            "rollout_log_probs": torch.tensor(flat_rollout_log_probs, dtype=torch.float32),
-        }
-
-        # Concatenate multimodal inputs along dim=0
-        if multimodal_data:
-            packed_result["multimodal_inputs"] = {
-                key: torch.cat(tensors, dim=0) for key, tensors in multimodal_data.items()
+        result.append(
+            {
+                "tokens": torch.tensor(flat_tokens, dtype=torch.long),
+                "loss_masks": torch.tensor(flat_masks, dtype=torch.int),
+                "position_ids": torch.tensor(flat_positionids, dtype=torch.int),
+                "cu_seqlens": torch.tensor(cu_seqlens, dtype=torch.int32),
+                "rewards": torch.tensor([rewards[i] for i in indices], dtype=torch.float32),
+                "raw_reward": [raw_rewards[i] for i in indices],
+                "response_lengths": [response_lengths[i] for i in indices],
+                "advantages": torch.tensor(flat_advantages, dtype=torch.float32),
+                "returns": torch.tensor(flat_returns, dtype=torch.float32),
+                "rollout_log_probs": torch.tensor(flat_rollout_log_probs, dtype=torch.float32),
+                "multimodal_inputs": multimodal_data,
+                "multimodal_num_items": multimodal_num_items,
             }
-            packed_result["multimodal_num_items"] = multimodal_num_items
-
-        result.append(packed_result)
+        )
 
     return result
 
