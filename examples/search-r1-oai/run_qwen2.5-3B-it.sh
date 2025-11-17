@@ -20,15 +20,15 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/../../scripts/models/qwen2.5-3B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /workspace/Qwen2.5-3B-Instruct/
-   --ref-load /workspace/Qwen2.5-3B-Instruct_torch_dist/
-   --load /workspace/Qwen2.5-3B-Instruct_slime/
-   --save /workspace/Qwen2.5-3B-Instruct_slime/
+   --hf-checkpoint /root/workspace/Qwen2.5-3B-Instruct/
+   --ref-load /root/workspace/Qwen2.5-3B-Instruct_torch_dist/
+   --load /root/workspace/Qwen2.5-3B-Instruct_slime/
+   --save /root/workspace/Qwen2.5-3B-Instruct_slime/
    --save-interval 20
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /workspace/slime-open/examples/search-r1-oai/data/search_R1_processed/train.parquet
+   --prompt-data /root/workspace/slime-open/examples/search-r1-oai/data/search_R1_processed/train.parquet
    --input-key prompt
    --label-key reward_model
    --tool-key tools
