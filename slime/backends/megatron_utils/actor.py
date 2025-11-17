@@ -1,3 +1,4 @@
+import logging
 import os
 import socket
 from argparse import Namespace
@@ -23,10 +24,11 @@ from slime.utils.ray_utils import Box
 from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
 from slime.utils.routing_replay import RoutingReplay
 from slime.utils.timer import Timer, inverse_timer, timer
+from slime.utils.tracking_utils import init_tracking
 from slime.utils.types import RolloutBatch
-from slime.utils.wandb_utils import init_wandb_secondary
 
 from ...utils.profile_utils import TrainProfiler
+from ...utils.tensor_backper import TensorBackuper
 from .checkpoint import load_checkpoint
 from .cp_utils import slice_log_prob_with_cp, slice_with_cp
 from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data, sync_actor_critic_data
@@ -35,6 +37,8 @@ from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor, named_parameters
 
+logger = logging.getLogger(__name__)
+
 
 class MegatronTrainRayActor(TrainRayActor):
     @with_defer(lambda: Timer().start("train_wait"))
@@ -42,17 +46,18 @@ class MegatronTrainRayActor(TrainRayActor):
         self,
         args: Namespace,
         role: str,
-        wandb_run_id: str,
         with_ref: bool = False,
     ) -> Optional[int]:
         monkey_patch_torch_dist()
 
-        super().init(args, role, wandb_run_id, with_ref)
+        super().init(args, role, with_ref)
 
         init(args)
 
         if is_megatron_main_rank():
-            init_wandb_secondary(args, wandb_run_id)
+            init_tracking(args, primary=False)
+
+        self.prof = TrainProfiler(args)
 
         # read config and tokenizer serialized to prevent concurrent writing bug.
         for i in range(dist.get_world_size()):
@@ -80,8 +85,12 @@ class MegatronTrainRayActor(TrainRayActor):
             return
 
         start_rollout_id = loaded_rollout_id + 1
-        self.weights = {"actor": {}}
-        self.update_cpu_params_dict(self.weights["actor"])
+
+        self.weights_backuper = TensorBackuper.create(
+            source_getter=lambda: named_parameters(self.args, self.model),
+            single_tag=None if args.enable_weights_backuper else "actor",
+        )
+        self.weights_backuper.backup("actor")
 
         if with_ref:
             self.load_other_checkpoint("ref", args.ref_load)
@@ -91,14 +100,13 @@ class MegatronTrainRayActor(TrainRayActor):
             self.load_other_checkpoint("old_actor", args.load)
             # Create rollout_actor as a copy of current actor
             if args.update_weights_interval == 1:
-                self.weights["rollout_actor"] = {}
-                self.update_cpu_params_dict(self.weights["rollout_actor"])
+                self.weights_backuper.backup("rollout_actor")
 
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
         self.weight_updater = update_weight_cls(
             self.args,
             self.model,
-            self.weights,
+            weights_getter=lambda: self.weights_backuper.get("actor"),
             model_name=type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name,
             quantization_config=getattr(self.hf_config, "quantization_config", None),
             vocab_size=self.tokenizer.vocab_size if self.args.vocab_size is None else self.args.vocab_size,
@@ -109,7 +117,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.offload_train:
             # recover to actor in the end.
-            self.update_gpu_params_dict(self.weights["actor"])
+            self.weights_backuper.restore("actor")
             self.sleep()
 
         self.rollout_engines = None
@@ -120,24 +128,9 @@ class MegatronTrainRayActor(TrainRayActor):
 
             self.rollout_data_postprocess = load_function(self.args.rollout_data_postprocess_path)
 
-        self.prof = TrainProfiler(args)
+        self.prof.on_init_end()
 
         return start_rollout_id
-
-    @torch.no_grad()
-    def update_cpu_params_dict(self, params_dict: Dict[str, torch.Tensor]) -> None:
-        for name, param in named_parameters(self.args, self.model):
-            if name not in params_dict:
-                params_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
-            params_dict[name].copy_(param.detach(), non_blocking=True)
-        torch.cuda.synchronize()
-
-    @torch.no_grad()
-    def update_gpu_params_dict(self, params_dict: Dict[str, torch.Tensor]) -> None:
-        for name, param in named_parameters(self.args, self.model):
-            assert name in params_dict
-            param.copy_(params_dict[name], non_blocking=True)
-        torch.cuda.synchronize()
 
     @timer
     def sleep(self) -> None:
@@ -202,6 +195,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         from megatron.core.transformer.transformer_block import get_num_layers_to_build
         from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
+
         from slime.utils.routing_replay import RoutingReplay
 
         for iterator in data_iterator:
@@ -254,7 +248,7 @@ class MegatronTrainRayActor(TrainRayActor):
         num_microbatches: list[int],
         store_prefix: str = "",
     ) -> Dict[str, list[torch.Tensor]]:
-        self.update_gpu_params_dict(self.weights[model_tag])
+        self.weights_backuper.restore(model_tag)
 
         with timer(f"{store_prefix}log_probs"):
             return forward_only(
@@ -318,7 +312,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         with inverse_timer("train_wait"), timer("train"):
             if self.args.compute_advantages_and_returns:
-                if "ref" in self.weights:
+                if "ref" in self.weights_backuper.backup_tags:
                     if self.args.use_routing_replay:
                         os.environ["ROUTING_REPLAY_STAGE"] = "fallthrough"
                     rollout_data.update(
@@ -354,8 +348,8 @@ class MegatronTrainRayActor(TrainRayActor):
                     )
 
                 # when there is old actor, we need to update the model params to actor manually
-                if "old_actor" in self.weights:
-                    self.update_gpu_params_dict(self.weights["actor"])
+                if "old_actor" in self.weights_backuper.backup_tags:
+                    self.weights_backuper.restore("actor")
 
                 # Calculate adv and returns. Need to performed before training (instead of on the fly),
                 # because we may need normalize the whole rollout.
@@ -379,7 +373,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     num_microbatches,
                 )
 
-            self.prof.step()
+            self.prof.step(rollout_id=rollout_id)
 
         train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
 
@@ -387,18 +381,18 @@ class MegatronTrainRayActor(TrainRayActor):
             RoutingReplay.clear_all()
 
         # update the cpu actor weight to the latest model
-        self.update_cpu_params_dict(self.weights["actor"])
+        self.weights_backuper.backup("actor")
 
         # Update ref model if needed
         if (
             self.args.ref_update_interval is not None
             and (rollout_id + 1) % self.args.ref_update_interval == 0
-            and "ref" in self.weights
+            and "ref" in self.weights_backuper.backup_tags
         ):
             with timer("ref_model_update"):
                 if is_megatron_main_rank():
-                    print(f"Updating ref model at rollout_id {rollout_id}")
-                self.update_cpu_params_dict(self.weights["ref"])
+                    logger.info(f"Updating ref model at rollout_id {rollout_id}")
+                self.weights_backuper.backup("ref")
 
         log_perf_data(rollout_id, self.args)
 
@@ -430,15 +424,14 @@ class MegatronTrainRayActor(TrainRayActor):
 
             if getattr(self.args, "keep_old_actor", False):
                 if self.args.update_weights_interval == 1:
-                    print("updating model queue: rollout_actor -> old_actor, actor -> rollout_actor")
+                    logger.info("updating model queue: rollout_actor -> old_actor, actor -> rollout_actor")
                     # Queue-style update: rollout_actor params -> old_actor, actor params -> rollout_actor
                     # First copy rollout_actor to old_actor
-                    for name in self.weights["old_actor"]:
-                        self.weights["old_actor"][name].copy_(self.weights["rollout_actor"][name])
+                    self.weights_backuper.copy(src_tag="rollout_actor", dst_tag="old_actor")
                     # Then copy current actor to rollout_actor
-                    self.update_cpu_params_dict(self.weights["rollout_actor"])
+                    self.weights_backuper.backup("rollout_actor")
                 else:
-                    self.update_cpu_params_dict(self.weights["old_actor"])
+                    self.weights_backuper.backup("old_actor")
 
         if self.args.offload_train:
             destroy_process_groups()
@@ -466,8 +459,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if model_tag == "ref" and self.args.ref_ckpt_step is not None:
             self.args.ckpt_step = old_ckpt_step
 
-        self.weights[model_tag] = {}
-        self.update_cpu_params_dict(self.weights[model_tag])
+        self.weights_backuper.backup(model_tag)
 
     def connect_actor_critic(
         self,

@@ -5,42 +5,47 @@ import time
 from pathlib import Path
 from typing import List, Union
 
+import numpy as np
 import ray
 import torch
-import wandb
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
 from slime.rollout.base_types import call_rollout_fn
+from slime.utils import tracking_utils
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
 from slime.utils.iter_utils import group_by
+from slime.utils.logging_utils import configure_logger
 from slime.utils.metric_checker import MetricChecker
-from slime.utils.metric_utils import compute_pass_rate, compute_statistics, dict_add_prefix
+from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
+from slime.utils.tracking_utils import init_tracking
 from slime.utils.types import Sample
-from slime.utils.wandb_utils import init_wandb_secondary
 
+from ..utils.metric_utils import has_repetition
 from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+logger = logging.getLogger(__name__)
 
 
 @ray.remote
 class RolloutManager:
     """The class to run rollout and convert rollout data to training data."""
 
-    def __init__(self, args, pg, wandb_run_id):
+    def __init__(self, args, pg):
+        configure_logger()
+
         self.args = args
         self.pg = pg
         _start_router(args)
         # TODO make args immutable
-        init_wandb_secondary(
-            args, wandb_run_id, router_addr=f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
-        )
+        init_tracking(args, primary=False, router_addr=f"http://{args.sglang_router_ip}:{args.sglang_router_port}")
         init_http_client(args)
 
         self.data_source = RolloutDataSourceWithBuffer(args)
@@ -50,8 +55,8 @@ class RolloutManager:
         self.custom_reward_post_process_func = None
         if self.args.custom_reward_post_process_path is not None:
             self.custom_reward_post_process_func = load_function(self.args.custom_reward_post_process_path)
-        print(f"import {self.args.rollout_function_path} as generate_rollout function.")
-        print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
+        logger.info(f"import {self.args.rollout_function_path} as generate_rollout function.")
+        logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
         if self.args.debug_train_only:
             self.all_rollout_engines = []
@@ -136,7 +141,7 @@ class RolloutManager:
                 original_num_rows = len(data)
                 rough_subsample_num_rows = int(original_num_rows * ratio)
                 data = data[: rough_subsample_num_rows // 2] + data[-rough_subsample_num_rows // 2 :]
-                print(
+                logger.info(
                     f"Subsample loaded debug rollout data using {ratio=} and change num rows {original_num_rows} -> {len(data)}"
                 )
             metrics = None
@@ -152,14 +157,14 @@ class RolloutManager:
                 trim_len = (len(data) // self.args.global_batch_size) * self.args.global_batch_size
                 origin_data_length = len(data)
                 data = data[:trim_len]
-                print(f"trim number of samples from {origin_data_length} to {trim_len}")
+                logger.info(f"trim number of samples from {origin_data_length} to {trim_len}")
         return data, metrics
 
     def _save_debug_rollout_data(self, data, rollout_id, evaluation: bool):
         # TODO to be refactored (originally Buffer._set_data)
         if (path_template := self.args.save_debug_rollout_data) is not None:
             path = Path(path_template.format(rollout_id=("eval_" if evaluation else "") + str(rollout_id)))
-            print(f"Save debug rollout data to {path}")
+            logger.info(f"Save debug rollout data to {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
 
             # TODO may improve the format
@@ -296,6 +301,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
                     "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                     "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                     "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
+                    "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
                 }
             },
         ).remote(args, rank=i)
@@ -399,7 +405,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
     for i, _ in rollout_engines:
         for key in ["port", "nccl_port", "dist_init_addr"]:
             assert key in addr_and_ports[i], f"Engine {i} {key} is not set."
-        print(f"Ports for engine {i}: {addr_and_ports[i]}")
+        logger.info(f"Ports for engine {i}: {addr_and_ports[i]}")
 
     return addr_and_ports
 
@@ -445,7 +451,7 @@ def _start_router(args):
     # Wait 3 seconds
     time.sleep(3)
     assert process.is_alive()
-    print(f"Router launched at {args.sglang_router_ip}:{args.sglang_router_port}")
+    logger.info(f"Router launched at {args.sglang_router_ip}:{args.sglang_router_port}")
 
 
 def _log_eval_rollout_data(rollout_id, args, data):
@@ -467,22 +473,11 @@ def _log_eval_rollout_data(rollout_id, args, data):
                 f"eval/{key}-",
             )
 
-    print(f"eval {rollout_id}: {log_dict}")
+    logger.info(f"eval {rollout_id}: {log_dict}")
 
-    step = (
-        rollout_id
-        if not args.wandb_always_use_train_step
-        else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-    )
-    if args.use_wandb:
-        log_dict["eval/step"] = step
-        wandb.log(log_dict)
-
-    if args.use_tensorboard:
-        from slime.utils.tensorboard_utils import _TensorboardAdapter
-
-        tb = _TensorboardAdapter(args)
-        tb.log(data=log_dict, step=step)
+    step = compute_rollout_step(args, rollout_id)
+    log_dict["eval/step"] = step
+    tracking_utils.log(args, log_dict, step_key="eval/step")
 
     return log_dict
 
@@ -498,21 +493,10 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
         log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
     log_dict |= dict_add_prefix(_compute_metrics_from_samples(args, samples), f"rollout/")
-    print(f"perf {rollout_id}: {log_dict}")
-    step = (
-        rollout_id
-        if not args.wandb_always_use_train_step
-        else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-    )
-    if args.use_wandb:
-        log_dict["rollout/step"] = step
-        wandb.log(log_dict)
-
-    if args.use_tensorboard:
-        from slime.utils.tensorboard_utils import _TensorboardAdapter
-
-        tb = _TensorboardAdapter(args)
-        tb.log(data=log_dict, step=step)
+    logger.info(f"perf {rollout_id}: {log_dict}")
+    step = compute_rollout_step(args, rollout_id)
+    log_dict["rollout/step"] = step
+    tracking_utils.log(args, log_dict, step_key="rollout/step")
 
 
 def _compute_metrics_from_samples(args, samples):
@@ -523,6 +507,8 @@ def _compute_metrics_from_samples(args, samples):
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_spec_metrics(args, samples)
     log_dict |= _compute_reward_cat_metrics(args, samples)
+    log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
+    log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
     return log_dict
 
 

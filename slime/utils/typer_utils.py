@@ -23,5 +23,7 @@ def dataclass_cli(func):
 
     wrapped.__signature__ = signature.replace(parameters=parameters)
     wrapped.__doc__ = func.__doc__
+    wrapped.__name__ = func.__name__
+    wrapped.__qualname__ = func.__qualname__
 
     return wrapped

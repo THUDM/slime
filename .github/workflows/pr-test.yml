@@ -1,3 +1,7 @@
+################################################################################
+# This file is auto-generated from the .j2 file via generate_github_workflows.py. Do not edit manually.
+################################################################################
+
 name: PR Test
 
 on:
@@ -7,15 +11,22 @@ on:
   pull_request:
     branches: [main]
     types: [synchronize, labeled]
+  workflow_dispatch:
+    inputs:
+      infinite_run:
+        description: 'Run training infinitely'
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
-  e2e-test:
-    # TODO may use run-ci label etc
-    if: github.event.pull_request.draft == false
+
+  e2e-test-short:
+    if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-short'))
     runs-on: self-hosted
     container:
       image: slimerl/slime:latest
@@ -28,21 +39,19 @@ jobs:
         --memory=0
         --memory-swap=0
         -v /mnt/nvme0n1/slime_ci:/data/slime_ci
-        -v /mnt/nvme0n1/models:/root/models
-        -v /mnt/nvme0n1/datasets:/root/datasets
+        -v /mnt/nvme0n1/slime_ci/models:/root/models
+        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
     strategy:
       fail-fast: false
       matrix:
-        info:
-          - {test_file: test_quick_start_glm4_9B.py}
-          - {test_file: test_qwen3_30B_A3B.py}
-          # TODO use deterministic kernel
+        info: [{"num_gpus": 8, "test_file": "test_quick_start_glm4_9B.py"}, {"num_gpus": 8, "test_file": "test_qwen3_30B_A3B.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}
     env:
       GITHUB_COMMIT_NAME: ${{ github.sha }}_${{ github.event.pull_request.number || 'non-pr' }}
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      SLIME_TEST_ENABLE_INFINITE_RUN: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.infinite_run) || 'false' }}
 
     steps:
       - name: Checkout repository
@@ -54,4 +63,44 @@ jobs:
 
       - name: Execute
         shell: bash
-        run: python tests/${{ matrix.info.test_file }}
+        run: python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python tests/${{ matrix.info.test_file }}
+
+  e2e-test-long:
+    if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-long'))
+    runs-on: self-hosted
+    container:
+      image: slimerl/slime:latest
+      options: >
+        --gpus all
+        --ipc=host
+        --shm-size=16g
+        --ulimit memlock=-1
+        --ulimit stack=67108864
+        --memory=0
+        --memory-swap=0
+        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
+        -v /mnt/nvme0n1/slime_ci/models:/root/models
+        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
+    strategy:
+      fail-fast: false
+      matrix:
+        info: [{"num_gpus": 2, "test_file": "test_qwen2.5_0.5B_gsm8k.py"}, {"num_gpus": 2, "test_file": "test_qwen2.5_0.5B_gsm8k_async.py"}, {"num_gpus": 2, "test_file": "test_qwen3_0.6B_fsdp_colocated_2xGPU.py"}, {"num_gpus": 2, "test_file": "test_qwen3_0.6B_fsdp_distributed.py"}]
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    env:
+      GITHUB_COMMIT_NAME: ${{ github.sha }}_${{ github.event.pull_request.number || 'non-pr' }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      SLIME_TEST_ENABLE_INFINITE_RUN: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.infinite_run) || 'false' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install
+        shell: bash
+        run: cd $GITHUB_WORKSPACE && pip install -e .
+
+      - name: Execute
+        shell: bash
+        run: python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python tests/${{ matrix.info.test_file }}

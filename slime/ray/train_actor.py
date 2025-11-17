@@ -1,4 +1,5 @@
 import abc
+import logging
 import os
 import random
 from datetime import timedelta
@@ -11,7 +12,10 @@ from torch_memory_saver import torch_memory_saver
 import slime.utils.eval_config
 from slime.ray.ray_actor import RayActor
 from slime.utils.distributed_utils import init_gloo_group
+from slime.utils.logging_utils import configure_logger
 from slime.utils.memory_utils import clear_memory, print_memory
+
+logger = logging.getLogger(__name__)
 
 
 def get_local_gpu_id():
@@ -23,7 +27,9 @@ def get_local_gpu_id():
 
 
 class TrainRayActor(RayActor):
-    def __init__(self, world_size, rank, master_addr, master_port, wandb_run_id):
+    def __init__(self, world_size, rank, master_addr, master_port):
+        configure_logger()
+
         self._world_size = world_size
         self._rank = rank
         if master_addr:
@@ -42,13 +48,13 @@ class TrainRayActor(RayActor):
         # os.environ["LOCAL_RANK"] = str(ray.get_gpu_ids()[0])
         os.environ["LOCAL_RANK"] = str(get_local_gpu_id())
 
-    def init(self, args, role, wandb_run_id, with_ref=False):
+    def init(self, args, role, with_ref=False):
         self.args = args
         self.role = role
         self.with_ref = with_ref
 
         if (x := args.train_memory_margin_bytes) > 0:
-            print(f"Set torch_memory_saver.memory_margin_bytes to {x}")
+            logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
             assert args.offload_train
             torch_memory_saver.memory_margin_bytes = x
 
@@ -68,7 +74,7 @@ class TrainRayActor(RayActor):
 
         try:
             if torch.version.hip is not None:
-                print(f"Detected ROCm/HIP environment, skipping NUMA affinity setup")
+                logger.info(f"Detected ROCm/HIP environment, skipping NUMA affinity setup")
                 # will find the coresponding API to implement ROCm version as below
             else:
                 import pynvml
@@ -80,13 +86,13 @@ class TrainRayActor(RayActor):
                 handle = pynvml.nvmlDeviceGetHandleByIndex(local_rank)
                 pynvml.nvmlDeviceSetCpuAffinity(handle)
 
-                print(f"Set NUMA affinity for GPU {local_rank}")
+                logger.info(f"Set NUMA affinity for GPU {local_rank}")
                 pynvml.nvmlShutdown()
 
         except ImportError:
-            print(f"Warning: pynvml not available, skipping NUMA affinity setup")
+            logger.info(f"Warning: pynvml not available, skipping NUMA affinity setup")
         except Exception as e:
-            print(f"Warning: Failed to set NUMA affinity: {e}")
+            logger.info(f"Warning: Failed to set NUMA affinity: {e}")
 
     def clear_memory(self):
         print_memory("before TrainRayActor.clear_memory")
