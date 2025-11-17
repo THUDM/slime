@@ -49,6 +49,7 @@ RUN pip install -r /tmp/requirements.txt
 
 COPY docker/patch/${PATCH_VERSION}/megatron.patch /root/Megatron-LM/
 RUN cd Megatron-LM && \
+    git update-index --refresh && \
     git apply megatron.patch --3way && \
     if grep -R -n '^<<<<<<< ' .; then \
       echo "Patch failed to apply cleanly. Please resolve conflicts." && \
@@ -58,6 +59,7 @@ RUN cd Megatron-LM && \
 
 COPY docker/patch/${PATCH_VERSION}/sglang.patch /sgl-workspace/sglang/
 RUN cd /sgl-workspace/sglang && \
+  git update-index --refresh && \
   git apply sglang.patch && \
   if grep -R -n '^<<<<<<< ' .; then \
     echo "Patch failed to apply cleanly. Please resolve conflicts." && \
