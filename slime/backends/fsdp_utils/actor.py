@@ -536,7 +536,7 @@ class FSDPTrainRayActor(TrainRayActor):
             )
         packed_batch["cur_log_probs"] = log_probs
         packed_batch["entropy"] = entropy_result
-        
+
         unpacked_batches = unpack_sequences(packed_batch)
 
         old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
