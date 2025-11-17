@@ -19,7 +19,7 @@ from slime.utils.http_utils import find_available_port, get_host_info, init_http
 from slime.utils.iter_utils import group_by
 from slime.utils.logging_utils import configure_logger
 from slime.utils.metric_checker import MetricChecker
-from slime.utils.metric_utils import compute_pass_rate, compute_statistics, dict_add_prefix
+from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
 from slime.utils.tracking_utils import init_tracking
@@ -475,11 +475,7 @@ def _log_eval_rollout_data(rollout_id, args, data):
 
     logger.info(f"eval {rollout_id}: {log_dict}")
 
-    step = (
-        rollout_id
-        if not args.wandb_always_use_train_step
-        else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-    )
+    step = compute_rollout_step(args, rollout_id)
     log_dict["eval/step"] = step
     tracking_utils.log(args, log_dict, step_key="eval/step")
 
@@ -498,11 +494,7 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
     log_dict |= dict_add_prefix(_compute_metrics_from_samples(args, samples), f"rollout/")
     logger.info(f"perf {rollout_id}: {log_dict}")
-    step = (
-        rollout_id
-        if not args.wandb_always_use_train_step
-        else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-    )
+    step = compute_rollout_step(args, rollout_id)
     log_dict["rollout/step"] = step
     tracking_utils.log(args, log_dict, step_key="rollout/step")
 

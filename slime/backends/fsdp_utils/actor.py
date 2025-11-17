@@ -21,6 +21,7 @@ from slime.utils.context_utils import with_defer
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
+from slime.utils.metric_utils import compute_rollout_step
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, inverse_timer, timer
@@ -32,7 +33,6 @@ from . import checkpoint
 from .data_packing import pack_sequences, pad_packed_sequence_with_cp, unpack_sequences
 from .fsdp_cpu_adam_wrapper import FSDPCPUAdamWrapper
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
-
 
 logger = logging.getLogger(__name__)
 
@@ -465,14 +465,7 @@ class FSDPTrainRayActor(TrainRayActor):
             ).item()
         if dist.get_rank() == 0:
             logger.info(f"rollout {rollout_id}: {log_dict}")
-            log_dict["rollout/step"] = (
-                rollout_id
-                if not self.args.wandb_always_use_train_step
-                else rollout_id
-                * self.args.rollout_batch_size
-                * self.args.n_samples_per_prompt
-                // self.args.global_batch_size
-            )
+            log_dict["rollout/step"] = compute_rollout_step(self.args, rollout_id)
             tracking_utils.log(self.args, log_dict, step_key="rollout/step")
 
         with timer("actor_train"):
