@@ -13,7 +13,7 @@ from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_
 from torch.distributed.tensor import DTensor, distribute_tensor
 from torch_memory_saver import torch_memory_saver
 from tqdm import tqdm
-from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
+from transformers import AutoConfig
 
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import train_dump_utils, train_metric_utils
@@ -24,6 +24,7 @@ from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
 from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, inverse_timer, timer
+from slime.utils.tokenizer_utils import load_processor, load_tokenizer
 from slime.utils.wandb_utils import init_wandb_secondary
 
 from ...utils.profile_utils import TrainProfiler
@@ -85,19 +86,19 @@ class FSDPTrainRayActor(TrainRayActor):
         for i in range(dist.get_world_size()):
             if i == dist.get_rank():
                 self.hf_config = AutoConfig.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
-                self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
+                self.tokenizer = load_tokenizer(self.args.hf_checkpoint, trust_remote_code=True)
+                if self.args.multimodal_keys:
+                    self.processor = load_processor(self.args.hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
-
-        if self.args.multimodal_keys:
-            self.vlm_processor = AutoProcessor.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
 
         # Load model
         with torch.autocast(device_type=f"cuda:{torch.cuda.current_device()}"):
-            model = AutoModelForCausalLM.from_pretrained(
+            model = self.get_model_cls().from_pretrained(
                 self.args.hf_checkpoint,
                 trust_remote_code=True,
                 attn_implementation=self.args.attn_implementation,
             )
+
         model.train()
 
         if args.gradient_checkpointing:
@@ -164,6 +165,16 @@ class FSDPTrainRayActor(TrainRayActor):
         self.prof.on_init_end()
 
         return int(getattr(self.args, "start_rollout_id", 0))
+
+    def get_model_cls(self):
+        if self.args.multimodal_keys:
+            from transformers import AutoModelForVision2Seq
+
+            return AutoModelForVision2Seq
+        else:
+            from transformers import AutoModelForCausalLM
+
+            return AutoModelForCausalLM
 
     def setup_device_mesh(self) -> None:
         """Setup device mesh for parallelism (always called, handles both CP and non-CP cases).
@@ -385,6 +396,9 @@ class FSDPTrainRayActor(TrainRayActor):
                     rollout_data["returns"][start:end],
                     rollout_log_probs=(
                         rollout_data["rollout_log_probs"][start:end] if "rollout_log_probs" in rollout_data else None
+                    ),
+                    multimodal_inputs=(
+                        rollout_data["multimodal_inputs"][start:end] if "multimodal_inputs" in rollout_data else None
                     ),
                     num_packs=mbs_size,
                 )
@@ -775,7 +789,7 @@ class FSDPTrainRayActor(TrainRayActor):
             # Get actor weights for dtype matching
             actor_weights = self.weights["actor"]
 
-            temp_ref_model = AutoModelForCausalLM.from_pretrained(
+            temp_ref_model = self.get_model_cls().from_pretrained(
                 ref_load_path,
                 trust_remote_code=True,
                 torch_dtype=torch.bfloat16,
@@ -817,6 +831,8 @@ class FSDPTrainRayActor(TrainRayActor):
             "position_ids": position_ids,
             "attention_mask": None,
         }
+        if packed_sequence['multimodal_inputs']:
+            model_args.update(packed_sequence["multimodal_inputs"])
         return model_args
 
 
