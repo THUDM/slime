@@ -831,7 +831,7 @@ class FSDPTrainRayActor(TrainRayActor):
             "position_ids": position_ids,
             "attention_mask": None,
         }
-        if "multimodal_inputs" in packed_sequence:
+        if packed_sequence['multimodal_inputs']:
             model_args.update(packed_sequence["multimodal_inputs"])
         return model_args
 
