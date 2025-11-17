@@ -12,10 +12,38 @@ index 41c21d93d..ef80f72d6 100644
              err_msg = f'Common file {load_path} does not exist'
              if MultiStorageClientFeature.is_enabled():
 diff --git a/megatron/core/dist_checkpointing/strategies/torch.py b/megatron/core/dist_checkpointing/strategies/torch.py
-index ccf5242a2..807959da5 100644
+index ccf5242a2..9b6d3e31f 100644
 --- a/megatron/core/dist_checkpointing/strategies/torch.py
 +++ b/megatron/core/dist_checkpointing/strategies/torch.py
-@@ -556,10 +556,12 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
+@@ -427,6 +427,15 @@ def _restore_dict_types(x: Union[dict, list, Any], keys_template: Union[dict, li
+             _restore_dict_types(x_val, templ_val)
+ 
+ 
++@dataclass
++class MCoreMetadata(Metadata):
++    """Metadata with mcore specific data."""
++
++    # holds data related to flattened_range
++    # TODO: remove when flattened_range is properly removed
++    mcore_data: Optional[Dict[str, Dict[str, Any]]] = None  # Mcore related data about each tensor
++
++
+ @dataclass(frozen=True)
+ class MCoreSavePlan(SavePlan):
+     """SavePlan with MCore specific data."""
+@@ -499,9 +508,10 @@ class MCoreSavePlanner(DefaultSavePlanner):
+     def create_global_plan(self, all_plans: List[MCoreSavePlan]) -> Tuple[List[SavePlan], Metadata]:
+         """Merges MCore data for all plans."""
+         global_plan, metadata = super().create_global_plan(all_plans)
+-        metadata.mcore_data = dict(
++        mcore_data = dict(
+             ChainMap(*(plan.mcore_data for plan in all_plans))  # type: ignore[arg-type]
+         )
++        metadata = MCoreMetadata(mcore_data=mcore_data, **vars(metadata))
+         return global_plan, metadata
+ 
+     def create_decentralized_global_plan(self, local_plan: SavePlan) -> SavePlan:
+@@ -556,10 +566,12 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
      def _validate_global_shapes(self, metadata, sharded_tensors):
          for sh_ten in sharded_tensors:
              if sh_ten.key not in metadata.state_dict_metadata:
@@ -32,7 +60,7 @@ index ccf5242a2..807959da5 100644
              loaded_shape = metadata.state_dict_metadata[sh_ten.key].size
              expected_shape = self._expected_shape(sh_ten)
              if loaded_shape != expected_shape:
-@@ -589,7 +591,7 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
+@@ -589,7 +601,7 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
          tensor_metadata = self.metadata.state_dict_metadata
          metadata_with_sizes = [
              (tensor_metadata[key], tensor_metadata[key].size, sharded_tensor)
@@ -41,7 +69,7 @@ index ccf5242a2..807959da5 100644
          ]
          try:
              # Temporarily set sizes to expected shapes
-@@ -918,6 +920,7 @@ class TorchDistLoadShardedStrategy(LoadShardedStrategy):
+@@ -918,6 +930,7 @@ class TorchDistLoadShardedStrategy(LoadShardedStrategy):
              planner=MCoreLoadPlanner(
                  shapes_validation_sharded_tensors=flexible_shape_sharded_tensors,
                  allow_shape_mismatch_sharded_tensors=allow_shape_mismatch_sharded_tensors,
@@ -376,7 +404,7 @@ index c749bac43..dde8d50e7 100644
          """Execute weight update operations"""
          self._backward_qkv_proj()
 diff --git a/megatron/core/transformer/moe/moe_utils.py b/megatron/core/transformer/moe/moe_utils.py
-index 235b6f6af..fbcffe278 100644
+index 235b6f6af..0f4862e43 100644
 --- a/megatron/core/transformer/moe/moe_utils.py
 +++ b/megatron/core/transformer/moe/moe_utils.py
 @@ -566,6 +566,9 @@ def topk_routing_with_score_function(
@@ -390,7 +418,7 @@ index 235b6f6af..fbcffe278 100644
          if use_pre_softmax:
              scores = torch.softmax(logits, dim=-1, dtype=torch.float32).type_as(logits)
 diff --git a/megatron/core/transformer/moe/router.py b/megatron/core/transformer/moe/router.py
-index 6b20b8622..459e65921 100644
+index 6b20b8622..f91b01f90 100644
 --- a/megatron/core/transformer/moe/router.py
 +++ b/megatron/core/transformer/moe/router.py
 @@ -156,6 +156,9 @@ class TopKRouter(Router):
