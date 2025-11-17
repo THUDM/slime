@@ -9,8 +9,7 @@ pylatexenc
 pyyaml
 ray[default]
 ring_flash_attn
-# 0.2.2 removes `/add_worker` endpoint
-sglang-router==0.2.1
+sglang-router
 tensorboard
 transformers
 wandb
