@@ -52,7 +52,7 @@
     <link rel="search" title="Search" href="../../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Nov 14, 2025"/>
+    <meta name="docbuild:last-update" content="Nov 17, 2025"/>
   </head>
   
   
@@ -490,7 +490,7 @@ document.write(`
 <h3>Setup &amp; Results<a class="headerlink" href="#setup-results" title="Link to this heading">#</a></h3>
 <p>We fine-tune Qwen3-4B-Base on dapo-math-17k dataset with max_new_tokens = 2048, and evaluate on aime-2024 dataset with max_new_tokens = 8192.
 Global batch size is 64 × 16. Results are summarized below.</p>
-<p align="center"> <img width="450" alt="raw_rewards" src="src/raw_reward.png" /> <img width="450" alt="diff" src="src/train_rollout_abs_diff.png" /> <img width="450" alt="rollout_time" src="src/rollout_time.png" /> <img width="450" alt="eval" src="src/aime.png" /> </p>
+<p align="center"> <img width="360" alt="diff" src="src/train_rollout_abs_diff.png" /> <img width="360" alt="step_time" src="src/step_time.png" /> <img width="360" alt="rollout_time" src="src/rollout_time.png" /> <img width="360" alt="raw_rewards" src="src/raw_reward.png" /> <img width="360" alt="eval" src="src/aime.png" /> </p>
 </section>
 <section id="observations">
 <h3>Observations<a class="headerlink" href="#observations" title="Link to this heading">#</a></h3>
@@ -509,6 +509,7 @@ Global batch size is 64 × 16. Results are summarized below.</p>
 <li><p>Attention: We use the <a class="reference external" href="https://github.com/Dao-AILab/flash-attention">Flash Attention 3</a> backend for both training and inference, since it achieves bitwise equal between prefill and decode operations.</p></li>
 <li><p>GEMM: We use <a class="reference external" href="https://github.com/deepseek-ai/DeepGEMM">DeepGEMM</a> for fast matrix multiplication while preserving true-on-policy, thanks to its algorithm to pick things like tensor core instructions (<a class="reference external" href="https://github.com/sgl-project/sglang/pull/12142">SGLang#12142</a>).</p></li>
 <li><p>Batch invariant kernels: This is a prerequisite for true on-policy, and we use <a class="reference external" href="https://github.com/thinking-machines-lab/batch_invariant_ops">the ones</a> from the Thinking Machines Lab.</p></li>
+<li><p>Torch compile: We also utilize <a class="reference external" href="https://docs.pytorch.org/docs/stable/generated/torch.compile.html"><code class="docutils literal notranslate"><span class="pre">torch.compile</span></code></a> to speed up by avoiding many tiny kernels.</p></li>
 <li><p>We align numeric operation details between the two systems for simplicity, such as op dtype, detailed kernels, etc. Some operations can also be compiled to speedup (<a class="reference external" href="https://github.com/THUDM/slime/pull/603">#603</a>, <a class="reference external" href="https://github.com/sgl-project/sglang/pull/12161">SGLang#12161</a>).</p></li>
 </ul>
 <p>In order to more easily align the two parts, we use SGLang’s <a class="reference external" href="https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/debug_utils/dumper.py">dumper</a> tool for quick comparisons. (Need <a class="reference external" href="https://github.com/sgl-project/sglang/pull/12622">#12622</a> and <a class="reference external" href="https://github.com/sgl-project/sglang/pull/12623">#12623</a> for most convenience.)</p>
@@ -595,7 +596,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Nov 14, 2025.
+  Last updated on Nov 17, 2025.
   <br/>
 </p>
   </div>

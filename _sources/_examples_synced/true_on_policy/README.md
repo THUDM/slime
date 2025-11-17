@@ -33,7 +33,7 @@ After running the training, you can see in wandb that the metric `train/train_ro
 ### Setup & Results
 We fine-tune Qwen3-4B-Base on dapo-math-17k dataset with max_new_tokens = 2048, and evaluate on aime-2024 dataset with max_new_tokens = 8192.
 Global batch size is 64 × 16. Results are summarized below.
-<p align="center"> <img width="450" alt="raw_rewards" src="src/raw_reward.png" /> <img width="450" alt="diff" src="src/train_rollout_abs_diff.png" /> <img width="450" alt="rollout_time" src="src/rollout_time.png" /> <img width="450" alt="eval" src="src/aime.png" /> </p>
+<p align="center"> <img width="360" alt="diff" src="src/train_rollout_abs_diff.png" /> <img width="360" alt="step_time" src="src/step_time.png" /> <img width="360" alt="rollout_time" src="src/rollout_time.png" /> <img width="360" alt="raw_rewards" src="src/raw_reward.png" /> <img width="360" alt="eval" src="src/aime.png" /> </p>
 
 ### Observations
 
@@ -52,6 +52,7 @@ Briefly speaking, we handled the following components to make them aligned:
 * Attention: We use the [Flash Attention 3](https://github.com/Dao-AILab/flash-attention) backend for both training and inference, since it achieves bitwise equal between prefill and decode operations.
 * GEMM: We use [DeepGEMM](https://github.com/deepseek-ai/DeepGEMM) for fast matrix multiplication while preserving true-on-policy, thanks to its algorithm to pick things like tensor core instructions ([SGLang#12142](https://github.com/sgl-project/sglang/pull/12142)).
 * Batch invariant kernels: This is a prerequisite for true on-policy, and we use [the ones](https://github.com/thinking-machines-lab/batch_invariant_ops) from the Thinking Machines Lab.
+* Torch compile: We also utilize [`torch.compile`](https://docs.pytorch.org/docs/stable/generated/torch.compile.html) to speed up by avoiding many tiny kernels.
 * We align numeric operation details between the two systems for simplicity, such as op dtype, detailed kernels, etc. Some operations can also be compiled to speedup ([#603](https://github.com/THUDM/slime/pull/603), [SGLang#12161](https://github.com/sgl-project/sglang/pull/12161)).
 
 In order to more easily align the two parts, we use SGLang's [dumper](https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/debug_utils/dumper.py) tool for quick comparisons. (Need [#12622](https://github.com/sgl-project/sglang/pull/12622) and [#12623](https://github.com/sgl-project/sglang/pull/12623) for most convenience.)
