@@ -1,3 +1,4 @@
+import logging
 from argparse import Namespace
 from typing import Optional, Sequence, Union
 
@@ -17,6 +18,8 @@ from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.types import RolloutBatch
 
 from .cp_utils import get_sum_of_sample_mean, slice_with_cp
+
+logger = logging.getLogger(__name__)
 
 
 def get_batch(
@@ -113,7 +116,7 @@ def gather_log_data(
         reduced_log_dict = {
             f"{metric_name}/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
         }
-        print(f"{metric_name} {rollout_id}: {reduced_log_dict}")
+        logger.info(f"{metric_name} {rollout_id}: {reduced_log_dict}")
 
         # Calculate step once to avoid duplication
         step = (
@@ -315,7 +318,12 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
         total_lengths = rollout_data["total_lengths"]
 
         for key, val in rollout_data.items():
-            if key == "tokens" or key == "loss_masks" or key == "sample_indices":
+            if key in [
+                "tokens",
+                "loss_masks",
+                "sample_indices",
+                "rollout_routed_experts",
+            ]:
                 continue
             # Upload per sample mean for each rollout value
             # There are the following assumptions:

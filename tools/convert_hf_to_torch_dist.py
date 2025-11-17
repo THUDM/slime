@@ -37,7 +37,7 @@ def get_args():
 
     assert world_size <= args.num_layers, (
         f"World size {world_size} must be less than or equal to number of layers {args.num_layers}. "
-        "You are using to much GPUs for this conversion."
+        "You are using too many GPUs for this conversion."
     )
 
     ceildiv = lambda a, b: -(a // -b)  # Ceiling division
@@ -69,16 +69,22 @@ def get_args():
 
 def main():
     """Initialize distributed environment"""
-    if "WORLD_SIZE" not in os.environ:
-        os.environ["WORLD_SIZE"] = "1"
-    if "RANK" not in os.environ:
-        os.environ["RANK"] = "0"
-    if "MASTER_ADDR" not in os.environ:
-        os.environ["MASTER_ADDR"] = "localhost"
-    if "MASTER_PORT" not in os.environ:
-        os.environ["MASTER_PORT"] = "12355"
-    dist.init_process_group(backend="nccl")
-    torch.cuda.set_device(dist.get_rank() % torch.cuda.device_count())
+    world_size = int(os.getenv("WORLD_SIZE") or os.getenv("SLURM_NTASKS") or 1)
+    local_rank = int(os.getenv("LOCAL_RANK") or os.getenv("SLURM_LOCALID") or 0)
+    global_rank = int(os.getenv("RANK") or os.getenv("SLURM_PROCID") or 0)
+
+    torch.cuda.set_device(local_rank)
+    os.environ.setdefault("WORLD_SIZE", str(world_size))
+    os.environ.setdefault("RANK", str(global_rank))
+    os.environ.setdefault("LOCAL_RANK", str(local_rank))
+    os.environ.setdefault("MASTER_ADDR", "localhost")
+    os.environ.setdefault("MASTER_PORT", "12355")
+    dist.init_process_group(
+        backend="nccl",
+        world_size=world_size,
+        rank=global_rank,
+        device_id=torch.device(f"cuda:{local_rank}"),
+    )
     args = get_args()
     init(args)
     model = get_model(get_model_provider_func(args), ModelType.encoder_or_decoder, wrap_with_ddp=False)

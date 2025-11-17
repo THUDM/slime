@@ -82,7 +82,7 @@ slime 是 [GLM-4.5](https://z.ai/blog/glm-4.5) 与 [GLM-4.6](https://z.ai/blog/g
 - 特别感谢以下项目 & 社区：SGLang、Megatron‑LM、mbridge、OpenRLHF、veRL、Pai-Megatron-Patch 等。
 
 - 引用 slime 请使用：
-```bibtext
+```bibtex
 @misc{slime_github,
   author       = {Zilin Zhu and Chengxing Xie and Xin Lv and slime Contributors},
   title        = {slime: An LLM post-training framework for RL Scaling},

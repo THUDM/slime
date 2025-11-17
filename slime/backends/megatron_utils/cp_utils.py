@@ -165,7 +165,9 @@ def slice_with_cp(tokens: torch.Tensor, pad_value: int) -> torch.Tensor:
     # pad
     chunk_size = (len(tokens) + 2 * cp_size - 1) // (2 * cp_size)
     pad = 2 * cp_size * chunk_size - len(tokens)
-    tokens = F.pad(tokens, (0, pad), value=pad_value)
+    # pad on the first dimension
+    pad_tuple = (0, 0) * (tokens.dim() - 1) + (0, pad)
+    tokens = F.pad(tokens, pad_tuple, value=pad_value)
     # get 2 chunk for thd cp
     start_1, end_1 = chunk_size * cp_rank, chunk_size * (cp_rank + 1)
     start_2, end_2 = chunk_size * (2 * cp_size - cp_rank - 1), chunk_size * (2 * cp_size - cp_rank)

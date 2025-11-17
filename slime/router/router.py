@@ -69,7 +69,6 @@ class SlimeRouter:
         # Forward all other paths to SGLang router
         worker_url = self._use_url()
         url = f"{worker_url}/{path}"
-        # print("path",path)
 
         # Get request body and headers
         body = await request.body()
