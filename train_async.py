@@ -6,6 +6,7 @@ from slime.utils.logging_utils import configure_logger
 from slime.utils.wandb_utils import init_wandb_primary
 
 
+# The framework supports other asynchronous approaches such as fully async (which is shown in examples/full_async).
 def train(args):
     assert not args.colocate, "Colocation is not supported for async training."
     configure_logger()
