@@ -22,6 +22,7 @@ from slime.utils.metric_checker import MetricChecker
 from slime.utils.metric_utils import compute_pass_rate, compute_statistics, dict_add_prefix
 from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
+from slime.utils.sglang_metric import RouterMetricsAggregator
 from slime.utils.types import Sample
 from slime.utils.wandb_utils import init_wandb_secondary
 
@@ -72,6 +73,22 @@ class RolloutManager:
         if self.args.use_fault_tolerance:
             self._health_monitor = RolloutHealthMonitor(self, args)
 
+        # Initialize SGLang metrics collector if enabled
+        self.sglang_metrics = None
+        if getattr(self.args, "sglang_enable_metrics", False):
+            if self.args.sglang_router_ip is not None and self.args.sglang_router_port is not None:
+                router_url = f"http://{self.args.sglang_router_ip}:{self.args.sglang_router_port}"
+                try:
+                    self.sglang_metrics = RouterMetricsAggregator(router_url)
+                    # Record initial snapshot
+                    self.sglang_metrics.record_snapshot()
+                    print(f"SGLang metrics collection enabled for router at {router_url}")
+                except Exception as e:
+                    print(f"Warning: Failed to initialize SGLang metrics collector: {e}")
+                    self.sglang_metrics = None
+            else:
+                print("Warning: sglang_enable_metrics is set but router IP/port is not available")
+
     def dispose(self):
         if self._metric_checker is not None:
             self._metric_checker.dispose()
@@ -96,6 +113,32 @@ class RolloutManager:
             data, metrics = self._get_rollout_data(rollout_id=rollout_id)
             self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
             _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
+
+            # Collect and log SGLang metrics if enabled
+            if self.sglang_metrics is not None:
+                try:
+                    stats = self.sglang_metrics.get_aggregated_stats()
+                    stats_dict = stats.to_dict(include_worker_details=False)
+                    # Prefix all keys with "sglang:"
+                    sglang_metrics = {f"rollout/sglang:{k}": v for k, v in stats_dict.items()}
+
+                    # Calculate step for wandb logging
+                    step = (
+                        rollout_id
+                        if not self.args.wandb_always_use_train_step
+                        else rollout_id
+                        * self.args.rollout_batch_size
+                        * self.args.n_samples_per_prompt
+                        // self.args.global_batch_size
+                    )
+
+                    if self.args.use_wandb:
+                        sglang_metrics["rollout/step"] = step
+                        wandb.log(sglang_metrics)
+                        print(f"sglang_metrics {rollout_id}: {len(sglang_metrics)} metrics logged")
+                except Exception as e:
+                    print(f"Warning: Failed to collect SGLang metrics: {e}")
+
             data = self._convert_samples_to_train_data(data)
             return Box(ray.put(data))
         finally:
