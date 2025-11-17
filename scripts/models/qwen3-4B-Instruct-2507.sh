@@ -1,1 +1,1 @@
-MODEL_ARGS_ROTARY_BASE=5000000 source "$(dirname "$0")/qwen3-4B.sh"
+MODEL_ARGS_ROTARY_BASE=5000000 source "$(dirname -- "${BASH_SOURCE[0]}")/qwen3-4B.sh"
