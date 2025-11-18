@@ -712,8 +712,6 @@ def loss_function(
         loss * num_microbatches / args.global_batch_size * mpu.get_data_parallel_world_size(with_context_parallel=True)
     )
 
-    log = {k: v for k, v in log.items() if v is not None}
-
     return (
         loss,
         num_tokens if args.calculate_per_token_loss else 1,
