@@ -330,6 +330,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         finally:
             if need_restore:
+                self.update_cpu_params_dict(self.weights["ref"])
                 self.update_gpu_params_dict(self.weights["actor"])
                 self.model.train()
                 torch.cuda.synchronize()
