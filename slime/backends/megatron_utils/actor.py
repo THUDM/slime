@@ -231,6 +231,14 @@ class MegatronTrainRayActor(TrainRayActor):
                 num_layers_to_build = get_num_layers_to_build(config, vp_stage=vp_stage)
                 offset = get_transformer_layer_offset(config, vp_stage=vp_stage)
                 for layer_id in range(offset, offset + num_layers_to_build):
+                    # skip dense layer
+                    if isinstance(config.moe_layer_freq, int):
+                        if layer_id % config.moe_layer_freq != 0:
+                            continue
+                    elif isinstance(config.moe_layer_freq, list):
+                        assert len(config.moe_layer_freq) == config.num_layers
+                        if config.moe_layer_freq[layer_id] == 0:
+                            continue
                     layer_routed_experts = rollout_routed_experts[:, layer_id]
                     RoutingReplay.all_routing_replays[routing_replay_offset].record(layer_routed_experts)
                     routing_replay_offset += 1
@@ -324,21 +332,22 @@ class MegatronTrainRayActor(TrainRayActor):
                         )
                     )
 
-                if self.args.use_routing_replay:
-                    if self.args.use_rollout_routing_replay:
-                        os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
-                    else:
-                        os.environ["ROUTING_REPLAY_STAGE"] = "record"
-                rollout_data.update(
-                    self.compute_log_prob(
-                        "old_actor" if self.args.keep_old_actor else "actor",
-                        data_iterator,
-                        num_microbatches,
-                        store_prefix="",
+                if not self.args.use_rollout_logprobs or self.args.get_mismatch_metrics:
+                    if self.args.use_routing_replay:
+                        if self.args.use_rollout_routing_replay:
+                            os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
+                        else:
+                            os.environ["ROUTING_REPLAY_STAGE"] = "record"
+                    rollout_data.update(
+                        self.compute_log_prob(
+                            "old_actor" if self.args.keep_old_actor else "actor",
+                            data_iterator,
+                            num_microbatches,
+                            store_prefix="",
+                        )
                     )
-                )
-                if self.args.use_rollout_routing_replay:
-                    RoutingReplay.clear_all_forward()
+                    if self.args.use_rollout_routing_replay:
+                        RoutingReplay.clear_all_forward()
 
                 if self.args.use_critic:
                     sync_actor_critic_data(
