@@ -9,7 +9,7 @@ pylatexenc
 pyyaml
 ray[default]
 ring_flash_attn
-sglang-router
+sglang-router>=0.2.3
 tensorboard
 transformers
 wandb
