@@ -1,5 +1,6 @@
 import itertools
 import json
+import logging
 import random
 import re
 
@@ -19,6 +20,8 @@ from .seqlen_balancing import get_seqlen_balanced_partitions
 from .timer import Timer
 
 __all__ = ["Dataset"]
+
+logger = logging.getLogger(__name__)
 
 
 def read_file(path):
@@ -58,8 +61,10 @@ def read_file(path):
         raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
 
     if row_slice is not None:
+
         print(f"read_file path={path} applying slice {row_slice=}")
         reader = itertools.islice(reader, row_slice.start, row_slice.stop, row_slice.step)
+
 
     yield from reader
 
@@ -187,8 +192,9 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         dist.broadcast_object_list(data, src=0)
         data = data[0]
 
-    # save the unprocessed reward for logging
-    rollout_data["raw_reward"] = data["raw_reward"]
+    # save the unprocessed reward for logging (optional for forward-only passes)
+    if "raw_reward" in data:
+        rollout_data["raw_reward"] = data["raw_reward"]
 
     if "prompt" in data:
         rollout_data["prompt"] = data["prompt"]
@@ -241,7 +247,9 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         "round_number",
         "sample_indices",
         "rollout_log_probs",
+        "rollout_routed_experts",
         "prompt",
+        "teacher_log_probs",
     ]:
         if key not in data:
             continue

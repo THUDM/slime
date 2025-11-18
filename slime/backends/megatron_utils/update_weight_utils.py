@@ -4,6 +4,7 @@ import socket
 import time
 from argparse import Namespace
 from collections.abc import Iterator, Mapping, Sequence
+from typing import Callable
 
 import ray
 import torch
@@ -342,7 +343,7 @@ class UpdateWeightFromTensor:
         self,
         args: Namespace,
         model: Sequence[torch.nn.Module],
-        weights: Mapping[str, Mapping[str, torch.Tensor]],
+        weights_getter: Callable[[], Mapping[str, torch.Tensor]],
         *,
         model_name: str,
         quantization_config: dict[str, int | str | list[str]] | None,
@@ -353,7 +354,7 @@ class UpdateWeightFromTensor:
         """
         self.args = args
         self.model = model
-        self.weights = weights
+        self.weights_getter = weights_getter
         self.model_name = model_name
         self.vocab_size = vocab_size
         self.quantization_config = quantization_config
@@ -423,16 +424,21 @@ class UpdateWeightFromTensor:
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
+        weights = self.weights_getter()
+
         num_buckets = len(self.param_info_buckets)
         for i in tqdm(range(num_buckets), disable=rank != 0, desc="Update weights"):
-            current_params, current_infos = self._gather_bucket_params(self.param_info_buckets[i])
+            current_params, current_infos = self._gather_bucket_params(self.param_info_buckets[i], weights)
             refs = self._update_converted_params_from_tensor(current_params, current_infos)
             ray.get(refs)
+            del current_params, current_infos
 
         dist.barrier(group=get_gloo_group())
 
     def _gather_bucket_params(
-        self, param_infos: Sequence[ParamInfo]
+        self,
+        param_infos: Sequence[ParamInfo],
+        weights,
     ) -> tuple[Sequence[torch.Tensor], Sequence[ParamInfo]]:
         monkey_patch_torch_reductions()
         pp_size = mpu.get_pipeline_model_parallel_world_size()
@@ -444,7 +450,7 @@ class UpdateWeightFromTensor:
             if dist.get_rank() == info.src_rank:
                 params.append(
                     torch.nn.Parameter(
-                        self.weights["actor"][info.name].to(device=torch.cuda.current_device(), non_blocking=True),
+                        weights[info.name].to(device=torch.cuda.current_device(), non_blocking=True),
                         requires_grad=False,
                     )
                 )
@@ -525,12 +531,15 @@ class UpdateWeightFromTensor:
 
     def _send_to_colocated_engine(self, converted_named_tensors: list[tuple[str, torch.Tensor]]) -> list[ObjectRef]:
         if use_flattened_tensor_bucket:
-            converted_named_tensors_by_dtypes = {}
-            for name, tensor in converted_named_tensors:
-                dtype = tensor.dtype
-                if dtype not in converted_named_tensors_by_dtypes:
-                    converted_named_tensors_by_dtypes[dtype] = []
-                converted_named_tensors_by_dtypes[dtype].append((name, tensor))
+            if getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
+                converted_named_tensors_by_dtypes = {"dtype": converted_named_tensors}
+            else:
+                converted_named_tensors_by_dtypes = {}
+                for name, tensor in converted_named_tensors:
+                    dtype = tensor.dtype
+                    if dtype not in converted_named_tensors_by_dtypes:
+                        converted_named_tensors_by_dtypes[dtype] = []
+                    converted_named_tensors_by_dtypes[dtype].append((name, tensor))
 
             serialized_tensors = []
             for dtype, named_tensors in converted_named_tensors_by_dtypes.items():
@@ -586,7 +595,7 @@ class UpdateWeightFromDistributed:
         self,
         args: Namespace,
         model: Sequence[torch.nn.Module],
-        weights: Mapping[str, Mapping[str, torch.Tensor]],
+        weights_getter: Callable[[], Mapping[str, torch.Tensor]],
         *,
         model_name: str,
         quantization_config: dict[str, int | str | list[str]] | None,

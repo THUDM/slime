@@ -1,9 +1,12 @@
 import dataclasses
+import logging
 import multiprocessing
 import time
 from typing import List, Optional
 
 import requests
+import sglang_router
+from packaging.version import parse
 from sglang.srt.entrypoints.http_server import launch_server
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import kill_process_tree
@@ -11,6 +14,8 @@ from urllib3.exceptions import NewConnectionError
 
 from slime.ray.ray_actor import RayActor
 from slime.utils.http_utils import get_host_info
+
+logger = logging.getLogger(__name__)
 
 
 def get_base_gpu_id(args, rank):
@@ -102,7 +107,7 @@ class SGLangEngine(RayActor):
             self._init_normal(server_args_dict)
 
     def _init_external(self, expect_server_args, external_engine_need_check_fields):
-        print(f"Use external SGLang engine (rank={self.rank}, expect_server_args={expect_server_args})")
+        logger.info(f"Use external SGLang engine (rank={self.rank}, expect_server_args={expect_server_args})")
 
         def _get_actual_server_args():
             response = requests.get(f"http://{self.server_host}:{self.server_port}/get_server_info")
@@ -126,12 +131,19 @@ class SGLangEngine(RayActor):
         _sanity_check_server_args(actual_server_args, expect_server_args)
 
     def _init_normal(self, server_args_dict):
-        print(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
+        logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
         self.process = launch_server_process(ServerArgs(**server_args_dict))
         if self.node_rank == 0 and self.router_ip and self.router_port:
-            requests.post(
-                f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}"
-            )
+            if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
+                response = requests.post(
+                    f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}"
+                )
+            else:
+                response = requests.post(
+                    f"http://{self.router_ip}:{self.router_port}/workers",
+                    json={"url": f"http://{self.server_host}:{self.server_port}"},
+                )
+            response.raise_for_status()
 
     def _make_request(self, endpoint: str, payload: Optional[dict] = None):
         """Make a POST request to the specified endpoint with the given payload.
@@ -211,7 +223,7 @@ class SGLangEngine(RayActor):
             except NewConnectionError as e:
                 raise e
             except Exception as e:
-                print(f"Error flushing cache: {e}")
+                logger.info(f"Error flushing cache: {e}")
                 time.sleep(1)
                 continue
         else:
@@ -221,11 +233,16 @@ class SGLangEngine(RayActor):
         if self.args.rollout_external:
             return
 
-        print(f"Shutdown engine {self.server_host}:{self.server_port}...")
+        logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
         if self.node_rank == 0:
-            requests.post(
-                f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
-            )
+            worker_url = f"http://{self.server_host}:{self.server_port}"
+            if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
+                response = requests.post(
+                    f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
+                )
+            else:
+                response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}")
+            response.raise_for_status()
         kill_process_tree(self.process.pid)
 
     def get_weight_version(self):
@@ -292,10 +309,14 @@ class SGLangEngine(RayActor):
         )
 
     def pause_generation(self):
-        return requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
+        response = requests.post(f"http://{self.server_host}:{self.server_port}/pause_generation", json={})
+        response.raise_for_status()
+        return response
 
     def continue_generation(self):
-        return requests.post(f"http://{self.server_host}:{self.server_port}/continue_generation", json={})
+        response = requests.post(f"http://{self.server_host}:{self.server_port}/continue_generation", json={})
+        response.raise_for_status()
+        return response
 
     def start_profile(
         self,
@@ -311,7 +332,7 @@ class SGLangEngine(RayActor):
         with_stack: Optional[bool] = None,
         record_shapes: Optional[bool] = None,
     ):
-        return requests.post(
+        response = requests.post(
             f"http://{self.server_host}:{self.server_port}/start_profile",
             json={
                 "output_dir": output_dir,
@@ -323,9 +344,13 @@ class SGLangEngine(RayActor):
                 "record_shapes": record_shapes,
             },
         )
+        response.raise_for_status()
+        return response
 
     def stop_profile(self):
-        return requests.post(f"http://{self.server_host}:{self.server_port}/stop_profile", json={})
+        response = requests.post(f"http://{self.server_host}:{self.server_port}/stop_profile", json={})
+        response.raise_for_status()
+        return response
 
 
 def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
@@ -354,6 +379,10 @@ def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
         # always skip warmup to prevent warmup timeout.
         "skip_server_warmup": True,
     }
+    if args.use_rollout_routing_replay:
+        kwargs["enable_return_routed_experts"] = True
+    if args.fp16:
+        kwargs["dtype"] = "float16"
 
     external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
 
@@ -365,7 +394,7 @@ def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
 
     # for compatibility with old args
     if len(unused_keys) > 0:
-        print(f"Warning: The following arguments is not supported in the current sglang: {unused_keys}.")
+        logger.info(f"Warning: The following arguments is not supported in the current sglang: {unused_keys}.")
         for key in unused_keys:
             kwargs.pop(key)
 

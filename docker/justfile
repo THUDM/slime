@@ -1,0 +1,21 @@
+release-primary:
+    ARG_TAG_POSTFIX="" ARG_BUILD_EXTRA_ARGS="" just _release-raw
+
+release-gb300:
+    ARG_TAG_POSTFIX="-gb300" ARG_BUILD_EXTRA_ARGS='--build-arg SGLANG_IMAGE_TAG=dev-arm64-cu13-20251116 --build-arg ENABLE_BLACKWELL_BUILD=1 --build-arg ENABLE_CUDA_13=1' just _release-raw
+
+_release-raw:
+    #!/bin/bash
+    set -euxo pipefail
+    cd ..
+
+    VERSION="$(cat docker/version.txt | tr -d '\n')"
+    IMAGE_TAG=${VERSION}${ARG_TAG_POSTFIX}
+
+    docker build -f docker/Dockerfile . $ARG_BUILD_EXTRA_ARGS -t slimerl/slime:$IMAGE_TAG
+    docker push slimerl/slime:$IMAGE_TAG
+
+    if [ -z "${ARG_TAG_POSTFIX}" ]; then
+        docker tag slimerl/slime:$IMAGE_TAG slimerl/slime:latest
+        docker push slimerl/slime:latest
+    fi

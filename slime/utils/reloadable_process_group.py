@@ -1,7 +1,13 @@
+import logging
 import os
+from contextlib import contextmanager
+
 import torch
 import torch.distributed as dist
 
+from slime.utils.memory_utils import print_memory
+
+logger = logging.getLogger(__name__)
 
 old_new_group_dict = {}
 
@@ -12,7 +18,7 @@ def monkey_patch_torch_dist():
         assert dist.old_new_group == old_new_group_dict[pid]
         return
 
-    print("Applying monkey patch to torch.distributed", flush=True)
+    logger.info("Applying monkey patch to torch.distributed")
 
     old_new_group = dist.new_group
     old_new_group_dict[pid] = old_new_group
@@ -43,9 +49,10 @@ def monkey_patch_torch_dist():
 
     def get_new_function(func):
         def new_function(*args, **kwargs):
-            args = (arg.group if isinstance(arg, ReloadableProcessGroup) else arg for arg in args)
+            args = tuple([arg.group if isinstance(arg, ReloadableProcessGroup) else arg for arg in args])
             kwargs = {k: (v.group if isinstance(v, ReloadableProcessGroup) else v) for k, v in kwargs.items()}
-            return func(*args, **kwargs)
+            with _wrap_low_level_call():
+                return func(*args, **kwargs)
 
         return new_function
 
@@ -135,7 +142,7 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
     @staticmethod
     def reload_process_groups():
         pid = os.getpid()
-        print(f"Reloading {len(ReloadableProcessGroup.GROUPS[pid])} process groups in pid {pid}", flush=True)
+        logger.info(f"Reloading {len(ReloadableProcessGroup.GROUPS[pid])} process groups in pid {pid}")
         old_new_group = old_new_group_dict[pid]
         for reloadable_group in ReloadableProcessGroup.GROUPS[pid]:
             if reloadable_group.group is not None:
@@ -164,7 +171,8 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
         inner = self.group
         if inner is None:
             raise RuntimeError("ReloadableProcessGroup: inner PG is None, call reload() first.")
-        return getattr(inner, method)(*args, **kwargs)
+        with _wrap_low_level_call():
+            return getattr(inner, method)(*args, **kwargs)
 
     def barrier(self, *a, **kw):
         return self._fwd("barrier", *a, **kw)
@@ -255,3 +263,13 @@ def destroy_process_groups():
 def reload_process_groups():
     """Reload all reloadable process groups."""
     ReloadableProcessGroup.reload_process_groups()
+
+
+@contextmanager
+def _wrap_low_level_call():
+    try:
+        yield
+    except Exception as e:
+        mem_info = print_memory("after torch distributed error")
+        e.add_note(f"{mem_info=}")
+        raise

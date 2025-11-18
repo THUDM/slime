@@ -1,8 +1,28 @@
+diff --git a/python/sglang/srt/entrypoints/engine.py b/python/sglang/srt/entrypoints/engine.py
+index ebab42a8f..05b2cb466 100644
+--- a/python/sglang/srt/entrypoints/engine.py
++++ b/python/sglang/srt/entrypoints/engine.py
+@@ -179,6 +179,7 @@ class Engine(EngineBase):
+         lora_path: Optional[List[Optional[str]]] = None,
+         custom_logit_processor: Optional[Union[List[str], str]] = None,
+         return_hidden_states: bool = False,
++        return_routed_experts: bool = False,
+         stream: bool = False,
+         bootstrap_host: Optional[Union[List[str], str]] = None,
+         bootstrap_port: Optional[Union[List[int], int]] = None,
+@@ -213,6 +214,7 @@ class Engine(EngineBase):
+             lora_path=lora_path,
+             custom_logit_processor=custom_logit_processor,
+             return_hidden_states=return_hidden_states,
++            return_routed_experts=return_routed_experts,
+             stream=stream,
+             bootstrap_host=bootstrap_host,
+             bootstrap_port=bootstrap_port,
 diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/entrypoints/http_server.py
-index ee2586fde..6e9877f5e 100644
+index 76e999498..c098f1d37 100644
 --- a/python/sglang/srt/entrypoints/http_server.py
 +++ b/python/sglang/srt/entrypoints/http_server.py
-@@ -400,6 +400,10 @@ async def validate_json_request(raw_request: Request):
+@@ -403,6 +403,10 @@ async def validate_json_request(raw_request: Request):
  
  
  @app.get("/health")
@@ -13,27 +33,548 @@ index ee2586fde..6e9877f5e 100644
  @app.get("/health_generate")
  async def health_generate(request: Request) -> Response:
      """
+diff --git a/python/sglang/srt/layers/moe/routed_experts_capturer.py b/python/sglang/srt/layers/moe/routed_experts_capturer.py
+new file mode 100644
+index 000000000..a15b73501
+--- /dev/null
++++ b/python/sglang/srt/layers/moe/routed_experts_capturer.py
+@@ -0,0 +1,206 @@
++import logging
++from abc import ABC
++from typing import Optional
++
++import numpy as np
++import torch
++
++from sglang.srt.configs.model_config import ModelConfig
++from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
++from sglang.srt.server_args import get_global_server_args
++
++logger = logging.getLogger(__name__)
++
++_GB = 1024 * 1024 * 1024
++_MB = 1024 * 1024
++
++
++def get_tensor_size_bytes(t: torch.Tensor):
++    return np.prod(t.shape) * t.dtype.itemsize
++
++
++class _RoutedExpertsDeviceCache:
++    def __init__(
++        self, model_config: ModelConfig, max_running_requests: int, device: str
++    ) -> None:
++        self.buffer = torch.zeros(
++            (
++                max(
++                    get_global_server_args().chunked_prefill_size, max_running_requests
++                ),
++                model_config.hf_text_config.num_hidden_layers,
++                model_config.hf_text_config.num_experts_per_tok,
++            ),
++            dtype=torch.int32,
++            device=device,
++        )
++        self._finalize_allocation_log()
++
++    def get_buffer_size_bytes(self):
++        assert hasattr(self, "buffer")
++        return get_tensor_size_bytes(self.buffer)
++
++    def capture_fwd_routed_experts(self, layer_id: int, topk_ids: torch.Tensor):
++        assert layer_id is not None, "capturing routing experts but get layer_id None"
++        batch, _ = topk_ids.shape
++        self.buffer[:batch, layer_id, :] = topk_ids
++
++    def _finalize_allocation_log(self):
++        """Common logging and memory usage computation for captured experts buffers."""
++        buffer_size_MB = self.get_buffer_size_bytes() / _MB
++        logger.info(
++            f"Routing experts device buffer allocated. #shape: {tuple(self.buffer.shape)}, size: {buffer_size_MB:.2f} MB"
++        )
++
++
++class _RoutedExpertsHostCache:
++    def __init__(
++        self,
++        model_config: ModelConfig,
++        num_tokens: int,
++    ) -> None:
++        self.num_tokens = num_tokens
++        self.buffer = torch.zeros(
++            (
++                num_tokens,
++                model_config.hf_text_config.num_hidden_layers,
++                model_config.hf_text_config.num_experts_per_tok,
++            ),
++            dtype=torch.int32,
++            device="cpu",
++        )
++        self._finalize_allocation_log()
++
++    def get_buffer_size_bytes(self):
++        assert hasattr(self, "buffer")
++        return get_tensor_size_bytes(self.buffer)
++
++    def set_experts_buffer(self, layer_id: int, loc: torch.Tensor, top_k: torch.Tensor):
++        self.buffer[layer_id, loc, :] = top_k.cpu()
++
++    def _finalize_allocation_log(self):
++        """Common logging and memory usage computation for captured experts buffers."""
++        buffer_size_GB = self.get_buffer_size_bytes() / _GB
++        logger.info(
++            f"Routing experts host buffer allocated. #tokens: {self.num_tokens}, size: {buffer_size_GB:.2f} GB"
++        )
++
++
++class RoutedExpertsCapturer(ABC):
++    @staticmethod
++    def create(
++        enable: bool,
++        model_config: ModelConfig,
++        num_tokens: int,
++        max_running_requests: int,
++        device: str,
++    ):
++        if enable:
++            return _RoutedExpertsCapturerReal(
++                model_config,
++                num_tokens=num_tokens,
++                max_running_requests=max_running_requests,
++                device=device,
++            )
++        else:
++            return _RoutedExpertsCapturerNoop()
++
++    def capture(self, layer_id: int, topk_ids: torch.Tensor):
++        raise NotImplementedError
++
++    def get_routed_experts(
++        self,
++        req_pool_idx: int,
++        seqlen: int,
++        req_to_token_pool: ReqToTokenPool,
++    ):
++        raise NotImplementedError
++
++    def sync_fwd_experts_buffer_DtoH(self, batch: int, loc: torch.Tensor):
++        raise NotImplementedError
++
++    def get_host_cache(self):
++        raise NotImplementedError
++
++    def get_device_cache(self):
++        raise NotImplementedError
++
++
++class _RoutedExpertsCapturerReal(RoutedExpertsCapturer):
++    """Capturer for routed experts with host buffer"""
++
++    def __init__(
++        self,
++        model_config: ModelConfig,
++        num_tokens: int,
++        max_running_requests: int,
++        device: str,
++    ):
++
++        self.host_cache = _RoutedExpertsHostCache(model_config, num_tokens)
++
++        self.device_cache = _RoutedExpertsDeviceCache(
++            model_config, max_running_requests, device
++        )
++
++    def capture(self, layer_id: int, topk_ids: torch.Tensor):
++        self.device_cache.capture_fwd_routed_experts(layer_id, topk_ids)
++
++    def sync_fwd_experts_buffer_DtoH(self, loc: torch.Tensor):
++        batch = loc.shape[0]
++        self.host_cache.buffer[loc] = self.device_cache.buffer[:batch].cpu()
++
++    def get_routed_experts(
++        self,
++        req_pool_idx: int,
++        seqlen: int,
++        req_to_token_pool: ReqToTokenPool,
++    ):
++        cache_pool_idx = (
++            req_to_token_pool.req_to_token[req_pool_idx][:seqlen].cpu().clone()
++        )
++
++        return self.get_host_cache().buffer[cache_pool_idx].tolist()
++
++    def get_host_cache(self):
++        return self.host_cache
++
++    def get_device_cache(self):
++        return self.device_cache
++
++
++class _RoutedExpertsCapturerNoop(RoutedExpertsCapturer):
++    def __init__(self):
++        pass
++
++    def capture(self, layer_id: int, topk_ids: torch.Tensor):
++        pass
++
++    def get_routed_experts(
++        self,
++        req_pool_idx: int,
++        seqlen: int,
++        req_to_token_pool: ReqToTokenPool,
++    ):
++        pass
++
++    def sync_fwd_experts_buffer_DtoH(self, loc: torch.Tensor):
++        pass
++
++    def get_host_cache(self):
++        pass
++
++    def get_device_cache(self):
++        pass
++
++
++_global_expert_capturer: Optional[RoutedExpertsCapturer] = _RoutedExpertsCapturerNoop()
++
++
++def get_global_experts_capturer():
++    return _global_expert_capturer
++
++
++def set_global_experts_capturer(capturer: RoutedExpertsCapturer):
++    global _global_expert_capturer
++    _global_expert_capturer = capturer
+diff --git a/python/sglang/srt/layers/moe/topk.py b/python/sglang/srt/layers/moe/topk.py
+index 203cd5f41..dad8515f5 100644
+--- a/python/sglang/srt/layers/moe/topk.py
++++ b/python/sglang/srt/layers/moe/topk.py
+@@ -44,6 +44,7 @@ from sglang.srt.eplb.expert_location_dispatch import (
+ )
+ from sglang.srt.layers.dp_attention import is_allocation_symmetric
+ from sglang.srt.layers.moe import get_moe_runner_backend
++from sglang.srt.layers.moe.routed_experts_capturer import get_global_experts_capturer
+ from sglang.srt.utils import (
+     cpu_has_amx_support,
+     get_bool_env_var,
+@@ -195,6 +196,7 @@ class TopK(CustomOp):
+         self,
+         top_k: int,
+         *,
++        layer_id: Optional[int] = None,
+         use_grouped_topk: bool = False,
+         topk_group: Optional[int] = None,
+         num_expert_group: Optional[int] = None,
+@@ -215,6 +217,7 @@ class TopK(CustomOp):
+         if use_grouped_topk:
+             assert num_expert_group is not None and topk_group is not None
+ 
++        self.layer_id = layer_id
+         self.topk_config = TopKConfig(
+             top_k=top_k,
+             use_grouped_topk=use_grouped_topk,
+@@ -240,6 +243,7 @@ class TopK(CustomOp):
+         self.topk_config.torch_native = True
+         return select_experts(
+             hidden_states=hidden_states,
++            layer_id=self.layer_id,
+             router_logits=router_logits,
+             topk_config=self.topk_config,
+             num_token_non_padded=num_token_non_padded,
+@@ -289,6 +293,7 @@ class TopK(CustomOp):
+             ):
+                 topk_output = select_experts(
+                     hidden_states=hidden_states,
++                    layer_id=self.layer_id,
+                     router_logits=router_logits,
+                     topk_config=self.topk_config,
+                     num_token_non_padded=num_token_non_padded,
+@@ -306,6 +311,7 @@ class TopK(CustomOp):
+     ) -> TopKOutput:
+         return select_experts(
+             hidden_states=hidden_states,
++            layer_id=self.layer_id,
+             router_logits=router_logits,
+             topk_config=self.topk_config,
+             num_token_non_padded=num_token_non_padded,
+@@ -387,6 +393,7 @@ class TopK(CustomOp):
+             self.topk_config.torch_native = True
+             return select_experts(
+                 hidden_states=hidden_states,
++                layer_id=self.layer_id,
+                 router_logits=router_logits,
+                 topk_config=self.topk_config,
+                 num_token_non_padded=num_token_non_padded,
+@@ -823,6 +830,7 @@ def select_experts(
+     router_logits: torch.Tensor,
+     topk_config: TopKConfig,
+     *,
++    layer_id: Optional[int] = None,
+     num_token_non_padded: Optional[torch.Tensor] = None,
+     expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
+ ) -> StandardTopKOutput:
+@@ -920,7 +928,10 @@ def select_experts(
+         )
+ 
+     get_global_expert_distribution_recorder().on_select_experts(topk_ids=topk_ids)
+-
++    get_global_experts_capturer().capture(
++        layer_id=layer_id,
++        topk_ids=topk_ids,
++    )
+     return StandardTopKOutput(topk_weights, topk_ids, router_logits)
+ 
+ 
+diff --git a/python/sglang/srt/managers/detokenizer_manager.py b/python/sglang/srt/managers/detokenizer_manager.py
+index 9399bbbea..91fbf80ab 100644
+--- a/python/sglang/srt/managers/detokenizer_manager.py
++++ b/python/sglang/srt/managers/detokenizer_manager.py
+@@ -273,6 +273,7 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
+             output_token_ids_logprobs_idx=recv_obj.output_token_ids_logprobs_idx,
+             output_token_entropy_val=recv_obj.output_token_entropy_val,
+             output_hidden_states=recv_obj.output_hidden_states,
++            output_routed_experts=recv_obj.output_routed_experts,
+             placeholder_tokens_idx=None,
+             placeholder_tokens_val=None,
+             retraction_counts=recv_obj.retraction_counts,
+diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
+index b22f98fbd..3513a9f14 100644
+--- a/python/sglang/srt/managers/io_struct.py
++++ b/python/sglang/srt/managers/io_struct.py
+@@ -175,6 +175,8 @@ class GenerateReqInput(BaseReq):
+     log_metrics: bool = True
+     # Whether to return hidden states
+     return_hidden_states: Union[List[bool], bool] = False
++    # Whether to return captured routed experts
++    return_routed_experts: bool = False
+ 
+     # The modalities of the image data [image, multi-images, video]
+     modalities: Optional[List[str]] = None
+@@ -592,6 +594,7 @@ class GenerateReqInput(BaseReq):
+                 if isinstance(self.return_hidden_states, list)
+                 else self.return_hidden_states
+             ),
++            return_routed_experts=self.return_routed_experts,
+             modalities=self.modalities[i] if self.modalities else None,
+             session_params=self.session_params,
+             lora_path=self.lora_path[i] if self.lora_path is not None else None,
+@@ -655,6 +658,9 @@ class TokenizedGenerateReqInput(BaseReq):
+     # Whether to return hidden states
+     return_hidden_states: bool = False
+ 
++    # Whether to return captured routed experts
++    return_routed_experts: bool = False
++
+     # The input embeds
+     input_embeds: Optional[Union[List[List[List[float]]], List[List[float]]]] = None
+ 
+@@ -910,6 +916,9 @@ class BatchTokenIDOutput(
+     # Hidden states
+     output_hidden_states: List[List[float]]
+ 
++    # The routed experts for each output token
++    output_routed_experts: List[List[int]]
++
+     # The information of placeholder tokens (e.g., image token)
+     # idx is the index of the token in the prompt after expansion.
+     # val is the length of padded tokens after expansion.
+@@ -989,6 +998,9 @@ class BatchStrOutput(
+     # Hidden states
+     output_hidden_states: List[List[float]]
+ 
++    # The routed experts for each output token
++    output_routed_experts: List[List[int]]
++
+     # The information of placeholder tokens (e.g., image token)
+     # idx is the index of the token in the prompt after expansion.
+     # val is the length of padded tokens after expansion.
+diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
+index 326b010b2..b7e24cfcf 100644
+--- a/python/sglang/srt/managers/schedule_batch.py
++++ b/python/sglang/srt/managers/schedule_batch.py
+@@ -451,6 +451,7 @@ class Req:
+         session_id: Optional[str] = None,
+         custom_logit_processor: Optional[str] = None,
+         return_hidden_states: bool = False,
++        return_routed_experts: bool = False,
+         eos_token_ids: Optional[Set[int]] = None,
+         bootstrap_host: Optional[str] = None,
+         bootstrap_port: Optional[int] = None,
+@@ -628,6 +629,10 @@ class Req:
+         self.output_topk_p = None
+         self.output_topk_index = None
+ 
++        # capture routed experts
++        self.return_routed_experts = return_routed_experts
++        self.routed_experts = []
++
+         # Embedding (return values)
+         self.embedding = None
+ 
+@@ -943,6 +948,7 @@ class Req:
+         self.retraction_count += 1
+ 
+         self.prefix_indices = torch.empty((0,), dtype=torch.int64)
++        self.routed_experts = []
+         self.last_node = None
+         self.swa_uuid_for_lock = None
+         self.extend_input_len = 0
+@@ -1112,6 +1118,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+     # Whether to return hidden states
+     return_hidden_states: bool = False
+ 
++    # Whether to return captured experts
++    return_routed_experts: bool = False
++
+     # Whether this batch is prefill-only (no token generation needed)
+     is_prefill_only: bool = False
+ 
+@@ -1155,6 +1164,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+             device=req_to_token_pool.device,
+             spec_algorithm=spec_algorithm,
+             return_hidden_states=any(req.return_hidden_states for req in reqs),
++            return_routed_experts=any(req.return_routed_experts for req in reqs),
+             is_prefill_only=all(req.is_prefill_only for req in reqs),
+             chunked_req=chunked_req,
+         )
+@@ -1900,7 +1910,8 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+     def __str__(self):
+         return (
+             f"ScheduleBatch(forward_mode={self.forward_mode.name if self.forward_mode else 'None'}, "
+-            f"#req={(len(self.reqs))})"
++            f"#req={(len(self.reqs))}), "
++            f"#out_cache_loc={self.out_cache_loc})"
+         )
+ 
+ 
+diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
+index 719e93691..dd9f613da 100644
+--- a/python/sglang/srt/managers/scheduler.py
++++ b/python/sglang/srt/managers/scheduler.py
+@@ -1250,6 +1250,7 @@ class Scheduler(
+                 input_embeds=recv_req.input_embeds,
+                 custom_logit_processor=recv_req.custom_logit_processor,
+                 return_hidden_states=recv_req.return_hidden_states,
++                return_routed_experts=recv_req.return_routed_experts,
+                 eos_token_ids=self.model_config.hf_eos_token_id,
+                 bootstrap_host=recv_req.bootstrap_host,
+                 bootstrap_port=recv_req.bootstrap_port,
+diff --git a/python/sglang/srt/managers/scheduler_output_processor_mixin.py b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
+index 5f5467c4f..186216c73 100644
+--- a/python/sglang/srt/managers/scheduler_output_processor_mixin.py
++++ b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
+@@ -9,6 +9,7 @@ import torch
+ from sglang.srt.disaggregation.utils import DisaggregationMode
+ from sglang.srt.environ import envs
+ from sglang.srt.layers.logits_processor import LogitsProcessorOutput
++from sglang.srt.layers.moe.routed_experts_capturer import get_global_experts_capturer
+ from sglang.srt.managers.io_struct import (
+     AbortReq,
+     BatchEmbeddingOutput,
+@@ -112,6 +113,14 @@ class SchedulerOutputProcessorMixin:
+                     req.check_finished()
+ 
+                     if req.finished():
++                        req.routed_experts = (
++                            get_global_experts_capturer().get_routed_experts(
++                                req_pool_idx=req.req_pool_idx,
++                                seqlen=req.seqlen,
++                                req_to_token_pool=self.req_to_token_pool,
++                            )
++                        )
++
+                         release_kv_cache(req, self.tree_cache)
+                         req.time_stats.completion_time = time.perf_counter()
+                     elif not batch.decoding_reqs or req not in batch.decoding_reqs:
+@@ -333,6 +342,12 @@ class SchedulerOutputProcessorMixin:
+             req.check_finished(new_accepted_len)
+ 
+             if req.finished():
++                req.routed_experts = get_global_experts_capturer().get_routed_experts(
++                    req_pool_idx=req.req_pool_idx,
++                    seqlen=req.seqlen,
++                    req_to_token_pool=self.req_to_token_pool,
++                )
++
+                 if self.server_args.disaggregation_decode_enable_offload_kvcache:
+                     # Asynchronously offload KV cache; release_kv_cache will be called after Device->Host transfer completes
+                     if not self.decode_offload_manager.offload_kv_cache(req):
+@@ -721,6 +736,7 @@ class SchedulerOutputProcessorMixin:
+         spec_accepted_tokens = []
+         retraction_counts = []
+         output_hidden_states = None
++        output_routed_experts = None
+ 
+         queue_times = []
+         forward_entry_times = []
+@@ -925,6 +941,10 @@ class SchedulerOutputProcessorMixin:
+                     if output_hidden_states is None:
+                         output_hidden_states = []
+                     output_hidden_states.append(req.hidden_states)
++                if req.return_routed_experts:
++                    if output_routed_experts is None:
++                        output_routed_experts = []
++                    output_routed_experts.append(req.routed_experts)
+ 
+             if (
+                 req.finished()
+@@ -971,6 +991,7 @@ class SchedulerOutputProcessorMixin:
+                     output_token_ids_logprobs_idx=output_token_ids_logprobs_idx,
+                     output_token_entropy_val=None,
+                     output_hidden_states=output_hidden_states,
++                    output_routed_experts=output_routed_experts,
+                     rids=rids,
+                     http_worker_ipcs=http_worker_ipcs,
+                     placeholder_tokens_idx=None,
+diff --git a/python/sglang/srt/managers/scheduler_runtime_checker_mixin.py b/python/sglang/srt/managers/scheduler_runtime_checker_mixin.py
+index e6f59e5b0..c199b987b 100644
+--- a/python/sglang/srt/managers/scheduler_runtime_checker_mixin.py
++++ b/python/sglang/srt/managers/scheduler_runtime_checker_mixin.py
+@@ -138,7 +138,7 @@ class SchedulerRuntimeCheckerMixin:
+                 f"available_size={len(self.req_to_token_pool.free_slots)}, "
+                 f"total_size={self.req_to_token_pool.size}\n"
+             )
+-            raise ValueError(msg)
++            # raise ValueError(msg)
+ 
+     def check_memory(self: Scheduler):
+         if self.is_hybrid:
+@@ -150,7 +150,7 @@ class SchedulerRuntimeCheckerMixin:
+ 
+         if memory_leak:
+             msg = "token_to_kv_pool_allocator memory leak detected! " f"{token_msg}"
+-            raise ValueError(msg)
++            # raise ValueError(msg)
+ 
+         self._check_req_pool()
+ 
 diff --git a/python/sglang/srt/managers/scheduler_update_weights_mixin.py b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
-index 647648fe1..e46cd69dd 100644
+index 9bed7030d..6e64dc36f 100644
 --- a/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
-@@ -71,7 +71,10 @@ class SchedulerUpdateWeightsMixin:
+@@ -76,7 +76,8 @@ class SchedulerUpdateWeightsMixin:
  
      def update_weights_from_tensor(self, recv_req: UpdateWeightsFromTensorReqInput):
          """Update the online model parameter from tensors."""
 -        success, message = self.tp_worker.update_weights_from_tensor(recv_req)
-+        if self.draft_worker is not None:
-+            success, message = self.draft_worker.update_weights_from_tensor(recv_req)
-+        else:
-+            success, message = self.tp_worker.update_weights_from_tensor(recv_req)
++        worker = self.draft_worker or self.tp_worker
++        success, message = worker.update_weights_from_tensor(recv_req)
          # TODO extract common code b/t update_weights_from_distributed and update_weights_from_tensor later
          if success:
              if recv_req.flush_cache:
 diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
-index 885da6a98..303e0d73c 100644
+index c5a2e35ed..403cfcd9b 100644
 --- a/python/sglang/srt/managers/tokenizer_manager.py
 +++ b/python/sglang/srt/managers/tokenizer_manager.py
-@@ -1083,6 +1083,9 @@ class TokenizerManager(TokenizerCommunicatorMixin):
+@@ -802,6 +802,7 @@ class TokenizerManager(TokenizerCommunicatorMixin):
+                 session_params=session_params,
+                 custom_logit_processor=obj.custom_logit_processor,
+                 return_hidden_states=obj.return_hidden_states,
++                return_routed_experts=obj.return_routed_experts,
+                 data_parallel_rank=obj.data_parallel_rank,
+                 priority=obj.priority,
+                 extra_key=obj.extra_key,
+@@ -1169,6 +1170,9 @@ class TokenizerManager(TokenizerCommunicatorMixin):
          async with self.is_pause_cond:
              self.is_pause = True
              self.abort_request(abort_all=True)
@@ -43,7 +584,17 @@ index 885da6a98..303e0d73c 100644
  
      async def continue_generation(self):
          async with self.is_pause_cond:
-@@ -1459,12 +1462,13 @@ class TokenizerManager(TokenizerCommunicatorMixin):
+@@ -1490,6 +1494,9 @@ class TokenizerManager(TokenizerCommunicatorMixin):
+             if getattr(recv_obj, "output_hidden_states", None):
+                 meta_info["hidden_states"] = recv_obj.output_hidden_states[i]
+ 
++            if getattr(recv_obj, "output_routed_experts", None):
++                meta_info["routed_experts"] = recv_obj.output_routed_experts[i]
++
+             if isinstance(recv_obj, BatchStrOutput):
+                 state.text += recv_obj.output_strs[i]
+                 if state.obj.stream:
+@@ -1616,12 +1623,13 @@ class TokenizerManager(TokenizerCommunicatorMixin):
              return
  
          if len(recv_obj.input_token_logprobs_val) > 0:
@@ -63,7 +614,7 @@ index 885da6a98..303e0d73c 100644
          state.output_token_logprobs_val.extend(
              recv_obj.output_token_logprobs_val[recv_obj_index]
          )
-@@ -1606,6 +1610,9 @@ class TokenizerManager(TokenizerCommunicatorMixin):
+@@ -1739,6 +1747,9 @@ class TokenizerManager(TokenizerCommunicatorMixin):
                  meta_info["spec_accept_length"] = (
                      recv_obj.completion_tokens[i] / recv_obj.spec_verify_ct[i]
                  )
@@ -71,1195 +622,358 @@ index 885da6a98..303e0d73c 100644
 +                meta_info["spec_draft_token_num"] = total_draft_tokens
 +                meta_info["spec_verify_ct"] = recv_obj.spec_verify_ct[i]
  
-     def collect_metrics(self, state: ReqState, recv_obj: BatchStrOutput, i: int):
-         completion_tokens = (
-@@ -1710,14 +1717,24 @@ class TokenizerManager(TokenizerCommunicatorMixin):
-         state.finished = True
-         if recv_obj.finished_reason:
-             out = {
-+                "text": "",
-+                "output_ids": [],
-                 "meta_info": {
-                     "id": recv_obj.rid,
-                     "finish_reason": recv_obj.finished_reason,
-+                    "prompt_tokens": 0,
-+                    "completion_tokens": 0,
-+                    "model_version": self.server_args.weight_version,
-+                    "cached_tokens": 0,
-+                    "e2e_latency": 0,
-+                    "output_token_logprobs": [[]],
-+                    "input_token_logprobs": [[]],
-                 },
-             }
-         else:
-             out = {
-                 "text": "",
-+                "output_ids": [],
-                 "meta_info": {
-                     "id": recv_obj.rid,
-                     "finish_reason": {
-@@ -1726,6 +1743,11 @@ class TokenizerManager(TokenizerCommunicatorMixin):
-                     },
-                     "prompt_tokens": 0,
-                     "completion_tokens": 0,
-+                    "model_version": self.server_args.weight_version,
-+                    "cached_tokens": 0,
-+                    "e2e_latency": 0,
-+                    "output_token_logprobs": [[]],
-+                    "input_token_logprobs": [[]],
-                 },
-             }
-         state.out_list.append(out)
+     def _calculate_timing_metrics(
+         self,
 diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
-index 46e2c7c57..975c727d7 100644
+index 739e28943..73d88e9e9 100644
 --- a/python/sglang/srt/mem_cache/memory_pool.py
 +++ b/python/sglang/srt/mem_cache/memory_pool.py
-@@ -809,6 +809,7 @@ class HybridLinearKVPool(KVCache):
+@@ -357,12 +357,16 @@ class HybridReqToTokenPool(ReqToTokenPool):
+             device=device,
+             enable_memory_saver=enable_memory_saver,
+         )
+-        self._init_mamba_pool(
+-            size=mamba_size,
+-            cache_params=cache_params,
+-            device=device,
+-            speculative_num_draft_tokens=speculative_num_draft_tokens,
++        memory_saver_adapter = TorchMemorySaverAdapter.create(
++            enable=enable_memory_saver
+         )
++        with memory_saver_adapter.region(GPU_MEMORY_TYPE_KV_CACHE):
++            self._init_mamba_pool(
++                size=mamba_size,
++                cache_params=cache_params,
++                device=device,
++                speculative_num_draft_tokens=speculative_num_draft_tokens,
++            )
+ 
+     def _init_mamba_pool(
+         self,
+@@ -848,6 +852,7 @@ class HybridLinearKVPool(KVCache):
          enable_kvcache_transpose: bool,
          device: str,
          mamba_pool: MambaPool,
 +        enable_memory_saver: bool,
-     ):
-         self.size = size
-         self.dtype = dtype
-@@ -834,7 +835,7 @@ class HybridLinearKVPool(KVCache):
-             head_dim=head_dim,
-             layer_num=self.full_layer_nums,
-             device=device,
--            enable_memory_saver=False,
-+            enable_memory_saver=enable_memory_saver,
-         )
+         # TODO: refactor mla related args
+         use_mla: bool = False,
+         kv_lora_rank: int = None,
+@@ -879,7 +884,7 @@ class HybridLinearKVPool(KVCache):
+                 head_dim=head_dim,
+                 layer_num=self.full_layer_nums,
+                 device=device,
+-                enable_memory_saver=False,
++                enable_memory_saver=enable_memory_saver,
+             )
+         else:
+             TokenToKVPoolClass = MLATokenToKVPool
+@@ -891,7 +896,7 @@ class HybridLinearKVPool(KVCache):
+                 device=device,
+                 kv_lora_rank=kv_lora_rank,
+                 qk_rope_head_dim=qk_rope_head_dim,
+-                enable_memory_saver=False,
++                enable_memory_saver=enable_memory_saver,
+             )
          self.full_attention_layer_id_mapping = {
              id: i for i, id in enumerate(full_attention_layer_ids)
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index 0dbb6ee86..34afad034 100644
+index 19e029d60..8c1be2535 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
-@@ -734,7 +734,7 @@ class ModelRunner:
+@@ -86,6 +86,10 @@ from sglang.srt.layers.dp_attention import (
+     initialize_dp_attention,
+ )
+ from sglang.srt.layers.logits_processor import LogitsProcessorOutput
++from sglang.srt.layers.moe.routed_experts_capturer import (
++    RoutedExpertsCapturer,
++    set_global_experts_capturer,
++)
+ from sglang.srt.layers.sampler import Sampler
+ from sglang.srt.layers.torchao_utils import apply_torchao_config_to_model
+ from sglang.srt.lora.lora_manager import LoRAManager
+@@ -155,6 +159,7 @@ from sglang.srt.utils.offloader import (
+     set_offloader,
+ )
+ from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
++from sglang.srt.layers.moe.routed_experts_capturer import get_global_experts_capturer
+ from sglang.srt.utils.torch_memory_saver_adapter import TorchMemorySaverAdapter
+ from sglang.srt.weight_sync.tensor_bucket import (
+     FlattenedTensorBucket,
+@@ -484,6 +489,10 @@ class ModelRunner:
+             server_args.max_running_requests,
+             server_args.max_total_tokens,
+         )
++
++        # Init routed experts capturer
++        self.init_routed_experts_capturer()
++
+         if self.device == "cuda":
+             self.init_cublas()
+             self.init_attention_backend()
+@@ -519,6 +528,31 @@ class ModelRunner:
+ 
+             self.model.set_eagle3_layers_to_capture(eagle_aux_hidden_state_layer_ids)
+ 
++    def init_routed_experts_capturer(self):
++        # TODO: the redundant logic with TpModelWorker
++        max_running_requests = min(
++            (
++                self.max_total_num_tokens // 2
++                if self.server_args.max_running_requests is None
++                else self.server_args.max_running_requests
++                // (
++                    self.server_args.dp_size
++                    if self.server_args.enable_dp_attention
++                    else 1
++                )
++            ),
++            self.req_to_token_pool.size,
++        )
++        set_global_experts_capturer(
++            RoutedExpertsCapturer.create(
++                enable=get_global_server_args().enable_return_routed_experts,
++                model_config=self.model_config,
++                num_tokens=self.max_total_num_tokens + self.page_size,
++                max_running_requests=max_running_requests,
++                device=self.device,
++            )
++        )
++
+     def model_specific_adjustment(self):
+         server_args = self.server_args
+ 
+@@ -758,7 +792,11 @@ class ModelRunner:
  
          with self.memory_saver_adapter.region(
              GPU_MEMORY_TYPE_WEIGHTS,
 -            enable_cpu_backup=self.server_args.enable_weights_cpu_backup,
-+            enable_cpu_backup=self.server_args.enable_weights_cpu_backup if not self.is_draft_worker else True,
++            enable_cpu_backup=(
++                self.server_args.enable_weights_cpu_backup
++                if not self.is_draft_worker
++                else True
++            ),
          ):
              self.model = get_model(
                  model_config=self.model_config,
-@@ -1735,6 +1735,7 @@ class ModelRunner:
+@@ -1810,6 +1848,7 @@ class ModelRunner:
                      enable_kvcache_transpose=False,
                      device=self.device,
                      mamba_pool=self.req_to_token_pool.mamba_pool,
 +                    enable_memory_saver=self.server_args.enable_memory_saver,
+                     use_mla=self.use_mla_backend,
+                     **extra_args,
                  )
-             else:
-                 self.token_to_kv_pool = MHATokenToKVPool(
-diff --git a/python/sglang/srt/models/glm4_moe.py b/python/sglang/srt/models/glm4_moe.py
-index 6051a5bb7..ba1324f17 100644
---- a/python/sglang/srt/models/glm4_moe.py
-+++ b/python/sglang/srt/models/glm4_moe.py
-@@ -15,7 +15,7 @@
- """Inference-only GLM-4.5, GLM-4.6 model compatible with HuggingFace weights"""
- 
- import logging
--from typing import Any, Dict, Iterable, Optional, Tuple, Union
-+from typing import Any, Dict, Iterable, Optional, Tuple
- 
- import torch
- import torch.nn.functional as F
-@@ -27,16 +27,10 @@ from sglang.srt.distributed import (
-     get_pp_group,
-     get_tensor_model_parallel_rank,
-     get_tensor_model_parallel_world_size,
--    parallel_state,
-     tensor_model_parallel_all_reduce,
- )
--from sglang.srt.distributed.device_communicators.pynccl_allocator import (
--    use_symmetric_memory,
--)
--from sglang.srt.eplb.expert_distribution import get_global_expert_distribution_recorder
--from sglang.srt.eplb.expert_location import ModelConfigForExpertLocation
--from sglang.srt.eplb.expert_location_dispatch import ExpertLocationDispatchInfo
- from sglang.srt.layers.activation import SiluAndMul
-+from sglang.srt.layers.amx_utils import PackWeightMethod
- from sglang.srt.layers.communicator import (
-     LayerCommunicator,
-     LayerScatterModes,
-@@ -54,10 +48,7 @@ from sglang.srt.layers.linear import (
-     RowParallelLinear,
- )
- from sglang.srt.layers.logits_processor import LogitsProcessor
--from sglang.srt.layers.moe import (
--    get_moe_a2a_backend,
--    should_use_flashinfer_cutlass_moe_fp4_allgather,
--)
-+from sglang.srt.layers.moe import get_moe_a2a_backend
- from sglang.srt.layers.moe.ep_moe.layer import get_moe_impl_class
- from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
- from sglang.srt.layers.moe.topk import TopK
-@@ -65,17 +56,23 @@ from sglang.srt.layers.quantization.base_config import QuantizationConfig
- from sglang.srt.layers.quantization.fp8_kernel import is_fp8_fnuz
- from sglang.srt.layers.radix_attention import RadixAttention
- from sglang.srt.layers.rotary_embedding import get_rope
--from sglang.srt.layers.utils import PPMissingLayer
- from sglang.srt.layers.vocab_parallel_embedding import (
-     ParallelLMHead,
-     VocabParallelEmbedding,
- )
- from sglang.srt.model_executor.cuda_graph_runner import get_is_capture_mode
--from sglang.srt.model_executor.forward_batch_info import ForwardBatch, PPProxyTensors
-+from sglang.srt.model_executor.forward_batch_info import ForwardBatch
- from sglang.srt.model_loader.weight_utils import default_weight_loader
-+from sglang.srt.models.deepseek_v2 import (
-+    DeepseekV2DecoderLayer,
-+    DeepseekV2ForCausalLM,
-+    DeepseekV2Model,
-+    DeepseekV2MoE,
-+)
- from sglang.srt.server_args import get_global_server_args
--from sglang.srt.two_batch_overlap import model_forward_maybe_tbo
- from sglang.srt.utils import (
-+    BumpAllocator,
-+    LazyValue,
-     add_prefix,
-     cpu_has_amx_support,
-     get_bool_env_var,
-@@ -83,7 +80,8 @@ from sglang.srt.utils import (
-     is_cpu,
-     is_cuda,
-     is_hip,
--    make_layers,
-+    log_info_on_rank0,
-+    use_intel_amx_backend,
- )
- 
- _is_hip = is_hip()
-@@ -94,6 +92,11 @@ _is_cpu_amx_available = cpu_has_amx_support()
- _is_cpu = is_cpu()
- _device_sm = get_device_sm()
- 
-+if _is_cuda:
-+    from sgl_kernel import dsv3_router_gemm
-+elif _is_cpu and _is_cpu_amx_available:
-+    pass
-+
- logger = logging.getLogger(__name__)
- 
- 
-@@ -133,7 +136,8 @@ class Glm4MoeMLP(nn.Module):
-         )
-         if hidden_act != "silu":
-             raise ValueError(
--                f"Unsupported activation: {hidden_act}. Only silu is supported for now."
-+                f"Unsupported activation: {hidden_act}. "
-+                "Only silu is supported for now."
+@@ -2164,6 +2203,10 @@ class ModelRunner:
+                 reinit_attn_backend,
+                 split_forward_count,
              )
-         self.act_fn = SiluAndMul()
- 
-@@ -142,6 +146,7 @@ class Glm4MoeMLP(nn.Module):
-         x,
-         forward_batch=None,
-         should_allreduce_fusion=False,
-+        gemm_output_zero_allocator: BumpAllocator = None,
-     ):
-         if (self.tp_size == 1) and x.shape[0] == 0:
-             return x
-@@ -321,21 +326,47 @@ class Glm4MoeGate(nn.Module):
-         self,
-         config,
-         prefix: str = "",
-+        is_nextn: bool = False,
-     ):
-         super().__init__()
-+        self.is_nextn = is_nextn
-         self.weight = nn.Parameter(
-             torch.empty((config.n_routed_experts, config.hidden_size))
-         )
-         self.e_score_correction_bias = nn.Parameter(
-             torch.empty((config.n_routed_experts), dtype=torch.float32)
-         )
-+        if _is_cpu and _is_cpu_amx_available:
-+            self.quant_method = PackWeightMethod(weight_names=["weight"])
- 
-     def forward(self, hidden_states):
--        logits = F.linear(hidden_states, self.weight, None)
-+        if use_intel_amx_backend(self):
-+            return torch.ops.sgl_kernel.weight_packed_linear(
-+                hidden_states,
-+                self.weight,
-+                None,  # bias
-+                True,  # is_vnni
++            # Copy cached routing experts' buffers back to CPU cache
++            get_global_experts_capturer().sync_fwd_experts_buffer_DtoH(
++                forward_batch.out_cache_loc
 +            )
-+
-+        # NOTE: For some unknown reason, router_gemm seems degrade accept length.
-+        if (
-+            _is_cuda
-+            and not self.is_nextn
-+            and hidden_states.shape[0] < 4
-+            and hidden_states.shape[1] == 7168
-+            and self.weight.shape[0] == 256
-+            and _device_sm >= 90
-+        ):
-+            logits = dsv3_router_gemm(hidden_states, self.weight).to(
-+                hidden_states.dtype
-+            )
-+        else:
-+            logits = F.linear(hidden_states, self.weight, None)
-+
-         return logits
  
- 
--class Glm4MoeSparseMoeBlock(nn.Module):
-+class Glm4MoeSparseMoeBlock(DeepseekV2MoE):
-     def __init__(
-         self,
-         config: PretrainedConfig,
-@@ -343,12 +374,18 @@ class Glm4MoeSparseMoeBlock(nn.Module):
-         quant_config: Optional[QuantizationConfig] = None,
-         prefix: str = "",
-         alt_stream: Optional[torch.cuda.Stream] = None,
-+        is_nextn: bool = False,
-     ):
-         nn.Module.__init__(self)
--        self.top_k = config.num_experts_per_tok
-         self.tp_size = get_tensor_model_parallel_world_size()
-+        self.ep_size = get_moe_expert_parallel_world_size()
-         self.routed_scaling_factor = config.routed_scaling_factor
-         self.n_shared_experts = config.n_shared_experts
-+        self.num_fused_shared_experts = (
-+            0
-+            if get_global_server_args().disable_shared_experts_fusion
-+            else config.n_shared_experts
-+        )
-         self.config = config
-         self.layer_id = layer_id
-         self.alt_stream = alt_stream
-@@ -365,31 +402,39 @@ class Glm4MoeSparseMoeBlock(nn.Module):
-                 "Only silu is supported for now."
-             )
- 
--        self.gate = Glm4MoeGate(config=config, prefix=add_prefix("gate", prefix))
-+        self.gate = Glm4MoeGate(
-+            config=config, prefix=add_prefix("gate", prefix), is_nextn=is_nextn
-+        )
+         if self.eplb_manager is not None:
+             self.eplb_manager.on_forward_pass_end()
+diff --git a/python/sglang/srt/models/deepseek_v2.py b/python/sglang/srt/models/deepseek_v2.py
+index 895b69105..4209a3ea6 100644
+--- a/python/sglang/srt/models/deepseek_v2.py
++++ b/python/sglang/srt/models/deepseek_v2.py
+@@ -641,6 +641,7 @@ class DeepseekV2MoE(nn.Module):
  
          self.topk = TopK(
--            top_k=self.top_k,
-+            top_k=config.num_experts_per_tok + self.num_fused_shared_experts,
+             top_k=config.num_experts_per_tok + self.num_fused_shared_experts,
++            layer_id=self.layer_id,
              renormalize=config.norm_topk_prob,
              use_grouped_topk=True,
              num_expert_group=config.n_group,
-+            num_fused_shared_experts=self.num_fused_shared_experts,
-             topk_group=config.topk_group,
+diff --git a/python/sglang/srt/models/ernie4.py b/python/sglang/srt/models/ernie4.py
+index ab1b6576b..dffd8f09a 100644
+--- a/python/sglang/srt/models/ernie4.py
++++ b/python/sglang/srt/models/ernie4.py
+@@ -87,6 +87,7 @@ class Ernie4Moe(nn.Module):
+ 
+         self.topk = TopK(
+             top_k=config.moe_k,
++            layer_id=layer_id,
+             renormalize=True,
+             use_grouped_topk=False,
              correction_bias=self.gate.e_score_correction_bias,
-             routed_scaling_factor=self.routed_scaling_factor,
+diff --git a/python/sglang/srt/models/glm4_moe.py b/python/sglang/srt/models/glm4_moe.py
+index 3b04422b1..3b810843e 100644
+--- a/python/sglang/srt/models/glm4_moe.py
++++ b/python/sglang/srt/models/glm4_moe.py
+@@ -374,6 +374,7 @@ class Glm4MoeSparseMoeBlock(nn.Module):
+ 
+         self.topk = TopK(
+             top_k=self.top_k,
++            layer_id=self.layer_id,
+             renormalize=config.norm_topk_prob,
+             use_grouped_topk=True,
+             num_expert_group=config.n_group,
+diff --git a/python/sglang/srt/models/gpt_oss.py b/python/sglang/srt/models/gpt_oss.py
+index 9474700c4..398d622ff 100644
+--- a/python/sglang/srt/models/gpt_oss.py
++++ b/python/sglang/srt/models/gpt_oss.py
+@@ -113,6 +113,7 @@ class GptOssSparseMoeBlock(nn.Module):
+         self.topk = TopK(
+             top_k=config.num_experts_per_tok,
+             renormalize=True,
++            layer_id=layer_id,
+         )
+ 
+         self.top_k = config.num_experts_per_tok
+diff --git a/python/sglang/srt/models/grok.py b/python/sglang/srt/models/grok.py
+index 1f4a3b443..4eb23cca8 100644
+--- a/python/sglang/srt/models/grok.py
++++ b/python/sglang/srt/models/grok.py
+@@ -167,6 +167,7 @@ class Grok1MoE(nn.Module):
+         self.topk = TopK(
+             top_k=top_k,
+             renormalize=False,
++            layer_id=layer_id,
+             custom_routing_function=custom_routing_function,
+         )
+ 
+diff --git a/python/sglang/srt/models/hunyuan.py b/python/sglang/srt/models/hunyuan.py
+index 7c6fd9e48..b20d28544 100644
+--- a/python/sglang/srt/models/hunyuan.py
++++ b/python/sglang/srt/models/hunyuan.py
+@@ -150,6 +150,7 @@ class HunYuanSparseMoeBlock(nn.Module):
+ 
+         self.topk = TopK(
+             top_k=top_k,
++            layer_id=layer_id,
+             renormalize=True if top_k > 1 else False,
+         )
+ 
+diff --git a/python/sglang/srt/models/longcat_flash.py b/python/sglang/srt/models/longcat_flash.py
+index 84aeb8b30..19637b20c 100644
+--- a/python/sglang/srt/models/longcat_flash.py
++++ b/python/sglang/srt/models/longcat_flash.py
+@@ -241,6 +241,7 @@ class LongcatFlashMoE(nn.Module):
+             renormalize=False,
+             use_grouped_topk=False,
+             correction_bias=self.router.e_score_correction_bias.data,
++            layer_id=layer_id,
+         )
+         self.topk.forward = self.topk.forward_native
+ 
+diff --git a/python/sglang/srt/models/qwen2_moe.py b/python/sglang/srt/models/qwen2_moe.py
+index 051095e61..4857b775e 100644
+--- a/python/sglang/srt/models/qwen2_moe.py
++++ b/python/sglang/srt/models/qwen2_moe.py
+@@ -151,6 +151,7 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
+         self.topk = TopK(
+             top_k=config.num_experts_per_tok,
+             renormalize=config.norm_topk_prob,
++            layer_id=layer_id,
          )
  
          self.experts = get_moe_impl_class(quant_config)(
--            num_experts=config.n_routed_experts,
--            top_k=self.top_k,
--            layer_id=self.layer_id,
-+            num_experts=config.n_routed_experts
-+            + self.num_fused_shared_experts
-+            + get_global_server_args().ep_num_redundant_experts,
-+            num_fused_shared_experts=self.num_fused_shared_experts,
-+            top_k=config.num_experts_per_tok + self.num_fused_shared_experts,
-             hidden_size=config.hidden_size,
-             intermediate_size=config.moe_intermediate_size,
-+            layer_id=self.layer_id,
-             quant_config=quant_config,
-             routed_scaling_factor=self.routed_scaling_factor,
-             prefix=add_prefix("experts", prefix),
+diff --git a/python/sglang/srt/models/qwen3_moe.py b/python/sglang/srt/models/qwen3_moe.py
+index d3acc629b..5aaae8523 100644
+--- a/python/sglang/srt/models/qwen3_moe.py
++++ b/python/sglang/srt/models/qwen3_moe.py
+@@ -100,6 +100,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
+             top_k=config.num_experts_per_tok,
+             renormalize=config.norm_topk_prob,
+             use_grouped_topk=False,
++            layer_id=layer_id,
          )
  
--        # shared expert
--        if config.n_shared_experts is not None:
-+        self.shared_experts_is_int8 = False
-+        self.shared_experts_is_fp8 = False
-+        # self.shared_experts_weight_block_size = None
-+        if config.n_shared_experts is not None and self.num_fused_shared_experts == 0:
-             intermediate_size = config.moe_intermediate_size * config.n_shared_experts
-             self.shared_experts = Glm4MoeMLP(
-                 hidden_size=config.hidden_size,
-@@ -398,14 +443,21 @@ class Glm4MoeSparseMoeBlock(nn.Module):
-                 quant_config=quant_config,
-                 reduce_results=False,
-                 prefix=add_prefix("shared_experts", prefix),
--                **(
--                    dict(tp_rank=0, tp_size=1)
--                    if get_moe_a2a_backend().is_deepep()
--                    or get_moe_a2a_backend().is_mooncake()
--                    or should_use_flashinfer_cutlass_moe_fp4_allgather()
--                    else {}
--                ),
-+                **(dict(tp_rank=0, tp_size=1) if self.ep_size > 1 else {}),
-             )
-+            is_packed_weight = hasattr(
-+                self.shared_experts.gate_up_proj.quant_method, "quant_config"
-+            )
-+            self.shared_experts_is_int8 = (
-+                not is_packed_weight
-+                and self.shared_experts.gate_up_proj.weight.dtype == torch.int8
-+            )
-+            self.shared_experts_is_fp8 = (
-+                not is_packed_weight
-+                and self.shared_experts.gate_up_proj.weight.dtype == torch.float8_e4m3fn
-+            )
-+
-+        self.top_k = config.num_experts_per_tok
- 
-         if get_moe_a2a_backend().is_deepep() or get_moe_a2a_backend().is_mooncake():
-             # TODO: we will support tp < ep in the future
-@@ -426,47 +478,14 @@ class Glm4MoeSparseMoeBlock(nn.Module):
-         self._enable_a2a_moe = (
-             get_moe_a2a_backend().is_deepep() or get_moe_a2a_backend().is_mooncake()
-         )
--
--    def get_moe_weights(self):
--        return [
--            x.data
--            for name, x in self.experts.named_parameters()
--            if name not in ["correction_bias"]
--        ]
--
--    def forward(
--        self,
--        hidden_states: torch.Tensor,
--        forward_batch: Optional[ForwardBatch] = None,
--        should_allreduce_fusion: bool = False,
--        use_reduce_scatter: bool = False,
--    ) -> torch.Tensor:
--        if not self._enable_a2a_moe:
--            DUAL_STREAM_TOKEN_THRESHOLD = 1024
--            if (
--                self.alt_stream is not None
--                and hidden_states.shape[0] > 0
--                and hidden_states.shape[0] <= DUAL_STREAM_TOKEN_THRESHOLD
--            ):
--                return self.forward_normal_dual_stream(
--                    hidden_states,
--                    should_allreduce_fusion,
--                    use_reduce_scatter,
--                )
--            else:
--                return self.forward_normal(
--                    hidden_states,
--                    should_allreduce_fusion,
--                    use_reduce_scatter,
--                )
--        else:
--            return self.forward_deepep(hidden_states, forward_batch)
-+        self._fuse_shared_experts_inside_sbo = False
- 
-     def forward_normal_dual_stream(
-         self,
-         hidden_states: torch.Tensor,
-         should_allreduce_fusion: bool = False,
-         use_reduce_scatter: bool = False,
-+        gemm_output_zero_allocator: BumpAllocator = None,
-     ) -> torch.Tensor:
- 
-         current_stream = torch.cuda.current_stream()
-@@ -480,21 +499,28 @@ class Glm4MoeSparseMoeBlock(nn.Module):
-             final_hidden_states = self.experts(hidden_states, topk_output)
-             if not _is_cuda:
-                 final_hidden_states *= self.routed_scaling_factor
--
-         current_stream.wait_stream(self.alt_stream)
--        with use_symmetric_memory(parallel_state.get_tp_group()) as sm:
--            final_hidden_states_out = torch.empty_like(final_hidden_states)
- 
--        torch.add(final_hidden_states, shared_output, out=final_hidden_states_out)
--        final_hidden_states = final_hidden_states_out
--        sm.tag(final_hidden_states)
--        if (
--            self.tp_size > 1
--            and not should_allreduce_fusion
--            and not use_reduce_scatter
--            and not should_use_flashinfer_cutlass_moe_fp4_allgather()
--        ):
--            final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
-+        if self.ep_size > 1:
-+            if (
-+                self.tp_size > 1
-+                and not should_allreduce_fusion
-+                and not use_reduce_scatter
-+            ):
-+                final_hidden_states = tensor_model_parallel_all_reduce(
-+                    final_hidden_states
-+                )
-+            final_hidden_states += shared_output
-+        else:
-+            final_hidden_states += shared_output
-+            if (
-+                self.tp_size > 1
-+                and not should_allreduce_fusion
-+                and not use_reduce_scatter
-+            ):
-+                final_hidden_states = tensor_model_parallel_all_reduce(
-+                    final_hidden_states
-+                )
-         return final_hidden_states
- 
-     def forward_normal(
-@@ -502,69 +528,39 @@ class Glm4MoeSparseMoeBlock(nn.Module):
-         hidden_states: torch.Tensor,
-         should_allreduce_fusion: bool = False,
-         use_reduce_scatter: bool = False,
-+        gemm_output_zero_allocator: BumpAllocator = None,
-     ) -> torch.Tensor:
--        if hidden_states.shape[0] > 0:
--            shared_output = self._forward_shared_experts(hidden_states)
--            # router_logits: (num_tokens, n_experts)
--            router_logits = self.gate(hidden_states)
--            topk_output = self.topk(hidden_states, router_logits)
--        else:
--            shared_output = None
--            topk_output = self.topk.empty_topk_output(hidden_states.device)
-+        if hasattr(self, "shared_experts") and use_intel_amx_backend(
-+            self.shared_experts.gate_up_proj
-+        ):
-+            return self.forward_cpu(hidden_states, should_allreduce_fusion)
- 
-+        shared_output = self._forward_shared_experts(hidden_states)
-+        # router_logits: (num_tokens, n_experts)
-+        router_logits = self.gate(hidden_states)
-+        topk_output = self.topk(hidden_states, router_logits)
-         final_hidden_states = self.experts(hidden_states, topk_output)
-         if not _is_cuda and not _use_aiter:
-             # fused in biased_grouped_topk so we can skip here
-             final_hidden_states *= self.routed_scaling_factor
--        if shared_output is not None:
--            with use_symmetric_memory(parallel_state.get_tp_group()) as sm:
--                final_hidden_states_out = torch.empty_like(final_hidden_states)
--            torch.add(final_hidden_states, shared_output, out=final_hidden_states_out)
--            final_hidden_states = final_hidden_states_out
--            sm.tag(final_hidden_states)
--        if (
--            self.tp_size > 1
--            and not should_allreduce_fusion
--            and not use_reduce_scatter
--            and not should_use_flashinfer_cutlass_moe_fp4_allgather()
--        ):
--            final_hidden_states = tensor_model_parallel_all_reduce(final_hidden_states)
--        return final_hidden_states
--
--    def _forward_deepep(self, hidden_states: torch.Tensor, forward_batch: ForwardBatch):
--        shared_output = None
--        if hidden_states.shape[0] > 0:
--            # router_logits: (num_tokens, n_experts)
--            router_logits, _ = self.gate(hidden_states)
--            shared_output = self._forward_shared_experts(hidden_states)
--            topk_output = self.topk(
--                hidden_states,
--                router_logits,
--                num_token_non_padded=forward_batch.num_token_non_padded,
--                expert_location_dispatch_info=ExpertLocationDispatchInfo.init_new(
--                    layer_id=self.layer_id,
--                ),
--            )
-+        if self.ep_size > 1:
-+            if self.tp_size > 1 and not should_allreduce_fusion:
-+                final_hidden_states = tensor_model_parallel_all_reduce(
-+                    final_hidden_states
-+                )
-+            if shared_output is not None:
-+                final_hidden_states += shared_output
-         else:
--            topk_output = self.topk.empty_topk_output(hidden_states.device)
--        final_hidden_states = self.experts(
--            hidden_states=hidden_states,
--            topk_output=topk_output,
--        )
--
--        if shared_output is not None:
--            final_hidden_states.add_(shared_output)
--
-+            if shared_output is not None:
-+                final_hidden_states += shared_output
-+            if self.tp_size > 1 and not should_allreduce_fusion:
-+                final_hidden_states = tensor_model_parallel_all_reduce(
-+                    final_hidden_states
-+                )
-         return final_hidden_states
- 
--    def _forward_shared_experts(self, hidden_states: torch.Tensor):
--        shared_output = None
--        if hidden_states.shape[0] > 0:
--            shared_output = self.shared_experts(hidden_states)
--        return shared_output
- 
--
--class Glm4MoeDecoderLayer(nn.Module):
-+class Glm4MoeDecoderLayer(DeepseekV2DecoderLayer):
-     def __init__(
-         self,
-         config: PretrainedConfig,
-@@ -587,7 +583,6 @@ class Glm4MoeDecoderLayer(nn.Module):
-         rms_norm_eps = config.rms_norm_eps
-         attention_bias = config.attention_bias
-         self.layer_id = layer_id
--
-         self.self_attn = Glm4MoeAttention(
-             hidden_size=self.hidden_size,
-             num_heads=config.num_attention_heads,
-@@ -603,15 +598,15 @@ class Glm4MoeDecoderLayer(nn.Module):
-             quant_config=quant_config,
-             prefix=add_prefix("self_attn", prefix),
-             use_qk_norm=config.use_qk_norm,
--            alt_stream=alt_stream,
+         self.experts = get_moe_impl_class(quant_config)(
+diff --git a/python/sglang/srt/models/step3_vl.py b/python/sglang/srt/models/step3_vl.py
+index 5a9e74ab6..07a06351f 100644
+--- a/python/sglang/srt/models/step3_vl.py
++++ b/python/sglang/srt/models/step3_vl.py
+@@ -129,6 +129,7 @@ class Step3TextMoEMLP(nn.Module):
+             top_k=config.moe_top_k,
+             renormalize=config.norm_expert_weight,
+             use_grouped_topk=False,
++            layer_id=layer_id,
          )
  
-         self.is_layer_sparse = self._is_layer_sparse(layer_id, is_nextn=is_nextn)
-         is_previous_layer_sparse = self._is_layer_sparse(layer_id - 1, is_nextn=False)
- 
-+        num_layers = 1 if is_nextn else config.num_hidden_layers
-         self.layer_scatter_modes = LayerScatterModes.init_new(
-             layer_id=layer_id,
--            num_layers=1 if is_nextn else config.num_hidden_layers,
-+            num_layers=num_layers,
-             is_layer_sparse=self.is_layer_sparse,
-             is_previous_layer_sparse=is_previous_layer_sparse,
+         self.experts = get_moe_impl_class(quant_config)(
+diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
+index 5b9a520b9..da24facf4 100644
+--- a/python/sglang/srt/server_args.py
++++ b/python/sglang/srt/server_args.py
+@@ -515,6 +515,7 @@ class ServerArgs:
+     disable_fast_image_processor: bool = False
+     keep_mm_feature_on_device: bool = False
+     enable_return_hidden_states: bool = False
++    enable_return_routed_experts: bool = False
+     scheduler_recv_interval: int = 1
+     numa_node: Optional[List[int]] = None
+     enable_deterministic_inference: bool = False
+@@ -3384,6 +3385,11 @@ class ServerArgs:
+             action="store_true",
+             help="Enable returning hidden states with responses.",
          )
-@@ -622,7 +617,6 @@ class Glm4MoeDecoderLayer(nn.Module):
-                 quant_config=quant_config,
-                 prefix=add_prefix("mlp", prefix),
-                 layer_id=self.layer_id,
--                alt_stream=alt_stream,
-             )
-         else:
-             if enable_moe_dense_fully_dp():
-@@ -648,16 +642,7 @@ class Glm4MoeDecoderLayer(nn.Module):
-             layer_scatter_modes=self.layer_scatter_modes,
-             input_layernorm=self.input_layernorm,
-             post_attention_layernorm=self.post_attention_layernorm,
--            allow_reduce_scatter=True,
--            is_last_layer=(
--                is_nextn or (self.layer_id == self.config.num_hidden_layers - 1)
--            ),
--        )
--
--    def _is_layer_sparse(self, layer_id: int, is_nextn: bool) -> bool:
--        return is_nextn or (
--            self.config.n_routed_experts is not None
--            and layer_id >= self.config.first_k_dense_replace
-+            allow_reduce_scatter=False,
-         )
- 
-     def forward(
-@@ -666,6 +651,8 @@ class Glm4MoeDecoderLayer(nn.Module):
-         hidden_states: torch.Tensor,
-         forward_batch: ForwardBatch,
-         residual: Optional[torch.Tensor],
-+        zero_allocator: BumpAllocator,
-+        gemm_output_zero_allocator: BumpAllocator = None,
-     ) -> torch.Tensor:
-         hidden_states, residual = self.layer_communicator.prepare_attn(
-             hidden_states, residual, forward_batch
-@@ -690,119 +677,44 @@ class Glm4MoeDecoderLayer(nn.Module):
-         return hidden_states, residual
- 
- 
--class Glm4MoeModel(nn.Module):
-+class Glm4MoeModel(DeepseekV2Model):
-     def __init__(
-         self,
-         config: PretrainedConfig,
-         quant_config: Optional[QuantizationConfig] = None,
-         prefix: str = "",
--    ):
--        super().__init__()
--        self.pp_group = get_pp_group()
--        self.config = config
-+    ) -> None:
-+        nn.Module.__init__(self)
-+        self.padding_id = config.pad_token_id
-         self.vocab_size = config.vocab_size
--        self.embed_dim = config.hidden_size
--        if self.pp_group.is_first_rank:
--            self.embed_tokens = VocabParallelEmbedding(
--                config.vocab_size,
--                config.hidden_size,
--                enable_tp=not is_dp_attention_enabled(),
--            )
--        else:
--            self.embed_tokens = PPMissingLayer()
-+        self.first_k_dense_replace = config.first_k_dense_replace
- 
--        self.alt_stream = torch.cuda.Stream() if _is_cuda else None
--        self.layers, self.start_layer, self.end_layer = make_layers(
--            config.num_hidden_layers,
--            lambda idx, prefix: Glm4MoeDecoderLayer(
--                layer_id=idx,
--                config=config,
--                quant_config=quant_config,
--                prefix=prefix,
--                alt_stream=self.alt_stream,
--            ),
--            pp_rank=self.pp_group.rank_in_group,
--            pp_size=self.pp_group.world_size,
--            prefix=add_prefix("layers", prefix),
-+        self.embed_tokens = VocabParallelEmbedding(
-+            config.vocab_size,
-+            config.hidden_size,
-+            enable_tp=not is_dp_attention_enabled(),
-         )
--        if self.pp_group.is_last_rank:
--            self.norm = RMSNorm(self.embed_dim, eps=config.rms_norm_eps)
--        else:
--            self.norm = PPMissingLayer(return_tuple=True)
--
--    def get_input_embeddings(self) -> torch.Tensor:
--        return self.embed_tokens
--
--    def forward(
--        self,
--        input_ids: torch.Tensor,
--        positions: torch.Tensor,
--        forward_batch: ForwardBatch,
--        input_embeds: torch.Tensor = None,
--        pp_proxy_tensors: Optional[PPProxyTensors] = None,
--    ) -> Union[torch.Tensor, PPProxyTensors]:
--        if self.pp_group.is_first_rank:
--            if input_embeds is None:
--                hidden_states = self.embed_tokens(input_ids)
--            else:
--                hidden_states = input_embeds
--            residual = None
--        else:
--            assert pp_proxy_tensors is not None
--            hidden_states = pp_proxy_tensors["hidden_states"]
--            residual = pp_proxy_tensors["residual"]
--
--        normal_start_layer = self.start_layer
--        normal_end_layer = self.end_layer
--        if forward_batch.can_run_tbo:
--            if (
--                self.first_k_dense_replace > normal_start_layer
--                and self.first_k_dense_replace < normal_end_layer
--            ):
--                normal_end_layer = self.first_k_dense_replace
--            elif self.first_k_dense_replace < normal_start_layer:
--                normal_end_layer = normal_start_layer = 0
--
--        for i in range(normal_start_layer, normal_end_layer):
--            with get_global_expert_distribution_recorder().with_current_layer(i):
--                layer = self.layers[i]
--                hidden_states, residual = layer(
--                    positions,
--                    hidden_states,
--                    forward_batch,
--                    residual,
-+        self.alt_stream = torch.cuda.Stream() if _is_cuda else None
-+        self.layers = nn.ModuleList(
-+            [
-+                Glm4MoeDecoderLayer(
-+                    config,
-+                    layer_id,
-+                    quant_config=quant_config,
-+                    prefix=add_prefix(f"layers.{layer_id}", prefix),
-+                    alt_stream=self.alt_stream,
-                 )
-+                for layer_id in range(config.num_hidden_layers)
-+            ]
++        parser.add_argument(
++            "--enable-return-routed-experts",
++            action="store_true",
++            help="Enable returning routed experts of each layer with responses.",
 +        )
-+        self.pp_group = get_pp_group()
-+        self.start_layer = 0
-+        self.end_layer = config.num_hidden_layers
-+        self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
- 
--        if normal_end_layer != self.end_layer:
--            hidden_states, residual = model_forward_maybe_tbo(
--                layers=self.layers[normal_end_layer : self.end_layer],
--                enable_tbo=True,
--                positions=positions,
--                forward_batch=forward_batch,
--                hidden_states=hidden_states,
--                residual=residual,
--                input_data_scatter_mode=self.layers[
--                    normal_end_layer - 1
--                ].layer_scatter_modes.layer_output_mode,
--            )
--
--        if not self.pp_group.is_last_rank:
--            return PPProxyTensors(
--                {
--                    "hidden_states": hidden_states,
--                    "residual": residual,
--                }
--            )
--        else:
--            if not forward_batch.forward_mode.is_idle():
--                if residual is None:
--                    hidden_states = self.norm(hidden_states)
--                else:
--                    hidden_states, _ = self.norm(hidden_states, residual)
--            return hidden_states
- 
-+class Glm4MoeForCausalLM(DeepseekV2ForCausalLM):
- 
--class Glm4MoeForCausalLM(nn.Module):
-     def __init__(
-         self,
-         config: PretrainedConfig,
-@@ -810,10 +722,12 @@ class Glm4MoeForCausalLM(nn.Module):
-         prefix: str = "",
-     ) -> None:
-         nn.Module.__init__(self)
-+        config.moe_layer_freq = 1
-         self.config = config
-         self.tp_size = get_tensor_model_parallel_world_size()
-         self.quant_config = quant_config
-         self.pp_group = get_pp_group()
-+        self.determine_num_fused_shared_experts("Glm4MoeForCausalLM")
-         self.model = Glm4MoeModel(
-             config, quant_config, prefix=add_prefix("model", prefix)
-         )
-@@ -826,41 +740,49 @@ class Glm4MoeForCausalLM(nn.Module):
-         )
-         self.logits_processor = LogitsProcessor(config)
- 
--        # For EAGLE3 support
--        self.capture_aux_hidden_states = False
--
--    def get_input_embeddings(self) -> nn.Embedding:
--        return self.model.embed_tokens
--
--    @torch.no_grad()
--    def forward(
--        self,
--        input_ids: torch.Tensor,
--        positions: torch.Tensor,
--        forward_batch: ForwardBatch,
--        input_embeds: torch.Tensor = None,
--        pp_proxy_tensors: Optional[PPProxyTensors] = None,
--    ) -> torch.Tensor:
--        hidden_states = self.model(
--            input_ids, positions, forward_batch, input_embeds, pp_proxy_tensors
-+        self._routed_experts_weights_of_layer = LazyValue(
-+            lambda: {
-+                layer_id: layer.mlp.get_moe_weights()
-+                for layer_id, layer in enumerate(self.model.layers)
-+                if isinstance(layer.mlp, DeepseekV2MoE)
-+            }
-         )
- 
--        if self.pp_group.is_last_rank:
--            return self.logits_processor(
--                input_ids, hidden_states, self.lm_head, forward_batch
-+    def determine_num_fused_shared_experts(
-+        self, architecture: str = "Glm4MoeForCausalLM"
-+    ):
-+        self.num_fused_shared_experts = 0
-+        if get_global_server_args().disable_shared_experts_fusion:
-+            return
-+
-+        # Only Deepseek V3/R1 can use shared experts fusion optimization now.
-+        disable_reason = None
-+        if (
-+            not _is_cuda
-+            or torch.cuda.get_device_capability("cuda") < (8, 0)
-+            or self.config.architectures[0] != architecture
-+            or self.config.n_shared_experts != 1
-+        ):
-+            disable_reason = "Only GLM-4.5 or GLM-4.6 on NV-platform with capability >= 80 can use shared experts fusion optimization."
-+        elif get_moe_expert_parallel_world_size() > 1:
-+            disable_reason = "Deepseek and GLM-4.5 or GLM-4.6 can not use shared experts fusion optimization under expert parallelism."
-+
-+        if disable_reason is not None:
-+            get_global_server_args().disable_shared_experts_fusion = True
-+            self.num_fused_shared_experts = 0
-+            log_info_on_rank0(
-+                logger,
-+                f"{disable_reason} Shared experts fusion optimization is disabled.",
-             )
--        else:
--            return hidden_states
-+            return
- 
--    @property
--    def start_layer(self):
--        return self.model.start_layer
-+        self.num_fused_shared_experts = self.config.n_shared_experts
- 
--    @property
--    def end_layer(self):
--        return self.model.end_layer
-+    def get_input_embeddings(self) -> nn.Embedding:
-+        return self.model.embed_tokens
- 
-     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]], is_nextn=False):
-+
-         if is_nextn:
-             if hasattr(self.config, "num_nextn_predict_layers"):
-                 num_nextn_layers = self.config.num_nextn_predict_layers
-@@ -882,14 +804,117 @@ class Glm4MoeForCausalLM(nn.Module):
-             ("gate_up_proj", "gate_proj", 0),
-             ("gate_up_proj", "up_proj", 1),
-         ]
-+        if self.num_fused_shared_experts > 0:
-+            assert self.num_fused_shared_experts == 1
-+            weights_list = list(weights)
-+            weights_dict = dict(weights_list)
-+            if self.quant_config is not None:
-+                if self.quant_config.get_name() == "w8a8_int8":
-+                    suffix_list = [
-+                        "down_proj.weight",
-+                        "down_proj.weight_scale",
-+                        "gate_proj.weight",
-+                        "gate_proj.weight_scale",
-+                        "up_proj.weight",
-+                        "up_proj.weight_scale",
-+                    ]
-+                elif (
-+                    self.quant_config.get_name() == "fp8"
-+                    or self.quant_config.get_name() == "blockwise_int8"
-+                    or self.quant_config.get_name() == "compressed_tensors"
-+                ):
-+                    suffix_list = [
-+                        "down_proj.weight",
-+                        "down_proj.weight_scale",
-+                        "gate_proj.weight",
-+                        "gate_proj.weight_scale",
-+                        "up_proj.weight",
-+                        "up_proj.weight_scale",
-+                    ]
-+                elif self.quant_config.get_name() == "awq":
-+                    suffix_list = [
-+                        "down_proj.qweight",
-+                        "down_proj.qzeros",
-+                        "down_proj.scales",
-+                        "gate_proj.qweight",
-+                        "gate_proj.qzeros",
-+                        "gate_proj.scales",
-+                        "up_proj.qweight",
-+                        "up_proj.qzeros",
-+                        "up_proj.scales",
-+                    ]
-+                elif self.quant_config.get_name() == "modelopt_fp4":
-+                    suffix_list = [
-+                        "down_proj.weight",
-+                        "down_proj.weight_scale",
-+                        "down_proj.weight_scale_2",
-+                        "down_proj.input_scale",
-+                        "gate_proj.weight",
-+                        "gate_proj.weight_scale",
-+                        "gate_proj.weight_scale_2",
-+                        "gate_proj.input_scale",
-+                        "up_proj.weight",
-+                        "up_proj.weight_scale",
-+                        "up_proj.weight_scale_2",
-+                        "up_proj.input_scale",
-+                    ]
-+                else:
-+                    raise ValueError(
-+                        f"Unsupported shared expert fusion for quantization: {self.quant_config.get_name()}."
-+                    )
-+            else:
-+                suffix_list = [
-+                    "down_proj.weight",
-+                    "gate_proj.weight",
-+                    "up_proj.weight",
-+                ]
-+            names_to_remove = []
-+
-+            moe_layers = (
-+                range(
-+                    self.config.first_k_dense_replace,
-+                    self.config.num_hidden_layers,
-+                    self.config.moe_layer_freq,
-+                )
-+                if not is_nextn
-+                else [nextn_layer_id]
-+            )
-+
-+            for moe_layer in moe_layers:
-+                for suffix in suffix_list:
-+                    shared_expert_weight_name = (
-+                        f"model.layers.{moe_layer}.mlp.shared_experts.{suffix}"
-+                    )
-+                    # online fp8 quantization does not load weight_scale
-+                    if shared_expert_weight_name not in weights_dict:
-+                        continue
-+                    weights_list.append(
-+                        (
-+                            f"model.layers.{moe_layer}."
-+                            f"mlp.experts."
-+                            f"{self.config.n_routed_experts + 0}"
-+                            f".{suffix}",
-+                            weights_dict[shared_expert_weight_name],
-+                        )
-+                    )
-+                    names_to_remove += [shared_expert_weight_name]
-+            weights = [w for w in weights_list if w[0] not in names_to_remove]
- 
-+        # Params for weights, fp8 weight scales, fp8 activation scales
-+        # (param_name, weight_name, expert_id, shard_id)
-         expert_params_mapping = FusedMoE.make_expert_params_mapping(
-             ckpt_gate_proj_name="gate_proj",
-             ckpt_down_proj_name="down_proj",
-             ckpt_up_proj_name="up_proj",
--            num_experts=self.config.n_routed_experts,
-+            num_experts=self.config.n_routed_experts + self.num_fused_shared_experts,
-         )
- 
-+        # Fuse q_a_proj and kv_a_proj_with_mqa along output dimension when q_lora_rank is not None
-+        fuse_qkv_a_proj = hasattr(self.config, "q_lora_rank") and (
-+            self.config.q_lora_rank is not None
-+        )
-+        cached_a_proj = {} if fuse_qkv_a_proj else None
-+
-         if is_nextn:
-             nextn_layer_prefix = f"model.layers.{nextn_layer_id}"
-             nextn_spec_weight_names = [
-@@ -945,36 +970,22 @@ class Glm4MoeForCausalLM(nn.Module):
-                 # name will be updated to mlp.experts[0].gate_up_proj, which
-                 # will then be updated below in expert_params_mapping
-                 # for mlp.experts[0].gate_gate_up_proj, which breaks load.
--                if "mlp.experts" in name:
-+                if ("mlp.experts." in name) and name not in params_dict:
-                     continue
-                 name = name.replace(weight_name, param_name)
-                 # Skip loading extra bias for GPTQ models.
-                 if name.endswith(".bias") and name not in params_dict:
-                     continue
--                if name not in params_dict:
--                    continue
--
-                 param = params_dict[name]
-                 weight_loader = param.weight_loader
-                 weight_loader(param, loaded_weight, shard_id)
-                 break
-             else:
--                # Track if this is an expert weight to enable early skipping
--                is_expert_weight = False
--
-                 for mapping in expert_params_mapping:
-                     param_name, weight_name, expert_id, shard_id = mapping
-                     if weight_name not in name:
-                         continue
--
--                    # Mark as expert weight regardless of whether we can process it
--                    is_expert_weight = True
--
-                     name = name.replace(weight_name, param_name)
--                    if name not in params_dict:
--                        # Expert weight not on this rank, will be skipped below
--                        continue
--
-                     param = params_dict[name]
-                     weight_loader = param.weight_loader
-                     weight_loader(
-@@ -986,43 +997,65 @@ class Glm4MoeForCausalLM(nn.Module):
-                     )
-                     break
-                 else:
--                    if is_expert_weight:
--                        # This is an expert weight but not mapped to this rank, skip all remaining processing
--                        continue
--
-                     # Skip loading extra bias for GPTQ models.
-                     if name.endswith(".bias") and name not in params_dict:
-                         continue
--                    if name not in params_dict:
--                        continue
-+                    if fuse_qkv_a_proj and (
-+                        "q_a_proj" in name or "kv_a_proj_with_mqa" in name
-+                    ):
-+                        cached_a_proj[name] = loaded_weight
-+                        q_a_proj_name = (
-+                            name
-+                            if "q_a_proj" in name
-+                            else name.replace("kv_a_proj_with_mqa", "q_a_proj")
-+                        )
-+                        kv_a_proj_name = (
-+                            name
-+                            if "kv_a_proj_with_mqa" in name
-+                            else name.replace("q_a_proj", "kv_a_proj_with_mqa")
-+                        )
- 
--                    if name in params_dict.keys():
-+                        # When both q_a_proj and kv_a_proj_with_mqa has been cached, load the fused weight to parameter
-+                        if (
-+                            q_a_proj_name in cached_a_proj
-+                            and kv_a_proj_name in cached_a_proj
-+                        ):
-+                            q_a_proj_weight = cached_a_proj[q_a_proj_name]
-+                            kv_a_proj_weight = cached_a_proj[kv_a_proj_name]
-+                            fused_weight = torch.cat(
-+                                [q_a_proj_weight, kv_a_proj_weight], dim=0
-+                            )
-+                            param_name = (
-+                                name.replace("q_a_proj", "fused_qkv_a_proj_with_mqa")
-+                                if "q_a_proj" in name
-+                                else name.replace(
-+                                    "kv_a_proj_with_mqa", "fused_qkv_a_proj_with_mqa"
-+                                )
-+                            )
-+                            param = params_dict[param_name]
-+
-+                            weight_loader = getattr(
-+                                param, "weight_loader", default_weight_loader
-+                            )
-+                            weight_loader(param, fused_weight)
-+                            cached_a_proj.pop(q_a_proj_name)
-+                            cached_a_proj.pop(kv_a_proj_name)
-+                    else:
-+                        if (
-+                            "k_scale" in name or "v_scale" in name
-+                        ) and name not in params_dict:
-+                            # modelopt attn kv scale is named differently
-+                            if any(scale in name for scale in ["k_scale", "v_scale"]):
-+                                name = name.replace("_proj", "attn_mqa")
-+                            else:
-+                                logger.warning(
-+                                    f"Unknown scale found in checkpoint: {name}"
-+                                )
-                         param = params_dict[name]
-                         weight_loader = getattr(
-                             param, "weight_loader", default_weight_loader
-                         )
-                         weight_loader(param, loaded_weight)
--                    else:
--                        logger.warning(f"Parameter {name} not found in params_dict")
--
--    def get_embed_and_head(self):
--        return self.model.embed_tokens.weight, self.lm_head.weight
--
--    def set_embed_and_head(self, embed, head):
--        del self.model.embed_tokens.weight
--        del self.lm_head.weight
--        self.model.embed_tokens.weight = embed
--        self.lm_head.weight = head
--        torch.cuda.empty_cache()
--        torch.cuda.synchronize()
--
--    @classmethod
--    def get_model_config_for_expert_location(cls, config):
--        return ModelConfigForExpertLocation(
--            num_layers=config.num_hidden_layers,
--            num_logical_experts=config.n_routed_experts,
--            num_groups=config.n_group,
--        )
- 
- 
- EntryClass = [Glm4MoeForCausalLM]
-diff --git a/python/sglang/srt/models/glm4_moe_nextn.py b/python/sglang/srt/models/glm4_moe_nextn.py
-index cb44a58e6..8697fc1a1 100644
---- a/python/sglang/srt/models/glm4_moe_nextn.py
-+++ b/python/sglang/srt/models/glm4_moe_nextn.py
-@@ -12,8 +12,7 @@
- # limitations under the License.
- # ==============================================================================
- 
--"""Inference-only GLM-4.5, GLM-4.6 Speculative Decoding."""
--
-+"""Inference-only GLM-4.5, GLM-4.6 NextN Speculative Decoding."""
- import logging
- from typing import Iterable, Optional, Tuple
- 
-@@ -34,7 +33,7 @@ from sglang.srt.layers.vocab_parallel_embedding import (
- from sglang.srt.model_executor.forward_batch_info import ForwardBatch
- from sglang.srt.models.glm4_moe import Glm4MoeDecoderLayer, Glm4MoeForCausalLM
- from sglang.srt.server_args import get_global_server_args
--from sglang.srt.utils import add_prefix
-+from sglang.srt.utils import BumpAllocator, add_prefix
- 
- logger = logging.getLogger(__name__)
- 
-@@ -85,6 +84,14 @@ class Glm4MoeModelNextN(nn.Module):
-         forward_batch: ForwardBatch,
-         input_embeds: torch.Tensor = None,
-     ) -> torch.Tensor:
-+        zero_allocator = BumpAllocator(
-+            buffer_size=2,
-+            dtype=torch.float32,
-+            device=(
-+                input_embeds.device if input_embeds is not None else input_ids.device
-+            ),
-+        )
-+
-         if input_embeds is None:
-             hidden_states = self.embed_tokens(input_ids)
-         else:
-@@ -104,7 +111,7 @@ class Glm4MoeModelNextN(nn.Module):
-         residual = None
-         with get_global_expert_distribution_recorder().disable_this_region():
-             hidden_states, residual = self.decoder(
--                positions, hidden_states, forward_batch, residual
-+                positions, hidden_states, forward_batch, residual, zero_allocator
-             )
- 
-         if not forward_batch.forward_mode.is_idle():
-@@ -117,6 +124,7 @@ class Glm4MoeModelNextN(nn.Module):
- 
- 
- class Glm4MoeForCausalLMNextN(Glm4MoeForCausalLM):
-+
-     def __init__(
-         self,
-         config: PretrainedConfig,
-@@ -127,6 +135,8 @@ class Glm4MoeForCausalLMNextN(Glm4MoeForCausalLM):
-         self.config = config
-         self.tp_size = get_tensor_model_parallel_world_size()
-         self.quant_config = quant_config
-+        self.determine_num_fused_shared_experts("Glm4MoeForCausalLMNextN")
-+
-         self.model = Glm4MoeModelNextN(
-             config, quant_config, prefix=add_prefix("model", prefix)
-         )
+         parser.add_argument(
+             "--scheduler-recv-interval",
+             type=int,
 diff --git a/python/sglang/srt/speculative/eagle_info.py b/python/sglang/srt/speculative/eagle_info.py
-index 2eebdb679..56066be41 100644
+index a2d72dc48..c18f37f1c 100644
 --- a/python/sglang/srt/speculative/eagle_info.py
 +++ b/python/sglang/srt/speculative/eagle_info.py
-@@ -736,6 +736,10 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
+@@ -750,6 +750,10 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
              self.topk_index = self.topk_index[: len(new_indices)]
              self.hidden_states = self.hidden_states[: len(new_indices)]
              self.verified_id = self.verified_id[: len(new_indices)]
 +            if self.accept_length is not None:
 +                self.accept_length = self.accept_length[: len(new_indices)]
 +            if self.accept_length_cpu is not None:
-+                self.accept_length_cpu = self.accept_length_cpu[:len(new_indices)]
++                self.accept_length_cpu = self.accept_length_cpu[: len(new_indices)]
          else:
              # in some cases(e.g draft_extend), we have not filtered the batch by `unfinished_index`
              self.topk_p = self.topk_p[new_indices]
-@@ -770,6 +774,17 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
+@@ -784,6 +788,27 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
          self.verified_id = torch.cat([self.verified_id, spec_info.verified_id], axis=0)
          self.topk_p = torch.cat([self.topk_p, spec_info.topk_p])
          self.topk_index = torch.cat([self.topk_index, spec_info.topk_index])
 +        if self.accept_length is not None and spec_info.accept_length is not None:
-+            self.accept_length = torch.cat([self.accept_length, spec_info.accept_length])
++            self.accept_length = torch.cat(
++                [self.accept_length, spec_info.accept_length]
++            )
 +            self.accept_length_cpu = self.accept_length.tolist()
 +        elif self.accept_length is not None:
-+            zeros = torch.zeros([spec_info.verified_id.shape[0]],dtype=self.accept_length.dtype,device=self.accept_length.device)
++            zeros = torch.zeros(
++                [spec_info.verified_id.shape[0]],
++                dtype=self.accept_length.dtype,
++                device=self.accept_length.device,
++            )
 +            self.accept_length = torch.cat([self.accept_length, zeros])
 +            self.accept_length_cpu = self.accept_length.tolist()
 +        elif spec_info.accept_length is not None:
-+            zeros = torch.zeros([self.verified_id.shape[0]],dtype=self.accept_length.dtype,device=self.accept_length.device)
++            zeros = torch.zeros(
++                [self.verified_id.shape[0]],
++                dtype=self.accept_length.dtype,
++                device=self.accept_length.device,
++            )
 +            self.accept_length = torch.cat([zeros, spec_info.accept_length])
 +            self.accept_length_cpu = self.accept_length.tolist()
  
  
  @dataclass
 diff --git a/python/sglang/srt/speculative/eagle_worker.py b/python/sglang/srt/speculative/eagle_worker.py
-index 4c94cbac9..415ab09c5 100644
+index 08e6516bc..37b4c3f85 100644
 --- a/python/sglang/srt/speculative/eagle_worker.py
 +++ b/python/sglang/srt/speculative/eagle_worker.py
-@@ -9,6 +9,7 @@ from sglang.srt.layers.logits_processor import LogitsProcessorOutput
+@@ -9,6 +9,7 @@ from sglang.srt.layers.dp_attention import get_attention_tp_group
+ from sglang.srt.layers.logits_processor import LogitsProcessorOutput
+ from sglang.srt.layers.moe.utils import speculative_moe_backend_context
  from sglang.srt.layers.sampler import get_token_ids_logprobs, get_top_logprobs
++from sglang.srt.managers.io_struct import UpdateWeightsFromTensorReqInput
  from sglang.srt.managers.schedule_batch import ScheduleBatch
  from sglang.srt.managers.scheduler import GenerationBatchResult
-+from sglang.srt.managers.io_struct import UpdateWeightsFromTensorReqInput
  from sglang.srt.managers.tp_worker import TpModelWorker
- from sglang.srt.mem_cache.common import (
-     alloc_paged_token_slots_extend,
-@@ -20,6 +21,7 @@ from sglang.srt.model_executor.forward_batch_info import (
-     ForwardBatch,
-     ForwardMode,
- )
-+from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
- from sglang.srt.server_args import ServerArgs
- from sglang.srt.speculative.draft_utils import DraftBackendFactory
- from sglang.srt.speculative.eagle_draft_cuda_graph_runner import (
-@@ -48,6 +50,7 @@ from sglang.srt.speculative.spec_utils import (
+@@ -50,6 +51,7 @@ from sglang.srt.speculative.spec_utils import (
      select_top_k_tokens,
  )
  from sglang.srt.utils import (
@@ -1267,7 +981,15 @@ index 4c94cbac9..415ab09c5 100644
      empty_context,
      get_available_gpu_memory,
      get_bool_env_var,
-@@ -939,6 +942,25 @@ class EAGLEWorker(TpModelWorker):
+@@ -57,6 +59,7 @@ from sglang.srt.utils import (
+     is_npu,
+     next_power_of_2,
+ )
++from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
+ 
+ _is_npu = is_npu()
+ 
+@@ -984,6 +987,26 @@ class EAGLEWorker(TpModelWorker):
          draft_input.topk_p, draft_input.topk_index = fast_topk(probs, self.topk, dim=-1)
          draft_input.hidden_states = logits_output.hidden_states
  
@@ -1290,6 +1012,46 @@ index 4c94cbac9..415ab09c5 100644
 +        )
 +
 +        return success, message
++
  
- @torch.compile(dynamic=True)
+ @torch.compile(dynamic=True, disable=_is_npu)
  def get_last_loc_large_page_size_top_k_1(
+diff --git a/python/sglang/srt/weight_sync/tensor_bucket.py b/python/sglang/srt/weight_sync/tensor_bucket.py
+index 44273713f..94a69464f 100644
+--- a/python/sglang/srt/weight_sync/tensor_bucket.py
++++ b/python/sglang/srt/weight_sync/tensor_bucket.py
+@@ -22,6 +22,9 @@ class FlattenedTensorBucket:
+     while preserving all metadata needed for reconstruction.
+     """
+ 
++    # This field is solely for users of to check whether the class supports this feature
++    supports_multi_dtypes = True
++
+     def __init__(
+         self,
+         named_tensors: List[Tuple[str, torch.Tensor]] = None,
+@@ -48,7 +51,7 @@ class FlattenedTensorBucket:
+             flattened_tensors: List[torch.Tensor] = [None] * len(named_tensors)
+ 
+             for i, (name, tensor) in enumerate(named_tensors):
+-                flattened = tensor.flatten()
++                flattened = tensor.flatten().view(torch.uint8)
+                 flattened_tensors[i] = flattened
+ 
+                 # Store metadata
+@@ -93,14 +96,10 @@ class FlattenedTensorBucket:
+         reconstructed = [None] * len(self.metadata)
+ 
+         for i, meta in enumerate(self.metadata):
+-            tensor = self.flattened_tensor[meta.start_idx : meta.end_idx].reshape(
++            tensor = self.flattened_tensor[meta.start_idx : meta.end_idx].view(meta.dtype).reshape(
+                 meta.shape
+             )
+ 
+-            # batch dtype conversion (if needed)
+-            if tensor.dtype != meta.dtype:
+-                tensor = tensor.to(meta.dtype)
+-
+             reconstructed[i] = (meta.name, tensor)
+ 
+         return reconstructed

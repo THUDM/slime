@@ -22,6 +22,7 @@ class Sample:
     loss_mask: Optional[list[int]] = None
     weight_versions: list[str] = field(default_factory=list)
     rollout_log_probs: Optional[list[float]] = None  # Log probabilities from rollout engine
+    rollout_routed_experts: Optional[list[list[int]]] = None  # Routed experts from rollout engine
 
     class Status(Enum):
         PENDING = "pending"
@@ -67,6 +68,10 @@ class Sample:
 
     def get_reward_value(self, args) -> float:
         return self.reward if not args.reward_key else self.reward[args.reward_key]
+
+    @property
+    def effective_response_length(self):
+        return sum(self.loss_mask) if self.loss_mask is not None else self.response_length
 
 
 @dataclass
