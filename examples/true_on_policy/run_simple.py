@@ -61,8 +61,6 @@ def execute():
         "--entropy-coef 0.00 "
         "--eps-clip 0.2 "
         "--eps-clip-high 0.28 "
-        # mainly to look at its metric
-        "--use-tis "
     )
 
     optimizer_args = (

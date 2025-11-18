@@ -2,21 +2,24 @@ import ray
 
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
-from slime.utils.wandb_utils import init_wandb_primary
+from slime.utils.logging_utils import configure_logger
+from slime.utils.tracking_utils import init_tracking
 
 
+# The framework supports other asynchronous approaches such as fully async (which is shown in examples/full_async).
 def train(args):
     assert not args.colocate, "Colocation is not supported for async training."
+    configure_logger()
     # allocate the GPUs
     pgs = create_placement_groups(args)
-    wandb_run_id = init_wandb_primary(args)
+    init_tracking(args)
 
     # create the rollout manager, with sglang engines inside.
     # need to initialize rollout manager first to calculate num_rollout
-    rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"], wandb_run_id=wandb_run_id)
+    rollout_manager, num_rollout_per_epoch = create_rollout_manager(args, pgs["rollout"])
 
     # create the actor and critic models
-    actor_model, critic_model = create_training_models(args, pgs, rollout_manager, wandb_run_id=wandb_run_id)
+    actor_model, critic_model = create_training_models(args, pgs, rollout_manager)
 
     # always update weight first so that sglang has the loaded weights from training.
     actor_model.update_weights()

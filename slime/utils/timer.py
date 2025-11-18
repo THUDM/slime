@@ -1,3 +1,4 @@
+import logging
 from contextlib import contextmanager
 from functools import wraps
 from time import time
@@ -7,6 +8,8 @@ import torch.distributed
 from .misc import SingletonMeta
 
 __all__ = ["Timer", "timer"]
+
+logger = logging.getLogger(__name__)
 
 
 class Timer(metaclass=SingletonMeta):
@@ -18,7 +21,7 @@ class Timer(metaclass=SingletonMeta):
         assert name not in self.start_time, f"Timer {name} already started."
         self.start_time[name] = time()
         if torch.distributed.get_rank() == 0:
-            print(f"Timer {name} start")
+            logger.info(f"Timer {name} start")
 
     def end(self, name):
         assert name in self.start_time, f"Timer {name} not started."
@@ -26,7 +29,7 @@ class Timer(metaclass=SingletonMeta):
         self.add(name, elapsed_time)
         del self.start_time[name]
         if torch.distributed.get_rank() == 0:
-            print(f"Timer {name} end (elapsed: {elapsed_time:.1f}s)")
+            logger.info(f"Timer {name} end (elapsed: {elapsed_time:.1f}s)")
 
     def reset(self, name=None):
         if name is None:

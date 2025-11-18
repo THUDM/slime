@@ -51,6 +51,14 @@ We also provide examples for some use cases not covered in the quick start guide
 
 slime has powered several novel research projects and production systems. Here are some notable examples:
 
+### ⚛️ P1: Mastering Physics Olympiads with Reinforcement Learning
+
+[**P1**](https://prime-rl.github.io/P1/) is a family of open-source physics reasoning models trained entirely through reinforcement learning. P1 leverages slime as the RL post training framework, and introduces a multi-stage RL training algorithm that progressively enhances reasoning ability through adaptive learnability adjustment and stabilization mechanisms. Enpowered by this training paradigm, P1 delivers breakthrough performance in open-source physics reasoning.
+
+### 📈RLVE: Scaling LM RL with Adaptive Verifiable Environments
+
+[**RLVE**](https://github.com/Zhiyuan-Zeng/RLVE) introduces an approach using verifiable environments that procedurally generate problems and provide algorithmically verifiable rewards, to scale up RL for language models (LMs). With joint training across 400 verifiable environments, RLVE enables each environment to dynamically adapt its problem difficulty distribution to the policy model's capabilities as training progresses.
+
 ### ⚡ TritonForge: Agentic RL Training Framework for Kernel Generation
 
 [**TritonForge**](https://github.com/RLsys-Foundation/TritonForge) leverages slime's SFT & RL capabilities to train LLMs that automatically generate optimized GPU kernels. By using a two-stage training approach—supervised fine-tuning followed by reinforcement learning with multi-turn compilation feedback—TritonForge achieves remarkable results in converting PyTorch operations into high-performance Triton kernels.
@@ -93,7 +101,7 @@ pre-commit run --all-files --show-diff-on-failure --color=always
 - Special thanks to the following projects & communities: SGLang, Megatron‑LM, mbridge, OpenRLHF, veRL, Pai-Megatron-Patch and others.
 - To quote slime, please use:
 
-```bibtext
+```bibtex
 @misc{slime_github,
   author       = {Zilin Zhu and Chengxing Xie and Xin Lv and slime Contributors},
   title        = {slime: An LLM post-training framework for RL Scaling},

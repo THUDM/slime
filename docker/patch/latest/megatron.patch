@@ -1,8 +1,49 @@
+diff --git a/megatron/core/dist_checkpointing/strategies/common.py b/megatron/core/dist_checkpointing/strategies/common.py
+index 41c21d93d..ef80f72d6 100644
+--- a/megatron/core/dist_checkpointing/strategies/common.py
++++ b/megatron/core/dist_checkpointing/strategies/common.py
+@@ -86,7 +86,7 @@ class TorchCommonLoadStrategy(LoadCommonStrategy):
+                 msc = MultiStorageClientFeature.import_package()
+                 return msc.torch.load(load_path, map_location='cpu')
+             else:
+-                return torch.load(load_path, map_location='cpu')
++                return torch.load(load_path, map_location='cpu', weights_only=False)
+         except FileNotFoundError as e:
+             err_msg = f'Common file {load_path} does not exist'
+             if MultiStorageClientFeature.is_enabled():
 diff --git a/megatron/core/dist_checkpointing/strategies/torch.py b/megatron/core/dist_checkpointing/strategies/torch.py
-index ccf5242a2..807959da5 100644
+index ccf5242a2..9b6d3e31f 100644
 --- a/megatron/core/dist_checkpointing/strategies/torch.py
 +++ b/megatron/core/dist_checkpointing/strategies/torch.py
-@@ -556,10 +556,12 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
+@@ -427,6 +427,15 @@ def _restore_dict_types(x: Union[dict, list, Any], keys_template: Union[dict, li
+             _restore_dict_types(x_val, templ_val)
+ 
+ 
++@dataclass
++class MCoreMetadata(Metadata):
++    """Metadata with mcore specific data."""
++
++    # holds data related to flattened_range
++    # TODO: remove when flattened_range is properly removed
++    mcore_data: Optional[Dict[str, Dict[str, Any]]] = None  # Mcore related data about each tensor
++
++
+ @dataclass(frozen=True)
+ class MCoreSavePlan(SavePlan):
+     """SavePlan with MCore specific data."""
+@@ -499,9 +508,10 @@ class MCoreSavePlanner(DefaultSavePlanner):
+     def create_global_plan(self, all_plans: List[MCoreSavePlan]) -> Tuple[List[SavePlan], Metadata]:
+         """Merges MCore data for all plans."""
+         global_plan, metadata = super().create_global_plan(all_plans)
+-        metadata.mcore_data = dict(
++        mcore_data = dict(
+             ChainMap(*(plan.mcore_data for plan in all_plans))  # type: ignore[arg-type]
+         )
++        metadata = MCoreMetadata(mcore_data=mcore_data, **vars(metadata))
+         return global_plan, metadata
+ 
+     def create_decentralized_global_plan(self, local_plan: SavePlan) -> SavePlan:
+@@ -556,10 +566,12 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
      def _validate_global_shapes(self, metadata, sharded_tensors):
          for sh_ten in sharded_tensors:
              if sh_ten.key not in metadata.state_dict_metadata:
@@ -19,7 +60,7 @@ index ccf5242a2..807959da5 100644
              loaded_shape = metadata.state_dict_metadata[sh_ten.key].size
              expected_shape = self._expected_shape(sh_ten)
              if loaded_shape != expected_shape:
-@@ -589,7 +591,7 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
+@@ -589,7 +601,7 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
          tensor_metadata = self.metadata.state_dict_metadata
          metadata_with_sizes = [
              (tensor_metadata[key], tensor_metadata[key].size, sharded_tensor)
@@ -28,7 +69,7 @@ index ccf5242a2..807959da5 100644
          ]
          try:
              # Temporarily set sizes to expected shapes
-@@ -918,6 +920,7 @@ class TorchDistLoadShardedStrategy(LoadShardedStrategy):
+@@ -918,6 +930,7 @@ class TorchDistLoadShardedStrategy(LoadShardedStrategy):
              planner=MCoreLoadPlanner(
                  shapes_validation_sharded_tensors=flexible_shape_sharded_tensors,
                  allow_shape_mismatch_sharded_tensors=allow_shape_mismatch_sharded_tensors,
@@ -94,7 +135,7 @@ index 860ee64a9..80944b702 100755
                      "mlp.0.weight": "mlp.linear_fc1.layer_norm_weight",
                      "mlp.0.bias": "mlp.linear_fc1.layer_norm_bias",
 diff --git a/megatron/core/models/gpt/gpt_model.py b/megatron/core/models/gpt/gpt_model.py
-index 6aec66e6d..7aa4b2f7d 100644
+index 6aec66e6d..6ca48b55f 100644
 --- a/megatron/core/models/gpt/gpt_model.py
 +++ b/megatron/core/models/gpt/gpt_model.py
 @@ -355,6 +355,7 @@ class GPTModel(LanguageModule):
@@ -130,7 +171,7 @@ index 6aec66e6d..7aa4b2f7d 100644
              hidden_states = self.mtp(
                  input_ids=input_ids,
                  position_ids=position_ids,
-@@ -465,8 +468,10 @@ class GPTModel(LanguageModule):
+@@ -465,25 +468,37 @@ class GPTModel(LanguageModule):
          if not self.post_process:
              return hidden_states
  
@@ -143,18 +184,40 @@ index 6aec66e6d..7aa4b2f7d 100644
              hidden_states_list = torch.chunk(hidden_states, 1 + self.config.mtp_num_layers, dim=0)
              hidden_states = hidden_states_list[0]
              if loss_mask is None:
-@@ -480,9 +485,9 @@ class GPTModel(LanguageModule):
-                     runtime_gather_output=runtime_gather_output,
+                 # if loss_mask is not provided, use all ones as loss_mask
+                 loss_mask = torch.ones_like(mtp_labels)
++            else:
++                # Otherwise, roll the loss_mask to keep up with the mtp_labels
++                loss_mask, _ = roll_tensor(loss_mask, shifts=-1, dims=-1, cp_group=self.cp_group, packed_seq_params=packed_seq_params)
+             for mtp_layer_number in range(self.config.mtp_num_layers):
+                 # output
+-                mtp_logits, _ = self.output_layer(
+-                    hidden_states_list[mtp_layer_number + 1],
+-                    weight=output_weight,
+-                    runtime_gather_output=runtime_gather_output,
++                output_layer_params = {k: v.detach() for k, v in self.output_layer.named_parameters()}
++                output_layer_buffers = dict(self.output_layer.named_buffers())
++                mtp_logits, _ = torch.func.functional_call(
++                    self.output_layer,
++                    {**output_layer_params, **output_layer_buffers},
++                    (hidden_states_list[mtp_layer_number + 1],),
++                    {
++                        "weight": output_weight.detach() if output_weight else None,
++                        "runtime_gather_output": runtime_gather_output,
++                    },
                  )
                  # Calc loss for the current Multi-Token Prediction (MTP) layers.
 -                mtp_labels, _ = roll_tensor(mtp_labels, shifts=-1, dims=-1, cp_group=self.cp_group)
-+                mtp_labels, _ = roll_tensor(mtp_labels, shifts=-1, dims=-1, cp_group=self.cp_group, packed_seq_params=packed_seq_params)
-                 loss_mask, num_tokens = roll_tensor(
+-                loss_mask, num_tokens = roll_tensor(
 -                    loss_mask, shifts=-1, dims=-1, cp_group=self.cp_group
++                mtp_labels, _ = roll_tensor(mtp_labels, shifts=-1, dims=-1, cp_group=self.cp_group, packed_seq_params=packed_seq_params)
++                new_loss_mask, num_tokens = roll_tensor(
 +                    loss_mask, shifts=-1, dims=-1, cp_group=self.cp_group, packed_seq_params=packed_seq_params
                  )
++                loss_mask = new_loss_mask * loss_mask
                  mtp_loss = self.compute_language_model_loss(mtp_labels, mtp_logits)
                  mtp_loss = loss_mask * mtp_loss
+                 if self.training:
 diff --git a/megatron/core/parallel_state.py b/megatron/core/parallel_state.py
 index a40c85a88..86688c331 100644
 --- a/megatron/core/parallel_state.py
@@ -341,7 +404,7 @@ index c749bac43..dde8d50e7 100644
          """Execute weight update operations"""
          self._backward_qkv_proj()
 diff --git a/megatron/core/transformer/moe/moe_utils.py b/megatron/core/transformer/moe/moe_utils.py
-index 235b6f6af..fbcffe278 100644
+index 235b6f6af..0f4862e43 100644
 --- a/megatron/core/transformer/moe/moe_utils.py
 +++ b/megatron/core/transformer/moe/moe_utils.py
 @@ -566,6 +566,9 @@ def topk_routing_with_score_function(
@@ -355,7 +418,7 @@ index 235b6f6af..fbcffe278 100644
          if use_pre_softmax:
              scores = torch.softmax(logits, dim=-1, dtype=torch.float32).type_as(logits)
 diff --git a/megatron/core/transformer/moe/router.py b/megatron/core/transformer/moe/router.py
-index 6b20b8622..459e65921 100644
+index 6b20b8622..f91b01f90 100644
 --- a/megatron/core/transformer/moe/router.py
 +++ b/megatron/core/transformer/moe/router.py
 @@ -156,6 +156,9 @@ class TopKRouter(Router):
@@ -369,7 +432,7 @@ index 6b20b8622..459e65921 100644
          """
          Maintain the expert bias in float32.
 diff --git a/megatron/core/transformer/multi_token_prediction.py b/megatron/core/transformer/multi_token_prediction.py
-index b7884e18e..153682618 100755
+index b7884e18e..f0104f861 100755
 --- a/megatron/core/transformer/multi_token_prediction.py
 +++ b/megatron/core/transformer/multi_token_prediction.py
 @@ -6,6 +6,7 @@ from typing import Callable, List, Optional, Union
@@ -560,10 +623,10 @@ index b7884e18e..153682618 100755
 +        )
          # embedding
          decoder_input = embedding(input_ids=input_ids, position_ids=position_ids)
-+        decoder_input = make_viewless_tensor(inp=decoder_input, requires_grad=False, keep_graph=False)
++        decoder_input = decoder_input.detach()
  
 -        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
-+        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=False, keep_graph=False)
++        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=False)
  
          return input_ids, position_ids, decoder_input, hidden_states
  

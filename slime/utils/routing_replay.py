@@ -40,10 +40,18 @@ class RoutingReplay:
         self.backward_index = 0
         self.top_indices_list = []
 
+    def clear_forward(self):
+        self.forward_index = 0
+
     @staticmethod
     def clear_all():
         for replay in RoutingReplay.all_routing_replays:
             replay.clear()
+
+    @staticmethod
+    def clear_all_forward():
+        for replay in RoutingReplay.all_routing_replays:
+            replay.clear_forward()
 
 
 def get_routing_replay_compute_topk(old_compute_topk):
@@ -59,7 +67,7 @@ def get_routing_replay_compute_topk(old_compute_topk):
                 top_indices = ROUTING_REPLAY.pop_forward()
                 assert (
                     top_indices.shape[0] == scores.shape[0] and top_indices.shape[1] == topk
-                ), f"top_indices shape {top_indices.shape} does not match scores shape {scores.shape} and topk {topk}"
+                ), f"[{torch.distributed.get_rank()}] top_indices shape {top_indices.shape} does not match scores shape {scores.shape} and topk {topk}"
                 probs = scores.gather(1, top_indices)
             elif routing_replay_stage == "replay_backward":
                 top_indices = ROUTING_REPLAY.pop_backward()

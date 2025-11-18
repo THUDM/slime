@@ -3,6 +3,7 @@
 import math
 
 import torch
+import torch.nn.functional as F
 
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 
@@ -115,6 +116,14 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
 
     instances = []
 
+    # Calculate pad_length by counting trailing zeros
+    tokens = packed_batch["tokens"]
+    nonzero_indices = (tokens != 0).nonzero(as_tuple=True)[0]
+    if len(nonzero_indices) > 0:
+        # Last non-zero index, pad_length is everything after it
+        pad_length = len(tokens) - nonzero_indices[-1].item() - 1
+    else:
+        pad_length = 0  # No padding if no non-zero tokens (or all zeros)
     for i in range(num_sequences):
         start_idx = cu_seqlens[i].item()
         end_idx = cu_seqlens[i + 1].item()
@@ -127,7 +136,9 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
                 if isinstance(value, torch.Tensor):
                     if key in ["log_probs", "ref_log_probs", "cur_log_probs", "entropy"]:
                         # These are computed from logits[:-1] so they have length seq_len-1
-                        instance[key] = value[end_idx - 1 - response_lengths[i] : end_idx - 1]
+                        instance[key] = value[
+                            end_idx - 1 - response_lengths[i] - pad_length : end_idx - 1 - pad_length
+                        ]
                     elif key == "rollout_log_probs":
                         # rollout_log_probs is packed based on response_lengths, so slice differently
                         instance[key] = value[sum(response_lengths[:i]) : sum(response_lengths[: i + 1])]
@@ -147,3 +158,26 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
         instances.append(instance)
 
     return instances
+
+
+def pad_packed_sequence_with_cp(packed_sequence: dict, cp_size: int) -> dict:
+    """Pad packed sequence to make total length divisible by cp_size.
+
+    Args:
+        packed_sequence: Packed sequence dict containing tokens, position_ids, cu_seqlens, etc.
+        cp_size: Context parallelism world size
+
+    Returns:
+        Padded packed sequence
+    """
+    seq_length = len(packed_sequence["tokens"])
+    # Calculate padding needed: (cp_size - seq_length % cp_size) % cp_size
+    remainder = seq_length % cp_size
+    pad_length = (cp_size - remainder) % cp_size
+
+    if pad_length > 0:
+        packed_sequence["tokens"] = F.pad(packed_sequence["tokens"], (0, pad_length), value=0)
+        packed_sequence["position_ids"] = F.pad(packed_sequence["position_ids"], (0, pad_length), value=0)
+        packed_sequence["loss_masks"] = F.pad(packed_sequence["loss_masks"], (0, pad_length), value=0)
+        packed_sequence["cu_seqlens"][-1] += pad_length
+    return packed_sequence

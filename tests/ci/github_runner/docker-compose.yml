@@ -3,15 +3,15 @@ version: "3.9"
 
 services:
   runner:
-    image: ghcr.io/actions/actions-runner:2.328.0
+    # NOTE need to use the latest, o/w the runner will want to upgrade itself
+    image: ghcr.io/actions/actions-runner:2.329.0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /mnt/nvme0n1/slime_ci:/data/slime_ci
+      - /data/slime_ci:/data/slime_ci
       # it requires this folder
       - /home/runner/externals:/home/runner/externals
     deploy:
-      # TODO 4 runner + lock gpu when running
-      replicas: 1
+      replicas: 8
     restart: always
     environment:
       RUNNER_ALLOW_RUNASROOT: "1"
@@ -23,7 +23,7 @@ services:
     # TODO seems we should not run config.sh repeatedly
     entrypoint: >
       sh -c "
-      cd /mnt/nvme0n1/slime_ci &&
-      /home/runner/config.sh --url ${GITHUB_RUNNER_URL} --token ${GITHUB_RUNNER_TOKEN} --unattended --work /mnt/nvme0n1/slime_ci/runner_$(hostname) &&
+      cd /data/slime_ci &&
+      /home/runner/config.sh --url ${GITHUB_RUNNER_URL} --token ${GITHUB_RUNNER_TOKEN} --unattended --work /data/slime_ci/runner_$(hostname) --disableupdate &&
       /home/runner/run.sh
       "
