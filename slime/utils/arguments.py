@@ -1328,6 +1328,11 @@ def slime_validate_args(args):
             not args.get_mismatch_metrics
         ), "use_rollout_logprobs and get_mismatch_metrics cannot be set at the same time."
 
+    if args.get_mismatch_metrics:
+        assert (
+            args.custom_tis_function_path is not None
+        ), "custom_tis_function_path must be set when get_mismatch_metrics is set"
+
     if args.use_dynamic_batch_size:
         assert args.max_tokens_per_gpu is not None, "max_tokens_per_gpu must be set when use_dynamic_batch_size is set"
         if args.log_probs_max_tokens_per_gpu is None:
