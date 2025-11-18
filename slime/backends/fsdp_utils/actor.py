@@ -317,8 +317,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 ):
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                         model_args = self._get_model_inputs_args(batch)
-                        if "pixel_values" in batch:
-                            model_args["pixel_values"] = batch["pixel_values"]
                         logits = self.model(**model_args).logits.squeeze(0)
                         log_probs_result, entropy_result = get_logprob_and_entropy_with_cp(
                             logits=logits,
@@ -831,7 +829,7 @@ class FSDPTrainRayActor(TrainRayActor):
             "position_ids": position_ids,
             "attention_mask": None,
         }
-        if packed_sequence['multimodal_inputs']:
+        if packed_sequence["multimodal_inputs"]:
             model_args.update(packed_sequence["multimodal_inputs"])
         return model_args
 
