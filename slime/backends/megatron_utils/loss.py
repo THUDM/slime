@@ -531,7 +531,7 @@ def policy_loss_function(
     if args.use_kl_loss:
         reported_loss["kl_loss"] = kl_loss.clone().detach()
 
-    if args.get_mismatch_metrics and args.use_tis:
+    if args.get_mismatch_metrics or args.use_tis:
         reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
         # Assume all metrics are already cloned and detached
         for metric_key, metric_value in tis_metrics.items():
