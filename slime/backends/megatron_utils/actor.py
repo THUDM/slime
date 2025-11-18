@@ -332,7 +332,7 @@ class MegatronTrainRayActor(TrainRayActor):
                         )
                     )
 
-                if not self.args.use_rollout_logprobs:
+                if not self.args.use_rollout_logprobs or self.args.get_mismatch_metrics:
                     if self.args.use_routing_replay:
                         if self.args.use_rollout_routing_replay:
                             os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
