@@ -130,11 +130,11 @@ def extract_solution(solution_str):
     match = re.finditer(answer_pattern, solution_str, re.DOTALL)
     matches = list(match)
 
-    # If there are 0 or exactly 1 matches, return None
-    if len(matches) <= 1:
+    # If there are no matches, return None
+    if len(matches) == 0:
         return None
 
-    # If there are 2 or more matches, return the last one
+    # Return the last answer (handles both single and multiple answers)
     return matches[-1].group(1).strip()
 
 
@@ -162,6 +162,8 @@ def compute_score_em(
     retrieval_score=0,
     format_score=0,
     score=1.0,
+    multi_answer_penalty_per_extra=0.05,
+    multi_answer_penalty_cap=0.2,
 ):
     """The scoring function for exact match (EM).
 
@@ -171,18 +173,29 @@ def compute_score_em(
         method: the method to extract the solution, choices are 'strict' and 'flexible'
         format_score: the score for the format
         score: the score for the correct answer
+        multi_answer_penalty_per_extra: penalty per extra <answer> tag beyond the first
+        multi_answer_penalty_cap: maximum penalty for multiple <answer> tags
     """
     is_valid_format, _ = is_valid_sequence(solution_str)
     retrieval_correct = False
     if is_valid_format:
         retrieval_correct = is_retrieval_correct(solution_str, ground_truth["target"])
     answer = extract_solution(solution_str=solution_str)
+
+    # Count number of <answer> tags for progressive penalty
+    num_answers = len(re.findall(r"<answer>", solution_str))
+    multi_answer_penalty = min(
+        multi_answer_penalty_cap,
+        multi_answer_penalty_per_extra * max(0, num_answers - 1)
+    )
+
     do_print = random.randint(1, 64) == 1
 
     if do_print:
         print(f"--------------------------------")
         print(f"Golden answers: {ground_truth['target']}")
         print(f"Extracted answer: {answer}")
+        print(f"Num answers: {num_answers}, penalty: {multi_answer_penalty}")
         print(f"Solution string: {solution_str}")
 
     if answer is None:
@@ -196,13 +209,14 @@ def compute_score_em(
     else:
         if em_check(answer, ground_truth["target"]):
             if is_valid_format:
-                return score  # 1
+                # Apply progressive penalty for multiple <answer> tags
+                return score - multi_answer_penalty
             else:
-                return score - structure_format_score  # 0.8
+                return score - structure_format_score - multi_answer_penalty
         elif is_valid_format:
             if retrieval_correct:
-                return structure_format_score + retrieval_score  # 0.3
+                return structure_format_score + retrieval_score - multi_answer_penalty
             else:
-                return structure_format_score  # 0.2
+                return structure_format_score - multi_answer_penalty
         else:
-            return final_format_score  # 0.1
+            return max(0, final_format_score - multi_answer_penalty)
