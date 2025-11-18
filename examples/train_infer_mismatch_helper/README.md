@@ -1,22 +1,11 @@
 # Rollout Correction Methods
 
-Rollout correction (e.g, training-inference mismatch correction) through algorithmic methods.
-
-The designs follow the algorithms in [Mathematical Formulations of Rollout Correction Methods in verl (Yingru Li)](https://github.com/szrlee/verl/blob/yingru/rollout_correction/docs/advance/rollout_corr_math.md). You may check this article for more math details and principles.
+Rollout correction (e.g, TIS, MIS) through algorithmic methods.
 
 
 ## Quick Takeaway
 
 This function is used to solve offline scenarios through algorithmic adaptations, e.g. TIS/MIS.
-
-Applicable scenarios may include:
-
-- Policy mismatch: Different precision (FP8 vs FP16 vs BF16 vs FP32), different backends (vLLM vs SGLang vs FSDP vs Megatron)
-- Temporal lag: Model staleness, asynchronous rollout workers
-- Replay buffers: Training on historical trajectories from earlier policy versions
-- Off-policy algorithms: Behavioral cloning, DAPO, expert demonstrations
-- Data filtering: Reweighting, preference learning, curriculum learning
-
 
 We included 3 rollout correction algorithms:
 
@@ -24,9 +13,13 @@ We included 3 rollout correction algorithms:
 2. direct rollout policy overwriting in the standard PPO
 3. pure REINFORCE loss (without PPO clipping) with rollout importance sampling
 
-You may use **loss algorithm selection** APIs `--use-rollout-log-probs` and `--use-rollout-correction` to select one of the rollout correction losses (details in **Algorithms**).
 
-When training-inference importance sampling/rejection sampling is enabled (`--use-rollout-correction`), you also need to specify the **IS/RS configs** with a config file using `--custom-config-path`. We will also provide some recommended settings for each mode (details in **Configs and Recommended Settings**).
+`--use-tis`: use this flag to **turn on TIS/MIS** for rollout correction (details in **Algorithms**).
+You may specify the **IS/RS configs** with a config file using `--custom-config-path`.
+
+`--use-rollout-logprobs`: When use this flag, the logprobs will **not** be recomputed by training engine - rollout log probs will be directly used in PPO/GRPO loss.
+
+`--get-mismatch-metrics`: When you don't want to add TIS/MIS, but still want to monitor the mismatch-related metrics (e.g. rollout-training KL). It will **only return mismatch metrics** but not change the loss in any way.
 
 
 ## Algorithms
@@ -50,23 +43,6 @@ L_{\text{PPO}}(\theta)
   \right)
 \right].
 $$
-
-### REINFORCE + pure importance sampling
-
-REINFORCE + pure IS is a simple and efficient method by directly applying TIS/MIS to REINFORCE loss, without PPO clipping.
-
-$$
-L_{\text{REINFORCE-IS}}(\theta)
-= - \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_{\textcolor{red}{\text{SGLang}}}} \left[
-    \frac{\pi_{\theta}(y \mid x)}{\pi_{\textcolor{red}{\text{SGLang}}}(y \mid x)}
-    \cdot \Sigma_t \log \pi_\theta \cdot A_t
-\right].
-$$
-
-Advantages: 
-
-- Efficiency: skip `log_prob` recomputation on training engine. Reduce one expensive forward pass on all the generated trajectories.
-
 
 ### Bypassing PPO importance sampling
 
@@ -127,7 +103,6 @@ You may choose from above algorithms by specifying arguments below:
 | False | False | Standard PPO (Algorithm 0) | 2 ($\pi_\theta$, $\pi_{\textcolor{blue}{\text{old}}}$)|Yes | No | N/A |
 | True | False | Bypassing PPO (Algorithm 3) | 2 ($\pi_\theta$, $\pi_{\textcolor{red}{\text{SGLang}}}$) |🚀 Skipped | No | N/A |
 | False | True | Decoupled PPO (Algorithm 2) | 3 ($\pi_\theta$, $\pi_{\textcolor{blue}{\text{old}}}$, $\pi_{\textcolor{red}{\text{SGLang}}}$)  |Yes  | Yes | token/seq/geo |
-| True | True | REINFORCE+IS (Algorithm 1) | 2 ($\pi_\theta$, $\pi_{\textcolor{red}{\text{SGLang}}}$) |🚀 Skipped | No | seq |
 
 ## Configs and Recommended Settings
 
@@ -195,19 +170,6 @@ Reject entire sequence if $\exists t \in T$ such that $\rho_t < C_{\text{veto}}$
 
 *Typical values: $10^{-4}$ to $10^{-6}$*
 
-**Recommendations**:
-
-| Method | Theory | Policies | PPO Clip | IS Correction | Correctness | Speed |
-|--------|--------|----------|----------|---------------|-------------|-------|
-| `Naive LLM-RL` | Standard PPO | 2 (old, θ) | ✅ | ❌ | ⚠️ Incorrect | Standard |
-| `pure_is` | Off-policy REINFORCE | 2 (rollout, θ) | ❌ | Seq-level IS | ✅ Correct | Fast |
-| `ppo_is_bypass` | PPO (rollout as prox) | 2 (rollout, θ) | ✅ | ❌ | ✅ Correct | Fast |
-| `token_is` | Decoupled PPO | 3 (rollout, old, θ) | ✅ | Token-level IS | ✅ Correct | Standard |
-| `seq_is` | Decoupled PPO | 3 (rollout, old, θ) | ✅ | Seq-level IS | ✅ Correct | Standard |
-| `seq_is_rs` | Decoupled PPO + Rejection | 3 (rollout, old, θ) | ✅ | seq-level IS + seq-level RS | ✅ Correct | Standard |
-| `geo_rs` | Decoupled PPO + Geo Rejection | 3 (rollout, old, θ) | ✅ | Geo-level RS | ✅ Correct | Standard |
-
-
 ## Mismatch Metrics
 
 When rollout log probabilities are available, SLIME automatically tracks comprehensive metrics to monitor training-inference mismatch and importance sampling weights. These metrics help diagnose policy divergence and guide hyperparameter tuning.
@@ -233,7 +195,7 @@ These metrics quantify the difference between training and rollout policies. The
 
 ### IS/RS Correction Metrics
 
-These metrics track importance sampling weights and corrections. They are only computed when `--use-rollout-correction` is enabled.
+These metrics track importance sampling weights and corrections. They are only computed when `--use-tis` is enabled.
 
 When using `--custom-tis-function-path` pointing to MIS implementation (e.g., `mis.py`), additional fine-grained metrics become available:
 
@@ -254,5 +216,7 @@ When using `--custom-tis-function-path` pointing to MIS implementation (e.g., `m
 ## Reference
 
 We thank the materials below for their excellent findings and theories.
-1. [Your Efficient RL Framework Secretly Brings You Off-Policy RL Training](https://fengyao.notion.site/off-policy-rl)
-2. [When Speed Kills Stability: Demystifying RL Collapse from the Training-Inference Mismatch](https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda)
+
+1. [Mathematical Formulations of Rollout Correction Methods in verl (Yingru Li)](https://github.com/szrlee/verl/blob/yingru/rollout_correction/docs/advance/rollout_corr_math.md).
+2. [Your Efficient RL Framework Secretly Brings You Off-Policy RL Training](https://fengyao.notion.site/off-policy-rl)
+3. [When Speed Kills Stability: Demystifying RL Collapse from the Training-Inference Mismatch](https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda)

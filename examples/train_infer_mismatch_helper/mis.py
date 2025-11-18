@@ -164,6 +164,13 @@ def compute_mis_weights(
         else:
             raise ValueError(f"Invalid level: {level}")
 
+    for train_log_prob, rollout_log_prob, loss_mask in zip(train_log_probs, rollout_log_probs, loss_masks):
+        add_ppl_metrics(train_log_prob, rollout_log_prob, loss_mask, metrics)
+
+    # only calculate mismatch metrics if TIS is not used
+    if not args.use_tis:
+        return None, loss_masks, metrics
+
     # handle each sequence independently
     for train_log_prob, rollout_log_prob, loss_mask in zip(train_log_probs, rollout_log_probs, loss_masks):
         loss_mask = loss_mask.float()
@@ -299,13 +306,84 @@ def compute_mis_weights_with_cp(
         return torch.cat(values, dim=0)
 
     result_metrics = {}
-    is_weights = slice_cp_and_concat(is_weights, total_lengths, response_lengths)
+    if is_weights is not None:
+        is_weights = slice_cp_and_concat(is_weights, total_lengths, response_lengths)
+        pg_loss = pg_loss * is_weights
 
     for key, values in is_metrics.items():
         key_name = f"mis_{key}"
         values = slice_cp_and_concat(values, total_lengths, response_lengths)
         result_metrics[key_name] = values
 
-    pg_loss = pg_loss * is_weights
-
     return pg_loss, modified_masks, result_metrics
+
+
+def add_ppl_metrics(
+    train_log_prob: torch.Tensor,
+    rollout_log_prob: torch.Tensor,
+    loss_mask: torch.Tensor,
+    metrics: Dict[str, list[torch.Tensor]],
+):
+    loss_mask = loss_mask.float()
+
+    mean_log_prob_training = masked_mean(train_log_prob, loss_mask, expand=True)
+    training_log_ppl = -mean_log_prob_training
+    training_ppl = torch.exp(training_log_ppl)
+    metrics_append(metrics, "training_log_ppl", training_log_ppl)
+    metrics_append(metrics, "training_ppl", training_ppl)
+
+    # 2. Rollout policy perplexity metrics
+    mean_log_prob_rollout = masked_mean(rollout_log_prob, loss_mask, expand=True)
+    rollout_log_ppl = -mean_log_prob_rollout
+    rollout_ppl = torch.exp(rollout_log_ppl)
+    metrics_append(metrics, "rollout_log_ppl", rollout_log_ppl)
+    metrics_append(metrics, "rollout_ppl", rollout_ppl)
+
+    # 3a. kl: Direct estimator for KL(π_rollout || π_training)
+    # This is the standard KL divergence: E[log(π_rollout) - log(π_training)]
+    # Positive value means rollout policy is more confident than training policy
+    kl_per_token = rollout_log_prob - train_log_prob
+    metrics_append(metrics, "kl", kl_per_token)
+
+    # 3b. K3 KL estimator for improved stability
+    # More stable for small KL values using: E[exp(log_ratio) - log_ratio - 1]
+    # Formula: KL ≈ E[r - log(r) - 1] where r = π_training/π_rollout
+    log_ratio = train_log_prob - rollout_log_prob
+    k3_kl_matrix = torch.exp(log_ratio) - log_ratio - 1
+    metrics_append(metrics, "k3_kl", k3_kl_matrix)
+
+    # 3c. Log PPL difference (sequence-level perplexity difference)
+    # log_ppl_diff = mean_log_prob_rollout - mean_log_prob_training
+    # Since ppl = exp(-log_prob), we have:
+    #   log(ppl_ratio) = log(training_ppl/rollout_ppl) = log_ppl_diff
+    # Positive value means training assigns lower probability (higher PPL) than rollout
+    log_ppl_diff = mean_log_prob_rollout - mean_log_prob_training
+    metrics_append(metrics, "log_ppl_diff", log_ppl_diff)
+    metrics_append(metrics, "log_ppl_abs_diff", log_ppl_diff.abs())
+
+    # 3d. PPL ratio (how much higher is training PPL vs rollout PPL)
+    # For numerical stability, compute in log space using log_ppl_diff
+    # Note: log_ppl_diff = log(ppl_ratio), so ppl_ratio = exp(log_ppl_diff)
+    ppl_ratio = torch.exp(log_ppl_diff)
+    metrics_append(metrics, "ppl_ratio", ppl_ratio)
+
+    # 4a. Token-level chi-squared divergence
+    # χ²(π_training || π_rollout) = E[ρ²] - 1, where ρ = π_training / π_rollout
+    # This measures the second moment of the importance weights
+    SAFETY_BOUND = 20.0
+    log_ratio = train_log_prob - rollout_log_prob
+    log_ratio_safe = torch.clamp(log_ratio, min=-SAFETY_BOUND, max=SAFETY_BOUND)
+    rho_token = torch.exp(log_ratio_safe)  # ρ = π_training / π_rollout
+    rho_squared_token = rho_token.square()
+    chi2_token_value = masked_mean(rho_squared_token, loss_mask) - 1.0
+    chi2_token = chi2_token_value.expand_as(train_log_prob)
+    metrics_append(metrics, "chi2_token", chi2_token)
+
+    # 4b. Sequence-level chi-squared divergence
+    # Computes (Π ρ_t)² - 1 for the entire sequence
+    # This captures the squared product of importance ratios
+    log_ratio_sum = masked_sum(log_ratio, loss_mask, expand=True)
+    log_ratio_sum_safe = torch.clamp(log_ratio_sum, min=-SAFETY_BOUND, max=SAFETY_BOUND)
+    rho_squared_seq = torch.exp(2.0 * log_ratio_sum_safe)  # (Π ρ_t)²
+    chi2_seq = rho_squared_seq - 1.0
+    metrics_append(metrics, "chi2_seq", chi2_seq)

@@ -739,6 +739,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--get-mismatch-metrics",
+                action="store_true",
+                default=False,
+                help="Whether to calculate the mismatch metrics.",
+            )
+            parser.add_argument(
                 "--use-rollout-logprobs",
                 action="store_true",
                 default=False,
@@ -748,12 +754,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             # Off-Policy Correction using Importance Sampling: https://fengyao.notion.site/off-policy-rl
-            parser.add_argument(
-                "--use-rollout-correction",
-                action="store_true",
-                default=False,
-                help="Enable rollout correction (TIS/RS). Specific correction strategies are configured via --custom-tis-function-path.",
-            )
             parser.add_argument(
                 "--use-tis",
                 action="store_true",
@@ -1322,8 +1322,8 @@ def slime_validate_args(args):
             "require advantage normalization. Please add `--normalize-advantages` to your command."
         )
 
-    # if args.use_rollout_logprobs:
-    #     assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
+    if args.use_rollout_logprobs:
+        assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
 
     if args.use_dynamic_batch_size:
         assert args.max_tokens_per_gpu is not None, "max_tokens_per_gpu must be set when use_dynamic_batch_size is set"

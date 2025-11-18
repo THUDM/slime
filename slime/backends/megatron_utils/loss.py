@@ -18,12 +18,7 @@ from slime.utils.ppo_utils import (
 )
 from slime.utils.types import RolloutBatch
 
-from .cp_utils import (
-    all_gather_with_cp,
-    get_logits_and_tokens_offset_with_cp,
-    get_sum_of_sample_mean,
-    slice_log_prob_with_cp,
-)
+from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
 
 
 def get_responses(
@@ -366,126 +361,6 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     rollout_data["returns"] = returns
 
 
-def get_rollout_training_metrics(
-    train_log_probs: torch.Tensor,
-    rollout_log_probs: torch.Tensor,
-    loss_masks: torch.Tensor,
-) -> dict[str, torch.Tensor]:
-
-    def masked_sum(x: torch.Tensor, expand: bool = False) -> torch.Tensor:
-        result = (x * loss_masks).sum()
-        return result.expand_as(x) if expand else result
-
-    def masked_mean(x: torch.Tensor) -> torch.Tensor:
-        result = masked_sum(x) / torch.clamp_min(masked_sum(loss_masks), 1)
-        return result.expand_as(x)
-
-    # 0. Absolute log probability difference (token-level)
-    # This measures the absolute difference between training and rollout log probs
-    train_rollout_logprob_abs_diff = (train_log_probs - rollout_log_probs).abs()
-
-    # 1. Training policy perplexity metrics
-    mean_log_prob_training = masked_mean(train_log_probs)
-    training_log_ppl = -mean_log_prob_training
-
-    # 2. Rollout policy perplexity metrics
-    mean_log_prob_rollout = masked_mean(rollout_log_probs)
-    rollout_log_ppl = -mean_log_prob_rollout
-
-    # 3a. kl: Direct estimator for KL(π_rollout || π_training)
-    # This is the standard KL divergence: E[log(π_rollout) - log(π_training)]
-    # Positive value means rollout policy is more confident than training policy
-    kl_per_token = rollout_log_probs - train_log_probs
-
-    # 3b. K3 KL estimator for improved stability
-    # More stable for small KL values using: E[exp(log_ratio) - log_ratio - 1]
-    # Formula: KL ≈ E[r - log(r) - 1] where r = π_training/π_rollout
-    log_ratio = train_log_probs - rollout_log_probs
-    k3_kl_per_token = torch.exp(log_ratio) - log_ratio - 1
-
-    # 3c. Log PPL difference (sequence-level perplexity difference)
-    # log_ppl_diff = mean_log_prob_rollout - mean_log_prob_training
-    # Since ppl = exp(-log_prob), we have:
-    #   log(ppl_ratio) = log(training_ppl/rollout_ppl) = log_ppl_diff
-    # Positive value means training assigns lower probability (higher PPL) than rollout
-    log_ppl_diff = mean_log_prob_rollout - mean_log_prob_training
-
-    # 3d. PPL ratio (how much higher is training PPL vs rollout PPL)
-    # For numerical stability, compute in log space using log_ppl_diff
-    # Note: log_ppl_diff = log(ppl_ratio), so ppl_ratio = exp(log_ppl_diff)
-    ppl_ratio = torch.exp(log_ppl_diff)
-
-    # 4a. Token-level chi-squared divergence
-    # χ²(π_training || π_rollout) = E[ρ²] - 1, where ρ = π_training / π_rollout
-    # This measures the second moment of the importance weights
-    SAFETY_BOUND = 20.0
-    log_ratio_safe = torch.clamp(log_ratio, min=-SAFETY_BOUND, max=SAFETY_BOUND)
-    rho_token = torch.exp(log_ratio_safe)  # ρ = π_training / π_rollout
-    rho_squared_token = rho_token.square()
-    chi2_token_value = masked_mean(rho_squared_token) - 1.0
-    chi2_token = chi2_token_value.expand_as(train_log_probs)
-
-    # 4b. Sequence-level chi-squared divergence
-    # Computes (Π ρ_t)² - 1 for the entire sequence
-    # This captures the squared product of importance ratios
-    log_ratio_sum = masked_sum(log_ratio, expand=True)
-    log_ratio_sum_safe = torch.clamp(log_ratio_sum, min=-SAFETY_BOUND, max=SAFETY_BOUND)
-    rho_squared_seq = torch.exp(2.0 * log_ratio_sum_safe)  # (Π ρ_t)²
-    chi2_seq = rho_squared_seq - 1.0
-
-    return {
-        "train_rollout_logprob_abs_diff": train_rollout_logprob_abs_diff,
-        "mismatch_training_log_ppl": training_log_ppl,
-        "mismatch_training_ppl": torch.exp(training_log_ppl),
-        "mismatch_rollout_log_ppl": rollout_log_ppl,
-        "mismatch_rollout_ppl": torch.exp(rollout_log_ppl),
-        "mismatch_kl": kl_per_token,
-        "mismatch_k3_kl": k3_kl_per_token,
-        "mismatch_log_ppl_diff": log_ppl_diff,
-        "mismatch_log_ppl_abs_diff": log_ppl_diff.abs(),
-        "mismatch_ppl_ratio": ppl_ratio,
-        "mismatch_chi2_token": chi2_token,
-        "mismatch_chi2_seq": chi2_seq,
-    }
-
-
-def _compute_metrics_with_cp(
-    train_log_probs_list: list[torch.Tensor],
-    rollout_log_probs_list: list[torch.Tensor],
-    loss_masks_list: list[torch.Tensor],
-    total_lengths: list[int],
-    response_lengths: list[int],
-) -> dict[str, torch.Tensor]:
-    """Compute metrics with context parallelism handling.
-
-    Gathers full sequences, computes metrics, then slices back to current CP rank.
-    """
-    # Gather cp slice from other cp ranks
-    full_train_log_probs = [
-        all_gather_with_cp(lp, tl, rl) for lp, tl, rl in zip(train_log_probs_list, total_lengths, response_lengths)
-    ]
-    full_rollout_log_probs = [
-        all_gather_with_cp(lp, tl, rl) for lp, tl, rl in zip(rollout_log_probs_list, total_lengths, response_lengths)
-    ]
-
-    all_metrics_per_seq = [
-        get_rollout_training_metrics(train_lp, rollout_lp, loss_mask.float())
-        for train_lp, rollout_lp, loss_mask in zip(full_train_log_probs, full_rollout_log_probs, loss_masks_list)
-    ]
-
-    # Slice out the value shards for this CP rank and concat them into a 1D tensor along dim=0 for loss.py computation.
-    final_metrics = {}
-    for key in all_metrics_per_seq[0].keys():
-        metric_values = [m[key] for m in all_metrics_per_seq]
-        sliced_values = [
-            slice_log_prob_with_cp(metric_values[i], total_lengths[i], response_lengths[i])
-            for i in range(len(metric_values))
-        ]
-        final_metrics[key] = torch.cat(sliced_values, dim=0)
-
-    return final_metrics
-
-
 def policy_loss_function(
     args: Namespace,
     batch: RolloutBatch,
@@ -533,42 +408,34 @@ def policy_loss_function(
 
     log_probs = log_probs_and_entropy["log_probs"]
 
-    if args.use_rollout_correction and args.use_rollout_logprobs:
-        # skipping clip, use pure reinforce + rollout correction
-        # https://github.com/szrlee/verl/blob/yingru/rollout_correction/docs/advance/rollout_corr_math.md#311-pure-is-pure_is
+    if args.advantage_estimator == "gspo":
+        full_log_probs = [
+            all_gather_with_cp(log_prob, total_length, response_length)
+            for log_prob, total_length, response_length in zip(log_probs, total_lengths, response_lengths)
+        ]
+        full_old_log_probs = [
+            all_gather_with_cp(old_log_prob, total_length, response_length)
+            for old_log_prob, total_length, response_length in zip(old_log_probs, total_lengths, response_lengths)
+        ]
+
+        loss_masks = batch["loss_masks"]
+        ppo_kl = [
+            ((old_logprob - log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+            for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks)
+        ]
+        ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, log_probs)]
+        ppo_kl = torch.cat(ppo_kl, dim=0)
+        old_log_probs = torch.cat(old_log_probs, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
-        pg_loss = -log_probs * advantages
-        pg_clipfrac = None
-        ppo_kl = None
     else:
-        if args.advantage_estimator == "gspo":
-            full_log_probs = [
-                all_gather_with_cp(log_prob, total_length, response_length)
-                for log_prob, total_length, response_length in zip(log_probs, total_lengths, response_lengths)
-            ]
-            full_old_log_probs = [
-                all_gather_with_cp(old_log_prob, total_length, response_length)
-                for old_log_prob, total_length, response_length in zip(old_log_probs, total_lengths, response_lengths)
-            ]
+        old_log_probs = torch.cat(old_log_probs, dim=0)
+        log_probs = torch.cat(log_probs, dim=0)
+        ppo_kl = old_log_probs - log_probs
 
-            loss_masks = batch["loss_masks"]
-            ppo_kl = [
-                ((old_logprob - log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
-                for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks)
-            ]
-            ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, log_probs)]
-            ppo_kl = torch.cat(ppo_kl, dim=0)
-            old_log_probs = torch.cat(old_log_probs, dim=0)
-            log_probs = torch.cat(log_probs, dim=0)
-        else:
-            old_log_probs = torch.cat(old_log_probs, dim=0)
-            log_probs = torch.cat(log_probs, dim=0)
-            ppo_kl = old_log_probs - log_probs
-
-        pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
+    pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
 
     # Apply off-policy correction using importance sampling if enabled
-    if args.use_rollout_correction or args.use_tis:
+    if args.get_mismatch_metrics or args.use_tis:
 
         def vanilla_tis_function(
             args,
@@ -595,11 +462,11 @@ def policy_loss_function(
 
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
 
-        ois = (-ppo_kl).exp() if not args.use_rollout_logprobs else None
+        ois = (-ppo_kl).exp()
         tis_kwargs = {
             "args": args,
             "pg_loss": pg_loss,
-            "train_log_probs": log_probs_and_entropy["log_probs"] if args.use_rollout_logprobs else batch["log_probs"],
+            "train_log_probs": batch["log_probs"],
             "rollout_log_probs": batch["rollout_log_probs"],
             "loss_masks": batch["loss_masks"],
             "total_lengths": total_lengths,
@@ -609,11 +476,6 @@ def policy_loss_function(
         if args.custom_tis_function_path is not None:
             tis_func = load_function(args.custom_tis_function_path)
         else:
-            if args.use_rollout_correction:
-                raise ValueError(
-                    "When using --use-rollout-correction, you must specify --custom-tis-function-path. "
-                    "Example: --custom-tis-function-path examples/train_infer_mismatch_helper/mis.py:compute_mis_weights_with_cp"
-                )
             tis_func = vanilla_tis_function
         pg_loss, modified_response_masks, tis_metrics = tis_func(**tis_kwargs)
 
@@ -624,10 +486,8 @@ def policy_loss_function(
         )
 
     pg_loss = sum_of_sample_mean(pg_loss)
-    if pg_clipfrac is not None:
-        pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
-    if ppo_kl is not None:
-        ppo_kl = sum_of_sample_mean(ppo_kl)
+    pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
+    ppo_kl = sum_of_sample_mean(ppo_kl)
 
     # entropy loss
     entropy = log_probs_and_entropy["entropy"]
@@ -652,38 +512,31 @@ def policy_loss_function(
     if log_probs.numel() == 0:
         loss += 0 * logits.sum()
 
+    train_rollout_logprob_abs_diff = None
+    if "rollout_log_probs" in batch:
+        rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
+        train_rollout_logprob_abs_diff = sum_of_sample_mean((old_log_probs - rollout_log_probs).abs())
+
     reported_loss = {
         "loss": loss.clone().detach(),
         "pg_loss": pg_loss.clone().detach(),
         "entropy_loss": entropy_loss.clone().detach(),
-        "pg_clipfrac": pg_clipfrac.clone().detach() if pg_clipfrac else None,
-        "ppo_kl": ppo_kl.clone().detach() if ppo_kl else None,
+        "pg_clipfrac": pg_clipfrac.clone().detach(),
+        "ppo_kl": ppo_kl.clone().detach(),
     }
+
+    if train_rollout_logprob_abs_diff is not None:
+        reported_loss["train_rollout_logprob_abs_diff"] = train_rollout_logprob_abs_diff.clone().detach()
 
     if args.use_kl_loss:
         reported_loss["kl_loss"] = kl_loss.clone().detach()
 
-    if args.use_tis:
-        reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach() if ois is not None else None
+    if args.get_mismatch_metrics and args.use_tis:
+        reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
         # Assume all metrics are already cloned and detached
         for metric_key, metric_value in tis_metrics.items():
             key_name = f"{metric_key}"
             reported_loss[key_name] = sum_of_sample_mean(metric_value)
-
-    # Always return metrics about rollout & training log probs (e.g. training-inference KL), no matter whether TIS is used.
-    if "rollout_log_probs" in batch:
-        final_metrics = _compute_metrics_with_cp(
-            log_probs_and_entropy["log_probs"] if args.use_rollout_logprobs else batch["log_probs"],
-            batch["rollout_log_probs"],
-            batch["loss_masks"],
-            total_lengths,
-            response_lengths,
-        )
-        for key, value in final_metrics.items():
-            reported_loss[key] = sum_of_sample_mean(value).clone().detach()
-    else:
-        if torch.distributed.get_rank() == 0:
-            print("[INFO] rollout_log_probs not available, skipping train-inference mismatch metrics computation.")
 
     return loss, reported_loss
 
