@@ -17,6 +17,100 @@ NC='\033[0m' # No Color
 
 echo -e "${GREEN}=== Slime Search-R1 Training with Local Dense Retriever ===${NC}"
 
+# Helper function: Check if a port is free
+wait_for_port_free() {
+    local port=$1
+    local max_wait=${2:-30}  # Default 30 seconds
+    local wait_count=0
+
+    echo "Checking if port ${port} is free..."
+
+    while [ $wait_count -lt $max_wait ]; do
+        # Check using lsof (works on macOS and Linux)
+        if command -v lsof &> /dev/null; then
+            if ! lsof -i :${port} -sTCP:LISTEN -t > /dev/null 2>&1; then
+                echo -e "${GREEN}✓ Port ${port} is free${NC}"
+                return 0
+            fi
+        # Fallback to ss (Linux-only, but more common in Docker)
+        elif command -v ss &> /dev/null; then
+            if ! ss -tuln | grep -q ":${port} "; then
+                echo -e "${GREEN}✓ Port ${port} is free${NC}"
+                return 0
+            fi
+        # Fallback to netstat (less reliable but widely available)
+        elif command -v netstat &> /dev/null; then
+            if ! netstat -tuln 2>/dev/null | grep -q ":${port} "; then
+                echo -e "${GREEN}✓ Port ${port} is free${NC}"
+                return 0
+            fi
+        else
+            echo -e "${YELLOW}Warning: No port checking tool available (lsof/ss/netstat), skipping check${NC}"
+            return 0
+        fi
+
+        if [ $wait_count -eq 0 ]; then
+            echo -n "  Port ${port} still in use, waiting"
+        else
+            echo -n "."
+        fi
+        sleep 1
+        wait_count=$((wait_count + 1))
+    done
+
+    echo ""
+    echo -e "${RED}Error: Port ${port} is still in use after ${max_wait} seconds${NC}"
+    echo ""
+    echo "To manually check and free the port:"
+    echo "  lsof -i :${port}  # Find the process"
+    echo "  kill -9 <PID>     # Kill the process"
+    return 1
+}
+
+# Helper function: Gracefully kill a process by pattern
+graceful_kill_process() {
+    local pattern=$1
+    local process_name=$2  # For display purposes
+
+    # Find PIDs matching the pattern
+    local pids=$(pgrep -f "${pattern}")
+
+    if [ -z "${pids}" ]; then
+        echo "No ${process_name} process found"
+        return 0
+    fi
+
+    echo "Found ${process_name} process(es): ${pids}"
+    echo "Attempting graceful shutdown (SIGTERM)..."
+    pkill -f "${pattern}" || true
+
+    # Wait up to 5 seconds for graceful shutdown
+    local wait_count=0
+    while [ $wait_count -lt 5 ]; do
+        sleep 1
+        pids=$(pgrep -f "${pattern}")
+        if [ -z "${pids}" ]; then
+            echo -e "${GREEN}✓ ${process_name} stopped gracefully${NC}"
+            return 0
+        fi
+        wait_count=$((wait_count + 1))
+    done
+
+    # If still running, force kill
+    echo "${process_name} did not stop gracefully, forcing shutdown (SIGKILL)..."
+    pkill -9 -f "${pattern}" || true
+    sleep 1
+
+    pids=$(pgrep -f "${pattern}")
+    if [ -z "${pids}" ]; then
+        echo -e "${GREEN}✓ ${process_name} stopped (forced)${NC}"
+        return 0
+    else
+        echo -e "${YELLOW}Warning: ${process_name} may still be running${NC}"
+        return 1
+    fi
+}
+
 # 1. Check prerequisites
 echo "Checking prerequisites..."
 
@@ -98,18 +192,25 @@ echo "  Log file: ${TRAINING_LOG}"
 
 # 3. Kill any existing retrieval server
 echo "Cleaning up any existing retrieval server..."
-pkill -9 -f retrieval_server.py || true
+graceful_kill_process "retrieval_server.py" "retrieval server"
+
+# Wait for port to be released
+if ! wait_for_port_free "${RETRIEVER_PORT}" 30; then
+    echo -e "${RED}Failed to free port ${RETRIEVER_PORT}. Please manually kill the process and retry.${NC}"
+    exit 1
+fi
 
 # 4. Kill existing tmux session if it exists
 if tmux has-session -t ${TMUX_SESSION} 2>/dev/null; then
     echo "Killing existing tmux session: ${TMUX_SESSION}"
     tmux kill-session -t ${TMUX_SESSION}
+    sleep 1  # Wait for tmux to clean up resources
 fi
 
 # 5. Create cleanup trap
 cleanup() {
     echo -e "\n${YELLOW}Cleaning up...${NC}"
-    pkill -9 -f retrieval_server.py || true
+    graceful_kill_process "retrieval_server.py" "retrieval server"
     if tmux has-session -t ${TMUX_SESSION} 2>/dev/null; then
         tmux kill-session -t ${TMUX_SESSION}
     fi
