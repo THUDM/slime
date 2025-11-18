@@ -4,16 +4,13 @@ This file is in preview, and will be further refined and optimized.
 
 import os
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
 import typer
 
-sys.path.append(str(Path(__file__).resolve().parents[1] / "tests"))
-
-import command_utils as U
+import slime.utils.external_utils.command_utils as U
 
 app = typer.Typer()
 
@@ -21,6 +18,7 @@ app = typer.Typer()
 @dataclass
 class ScriptArgs(U.ExecuteTrainConfig):
     mode: Literal["normal", "debug_minimal"] = "normal"
+    run_id: str = U.create_run_id()
     model_org: str = "deepseek-ai"
     model_name: str = "DeepSeek-V3"
     megatron_model_type: str = "deepseek-v3"
@@ -30,7 +28,6 @@ class ScriptArgs(U.ExecuteTrainConfig):
     task: Literal["dapo_aime", "gsm8k"] = "dapo_aime"
 
     def __post_init__(self):
-        super().__post_init__()
         if (m := re.search(r"(\d+)layer", self.model_name)) is not None:
             self.model_org = "fzyzcjy"
             self.megatron_model_type = f"deepseek-v3-{m.group(1)}layer"
@@ -141,9 +138,7 @@ def _cp_model_to_local(args: ScriptArgs):
 @app.command()
 @U.dataclass_cli
 def train(args: ScriptArgs):
-    run_id = U.create_run_id()
-
-    load_save_path = f"/root/shared_data/{run_id}/checkpoints"
+    load_save_path = f"/root/shared_data/{args.run_id}/checkpoints"
     ckpt_args = (
         f"--hf-checkpoint /root/models/{args.model_name} "
         f"--ref-load /root/local_data/{args.model_name}_torch_dist "
@@ -320,7 +315,7 @@ def train(args: ScriptArgs):
         f"--num-gpus-per-node {args.num_gpus_per_node} "
         "--colocate "
         "--use-fault-tolerance "
-        f"--dump-details /root/shared_data/{run_id}/dump_details "
+        f"--dump-details /root/shared_data/{args.run_id}/dump_details "
         "--disable-weights-backuper "
     )
 
@@ -329,7 +324,7 @@ def train(args: ScriptArgs):
         f"{rollout_args} "
         f"{optimizer_args} "
         f"{grpo_args} "
-        f"{U.get_default_wandb_args(__file__, run_id=run_id)} "
+        f"{U.get_default_wandb_args(__file__, run_id=args.run_id)} "
         f"{perf_args} "
         f"{eval_args} "
         f"{sglang_args} "
@@ -341,8 +336,8 @@ def train(args: ScriptArgs):
         train_args=train_args,
         config=args,
         # TODO may get it from `config`
-        num_gpus=args.num_gpus_per_node,
-        model_type=args.megatron_model_type,
+        num_gpus_per_node=args.num_gpus_per_node,
+        megatron_model_type=args.megatron_model_type,
         extra_env_vars={**sglang_extra_env_vars},
     )
 

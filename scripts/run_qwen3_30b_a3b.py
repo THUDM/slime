@@ -1,11 +1,9 @@
 import datetime
 import os
-import sys
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).resolve().parents[1] / "tests"))
 
-import command_utils as U
+import slime.utils.external_utils.command_utils as U
 
 mode = os.environ.get("SLIME_SCRIPT_MODE", "8xh100")
 
@@ -34,8 +32,8 @@ def prepare():
     U.hf_download_dataset("zhuzilin/aime-2024")
     U.convert_checkpoint(
         model_name=MODEL_NAME,
-        model_type=MODEL_TYPE,
-        num_gpus=num_gpus_for_convert,
+        megatron_model_type=MODEL_TYPE,
+        num_gpus_per_node=num_gpus_for_convert,
         # To support multi-node training, for simplicity, we put model into shared folder
         dir_dst="/root/models",
     )
@@ -202,8 +200,8 @@ def execute():
 
     U.execute_train(
         train_args=train_args,
-        num_gpus=num_gpus,
-        model_type=MODEL_TYPE,
+        num_gpus_per_node=num_gpus,
+        megatron_model_type=MODEL_TYPE,
     )
 
 
