@@ -113,6 +113,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     # Tracking variables
     all_token_ids = prompt_token_ids.copy()
     response_token_ids = []
+    response_log_probs = []  # Track log probabilities for rollout
     loss_mask = []
     response_text = ""
 
@@ -137,6 +138,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             sample.tokens = all_token_ids
             sample.response_length = len(response_token_ids)
             sample.loss_mask = loss_mask
+            sample.rollout_log_probs = response_log_probs
             return sample
 
         # Parse response
@@ -148,14 +150,19 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         message = choice["message"]
         finish_reason = choice.get("finish_reason", "stop")
 
-        # Extract token_ids from logprobs (model-generated content)
+        # Extract token_ids and log_probs from logprobs (model-generated content)
         assistant_token_ids = []
+        assistant_log_probs = []
         if "logprobs" in choice and choice["logprobs"] and "content" in choice["logprobs"]:
             content_logprobs = choice["logprobs"]["content"]
             for item in content_logprobs:
+                # Extract log probability (always available in logprobs)
+                log_prob = item.get("logprob", 0.0)
+
                 # Try to get token_id if available, otherwise encode the token string
                 if "token_id" in item:
                     assistant_token_ids.append(item["token_id"])
+                    assistant_log_probs.append(log_prob)
                 elif "bytes" in item and item["bytes"]:
                     # Decode bytes and encode to get token_id
                     token_bytes = item["bytes"]
@@ -167,12 +174,14 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                     token_ids = tokenizer.encode(token_str, add_special_tokens=False)
                     if token_ids:
                         assistant_token_ids.append(token_ids[0])
+                        assistant_log_probs.append(log_prob)
                 elif "token" in item:
                     # Fallback: encode token string
                     token_str = item["token"]
                     token_ids = tokenizer.encode(token_str, add_special_tokens=False)
                     if token_ids:
                         assistant_token_ids.append(token_ids[0])
+                        assistant_log_probs.append(log_prob)
         else:
             # Fallback: manually tokenize content
             # Skip retokenization if tool_calls exist (to avoid prefix instability)
@@ -180,10 +189,13 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                 assistant_content = message.get("content") or ""
                 if assistant_content:
                     assistant_token_ids = tokenizer(assistant_content, add_special_tokens=False)["input_ids"]
+                    # No log_probs available in fallback, use 0.0
+                    assistant_log_probs = [0.0] * len(assistant_token_ids)
 
         # Update tracking for assistant message
         if assistant_token_ids:
             response_token_ids.extend(assistant_token_ids)
+            response_log_probs.extend(assistant_log_probs)
             all_token_ids.extend(assistant_token_ids)
             loss_mask.extend([1] * len(assistant_token_ids))  # Assistant content: loss_mask=1
 
@@ -256,6 +268,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
             # Update tracking for tool message
             response_token_ids.extend(delta_tool_tokens)
+            response_log_probs.extend([0.0] * len(delta_tool_tokens))  # Tool messages have no log_probs
             all_token_ids.extend(delta_tool_tokens)
             loss_mask.extend([0] * len(delta_tool_tokens))  # Tool content: loss_mask=0
 
@@ -269,6 +282,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     sample.response_length = len(response_token_ids)
     sample.response = response_text
     sample.loss_mask = loss_mask
+    sample.rollout_log_probs = response_log_probs
 
     if sample.status == Sample.Status.PENDING:
         sample.status = Sample.Status.COMPLETED
