@@ -1,7 +1,7 @@
 import json
 import random
 import re
-
+import os
 import numpy as np
 import pandas as pd
 import ray
@@ -18,6 +18,32 @@ __all__ = ["Dataset"]
 def read_file(path):
     path, row_slice = _parse_generalized_path(path)
 
+    # # --- 开始添加调试代码 ---
+    # print(f"!!!!!!!!!! [DEBUG] Attempting to read file: {path}")
+    # try:
+    #     with open(path, 'r', encoding='utf-8') as f:
+    #         print("!!!!!!!!!! [DEBUG] First 5 lines of the file:")
+    #         for i, line in enumerate(f):
+    #             if i >= 5:
+    #                 break
+    #             print(f"Line {i+1}: {line.strip()}")
+    # except Exception as e:
+    #     print(f"!!!!!!!!!! [DEBUG] Failed to open or read the file: {e}")
+    # # --- 结束添加调试代码 ---
+
+    # if path.endswith(".json") or path.endswith(".jsonl"):
+    #     # 确保文件存在且不为空
+    #     if not os.path.exists(path) or os.path.getsize(path) == 0:
+    #         print(f"!!!!!!!!!! [DEBUG] Error: File is missing or empty at path: {path}")
+    #         # 返回一个空迭代器或引发错误，以避免后续崩溃
+    #         return
+            
+    #     df = pd.read_json(path, lines=True, dtype={"label": str})
+    # elif path.endswith(".parquet"):
+    #     df = pd.read_parquet(path, dtype_backend="pyarrow")
+    # else:
+    #     raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
+
     if path.endswith(".jsonl"):
         df = pd.read_json(path, lines=True, dtype={"label": str})
     elif path.endswith(".parquet"):
@@ -31,6 +57,9 @@ def read_file(path):
 
     for _, row in df.iterrows():
         yield row.to_dict()
+
+
+
 
 
 def _parse_generalized_path(s: str):

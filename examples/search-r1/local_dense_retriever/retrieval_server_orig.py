@@ -19,7 +19,6 @@ import argparse
 import json
 import warnings
 from typing import Optional
-import threading  # 1. [修改] 导入 threading 模块
 
 import datasets
 import faiss
@@ -77,6 +76,7 @@ class Encoder:
 
     @torch.no_grad()
     def encode(self, query_list: list[str], is_query=True) -> np.ndarray:
+        # processing query for different encoders
         if isinstance(query_list, str):
             query_list = [query_list]
 
@@ -98,6 +98,7 @@ class Encoder:
         inputs = {k: v.cuda() for k, v in inputs.items()}
 
         if "T5" in type(self.model).__name__:
+            # T5-based retrieval model
             decoder_input_ids = torch.zeros((inputs["input_ids"].shape[0], 1), dtype=torch.long).to(
                 inputs["input_ids"].device
             )
@@ -143,7 +144,6 @@ class BaseRetriever:
 
 
 class BM25Retriever(BaseRetriever):
-    # BM25Retriever 不涉及 GPU，无需修改
     def __init__(self, config):
         super().__init__(config)
         from pyserini.search.lucene import LuceneSearcher
@@ -202,8 +202,6 @@ class BM25Retriever(BaseRetriever):
         else:
             return results
 
-# 2. [修改] 创建一个全局线程锁，用于保护对 GPU 资源的访问
-gpu_lock = threading.Lock()
 
 class DenseRetriever(BaseRetriever):
     def __init__(self, config):
@@ -229,12 +227,8 @@ class DenseRetriever(BaseRetriever):
     def _search(self, query: str, num: int = None, return_score: bool = False):
         if num is None:
             num = self.topk
-        
-        # 3. [修改] 使用 with 语句块包裹 GPU 操作，自动获取和释放锁
-        with gpu_lock:
-            query_emb = self.encoder.encode(query)
-            scores, idxs = self.index.search(query_emb, k=num)
-            
+        query_emb = self.encoder.encode(query)
+        scores, idxs = self.index.search(query_emb, k=num)
         idxs = idxs[0]
         scores = scores[0]
         results = load_docs(self.corpus, idxs)
@@ -253,18 +247,15 @@ class DenseRetriever(BaseRetriever):
         scores = []
         for start_idx in tqdm(range(0, len(query_list), self.batch_size), desc="Retrieval process: "):
             query_batch = query_list[start_idx : start_idx + self.batch_size]
-            
-            # 4. [修改] 在循环内部，仅对 GPU 密集型操作加锁
-            with gpu_lock:
-                batch_emb = self.encoder.encode(query_batch)
-                batch_scores, batch_idxs = self.index.search(batch_emb, k=num)
-
-            # 在锁释放后处理数据，以最小化锁的持有时间
+            batch_emb = self.encoder.encode(query_batch)
+            batch_scores, batch_idxs = self.index.search(batch_emb, k=num)
             batch_scores = batch_scores.tolist()
             batch_idxs = batch_idxs.tolist()
 
+            # load_docs is not vectorized, but is a python list approach
             flat_idxs = sum(batch_idxs, [])
             batch_results = load_docs(self.corpus, flat_idxs)
+            # chunk them back
             batch_results = [batch_results[i * num : (i + 1) * num] for i in range(len(batch_idxs))]
 
             results.extend(batch_results)
@@ -292,6 +283,11 @@ def get_retriever(config):
 
 
 class Config:
+    """
+    Minimal config class (simulating your argparse)
+    Replace this with your real arguments or load them dynamically.
+    """
+
     def __init__(
         self,
         retrieval_method: str = "bm25",
@@ -332,9 +328,33 @@ app = FastAPI()
 
 @app.post("/retrieve")
 def retrieve_endpoint(request: QueryRequest):
-    if not request.topk:
-        request.topk = config.retrieval_topk
+    """
+    Endpoint that accepts queries and performs retrieval.
 
+    Input format:
+    {
+      "queries": ["What is Python?", "Tell me about neural networks."],
+      "topk": 3,
+      "return_scores": true
+    }
+
+    Output format (when return_scores=True，similarity scores are returned):
+    {
+        "result": [
+            [   # Results for each query
+                {
+                    {"document": doc, "score": score}
+                },
+                # ... more documents
+            ],
+            # ... results for other queries
+        ]
+    }
+    """
+    if not request.topk:
+        request.topk = config.retrieval_topk  # fallback to default
+
+    # Perform batch retrieval
     tmp = retriever.batch_search(query_list=request.queries, num=request.topk, return_score=request.return_scores)
 
     scores = []
@@ -343,9 +363,11 @@ def retrieve_endpoint(request: QueryRequest):
     except:
         results = tmp
 
+    # Format response
     resp = []
     for i, single_result in enumerate(results):
         if scores:
+            # If scores are returned, combine them with results
             combined = []
             for doc, score in zip(single_result, scores[i], strict=True):
                 combined.append({"document": doc, "score": score})
@@ -378,8 +400,10 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # 1) Build a config (could also parse from arguments).
+    #    In real usage, you'd parse your CLI arguments or environment variables.
     config = Config(
-        retrieval_method=args.retriever_name,
+        retrieval_method=args.retriever_name,  # or "dense"
         index_path=args.index_path,
         corpus_path=args.corpus_path,
         retrieval_topk=args.topk,
@@ -391,8 +415,9 @@ if __name__ == "__main__":
         retrieval_batch_size=512,
     )
 
+    # 2) Instantiate a global retriever so it is loaded once and reused.
     retriever = get_retriever(config)
 
-    # 5. [修改] 现在代码是线程安全的，可以安全地移除 `workers=1` 限制，
-    # 允许 uvicorn 使用默认的多个工作线程来提高并发处理能力。
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    # 3) Launch the server. By default, it listens on http://127.0.0.1:8000
+    # uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, workers=1)
