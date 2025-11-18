@@ -1,52 +1,46 @@
-import datetime
-import os
-from pathlib import Path
+from dataclasses import dataclass
+from typing import Literal, Optional
 
+import typer
 
 import slime.utils.external_utils.command_utils as U
 
-mode = os.environ.get("SLIME_SCRIPT_MODE", "8xh100")
 
-MODEL_NAME = "Qwen3-30B-A3B"
-MODEL_TYPE = "qwen3-30B-A3B"
+@dataclass
+class ScriptArgs(U.ExecuteTrainConfig):
+    mode: Literal["normal", "debug_minimal"] = "normal"
+    run_id: str = U.create_run_id()
+    model_name: str = "Qwen3-30B-A3B"
+    megatron_model_type: str = "qwen3-30B-A3B"
+    num_gpus_per_node: Optional[int] = None
+    hardware: Literal["H100", "GB300"] = "H100"
+    enable_eval: bool = True
+    extra_args: str = ""
 
-match mode:
-    case "8xh100":
-        num_gpus_for_convert = num_gpus = 8
-    case "4xgb300":
-        num_gpus_for_convert = num_gpus = 4
-    case "8xgb300":
-        num_gpus_for_convert = 4
-        num_gpus = 8
-    case "32xgb300":
-        num_gpus_for_convert = 4
-        num_gpus = 32
-    case _:
-        raise NotImplementedError(f"{mode=}")
+    def __post_init__(self):
+        self.num_gpus_per_node = self.num_gpus_per_node or U.NUM_GPUS_OF_HARDWARE[self.hardware]
 
 
-def prepare():
+def prepare(args: ScriptArgs):
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"huggingface-cli download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    U.exec_command(f"huggingface-cli download Qwen/{args.model_name} --local-dir /root/models/{args.model_name}")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
     U.hf_download_dataset("zhuzilin/aime-2024")
     U.convert_checkpoint(
-        model_name=MODEL_NAME,
-        megatron_model_type=MODEL_TYPE,
-        num_gpus_per_node=num_gpus_for_convert,
+        model_name=args.model_name,
+        megatron_model_type=args.megatron_model_type,
+        num_gpus_per_node=args.num_gpus_per_node,
         # To support multi-node training, for simplicity, we put model into shared folder
         dir_dst="/root/models",
     )
 
 
 # TODO improve layering: split algorithm vs infra
-def execute():
-    load_save_path = (
-        f"/root/models/{MODEL_NAME}_ckpt__{Path(__file__).stem}__{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}/"
-    )
+def execute(args: ScriptArgs):
+    load_save_path = f"/root/shared_data/{args.run_id}/checkpoints"
     ckpt_args = (
-        f"--hf-checkpoint /root/models/{MODEL_NAME}/ "
-        f"--ref-load /root/models/{MODEL_NAME}_torch_dist "
+        f"--hf-checkpoint /root/models/{args.model_name}/ "
+        f"--ref-load /root/models/{args.model_name}_torch_dist "
         f"--load {load_save_path} "
         f"--save {load_save_path} "
         "--save-interval 20 "
@@ -62,19 +56,21 @@ def execute():
         "--num-rollout 3000 "
         "--rollout-batch-size 32 "
         "--n-samples-per-prompt 8 "
-        "--rollout-max-response-len 8192 "
+        f"--rollout-max-response-len {100 if args.mode == 'debug_minimal' else 8192} "
         "--rollout-temperature 0.8 "
         "--global-batch-size 256 "
         "--balance-data "
     )
 
-    eval_args = (
-        "--eval-interval 20 "
-        "--eval-prompt-data aime /root/datasets/aime-2024/aime-2024.jsonl "
-        "--n-samples-per-eval-prompt 16 "
-        "--eval-max-response-len 16384 "
-        "--eval-top-p 0.7 "
-    )
+    eval_args = ""
+    if (args.mode != "debug_minimal") and args.enable_eval:
+        eval_args += (
+            "--eval-interval 20 "
+            "--eval-prompt-data aime /root/datasets/aime-2024/aime-2024.jsonl "
+            "--n-samples-per-eval-prompt 16 "
+            "--eval-max-response-len 16384 "
+            "--eval-top-p 0.7 "
+        )
 
     perf_args = (
         "--recompute-granularity full "
@@ -82,7 +78,7 @@ def execute():
         "--recompute-num-layers 1 "
         # "--micro-batch-size 1 "
         "--use-dynamic-batch-size "
-        "--max-tokens-per-gpu 20480 "
+        "--max-tokens-per-gpu 32768 "
     )
 
     grpo_args = (
@@ -114,10 +110,12 @@ def execute():
         # need to comment this when using model with MLA
         "--attention-backend flash "
         "--colocate "
+        "--use-fault-tolerance "
+        f"--dump-details /root/shared_data/{args.run_id}/dump_details "
     )
 
-    match mode:
-        case "8xh100":
+    match (args.hardware, args.num_nodes):
+        case ("H100", 1):
             perf_args += (
                 "--tensor-model-parallel-size 4 "
                 "--sequence-parallel "
@@ -129,13 +127,13 @@ def execute():
             sglang_args = (
                 "--rollout-num-gpus-per-engine 8 "
                 "--sglang-mem-fraction-static 0.7 "
-                "--sglang-cuda-graph-bs 1 2 4 8 " + " ".join(str(x) for x in range(16, 257, 8)) + " "
+                "--sglang-cuda-graph-max-bs 512 "
             )
             optimizer_args += (
                 "--optimizer-cpu-offload " "--overlap-cpu-optimizer-d2h-h2d " "--use-precision-aware-optimizer "
             )
             misc_args += "--actor-num-gpus-per-node 8 " "--actor-num-nodes 1 "
-        case "4xgb300":
+        case ("GB300", 1):
             perf_args += (
                 "--tensor-model-parallel-size 4 "
                 "--sequence-parallel "
@@ -146,12 +144,12 @@ def execute():
             )
             sglang_args = (
                 "--rollout-num-gpus-per-engine 4 "
-                "--sglang-ep-size 4 "
+                # "--sglang-ep-size 4 "
                 "--sglang-mem-fraction-static 0.7 "
-                "--sglang-cuda-graph-bs 1 2 4 8 " + " ".join(str(x) for x in range(16, 513, 8)) + " "
+                "--sglang-cuda-graph-max-bs 512 "
             )
             misc_args += "--actor-num-gpus-per-node 4 " "--actor-num-nodes 1 " "--num-gpus-per-node 4"
-        case "8xgb300":
+        case ("GB300", 2):
             perf_args += (
                 "--tensor-model-parallel-size 4 "
                 "--sequence-parallel "
@@ -162,12 +160,12 @@ def execute():
             )
             sglang_args = (
                 "--rollout-num-gpus-per-engine 4 "
-                "--sglang-ep-size 4 "
+                # "--sglang-ep-size 4 "
                 "--sglang-mem-fraction-static 0.7 "
-                "--sglang-cuda-graph-bs 1 2 4 8 " + " ".join(str(x) for x in range(16, 513, 8)) + " "
+                "--sglang-cuda-graph-max-bs 512 "
             )
             misc_args += "--actor-num-gpus-per-node 4 " "--actor-num-nodes 2 " "--num-gpus-per-node 4"
-        case "32xgb300":
+        case ("GB300", 4):
             perf_args += (
                 "--tensor-model-parallel-size 4 "
                 "--sequence-parallel "
@@ -178,33 +176,39 @@ def execute():
             )
             sglang_args = (
                 "--rollout-num-gpus-per-engine 4 "
-                "--sglang-ep-size 4 "
+                # "--sglang-ep-size 4 "
                 "--sglang-mem-fraction-static 0.7 "
-                "--sglang-cuda-graph-bs 1 2 4 8 " + " ".join(str(x) for x in range(16, 513, 8)) + " "
+                "--sglang-cuda-graph-max-bs 512 "
             )
             misc_args += "--actor-num-gpus-per-node 4 " "--actor-num-nodes 8 " "--num-gpus-per-node 4"
         case _:
-            raise NotImplementedError(f"{mode=}")
+            raise NotImplementedError
 
     train_args = (
         f"{ckpt_args} "
         f"{rollout_args} "
         f"{optimizer_args} "
         f"{grpo_args} "
-        f"{U.get_default_wandb_args(__file__)} "
+        f"{U.get_default_wandb_args(__file__, run_id=args.run_id)} "
         f"{perf_args} "
         f"{eval_args} "
         f"{sglang_args} "
         f"{misc_args} "
+        f"{args.extra_args} "
     )
 
     U.execute_train(
         train_args=train_args,
-        num_gpus_per_node=num_gpus,
-        megatron_model_type=MODEL_TYPE,
+        num_gpus_per_node=args.num_gpus_per_node,
+        megatron_model_type=args.megatron_model_type,
     )
 
 
+@U.dataclass_cli
+def main(args: ScriptArgs):
+    prepare(args)
+    execute(args)
+
+
 if __name__ == "__main__":
-    prepare()
-    execute()
+    typer.run(main)
