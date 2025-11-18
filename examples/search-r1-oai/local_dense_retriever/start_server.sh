@@ -12,6 +12,7 @@ TOPK="$3"
 RETRIEVER_NAME="$4"
 RETRIEVER_MODEL="$5"
 LOG_FILE="$6"
+PORT="${7:-8000}"  # Port for the server (default: 8000)
 
 # Log startup
 echo "Starting retrieval server at $(date)" | tee "${LOG_FILE}"
@@ -20,6 +21,7 @@ echo "Corpus: ${CORPUS_PATH}" | tee -a "${LOG_FILE}"
 echo "Top-K: ${TOPK}" | tee -a "${LOG_FILE}"
 echo "Retriever: ${RETRIEVER_NAME}" | tee -a "${LOG_FILE}"
 echo "Model: ${RETRIEVER_MODEL}" | tee -a "${LOG_FILE}"
+echo "Port: ${PORT}" | tee -a "${LOG_FILE}"
 echo "" | tee -a "${LOG_FILE}"
 
 # Activate venv and run server
@@ -36,4 +38,5 @@ exec "${PYTHON_BIN}" retrieval_server.py \
     --topk "${TOPK}" \
     --retriever_name "${RETRIEVER_NAME}" \
     --retriever_model "${RETRIEVER_MODEL}" \
+    --port "${PORT}" \
     2>&1 | tee -a "${LOG_FILE}"

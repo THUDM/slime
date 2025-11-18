@@ -73,8 +73,13 @@ echo -e "${GREEN}✓ All prerequisites met${NC}"
 
 # 2. Configuration
 export RETRIEVAL_SERVER_URL=${RETRIEVAL_SERVER_URL:-"http://localhost:8000"}
-RETRIEVER_HOST="0.0.0.0"
-RETRIEVER_PORT="8000"
+
+# Parse port from RETRIEVAL_SERVER_URL
+RETRIEVER_PORT=$(echo "${RETRIEVAL_SERVER_URL}" | sed -n 's/.*:\([0-9]\{4,5\}\).*/\1/p')
+if [ -z "${RETRIEVER_PORT}" ]; then
+    RETRIEVER_PORT="8000"  # Fallback to default if parsing fails
+fi
+
 RETRIEVER_TOPK=3
 RETRIEVER_MODEL="intfloat/e5-base-v2"
 RETRIEVER_LOG="/tmp/retrieval_server_$(date +%Y%m%d_%H%M%S).log"
@@ -83,7 +88,6 @@ export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-"4,5,6,7"}
 
 echo "Retrieval server configuration:"
 echo "  URL: ${RETRIEVAL_SERVER_URL}"
-echo "  Host: ${RETRIEVER_HOST}"
 echo "  Port: ${RETRIEVER_PORT}"
 echo "  Top-K: ${RETRIEVER_TOPK}"
 echo "  Model: ${RETRIEVER_MODEL}"
@@ -126,7 +130,7 @@ INDEX_PATH="${RETRIEVER_DIR}/corpus_and_index/e5_Flat.index"
 CORPUS_PATH="${RETRIEVER_DIR}/corpus_and_index/wiki-18.jsonl"
 START_SCRIPT="${RETRIEVER_DIR}/start_server.sh"
 
-tmux send-keys -t ${TMUX_SESSION}:0 "bash ${START_SCRIPT} ${INDEX_PATH} ${CORPUS_PATH} ${RETRIEVER_TOPK} e5 ${RETRIEVER_MODEL} ${RETRIEVER_LOG}" C-m
+tmux send-keys -t ${TMUX_SESSION}:0 "bash ${START_SCRIPT} ${INDEX_PATH} ${CORPUS_PATH} ${RETRIEVER_TOPK} e5 ${RETRIEVER_MODEL} ${RETRIEVER_LOG} ${RETRIEVER_PORT}" C-m
 
 # Give the server a moment to start initializing
 sleep 5
@@ -138,7 +142,7 @@ WAIT_COUNT=0
 START_TIME=$(date +%s)
 
 while [ $WAIT_COUNT -lt $MAX_WAIT ]; do
-    if curl -s http://localhost:${RETRIEVER_PORT}/docs > /dev/null 2>&1; then
+    if curl -s ${RETRIEVAL_SERVER_URL}/docs > /dev/null 2>&1; then
         ELAPSED=$(($(date +%s) - START_TIME))
         echo ""
         echo -e "${GREEN}✓ Retrieval server is ready (started in ${ELAPSED} seconds)${NC}"
