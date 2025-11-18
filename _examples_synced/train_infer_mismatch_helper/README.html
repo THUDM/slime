@@ -1,0 +1,891 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Rollout Correction Methods &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../../_static/styles/theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../../_static/styles/bootstrap.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../../_static/styles/pydata-sphinx-theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+
+  
+  <link href="../../_static/vendor/fontawesome/6.5.2/css/all.min.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="../../_static/vendor/fontawesome/6.5.2/webfonts/fa-solid-900.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../../_static/vendor/fontawesome/6.5.2/webfonts/fa-brands-400.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../../_static/vendor/fontawesome/6.5.2/webfonts/fa-regular-400.woff2" />
+
+    <link rel="stylesheet" type="text/css" href="../../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../../_static/styles/sphinx-book-theme.css?v=eba8b062" />
+    <link rel="stylesheet" type="text/css" href="../../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../../_static/css/custom_log.css?v=ad20845f" />
+  
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
+<link rel="preload" as="script" href="../../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b" />
+  <script src="../../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+    <script src="../../_static/documentation_options.js?v=e645c8fa"></script>
+    <script src="../../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = '_examples_synced/train_infer_mismatch_helper/README';</script>
+    <script src="../../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <link rel="icon" href="../../_static/logo.ico"/>
+    <link rel="index" title="Index" href="../../genindex.html" />
+    <link rel="search" title="Search" href="../../search.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+    <meta name="docbuild:last-update" content="Nov 18, 2025"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-primary-sidebar-checkbox"/>
+  <label class="overlay overlay-primary" for="pst-primary-sidebar-checkbox"></label>
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-secondary-sidebar-checkbox"/>
+  <label class="overlay overlay-secondary" for="pst-secondary-sidebar-checkbox"></label>
+  
+  <div class="search-button__wrapper">
+    <div class="search-button__overlay"></div>
+    <div class="search-button__search-container">
+<form class="bd-search d-flex align-items-center"
+      action="../../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         id="search-input"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form></div>
+  </div>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+        
+      
+      <div class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <script>document.write(`<img src="../../_static/logo.jpg" class="logo__image only-dark" alt="slime - Home"/>`);</script>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">Search</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../get_started/quick_start.html">Quick Start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started/usage.html">Usage Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started/qa.html">FAQ</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-4B.html">Qwen3-4B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/glm4-9B.html">GLM4-9B with 8xH100</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/glm4.5-355B-A32B.html">GLM-4.5 with 64xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../reproducibility/README.html">Reproducibility</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../advanced/speculative-decoding.html">Speculative Decoding</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../advanced/fault-tolerance.html">Fault Tolerance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../advanced/arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../search-r1/README.html">Search-R1 lite</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../fully_async/README.html">Fully Asynchronous Rollout Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../retool/README.html">Retool: from SFT to RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../multi_agent/README.html">Multi-Agent RL</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../developer_guide/debug.html">Debugging</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../platform_support/amd_tutorial.html">AMD</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../../blogs/release_v0.1.0.html">v0.1.0: Redefining High-Performance RL Training Frameworks</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../blogs/introducing_slime.html">slime: An SGLang-Native Post-Training Framework for RL Scaling</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+  
+  <div id="rtd-footer-container"></div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="Source repository"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/_examples_synced/train_infer_mismatch_helper/README.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/_examples_synced/train_infer_mismatch_helper/README.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2F_examples_synced/train_infer_mismatch_helper/README.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="Open an issue"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../../_sources/_examples_synced/train_infer_mismatch_helper/README.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script>
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm pst-navbar-icon search-button search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+  </button>
+`);
+</script>
+<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>Rollout Correction Methods</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-takeaway">Quick Takeaway</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#algorithms">Algorithms</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#baseline-no-mismatch-correction-standard-ppo">[Baseline: No Mismatch Correction] Standard PPO</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#bypassing-ppo-importance-sampling">Bypassing PPO importance sampling</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#decoupled-3-policy-ppo-importance-sampling">Decoupled, 3-policy PPO Importance Sampling</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#apis-of-algorithms">APIs of Algorithms</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#configs-and-recommended-settings">Configs and Recommended Settings</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#arguments">Arguments</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#importance-sampling">Importance Sampling</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rejection-sampling">Rejection Sampling</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mismatch-metrics">Mismatch Metrics</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mismatch-monitoring-metrics">Mismatch Monitoring Metrics</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#is-rs-correction-metrics">IS/RS Correction Metrics</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reference">Reference</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="rollout-correction-methods">
+<h1>Rollout Correction Methods<a class="headerlink" href="#rollout-correction-methods" title="Link to this heading">#</a></h1>
+<p>Rollout correction (e.g, TIS, MIS) through algorithmic methods.</p>
+<section id="quick-takeaway">
+<h2>Quick Takeaway<a class="headerlink" href="#quick-takeaway" title="Link to this heading">#</a></h2>
+<p>This function is used to solve offline scenarios through algorithmic adaptations, e.g. TIS/MIS.</p>
+<p>We included 3 rollout correction algorithms:</p>
+<ol class="arabic simple">
+<li><p>decoupled, 3-policies PPO with rollout importance sampling</p></li>
+<li><p>direct rollout policy overwriting in the standard PPO</p></li>
+<li><p>pure REINFORCE loss (without PPO clipping) with rollout importance sampling</p></li>
+</ol>
+<p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>: use this flag to <strong>turn on TIS/MIS</strong> for rollout correction (details in <strong>Algorithms</strong>).
+You may specify the <strong>IS/RS configs</strong> with a config file using <code class="docutils literal notranslate"><span class="pre">--custom-config-path</span></code>.</p>
+<p><code class="docutils literal notranslate"><span class="pre">--use-rollout-logprobs</span></code>: When use this flag, the logprobs will <strong>not</strong> be recomputed by training engine - rollout log probs will be directly used in PPO/GRPO loss.</p>
+<p><code class="docutils literal notranslate"><span class="pre">--get-mismatch-metrics</span></code>: When you don’t want to add TIS/MIS, but still want to monitor the mismatch-related metrics (e.g. rollout-training KL). It will <strong>only return mismatch metrics</strong> but not change the loss in any way.</p>
+</section>
+<section id="algorithms">
+<h2>Algorithms<a class="headerlink" href="#algorithms" title="Link to this heading">#</a></h2>
+<p>We give examples of the algorithms for solving the training-inference mismatch issue.</p>
+<section id="baseline-no-mismatch-correction-standard-ppo">
+<h3>[Baseline: No Mismatch Correction] Standard PPO<a class="headerlink" href="#baseline-no-mismatch-correction-standard-ppo" title="Link to this heading">#</a></h3>
+<p>This is the basic PPO algorithm with potentially training-inference mismatch issue when the output of SGLang and Megatron does not exactly match.</p>
+<div class="math notranslate nohighlight">
+\[
+L_{\text{PPO}}(\theta)
+= - \mathbb{E}_{x \sim \mathcal{D},\, y \sim \pi_{\textcolor{red}{\text{SGLang}}}} \left[
+  \min \left(
+    \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{blue}{\text{Megatron}}}(y \mid x)} A_t,
+    \mathrm{clip}\left(
+      \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{blue}{\text{Megatron}}}(y \mid x)},
+      1 - \epsilon,
+      1 + \epsilon
+    \right) A_t
+  \right)
+\right].
+\]</div>
+</section>
+<section id="bypassing-ppo-importance-sampling">
+<h3>Bypassing PPO importance sampling<a class="headerlink" href="#bypassing-ppo-importance-sampling" title="Link to this heading">#</a></h3>
+<p>Like REINFORCE, we directly use the rollout engine’s log probs as the old policy in offline PPO’s importance sampling, rather than the recomputed log-probs from the training engine.</p>
+<div class="math notranslate nohighlight">
+\[
+L_{\text{PPO-bypass}}(\theta)
+= - \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_{\textcolor{red}{\text{SGLang}}}} \left[
+  \min \left(
+    \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{red}{\text{SGLang}}}(y \mid x)} A_t,
+    \mathrm{clip}\left(
+      \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{red}{\text{SGLang}}}(y \mid x)},
+      1 - \epsilon,
+      1 + \epsilon
+    \right) A_t
+  \right)
+\right].
+\]</div>
+<p>Advantages:</p>
+<ul class="simple">
+<li><p>Efficiency: skip <code class="docutils literal notranslate"><span class="pre">log_prob</span></code> recomputation on training engine. Reduce one expensive forward pass on all the generated trajectories.</p></li>
+</ul>
+</section>
+<section id="decoupled-3-policy-ppo-importance-sampling">
+<h3>Decoupled, 3-policy PPO Importance Sampling<a class="headerlink" href="#decoupled-3-policy-ppo-importance-sampling" title="Link to this heading">#</a></h3>
+<p><a class="reference external" href="https://arxiv.org/pdf/2110.00641">Decoupled PPO</a> achieves batch-independent PPO by decoupling two roles: Proximal Policy (anchor policy for PPO clipping, control update size) and Behavior Policy (for off-policy correction in importance sampling). Therefore, there are totally 3 roles engaged in this mode, <strong>target policy</strong> <span class="math notranslate nohighlight">\(\pi_\theta\)</span>, <strong>proximal policy</strong> <span class="math notranslate nohighlight">\(\pi_{\textcolor{blue}{\text{old}}}\)</span>, and <strong>behavior policy</strong> <span class="math notranslate nohighlight">\(\pi_{\textcolor{red}{\text{SGLang}}}\)</span>. <span class="math notranslate nohighlight">\(\pi_{\textcolor{blue}{\text{old}}}\)</span> is recomputed with Megatron at the beginning of each training step.</p>
+<div class="math notranslate nohighlight">
+\[
+L_{\text{PPO-decoupled}}(\theta)
+= - \mathbb{E}_{x \sim \mathcal{D}, y \sim \pi_{\textcolor{red}{\text{SGLang}}}} \left[
+    \frac{\pi_{\textcolor{blue}{\text{old}}}(y \mid x)}{\pi_{\textcolor{red}{\text{SGLang}}}(y \mid x)}
+  \min \left(
+    \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{blue}{\text{old}}}(y \mid x)} A_t,
+    \mathrm{clip}\left(
+      \frac{\pi_\theta(y \mid x)}{\pi_{\textcolor{blue}{\text{old}}}(y \mid x)},
+      1 - \epsilon,
+      1 + \epsilon
+    \right) A_t
+  \right)
+\right].
+\]</div>
+<p>Advantages:</p>
+<ul class="simple">
+<li><p>Achieves batch size invariance and efficient stale data utilization</p></li>
+<li><p>Enables accurate off-policy metrics monitoring</p></li>
+</ul>
+</section>
+</section>
+<section id="apis-of-algorithms">
+<h2>APIs of Algorithms<a class="headerlink" href="#apis-of-algorithms" title="Link to this heading">#</a></h2>
+<p>You may choose from above algorithms by specifying arguments below:</p>
+<p><code class="docutils literal notranslate"><span class="pre">--use-rollout-log-probs</span></code>: True if only use <code class="docutils literal notranslate"><span class="pre">rollout_log_probs</span></code> to compute the loss, bypassing old_log_probs calculated by training engine;</p>
+<p><code class="docutils literal notranslate"><span class="pre">--use-rollout-correction</span></code>: True if apply importance sampling/rejection sampling to loss.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p><code class="docutils literal notranslate"><span class="pre">use_rollout_log_probs</span></code></p></th>
+<th class="head"><p><code class="docutils literal notranslate"><span class="pre">use_rollout_correction</span></code></p></th>
+<th class="head"><p>Algorithm</p></th>
+<th class="head"><p>Policies</p></th>
+<th class="head"><p>Compute old_log_probs</p></th>
+<th class="head"><p>Batch Invariant</p></th>
+<th class="head"><p>Recommended TIS Mode</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p>False</p></td>
+<td><p>False</p></td>
+<td><p>Standard PPO (Algorithm 0)</p></td>
+<td><p>2 (<span class="math notranslate nohighlight">\(\pi_\theta\)</span>, <span class="math notranslate nohighlight">\(\pi_{\textcolor{blue}{\text{old}}}\)</span>)</p></td>
+<td><p>Yes</p></td>
+<td><p>No</p></td>
+<td><p>N/A</p></td>
+</tr>
+<tr class="row-odd"><td><p>True</p></td>
+<td><p>False</p></td>
+<td><p>Bypassing PPO (Algorithm 3)</p></td>
+<td><p>2 (<span class="math notranslate nohighlight">\(\pi_\theta\)</span>, <span class="math notranslate nohighlight">\(\pi_{\textcolor{red}{\text{SGLang}}}\)</span>)</p></td>
+<td><p>🚀 Skipped</p></td>
+<td><p>No</p></td>
+<td><p>N/A</p></td>
+</tr>
+<tr class="row-even"><td><p>False</p></td>
+<td><p>True</p></td>
+<td><p>Decoupled PPO (Algorithm 2)</p></td>
+<td><p>3 (<span class="math notranslate nohighlight">\(\pi_\theta\)</span>, <span class="math notranslate nohighlight">\(\pi_{\textcolor{blue}{\text{old}}}\)</span>, <span class="math notranslate nohighlight">\(\pi_{\textcolor{red}{\text{SGLang}}}\)</span>)</p></td>
+<td><p>Yes</p></td>
+<td><p>Yes</p></td>
+<td><p>token/seq/geo</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="configs-and-recommended-settings">
+<h2>Configs and Recommended Settings<a class="headerlink" href="#configs-and-recommended-settings" title="Link to this heading">#</a></h2>
+<p>When choosing to use importance sampling or rejection sampling for mismatch correction (<code class="docutils literal notranslate"><span class="pre">use-rollout-correction</span></code> enabled, Algorithm 2 &amp; 3), you may specify the IS modes and applied levels.</p>
+<section id="arguments">
+<h3>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">use-tis</span></code>: Enable importance sampling. The IS weight will be multiplied by the policy gradient loss.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--tis-mode</span></code>: Mode for IS. Allowed mode: <strong>truncate</strong>, <strong>clip</strong>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--tis-lower-bound</span></code>, <code class="docutils literal notranslate"><span class="pre">--tis-upper-bound</span></code>: Bounds for IS weights.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--tis-level</span></code>: Allowed levels: <strong>token</strong>, <strong>sequence</strong>, <strong>geometric</strong>. See explanations below.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--tis-batch-normalize</span></code>: Normalize IS weights to mean=1.0 across batch</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">use-rs</span></code>: Enable rejection sampling. When choosing to use rejection sampling, the tokens/sequences with an IS weight out of threshold will be directly masked. Those rejected tokens/sequences will not be considered for loss averaging.</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--rs-lower-bound</span></code>, <code class="docutils literal notranslate"><span class="pre">--rs-upper-bound</span></code>: Bounds for RS</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--rs-level</span></code>: Allowed levels: <strong>token</strong>, <strong>sequence</strong>, <strong>geometric</strong>. See explanations below.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--rs-veto-threshold</span></code>: Sequence-level rejection threshold for catastrophic mismatches</p></li>
+</ul>
+</section>
+<section id="importance-sampling">
+<h3>Importance Sampling<a class="headerlink" href="#importance-sampling" title="Link to this heading">#</a></h3>
+<p>For both IS and RS, we provided 3 levels: <strong>token</strong>, <strong>sequence</strong>, <strong>geometric</strong>.</p>
+<p><strong>Token Level (default)</strong>:</p>
+<p>Computes importance weights independently for each token:
+<span class="math notranslate nohighlight">\(w_i = \exp\left(\log \pi_{\text{train}}(x_i) - \log \pi_{\text{rollout}}(x_i)\right)\)</span></p>
+<p>Characteristics: Biased but computationally simple, suitable for most scenarios</p>
+<p><strong>Sequence Level</strong>:</p>
+<p>Uses the product of all token weights as the sequence weight:
+<span class="math notranslate nohighlight">\(w_{\text{seq}} = \exp\left( \sum_i \left( \log \pi_{\text{train}}(x_i) - \log \pi_{\text{rollout}}(x_i) \right) \right)\)</span></p>
+<p>Characteristics: Unbiased but high variance, suitable for sequence-level optimization</p>
+<p><strong>Geometric Level</strong>:</p>
+<p>Uses geometric mean to compute sequence weight:
+<span class="math notranslate nohighlight">\(w_{\text{seq}} = \exp\left( \frac{1}{n} \sum_{i=1}^{n} \left( \log \pi_{\text{train}}(x_i) - \log \pi_{\text{rollout}}(x_i) \right) \right)\)</span></p>
+<p>Characteristics: Biased but low variance, balances bias and variance</p>
+</section>
+<section id="rejection-sampling">
+<h3>Rejection Sampling<a class="headerlink" href="#rejection-sampling" title="Link to this heading">#</a></h3>
+<p><strong>Token Level</strong>: Reject tokens with IS weight out of threshold</p>
+<p><strong>Sequence Level:</strong> Reject sequences with mean IS weight out of threshold</p>
+<p><strong>Geometric Level:</strong> Reject sequences with geometric mean IS weight out of threshold</p>
+<ul class="simple">
+<li><p>Extremely selective: Requires near-perfect policy match</p></li>
+<li><p>High rejection rate: Only suitable for very slight distribution shifts</p></li>
+</ul>
+<p><strong>Veto Mechanism</strong>:</p>
+<p>Veto mechanism rejects sequences with catastrophically low token probabilities.
+Reject entire sequence if <span class="math notranslate nohighlight">\(\exists t \in T\)</span> such that <span class="math notranslate nohighlight">\(\rho_t &lt; C_{\text{veto}}\)</span></p>
+<ul class="simple">
+<li><p>Prevents catastrophic updates from tokens with near-zero probability under <span class="math notranslate nohighlight">\(\pi_{\text{old}}\)</span></p></li>
+<li><p>Independent of IS/RS settings</p></li>
+</ul>
+<p><em>Typical values: <span class="math notranslate nohighlight">\(10^{-4}\)</span> to <span class="math notranslate nohighlight">\(10^{-6}\)</span></em></p>
+</section>
+</section>
+<section id="mismatch-metrics">
+<h2>Mismatch Metrics<a class="headerlink" href="#mismatch-metrics" title="Link to this heading">#</a></h2>
+<p>When rollout log probabilities are available, SLIME automatically tracks comprehensive metrics to monitor training-inference mismatch and importance sampling weights. These metrics help diagnose policy divergence and guide hyperparameter tuning.</p>
+<section id="mismatch-monitoring-metrics">
+<h3>Mismatch Monitoring Metrics<a class="headerlink" href="#mismatch-monitoring-metrics" title="Link to this heading">#</a></h3>
+<p>These metrics quantify the difference between training and rollout policies. They are computed automatically when <code class="docutils literal notranslate"><span class="pre">rollout_log_probs</span></code> are provided, regardless of whether TIS/MIS correction is enabled.</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Metric Name</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">mismatch_training_log_ppl</span></code></p></td>
+<td><p>Negative mean log probability under training policy: <span class="math notranslate nohighlight">\(-\mathbb{E}[\log \pi_{\text{train}}]\)</span></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">mismatch_training_ppl</span></code></p></td>
+<td><p>Perplexity of training policy: <span class="math notranslate nohighlight">\(\exp(-\mathbb{E}[\log \pi_{\text{train}}])\)</span></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">mismatch_rollout_log_ppl</span></code></p></td>
+<td><p>Negative mean log probability under rollout policy: <span class="math notranslate nohighlight">\(-\mathbb{E}[\log \pi_{\text{rollout}}]\)</span></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">mismatch_rollout_ppl</span></code></p></td>
+<td><p>Perplexity of rollout policy: <span class="math notranslate nohighlight">\(\exp(-\mathbb{E}[\log \pi_{\text{rollout}}])\)</span></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">mismatch_kl</span></code></p></td>
+<td><p>Forward KL divergence estimator: <span class="math notranslate nohighlight">\(\mathbb{E}[\log \pi_{\text{rollout}} - \log \pi_{\text{train}}]\)</span></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">mismatch_k3_kl</span></code></p></td>
+<td><p>K3 KL estimator: <span class="math notranslate nohighlight">\(\mathbb{E}[\exp(r) - r - 1]\)</span> where <span class="math notranslate nohighlight">\(r = \log \pi_{\text{train}} - \log \pi_{\text{rollout}}\)</span></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">mismatch_log_ppl_diff</span></code></p></td>
+<td><p>Log perplexity difference</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">mismatch_log_ppl_abs_diff</span></code></p></td>
+<td><p>Absolute log perplexity difference</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">mismatch_ppl_ratio</span></code></p></td>
+<td><p>Perplexity ratio</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">train_rollout_logprob_abs_diff</span></code></p></td>
+<td><p>Token-level absolute log probability difference</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+<p><strong>Usage</strong>: These metrics help you monitor policy drift. Large values indicate a significant mismatch between the training and rollout engines.</p>
+</section>
+<section id="is-rs-correction-metrics">
+<h3>IS/RS Correction Metrics<a class="headerlink" href="#is-rs-correction-metrics" title="Link to this heading">#</a></h3>
+<p>These metrics track importance sampling weights and corrections. They are only computed when <code class="docutils literal notranslate"><span class="pre">--use-tis</span></code> is enabled.</p>
+<p>When using <code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code> pointing to MIS implementation (e.g., <code class="docutils literal notranslate"><span class="pre">mis.py</span></code>), additional fine-grained metrics become available:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Metric Name</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Required Args</p></th>
+<th class="head"><p>Optional Control Args</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">ois</span></code></p></td>
+<td><p>On-policy importance sampling ratio: <span class="math notranslate nohighlight">\(\exp(\log \pi_{\text{train}} - \log \pi_{\text{old}})\)</span></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code></p></td>
+<td><p>Only for Algorithm 2 (Decoupled PPO)</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">mis_mean_is_weight_before_clip</span></code></p></td>
+<td><p>Raw IS weights before any correction: <span class="math notranslate nohighlight">\(\exp(\text{log-ratio})\)</span></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--mis-level</span></code> (token/sequence/geometric)</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">mis_ratio_mean_after_mis</span></code></p></td>
+<td><p>IS weights after correction (bounded or masked)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--mis-mode</span></code>, bounds</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">mis_truncate_fraction</span></code></p></td>
+<td><p>Fraction of weights truncated (mode-specific)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>, <code class="docutils literal notranslate"><span class="pre">--mis-mode=truncate</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--mis-upper-bound</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">mis_clip_fraction_low</span></code></p></td>
+<td><p>Fraction of weights clipped below lower bound</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>, <code class="docutils literal notranslate"><span class="pre">--mis-mode=clip</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--mis-lower-bound</span></code>, <code class="docutils literal notranslate"><span class="pre">--mis-upper-bound</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">mis_clip_fraction_high</span></code></p></td>
+<td><p>Fraction of weights clipped above upper bound</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>, <code class="docutils literal notranslate"><span class="pre">--mis-mode=clip</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--mis-lower-bound</span></code>, <code class="docutils literal notranslate"><span class="pre">--mis-upper-bound</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">mis_mask_fraction_low</span></code></p></td>
+<td><p>Fraction of tokens rejected (below lower bound)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>, <code class="docutils literal notranslate"><span class="pre">--mis-mode=mask</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--mis-lower-bound</span></code>, <code class="docutils literal notranslate"><span class="pre">--mis-upper-bound</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">mis_mask_fraction_high</span></code></p></td>
+<td><p>Fraction of tokens rejected (above upper bound)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>, <code class="docutils literal notranslate"><span class="pre">--mis-mode=mask</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--mis-lower-bound</span></code>, <code class="docutils literal notranslate"><span class="pre">--mis-upper-bound</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">mis_catastrophic_token_fraction</span></code></p></td>
+<td><p>Fraction of catastrophic tokens (veto-specific)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>, <code class="docutils literal notranslate"><span class="pre">--mis-veto-threshold</span></code> set</p></td>
+<td><p>Sequence-level rejection</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">mis_catastrophic_seq_fraction</span></code></p></td>
+<td><p>Fraction of sequences with catastrophic tokens</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>, <code class="docutils literal notranslate"><span class="pre">--mis-veto-threshold</span></code> set</p></td>
+<td><p>Sequence-level rejection</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">mis_batch_norm_factor</span></code></p></td>
+<td><p>Batch normalization factor applied to weights</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>, <code class="docutils literal notranslate"><span class="pre">--mis-batch-normalize</span></code></p></td>
+<td><p>Normalizes mean to 1.0</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="reference">
+<h2>Reference<a class="headerlink" href="#reference" title="Link to this heading">#</a></h2>
+<p>We thank the materials below for their excellent findings and theories.</p>
+<ol class="arabic simple">
+<li><p><a class="reference external" href="https://github.com/szrlee/verl/blob/yingru/rollout_correction/docs/advance/rollout_corr_math.md">Mathematical Formulations of Rollout Correction Methods in verl (Yingru Li)</a>.</p></li>
+<li><p><a class="reference external" href="https://fengyao.notion.site/off-policy-rl">Your Efficient RL Framework Secretly Brings You Off-Policy RL Training</a></p></li>
+<li><p><a class="reference external" href="https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda">When Speed Kills Stability: Demystifying RL Collapse from the Training-Inference Mismatch</a></p></li>
+</ol>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+  <div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav class="bd-toc-nav page-toc">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-takeaway">Quick Takeaway</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#algorithms">Algorithms</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#baseline-no-mismatch-correction-standard-ppo">[Baseline: No Mismatch Correction] Standard PPO</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#bypassing-ppo-importance-sampling">Bypassing PPO importance sampling</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#decoupled-3-policy-ppo-importance-sampling">Decoupled, 3-policy PPO Importance Sampling</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#apis-of-algorithms">APIs of Algorithms</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#configs-and-recommended-settings">Configs and Recommended Settings</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#arguments">Arguments</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#importance-sampling">Importance Sampling</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rejection-sampling">Rejection Sampling</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mismatch-metrics">Mismatch Metrics</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mismatch-monitoring-metrics">Mismatch Monitoring Metrics</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#is-rs-correction-metrics">IS/RS Correction Metrics</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reference">Reference</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2025, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  Last updated on Nov 18, 2025.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b"></script>
+<script src="../../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>
