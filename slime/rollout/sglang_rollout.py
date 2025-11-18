@@ -581,9 +581,9 @@ async def eval_rollout_single_dataset(
         sample = await coro
         if do_print:
             logger.info(
-                "eval_rollout_single_dataset example data:",
-                [str(sample.prompt) + sample.response],
-                f"reward={sample.reward}",
+                "eval_rollout_single_dataset example data: %s, reward=%s",
+                str(sample.prompt) + sample.response,
+                sample.reward,
             )
             do_print = False
         if isinstance(sample, list):
