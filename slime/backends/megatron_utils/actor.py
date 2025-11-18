@@ -37,6 +37,8 @@ from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor, named_parameters
 
+logging.getLogger("megatron").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
