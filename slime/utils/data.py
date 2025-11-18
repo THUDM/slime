@@ -15,6 +15,31 @@ from .timer import Timer
 __all__ = ["Dataset"]
 
 
+def convert_numpy_to_native(obj):
+    """
+    Recursively convert numpy arrays and scalars to native Python types.
+
+    Handles nested dictionaries, lists, numpy arrays, and numpy scalar types
+    to ensure compatibility with JSON serialization and downstream processing.
+
+    Args:
+        obj: Object to convert (can be dict, list, np.ndarray, np.generic, or primitive type)
+
+    Returns:
+        Object with all numpy types converted to native Python types
+    """
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, np.generic):  # Handle numpy scalar types (np.int64, np.float32, etc.)
+        return obj.item()
+    elif isinstance(obj, dict):
+        return {k: convert_numpy_to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_numpy_to_native(item) for item in obj]
+    else:
+        return obj
+
+
 # TODO: don't read the whole file into memory.
 def read_file(path):
     path, row_slice = _parse_generalized_path(path)
@@ -110,8 +135,8 @@ class Dataset:
             self.origin_samples.append(
                 Sample(
                     prompt=prompt,
-                    label=data[label_key] if label_key is not None else None,
-                    metadata=data.get(metadata_key) or {},
+                    label=convert_numpy_to_native(data[label_key]) if label_key is not None else None,
+                    metadata=data.get(metadata_key, {}),
                 )
             )
 

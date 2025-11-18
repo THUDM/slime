@@ -17,7 +17,7 @@ class Sample:
     # response
     response: str = ""
     response_length: int = 0
-    label: Optional[str] = None
+    label: Optional[Union[str, int, float, dict[str, Any]]] = None
     reward: Optional[Union[float, dict[str, Any]]] = None
     loss_mask: Optional[list[int]] = None
     weight_versions: list[str] = field(default_factory=list)
@@ -31,9 +31,9 @@ class Sample:
 
     status: Status = Status.PENDING
 
-    metadata: dict = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     # metadata used during training, e.g., what loss to use for this sample.
-    train_metadata: Optional[dict] = None
+    train_metadata: Optional[dict[str, Any]] = None
 
     class SpecInfo:
         spec_accept_token_num: int = 0
