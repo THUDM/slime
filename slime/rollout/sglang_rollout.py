@@ -303,12 +303,13 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
         # abort all the requests
         for url in response["urls"]:
             logger.info(f"Abort request for {url}")
+            await post(f"{url}/abort_request", {"abort_all": True})
     else:
         response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
         # abort all the requests
         for worker in response["workers"]:
             url = worker["url"]
-            print(f"Abort request for {url}", flush=True)
+            logger.info(f"Abort request for {url}")
             await post(f"{url}/abort_request", {"abort_all": True})
 
     # make sure all the pending tasks are finished
