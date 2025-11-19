@@ -297,6 +297,11 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         # Select which model to use
         if model_tag == "ref" and self.ref_model is not None:
+            # Offload actor model to CPU to save GPU memory
+            logger.info("[Rank {}] Offloading actor model to CPU".format(dist.get_rank()))
+            self.model.cpu()
+            torch.cuda.empty_cache()
+            
             # Load ref model to GPU
             logger.info("[Rank {}] Loading ref model to GPU".format(dist.get_rank()))
             self.ref_model.cuda()
@@ -339,6 +344,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 logger.info("[Rank {}] Offloading ref model to CPU".format(dist.get_rank()))
                 self.ref_model.cpu()
                 torch.cuda.empty_cache()
+                # Restore actor model to GPU
+                logger.info("[Rank {}] Restoring actor model to GPU".format(dist.get_rank()))
+                self.model.cuda()
 
     def packed_data(
         self, rollout_data: dict[str, list[torch.Tensor]]
