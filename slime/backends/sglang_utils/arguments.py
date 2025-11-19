@@ -1,6 +1,7 @@
 import sglang
 from packaging.version import parse
 from sglang.srt.server_args import ServerArgs
+from slime.utils.http_utils import _wrap_ipv6
 
 
 # TODO: use all sglang router arguments with `--sglang-router` prefix
@@ -124,3 +125,6 @@ def validate_args(args):
 
     if args.sglang_dp_size > 1:
         assert args.sglang_enable_dp_attention
+
+    if getattr(args, "sglang_router_ip", None):
+        args.sglang_router_ip = _wrap_ipv6(args.sglang_router_ip)
