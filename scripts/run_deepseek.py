@@ -2,7 +2,6 @@
 This file is in preview, and will be further refined and optimized.
 """
 
-import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -65,74 +64,40 @@ def _fp8_cast_bf16(args: ScriptArgs):
 @app.command()
 @U.dataclass_cli
 def prepare_spmd(args: ScriptArgs):
-    _convert_to_megatron_ckpt(args)
-
-
-def _convert_to_megatron_ckpt(args: ScriptArgs):
-    """This script needs to be executed once per node."""
-    path_dst = f"/root/models/{args.model_name}_torch_dist"
-    if Path(path_dst).exists():
-        return
-
-    # `export SLURM_JOB_HOSTNAMES=$(scontrol show hostnames "$SLURM_JOB_NODELIST")`
-    print(f"{os.environ.get('SLURM_JOB_HOSTNAMES')=} {os.environ.get('SLURM_NODEID')=}")
-    master_addr = os.environ["SLURM_JOB_HOSTNAMES"].split("\n")[0]
-    node_rank = int(os.environ["SLURM_NODEID"])
-
-    cmd = (
-        f"source scripts/models/{args.megatron_model_type}.sh && "
-        "PYTHONPATH=/root/Megatron-LM/ torchrun "
-        f"--nproc-per-node {args.num_gpus_per_node} "
-        f"--master-addr {master_addr} "
-        "--master-port 23456 "
-        f"--nnodes={args.num_nodes} "
-        f"--node-rank {node_rank} "
-        "tools/convert_hf_to_torch_dist.py "
-        "${MODEL_ARGS[@]} "
-        f"--hf-checkpoint /root/models/{args.model_name}-bf16/ "
-        f"--save {path_dst} "
-    )
-
-    # TODO unify 5layer w/ 20layer
+    # TODO unify 5layer w/ 20layer, also maybe unify the whole script
+    extra_args = "--tensor-model-parallel-size 1 " "--expert-tensor-parallel-size 1 "
     if args.num_nodes == 1 and args.model_name == "DeepSeek-V3-0324-5layer":
-        cmd += (
-            "--tensor-model-parallel-size 1 "
-            "--pipeline-model-parallel-size 1 "
-            "--expert-tensor-parallel-size 1 "
-            "--expert-model-parallel-size 1 "
-        )
+        extra_args += "--pipeline-model-parallel-size 1 " "--expert-model-parallel-size 1 "
     elif args.model_name == "DeepSeek-V3-0324-20layer":
-        cmd += (
-            "--tensor-model-parallel-size 1 "
-            "--expert-tensor-parallel-size 1 "
+        extra_args += (
             "--expert-model-parallel-size 4 "
             # PP info will be auto determined by converter script
         )
     else:
-        cmd += (
-            "--tensor-model-parallel-size 1 "
+        extra_args += (
             "--pipeline-model-parallel-size 8 "
-            "--expert-tensor-parallel-size 1 "
             "--expert-model-parallel-size 4 "
             "--decoder-first-pipeline-num-layers 7 "
             "--decoder-last-pipeline-num-layers 6 "
         )
 
-    U.exec_command(cmd)
+    U.convert_checkpoint(
+        model_name=args.model_name,
+        megatron_model_type=args.megatron_model_type,
+        num_gpus_per_node=args.num_gpus_per_node,
+        multinode=True,
+        extra_args=extra_args,
+        dir_dst="/root/models",
+    )
 
 
-# TODO improve these commadns
 @app.command()
 @U.dataclass_cli
 def prepare_cp(args: ScriptArgs):
-    _cp_model_to_local(args)
-
-
-def _cp_model_to_local(args: ScriptArgs):
-    path_src = f"/root/models/{args.model_name}_torch_dist"
-    path_dst = f"/root/local_data/{args.model_name}_torch_dist"
-    # Always execute, since this is rsync and is cheap
-    U.exec_command(f"mkdir -p {path_dst} && rsync -a --info=progress2 {path_src}/ {path_dst}")
+    U.rsync_simple(
+        path_src=f"/root/models/{args.model_name}_torch_dist",
+        path_dst=f"/root/local_data/{args.model_name}_torch_dist",
+    )
 
 
 @app.command()
