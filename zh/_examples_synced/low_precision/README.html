@@ -452,6 +452,7 @@ document.write(`
 <h2>Files<a class="headerlink" href="#files" title="Link to this heading">#</a></h2>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">run-qwen3-4b-fp8.sh</span></code>: example launch script with Qwen3‑4B in FP8.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-qwen3-30b-a3b-fp8-two-nodes.sh</span></code>: example launch script for running Qwen3‑30B‑A3B in FP8 across two nodes.</p></li>
 </ul>
 </section>
 <section id="quick-start">
@@ -461,7 +462,12 @@ document.write(`
 <li><p>Start FP8 training</p></li>
 </ol>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cd</span> <span class="n">slime</span>
-<span class="n">bash</span> <span class="n">examples</span><span class="o">/</span><span class="n">fp8</span><span class="o">/</span><span class="n">run</span><span class="o">-</span><span class="n">qwen3</span><span class="o">-</span><span class="mi">4</span><span class="n">b</span><span class="o">-</span><span class="n">fp8</span><span class="o">.</span><span class="n">sh</span>
+
+<span class="c1"># Qwen3‑4B FP8 training (single node)</span>
+<span class="n">bash</span> <span class="n">examples</span><span class="o">/</span><span class="n">low_precision</span><span class="o">/</span><span class="n">run</span><span class="o">-</span><span class="n">qwen3</span><span class="o">-</span><span class="mi">4</span><span class="n">b</span><span class="o">-</span><span class="n">fp8</span><span class="o">.</span><span class="n">sh</span>
+
+<span class="c1"># Qwen3‑30B‑A3B FP8 training (two nodes)</span>
+<span class="n">bash</span> <span class="n">examples</span><span class="o">/</span><span class="n">low_precision</span><span class="o">/</span><span class="n">run</span><span class="o">-</span><span class="n">qwen3</span><span class="o">-</span><span class="mi">30</span><span class="n">b</span><span class="o">-</span><span class="n">a3b</span><span class="o">-</span><span class="n">fp8</span><span class="o">-</span><span class="n">two</span><span class="o">-</span><span class="n">nodes</span><span class="o">.</span><span class="n">sh</span>
 </pre></div>
 </div>
 <p>Following the above command will launch FP8 training. According to slime's design, if the model under <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> is FP8, it will automatically use FP8 quantization in weight updates.</p>

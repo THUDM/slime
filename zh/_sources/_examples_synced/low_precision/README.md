@@ -6,6 +6,8 @@ This is an example of FP8 training and FP8 inference. Under FP8 training and inf
 
 * `run-qwen3-4b-fp8.sh`: example launch script with Qwen3‑4B in FP8.
 
+* `run-qwen3-30b-a3b-fp8-two-nodes.sh`: example launch script for running Qwen3‑30B‑A3B in FP8 across two nodes.
+
 ### Quick Start
 
 1. [optional] Convert your HuggingFace weights to FP8 format. You can use `tools/convert_hf_to_fp8`, or directly write an FP8 format model config.
@@ -14,8 +16,14 @@ This is an example of FP8 training and FP8 inference. Under FP8 training and inf
 
 ```
 cd slime
-bash examples/fp8/run-qwen3-4b-fp8.sh
+
+# Qwen3‑4B FP8 training (single node)
+bash examples/low_precision/run-qwen3-4b-fp8.sh
+
+# Qwen3‑30B‑A3B FP8 training (two nodes)
+bash examples/low_precision/run-qwen3-30b-a3b-fp8-two-nodes.sh
 ```
+
 Following the above command will launch FP8 training. According to slime's design, if the model under `--hf-checkpoint` is FP8, it will automatically use FP8 quantization in weight updates.
 
 3. Use the saved checkpoint for evaluation
