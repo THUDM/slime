@@ -281,7 +281,7 @@ def get_advantages_and_returns(
     full_advantages = torch.tensor(advantages_reversed[::-1], dtype=full_values.dtype, device=full_values.device)
     full_returns = full_advantages + full_values
 
-    if cp_size > 0:
+    if cp_size > 1:
         from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
 
         advantages = slice_log_prob_with_cp(full_advantages, total_len, response_len)
@@ -291,6 +291,107 @@ def get_advantages_and_returns(
         returns = full_returns
 
     return advantages.detach(), returns
+
+
+def get_advantages_and_returns_batch(
+    total_lengths,
+    response_lengths,
+    values_list,
+    rewards_list,
+    gamma,
+    lambd,
+):
+    """
+    Batched GAE with CP support.
+    Input:
+        total_lengths:     list[int], each sample's total_len
+        response_lengths:  list[int], each sample's response_len
+        values_list:       list[Tensor], each shape = [resp_len_i]
+        rewards_list:      list[Tensor], same shape
+    Output:
+        advantages_list:   list[Tensor], each shape = [resp_len_i]
+        returns_list:      list[Tensor], same shape
+    """
+
+    from megatron.core import mpu
+
+    with torch.no_grad():
+        B = len(response_lengths)
+        assert B == len(values_list)
+        assert B == len(rewards_list)
+
+        cp_size = mpu.get_context_parallel_world_size()
+        device = values_list[0].device
+        dtype = values_list[0].dtype
+
+        if cp_size > 1:
+            from slime.backends.megatron_utils.cp_utils import all_gather_with_cp
+
+            full_values_list = []
+            full_rewards_list = []
+
+            for total_len, resp_len, v, r in zip(total_lengths, response_lengths, values_list, rewards_list):
+                full_v = all_gather_with_cp(v, total_len, resp_len)
+                full_r = all_gather_with_cp(r, total_len, resp_len)
+                full_values_list.append(full_v)
+                full_rewards_list.append(full_r)
+
+            # full_values_list[i].shape = [total_len_i]
+        else:
+            full_values_list = values_list
+            full_rewards_list = rewards_list
+
+        # pad to max_len for batched GAE
+        max_len = max(response_lengths)
+
+        full_values = torch.zeros(B, max_len, device=device, dtype=dtype)
+        full_rewards = torch.zeros(B, max_len, device=device, dtype=dtype)
+
+        for i in range(B):
+            L = response_lengths[i]
+            full_values[i, :L] = full_values_list[i][:L]
+            full_rewards[i, :L] = full_rewards_list[i][:L]
+
+        lastgaelam = torch.zeros(B, device=device, dtype=dtype)
+        adv_rev = []
+
+        for t in reversed(range(max_len)):
+            next_value = full_values[:, t + 1] if t < max_len - 1 else 0.0
+            delta = full_rewards[:, t] + gamma * next_value - full_values[:, t]
+            lastgaelam = delta + gamma * lambd * lastgaelam
+            adv_rev.append(lastgaelam)
+
+        full_advantages = torch.stack(adv_rev[::-1], dim=1)  # [B, max_len]
+        full_returns = full_advantages + full_values  # [B, max_len]
+
+        advantages_list = []
+        returns_list = []
+
+        if cp_size > 1:
+            from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
+
+            for total_len, resp_len, adv_row, ret_row in zip(
+                total_lengths,
+                response_lengths,
+                full_advantages,
+                full_returns,
+            ):
+                adv_full = adv_row  # shape = [resp_len_i padded to max_len]
+                ret_full = ret_row
+
+                adv_sliced = slice_log_prob_with_cp(adv_full[:resp_len], total_len, resp_len)
+                ret_sliced = slice_log_prob_with_cp(ret_full[:resp_len], total_len, resp_len)
+
+                advantages_list.append(adv_sliced)
+                returns_list.append(ret_sliced)
+
+        else:
+            for i in range(B):
+                L = response_lengths[i]
+                advantages_list.append(full_advantages[i, :L])
+                returns_list.append(full_returns[i, :L])
+
+    return advantages_list, returns_list
 
 
 def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool = False):
