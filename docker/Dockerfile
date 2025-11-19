@@ -100,3 +100,11 @@ RUN if [ "$ENABLE_CUDA_13" = "0" ]; then \
   rm sglang.patch; \
 fi
 
+# ====================================== Install main package ============================================
+
+# TODO may improve
+ARG SLIME_COMMIT=main
+RUN git clone https://github.com/slimerl/slime /root/slime && \
+    cd /root/slime && \
+    git checkout ${SLIME_COMMIT} && \
+    pip install -e .
