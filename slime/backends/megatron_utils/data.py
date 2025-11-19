@@ -64,7 +64,8 @@ def get_batch(
 
     # Always pad to 128 to reduce memory fragmentation and maybe make the computation faster
     # TODO: make this configurable?
-    pad = (128 - tokens.size(0) % 128) % 128
+    pad_size = mpu.get_tensor_model_parallel_world_size() * 128
+    pad = (pad_size - tokens.size(0) % pad_size) % pad_size
     if pad != 0:
         tokens = F.pad(tokens, (0, pad), value=pad_token_id)
         cu_seqlens.append(cu_seqlens[-1] + pad)
