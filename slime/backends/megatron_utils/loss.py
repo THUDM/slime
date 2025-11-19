@@ -152,8 +152,8 @@ def get_values(
     unconcat_tokens: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
+    with_entropy: bool = False,
     non_loss_data: bool = True,
-    **kwargs: Any,
 ) -> dict[str, list[torch.Tensor]]:
     """Extract per-token value predictions over response tokens.
 
@@ -167,8 +167,8 @@ def get_values(
         unconcat_tokens: List of token tensors per sample.
         total_lengths: Total sequence lengths per sample.
         response_lengths: Response segment lengths per sample.
+        with_entropy: Unused; kept for signature compatibility.
         non_loss_data: Unused; kept for signature compatibility.
-        **kwargs: Additional unused keyword arguments.
 
     Returns:
         Dict with key "values" mapping to a list of `[R]` value tensors
