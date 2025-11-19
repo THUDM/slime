@@ -52,7 +52,7 @@ RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
     cd Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
     pip install -e .
 
-RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@383bec3919fc266b25bdaaa0447ebd1ee9275f1e --no-cache-dir --force-reinstall
+RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@9b8b788fdeb9c2ee528183214cef65a99b71e7d5 --no-cache-dir --force-reinstall
 
 # This patch from masahi will be included in later Triton releases
 RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
