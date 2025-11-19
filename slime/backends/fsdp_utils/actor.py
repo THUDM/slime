@@ -308,6 +308,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 for batch in self.prof.iterate_train_log_probs(
                     tqdm(packed_batches, desc=f"{store_prefix}log_probs", disable=dist.get_rank() != 0)
                 ):
+                    # TODO: remove the autocast in the future
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                         model_args = self._get_model_inputs_args(batch)
                         if "pixel_values" in batch:
@@ -503,6 +504,7 @@ class FSDPTrainRayActor(TrainRayActor):
             self.update_cpu_params_dict(self.weights["ref"])
 
     def _train_step(self, packed_batch, reported_accum, mbs_id, grad_accum):
+        # TODO: remove the autocast in the future
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             # Prepare model inputs
             model_args = self._get_model_inputs_args(packed_batch)
