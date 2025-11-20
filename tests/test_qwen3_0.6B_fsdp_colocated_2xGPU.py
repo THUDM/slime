@@ -60,8 +60,6 @@ def execute():
     sglang_args = "--rollout-num-gpus-per-engine 2 " "--sglang-decode-log-interval 1000 " "--sglang-enable-metrics "
 
     fsdp_args = (
-        # Set to true for FULL_STATE_DICT mode, false for SHARDED_STATE_DICT mode (default)
-        # "--fsdp-full-params "  # Uncomment this line to enable full params mode
         # Set the bucket size for weight update
         "--update-weight-buffer-size 536870912 "  # 512MB
     )
