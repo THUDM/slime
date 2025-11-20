@@ -31,7 +31,6 @@ from ...utils import tracking_utils
 from ...utils.profile_utils import TrainProfiler
 from . import checkpoint
 from .data_packing import pack_sequences, pad_packed_sequence_with_cp, unpack_sequences
-from .fsdp_cpu_adam_wrapper import FSDPCPUAdamWrapper
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
 logger = logging.getLogger(__name__)
@@ -110,22 +109,11 @@ class FSDPTrainRayActor(TrainRayActor):
         # Setup device mesh for parallelism (handles both CP and non-CP cases)
         self.setup_device_mesh()
 
-        # Apply FSDP with DP mesh
-        self.model = apply_fsdp2(model, mesh=self.dp_mesh)
-
-        if args.optimizer == "deepspeed_cpu_adam":
-            optimizer_config = {
-                "lr": args.lr,
-                "betas": (args.adam_beta1, args.adam_beta2),
-                "eps": args.adam_eps,
-                "weight_decay": args.weight_decay,
-                "adamw_mode": True,  # Use AdamW mode (decoupled weight decay)
-                "fp32_optimizer_states": True,  # Keep optimizer states in FP32
-            }
-
-            self.optimizer = FSDPCPUAdamWrapper(optimizer_config, self.model)
-
-        elif args.optimizer == "adam":
+        # Apply FSDP with DP mesh and CPU offload policy if requested
+        cpu_offload = getattr(args, "fsdp_cpu_offload", False)
+        self.model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=cpu_offload)
+        
+        if args.optimizer == "adam":
             self.optimizer = torch.optim.AdamW(
                 self.model.parameters(),
                 lr=args.lr,
@@ -133,10 +121,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 eps=args.adam_eps,
                 weight_decay=args.weight_decay,
             )
-
         else:
             raise ValueError(
-                f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam', 'deepspeed_cpu_adam'"
+                f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam'"
             )
 
         self.global_step = 0
@@ -1004,22 +991,27 @@ def move_torch_optimizer(optimizer, device):
     torch.cuda.synchronize()
 
 
-def apply_fsdp2(model, mesh=None):
+def apply_fsdp2(model, mesh=None, cpu_offload=False):
     """Apply FSDP v2 to the model.
 
     Args:
         model: The model to wrap with FSDP
         mesh: Optional DeviceMesh for FSDP. If None, uses all ranks.
+        cpu_offload: If True, offload parameters, gradients, and optimizer states
+            to CPU. The optimizer step will run on CPU. (Default: False)
 
     Ref: https://github.com/volcengine/verl/blob/main/verl/utils/fsdp_utils.py
     """
     # Import FSDP v2 components based on PyTorch version
     if version.parse(torch.__version__) >= version.parse("2.6"):
-        from torch.distributed.fsdp import fully_shard
+        from torch.distributed.fsdp import fully_shard, CPUOffloadPolicy
     elif version.parse(torch.__version__) >= version.parse("2.4"):
         from torch.distributed._composable.fsdp import fully_shard
+        from torch.distributed._composable.fsdp.fully_shard import CPUOffloadPolicy
     else:
         raise ImportError("FSDP v2 not available")
+
+    offload_policy = CPUOffloadPolicy() if cpu_offload else None
 
     layer_cls_to_wrap = model._no_split_modules
     assert len(layer_cls_to_wrap) > 0 and layer_cls_to_wrap[0] is not None
@@ -1031,8 +1023,11 @@ def apply_fsdp2(model, mesh=None):
         or (isinstance(module, torch.nn.Embedding) and not model.config.tie_word_embeddings)
     ]
 
-    for idx, module in enumerate(modules):
-        fully_shard(module, mesh=mesh)
-    fully_shard(model, mesh=mesh)
+    # Apply FSDP to each module (offload_policy=None is equivalent to not passing it)
+    for module in modules:
+        fully_shard(module, mesh=mesh, offload_policy=offload_policy)
+    
+    # Apply FSDP to the top-level model
+    fully_shard(model, mesh=mesh, offload_policy=offload_policy)
 
     return model
