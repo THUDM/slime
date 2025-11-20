@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 def get_batch(
     data_iterator: "DataIterator",
     keys: Sequence[str],
+    pad_multiplier: int = 128,
 ) -> dict[str, Union[torch.Tensor, PackedSeqParams, list[torch.Tensor], None]]:
     """
     Generate a CP-ready micro-batch with packed sequence parameters.
@@ -32,8 +33,13 @@ def get_batch(
     Steps:
     - Fetch raw fields via iterator.
     - Save original token tensors under "unconcat_tokens".
-    - Slice tokens into two chunks for Context Parallelism (CP), concatenate, and pad to a multiple of 128.
+    - Slice tokens into two chunks for Context Parallelism (CP), concatenate, and pad to a configurable multiple.
     - Build cu_seqlens and `PackedSeqParams` with T-H-D layout (T: sequence length, H: attention heads, D: head dimension).
+
+    Args:
+        data_iterator: Iterator providing micro-batch data.
+        keys: List of keys to fetch from the iterator.
+        pad_multiplier: Multiplier for padding size calculation (default: 128).
 
     Returns a dict including:
     - "tokens": torch.LongTensor of shape [1, T_padded] on the current CUDA device
@@ -62,9 +68,8 @@ def get_batch(
 
     tokens = torch.cat(tokens)
 
-    # Always pad to 128 to reduce memory fragmentation and maybe make the computation faster
-    # TODO: make this configurable?
-    pad_size = mpu.get_tensor_model_parallel_world_size() * 128
+    # Always pad to reduce memory fragmentation and maybe make the computation faster
+    pad_size = mpu.get_tensor_model_parallel_world_size() * pad_multiplier
     pad = (pad_size - tokens.size(0) % pad_size) % pad_size
     if pad != 0:
         tokens = F.pad(tokens, (0, pad), value=pad_token_id)

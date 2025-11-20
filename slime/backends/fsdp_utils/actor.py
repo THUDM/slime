@@ -52,19 +52,7 @@ class FSDPTrainRayActor(TrainRayActor):
     def init(self, args: Namespace, role: str, with_ref: bool = False) -> int:  # type: ignore[override]
         super().init(args, role, with_ref)
 
-        # TODO extract to function
-        if args.true_on_policy_mode:
-            from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
-            from transformers.models.qwen3 import modeling_qwen3
-
-            logger.info("FSDPTrainRayActor call enable_batch_invariant_mode for true-on-policy")
-            enable_batch_invariant_mode(
-                # In Qwen3, rope `inv_freq_expanded.float() @ position_ids_expanded.float()` uses bmm
-                # and disabling it will make it aligned
-                enable_bmm=False,
-            )
-
-            modeling_qwen3.apply_rotary_pos_emb = torch.compile(dynamic=True)(modeling_qwen3.apply_rotary_pos_emb)
+        self._enable_true_on_policy_optimizations(args)
 
         # Update rank and world_size for wandb secondary initialization (using actual distributed values)
         args.rank = dist.get_rank()
@@ -153,6 +141,20 @@ class FSDPTrainRayActor(TrainRayActor):
         self.prof.on_init_end()
 
         return int(getattr(self.args, "start_rollout_id", 0))
+
+    def _enable_true_on_policy_optimizations(self, args):
+        if args.true_on_policy_mode:
+            from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
+            from transformers.models.qwen3 import modeling_qwen3
+
+            logger.info("FSDPTrainRayActor call enable_batch_invariant_mode for true-on-policy")
+            enable_batch_invariant_mode(
+                # In Qwen3, rope `inv_freq_expanded.float() @ position_ids_expanded.float()` uses bmm
+                # and disabling it will make it aligned
+                enable_bmm=False,
+            )
+
+            modeling_qwen3.apply_rotary_pos_emb = torch.compile(dynamic=True)(modeling_qwen3.apply_rotary_pos_emb)
 
     def setup_device_mesh(self) -> None:
         """Setup device mesh for parallelism (always called, handles both CP and non-CP cases).

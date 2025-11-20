@@ -214,7 +214,9 @@ def forward_only(
         assert not return_schedule_plan, "forward_only step should never return schedule plan"
 
         # Get the batch.
-        batch = get_batch(data_iterator, ["tokens", "total_lengths", "response_lengths"])
+        batch = get_batch(
+            data_iterator, ["tokens", "total_lengths", "response_lengths"], args.data_pad_size_multiplier
+        )
         unconcat_tokens = batch["unconcat_tokens"]
         tokens = batch["tokens"]
         packed_seq_params = batch["packed_seq_params"]
@@ -365,6 +367,7 @@ def train_one_step(
                 "returns",
                 "rollout_log_probs",
             ],
+            args.data_pad_size_multiplier,
         )
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":

@@ -815,6 +815,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 nargs="+",
                 default="",
             )
+            parser.add_argument(
+                "--slime-router-timeout",
+                type=float,
+                default=None,
+                help="Timeout for SlimeRouter HTTP requests in seconds.",
+            )
+            parser.add_argument(
+                "--slime-router-max-connections",
+                type=int,
+                default=None,
+                help="Max connections for SlimeRouter HTTP client.",
+            )
             return parser
 
         # wandb
@@ -1070,6 +1082,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default="qwen",
                 choices=["qwen", "qwen3", "distill_qwen"],
                 help="Loss mask type",
+            )
+            parser.add_argument(
+                "--data-pad-size-multiplier",
+                type=int,
+                default=128,
+                help="Multiplier for data padding size in data processing.",
             )
             return parser
 
