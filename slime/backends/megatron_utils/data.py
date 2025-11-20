@@ -64,7 +64,8 @@ def get_batch(
 
     # Always pad to 128 to reduce memory fragmentation and maybe make the computation faster
     # TODO: make this configurable?
-    pad = (128 - tokens.size(0) % 128) % 128
+    pad_size = mpu.get_tensor_model_parallel_world_size() * 128
+    pad = (pad_size - tokens.size(0) % pad_size) % pad_size
     if pad != 0:
         tokens = F.pad(tokens, (0, pad), value=pad_token_id)
         cu_seqlens.append(cu_seqlens[-1] + pad)
@@ -332,7 +333,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
             elif isinstance(val, torch.Tensor):
                 val = val.float().mean()
             else:
-                raise ValueError(f"Unsupported type: {type(val)}")
+                raise ValueError(f"Unsupported type: {type(val)} for key: {key}")
             log_dict[key] = val.item() if isinstance(val, torch.Tensor) else val
 
         reduced_log_dict = gather_log_data("rollout", args, rollout_id, log_dict)
@@ -443,7 +444,8 @@ def sync_actor_critic_data(
     - Log-probs and ref-log-probs are broadcast from src=0 when KL is used.
     Updates `rollout_data` in place with the synchronized tensors.
     """
-    values, log_probs, ref_log_probs = map(rollout_data.get, ("values", "log_probs", "ref_log_probs"))
+    log_probs_key = "log_probs" if not args.use_rollout_logprobs else "rollout_log_probs"
+    values, log_probs, ref_log_probs = map(rollout_data.get, ("values", log_probs_key, "ref_log_probs"))
 
     # return when not the pp last stage
     if not values and not log_probs:
@@ -467,4 +469,14 @@ def sync_actor_critic_data(
     for handle in handles:
         handle.wait()
 
-    rollout_data.update({"values": values, "log_probs": log_probs, "ref_log_probs": ref_log_probs})
+    rollout_data.update(
+        {
+            k: v
+            for k, v in {
+                "values": values,
+                log_probs_key: log_probs,
+                "ref_log_probs": ref_log_probs,
+            }.items()
+            if v is not None
+        }
+    )

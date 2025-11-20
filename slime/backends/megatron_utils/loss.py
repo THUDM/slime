@@ -11,7 +11,7 @@ from slime.utils.ppo_utils import (
     calculate_log_probs_and_entropy,
     compute_approx_kl,
     compute_policy_loss,
-    get_advantages_and_returns,
+    get_advantages_and_returns_batch,
     get_grpo_returns,
     get_reinforce_plus_plus_baseline_advantages,
     get_reinforce_plus_plus_returns,
@@ -152,6 +152,7 @@ def get_values(
     unconcat_tokens: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
+    with_entropy: bool = False,
     non_loss_data: bool = True,
 ) -> dict[str, list[torch.Tensor]]:
     """Extract per-token value predictions over response tokens.
@@ -252,15 +253,8 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             if cp_rank == 0:
                 k[-1] += reward
             rewards.append(k)
-        advantages, returns = list(
-            zip(
-                *[
-                    get_advantages_and_returns(total_length, response_length, value, reward, args.gamma, args.lambd)
-                    for total_length, response_length, value, reward in zip(
-                        total_lengths, response_lengths, values, rewards
-                    )
-                ]
-            )
+        advantages, returns = get_advantages_and_returns_batch(
+            total_lengths, response_lengths, values, rewards, args.gamma, args.lambd
         )
 
     elif args.advantage_estimator == "reinforce_plus_plus":

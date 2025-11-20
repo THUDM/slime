@@ -10,7 +10,6 @@ import torch.nn.functional as F
 from packaging import version
 from ring_flash_attn import substitute_hf_flash_attn, update_ring_flash_attn_params
 from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
-from torch.distributed.tensor import DTensor, distribute_tensor
 from torch_memory_saver import torch_memory_saver
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
@@ -31,7 +30,6 @@ from ...utils import tracking_utils
 from ...utils.profile_utils import TrainProfiler
 from . import checkpoint
 from .data_packing import pack_sequences, pad_packed_sequence_with_cp, unpack_sequences
-from .fsdp_cpu_adam_wrapper import FSDPCPUAdamWrapper
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
 logger = logging.getLogger(__name__)
@@ -110,22 +108,11 @@ class FSDPTrainRayActor(TrainRayActor):
         # Setup device mesh for parallelism (handles both CP and non-CP cases)
         self.setup_device_mesh()
 
-        # Apply FSDP with DP mesh
-        self.model = apply_fsdp2(model, mesh=self.dp_mesh)
+        # Apply FSDP with DP mesh and CPU offload policy if requested
+        cpu_offload = getattr(args, "fsdp_cpu_offload", False)
+        self.model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=cpu_offload)
 
-        if args.optimizer == "deepspeed_cpu_adam":
-            optimizer_config = {
-                "lr": args.lr,
-                "betas": (args.adam_beta1, args.adam_beta2),
-                "eps": args.adam_eps,
-                "weight_decay": args.weight_decay,
-                "adamw_mode": True,  # Use AdamW mode (decoupled weight decay)
-                "fp32_optimizer_states": True,  # Keep optimizer states in FP32
-            }
-
-            self.optimizer = FSDPCPUAdamWrapper(optimizer_config, self.model)
-
-        elif args.optimizer == "adam":
+        if args.optimizer == "adam":
             self.optimizer = torch.optim.AdamW(
                 self.model.parameters(),
                 lr=args.lr,
@@ -133,11 +120,8 @@ class FSDPTrainRayActor(TrainRayActor):
                 eps=args.adam_eps,
                 weight_decay=args.weight_decay,
             )
-
         else:
-            raise ValueError(
-                f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam', 'deepspeed_cpu_adam'"
-            )
+            raise ValueError(f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam'")
 
         self.global_step = 0
         self.micro_step = 0
@@ -145,9 +129,10 @@ class FSDPTrainRayActor(TrainRayActor):
 
         checkpoint_payload = checkpoint.load(self)
 
+        # Create separate ref model if needed (kept in CPU until needed)
         self.ref_model = None
         if with_ref:
-            self.load_ref_model(args.ref_load)
+            self.ref_model = self.create_ref_model(args.ref_load)
 
         self.update_cpu_params_dict(self.weights["actor"])
 
@@ -292,15 +277,23 @@ class FSDPTrainRayActor(TrainRayActor):
             `packed_batches` under the same key and can be read back by callers.
 
         Note:
-            This method temporarily switches model weights when `model_tag != "actor"`
-            and restores the original weights and train mode afterwards.
+            Uses separate ref model when model_tag == "ref". The ref model is
+            loaded from CPU to GPU on-demand and offloaded back after use.
         """
-        need_restore = False
-        if model_tag != "actor" and model_tag in self.weights:
-            self.update_cpu_params_dict(self.weights["actor"])
-            self.update_gpu_params_dict(self.weights[model_tag])
-            self.model.eval()
-            need_restore = True
+        # Select which model to use
+        if model_tag == "ref" and self.ref_model is not None:
+            # Offload actor model to CPU to save GPU memory
+            logger.info("[Rank {}] Offloading actor model to CPU".format(dist.get_rank()))
+            self.model.cpu()
+            torch.cuda.empty_cache()
+
+            # Load ref model to GPU
+            logger.info("[Rank {}] Loading ref model to GPU".format(dist.get_rank()))
+            self.ref_model.cuda()
+            active_model = self.ref_model
+            active_model.eval()
+        else:
+            active_model = self.model
 
         try:
             rollout_data = {f"{store_prefix}log_probs": []}
@@ -308,31 +301,33 @@ class FSDPTrainRayActor(TrainRayActor):
                 for batch in self.prof.iterate_train_log_probs(
                     tqdm(packed_batches, desc=f"{store_prefix}log_probs", disable=dist.get_rank() != 0)
                 ):
+                    # TODO: remove the autocast in the future
                     with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
                         model_args = self._get_model_inputs_args(batch)
                         if "pixel_values" in batch:
                             model_args["pixel_values"] = batch["pixel_values"]
                         logits = self.model(**model_args).logits.squeeze(0)
-                        log_probs_result, entropy_result = get_logprob_and_entropy_with_cp(
-                            logits=logits,
-                            target_tokens=batch["tokens"],
-                            cp_rank=self.cp_rank,
-                            cp_size=self.cp_size,
-                            cp_group=self.cp_group,
-                            model_input_ids=model_args["input_ids"],
-                            allow_compile=not self.args.true_on_policy_mode,
-                            temperature=self.args.rollout_temperature,
-                        )
+                    log_probs_result, entropy_result = get_logprob_and_entropy_with_cp(
+                        logits=logits,
+                        target_tokens=batch["tokens"],
+                        cp_rank=self.cp_rank,
+                        cp_size=self.cp_size,
+                        cp_group=self.cp_group,
+                        model_input_ids=model_args["input_ids"],
+                        allow_compile=not self.args.true_on_policy_mode,
+                        temperature=self.args.rollout_temperature,
+                    )
                     batch[f"{store_prefix}log_probs"] = log_probs_result
                     if store_prefix == "":
                         batch["entropy"] = entropy_result
             return rollout_data
 
         finally:
-            if need_restore:
-                self.update_gpu_params_dict(self.weights["actor"])
-                self.model.train()
-                torch.cuda.synchronize()
+            # Offload ref model back to CPU
+            if model_tag == "ref" and self.ref_model is not None:
+                self.ref_model.cpu()
+                torch.cuda.empty_cache()
+                self.model.cuda()
 
     def packed_data(
         self, rollout_data: dict[str, list[torch.Tensor]]
@@ -441,7 +436,7 @@ class FSDPTrainRayActor(TrainRayActor):
             len(grad_accum) > 0
         ), f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
 
-        if "ref" in self.weights:
+        if self.ref_model is not None:
             self.compute_log_prob("ref", packed_batches, store_prefix="ref_")
 
         self.compute_log_prob("actor", packed_batches)
@@ -492,17 +487,21 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.update_cpu_params_dict(self.weights["actor"])
 
-        # Update ref model if needed
+        # Update ref model if needed (copy actor weights to ref)
         if (
             self.args.ref_update_interval is not None
             and (rollout_id + 1) % self.args.ref_update_interval == 0
-            and "ref" in self.weights
+            and self.ref_model is not None
         ):
             if dist.get_rank() == 0:
                 logger.info(f"Updating ref model at rollout_id {rollout_id}")
-            self.update_cpu_params_dict(self.weights["ref"])
+            # Copy actor model state to ref model
+            actor_state = self.model.state_dict()
+            self.ref_model.load_state_dict(actor_state)
+            self.ref_model.cpu()  # Keep ref in CPU
 
     def _train_step(self, packed_batch, reported_accum, mbs_id, grad_accum):
+        # TODO: remove the autocast in the future
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             # Prepare model inputs
             model_args = self._get_model_inputs_args(packed_batch)
@@ -510,17 +509,17 @@ class FSDPTrainRayActor(TrainRayActor):
                 **model_args,
             ).logits.squeeze(0)
 
-            # Compute log probs and entropy (unified for both CP and non-CP modes)
-            log_probs, entropy_result = get_logprob_and_entropy_with_cp(
-                logits=logits,
-                target_tokens=packed_batch["tokens"],
-                cp_rank=self.cp_rank,
-                cp_size=self.cp_size,
-                cp_group=self.cp_group,
-                model_input_ids=model_args["input_ids"],
-                allow_compile=not self.args.true_on_policy_mode,
-                temperature=self.args.rollout_temperature,
-            )
+        # Compute log probs and entropy (unified for both CP and non-CP modes)
+        log_probs, entropy_result = get_logprob_and_entropy_with_cp(
+            logits=logits,
+            target_tokens=packed_batch["tokens"],
+            cp_rank=self.cp_rank,
+            cp_size=self.cp_size,
+            cp_group=self.cp_group,
+            model_input_ids=model_args["input_ids"],
+            allow_compile=not self.args.true_on_policy_mode,
+            temperature=self.args.rollout_temperature,
+        )
         packed_batch["cur_log_probs"] = log_probs
         packed_batch["entropy"] = entropy_result
 
@@ -709,62 +708,20 @@ class FSDPTrainRayActor(TrainRayActor):
             params_dict[name].copy_(param.detach(), non_blocking=True)
         torch.cuda.synchronize()
 
-    @torch.no_grad()
-    def update_gpu_params_dict(self, params_dict: dict[str, torch.Tensor]) -> None:
-        """Load parameters from a CPU dictionary into the GPU model.
-
-        Parameters:
-            params_dict: Source mapping from parameter names to CPU tensors.
-
-        Note:
-            This method handles both regular Tensors and DTensors. For DTensors,
-            it properly distributes the full tensor according to FSDP sharding.
-        """
-        # Cache parameter and buffer maps for efficiency
-        if not hasattr(self, "_fsdp_param_map"):
-            self._fsdp_param_map = dict(self.model.named_parameters())
-            self._fsdp_buffer_map = dict(self.model.named_buffers())
-
-        param_map = self._fsdp_param_map
-        buffer_map = self._fsdp_buffer_map
-
-        for name, src in params_dict.items():
-            if not torch.is_tensor(src):
-                continue
-
-            target_param = param_map.get(name)
-            if target_param is None:
-                target_param = buffer_map.get(name)
-                if target_param is None:
-                    continue
-
-            dst_tensor = target_param.data
-
-            src_tensor = src.detach()
-            if src_tensor.device.type != "cpu":
-                src_tensor = src_tensor.to(device=torch.device("cpu"))
-            if src_tensor.dtype != dst_tensor.dtype:
-                src_tensor = src_tensor.to(dtype=dst_tensor.dtype)
-
-            if isinstance(dst_tensor, DTensor):
-                distributed = distribute_tensor(
-                    src_tensor.contiguous(),
-                    device_mesh=dst_tensor.device_mesh,
-                    placements=dst_tensor.placements,
-                )
-                dst_tensor.copy_(distributed)
-            else:
-                # Regular tensor: just move to GPU
-                dst_tensor.copy_(src_tensor.to(device=dst_tensor.device, non_blocking=True))
-
-        torch.cuda.synchronize()
-
-    def load_ref_model(self, ref_load_path: str | None) -> None:
-        """Load reference model weights once and cache them on CPU.
+    def create_ref_model(self, ref_load_path: str | None):
+        """Create and initialize a separate reference model (kept in CPU).
 
         Parameters:
             ref_load_path: Path to a directory containing a HF checkpoint. If
                 None, a ValueError is raised.
+
+        Returns:
+            FSDP-wrapped ref model in CPU memory
+
+        Note:
+            Creates a separate FSDP model instance for the reference model.
+            This model is kept in CPU and loaded to GPU only when needed in
+            compute_log_prob(). This approach is cleaner than weight swapping.
         """
         if ref_load_path is None:
             raise ValueError("ref_load_path must be provided when loading reference model")
@@ -772,30 +729,23 @@ class FSDPTrainRayActor(TrainRayActor):
         import os
 
         if os.path.isdir(ref_load_path):
-            # Get actor weights for dtype matching
-            actor_weights = self.weights["actor"]
+            logger.info(f"[Rank {dist.get_rank()}] Creating separate ref model from {ref_load_path}")
 
-            temp_ref_model = AutoModelForCausalLM.from_pretrained(
-                ref_load_path,
-                trust_remote_code=True,
-                torch_dtype=torch.bfloat16,
-                device_map="cpu",
-            )
-            ref_state_dict = temp_ref_model.state_dict()
-            self.weights["ref"] = {}
+            # Load model same way as actor model
+            with torch.autocast(device_type=f"cuda:{torch.cuda.current_device()}"):
+                ref_model = AutoModelForCausalLM.from_pretrained(
+                    ref_load_path,
+                    trust_remote_code=True,
+                    attn_implementation=self.args.attn_implementation,
+                )
 
-            for name, tensor in ref_state_dict.items():
-                actor_tensor = actor_weights.get(name)
-                target_dtype = actor_tensor.dtype if actor_tensor is not None else tensor.dtype
-                cpu_tensor = tensor.detach().to(device="cpu", dtype=target_dtype, copy=True)
-                self.weights["ref"][name] = cpu_tensor.pin_memory()
+            ref_model = apply_fsdp2(ref_model, mesh=self.dp_mesh)
+            ref_model.cpu()
 
-            del temp_ref_model
-            torch.cuda.empty_cache()
+            logger.info(f"[Rank {dist.get_rank()}] Reference model created and offloaded to CPU")
+            return ref_model
         else:
             raise NotImplementedError(f"Loading from checkpoint file {ref_load_path} not yet implemented")
-
-        logger.info("Reference model parameters loaded and stored in CPU memory")
 
     def _get_model_inputs_args(self, packed_sequence: dict) -> dict:
         input_ids = packed_sequence["tokens"].unsqueeze(0)
@@ -1002,22 +952,27 @@ def move_torch_optimizer(optimizer, device):
     torch.cuda.synchronize()
 
 
-def apply_fsdp2(model, mesh=None):
+def apply_fsdp2(model, mesh=None, cpu_offload=False):
     """Apply FSDP v2 to the model.
 
     Args:
         model: The model to wrap with FSDP
         mesh: Optional DeviceMesh for FSDP. If None, uses all ranks.
+        cpu_offload: If True, offload parameters, gradients, and optimizer states
+            to CPU. The optimizer step will run on CPU. (Default: False)
 
     Ref: https://github.com/volcengine/verl/blob/main/verl/utils/fsdp_utils.py
     """
     # Import FSDP v2 components based on PyTorch version
     if version.parse(torch.__version__) >= version.parse("2.6"):
-        from torch.distributed.fsdp import fully_shard
+        from torch.distributed.fsdp import CPUOffloadPolicy, fully_shard
     elif version.parse(torch.__version__) >= version.parse("2.4"):
         from torch.distributed._composable.fsdp import fully_shard
+        from torch.distributed._composable.fsdp.fully_shard import CPUOffloadPolicy
     else:
         raise ImportError("FSDP v2 not available")
+
+    offload_policy = CPUOffloadPolicy() if cpu_offload else None
 
     layer_cls_to_wrap = model._no_split_modules
     assert len(layer_cls_to_wrap) > 0 and layer_cls_to_wrap[0] is not None
@@ -1029,8 +984,11 @@ def apply_fsdp2(model, mesh=None):
         or (isinstance(module, torch.nn.Embedding) and not model.config.tie_word_embeddings)
     ]
 
-    for idx, module in enumerate(modules):
-        fully_shard(module, mesh=mesh)
-    fully_shard(model, mesh=mesh)
+    # Apply FSDP to each module (offload_policy=None is equivalent to not passing it)
+    for module in modules:
+        fully_shard(module, mesh=mesh, offload_policy=offload_policy)
+
+    # Apply FSDP to the top-level model
+    fully_shard(model, mesh=mesh, offload_policy=offload_policy)
 
     return model

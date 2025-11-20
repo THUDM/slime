@@ -1,13 +1,9 @@
-import sys
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal, Optional
 
 import typer
 
-sys.path.append(str(Path(__file__).resolve().parents[1] / "tests"))
-
-import command_utils as U
+import slime.utils.external_utils.command_utils as U
 
 
 @dataclass
@@ -26,19 +22,13 @@ class ScriptArgs(U.ExecuteTrainConfig):
     train_backend: Literal["fsdp", "megatron"] = "fsdp"
 
     def __post_init__(self):
-        super().__post_init__()
-
         if self.train_backend == "megatron":
             self.megatron_model_type = {
                 "Qwen3-4B-Instruct-2507": "qwen3-4B-Instruct-2507",
                 "Qwen3-4B-Base": "qwen3-4B",
             }[self.model_name]
 
-        if self.num_gpus_per_node is None:
-            self.num_gpus_per_node = {
-                "H100": 8,
-                "GB300": 4,
-            }[self.hardware]
+        self.num_gpus_per_node = self.num_gpus_per_node or U.NUM_GPUS_OF_HARDWARE[self.hardware]
 
 
 def prepare(args: ScriptArgs):
@@ -51,8 +41,8 @@ def prepare(args: ScriptArgs):
     if args.train_backend == "megatron":
         U.convert_checkpoint(
             model_name=args.model_name,
-            model_type=args.megatron_model_type,
-            num_gpus=args.num_gpus_per_node,
+            megatron_model_type=args.megatron_model_type,
+            num_gpus_per_node=args.num_gpus_per_node,
             # TODO unify
             dir_dst="/root/models",
         )
@@ -144,7 +134,7 @@ eval:
 
     optimizer_args = (
         "--optimizer adam "
-        # "--optimizer deepspeed_cpu_adam "
+        # "--fsdp-cpu-offload "
         "--lr 1e-6 "
         "--lr-decay-style constant "
         "--weight-decay 0.1 "
@@ -248,8 +238,8 @@ eval:
         train_args=train_args,
         config=args,
         # TODO may get it from `config`
-        num_gpus=args.num_gpus_per_node,
-        model_type=args.megatron_model_type,
+        num_gpus_per_node=args.num_gpus_per_node,
+        megatron_model_type=args.megatron_model_type,
         extra_env_vars={
             **misc_env_vars,
             **true_on_policy_envs,

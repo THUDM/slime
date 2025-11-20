@@ -140,16 +140,6 @@ for WORKER_IP in $(awk '{print $1}' /root/mpi_rack_hostfile); do
 done
 wait
 
-
-# Build the runtime environment JSON with proper variable substitution
-RUNTIME_ENV_JSON="{
-  \"env_vars\": {
-    \"PYTHONPATH\": \"/root/Megatron-LM/\",
-    \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\"
-  }
-}"
-
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
      "env_vars": {
