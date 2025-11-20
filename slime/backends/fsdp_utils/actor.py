@@ -301,7 +301,7 @@ class FSDPTrainRayActor(TrainRayActor):
             logger.info("[Rank {}] Offloading actor model to CPU".format(dist.get_rank()))
             self.model.cpu()
             torch.cuda.empty_cache()
-            
+
             # Load ref model to GPU
             logger.info("[Rank {}] Loading ref model to GPU".format(dist.get_rank()))
             self.ref_model.cuda()
@@ -309,7 +309,6 @@ class FSDPTrainRayActor(TrainRayActor):
             active_model.eval()
         else:
             active_model = self.model
-            # Keep actor in train mode unless explicitly computing ref
 
         try:
             rollout_data = {f"{store_prefix}log_probs": []}
@@ -341,11 +340,8 @@ class FSDPTrainRayActor(TrainRayActor):
         finally:
             # Offload ref model back to CPU
             if model_tag == "ref" and self.ref_model is not None:
-                logger.info("[Rank {}] Offloading ref model to CPU".format(dist.get_rank()))
                 self.ref_model.cpu()
                 torch.cuda.empty_cache()
-                # Restore actor model to GPU
-                logger.info("[Rank {}] Restoring actor model to GPU".format(dist.get_rank()))
                 self.model.cuda()
 
     def packed_data(
@@ -733,10 +729,10 @@ class FSDPTrainRayActor(TrainRayActor):
         Parameters:
             ref_load_path: Path to a directory containing a HF checkpoint. If
                 None, a ValueError is raised.
-        
+
         Returns:
             FSDP-wrapped ref model in CPU memory
-        
+
         Note:
             Creates a separate FSDP model instance for the reference model.
             This model is kept in CPU and loaded to GPU only when needed in
@@ -749,7 +745,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if os.path.isdir(ref_load_path):
             logger.info(f"[Rank {dist.get_rank()}] Creating separate ref model from {ref_load_path}")
-            
+
             # Load model same way as actor model
             with torch.autocast(device_type=f"cuda:{torch.cuda.current_device()}"):
                 ref_model = AutoModelForCausalLM.from_pretrained(
@@ -757,13 +753,10 @@ class FSDPTrainRayActor(TrainRayActor):
                     trust_remote_code=True,
                     attn_implementation=self.args.attn_implementation,
                 )
-            
-            # Apply FSDP wrapping (same as actor)
+
             ref_model = apply_fsdp2(ref_model, mesh=self.dp_mesh)
-            
-            # Move to CPU immediately to save GPU memory
             ref_model.cpu()
-            
+
             logger.info(f"[Rank {dist.get_rank()}] Reference model created and offloaded to CPU")
             return ref_model
         else:
