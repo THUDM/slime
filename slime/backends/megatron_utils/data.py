@@ -444,7 +444,8 @@ def sync_actor_critic_data(
     - Log-probs and ref-log-probs are broadcast from src=0 when KL is used.
     Updates `rollout_data` in place with the synchronized tensors.
     """
-    values, log_probs, ref_log_probs = map(rollout_data.get, ("values", "log_probs", "ref_log_probs"))
+    log_probs_key = "log_probs" if not args.use_rollout_logprobs else "rollout_log_probs"
+    values, log_probs, ref_log_probs = map(rollout_data.get, ("values", log_probs_key, "ref_log_probs"))
 
     # return when not the pp last stage
     if not values and not log_probs:
@@ -473,7 +474,7 @@ def sync_actor_critic_data(
             k: v
             for k, v in {
                 "values": values,
-                "log_probs": log_probs,
+                log_probs_key: log_probs,
                 "ref_log_probs": ref_log_probs,
             }.items()
             if v is not None
