@@ -1,3 +1,28 @@
+"""
+Usage:
+------
+python convert_k2_thinking_int4_to_bf16.py [-h] --model-dir MODEL_DIR [--output-dir OUTPUT_DIR]
+                           [--files FILE [FILE ...]] [--config-path CONFIG_PATH]
+                           [--overwrite]
+options:
+  -h, --help            Show this help message and exit.
+  --model-dir MODEL_DIR Path to the directory of the HF safetensors quantized model.
+  --output-dir OUTPUT_DIR
+                        Path to the directory to save the converted BF16 model.
+                        Default: <model-dir>_bf16
+  --files FILE [FILE ...]
+                        Specific safetensors filenames to convert (relative to model-dir).
+                        Convert all if omitted.
+  --config-path CONFIG_PATH
+                        Path to config.json to extract group_size (default: model-dir/config.json).
+  --overwrite           Rewrite output files even if they already exist.
+
+
+Example:
+--------
+python convert_k2_thinking_int4_to_bf16.py --model-dir /Kimi-K2-Thinking --output-dir /Kimi-K2-Thinking-bf16
+"""
+
 import argparse
 import json
 import os
