@@ -112,7 +112,7 @@ class FSDPTrainRayActor(TrainRayActor):
         # Apply FSDP with DP mesh and CPU offload policy if requested
         cpu_offload = getattr(args, "fsdp_cpu_offload", False)
         self.model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=cpu_offload)
-        
+
         if args.optimizer == "adam":
             self.optimizer = torch.optim.AdamW(
                 self.model.parameters(),
@@ -122,9 +122,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 weight_decay=args.weight_decay,
             )
         else:
-            raise ValueError(
-                f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam'"
-            )
+            raise ValueError(f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam'")
 
         self.global_step = 0
         self.micro_step = 0
@@ -1004,7 +1002,7 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False):
     """
     # Import FSDP v2 components based on PyTorch version
     if version.parse(torch.__version__) >= version.parse("2.6"):
-        from torch.distributed.fsdp import fully_shard, CPUOffloadPolicy
+        from torch.distributed.fsdp import CPUOffloadPolicy, fully_shard
     elif version.parse(torch.__version__) >= version.parse("2.4"):
         from torch.distributed._composable.fsdp import fully_shard
         from torch.distributed._composable.fsdp.fully_shard import CPUOffloadPolicy
@@ -1026,7 +1024,7 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False):
     # Apply FSDP to each module (offload_policy=None is equivalent to not passing it)
     for module in modules:
         fully_shard(module, mesh=mesh, offload_policy=offload_policy)
-    
+
     # Apply FSDP to the top-level model
     fully_shard(model, mesh=mesh, offload_policy=offload_policy)
 
