@@ -98,15 +98,12 @@ class SGLangEngine(RayActor):
         # support ipv6 address
         if ":" in host and not host.startswith("["):
             host = f"[{host}]"
-        if ":" in dist_init_addr and not dist_init_addr.startswith("["):
-            # dist_init_addr may be 2605:...:10163, should split port
-            try:
-                *addr_parts, port_str = dist_init_addr.split(":")
-                ipv6_addr = ":".join(addr_parts)
-                dist_init_addr = f"[{ipv6_addr}]:{port_str}"
-            except Exception:
-                # fallback
-                dist_init_addr = f"[{dist_init_addr}]"
+
+        # dist_init_addr may be 2605:...:10163, should split port
+        *addr_parts, port_str = dist_init_addr.split(":")
+        ipv6_addr = ":".join(addr_parts)
+        if ":" in ipv6_addr and not ipv6_addr.startswith("["):
+            dist_init_addr = f"[{ipv6_addr}]:{port_str}"
 
         server_args_dict, external_engine_need_check_fields = _compute_server_args(
             self.args, self.rank, dist_init_addr, nccl_port, host, port
