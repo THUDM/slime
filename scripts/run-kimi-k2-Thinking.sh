@@ -61,7 +61,7 @@ ROLLOUT_ARGS=(
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data aime $BASE_DIR/rl_data/aime-2024.jsonl
+   --eval-prompt-data aime $BASE_DIR/aime-2024.jsonl
    --n-samples-per-eval-prompt 16
    --eval-max-response-len 16384
    --eval-top-p 0.7
