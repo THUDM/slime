@@ -3,10 +3,9 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from sglang_tool_parser import parse_tools
 from tau_bench.agents.tool_calling_agent import RESPOND_ACTION_NAME
 from tau_bench.types import Action
-
-from sglang_tool_parser import parse_tools
 
 # Set up logger for this module
 logger = logging.getLogger(__name__)
@@ -15,6 +14,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class OpenAIToolCall:
     """OpenAI format tool call structure"""
+
     id: str
     type: str = "function"
     function: Dict[str, Any] = None
@@ -23,6 +23,7 @@ class OpenAIToolCall:
 @dataclass
 class OpenAIAssistantMessage:
     """OpenAI format assistant message structure"""
+
     role: str = "assistant"
     content: Optional[str] = None
     tool_calls: Optional[List[OpenAIToolCall]] = None
@@ -36,8 +37,7 @@ class OpenAICompatibleToolCallAdapter:
     and provides OpenAI format output interface.
     """
 
-    def __init__(self, tools_info: List[Dict[str, Any]],
-                 parser_type: str = "qwen25"):
+    def __init__(self, tools_info: List[Dict[str, Any]], parser_type: str = "qwen25"):
         """
         Initialize adapter
 
@@ -48,10 +48,7 @@ class OpenAICompatibleToolCallAdapter:
         self.tools_info = tools_info
         self.parser_type = parser_type
 
-    def parse_response_to_openai_format(
-        self,
-        response: str
-    ) -> Dict[str, Any]:
+    def parse_response_to_openai_format(self, response: str) -> Dict[str, Any]:
         """
         Parse sglang response to OpenAI compatible format
 
@@ -69,33 +66,19 @@ class OpenAICompatibleToolCallAdapter:
             parsed = parse_tools(response, self.tools_info, self.parser_type)
 
             # Extract parsing results
-            normal_text = parsed['normal_text']
-            calls = parsed['calls']
+            normal_text = parsed["normal_text"]
+            calls = parsed["calls"]
 
             # Convert to OpenAI format
-            openai_message = self._convert_to_openai_message(
-                normal_text, calls)
+            openai_message = self._convert_to_openai_message(normal_text, calls)
 
-            return {
-                "openai_message": openai_message,
-                "parsed_result": parsed,
-                "success": True
-            }
+            return {"openai_message": openai_message, "parsed_result": parsed, "success": True}
 
         except Exception as e:
             logger.warning(f"Parsing failed with error: {str(e)}")
-            return {
-                "openai_message": None,
-                "parsed_result": None,
-                "success": False,
-                "error": str(e)
-            }
+            return {"openai_message": None, "parsed_result": None, "success": False, "error": str(e)}
 
-    def _convert_to_openai_message(
-        self,
-        normal_text: str,
-        calls: List[Dict[str, Any]]
-    ) -> OpenAIAssistantMessage:
+    def _convert_to_openai_message(self, normal_text: str, calls: List[Dict[str, Any]]) -> OpenAIAssistantMessage:
         """
         Convert parsing results to OpenAI format assistant message
 
@@ -108,11 +91,7 @@ class OpenAICompatibleToolCallAdapter:
         """
         if not calls:
             # No tool calls, return plain text response
-            return OpenAIAssistantMessage(
-                role="assistant",
-                content=normal_text,
-                tool_calls=None
-            )
+            return OpenAIAssistantMessage(role="assistant", content=normal_text, tool_calls=None)
 
         # Convert tool calls to OpenAI format
         openai_tool_calls = []
@@ -120,23 +99,16 @@ class OpenAICompatibleToolCallAdapter:
             openai_tool_call = OpenAIToolCall(
                 id=f"call_{i}_{call.get('name', 'unknown')}",
                 type="function",
-                function={
-                    "name": call.get('name', ''),
-                    "arguments": call.get('parameters', '{}')
-                }
+                function={"name": call.get("name", ""), "arguments": call.get("parameters", "{}")},
             )
             openai_tool_calls.append(openai_tool_call)
 
         result = OpenAIAssistantMessage(
-            role="assistant",
-            content=normal_text if normal_text.strip() else None,
-            tool_calls=openai_tool_calls
+            role="assistant", content=normal_text if normal_text.strip() else None, tool_calls=openai_tool_calls
         )
         return result
 
-
-    def _call_to_action_sglang(self, calls: List[Any],
-                               text_response: str) -> Action:
+    def _call_to_action_sglang(self, calls: List[Any], text_response: str) -> Action:
         """
         Convert sglang tool calls to Action object
 
@@ -144,25 +116,21 @@ class OpenAICompatibleToolCallAdapter:
         ensuring compatibility with existing code.
         """
         # Default action if no action found
-        action = Action(name=RESPOND_ACTION_NAME,
-                        kwargs={"content": text_response})
+        action = Action(name=RESPOND_ACTION_NAME, kwargs={"content": text_response})
 
         if calls:
             if len(calls) > 1:
                 logger.debug("Multiple tool calls identified, only taking first.")
 
             tool_call = calls[0]
-            
+
             try:
                 params = json.loads(tool_call["parameters"])
 
                 if not isinstance(params, dict):
                     logger.warning(f"{params} does not follow dict structure for action")
                 else:
-                    action = Action(
-                        name=tool_call["name"],
-                        kwargs=params
-                    )
+                    action = Action(name=tool_call["name"], kwargs=params)
             except json.JSONDecodeError as e:
                 logger.warning(f"Failed to parse parameters as JSON: {e}")
 
@@ -180,21 +148,19 @@ class OpenAICompatibleToolCallAdapter:
             openai_tool = {
                 "type": "function",
                 "function": {
-                    "name": tool['function']['name'],
-                    "description": tool['function']['description'],
-                    "parameters": tool['function']['parameters']
-                }
+                    "name": tool["function"]["name"],
+                    "description": tool["function"]["description"],
+                    "parameters": tool["function"]["parameters"],
+                },
             }
             openai_tools.append(openai_tool)
 
         return openai_tools
 
 
-
 # Usage examples and factory functions
 def create_openai_adapter(
-    tools_info: List[Dict[str, Any]],
-    parser_type: str = "qwen25"
+    tools_info: List[Dict[str, Any]], parser_type: str = "qwen25"
 ) -> OpenAICompatibleToolCallAdapter:
     """
     Factory function to create OpenAI compatible tool call adapter

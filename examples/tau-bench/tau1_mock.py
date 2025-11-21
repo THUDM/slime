@@ -31,7 +31,7 @@ def main():
             with open(output_path, "w") as f:
                 for i, task in enumerate(env_instance.tasks):
                     row = {"index": i, "metadata": task.model_dump()}
-                    f.write(json.dumps(row) + "\n")   # <-- one JSON object per line
+                    f.write(json.dumps(row) + "\n")  # <-- one JSON object per line
             print(f"Saved preprocessed task indices for {env} ({s}) to {output_path}")
 
 

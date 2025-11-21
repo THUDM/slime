@@ -233,7 +233,7 @@ class RolloutManager:
             # always instantiate loss_mask if not provided
             if sample.loss_mask is None:
                 sample.loss_mask = [1] * sample.response_length
-            
+
             assert (
                 len(sample.loss_mask) == sample.response_length
             ), f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"

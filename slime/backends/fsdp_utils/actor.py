@@ -137,7 +137,7 @@ class FSDPTrainRayActor(TrainRayActor):
         if with_ref:
             self.ref_model = self.create_ref_model(args.ref_load)
 
-        self.update_cpu_params_dict(self.weights["actor"])
+        # self.update_cpu_params_dict(self.weights["actor"])
 
         self.weight_updater = (
             UpdateWeightFromTensor(self.args, self.model, self.weights)
@@ -423,34 +423,14 @@ class FSDPTrainRayActor(TrainRayActor):
             compute_total_fwd_flops=None,
         )
 
-    def _train_core(self, rollout_id: int, rollout_data) -> None:
-        rank = dist.get_rank()
-        if self.args.advantage_estimator in ["grpo", "gspo"]:
-            rollout_data["advantages"] = rollout_data["returns"] = [
-                torch.tensor([rollout_data["rewards"][i]] * rollout_data["response_lengths"][i])
-                for i in range(len(rollout_data["rewards"]))
-            ]
-        else:
-            raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
-
-        packed_batches, grad_accum = self.packed_data(rollout_data)
+    def log_rollout_data(self, rollout_id: int, rollout_data, packed_batches):
         log_dict = {}
-
-        assert (
-            len(grad_accum) > 0
-        ), f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
-
-        if self.ref_model is not None:
-            self.compute_log_prob("ref", packed_batches, store_prefix="ref_")
-
-        self.compute_log_prob("actor", packed_batches)
-
         if "raw_reward" in rollout_data and dist.get_rank() == 0:
             raw_reward_list = rollout_data["raw_reward"]
             if raw_reward_list:
                 log_dict["rollout/raw_reward"] = sum(raw_reward_list) / len(raw_reward_list)
 
-        for metric_key in ["log_probs", "ref_log_probs", "advantages", "returns"]:
+        for metric_key in ["log_probs", "rollout_log_probs", "ref_log_probs", "advantages", "returns"]:
             if metric_key not in packed_batches[0]:
                 continue
             val = torch.tensor([0.0], device=torch.cuda.current_device())
@@ -471,6 +451,27 @@ class FSDPTrainRayActor(TrainRayActor):
             logger.info(f"rollout {rollout_id}: {log_dict}")
             log_dict["rollout/step"] = compute_rollout_step(self.args, rollout_id)
             tracking_utils.log(self.args, log_dict, step_key="rollout/step")
+
+    def _train_core(self, rollout_id: int, rollout_data) -> None:
+        if self.args.advantage_estimator in ["grpo", "gspo"]:
+            rollout_data["advantages"] = rollout_data["returns"] = [
+                torch.tensor([rollout_data["rewards"][i]] * rollout_data["response_lengths"][i])
+                for i in range(len(rollout_data["rewards"]))
+            ]
+        else:
+            raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
+
+        packed_batches, grad_accum = self.packed_data(rollout_data)
+
+        assert (
+            len(grad_accum) > 0
+        ), f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
+
+        if self.ref_model is not None:
+            self.compute_log_prob("ref", packed_batches, store_prefix="ref_")
+
+        self.compute_log_prob("actor", packed_batches)
+        self.log_rollout_data(rollout_id, rollout_data, packed_batches)
 
         with timer("actor_train"):
             reported_accum: dict[str, list[torch.Tensor]] = {}
