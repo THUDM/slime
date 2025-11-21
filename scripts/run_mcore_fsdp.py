@@ -200,10 +200,7 @@ eval:
         )
 
     if args.train_backend == "fsdp":
-        misc_args += (
-            "--offload-train-mode move "
-            """--train-env-vars '{"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}' """
-        )
+        misc_args += """--train-env-vars '{"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}' """
 
     misc_args += "--use-fault-tolerance " f"--dump-details /root/shared_data/{args.run_id}/dump_details "
 

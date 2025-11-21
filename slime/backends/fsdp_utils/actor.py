@@ -1,6 +1,5 @@
 import logging
 from argparse import Namespace
-from contextlib import nullcontext
 from itertools import accumulate
 
 import ray
@@ -9,8 +8,6 @@ import torch.distributed as dist
 import torch.nn.functional as F
 from packaging import version
 from ring_flash_attn import substitute_hf_flash_attn, update_ring_flash_attn_params
-from torch.distributed.checkpoint.state_dict import StateDictOptions, get_model_state_dict
-from torch_memory_saver import torch_memory_saver
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
 
@@ -52,12 +49,9 @@ class FSDPTrainRayActor(TrainRayActor):
     def init(self, args: Namespace, role: str, with_ref: bool = False) -> int:  # type: ignore[override]
         super().init(args, role, with_ref)
 
-        # Update rank and world_size for wandb secondary initialization (using actual distributed values)
-        args.rank = dist.get_rank()
-        args.world_size = dist.get_world_size()
-
         # Setup device mesh for parallelism (handles both CP and non-CP cases)
         self.setup_device_mesh()
+        torch.manual_seed(args.seed)
 
         if self.args.debug_rollout_only:
             return 0
@@ -78,12 +72,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if dist.get_rank() == 0:
             init_tracking(args, primary=False)
-
-        self.args = args
-        self.fsdp_full_state_dict_opts = StateDictOptions(
-            full_state_dict=True, cpu_offload=getattr(self.args, "fsdp_state_dict_cpu_offload", False)
-        )
-        torch.manual_seed(args.seed)
 
         if getattr(self.args, "start_rollout_id", None) is None:
             self.args.start_rollout_id = 0
@@ -128,7 +116,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.global_step = 0
         self.micro_step = 0
-        self.weights = {"actor": {}}
 
         checkpoint_payload = checkpoint.load(self)
 
@@ -137,12 +124,10 @@ class FSDPTrainRayActor(TrainRayActor):
         if with_ref:
             self.ref_model = self.create_ref_model(args.ref_load)
 
-        self.update_cpu_params_dict(self.weights["actor"])
-
         self.weight_updater = (
-            UpdateWeightFromTensor(self.args, self.model, self.weights)
+            UpdateWeightFromTensor(self.args, self.model)
             if self.args.colocate
-            else UpdateWeightFromDistributed(self.args, self.model, self.weights)
+            else UpdateWeightFromDistributed(self.args, self.model)
         )
 
         checkpoint.finalize_load(self, checkpoint_payload)
@@ -212,24 +197,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
         print_memory("before offload model")
 
-        match self.args.offload_train_mode:
-            case "tms":
-                # Try to avoid this case:
-                # * FSDP contains a lot of cached memory and sleep
-                # * SGLang resumes and allocate some memory
-                # * FSDP resumes but realize there is no enough memory, thus OOM currently, but indeed the cache can be (partially) freed to fulfill requirements
-                # TODO: improve it later
-                clear_memory()
-
-                torch_memory_saver.pause()
-            case "move":
-                self.model.cpu()
-                move_torch_optimizer(self.optimizer, "cpu")
-                clear_memory()
-            case _:
-                raise NotImplementedError
-
-        torch.cuda.synchronize()
+        self.model.cpu()
+        move_torch_optimizer(self.optimizer, "cpu")
+        clear_memory()
         dist.barrier(group=get_gloo_group())
         print_memory("after offload model")
 
@@ -239,16 +209,8 @@ class FSDPTrainRayActor(TrainRayActor):
         if not self.args.offload_train:
             return
 
-        match self.args.offload_train_mode:
-            case "tms":
-                torch_memory_saver.resume()
-            case "move":
-                self.model.cuda()
-                move_torch_optimizer(self.optimizer, "cuda")
-            case _:
-                raise NotImplementedError
-
-        torch.cuda.synchronize()
+        self.model.cuda()
+        move_torch_optimizer(self.optimizer, "cuda")
         dist.barrier(group=get_gloo_group())
         print_memory("after wake_up model")
 
@@ -490,8 +452,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
         train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)
 
-        self.update_cpu_params_dict(self.weights["actor"])
-
         # Update ref model if needed (copy actor weights to ref)
         if (
             self.args.ref_update_interval is not None
@@ -682,32 +642,8 @@ class FSDPTrainRayActor(TrainRayActor):
             self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
 
-        with (
-            torch_memory_saver.disable()
-            if self.args.offload_train and self.args.offload_train_mode == "tms" and not torch.version.hip
-            else nullcontext()
-        ):
-            self.weight_updater.update_weights()
-
-    @torch.no_grad()
-    def update_cpu_params_dict(self, params_dict: dict[str, torch.Tensor]) -> None:
-        """Copy model parameters from GPU to a pinned CPU dictionary.
-
-        Parameters:
-            params_dict: Destination mapping from parameter names to CPU tensors.
-                Missing entries are allocated with matching shapes and dtypes.
-        """
-
-        state_dict = get_model_state_dict(self.model, options=self.fsdp_full_state_dict_opts)
-
-        for name, param in state_dict.items():
-            if not torch.is_tensor(param):
-                continue
-
-            if name not in params_dict:
-                params_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
-            params_dict[name].copy_(param.detach(), non_blocking=True)
-        torch.cuda.synchronize()
+        self.weight_updater.update_weights()
+        clear_memory()
 
     def create_ref_model(self, ref_load_path: str | None):
         """Create and initialize a separate reference model (kept in CPU).

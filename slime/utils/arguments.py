@@ -94,12 +94,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--offload-train-mode",
-                choices=["tms", "move"],
-                default="tms",
-                help="Approach to offload training engine",
-            )
-            parser.add_argument(
                 "--offload-rollout",
                 action=argparse.BooleanOptionalAction,
                 help=(
