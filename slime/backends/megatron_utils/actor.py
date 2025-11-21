@@ -149,6 +149,8 @@ class MegatronTrainRayActor(TrainRayActor):
     @timer
     def wake_up(self) -> None:
         assert self.args.offload_train
+        print_memory("before wake_up model")
+
         torch_memory_saver.resume()
 
         clear_memory()
