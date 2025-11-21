@@ -15,14 +15,22 @@ set -ex
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
 
+NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
+if [ "$NVLINK_COUNT" -gt 0 ]; then
+    HAS_NVLINK=1
+else
+    HAS_NVLINK=0
+fi
+echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
+
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/../../scripts/models/qwen3-4B-Instruct.sh"
+source "${SCRIPT_DIR}/../../scripts/models/qwen3-4B-Instruct-2507.sh"
 
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-4B-Instruct-2507/
    --ref-load /root/Qwen3-4B-Instruct-2507_torch_dist/
-   --load /root/Qwen3-4B-Instruct-2507_slime2/
-   --save /root/Qwen3-4B-Instruct-2507_slime2/
+   --load /root/Qwen3-4B-Instruct-2507_slime/
+   --save /root/Qwen3-4B-Instruct-2507_slime/
    --save-interval 20
 )
 
@@ -49,15 +57,15 @@ EVAL_ARGS=(
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 4
+   --tensor-model-parallel-size 2
    --sequence-parallel
    --pipeline-model-parallel-size 1
    --context-parallel-size 1
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
-#    --recompute-granularity full
-#    --recompute-method uniform
-#    --recompute-num-layers 1
+   --recompute-granularity full
+   --recompute-method uniform
+   --recompute-num-layers 1
    --use-dynamic-batch-size
    --max-tokens-per-gpu 9216
 )
@@ -81,10 +89,18 @@ OPTIMIZER_ARGS=(
    --adam-beta2 0.98
 )
 
+WANDB_ARGS=(
+   # --use-wandb
+   # --wandb-project slime-tau-bench
+   # --wandb-group qwen3-4B
+   # --wandb-key ${WANDB_KEY}
+)
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
    --sglang-mem-fraction-static 0.7
+   # If gemini API reports concurrency limit error, set this parameter to reduce the concurrency
+   # --sglang-server-concurrency 32
 )
 
 MISC_ARGS=(
@@ -103,8 +119,10 @@ CUSTOM_ARGS=(
 )
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-export CUDA_VISIBLE_DEVICES=4,5,6,7
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 --disable-usage-stats --temp-dir /root/ray_temp 
+
+# If you want more or less GPUs, change this parameter
+NUM_GPUS=2
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265 --temp-dir /root/shared/ray_temp 
 
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
@@ -116,9 +134,9 @@ RUNTIME_ENV_JSON="{
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
-   --actor-num-nodes 2 \
-   --actor-num-gpus-per-node 2 \
-   --rollout-num-gpus 4 \
+   --actor-num-nodes 1 \
+   --actor-num-gpus-per-node ${NUM_GPUS} \
+   --rollout-num-gpus ${NUM_GPUS} \
    --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \

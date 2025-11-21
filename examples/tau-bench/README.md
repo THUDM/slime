@@ -12,7 +12,7 @@ cd slime
 pip install -e .
 # for tau bench 
 cd /root/
-git clone https://github.com:JD-ETH/tau-bench.git
+git clone https://github.com/JD-ETH/tau-bench.git
 cd tau-bench
 git checkout feature/litellm-retry
 pip install -e . 
@@ -33,7 +33,7 @@ huggingface-cli download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/Qwen3-4B-
 
 # mcore checkpoint
 cd /root/slime
-source scripts/models/qwen3-4B-Instruct.sh
+source scripts/models/qwen3-4B-Instruct-2507.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
     --hf-checkpoint /root/Qwen3-4B-Instruct-2507 \

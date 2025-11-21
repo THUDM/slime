@@ -6,16 +6,15 @@ using the slime framework. It handles agent-environment interactions and convert
 results to the format expected by slime's training pipeline.
 """
 
-import os
 import logging
+import os
 from typing import Any, Dict
 
 from tau_bench.envs import get_env
 from tau_bench.types import RunConfig
+from trainable_agents import InteractionResult, Status, agent_factory
 
 from slime.utils.types import Sample
-
-from trainable_agents import InteractionResult, Status, agent_factory
 
 # Set up logger for this module
 logger = logging.getLogger(__name__)
@@ -28,7 +27,7 @@ TAU_CONFIGS = {
     "task_split": "train",  # Select between ["train", "test", "dev"] for retail
     "user_strategy": "llm",  # Select between ["llm", "react", "verify", "reflection"]
     "model_provider": "auto_router",  # Unused, required
-    "model": "qwen2.5-3b",  # Unused, required
+    "model": "qwen3-4b",  # Unused, required
     "user_model_provider": "gemini",
 }
 # Replace with your actual API key for user sim
@@ -40,26 +39,26 @@ tau_config = RunConfig(**TAU_CONFIGS)
 def res_to_sample(res: InteractionResult, task_index: int) -> Sample:
     """
     Convert InteractionResult to Sample format for slime training.
-    
+
     This function transforms the tau-bench interaction result into the format
     expected by slime's training pipeline, handling status mapping and response
     length calculation.
-    
+
     Args:
         res: InteractionResult from tau-bench agent
         task_index: Index of the task being processed
-        
+
     Returns:
         Sample object for slime training
     """
     # Map tau-bench status to slime status
     status_mapping = {
         Status.COMPLETED: "completed",
-        Status.TRUNCATED: "truncated", 
+        Status.TRUNCATED: "truncated",
         Status.ABORTED: "aborted",
     }
     status = status_mapping.get(res.status)
-    
+
     # Debug logging for response tracking
     logger.debug(
         f"res_to_sample: response_length="
@@ -67,7 +66,7 @@ def res_to_sample(res: InteractionResult, task_index: int) -> Sample:
         f"loss_mask_len={len(res.loss_mask) if res.loss_mask else 'None'}, "
         f"tokens_len={len(res.tokens) if res.tokens else 'None'}"
     )
-    
+
     # Create sample with basic information
     sample = Sample(
         index=task_index,
@@ -79,9 +78,9 @@ def res_to_sample(res: InteractionResult, task_index: int) -> Sample:
         status=status,
         metadata=res.info,
     )
-    
+
     # Ensure response_length is set correctly
-    if hasattr(res, 'response_length'):
+    if hasattr(res, "response_length"):
         sample.response_length = res.response_length
     else:
         # Fallback: calculate from loss_mask if available
@@ -93,43 +92,37 @@ def res_to_sample(res: InteractionResult, task_index: int) -> Sample:
             sample.response_length = len(res.tokens)
         else:
             sample.response_length = 0
-            logger.debug(
-                f"res_to_sample: Set response_length={sample.response_length}"
-            )
-    
+            logger.debug(f"res_to_sample: Set response_length={sample.response_length}")
+
     return sample
 
 
 async def generate(args: Dict[str, Any], sample: Sample, sampling_params: dict) -> Sample:
     """
     Generate a complete agent-environment interaction trajectory for tau-bench.
-    
+
     This is the main entry point for slime training. It creates a tau-bench
     environment, initializes a trainable agent, and executes a full interaction
     trajectory. The result is converted to slime's Sample format for training.
-    
+
     Args:
         args: Rollout arguments from slime training pipeline
         sample: Sample containing task index in prompt field
         sampling_params: LLM sampling parameters
-        
+
     Returns:
         Sample object containing the complete interaction trajectory
-        
+
     Raises:
         AssertionError: If partial rollout is requested (not supported)
     """
     # Validate arguments
-    assert not args.partial_rollout, (
-        "Partial rollout is not supported for tau-bench interactions."
-    )
-    
+    assert not args.partial_rollout, "Partial rollout is not supported for tau-bench interactions."
+
     # Extract task index from sample prompt
     task_index = int(sample.prompt)
-    logger.info(
-        f"Starting agent-environment interaction for task {task_index}"
-    )
-    
+    logger.info(f"Starting agent-environment interaction for task {task_index}")
+
     # Initialize tau-bench environment
     env = get_env(
         env_name=tau_config.env,
@@ -139,7 +132,7 @@ async def generate(args: Dict[str, Any], sample: Sample, sampling_params: dict) 
         task_split=tau_config.task_split,
         task_index=task_index,
     )
-    
+
     # Create trainable agent
     agent = agent_factory(
         tools_info=env.tools_info,
@@ -148,17 +141,13 @@ async def generate(args: Dict[str, Any], sample: Sample, sampling_params: dict) 
         rollout_args=args,
         sampling_params=sampling_params,
     )
-    
+
     # Execute agent-environment interaction
     # Note: The sample.prompt field contains the task index for repeatability
-    interaction_result = await agent.asolve(
-        env, agent.rollout_args, agent.sampling_params, task_index
-    )
-    
+    interaction_result = await agent.asolve(env, agent.rollout_args, agent.sampling_params, task_index)
+
     # Convert to slime Sample format
     result_sample = res_to_sample(interaction_result, task_index)
-    
-    logger.info(
-        f"Finished agent-environment interaction for task {task_index}"
-    )
+
+    logger.info(f"Finished agent-environment interaction for task {task_index}")
     return result_sample
