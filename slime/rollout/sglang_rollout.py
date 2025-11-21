@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import copy
+import inspect
 import io
 import logging
 from argparse import Namespace
@@ -235,7 +236,13 @@ async def generate_and_rm(
 
         if args.custom_generate_function_path is not None:
             custom_generate_func = load_function(args.custom_generate_function_path)
-            sample = await custom_generate_func(args, sample, sampling_params)
+
+            # Check if the function accepts the evaluation parameter
+            sig = inspect.signature(custom_generate_func)
+            if "evaluation" in sig.parameters:
+                sample = await custom_generate_func(args, sample, sampling_params, evaluation=evaluation)
+            else:
+                sample = await custom_generate_func(args, sample, sampling_params)
         else:
             sample = await generate(args, sample, sampling_params)
 
