@@ -301,7 +301,7 @@ def get_advantages_and_returns_batch(
     rewards_list,
     gamma,
     lambd,
-    chunked_gae: bool = True,
+    chunked: bool = True,
 ):
     """
     Batched GAE with CP support.
@@ -354,25 +354,19 @@ def get_advantages_and_returns_batch(
             full_values[i, :L] = full_values_list[i][:L]
             full_rewards[i, :L] = full_rewards_list[i][:L]
 
-        if not chunked_gae:
-            lastgaelam = torch.zeros(B, device=device, dtype=dtype)
-            adv_rev = []
-
-            for t in reversed(range(max_len)):
-                next_value = full_values[:, t + 1] if t < max_len - 1 else 0.0
-                delta = full_rewards[:, t] + gamma * next_value - full_values[:, t]
-                lastgaelam = delta + gamma * lambd * lastgaelam
-                adv_rev.append(lastgaelam)
-
-            full_advantages = torch.stack(adv_rev[::-1], dim=1)  # [B, max_len]
-            full_returns = full_advantages + full_values  # [B, max_len]
-        else:
-            full_advantages, full_returns = gae_fla_chunk(
+        if not chunked:
+            full_advantages, full_returns = vanilla_gae(
                 rewards=full_rewards,
                 values=full_values,
                 gamma=gamma,
                 lambd=lambd,
-                chunk_size=128,
+            )
+        else:
+            full_advantages, full_returns = chunked_gae(
+                rewards=full_rewards,
+                values=full_values,
+                gamma=gamma,
+                lambd=lambd,
             )
 
         advantages_list = []
@@ -405,8 +399,31 @@ def get_advantages_and_returns_batch(
     return advantages_list, returns_list
 
 
-@torch.no_grad()
-def gae_fla_chunk(
+def vanilla_gae(
+    rewards: torch.Tensor,
+    values: torch.Tensor,
+    gamma: float,
+    lambd: float,
+):
+    B, T = rewards.shape
+    device = rewards.device
+    dtype = rewards.dtype
+
+    lastgaelam = torch.zeros(B, device=device, dtype=dtype)
+    adv_rev = []
+
+    for t in reversed(range(T)):
+        next_value = values[:, t + 1] if t < T - 1 else 0.0
+        delta = rewards[:, t] + gamma * next_value - values[:, t]
+        lastgaelam = delta + gamma * lambd * lastgaelam
+        adv_rev.append(lastgaelam)
+
+    full_advantages = torch.stack(adv_rev[::-1], dim=1)  # [B, max_len]
+    full_returns = full_advantages + values  # [B, max_len]
+    return full_advantages, full_returns
+
+
+def chunked_gae(
     rewards: torch.Tensor,
     values: torch.Tensor,
     gamma: float,

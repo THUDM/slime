@@ -70,7 +70,6 @@ def execute():
         "--num-critic-only-steps 1 "
         "--normalize-advantages "
         "--critic-lr 1e-5 "
-        "--use-rollout-logprobs "
     )
 
     optimizer_args = (
