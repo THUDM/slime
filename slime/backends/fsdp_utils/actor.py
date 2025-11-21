@@ -137,7 +137,7 @@ class FSDPTrainRayActor(TrainRayActor):
         if with_ref:
             self.ref_model = self.create_ref_model(args.ref_load)
 
-        # self.update_cpu_params_dict(self.weights["actor"])
+        self.update_cpu_params_dict(self.weights["actor"])
 
         self.weight_updater = (
             UpdateWeightFromTensor(self.args, self.model, self.weights)
@@ -560,10 +560,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
         # Apply TIS before sample mean calculation
         if self.args.use_tis:
-            # Initialize TIS variables
-            tis = None
-            tis_clipfrac = None
-            ois = None
             # Apply TIS off-policy correction using importance sampling
             assert all(
                 "rollout_log_probs" in batch
