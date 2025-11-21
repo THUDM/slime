@@ -12,4 +12,3 @@ ring_flash_attn
 sglang-router>=0.2.3
 tensorboard
 transformers
-wandb

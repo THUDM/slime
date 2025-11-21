@@ -52,6 +52,16 @@ class FSDPTrainRayActor(TrainRayActor):
     def init(self, args: Namespace, role: str, with_ref: bool = False) -> int:  # type: ignore[override]
         super().init(args, role, with_ref)
 
+        # Update rank and world_size for wandb secondary initialization (using actual distributed values)
+        args.rank = dist.get_rank()
+        args.world_size = dist.get_world_size()
+
+        # Setup device mesh for parallelism (handles both CP and non-CP cases)
+        self.setup_device_mesh()
+
+        if self.args.debug_rollout_only:
+            return 0
+
         # TODO extract to function
         if args.true_on_policy_mode:
             from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
@@ -65,10 +75,6 @@ class FSDPTrainRayActor(TrainRayActor):
             )
 
             modeling_qwen3.apply_rotary_pos_emb = torch.compile(dynamic=True)(modeling_qwen3.apply_rotary_pos_emb)
-
-        # Update rank and world_size for wandb secondary initialization (using actual distributed values)
-        args.rank = dist.get_rank()
-        args.world_size = dist.get_world_size()
 
         if dist.get_rank() == 0:
             init_tracking(args, primary=False)
@@ -104,9 +110,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if args.gradient_checkpointing:
             model.gradient_checkpointing_enable()
-
-        # Setup device mesh for parallelism (handles both CP and non-CP cases)
-        self.setup_device_mesh()
 
         # Apply FSDP with DP mesh and CPU offload policy if requested
         cpu_offload = getattr(args, "fsdp_cpu_offload", False)
@@ -408,7 +411,10 @@ class FSDPTrainRayActor(TrainRayActor):
             self.wake_up()
 
         with inverse_timer("train_wait"), timer("train"):
-            self._train_core(rollout_id=rollout_id, rollout_data_ref=rollout_data_ref)
+            rollout_data = process_rollout_data(self.args, rollout_data_ref, self.dp_rank, self.dp_size)
+            if self.args.debug_rollout_only:
+                return
+            self._train_core(rollout_id=rollout_id, rollout_data=rollout_data)
 
         train_metric_utils.log_perf_data_raw(
             rollout_id=rollout_id,
@@ -417,10 +423,8 @@ class FSDPTrainRayActor(TrainRayActor):
             compute_total_fwd_flops=None,
         )
 
-    def _train_core(self, rollout_id: int, rollout_data_ref: Box) -> None:
+    def _train_core(self, rollout_id: int, rollout_data) -> None:
         rank = dist.get_rank()
-
-        rollout_data = process_rollout_data(self.args, rollout_data_ref, self.dp_rank, self.dp_size)
         if self.args.advantage_estimator in ["grpo", "gspo"]:
             rollout_data["advantages"] = rollout_data["returns"] = [
                 torch.tensor([rollout_data["rewards"][i]] * rollout_data["response_lengths"][i])

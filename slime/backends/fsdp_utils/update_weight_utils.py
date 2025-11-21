@@ -84,14 +84,9 @@ def get_param_info_buckets(
 class UpdateWeightFromTensor:
     """Push model weights to rollout engines using tensors.
 
-    Supports two paths:
-    - full_params=True: serialize the full state dict on each rank, gather
-      serialized blobs via `dist.gather_object` to a designated source rank,
-      and have that source issue a single RPC to the engine.
-    - full_params=False: stream parameters in size-bounded buckets; optionally
-      group tensors by dtype and flatten per dtype, gather per-rank blobs to the
-      source, and issue one RPC per dtype per bucket (or one per bucket if not
-      flattened).
+    Streams parameters in size-bounded buckets; optionally groups tensors by dtype
+    and flattens per dtype, gathers per-rank blobs to the source, and issues one
+    RPC per dtype per bucket (or one per bucket if not flattened).
     """
 
     def __init__(
@@ -99,25 +94,17 @@ class UpdateWeightFromTensor:
         args: Namespace,
         model: torch.nn.Module,
         weights: Mapping[str, Mapping[str, torch.Tensor]] | None,
-        full_params: bool = False,
     ) -> None:
         self.args = args
         self.model = model
         self.weights = weights  # CPU parameter storage
-        self.full_params = full_params
 
         # Validate weights initialization
         if self.weights is None:
             raise RuntimeError("weights cannot be None - CPU parameter storage is required for weight updates")
 
-        # Bucket-based loading is automatically enabled when full_params=False
-        # This provides the Megatron-style optimization for sharded mode
-
         # Create parameter info buckets once during initialization (like Megatron)
-        if not self.full_params:
-            self.param_info_buckets = get_param_info_buckets(self.args, self.weights)
-        else:
-            self.param_info_buckets = None
+        self.param_info_buckets = get_param_info_buckets(self.args, self.weights)
 
         # FSDP v2 model expected
 
@@ -155,152 +142,100 @@ class UpdateWeightFromTensor:
 
     @torch.no_grad()
     def update_weights(self) -> None:
-        """Send weights over IPC using either full or sharded mode."""
+        """Send weights over IPC using bucket-based loading."""
 
         monkey_patch_torch_reductions()
 
-        if self.full_params:
-            logger.info("Using FULL_STATE_DICT path with loading from CPU storage")
+        logger.info("Using bucket-based loading from CPU storage")
+        if self.param_info_buckets is None:
+            raise RuntimeError("Parameter info buckets not initialized")
 
-            # Load all parameters from CPU storage to GPU in one go
-            # This is more memory intensive but faster than bucket-based approach
-            named_tensors = []
-            for name, cpu_param in self.weights["actor"].items():
+        for param_infos in self.param_info_buckets:
+            # Load only the parameters in this bucket from CPU to GPU
+            named_tensors_batch = []
+            for param_info in param_infos:
+                cpu_param = self.weights["actor"][param_info.name]
                 gpu_param = cpu_param.to(device=torch.cuda.current_device(), non_blocking=True)
-                named_tensors.append((name, gpu_param))
+                named_tensors_batch.append((param_info.name, gpu_param))
 
             torch.cuda.synchronize()
 
+            # Use flattened bucket approach similar to Megatron
             if use_flattened_tensor_bucket:
-                flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
-                metadata = flattened_tensor_bucket.get_metadata()
+                logger.info("Using flattened tensor bucket")
+                # Group tensors by dtype (same as Megatron)
+                named_tensors_by_dtypes = {}
+                for name, tensor in named_tensors_batch:
+                    dtype = tensor.dtype
+                    if dtype not in named_tensors_by_dtypes:
+                        named_tensors_by_dtypes[dtype] = []
+                    named_tensors_by_dtypes[dtype].append((name, tensor))
 
-                flattened_tensor_data = {
-                    "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
-                    "metadata": metadata,
-                }
-                serialized_tensors = MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True)
+                # Create flattened bucket for each dtype group
+                serialized_tensors = []
+                for dtype, named_tensors in named_tensors_by_dtypes.items():
+                    flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
+                    metadata = flattened_tensor_bucket.get_metadata()
+                    flattened_tensor_data = {
+                        "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
+                        "metadata": metadata,
+                    }
+                    serialized_tensors.append(
+                        MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True)
+                    )
             else:
-                serialized_tensors = MultiprocessingSerializer.serialize(named_tensors, output_str=True)
+                # Fallback to non-flattened approach
+                serialized_tensors = MultiprocessingSerializer.serialize(named_tensors_batch, output_str=True)
 
-            del named_tensors
+            del named_tensors_batch
             clear_memory()
 
-            serialized_named_tensors = (
-                [None] * dist.get_world_size(self._ipc_gather_group)
-                if self._ipc_gather_src == dist.get_rank()
-                else None
-            )
+            if self._ipc_gather_src == dist.get_rank():
+                # On rank 0, prepare a list to hold the gathered batches from all ranks.
+                gathered_serialized_batches = [None for _ in range(dist.get_world_size(self._ipc_gather_group))]
+            else:
+                gathered_serialized_batches = None
+
+            # Gather the serialized batches from all ranks to rank 0.
             dist.gather_object(
-                serialized_tensors,
-                object_gather_list=serialized_named_tensors,
+                obj=serialized_tensors,
+                object_gather_list=gathered_serialized_batches,
                 dst=self._ipc_gather_src,
                 group=self._ipc_gather_group,
             )
+            del serialized_tensors
             clear_memory()
 
             if dist.get_rank() == self._ipc_gather_src:
-                kwargs = {
-                    "serialized_named_tensors": serialized_named_tensors,
-                }
                 if use_flattened_tensor_bucket:
-                    kwargs["load_format"] = "flattened_bucket"
-
-                ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
-                ray.get(ref)
-                clear_memory()
-        else:
-            # For sharded mode (full_params=False), automatically use bucket-based loading
-            logger.info("Using SHARDED_STATE_DICT path with bucket-based loading from CPU storage")
-            if self.param_info_buckets is None:
-                raise RuntimeError("Parameter info buckets not initialized for sharded mode")
-
-            for param_infos in self.param_info_buckets:
-                # Load only the parameters in this bucket from CPU to GPU
-                named_tensors_batch = []
-                for param_info in param_infos:
-                    cpu_param = self.weights["actor"][param_info.name]
-                    gpu_param = cpu_param.to(device=torch.cuda.current_device(), non_blocking=True)
-                    named_tensors_batch.append((param_info.name, gpu_param))
-
-                torch.cuda.synchronize()
-
-                # Use flattened bucket approach similar to Megatron and full_params=True
-                if use_flattened_tensor_bucket:
-                    logger.info("Using flattened tensor bucket")
-                    # Group tensors by dtype (same as Megatron)
-                    named_tensors_by_dtypes = {}
-                    for name, tensor in named_tensors_batch:
-                        dtype = tensor.dtype
-                        if dtype not in named_tensors_by_dtypes:
-                            named_tensors_by_dtypes[dtype] = []
-                        named_tensors_by_dtypes[dtype].append((name, tensor))
-
-                    # Create flattened bucket for each dtype group
-                    serialized_tensors = []
-                    for dtype, named_tensors in named_tensors_by_dtypes.items():
-                        flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
-                        metadata = flattened_tensor_bucket.get_metadata()
-                        flattened_tensor_data = {
-                            "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
-                            "metadata": metadata,
-                        }
-                        serialized_tensors.append(
-                            MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True)
-                        )
-                else:
-                    # Fallback to non-flattened approach
-                    serialized_tensors = MultiprocessingSerializer.serialize(named_tensors_batch, output_str=True)
-
-                del named_tensors_batch
-                clear_memory()
-
-                if self._ipc_gather_src == dist.get_rank():
-                    # On rank 0, prepare a list to hold the gathered batches from all ranks.
-                    gathered_serialized_batches = [None for _ in range(dist.get_world_size(self._ipc_gather_group))]
-                else:
-                    gathered_serialized_batches = None
-
-                # Gather the serialized batches from all ranks to rank 0.
-                dist.gather_object(
-                    obj=serialized_tensors,
-                    object_gather_list=gathered_serialized_batches,
-                    dst=self._ipc_gather_src,
-                    group=self._ipc_gather_group,
-                )
-                del serialized_tensors
-                clear_memory()
-
-                if dist.get_rank() == self._ipc_gather_src:
-                    if use_flattened_tensor_bucket:
-                        # Handle flattened bucket format (same as Megatron approach)
-                        # Each rank may have multiple dtype buckets
-                        # TODO: here we assume all ranks have the same number of dtypes
-                        num_dtypes = len(gathered_serialized_batches[0])
-                        for i in range(num_dtypes):
-                            kwargs = {
-                                "serialized_named_tensors": [tensors[i] for tensors in gathered_serialized_batches],
-                                "load_format": "flattened_bucket",
-                                "flush_cache": False,
-                            }
-                            ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
-                            ray.get(ref)
-                    else:
-                        # Non-flattened approach
+                    # Handle flattened bucket format (same as Megatron approach)
+                    # Each rank may have multiple dtype buckets
+                    # TODO: here we assume all ranks have the same number of dtypes
+                    num_dtypes = len(gathered_serialized_batches[0])
+                    for i in range(num_dtypes):
                         kwargs = {
-                            "serialized_named_tensors": gathered_serialized_batches,
+                            "serialized_named_tensors": [tensors[i] for tensors in gathered_serialized_batches],
+                            "load_format": "flattened_bucket",
                             "flush_cache": False,
                         }
                         ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
                         ray.get(ref)
+                else:
+                    # Non-flattened approach
+                    kwargs = {
+                        "serialized_named_tensors": gathered_serialized_batches,
+                        "flush_cache": False,
+                    }
+                    ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
+                    ray.get(ref)
 
-                    del gathered_serialized_batches, kwargs
-                    clear_memory()
-
-            if dist.get_rank() == self._ipc_gather_src:
-                ref = self._ipc_engine.flush_cache.remote()
-                ray.get(ref)
+                del gathered_serialized_batches, kwargs
                 clear_memory()
+
+        if dist.get_rank() == self._ipc_gather_src:
+            ref = self._ipc_engine.flush_cache.remote()
+            ray.get(ref)
+            clear_memory()
 
 
 class UpdateWeightFromDistributed:
