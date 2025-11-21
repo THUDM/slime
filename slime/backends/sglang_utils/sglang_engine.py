@@ -98,27 +98,17 @@ class SGLangEngine(RayActor):
 
         def _format_v6_uri(addr):
             if not addr or addr.startswith("["):
-                return addr
-            # 1. Try parsing as a pure IP address (e.g., "2001:db8::1")
+                return addr··
             try:
                 if ipaddress.ip_address(addr).version == 6:
                     return f"[{addr}]"
-                return addr  # It is a valid IPv4, return as is
             except ValueError:
                 pass
-
-            if ":" in addr:
-                try:
-                    # Split from the right to separate IP and Port
-                    ip_part, port_part = addr.rsplit(":", 1)
-                    if ipaddress.ip_address(ip_part).version == 6:
-                        return f"[{ip_part}]:{port_part}"
-                except ValueError:
-                    pass
             return addr
 
         host = _format_v6_uri(host)
-        dist_init_addr = _format_v6_uri(dist_init_addr)
+        ip_part, port_part = dist_init_addr.rsplit(":", 1)
+        dist_init_addr = f"{_format_v6_uri(ip_part)}:{port_part}"
 
         server_args_dict, external_engine_need_check_fields = _compute_server_args(
             self.args, self.rank, dist_init_addr, nccl_port, host, port
