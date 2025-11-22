@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import logging
 import multiprocessing
 import os
@@ -42,16 +43,45 @@ def get_host_info():
     hostname = socket.gethostname()
 
     if env_overwrite_local_ip := os.getenv(SLIME_HOST_IP_ENV, None):
-        local_ip = env_overwrite_local_ip
-    else:
-        try:
-            local_ip = socket.gethostbyname(hostname)
-        except socket.gaierror:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_sock:
-                udp_sock.connect(("8.8.8.8", 80))  # Google DNS
-                local_ip = udp_sock.getsockname()[0]
+        return hostname, env_overwrite_local_ip
 
-    return hostname, local_ip
+    # try DNS
+    try:
+        return hostname, socket.gethostbyname(hostname)
+    except socket.gaierror:
+        pass
+
+    # try IPv4
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_sock:
+            udp_sock.connect(("8.8.8.8", 80))  # Google DNS
+            return hostname, udp_sock.getsockname()[0]
+    except OSError:
+        pass
+
+    # try IPv6
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as s6:
+            s6.connect(("2001:4860:4860::8888", 80))
+            return hostname, s6.getsockname()[0]
+    except OSError:
+        pass
+
+    # hostname -I
+    try:
+        local_ip = os.popen("hostname -I | awk '{print $1}'").read().strip()
+        return hostname, local_ip or "::1"
+    except Exception:
+        return hostname, "::1"
+
+
+def _wrap_ipv6(host):
+    """Wrap IPv6 address in [] if needed."""
+    try:
+        ipaddress.IPv6Address(host.strip("[]"))
+        return f"[{host.strip('[]')}]"
+    except ipaddress.AddressValueError:
+        return host
 
 
 def run_router(args):

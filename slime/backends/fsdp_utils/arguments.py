@@ -28,7 +28,6 @@ class FSDPArgs:
     fp16: bool = False
 
     # FSDP configuration
-    fsdp_full_params: bool = False  # If True, use full_tensor; if False, use shard_tensor
     fsdp_state_dict_cpu_offload: bool = True  # If True, offload full state dict to CPU during collection.
     fsdp_cpu_offload: bool = (
         False  # If True, offload parameters, gradients, and optimizer states to CPU (optimizer runs on CPU)

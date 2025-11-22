@@ -52,12 +52,17 @@ class FSDPTrainRayActor(TrainRayActor):
     def init(self, args: Namespace, role: str, with_ref: bool = False) -> int:  # type: ignore[override]
         super().init(args, role, with_ref)
 
-        self._enable_true_on_policy_optimizations(args)
-
         # Update rank and world_size for wandb secondary initialization (using actual distributed values)
         args.rank = dist.get_rank()
         args.world_size = dist.get_world_size()
 
+        # Setup device mesh for parallelism (handles both CP and non-CP cases)
+        self.setup_device_mesh()
+
+        if self.args.debug_rollout_only:
+            return 0
+
+        self._enable_true_on_policy_optimizations(args)
         if dist.get_rank() == 0:
             init_tracking(args, primary=False)
 
@@ -92,9 +97,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if args.gradient_checkpointing:
             model.gradient_checkpointing_enable()
-
-        # Setup device mesh for parallelism (handles both CP and non-CP cases)
-        self.setup_device_mesh()
 
         # Apply FSDP with DP mesh and CPU offload policy if requested
         cpu_offload = getattr(args, "fsdp_cpu_offload", False)
@@ -410,7 +412,10 @@ class FSDPTrainRayActor(TrainRayActor):
             self.wake_up()
 
         with inverse_timer("train_wait"), timer("train"):
-            self._train_core(rollout_id=rollout_id, rollout_data_ref=rollout_data_ref)
+            rollout_data = process_rollout_data(self.args, rollout_data_ref, self.dp_rank, self.dp_size)
+            if self.args.debug_rollout_only:
+                return
+            self._train_core(rollout_id=rollout_id, rollout_data=rollout_data)
 
         train_metric_utils.log_perf_data_raw(
             rollout_id=rollout_id,
@@ -419,36 +424,14 @@ class FSDPTrainRayActor(TrainRayActor):
             compute_total_fwd_flops=None,
         )
 
-    def _train_core(self, rollout_id: int, rollout_data_ref: Box) -> None:
-        rank = dist.get_rank()
-
-        rollout_data = process_rollout_data(self.args, rollout_data_ref, self.dp_rank, self.dp_size)
-        if self.args.advantage_estimator in ["grpo", "gspo"]:
-            rollout_data["advantages"] = rollout_data["returns"] = [
-                torch.tensor([rollout_data["rewards"][i]] * rollout_data["response_lengths"][i])
-                for i in range(len(rollout_data["rewards"]))
-            ]
-        else:
-            raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
-
-        packed_batches, grad_accum = self.packed_data(rollout_data)
+    def log_rollout_data(self, rollout_id: int, rollout_data, packed_batches):
         log_dict = {}
-
-        assert (
-            len(grad_accum) > 0
-        ), f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
-
-        if self.ref_model is not None:
-            self.compute_log_prob("ref", packed_batches, store_prefix="ref_")
-
-        self.compute_log_prob("actor", packed_batches)
-
         if "raw_reward" in rollout_data and dist.get_rank() == 0:
             raw_reward_list = rollout_data["raw_reward"]
             if raw_reward_list:
                 log_dict["rollout/raw_reward"] = sum(raw_reward_list) / len(raw_reward_list)
 
-        for metric_key in ["log_probs", "ref_log_probs", "advantages", "returns"]:
+        for metric_key in ["log_probs", "rollout_log_probs", "ref_log_probs", "advantages", "returns"]:
             if metric_key not in packed_batches[0]:
                 continue
             val = torch.tensor([0.0], device=torch.cuda.current_device())
@@ -469,6 +452,27 @@ class FSDPTrainRayActor(TrainRayActor):
             logger.info(f"rollout {rollout_id}: {log_dict}")
             log_dict["rollout/step"] = compute_rollout_step(self.args, rollout_id)
             tracking_utils.log(self.args, log_dict, step_key="rollout/step")
+
+    def _train_core(self, rollout_id: int, rollout_data) -> None:
+        if self.args.advantage_estimator in ["grpo", "gspo"]:
+            rollout_data["advantages"] = rollout_data["returns"] = [
+                torch.tensor([rollout_data["rewards"][i]] * rollout_data["response_lengths"][i])
+                for i in range(len(rollout_data["rewards"]))
+            ]
+        else:
+            raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
+
+        packed_batches, grad_accum = self.packed_data(rollout_data)
+
+        assert (
+            len(grad_accum) > 0
+        ), f"Invalid grad_accum {grad_accum} for micro_batch_size {self.args.micro_batch_size} and global_batch_size {self.args.global_batch_size}"
+
+        if self.ref_model is not None:
+            self.compute_log_prob("ref", packed_batches, store_prefix="ref_")
+
+        self.compute_log_prob("actor", packed_batches)
+        self.log_rollout_data(rollout_id, rollout_data, packed_batches)
 
         with timer("actor_train"):
             reported_accum: dict[str, list[torch.Tensor]] = {}
@@ -557,10 +561,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
         # Apply TIS before sample mean calculation
         if self.args.use_tis:
-            # Initialize TIS variables
-            tis = None
-            tis_clipfrac = None
-            ois = None
             # Apply TIS off-policy correction using importance sampling
             assert all(
                 "rollout_log_probs" in batch
