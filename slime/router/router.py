@@ -33,14 +33,17 @@ class SlimeRouter:
         self.worker_urls: dict[str, int] = {}
         self.max_weight_version = None
 
-        # TODO: remove this hardcode
+        max_connections = getattr(args, "slime_router_max_connections", None)
+        if max_connections is None:
+            max_connections = (
+                args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
+            )
+
+        timeout = getattr(args, "slime_router_timeout", None)
+
         self.client = httpx.AsyncClient(
-            limits=httpx.Limits(
-                max_connections=args.sglang_server_concurrency
-                * args.rollout_num_gpus
-                // args.rollout_num_gpus_per_engine
-            ),
-            timeout=httpx.Timeout(None),
+            limits=httpx.Limits(max_connections=max_connections),
+            timeout=httpx.Timeout(timeout),
         )
 
         self._setup_routes()
