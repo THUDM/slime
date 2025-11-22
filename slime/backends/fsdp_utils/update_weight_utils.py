@@ -66,6 +66,8 @@ class UpdateWeight(abc.ABC):
         if bucket:
             self.wait_and_update_bucket_weights(bucket)
             del bucket
+            bucket = []
+            bucket_size = 0
 
     def wait_and_update_bucket_weights(self, bucket):
         bucket = [(name, param.wait()) if hasattr(param, "wait") else (name, param) for name, param in bucket]
