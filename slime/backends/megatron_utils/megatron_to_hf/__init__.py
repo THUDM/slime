@@ -20,10 +20,6 @@ from .qwen3_next import convert_qwen3_next_to_hf
 from .qwen3moe import convert_qwen3moe_to_hf
 
 
-def ceildiv(a, b):
-    return -(-a // b)
-
-
 def quantize_param(name, weight, weight_block_size):
     assert name.endswith(".weight"), f"Expected weight parameter, got {name}"
     FP8_MIN = torch.finfo(torch.float8_e4m3fn).min
