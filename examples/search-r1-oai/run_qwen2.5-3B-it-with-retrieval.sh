@@ -176,8 +176,8 @@ fi
 
 RETRIEVER_TOPK=3
 RETRIEVER_MODEL="intfloat/e5-base-v2"
-RETRIEVER_LOG="/tmp/retrieval_server_$(date +%Y%m%d_%H%M%S).log"
-TRAINING_LOG="/tmp/training_$(date +%Y%m%d_%H%M%S).log"
+RETRIEVER_LOG="/root/workspace/slime-open/retrieval_server_$(date +%Y%m%d_%H%M%S).log"
+TRAINING_LOG="/root/workspace/slime-open/training_$(date +%Y%m%d_%H%M%S).log"
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-"4,5,6,7"}
 
 echo "Retrieval server configuration:"
