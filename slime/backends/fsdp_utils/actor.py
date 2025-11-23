@@ -320,11 +320,16 @@ class FSDPTrainRayActor(TrainRayActor):
         ), f"global_batch_size {self.args.global_batch_size} is not divisible by dp_world_size {self.dp_size}"
         # Use global_batch_size for splitting when max_tokens_per_gpu is enabled
         if self.args.use_dynamic_batch_size:
+            # In CP mode, CP group shares sequences, so total capacity is max_tokens_per_gpu * cp_size
+            max_tokens = self.args.max_tokens_per_gpu
+            if self.cp_size > 1:
+                max_tokens = max_tokens * self.cp_size
+
             for i in range(0, len(tokens), local_batch_size):
                 mbs_size_list.append(
                     get_minimum_num_micro_batch_size(
                         [len(t) for t in rollout_data["tokens"][i : i + local_batch_size]],
-                        self.args.max_tokens_per_gpu,
+                        max_tokens,
                     )
                 )
             num_microbatches = torch.tensor(mbs_size_list, dtype=torch.int, device=torch.cuda.current_device())
