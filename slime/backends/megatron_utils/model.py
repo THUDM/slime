@@ -275,6 +275,10 @@ def forward_only(
     # Store the results on the last stage
     if mpu.is_pipeline_last_stage():
         keys = forward_data_store[0].keys()
+        origin_indices = None
+        if args.use_dynamic_batch_size:
+            origin_indices = sum(data_iterator[0].micro_batch_indices, [])
+
         for key in keys:
             values = []
             for value in forward_data_store:
@@ -283,9 +287,7 @@ def forward_only(
 
             if args.use_dynamic_batch_size:
                 # TODO: This is ugly... Find a better way to make the data have the same order.
-                # TODO: move this out of the loop.
                 origin_values = [None] * len(values)
-                origin_indices = sum(data_iterator[0].micro_batch_indices, [])
                 for value, origin_index in zip(values, origin_indices):
                     origin_values[origin_index] = value
                 values = origin_values
