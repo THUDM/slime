@@ -220,3 +220,79 @@ def compute_score_em(
                 return structure_format_score - multi_answer_penalty
         else:
             return max(0, final_format_score - multi_answer_penalty)
+
+
+def log_turn_by_turn(sample, show_full_content: bool = False):
+    """Print turn-by-turn rollout log based on OpenAI messages format.
+
+    Args:
+        sample: Sample object with metadata["messages"] containing OpenAI format messages
+        show_full_content: If True, show full content; otherwise truncate for readability
+    """
+    messages = sample.metadata.get("messages", [])
+
+    if not messages:
+        print("⚠️  No messages found in sample.metadata")
+        return
+
+    print("\n" + "="*70)
+    print("Turn-by-Turn Rollout Analysis")
+    print("="*70)
+
+    turn = 0
+    for i, msg in enumerate(messages):
+        role = msg.get("role", "unknown")
+
+        if role == "user":
+            print(f"\n[User Prompt]")
+            content = msg.get("content", "")
+            if show_full_content:
+                print(f"  {content}")
+            else:
+                print(f"  {content[:150]}..." if len(content) > 150 else f"  {content}")
+
+        elif role == "assistant":
+            turn += 1
+            print(f"\n--- Turn {turn}: Assistant ---")
+
+            content = msg.get("content")
+            if content:
+                if show_full_content:
+                    print(f"Content: {content}")
+                else:
+                    preview = content[:200] + "..." if len(content) > 200 else content
+                    print(f"Content: {preview}")
+
+            tool_calls = msg.get("tool_calls")
+            if tool_calls:
+                print(f"Tool Calls: {len(tool_calls)} call(s)")
+                for idx, tc in enumerate(tool_calls):
+                    func_name = tc.get("function", {}).get("name", "unknown")
+                    args = tc.get("function", {}).get("arguments", "")
+                    print(f"  [{idx+1}] Function: {func_name}")
+                    if show_full_content:
+                        print(f"      Arguments: {args}")
+                    else:
+                        args_preview = args[:100] + "..." if len(args) > 100 else args
+                        print(f"      Arguments: {args_preview}")
+
+        elif role == "tool":
+            tool_call_id = msg.get("tool_call_id", "N/A")
+            content = msg.get("content", "")
+            print(f"\n  → Tool Result (id={tool_call_id}):")
+            if show_full_content:
+                print(f"    {content}")
+            else:
+                preview = content[:300] + "..." if len(content) > 300 else content
+                print(f"    {preview}")
+
+    # Summary
+    print("\n" + "-"*70)
+    print("Summary")
+    print("-"*70)
+    print(f"Total turns: {turn}")
+    print(f"Total tool calls: {sample.metadata.get('total_tool_calls', 0)}")
+    print(f"Has final <answer>: {sample.metadata.get('has_final_answer', False)}")
+    print(f"Final turn has tool_calls (ERROR): {sample.metadata.get('final_turn_has_tool_calls', False)}")
+    print(f"Response status: {sample.status.value if hasattr(sample.status, 'value') else sample.status}")
+    print("="*70 + "\n")

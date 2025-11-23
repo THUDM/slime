@@ -4,7 +4,7 @@ import json
 import os
 
 import httpx
-from qa_em_format import compute_score_em
+from qa_em_format import compute_score_em, log_turn_by_turn
 
 from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.http_utils import post
@@ -150,6 +150,9 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         message = choice["message"]
         finish_reason = choice.get("finish_reason", "stop")
 
+        # Check for tool calls first (needed for token extraction logic)
+        tool_calls = message.get("tool_calls")
+
         # Extract token_ids and log_probs from logprobs (model-generated content)
         assistant_token_ids = []
         assistant_log_probs = []
@@ -202,11 +205,11 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         assistant_content = message.get("content") or ""
         response_text = assistant_content
 
-        # Check for tool calls
-        tool_calls = message.get("tool_calls")
-
         if not tool_calls:
             # No tool calls, generation complete
+            # IMPORTANT: Add final assistant message before breaking (for turn-by-turn logging)
+            messages.append(message)
+
             if finish_reason == "length":
                 sample.status = Sample.Status.TRUNCATED
             else:
@@ -284,6 +287,35 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     sample.loss_mask = loss_mask
     sample.rollout_log_probs = response_log_probs
 
+    # Ensure metadata is initialized
+    if sample.metadata is None:
+        sample.metadata = {}
+
+    # Save complete messages history (OpenAI format) to metadata for debugging
+    sample.metadata["messages"] = messages
+
+    # Calculate monitoring metrics
+    # Metric 1: Find last assistant message
+    last_assistant_msg = None
+    for msg in reversed(messages):
+        if msg.get("role") == "assistant":
+            last_assistant_msg = msg
+            break
+
+    # Metric 2: Check if final response has <answer> tags
+    has_final_answer = "<answer>" in response_text and "</answer>" in response_text
+
+    # Metric 3: Check if final turn incorrectly has tool_calls (should be answer-only)
+    final_turn_has_tool_calls = last_assistant_msg and last_assistant_msg.get("tool_calls") is not None
+
+    # Metric 4: Count total tool calls across all turns
+    total_tool_calls = sum(1 for msg in messages if msg.get("role") == "assistant" and msg.get("tool_calls"))
+
+    sample.metadata["has_final_answer"] = has_final_answer
+    sample.metadata["final_turn_has_tool_calls"] = final_turn_has_tool_calls
+    sample.metadata["total_tool_calls"] = total_tool_calls
+    sample.metadata["num_turns"] = len([msg for msg in messages if msg.get("role") == "assistant"])
+
     if sample.status == Sample.Status.PENDING:
         sample.status = Sample.Status.COMPLETED
 
@@ -305,5 +337,13 @@ async def reward_func(args, sample, **kwargs):
         ground_truth=sample.label["ground_truth"],
         format_score=SEARCH_R1_CONFIGS["format_score"],
     )
+
+    # Log turn-by-turn rollout for debugging (sample 1/64 randomly)
+    import random
+    if random.randint(1, 64) == 1:
+        log_turn_by_turn(sample, show_full_content=False)
+        print(f"Golden answers: {sample.label['ground_truth']['target']}")
+        print(f"Extracted answer: {sample.response[:200]}..." if len(sample.response) > 200 else sample.response)
+        print(f"Score: {score}\n")
 
     return score
