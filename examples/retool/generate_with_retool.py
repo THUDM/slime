@@ -266,7 +266,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             return sample
 
         cur_response = output["text"]
-        
+
         if "output_token_logprobs" in output["meta_info"]:
             cur_response_token_ids = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
             cur_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
@@ -276,7 +276,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         else:
             cur_response = postprocess_responses(cur_response)
             cur_response_token_ids = state.tokenizer(cur_response, add_special_tokens=False)["input_ids"]
-        
+
         response += cur_response
         response_token_ids += cur_response_token_ids
         loss_masks += [1] * len(cur_response_token_ids)
@@ -304,7 +304,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         # Check if maximum tool call count reached
         if sample.rollout_log_probs is not None:
             sample.rollout_log_probs += [0.0] * len(obs_tokens_ids)
-            
+
             assert len(response_token_ids) == len(
                 sample.rollout_log_probs
             ), f"Token/logp length mismatch at turn {turn}: {len(response_token_ids)} tokens vs {len(sample.rollout_log_probs)} logps"
