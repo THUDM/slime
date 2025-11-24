@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[2] / "tests"))
@@ -10,6 +11,8 @@ MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")
 assert MODEL_NAME in {"Qwen3-VL-2B-Instruct", "Qwen3-VL-4B-Instruct", "Qwen3-VL-8B-Instruct"}
 
 NUM_GPUS = int(os.environ.get("SLIME_SCRIPT_NUM_GPUS", "1"))
+EXTERNAL_RAY = int(os.environ.get("SLIME_SCRIPT_EXTERNAL_RAY", "0"))
+MASTER_ADDR = os.environ.get("MASTER_ADDR", "127.0.0.1")
 
 
 def prepare():
@@ -131,7 +134,6 @@ def execute():
         f"{optimizer_args} "
         f"{grpo_args} "
         f"{sglang_args} "
-        f"{U.get_default_wandb_args(__file__)} "
         f"{eval_args} "
         f"{fsdp_args} "
         f"{ci_args} "
@@ -139,16 +141,47 @@ def execute():
         f"{true_on_policy_args} "
     )
 
-    U.execute_train(
-        train_args=train_args,
-        num_gpus=NUM_GPUS,
-        model_type=None,
-        train_script="/root/slime/train.py",
-        extra_env_vars={
-            **true_on_policy_envs,
-            "SGLANG_DUMPER_ENABLE": "0",
-            "SGLANG_TEMP_UTILS_ENABLE_DEBUG_PRINT": "0",
-        },
+    # Kill existing processes
+    U.exec_command(
+        "pkill -9 sglang; "
+        "sleep 3; "
+        f"{'' if EXTERNAL_RAY else 'ray stop --force; '}"
+        f"{'' if EXTERNAL_RAY else 'pkill -9 ray; '}"
+        "pkill -9 slime; "
+        "sleep 3; "
+        f"{'' if EXTERNAL_RAY else 'pkill -9 ray; '}"
+        "pkill -9 slime; "
+        "pkill -9 redis; "
+        "true; "
+    )
+
+    if not EXTERNAL_RAY:
+        # Start Ray
+        U.exec_command(
+            f"export PYTHONBUFFERED=16 && "
+            f"ray start --head --node-ip-address {MASTER_ADDR} --num-gpus {NUM_GPUS} --disable-usage-stats"
+        )
+
+    # Prepare runtime environment
+    runtime_env_json = json.dumps(
+        {
+            "env_vars": {
+                "no_proxy": f"127.0.0.1,{MASTER_ADDR}",
+                "MASTER_ADDR": MASTER_ADDR,
+                **true_on_policy_envs,
+                "SGLANG_DUMPER_ENABLE": "0",
+                "SGLANG_TEMP_UTILS_ENABLE_DEBUG_PRINT": "0",
+            }
+        }
+    )
+
+    # Submit Ray job
+    U.exec_command(
+        f"export no_proxy=127.0.0.1 && export PYTHONBUFFERED=16 && "
+        f'ray job submit --address="http://127.0.0.1:8265" '
+        f"--runtime-env-json='{runtime_env_json}' "
+        f"-- python3 /root/slime/train.py "
+        f"{train_args}"
     )
 
 
