@@ -33,12 +33,10 @@ DEFAULT_SYSTEM_CONTENT = "You are a helpful and harmless assistant."
 DEFAULT_USER_CONTENT_PREFIX = (
     "Answer the given question. You must conduct reasoning inside <think> and </think> "
     "first every time you get new information. After reasoning, if you find you lack "
-    "some knowledge, you can call a search engine by <tool_call> query </tool_call> "
-    "and it will return the top searched results between <tool_response> and "
-    "</tool_response>. You can search as many times as your want. If you find no "
-    "further external knowledge needed, you can directly provide the answer inside "
-    "<answer> and </answer>, without detailed illustrations. For example, "
-    "<answer> Beijing </answer>. Question: "
+    "some knowledge, you can use the search function to find relevant information. "
+    "You can search as many times as you want. When you have sufficient information, "
+    "provide the final answer inside <answer> and </answer>, without detailed "
+    "illustrations. For example, <answer> Beijing </answer>. Question: "
 )
 SEARCH_TOOL =  {
     "type": "function",
