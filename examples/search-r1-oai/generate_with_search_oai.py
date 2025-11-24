@@ -1,26 +1,47 @@
 # Adapted form https://github.com/PeterGriffinJin/Search-R1/blob/ceee7b89655ed52f205b9beb98e1190c3eedcfb0/search_r1/llm_agent/generation.py
 import asyncio
 import json
+import logging
 import os
+import random
 
 import httpx
 from qa_em_format import compute_score_em, log_turn_by_turn
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type, before_sleep_log
 
 from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.http_utils import post
 from slime.utils.types import Sample
 
+logger = logging.getLogger(__name__)
+
 SEARCH_R1_CONFIGS = {
-    "max_turns": 3,
+    "max_turns": 5,
     "topk": 3,
     "retrieval_server_url": os.getenv("RETRIEVAL_SERVER_URL", "http://localhost:8000"),  # Local dense retriever
     "search_concurrency": 256,
+    # HTTP client connection pool settings
+    "max_connections": int(os.getenv("SEARCH_MAX_CONNECTIONS", "256")),  # Max concurrent TCP connections
+    "max_keepalive_connections": int(os.getenv("SEARCH_MAX_KEEPALIVE", "64")),  # Max idle keep-alive connections
+    "request_timeout": float(os.getenv("SEARCH_TIMEOUT", "60.0")),  # Request timeout in seconds
     # rm
     "format_score": 0.2,
+    "max_context_length": 32768,  # Maximum context length in tokens
+    "log_sample_rate": 64,  # Sample 1/N for detailed logging
+    "log_truncate_length": 200,  # Character limit for log truncation
 }
 
 
 SEMAPHORE = asyncio.Semaphore(SEARCH_R1_CONFIGS["search_concurrency"])
+
+# Shared HTTP client for all search requests to avoid resource exhaustion
+SHARED_HTTP_CLIENT = httpx.AsyncClient(
+    limits=httpx.Limits(
+        max_connections=SEARCH_R1_CONFIGS["max_connections"],
+        max_keepalive_connections=SEARCH_R1_CONFIGS["max_keepalive_connections"],
+    ),
+    timeout=SEARCH_R1_CONFIGS["request_timeout"],
+)
 
 
 def _passages2string(retrieval_result):
@@ -49,8 +70,15 @@ def _passages2string(retrieval_result):
     return format_reference
 
 
+@retry(
+    retry=retry_if_exception_type((httpx.ConnectError, httpx.TimeoutException)),
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=1, max=10),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
 async def search(queries: list[str]) -> str:
-    """Call local dense retriever service.
+    """Call local dense retriever service with automatic retry.
 
     Args:
         queries: List of search queries
@@ -66,10 +94,10 @@ async def search(queries: list[str]) -> str:
     }
 
     async with SEMAPHORE:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, timeout=30.0)
-            response.raise_for_status()
-            data = response.json()
+        # Use shared HTTP client instead of creating new one each time
+        response = await SHARED_HTTP_CLIENT.post(url, json=payload)
+        response.raise_for_status()
+        data = response.json()
 
     # data["result"] is a list of lists: [[doc1, doc2], [doc3, doc4], ...]
     # Each inner list corresponds to results for one query
@@ -120,6 +148,12 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/v1/chat/completions"
 
     for turn in range(SEARCH_R1_CONFIGS["max_turns"]):
+        # Check context length before this turn
+        if len(all_token_ids) >= SEARCH_R1_CONFIGS["max_context_length"]:
+            logger.warning(f"Context length {len(all_token_ids)} exceeds max {SEARCH_R1_CONFIGS['max_context_length']}, stopping generation")
+            sample.status = Sample.Status.TRUNCATED
+            break
+
         # Call chat completions API with tools
         payload = {
             "messages": messages,
@@ -133,6 +167,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         try:
             output = await post(url, payload)
         except Exception as e:
+            logger.error(f"API call failed at turn {turn}: {type(e).__name__}: {str(e)}")
             sample.status = Sample.Status.ABORTED
             sample.response = response_text
             sample.tokens = all_token_ids
@@ -143,6 +178,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
         # Parse response
         if "choices" not in output or len(output["choices"]) == 0:
+            logger.warning(f"API response missing choices at turn {turn}")
             sample.status = Sample.Status.ABORTED
             break
 
@@ -209,6 +245,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             # No tool calls, generation complete
             # IMPORTANT: Add final assistant message before breaking (for turn-by-turn logging)
             messages.append(message)
+            logger.debug(f"Added final assistant message (no tool calls), finish_reason={finish_reason}")
 
             if finish_reason == "length":
                 sample.status = Sample.Status.TRUNCATED
@@ -218,6 +255,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
         # Add assistant message (with tool_calls) to conversation
         messages.append(message)
+        logger.debug(f"Added assistant message with {len(tool_calls)} tool_calls")
 
         # Execute tool calls and collect tool messages
         tool_messages = []
@@ -227,8 +265,8 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
             try:
                 arguments = json.loads(arguments_str) if isinstance(arguments_str, str) else arguments_str
-            except json.JSONDecodeError:
-                # Skip invalid tool call
+            except json.JSONDecodeError as e:
+                logger.warning(f"Failed to parse tool call arguments for {func_name}: {str(e)}")
                 continue
 
             if func_name == "search":
@@ -236,10 +274,12 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                 if not queries:
                     continue
 
-                # Call local retrieval service
+                # Call local retrieval service (with automatic retry)
                 try:
                     search_results = await search(queries)
                 except Exception as e:
+                    # This exception is raised after all retry attempts have been exhausted
+                    logger.error(f"Search failed after retries for queries {queries}: {type(e).__name__}: {str(e)}")
                     search_results = f"Error during retrieval: {str(e)}"
 
                 # Create tool message
@@ -254,13 +294,22 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
         # Process all tool messages as a unit using delta-based approach
         if tool_messages:
+            # Validate tool_messages structure before processing
+            assert isinstance(tool_messages, list), f"tool_messages must be list, got {type(tool_messages)}"
+            for tm in tool_messages:
+                assert isinstance(tm, dict), f"Each tool message must be dict, got {type(tm)}"
+                assert tm.get("role") == "tool", f"Tool message must have role='tool', got {tm.get('role')}"
+
+            logger.debug(f"Adding {len(tool_messages)} tool messages to conversation")
+
             # Calculate text before adding THIS tool message
             text_before = tokenizer.apply_chat_template(
                 messages, tools=tools, add_generation_prompt=True, tokenize=False
             )
 
             # Add tool messages and calculate delta tokens
-            messages.append(tool_messages)
+            messages.extend(tool_messages)
+            logger.debug(f"Tool messages added, total messages: {len(messages)}")
 
             # Calculate delta for this tool message
             text_after = tokenizer.apply_chat_template(
@@ -294,27 +343,31 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     # Save complete messages history (OpenAI format) to metadata for debugging
     sample.metadata["messages"] = messages
 
-    # Calculate monitoring metrics
-    # Metric 1: Find last assistant message
+    # Calculate monitoring metrics in a single pass
     last_assistant_msg = None
+    total_tool_calls = 0
+    num_turns = 0
+
     for msg in reversed(messages):
         if msg.get("role") == "assistant":
-            last_assistant_msg = msg
-            break
+            # Count assistant turns
+            num_turns += 1
+            # Count tool calls
+            if msg.get("tool_calls"):
+                total_tool_calls += 1
+            # Capture last assistant message (first one in reverse order)
+            if last_assistant_msg is None:
+                last_assistant_msg = msg
 
-    # Metric 2: Check if final response has <answer> tags
+    # Check if final response has <answer> tags
     has_final_answer = "<answer>" in response_text and "</answer>" in response_text
-
-    # Metric 3: Check if final turn incorrectly has tool_calls (should be answer-only)
+    # Check if final turn incorrectly has tool_calls (should be answer-only)
     final_turn_has_tool_calls = last_assistant_msg and last_assistant_msg.get("tool_calls") is not None
-
-    # Metric 4: Count total tool calls across all turns
-    total_tool_calls = sum(1 for msg in messages if msg.get("role") == "assistant" and msg.get("tool_calls"))
 
     sample.metadata["has_final_answer"] = has_final_answer
     sample.metadata["final_turn_has_tool_calls"] = final_turn_has_tool_calls
     sample.metadata["total_tool_calls"] = total_tool_calls
-    sample.metadata["num_turns"] = len([msg for msg in messages if msg.get("role") == "assistant"])
+    sample.metadata["num_turns"] = num_turns
 
     if sample.status == Sample.Status.PENDING:
         sample.status = Sample.Status.COMPLETED
@@ -338,12 +391,12 @@ async def reward_func(args, sample, **kwargs):
         format_score=SEARCH_R1_CONFIGS["format_score"],
     )
 
-    # Log turn-by-turn rollout for debugging (sample 1/64 randomly)
-    import random
-    if random.randint(1, 64) == 1:
+    # Log turn-by-turn rollout for debugging (sample 1/N randomly)
+    if random.randint(1, SEARCH_R1_CONFIGS["log_sample_rate"]) == 1:
         log_turn_by_turn(sample, show_full_content=False)
-        print(f"Golden answers: {sample.label['ground_truth']['target']}")
-        print(f"Extracted answer: {sample.response[:200]}..." if len(sample.response) > 200 else sample.response)
-        print(f"Score: {score}\n")
+        logger.info(f"Golden answers: {sample.label['ground_truth']['target']}")
+        truncate_len = SEARCH_R1_CONFIGS["log_truncate_length"]
+        logger.info(f"Extracted answer: {sample.response[:truncate_len]}..." if len(sample.response) > truncate_len else sample.response)
+        logger.info(f"Score: {score}")
 
     return score
