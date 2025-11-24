@@ -20,12 +20,14 @@ class ScriptArgs(U.ExecuteTrainConfig):
     dynamic_sampling: bool = False
     enable_eval: bool = True
     train_backend: Literal["fsdp", "megatron"] = "fsdp"
+    enable_megatron_bridge: bool = False
 
     def __post_init__(self):
         if self.train_backend == "megatron":
             self.megatron_model_type = {
                 "Qwen3-4B-Instruct-2507": "qwen3-4B-Instruct-2507",
                 "Qwen3-4B-Base": "qwen3-4B",
+                "Qwen3-4B": "qwen3-4B",
             }[self.model_name]
 
         self.num_gpus_per_node = self.num_gpus_per_node or U.NUM_GPUS_OF_HARDWARE[self.hardware]
@@ -38,7 +40,7 @@ def prepare(args: ScriptArgs):
     U.hf_download_dataset("zhuzilin/aime-2024")
     U.hf_download_dataset("zyzshishui0627/gpqa_diamond")
     U.hf_download_dataset("zyzshishui0627/IFBench")
-    if args.train_backend == "megatron":
+    if (args.train_backend == "megatron") and not args.enable_megatron_bridge:
         U.convert_checkpoint(
             model_name=args.model_name,
             megatron_model_type=args.megatron_model_type,
@@ -58,9 +60,14 @@ def execute(args: ScriptArgs):
         f"--save-retain-interval {2 if args.mode == 'debug_minimal' else 20} "
     )
     if args.train_backend == "megatron":
+        ref_load_path = (
+            f"/root/models/{args.model_name}/"
+            if args.enable_megatron_bridge
+            else f"/root/models/{args.model_name}_torch_dist"
+        )
         ckpt_args += (
             # FSDP does not support this
-            f"--ref-load /root/models/{args.model_name}_torch_dist "
+            f"--ref-load {ref_load_path} "
         )
 
     rollout_args = (
@@ -200,6 +207,9 @@ eval:
         misc_env_vars |= {
             "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN": "1",
         }
+
+    if args.enable_megatron_bridge:
+        misc_args += "--megatron-to-hf-mode bridge "
 
     true_on_policy_args = ""
     true_on_policy_envs = {}

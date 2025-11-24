@@ -16,6 +16,7 @@ class ScriptArgs(U.ExecuteTrainConfig):
     hardware: Literal["H100", "GB300"] = "H100"
     enable_eval: bool = True
     extra_args: str = ""
+    enable_megatron_bridge: bool = False
 
     def __post_init__(self):
         self.num_gpus_per_node = self.num_gpus_per_node or U.NUM_GPUS_OF_HARDWARE[self.hardware]
@@ -26,24 +27,31 @@ def prepare(args: ScriptArgs):
     U.exec_command(f"huggingface-cli download Qwen/{args.model_name} --local-dir /root/models/{args.model_name}")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
     U.hf_download_dataset("zhuzilin/aime-2024")
-    U.convert_checkpoint(
-        model_name=args.model_name,
-        megatron_model_type=args.megatron_model_type,
-        num_gpus_per_node=args.num_gpus_per_node,
-        # To support multi-node training, for simplicity, we put model into shared folder
-        dir_dst="/root/models",
-    )
+    if not args.enable_megatron_bridge:
+        U.convert_checkpoint(
+            model_name=args.model_name,
+            megatron_model_type=args.megatron_model_type,
+            num_gpus_per_node=args.num_gpus_per_node,
+            # To support multi-node training, for simplicity, we put model into shared folder
+            dir_dst="/root/models",
+        )
 
 
 # TODO improve layering: split algorithm vs infra
 def execute(args: ScriptArgs):
+    ref_load_path = (
+        f"/root/models/{args.model_name}/"
+        if args.enable_megatron_bridge
+        else f"/root/models/{args.model_name}_torch_dist"
+    )
     load_save_path = f"/root/shared_data/{args.run_id}/checkpoints"
     ckpt_args = (
         f"--hf-checkpoint /root/models/{args.model_name}/ "
-        f"--ref-load /root/models/{args.model_name}_torch_dist "
+        f"--ref-load {ref_load_path} "
         f"--load {load_save_path} "
         f"--save {load_save_path} "
-        "--save-interval 20 "
+        f"--save-interval {2 if args.mode == 'debug_minimal' else 20} "
+        f"--save-retain-interval {2 if args.mode == 'debug_minimal' else 20} "
     )
 
     rollout_args = (
@@ -113,6 +121,9 @@ def execute(args: ScriptArgs):
         "--use-fault-tolerance "
         f"--dump-details /root/shared_data/{args.run_id}/dump_details "
     )
+
+    if args.enable_megatron_bridge:
+        misc_args += "--megatron-to-hf-mode bridge "
 
     match (args.hardware, args.num_nodes):
         case ("H100", 1):
