@@ -1,9 +1,12 @@
+import dataclasses
 from argparse import Namespace
 from collections.abc import Sequence
 
 import torch
 import torch.distributed as dist
 from megatron.core import mpu
+
+from .hf_weight_iterator_base import HfWeightIteratorBase
 
 try:
     from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
@@ -19,20 +22,12 @@ from ..megatron_to_hf import convert_to_hf
 from .common import all_gather_params_async, named_params_and_buffers
 
 
-class HfWeightIteratorDirect:
-    def __init__(self, args, model, model_name, quantization_config):
-        self.args = args
-        self.model = model
-        self.model_name = model_name
-        self.quantization_config = quantization_config
-
+class HfWeightIteratorDirect(HfWeightIteratorBase):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self.megatron_local_param_info_buckets = _get_megatron_local_param_info_buckets(self.args, self.model)
 
     def get_hf_weight_chunks(self, megatron_local_weights):
-        """
-        Mental model of the API:
-        megatron_model.to_hf_magically().named_parameters()
-        """
         rank = dist.get_rank()
 
         for megatron_local_param_infos in tqdm(
@@ -197,7 +192,7 @@ def _get_megatron_local_param_infos(args: Namespace, model: Sequence[torch.nn.Mo
             for name, info in infos.items():
                 if name not in param_infos:
                     # here we need to set the src_rank to the rank within the expert model parallel group
-                    info.src_rank = src_rank
+                    info = dataclasses.replace(info, src_rank=src_rank)
                     param_infos[name] = info
 
     param_infos = list(param_infos.values())

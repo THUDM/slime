@@ -12,7 +12,7 @@ from sglang.srt.utils import MultiprocessingSerializer
 
 from slime.utils.distributed_utils import get_gloo_group
 
-from .hf_weight_iterator_direct import HfWeightIteratorDirect
+from .hf_weight_iterator_base import HfWeightIteratorBase
 from .update_weight_from_distributed import (
     connect_rollout_engines_from_distributed,
     disconnect_rollout_engines_from_distributed,
@@ -57,7 +57,7 @@ class UpdateWeightFromTensor:
         self.quantization_config = quantization_config
         self.weight_version = 0
 
-        self._hf_weight_iterator = HfWeightIteratorDirect(
+        self._hf_weight_iterator = HfWeightIteratorBase.create(
             args=args, model=model, model_name=model_name, quantization_config=quantization_config
         )
 
