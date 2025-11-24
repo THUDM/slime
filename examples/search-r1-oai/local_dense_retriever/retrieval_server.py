@@ -18,6 +18,7 @@
 
 import argparse
 import json
+import logging
 import warnings
 from typing import Optional
 
@@ -26,8 +27,11 @@ import faiss
 import numpy as np
 import torch
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
+
+# Configure logger
+logger = logging.getLogger(__name__)
 from tqdm import tqdm
 from transformers import AutoModel, AutoTokenizer
 
@@ -327,6 +331,20 @@ class QueryRequest(BaseModel):
 app = FastAPI()
 
 
+@app.get("/health")
+def health_check():
+    """
+    Health check endpoint for monitoring.
+
+    Returns service status and retriever information.
+    """
+    return {
+        "status": "healthy",
+        "retriever_type": type(retriever).__name__ if 'retriever' in globals() else "not_initialized",
+        "service": "local_dense_retriever"
+    }
+
+
 @app.post("/retrieve")
 def retrieve_endpoint(request: QueryRequest):
     """
@@ -352,26 +370,39 @@ def retrieve_endpoint(request: QueryRequest):
         ]
     }
     """
-    if not request.topk:
-        request.topk = config.retrieval_topk  # fallback to default
+    try:
+        if not request.topk:
+            request.topk = config.retrieval_topk  # fallback to default
 
-    # Perform batch retrieval
-    results, scores = retriever.batch_search(
-        query_list=request.queries, num=request.topk, return_score=request.return_scores
-    )
-
-    # Format response
-    resp = []
-    for i, single_result in enumerate(results):
+        # Perform batch retrieval
+        # Note: batch_search returns (results, scores) if return_score=True, otherwise just results
         if request.return_scores:
-            # If scores are returned, combine them with results
-            combined = []
-            for doc, score in zip(single_result, scores[i], strict=True):
-                combined.append({"document": doc, "score": score})
-            resp.append(combined)
+            results, scores = retriever.batch_search(
+                query_list=request.queries, num=request.topk, return_score=request.return_scores
+            )
         else:
-            resp.append(single_result)
-    return {"result": resp}
+            results = retriever.batch_search(
+                query_list=request.queries, num=request.topk, return_score=request.return_scores
+            )
+            scores = None
+
+        # Format response
+        resp = []
+        for i, single_result in enumerate(results):
+            if request.return_scores:
+                # If scores are returned, combine them with results
+                combined = []
+                for doc, score in zip(single_result, scores[i], strict=True):
+                    combined.append({"document": doc, "score": score})
+                resp.append(combined)
+            else:
+                resp.append(single_result)
+        return {"result": resp}
+    except Exception as e:
+        # Log the full exception with traceback
+        logger.exception(f"Retrieval failed for {len(request.queries)} queries: {e}")
+        # Return 500 error instead of crashing the server
+        raise HTTPException(status_code=500, detail=f"Retrieval error: {str(e)}")
 
 
 if __name__ == "__main__":
