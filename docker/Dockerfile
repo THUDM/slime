@@ -64,7 +64,7 @@ RUN pip install -r /tmp/requirements.txt
 
 # Temporarily install another sgl-kernel version for GB300 without rebuilding the whole image
 RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
-    SGL_KERNEL_VERSION=0.3.17 && \
+    SGL_KERNEL_VERSION=0.3.17.post2 && \
     python3 -m pip install https://github.com/sgl-project/whl/releases/download/v${SGL_KERNEL_VERSION}/sgl_kernel-${SGL_KERNEL_VERSION}+cu130-cp310-abi3-manylinux2014_$(uname -m).whl --force-reinstall --no-deps; \
   fi
 
