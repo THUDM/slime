@@ -112,7 +112,7 @@ def all_gather_params_async(
     return gathered_params
 
 
-def named_parameters(args: Namespace, model: Sequence[torch.nn.Module]) -> Iterator[tuple[str, torch.Tensor]]:
+def named_params_and_buffers(args: Namespace, model: Sequence[torch.nn.Module]) -> Iterator[tuple[str, torch.Tensor]]:
     """
     Yield (global_name, param/buffer) with consistent names across PP/EP. Adjusts indices for
     virtual PP + EP offsets. Handles decoder.layers, mtp.layers (Multi-Token Prediction), expert_bias.
@@ -173,6 +173,7 @@ def named_parameters(args: Namespace, model: Sequence[torch.nn.Module]) -> Itera
 
         # treat expert bias as normal parameters
         for name, buffer in model_module.named_buffers():
+            # TODO shall we handle (almost) all buffers like Megatron Bridge
             if "expert_bias" not in name:
                 continue
             # for model without ddp wrap
