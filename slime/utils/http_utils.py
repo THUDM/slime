@@ -1,4 +1,6 @@
 import asyncio
+import ipaddress
+import logging
 import multiprocessing
 import os
 import random
@@ -6,6 +8,8 @@ import socket
 from typing import Optional
 
 import httpx
+
+logger = logging.getLogger(__name__)
 
 SLIME_HOST_IP_ENV = "SLIME_HOST_IP"
 
@@ -39,16 +43,45 @@ def get_host_info():
     hostname = socket.gethostname()
 
     if env_overwrite_local_ip := os.getenv(SLIME_HOST_IP_ENV, None):
-        local_ip = env_overwrite_local_ip
-    else:
-        try:
-            local_ip = socket.gethostbyname(hostname)
-        except socket.gaierror:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_sock:
-                udp_sock.connect(("8.8.8.8", 80))  # Google DNS
-                local_ip = udp_sock.getsockname()[0]
+        return hostname, env_overwrite_local_ip
 
-    return hostname, local_ip
+    # try DNS
+    try:
+        return hostname, socket.gethostbyname(hostname)
+    except socket.gaierror:
+        pass
+
+    # try IPv4
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_sock:
+            udp_sock.connect(("8.8.8.8", 80))  # Google DNS
+            return hostname, udp_sock.getsockname()[0]
+    except OSError:
+        pass
+
+    # try IPv6
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as s6:
+            s6.connect(("2001:4860:4860::8888", 80))
+            return hostname, s6.getsockname()[0]
+    except OSError:
+        pass
+
+    # hostname -I
+    try:
+        local_ip = os.popen("hostname -I | awk '{print $1}'").read().strip()
+        return hostname, local_ip or "::1"
+    except Exception:
+        return hostname, "::1"
+
+
+def _wrap_ipv6(host):
+    """Wrap IPv6 address in [] if needed."""
+    try:
+        ipaddress.IPv6Address(host.strip("[]"))
+        return f"[{host.strip('[]')}]"
+    except ipaddress.AddressValueError:
+        return host
 
 
 def run_router(args):
@@ -60,7 +93,7 @@ def run_router(args):
             return 1
         return 0
     except Exception as e:
-        print(e)
+        logger.info(e)
         return 1
 
 
@@ -117,11 +150,11 @@ async def _post(client, url, payload, max_retries=60):
             else:
                 response_text = None
 
-            print(
+            logger.info(
                 f"Error: {e}, retrying... (attempt {retry_count}/{max_retries}, url={url}, response={response_text})"
             )
             if retry_count >= max_retries:
-                print(f"Max retries ({max_retries}) reached, failing... (url={url})")
+                logger.info(f"Max retries ({max_retries}) reached, failing... (url={url})")
                 raise e
             await asyncio.sleep(1)
             continue
@@ -214,7 +247,7 @@ async def post(url, payload, max_retries=60):
                 obj_ref = actor.do_post.remote(url, payload, max_retries)
                 return await asyncio.to_thread(ray.get, obj_ref)
         except Exception as e:
-            print(f"[http_utils] Distributed POST failed, falling back to local: {e} (url={url})")
+            logger.info(f"[http_utils] Distributed POST failed, falling back to local: {e} (url={url})")
             # fall through to local
 
     return await _post(_http_client, url, payload, max_retries)

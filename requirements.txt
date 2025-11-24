@@ -3,14 +3,15 @@ blobfile
 datasets
 httpx[http2]
 mcp[cli]
+megatron-bridge @ git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl
+memray  # needed for debugging (but is lightweight), we can put it to dev mode when using pyproject.toml
+nvidia-modelopt[torch]>=0.37.0  # needed by megatron-bridge
 omegaconf
 pillow
 pylatexenc
 pyyaml
 ray[default]
 ring_flash_attn
-# 0.2.2 removes `/add_worker` endpoint
-sglang-router==0.2.1
+sglang-router>=0.2.3
 tensorboard
 transformers
-wandb

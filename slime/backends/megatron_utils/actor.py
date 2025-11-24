@@ -1,3 +1,4 @@
+import logging
 import os
 import socket
 from argparse import Namespace
@@ -23,8 +24,8 @@ from slime.utils.ray_utils import Box
 from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
 from slime.utils.routing_replay import RoutingReplay
 from slime.utils.timer import Timer, inverse_timer, timer
+from slime.utils.tracking_utils import init_tracking
 from slime.utils.types import RolloutBatch
-from slime.utils.wandb_utils import init_wandb_secondary
 
 from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
@@ -34,7 +35,13 @@ from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_da
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
-from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor, named_parameters
+from .update_weight.common import named_parameters
+from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
+from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
+
+logging.getLogger("megatron").setLevel(logging.WARNING)
+
+logger = logging.getLogger(__name__)
 
 
 class MegatronTrainRayActor(TrainRayActor):
@@ -43,17 +50,16 @@ class MegatronTrainRayActor(TrainRayActor):
         self,
         args: Namespace,
         role: str,
-        wandb_run_id: str,
         with_ref: bool = False,
     ) -> Optional[int]:
         monkey_patch_torch_dist()
 
-        super().init(args, role, wandb_run_id, with_ref)
+        super().init(args, role, with_ref)
 
         init(args)
 
         if is_megatron_main_rank():
-            init_wandb_secondary(args, wandb_run_id)
+            init_tracking(args, primary=False)
 
         self.prof = TrainProfiler(args)
 
@@ -100,6 +106,9 @@ class MegatronTrainRayActor(TrainRayActor):
             if args.update_weights_interval == 1:
                 self.weights_backuper.backup("rollout_actor")
 
+        if self.args.vocab_size is None:
+            self.args.vocab_size = self.tokenizer.vocab_size
+
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
         self.weight_updater = update_weight_cls(
             self.args,
@@ -107,7 +116,6 @@ class MegatronTrainRayActor(TrainRayActor):
             weights_getter=lambda: self.weights_backuper.get("actor"),
             model_name=type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name,
             quantization_config=getattr(self.hf_config, "quantization_config", None),
-            vocab_size=self.tokenizer.vocab_size if self.args.vocab_size is None else self.args.vocab_size,
         )
 
         # empty cache after initialization
@@ -134,7 +142,7 @@ class MegatronTrainRayActor(TrainRayActor):
     def sleep(self) -> None:
         assert self.args.offload_train
 
-        clear_memory()
+        clear_memory(clear_host_memory=True)
         print_memory("before offload model")
         destroy_process_groups()
 
@@ -145,6 +153,8 @@ class MegatronTrainRayActor(TrainRayActor):
     @timer
     def wake_up(self) -> None:
         assert self.args.offload_train
+        print_memory("before wake_up model")
+
         torch_memory_saver.resume()
 
         clear_memory()
@@ -213,7 +223,8 @@ class MegatronTrainRayActor(TrainRayActor):
             # TODO: maybe extract a common process function for here and get_batch?
             rollout_routed_experts = [slice_with_cp(r, 0) for r in rollout_routed_experts]
             rollout_routed_experts = torch.cat(rollout_routed_experts, dim=0)
-            pad = (128 - rollout_routed_experts.size(0) % 128) % 128
+            pad_size = mpu.get_tensor_model_parallel_world_size() * 128
+            pad = (pad_size - rollout_routed_experts.size(0) % pad_size) % pad_size
             if pad != 0:
                 rollout_routed_experts = F.pad(rollout_routed_experts, (0, 0, 0, 0, 0, pad), value=0)
 
@@ -229,6 +240,14 @@ class MegatronTrainRayActor(TrainRayActor):
                 num_layers_to_build = get_num_layers_to_build(config, vp_stage=vp_stage)
                 offset = get_transformer_layer_offset(config, vp_stage=vp_stage)
                 for layer_id in range(offset, offset + num_layers_to_build):
+                    # skip dense layer
+                    if isinstance(config.moe_layer_freq, int):
+                        if layer_id % config.moe_layer_freq != 0:
+                            continue
+                    elif isinstance(config.moe_layer_freq, list):
+                        assert len(config.moe_layer_freq) == config.num_layers
+                        if config.moe_layer_freq[layer_id] == 0:
+                            continue
                     layer_routed_experts = rollout_routed_experts[:, layer_id]
                     RoutingReplay.all_routing_replays[routing_replay_offset].record(layer_routed_experts)
                     routing_replay_offset += 1
@@ -322,21 +341,22 @@ class MegatronTrainRayActor(TrainRayActor):
                         )
                     )
 
-                if self.args.use_routing_replay:
-                    if self.args.use_rollout_routing_replay:
-                        os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
-                    else:
-                        os.environ["ROUTING_REPLAY_STAGE"] = "record"
-                rollout_data.update(
-                    self.compute_log_prob(
-                        "old_actor" if self.args.keep_old_actor else "actor",
-                        data_iterator,
-                        num_microbatches,
-                        store_prefix="",
+                if not self.args.use_rollout_logprobs or self.args.get_mismatch_metrics:
+                    if self.args.use_routing_replay:
+                        if self.args.use_rollout_routing_replay:
+                            os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
+                        else:
+                            os.environ["ROUTING_REPLAY_STAGE"] = "record"
+                    rollout_data.update(
+                        self.compute_log_prob(
+                            "old_actor" if self.args.keep_old_actor else "actor",
+                            data_iterator,
+                            num_microbatches,
+                            store_prefix="",
+                        )
                     )
-                )
-                if self.args.use_rollout_routing_replay:
-                    RoutingReplay.clear_all_forward()
+                    if self.args.use_rollout_routing_replay:
+                        RoutingReplay.clear_all_forward()
 
                 if self.args.use_critic:
                     sync_actor_critic_data(
@@ -389,11 +409,12 @@ class MegatronTrainRayActor(TrainRayActor):
         ):
             with timer("ref_model_update"):
                 if is_megatron_main_rank():
-                    print(f"Updating ref model at rollout_id {rollout_id}")
+                    logger.info(f"Updating ref model at rollout_id {rollout_id}")
                 self.weights_backuper.backup("ref")
 
         log_perf_data(rollout_id, self.args)
 
+    @timer
     def save_model(self, iteration: int) -> None:
         if self.args.debug_rollout_only:
             return
@@ -422,7 +443,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
             if getattr(self.args, "keep_old_actor", False):
                 if self.args.update_weights_interval == 1:
-                    print("updating model queue: rollout_actor -> old_actor, actor -> rollout_actor")
+                    logger.info("updating model queue: rollout_actor -> old_actor, actor -> rollout_actor")
                     # Queue-style update: rollout_actor params -> old_actor, actor params -> rollout_actor
                     # First copy rollout_actor to old_actor
                     self.weights_backuper.copy(src_tag="rollout_actor", dst_tag="old_actor")

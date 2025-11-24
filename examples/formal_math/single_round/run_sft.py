@@ -1,10 +1,8 @@
 import os
-import sys
 from pathlib import Path
 
-sys.path.append(str(Path(__file__).resolve().parents[3] / "tests"))
 
-import command_utils as U
+import slime.utils.external_utils.command_utils as U
 
 dataset_transform_id = os.environ["SLIME_DATASET_TRANSFORM_ID"]
 
@@ -16,11 +14,11 @@ NUM_GPUS = 8
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"huggingface-cli download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
-    U.convert_checkpoint(model_name=MODEL_NAME, model_type=MODEL_TYPE, num_gpus=NUM_GPUS)
+    U.convert_checkpoint(model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS)
 
 
 def execute():
-    run_id = U.create_run_id()
+    run_id: str = U.create_run_id()
 
     load_save_path = f"/root/models/{MODEL_NAME}_ckpt__{Path(__file__).stem}_{run_id}/"
     ckpt_args = (
@@ -103,8 +101,8 @@ def execute():
 
     U.execute_train(
         train_args=train_args,
-        num_gpus=NUM_GPUS,
-        model_type=MODEL_TYPE,
+        num_gpus_per_node=NUM_GPUS,
+        megatron_model_type=MODEL_TYPE,
         train_script="train_async.py",
         extra_env_vars={
             "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",

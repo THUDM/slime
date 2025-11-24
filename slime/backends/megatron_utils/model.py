@@ -1,5 +1,6 @@
 import dataclasses
 import gc
+import logging
 import math
 import os
 from argparse import Namespace
@@ -7,7 +8,6 @@ from collections.abc import Callable, Sequence
 from functools import partial
 
 import torch
-import wandb
 from megatron.core import mpu
 from megatron.core.distributed import DistributedDataParallel as DDP
 from megatron.core.distributed import finalize_model_grads
@@ -21,6 +21,7 @@ from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
+from slime.utils import tracking_utils
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
@@ -28,6 +29,8 @@ from .cp_utils import slice_with_cp
 from .data import DataIterator, get_batch
 from .loss import loss_function
 from .model_provider import get_model_provider_func
+
+logger = logging.getLogger(__name__)
 
 
 def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer) -> OptimizerParamScheduler:
@@ -211,7 +214,9 @@ def forward_only(
         assert not return_schedule_plan, "forward_only step should never return schedule plan"
 
         # Get the batch.
-        batch = get_batch(data_iterator, ["tokens", "total_lengths", "response_lengths"])
+        batch = get_batch(
+            data_iterator, ["tokens", "total_lengths", "response_lengths"], args.data_pad_size_multiplier
+        )
         unconcat_tokens = batch["unconcat_tokens"]
         tokens = batch["tokens"]
         packed_seq_params = batch["packed_seq_params"]
@@ -362,6 +367,7 @@ def train_one_step(
                 "returns",
                 "rollout_log_probs",
             ],
+            args.data_pad_size_multiplier,
         )
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
@@ -632,15 +638,8 @@ def train(
             for param_group_id, param_group in enumerate(optimizer.param_groups):
                 log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
 
-            if args.use_wandb:
-                log_dict["train/step"] = accumulated_step_id
-                wandb.log(log_dict)
-
-            if args.use_tensorboard:
-                from slime.utils.tensorboard_utils import _TensorboardAdapter
-
-                tb = _TensorboardAdapter(args)
-                tb.log(data=log_dict, step=accumulated_step_id)
+            log_dict["train/step"] = accumulated_step_id
+            tracking_utils.log(args, log_dict, step_key="train/step")
 
             if args.ci_test and not args.ci_disable_kl_checker:
                 if step_id == 0 and "train/ppo_kl" in log_dict and "train/pg_clipfrac" in log_dict:
@@ -648,7 +647,7 @@ def train(
                 if accumulated_step_id == 0 and "train/kl_loss" in log_dict:
                     assert log_dict["train/kl_loss"] == 0.0, f"{log_dict=}"
 
-            print(f"{role_tag}step {accumulated_step_id}: {log_dict}")
+            logger.info(f"{role_tag}step {accumulated_step_id}: {log_dict}")
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
     if pre_hook_enabled:
         disable_forward_pre_hook(model)

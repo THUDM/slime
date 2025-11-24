@@ -1,14 +1,18 @@
 import argparse
 import json
+import logging
 import os
 from typing import Any, Dict
 
 import yaml
+from sglang_router.launch_router import RouterArgs
 from transformers import AutoConfig
 
 from slime.backends.sglang_utils.arguments import add_sglang_arguments
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
+
+logger = logging.getLogger(__name__)
 
 
 def reset_arg(parser, name, **kwargs):
@@ -89,12 +93,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Whether to offload the training actor to CPU during training. "
                     "This will always be true when --colocate is set."
                 ),
-            )
-            parser.add_argument(
-                "--offload-train-mode",
-                choices=["tms", "move"],
-                default="tms",
-                help="Approach to offload training engine",
             )
             parser.add_argument(
                 "--offload-rollout",
@@ -447,7 +445,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Currently we only support jsonl format, and each line should contains --input-key and --label-key, "
                     "which will be used as the prompt and the label respectively. "
                     "If you want to use a custom template, you can set --apply-chat-template to true, in that case, "
-                    "the input should be the same structure as an openai message, e.g. [\{'role': 'user', 'content': 'blabla'\}]. "
+                    "the input should be the same structure as an openai message, e.g. [{'role': 'user', 'content': 'blabla'}]. "
                 ),
             )
             parser.add_argument("--apply-chat-template", action="store_true", default=False)
@@ -745,6 +743,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--get-mismatch-metrics",
+                action="store_true",
+                default=False,
+                help="Whether to calculate the mismatch metrics.",
+            )
+            parser.add_argument(
                 "--use-rollout-logprobs",
                 action="store_true",
                 default=False,
@@ -776,7 +780,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--custom-tis-function-path",
                 type=str,
                 default=None,
-                help="Path to the custom TIS function.",
+                help="Path to the custom TIS/RS function (e.g., examples/train_infer_mismatch_helper/mis.py:compute_mis_weights_with_cp).",
             )
 
             parser.add_argument(
@@ -806,6 +810,19 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 nargs="+",
                 default="",
             )
+            parser.add_argument(
+                "--slime-router-timeout",
+                type=float,
+                default=None,
+                help="Timeout for SlimeRouter HTTP requests in seconds.",
+            )
+            parser.add_argument(
+                "--slime-router-max-connections",
+                type=int,
+                default=None,
+                help="Max connections for SlimeRouter HTTP client.",
+            )
+            RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
             return parser
 
         # wandb
@@ -1062,6 +1079,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 choices=["qwen", "qwen3", "distill_qwen"],
                 help="Loss mask type",
             )
+            parser.add_argument(
+                "--data-pad-size-multiplier",
+                type=int,
+                default=128,
+                help="Multiplier for data padding size in data processing.",
+            )
             return parser
 
         def add_custom_megatron_plugins_arguments(parser):
@@ -1207,7 +1230,7 @@ def parse_args(add_custom_arguments=None):
         # always use varlen
         args.variable_seq_lengths = True
         if getattr(args, "moe_token_dispatcher_type", None) == "allgather":
-            print(
+            logger.info(
                 "--moe-token-dispatcher-type allgather does not support variable sequence length, "
                 "please use alltoall dispatcher instead."
             )
@@ -1254,7 +1277,7 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
     elif args.eval_prompt_data:
         values = list(args.eval_prompt_data)
         if len(values) == 1:
-            print("[legacy] only one eval_prompt_data detected, will assume it is data for aime")
+            logger.info("[legacy] only one eval_prompt_data detected, will assume it is data for aime")
             values = ["aime", values[0]]
         if len(values) % 2 != 0:
             raise ValueError("eval prompt data must be provided as name/path pairs.")
@@ -1279,7 +1302,7 @@ def slime_validate_args(args):
             raise FileNotFoundError(f"ref_load {args.ref_load} does not exist, please check the path.")
 
         if not os.path.exists(os.path.join(args.ref_load, "latest_checkpointed_iteration.txt")):
-            print(
+            logger.info(
                 f"ref_load {args.ref_load} does not have latest_checkpointed_iteration.txt, "
                 "please make sure it is a valid megatron checkpoint directory."
             )
@@ -1315,6 +1338,16 @@ def slime_validate_args(args):
     if args.use_rollout_logprobs:
         assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
 
+    if args.get_mismatch_metrics:
+        assert (
+            args.custom_tis_function_path is not None
+        ), "custom_tis_function_path must be set when get_mismatch_metrics is set"
+
+        if args.use_rollout_logprobs:
+            print(
+                "get_mismatch_metrics is set; For metrics calculation, the log probs will still be recomputed by training engine. One more forward pass will be applied."
+            )
+
     if args.use_dynamic_batch_size:
         assert args.max_tokens_per_gpu is not None, "max_tokens_per_gpu must be set when use_dynamic_batch_size is set"
         if args.log_probs_max_tokens_per_gpu is None:
@@ -1331,7 +1364,7 @@ def slime_validate_args(args):
         args.save_debug_train_data = f"{args.dump_details}/train_data/{{rollout_id}}_{{rank}}.pt"
 
     if args.load_debug_rollout_data is not None:
-        print(
+        logger.info(
             f"load_debug_rollout_data {args.load_debug_rollout_data} is set, "
             "will not instantiate sglang servers and will only run the training process."
         )
@@ -1372,7 +1405,7 @@ def slime_validate_args(args):
         if args.offload_rollout is None:
             args.offload_rollout = True
         if args.rollout_num_gpus != args.actor_num_gpus_per_node * args.actor_num_nodes:
-            print(
+            logger.info(
                 f"rollout_num_gpus {args.rollout_num_gpus} != actor_num_gpus_per_node {args.actor_num_gpus_per_node} "
                 f"* actor_num_nodes {args.actor_num_nodes}, overriding rollout_num_gpus to match actor_num_gpus_per_node * actor_num_nodes."
             )
@@ -1405,7 +1438,7 @@ def slime_validate_args(args):
 
     if args.n_samples_per_prompt == 1:
         args.grpo_std_normalization = False
-        print("n_samples_per_prompt is set to 1, grpo_std_normalization will be set to False.")
+        logger.info("n_samples_per_prompt is set to 1, grpo_std_normalization will be set to False.")
 
     if args.over_sampling_batch_size is None:
         args.over_sampling_batch_size = args.rollout_batch_size
@@ -1417,7 +1450,7 @@ def slime_validate_args(args):
 
     if args.num_epoch is not None:
         if args.num_rollout is not None:
-            print("Both num_epoch and num_rollout are set, num_epoch will be ignored.")
+            logger.info("Both num_epoch and num_rollout are set, num_epoch will be ignored.")
         else:
             assert args.rollout_global_dataset, (
                 "num_epoch is set, but rollout_global_dataset is not set, "
@@ -1442,7 +1475,7 @@ def slime_validate_args(args):
             if not hasattr(args, k):
                 setattr(args, k, v)
             else:
-                print(f"Warning: Argument {k} is already set to {getattr(args, k)}, will not override with {v}.")
+                logger.info(f"Warning: Argument {k} is already set to {getattr(args, k)}, will not override with {v}.")
 
 
 def hf_validate_args(args, hf_config):

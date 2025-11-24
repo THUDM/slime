@@ -181,10 +181,6 @@ def get_seqlen_balanced_partitions(seqlen_list: List[int], k_partitions: int, eq
     return _check_and_sort_partitions(partitions)
 
 
-def ceildiv(a, b):
-    return -(a // -b)
-
-
 def get_reverse_idx(idx_map):
     reverse_idx_map = copy.deepcopy(idx_map)
 
