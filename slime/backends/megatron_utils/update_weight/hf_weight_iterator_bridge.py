@@ -46,11 +46,12 @@ def _process_conversion_tasks(vanilla_conversion_tasks, new_weight_dict):
         if task.param_weight is None:
             return task
 
+        weight_dict_key = f"vp_stages.{task.vp_stage}.{task.param_name}"
         assert (
-            task.param_name in new_weight_dict
-        ), f"{task.param_name=} not in new_weight_dict ({list(new_weight_dict)=})"
+            weight_dict_key in new_weight_dict
+        ), f"{weight_dict_key=} not in new_weight_dict ({task.vp_stage=}, {task.param_name=}, {list(new_weight_dict)=})"
 
-        new_param_weight = new_weight_dict[task.param_name]
+        new_param_weight = new_weight_dict[weight_dict_key]
         new_param_weight = new_param_weight.cuda()
         return dataclasses.replace(task, param_weight=new_param_weight)
 

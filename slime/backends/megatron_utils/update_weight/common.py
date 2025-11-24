@@ -8,6 +8,7 @@ import torch.distributed as dist
 from megatron.core import mpu
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
 
+from slime.backends.megatron_utils.misc_utils import strip_param_name_prefix
 from slime.utils.types import ParamInfo
 
 
@@ -112,7 +113,36 @@ def all_gather_params_async(
     return gathered_params
 
 
-def named_params_and_buffers(args: Namespace, model: Sequence[torch.nn.Module]) -> Iterator[tuple[str, torch.Tensor]]:
+def named_params_and_buffers(
+    args: Namespace,
+    model: Sequence[torch.nn.Module],
+    convert_to_global_name: bool = True,
+) -> Iterator[tuple[str, torch.Tensor]]:
+    if convert_to_global_name:
+        return _named_params_and_buffers_global(args, model)
+    else:
+        return _named_params_and_buffers_vanilla(model)
+
+
+def _named_params_and_buffers_vanilla(model: Sequence[torch.nn.Module]) -> Iterator[tuple[str, torch.Tensor]]:
+    for vp_stage, model_module in enumerate(model):
+
+        def _compute_fqn(name):
+            return f"vp_stages.{vp_stage}.{strip_param_name_prefix(name)}"
+
+        for name, param in model_module.named_parameters():
+            yield _compute_fqn(name), param
+
+        for name, buffer in model_module.named_buffers():
+            # TODO shall we handle (almost) all buffers like Megatron Bridge
+            if "expert_bias" not in name:
+                continue
+            yield _compute_fqn(name), buffer
+
+
+def _named_params_and_buffers_global(
+    args: Namespace, model: Sequence[torch.nn.Module]
+) -> Iterator[tuple[str, torch.Tensor]]:
     """
     Yield (global_name, param/buffer) with consistent names across PP/EP. Adjusts indices for
     virtual PP + EP offsets. Handles decoder.layers, mtp.layers (Multi-Token Prediction), expert_bias.
