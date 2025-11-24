@@ -16,12 +16,14 @@ def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"huggingface-cli download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     U.hf_download_dataset("hiyouga/geometry3k")
-    # Rename the dataset directory and files to match expected structure
-    U.exec_command("mv /root/datasets/geometry3k /root/datasets/geo3k")
-    U.exec_command("mv /root/datasets/geo3k/data/train-00000-of-00001.parquet /root/datasets/geo3k/data/train.parquet")
-    U.exec_command("mv /root/datasets/geo3k/data/test-00000-of-00001.parquet /root/datasets/geo3k/data/test.parquet")
-    U.exec_command("mv /root/datasets/geo3k/data/validation-00000-of-00001.parquet /root/datasets/geo3k/data/val.parquet")
-
+    try:
+        # Rename the dataset directory and files to match expected structure
+        U.exec_command("mv /root/datasets/geometry3k /root/datasets/geo3k")
+        U.exec_command("mv /root/datasets/geo3k/data/train-00000-of-00001.parquet /root/datasets/geo3k/data/train.parquet")
+        U.exec_command("mv /root/datasets/geo3k/data/test-00000-of-00001.parquet /root/datasets/geo3k/data/test.parquet")
+        U.exec_command("mv /root/datasets/geo3k/data/validation-00000-of-00001.parquet /root/datasets/geo3k/data/val.parquet")
+    except Exception as e:
+        pass
 
 
 def execute():
