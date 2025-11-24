@@ -9,6 +9,9 @@ from megatron.core import mpu
 from ray import ObjectRef
 from ray.actor import ActorHandle
 
+# TODO do not use it here
+from slime.backends.megatron_utils.megatron_to_hf.processors.padding_remover import remove_padding
+
 from .update_weight_from_distributed import (
     connect_rollout_engines_from_distributed,
     disconnect_rollout_engines_from_distributed,
@@ -27,7 +30,7 @@ from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.types import ParamInfo
 
 from ..megatron_to_hf import convert_to_hf
-from .common import all_gather_params_async, named_parameters, remove_padding
+from .common import all_gather_params_async, named_parameters
 
 try:
     try:

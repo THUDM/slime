@@ -12,10 +12,12 @@ from ray import ObjectRef
 from ray.actor import ActorHandle
 from tqdm import tqdm
 
+# TODO do not use it here
+from slime.backends.megatron_utils.megatron_to_hf.processors.padding_remover import remove_padding
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 
 from ..megatron_to_hf import convert_to_hf
-from .common import all_gather_param, named_parameters, remove_padding
+from .common import all_gather_param, named_parameters
 
 
 class UpdateWeightFromDistributed:
