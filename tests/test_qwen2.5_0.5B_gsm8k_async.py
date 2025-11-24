@@ -12,11 +12,10 @@ def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"huggingface-cli download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     U.hf_download_dataset("zhuzilin/gsm8k")
-    U.convert_checkpoint(model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS)
 
 
 def execute():
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/{MODEL_NAME}_torch_dist/ "
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
     rollout_args = (
         "--prompt-data /root/datasets/gsm8k/train.parquet "
@@ -99,6 +98,7 @@ def execute():
         "--actor-num-nodes 1 "
         f"--actor-num-gpus-per-node {1 if FEW_GPU else 2} "
         f"--rollout-num-gpus {1 if FEW_GPU else 2} "
+        "--megatron-to-hf-mode bridge "
     )
 
     train_args = (
