@@ -98,16 +98,17 @@ class Dataset:
             else:
                 prompt_content = data.get(prompt_key)
 
+            # Extract and parse tools
+            tools = None
+            if tool_key is not None and tool_key in data:
+                tools = data[tool_key]
+                if isinstance(tools, str):
+                    tools = json.loads(tools)
+                elif isinstance(tools, np.ndarray):
+                    tools = tools.tolist()
+                assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
+            
             if apply_chat_template:
-                if tool_key is not None:
-                    tools = data[tool_key]
-                    if isinstance(tools, str):
-                        tools = json.loads(tools)
-                    elif isinstance(tools, np.ndarray):
-                        tools = tools.tolist()
-                    assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
-                else:
-                    tools = None
                 template_input = [{"role": "user", "content": prompt_content}] if multimodal_keys else prompt_content
                 prompt = tokenizer.apply_chat_template(
                     template_input,
@@ -132,11 +133,18 @@ class Dataset:
                     if len(raw_prompt_ids) > max_length:
                         continue
 
+            # Prepare metadata and add tools if available
+            sample_metadata = data.get(metadata_key, {})
+            if sample_metadata is None:
+                sample_metadata = {}
+            if tools is not None:
+                sample_metadata["tools"] = tools
+
             self.origin_samples.append(
                 Sample(
                     prompt=prompt,
                     label=convert_numpy_to_native(data[label_key]) if label_key is not None else None,
-                    metadata=data.get(metadata_key, {}),
+                    metadata=sample_metadata,
                 )
             )
 
