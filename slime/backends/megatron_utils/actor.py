@@ -412,6 +412,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         log_perf_data(rollout_id, self.args)
 
+    @timer
     def save_model(self, iteration: int) -> None:
         if self.args.debug_rollout_only:
             return
