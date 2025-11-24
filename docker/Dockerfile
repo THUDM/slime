@@ -104,7 +104,7 @@ fi
 
 # TODO may improve
 ARG SLIME_COMMIT=main
-RUN git clone https://github.com/slimerl/slime /root/slime && \
+RUN git clone https://github.com/THUDM/slime.git /root/slime && \
     cd /root/slime && \
     git checkout ${SLIME_COMMIT} && \
     pip install -e .
