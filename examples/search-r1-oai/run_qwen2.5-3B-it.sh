@@ -5,10 +5,10 @@ pkill -9 sglang
 sleep 3
 ray stop --force
 pkill -9 ray
-pkill -9 python
+pkill -9 sglang
 sleep 3
 pkill -9 ray
-pkill -9 python
+pkill -9 sglang
 
 set -ex
 
@@ -38,7 +38,7 @@ ROLLOUT_ARGS=(
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 512
-   --rollout-temperature 0.8
+   --rollout-temperature 1.0
 
    --global-batch-size 256
    --balance-data

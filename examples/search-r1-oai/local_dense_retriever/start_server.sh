@@ -32,6 +32,7 @@ cd "${SCRIPT_DIR}"
 PYTHON_BIN="${SCRIPT_DIR}/.venv/bin/python"
 
 echo "Starting Python server..." | tee -a "${LOG_FILE}"
+echo "Logs will be written to: ${LOG_FILE}" | tee -a "${LOG_FILE}"
 exec "${PYTHON_BIN}" retrieval_server.py \
     --index_path "${INDEX_PATH}" \
     --corpus_path "${CORPUS_PATH}" \

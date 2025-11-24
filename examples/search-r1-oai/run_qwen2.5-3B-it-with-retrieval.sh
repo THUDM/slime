@@ -16,6 +16,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 echo -e "${GREEN}=== Slime Search-R1 Training with Local Dense Retriever ===${NC}"
+python3 -m uv pip install tenacity
 
 # Helper function: Check if a port is free
 wait_for_port_free() {
