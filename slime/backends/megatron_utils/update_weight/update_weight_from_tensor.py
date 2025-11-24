@@ -67,7 +67,7 @@ class UpdateWeightFromTensor:
         self.model_name = model_name
         self.vocab_size = vocab_size
         self.quantization_config = quantization_config
-        self.param_info_buckets = get_param_info_buckets(self.args, self.model)
+        self.megatron_local_param_info_buckets = _get_megatron_local_param_info_buckets(self.args, self.model)
         self.weight_version = 0
 
         # create the group within megatron.
@@ -133,118 +133,133 @@ class UpdateWeightFromTensor:
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
-        weights = self.weights_getter()
+        megatron_local_weights = self.weights_getter()
 
-        num_buckets = len(self.param_info_buckets)
-        for i in tqdm(range(num_buckets), disable=rank != 0, desc="Update weights"):
-            current_params, current_infos = _gather_bucket_params(self.param_info_buckets[i], weights)
-            refs = self._update_converted_params_from_tensor(current_params, current_infos)
+        for megatron_local_param_infos in tqdm(
+            self.megatron_local_param_info_buckets, disable=rank != 0, desc="Update weights"
+        ):
+            megatron_full_params = _get_megatron_full_params(megatron_local_param_infos, megatron_local_weights)
+            refs = self._update_converted_params_from_tensor(megatron_full_params, megatron_local_param_infos)
             ray.get(refs)
-            del current_params, current_infos
+            del megatron_full_params
 
         dist.barrier(group=get_gloo_group())
 
+    # TODO rename and split fn
     def _update_converted_params_from_tensor(
-        self, gathered_params: Sequence[torch.Tensor], param_infos: list[ParamInfo]
+        self, megatron_params: Sequence[torch.Tensor], param_infos: list[ParamInfo]
     ) -> list[ObjectRef]:
-
-        converted_named_tensors = []
-        for info, param in zip(param_infos, gathered_params):
+        # TODO extract this part
+        hf_named_tensors = []
+        for info, param in zip(param_infos, megatron_params):
             param = remove_padding(info.name, param, self.vocab_size)
-            converted_named_tensors.extend(
+            hf_named_tensors.extend(
                 convert_to_hf(self.args, self.model_name, info.name, param, self.quantization_config)
             )
 
         all_refs = []
 
-        refs_colocated = self._send_to_colocated_engine(converted_named_tensors)
+        refs_colocated = _send_to_colocated_engine(
+            hf_named_tensors,
+            ipc_engine=self._ipc_engine,
+            ipc_gather_src=self._ipc_gather_src,
+            ipc_gather_group=self._ipc_gather_group,
+            weight_version=self.weight_version,
+        )
         all_refs.extend(refs_colocated)
 
         if self.use_distribute and self._is_distributed_src_rank:
             refs_distributed = update_weights_from_distributed(
-                self.args,
                 self._group_name,
                 self._model_update_groups,
                 self.weight_version,
                 self.distributed_rollout_engines,
-                converted_named_tensors,
+                hf_named_tensors,
             )
             if refs_distributed:
                 all_refs.extend(refs_distributed)
 
         return all_refs
 
-    def _send_to_colocated_engine(self, converted_named_tensors: list[tuple[str, torch.Tensor]]) -> list[ObjectRef]:
-        if use_flattened_tensor_bucket:
-            if getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
-                converted_named_tensors_by_dtypes = {"dtype": converted_named_tensors}
-            else:
-                converted_named_tensors_by_dtypes = {}
-                for name, tensor in converted_named_tensors:
-                    dtype = tensor.dtype
-                    if dtype not in converted_named_tensors_by_dtypes:
-                        converted_named_tensors_by_dtypes[dtype] = []
-                    converted_named_tensors_by_dtypes[dtype].append((name, tensor))
 
-            serialized_tensors = []
-            for dtype, named_tensors in converted_named_tensors_by_dtypes.items():
-                flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
-                metadata = flattened_tensor_bucket.get_metadata()
-                flattened_tensor_data = {
-                    "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
-                    "metadata": metadata,
-                }
-                serialized_tensors.append(MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True))
+def _send_to_colocated_engine(
+    hf_named_tensors: list[tuple[str, torch.Tensor]],
+    *,
+    ipc_engine,
+    ipc_gather_src,
+    ipc_gather_group,
+    weight_version,
+) -> list[ObjectRef]:
+    if use_flattened_tensor_bucket:
+        if getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
+            converted_named_tensors_by_dtypes = {"dtype": hf_named_tensors}
         else:
-            serialized_tensors = MultiprocessingSerializer.serialize(converted_named_tensors, output_str=True)
+            converted_named_tensors_by_dtypes = {}
+            for name, tensor in hf_named_tensors:
+                dtype = tensor.dtype
+                if dtype not in converted_named_tensors_by_dtypes:
+                    converted_named_tensors_by_dtypes[dtype] = []
+                converted_named_tensors_by_dtypes[dtype].append((name, tensor))
 
-        serialized_named_tensors = (
-            [None] * dist.get_world_size(self._ipc_gather_group) if self._ipc_gather_src == dist.get_rank() else None
-        )
-        dist.gather_object(
-            serialized_tensors,
-            object_gather_list=serialized_named_tensors,
-            dst=self._ipc_gather_src,
-            group=self._ipc_gather_group,
-        )
+        serialized_tensors = []
+        for dtype, named_tensors in converted_named_tensors_by_dtypes.items():
+            flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
+            metadata = flattened_tensor_bucket.get_metadata()
+            flattened_tensor_data = {
+                "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
+                "metadata": metadata,
+            }
+            serialized_tensors.append(MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True))
+    else:
+        serialized_tensors = MultiprocessingSerializer.serialize(hf_named_tensors, output_str=True)
 
-        if dist.get_rank() == self._ipc_gather_src:
-            refs = []
-            if use_flattened_tensor_bucket:
-                # TODO: here we assume all ranks have the same number of dtypes, not sure if that is correct.
-                num_dtypes = len(serialized_named_tensors[0])
-                for i in range(num_dtypes):
-                    kwargs = {
-                        "serialized_named_tensors": [tensors[i] for tensors in serialized_named_tensors],
-                        "load_format": "flattened_bucket",
-                        "weight_version": str(self.weight_version),
-                    }
-                    refs.append(self._ipc_engine.update_weights_from_tensor.remote(**kwargs))
-            else:
+    serialized_named_tensors = (
+        [None] * dist.get_world_size(ipc_gather_group) if ipc_gather_src == dist.get_rank() else None
+    )
+    dist.gather_object(
+        serialized_tensors,
+        object_gather_list=serialized_named_tensors,
+        dst=ipc_gather_src,
+        group=ipc_gather_group,
+    )
+
+    if dist.get_rank() == ipc_gather_src:
+        refs = []
+        if use_flattened_tensor_bucket:
+            # TODO: here we assume all ranks have the same number of dtypes, not sure if that is correct.
+            num_dtypes = len(serialized_named_tensors[0])
+            for i in range(num_dtypes):
                 kwargs = {
-                    "serialized_named_tensors": serialized_named_tensors,
-                    "weight_version": str(self.weight_version),
+                    "serialized_named_tensors": [tensors[i] for tensors in serialized_named_tensors],
+                    "load_format": "flattened_bucket",
+                    "weight_version": str(weight_version),
                 }
-                refs.append(self._ipc_engine.update_weights_from_tensor.remote(**kwargs))
-            return refs
-        return []
+                refs.append(ipc_engine.update_weights_from_tensor.remote(**kwargs))
+        else:
+            kwargs = {
+                "serialized_named_tensors": serialized_named_tensors,
+                "weight_version": str(weight_version),
+            }
+            refs.append(ipc_engine.update_weights_from_tensor.remote(**kwargs))
+        return refs
+    return []
 
 
-def _gather_bucket_params(
-    param_infos: Sequence[ParamInfo],
-    weights,
-) -> tuple[Sequence[torch.Tensor], Sequence[ParamInfo]]:
+def _get_megatron_full_params(
+    megatron_local_param_infos: Sequence[ParamInfo],
+    megatron_local_weights,
+) -> Sequence[torch.Tensor]:
     monkey_patch_torch_reductions()
     pp_size = mpu.get_pipeline_model_parallel_world_size()
     ep_size = mpu.get_expert_model_parallel_world_size()
     rank = dist.get_rank()
     # init params:
     params = []
-    for info in param_infos:
+    for info in megatron_local_param_infos:
         if dist.get_rank() == info.src_rank:
             params.append(
                 torch.nn.Parameter(
-                    weights[info.name].to(device=torch.cuda.current_device(), non_blocking=True),
+                    megatron_local_weights[info.name].to(device=torch.cuda.current_device(), non_blocking=True),
                     requires_grad=False,
                 )
             )
@@ -255,7 +270,7 @@ def _gather_bucket_params(
     # broadcast params across pp ranks
     if pp_size > 1:
         handles = []
-        for info, param in zip(param_infos, params):
+        for info, param in zip(megatron_local_param_infos, params):
             if info.src_rank in dist.get_process_group_ranks(mpu.get_pipeline_model_parallel_group()):
                 handles.append(
                     torch.distributed.broadcast(
@@ -268,7 +283,7 @@ def _gather_bucket_params(
     # broadcast params across ep ranks
     if ep_size > 1:
         handles = []
-        for info, param in zip(param_infos, params):
+        for info, param in zip(megatron_local_param_infos, params):
             if ".experts." in info.name:
                 src_rank = (
                     info.src_rank
@@ -284,21 +299,21 @@ def _gather_bucket_params(
             handle.wait()
 
     # Set tp attrs for all params
-    for info, param in zip(param_infos, params):
+    for info, param in zip(megatron_local_param_infos, params):
         for key, value in info.attrs.items():
             setattr(param, key, value)
 
     # Batch async all_gather for all parameters
-    gathered_params = all_gather_params_async(list(zip(param_infos, params)))
+    gathered_params = all_gather_params_async(list(zip(megatron_local_param_infos, params)))
 
-    return gathered_params, param_infos
+    return gathered_params
 
 
-def get_param_info_buckets(args: Namespace, model: Sequence[torch.nn.Module]) -> list[list[ParamInfo]]:
+def _get_megatron_local_param_info_buckets(args: Namespace, model: Sequence[torch.nn.Module]) -> list[list[ParamInfo]]:
     """
     Partition params into buckets ≤ update_weight_buffer_size (with TP replication).
     """
-    param_infos = get_param_infos(args, model)
+    param_infos = _get_megatron_local_param_infos(args, model)
     param_info_buckets = [[]]  # Start with one empty bucket
     buffer_size = 0  # Track current bucket size in bytes
 
@@ -324,7 +339,7 @@ def get_param_info_buckets(args: Namespace, model: Sequence[torch.nn.Module]) ->
     return param_info_buckets
 
 
-def get_param_infos(args: Namespace, model: Sequence[torch.nn.Module]) -> list[ParamInfo]:
+def _get_megatron_local_param_infos(args: Namespace, model: Sequence[torch.nn.Module]) -> list[ParamInfo]:
     """
     Build global param metadata: collect → exchange PP/EP → resolve duplicates (MTP virtual PP)
     by min src_rank → validate. Returns sorted ParamInfo identical across all ranks.

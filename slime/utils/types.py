@@ -95,7 +95,7 @@ class Sample:
         return sum(self.loss_mask) if self.loss_mask is not None else self.response_length
 
 
-@dataclass
+@dataclass(frozen=True)
 class ParamInfo:
     name: str
     dtype: torch.dtype
