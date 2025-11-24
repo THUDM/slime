@@ -94,18 +94,29 @@ def prepare_spmd(args: ScriptArgs):
 @app.command()
 @U.dataclass_cli
 def prepare_cp(args: ScriptArgs):
+    _prepare_cp(args)
+
+
+def _prepare_cp(args: ScriptArgs):
     U.rsync_simple(
         path_src=f"/root/models/{args.model_name}_torch_dist",
         path_dst=f"/root/local_data/{args.model_name}_torch_dist",
+    )
+    U.rsync_simple(
+        path_src=f"/root/models/{args.model_name}",
+        path_dst=f"/root/local_data/{args.model_name}",
     )
 
 
 @app.command()
 @U.dataclass_cli
 def train(args: ScriptArgs):
+    # ensure files are there is it was not synced before
+    _prepare_cp(args)
+
     load_save_path = f"/root/shared_data/{args.run_id}/checkpoints"
     ckpt_args = (
-        f"--hf-checkpoint /root/models/{args.model_name} "
+        f"--hf-checkpoint /root/local_data/{args.model_name} "
         f"--ref-load /root/local_data/{args.model_name}_torch_dist "
         f"--load {load_save_path} "
         f"--save {load_save_path} "
