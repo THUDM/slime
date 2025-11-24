@@ -147,6 +147,7 @@ def execute(args: ScriptArgs):
                 # "--sglang-ep-size 4 "
                 "--sglang-mem-fraction-static 0.7 "
                 "--sglang-cuda-graph-max-bs 512 "
+                "--sglang-attention-backend trtllm_mha "
             )
             misc_args += "--actor-num-gpus-per-node 4 " "--actor-num-nodes 1 " "--num-gpus-per-node 4"
         case ("GB300", 2):
@@ -163,6 +164,7 @@ def execute(args: ScriptArgs):
                 # "--sglang-ep-size 4 "
                 "--sglang-mem-fraction-static 0.7 "
                 "--sglang-cuda-graph-max-bs 512 "
+                "--sglang-attention-backend trtllm_mha "
             )
             misc_args += "--actor-num-gpus-per-node 4 " "--actor-num-nodes 2 " "--num-gpus-per-node 4"
         case ("GB300", 4):
@@ -179,6 +181,7 @@ def execute(args: ScriptArgs):
                 # "--sglang-ep-size 4 "
                 "--sglang-mem-fraction-static 0.7 "
                 "--sglang-cuda-graph-max-bs 512 "
+                "--sglang-attention-backend trtllm_mha "
             )
             misc_args += "--actor-num-gpus-per-node 4 " "--actor-num-nodes 8 " "--num-gpus-per-node 4"
         case _:
