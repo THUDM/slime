@@ -1,4 +1,5 @@
 import logging
+from pathlib import Path
 
 # TODO: may need to copy those 2 functions and do refactoring.
 from megatron.training.checkpointing import load_checkpoint as _load_checkpoint_megatron
@@ -17,14 +18,7 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
     args = get_args()
     load_path = args.load
 
-    if _is_hf_checkpoint(load_path):
-        return _load_checkpoint_hf(
-            ddp_model=ddp_model,
-            optimizer=optimizer,
-            args=args,
-            load_path=load_path,
-        )
-    else:
+    if _is_megatron_checkpoint(load_path):
         return _load_checkpoint_megatron(
             ddp_model=ddp_model,
             optimizer=optimizer,
@@ -32,14 +26,17 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
             checkpointing_context=checkpointing_context,
             skip_load_to_model_and_opt=skip_load_to_model_and_opt,
         )
+    else:
+        return _load_checkpoint_hf(
+            ddp_model=ddp_model,
+            optimizer=optimizer,
+            args=args,
+            load_path=load_path,
+        )
 
 
-def _is_hf_checkpoint(path: str):
-    try:
-        AutoConfig.from_pretrained(path)
-        return True
-    except (ValueError, OSError):
-        return False
+def _is_megatron_checkpoint(path: str | Path) -> bool:
+    return (Path(path) / "latest_checkpointed_iteration.txt").is_file()
 
 
 def _load_checkpoint_hf(ddp_model, optimizer, args, load_path: str):
