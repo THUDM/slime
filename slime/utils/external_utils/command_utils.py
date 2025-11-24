@@ -141,7 +141,7 @@ def execute_train(
                         "CUDA_ENABLE_COREDUMP_ON_EXCEPTION": "1",
                         "CUDA_COREDUMP_SHOW_PROGRESS": "1",
                         "CUDA_COREDUMP_GENERATION_FLAGS": "skip_nonrelocated_elf_images,skip_global_memory,skip_shared_memory,skip_local_memory,skip_constbank_memory",
-                        "CUDA_COREDUMP_FILE": "/tmp/cuda_coredump_%h.%p.%t",
+                        "CUDA_COREDUMP_FILE": "/root/shared_data/cuda_coredump_%h.%p.%t",
                     }
                     if config.cuda_core_dump
                     else {}
