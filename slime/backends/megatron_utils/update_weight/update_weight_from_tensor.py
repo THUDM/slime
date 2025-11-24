@@ -9,9 +9,6 @@ from megatron.core import mpu
 from ray import ObjectRef
 from ray.actor import ActorHandle
 
-# TODO do not use it here
-from slime.backends.megatron_utils.megatron_to_hf.processors.padding_remover import remove_padding
-
 from .update_weight_from_distributed import (
     connect_rollout_engines_from_distributed,
     disconnect_rollout_engines_from_distributed,
@@ -59,7 +56,6 @@ class UpdateWeightFromTensor:
         *,
         model_name: str,
         quantization_config: dict[str, int | str | list[str]] | None,
-        vocab_size: int,
     ) -> None:
         """
         Compute param buckets, create IPC Gloo groups (rollout_num_gpus_per_engine ranks/group).
@@ -68,7 +64,6 @@ class UpdateWeightFromTensor:
         self.model = model
         self.weights_getter = weights_getter
         self.model_name = model_name
-        self.vocab_size = vocab_size
         self.quantization_config = quantization_config
         self.megatron_local_param_info_buckets = _get_megatron_local_param_info_buckets(self.args, self.model)
         self.weight_version = 0
@@ -152,7 +147,6 @@ class UpdateWeightFromTensor:
     def _convert_to_hf_named_tensors(self, megatron_full_params: Sequence[torch.Tensor], param_infos: list[ParamInfo]):
         hf_named_tensors = []
         for info, param in zip(param_infos, megatron_full_params):
-            param = remove_padding(info.name, param, self.vocab_size)
             hf_named_tensors.extend(
                 convert_to_hf(self.args, self.model_name, info.name, param, self.quantization_config)
             )

@@ -12,8 +12,6 @@ from ray import ObjectRef
 from ray.actor import ActorHandle
 from tqdm import tqdm
 
-# TODO do not use it here
-from slime.backends.megatron_utils.megatron_to_hf.processors.padding_remover import remove_padding
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 
 from ..megatron_to_hf import convert_to_hf
@@ -34,7 +32,6 @@ class UpdateWeightFromDistributed:
         *,
         model_name: str,
         quantization_config: dict[str, int | str | list[str]] | None,
-        vocab_size: int,
     ) -> None:
         """
         Initialize. Groups created in connect_rollout_engines.
@@ -42,7 +39,6 @@ class UpdateWeightFromDistributed:
         self.args = args
         self.model = model
         self.model_name = model_name
-        self.vocab_size = vocab_size
         self.quantization_config = quantization_config
         self.weight_version = 0
         self._model_update_groups = None
@@ -134,7 +130,6 @@ class UpdateWeightFromDistributed:
         Returns updated bytes on source, None on non-source.
         """
         param = all_gather_param(name, param)
-        param = remove_padding(name, param, self.vocab_size)
         if not self._is_pp_src_rank:
             return
 
@@ -158,7 +153,6 @@ class UpdateWeightFromDistributed:
         Expert: gather TP → rm pad → buffer. EP gather + HF deferred. Threshold × EP size.
         """
         param = all_gather_param(name, param)
-        param = remove_padding(name, param, self.vocab_size)
 
         param_size = param.numel() * param.element_size()
         if (

@@ -106,6 +106,9 @@ class MegatronTrainRayActor(TrainRayActor):
             if args.update_weights_interval == 1:
                 self.weights_backuper.backup("rollout_actor")
 
+        if self.args.vocab_size is None:
+            self.args.vocab_size = self.tokenizer.vocab_size
+
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
         self.weight_updater = update_weight_cls(
             self.args,
@@ -113,7 +116,6 @@ class MegatronTrainRayActor(TrainRayActor):
             weights_getter=lambda: self.weights_backuper.get("actor"),
             model_name=type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name,
             quantization_config=getattr(self.hf_config, "quantization_config", None),
-            vocab_size=self.tokenizer.vocab_size if self.args.vocab_size is None else self.args.vocab_size,
         )
 
         # empty cache after initialization
