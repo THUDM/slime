@@ -140,7 +140,7 @@ class MegatronTrainRayActor(TrainRayActor):
     def sleep(self) -> None:
         assert self.args.offload_train
 
-        clear_memory()
+        clear_memory(clear_host_memory=True)
         print_memory("before offload model")
         destroy_process_groups()
 
