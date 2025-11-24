@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[2] / "tests"))
 
-import command_utils as U
+import slime.utils.misc as U
 
 MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")
 assert MODEL_NAME in {"Qwen3-VL-2B-Instruct", "Qwen3-VL-4B-Instruct", "Qwen3-VL-8B-Instruct"}
@@ -14,8 +14,11 @@ NUM_GPUS = int(os.environ.get("SLIME_SCRIPT_NUM_GPUS", "1"))
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"huggingface-cli download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
-    U.hf_download_dataset("hiyouga/geometry3k")
+    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    dataset_name = "hiyouga/geometry3k"
+    _, partial_name = dataset_name.split("/")
+    U.exec_command(f"hf download --repo-type dataset {dataset_name} --local-dir /root/datasets/{partial_name}")
+
     try:
         # Rename the dataset directory and files to match expected structure
         U.exec_command("mv /root/datasets/geometry3k /root/datasets/geo3k")
