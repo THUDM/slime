@@ -130,6 +130,7 @@ class FSDPTrainRayActor(TrainRayActor):
     def _enable_true_on_policy_optimizations(self, args):
         if args.true_on_policy_mode:
             from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
+            from .models.qwen3_moe import apply_true_on_policy_patch_for_qwen3_moe
 
             logger.info("FSDPTrainRayActor call enable_batch_invariant_mode for true-on-policy")
             enable_batch_invariant_mode(
@@ -137,6 +138,8 @@ class FSDPTrainRayActor(TrainRayActor):
                 # and disabling it will make it aligned
                 enable_bmm=False,
             )
+
+            apply_true_on_policy_patch_for_qwen3_moe()
 
     def setup_device_mesh(self) -> None:
         """Setup device mesh for parallelism (always called, handles both CP and non-CP cases).
