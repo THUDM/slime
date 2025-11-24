@@ -431,18 +431,19 @@ def _start_router(args):
 
         from slime.utils.http_utils import run_router
 
-        router_args = RouterArgs(
-            host=args.sglang_router_ip,
-            port=args.sglang_router_port,
-            balance_abs_threshold=0,
-            prometheus_port=find_available_port(random.randint(4000, 5000)),
-        )
+        router_args = RouterArgs.from_cli_args(args, use_router_prefix=True)
+        router_args.host = args.sglang_router_ip
+        router_args.port = args.sglang_router_port
+        router_args.balance_abs_threshold = 0
+        router_args.prometheus_port = find_available_port(random.randint(4000, 5000))
 
         if hasattr(router_args, "log_level"):
             router_args.log_level = "warn"
 
         if hasattr(router_args, "request_timeout_secs"):
             router_args.request_timeout_secs = args.sglang_router_request_timeout_secs
+
+        logger.info(f"Launch router with args: {router_args}")
 
     process = multiprocessing.Process(
         target=run_router,

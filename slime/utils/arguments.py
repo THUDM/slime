@@ -5,6 +5,7 @@ import os
 from typing import Any, Dict
 
 import yaml
+from sglang_router.launch_router import RouterArgs
 from transformers import AutoConfig
 
 from slime.backends.sglang_utils.arguments import add_sglang_arguments
@@ -821,6 +822,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help="Max connections for SlimeRouter HTTP client.",
             )
+            RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
             return parser
 
         # wandb
