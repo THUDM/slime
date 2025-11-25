@@ -265,7 +265,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     model_args = self._get_model_inputs_args(batch)
                     if "pixel_values" in batch:
                         model_args["pixel_values"] = batch["pixel_values"]
-                    logits = active_model(**model_args).logits.squeeze(0)
+                    logits = active_model(**model_args).logits.squeeze(0).float()
                     log_probs_result, entropy_result = get_logprob_and_entropy_with_cp(
                         logits=logits,
                         target_tokens=batch["tokens"],
