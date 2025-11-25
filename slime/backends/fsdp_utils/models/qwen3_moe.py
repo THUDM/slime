@@ -130,8 +130,8 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
 
         w13_weight = torch.stack(
             [torch.cat([layer.gate_proj.weight, layer.up_proj.weight], dim=0) for layer in self.experts]
-        ).to(torch.bfloat16)
-        w2_weight = torch.stack([layer.down_proj.weight for layer in self.experts], dim=0).to(torch.bfloat16)
+        )
+        w2_weight = torch.stack([layer.down_proj.weight for layer in self.experts], dim=0)
 
         topk_output = StandardTopKOutput(
             topk_weights=routing_weights,
@@ -154,4 +154,3 @@ def apply_true_on_policy_patch_for_qwen3_moe():
     from transformers.models.qwen3_moe import modeling_qwen3_moe
 
     modeling_qwen3_moe.Qwen3MoeSparseMoeBlock = Qwen3MoeSparseMoeBlock
-    modeling_qwen3_moe.apply_rotary_pos_emb = torch.compile(dynamic=True)(modeling_qwen3_moe.apply_rotary_pos_emb)
