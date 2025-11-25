@@ -92,9 +92,8 @@ def pack_sequences(
                 "response_lengths": [response_lengths[i] for i in indices],
                 "advantages": torch.tensor(flat_advantages, dtype=torch.float32),
                 "returns": torch.tensor(flat_returns, dtype=torch.float32),
-                # TODO: currently the get_logprob fucntion returns bfloat16, we may want to change it to float32 later.
                 "rollout_log_probs": torch.tensor(
-                    flat_rollout_log_probs, dtype=torch.bfloat16, device=torch.cuda.current_device()
+                    flat_rollout_log_probs, dtype=torch.float32, device=torch.cuda.current_device()
                 ),
             }
         )

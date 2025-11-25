@@ -130,7 +130,6 @@ class FSDPTrainRayActor(TrainRayActor):
     def _enable_true_on_policy_optimizations(self, args):
         if args.true_on_policy_mode:
             from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
-            from transformers.models.qwen3 import modeling_qwen3
 
             logger.info("FSDPTrainRayActor call enable_batch_invariant_mode for true-on-policy")
             enable_batch_invariant_mode(
@@ -138,8 +137,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 # and disabling it will make it aligned
                 enable_bmm=False,
             )
-
-            modeling_qwen3.apply_rotary_pos_emb = torch.compile(dynamic=True)(modeling_qwen3.apply_rotary_pos_emb)
 
     def setup_device_mesh(self) -> None:
         """Setup device mesh for parallelism (always called, handles both CP and non-CP cases).
@@ -268,7 +265,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     model_args = self._get_model_inputs_args(batch)
                     if "pixel_values" in batch:
                         model_args["pixel_values"] = batch["pixel_values"]
-                    logits = self.model(**model_args).logits.squeeze(0)
+                    logits = self.model(**model_args).logits.squeeze(0).float()
                     log_probs_result, entropy_result = get_logprob_and_entropy_with_cp(
                         logits=logits,
                         target_tokens=batch["tokens"],
@@ -470,7 +467,7 @@ class FSDPTrainRayActor(TrainRayActor):
     def _train_step(self, packed_batch, reported_accum, mbs_id, grad_accum):
         # Prepare model inputs
         model_args = self._get_model_inputs_args(packed_batch)
-        logits = self.model(**model_args).logits.squeeze(0)
+        logits = self.model(**model_args).logits.squeeze(0).float()
 
         # Compute log probs and entropy (unified for both CP and non-CP modes)
         log_probs, entropy_result = get_logprob_and_entropy_with_cp(
