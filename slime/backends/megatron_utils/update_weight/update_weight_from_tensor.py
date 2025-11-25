@@ -1,6 +1,6 @@
 from argparse import Namespace
 from collections.abc import Mapping, Sequence
-from typing import Callable
+from typing import Any, Callable, Tuple
 
 import ray
 import torch
@@ -127,15 +127,16 @@ class UpdateWeightFromTensor:
         megatron_local_weights = self.weights_getter()
 
         for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights):
-            refs = self._send_hf_params(hf_named_tensors)
+            refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
             ray.get(refs)
+            del long_lived_tensors
 
         dist.barrier(group=get_gloo_group())
 
-    def _send_hf_params(self, hf_named_tensors) -> list[ObjectRef]:
+    def _send_hf_params(self, hf_named_tensors) -> Tuple[list[ObjectRef], Any]:
         all_refs = []
 
-        refs_colocated = _send_to_colocated_engine(
+        refs_colocated, long_lived_tensors = _send_to_colocated_engine(
             hf_named_tensors,
             ipc_engine=self._ipc_engine,
             ipc_gather_src=self._ipc_gather_src,
@@ -155,7 +156,7 @@ class UpdateWeightFromTensor:
             if refs_distributed:
                 all_refs.extend(refs_distributed)
 
-        return all_refs
+        return all_refs, long_lived_tensors
 
 
 def _send_to_colocated_engine(
@@ -165,7 +166,10 @@ def _send_to_colocated_engine(
     ipc_gather_src,
     ipc_gather_group,
     weight_version,
-) -> list[ObjectRef]:
+) -> Tuple[list[ObjectRef], Any]:
+    # TODO improve
+    long_live_tensors = []
+
     if use_flattened_tensor_bucket:
         if getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
             converted_named_tensors_by_dtypes = {"dtype": hf_named_tensors}
@@ -185,8 +189,10 @@ def _send_to_colocated_engine(
                 "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
                 "metadata": metadata,
             }
+            long_live_tensors.append(flattened_tensor_data)
             serialized_tensors.append(MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True))
     else:
+        long_live_tensors.append(hf_named_tensors)
         serialized_tensors = MultiprocessingSerializer.serialize(hf_named_tensors, output_str=True)
 
     serialized_named_tensors = (
@@ -199,8 +205,8 @@ def _send_to_colocated_engine(
         group=ipc_gather_group,
     )
 
+    refs = []
     if dist.get_rank() == ipc_gather_src:
-        refs = []
         if use_flattened_tensor_bucket:
             # TODO: here we assume all ranks have the same number of dtypes, not sure if that is correct.
             num_dtypes = len(serialized_named_tensors[0])
@@ -217,5 +223,5 @@ def _send_to_colocated_engine(
                 "weight_version": str(weight_version),
             }
             refs.append(ipc_engine.update_weights_from_tensor.remote(**kwargs))
-        return refs
-    return []
+
+    return refs, long_live_tensors
