@@ -131,7 +131,7 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
     @staticmethod
     def destroy_process_groups():
         pid = os.getpid()
-        for reloadable_group in ReloadableProcessGroup.GROUPS[pid]:
+        for reloadable_group in ReloadableProcessGroup.GROUPS.get(pid, []):
             if reloadable_group.group is None:
                 continue
             try:
@@ -145,9 +145,10 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
     @staticmethod
     def reload_process_groups():
         pid = os.getpid()
-        logger.info(f"Reloading {len(ReloadableProcessGroup.GROUPS[pid])} process groups in pid {pid}")
-        old_new_group = old_new_group_dict[pid]
-        for reloadable_group in ReloadableProcessGroup.GROUPS[pid]:
+        reloadable_groups = ReloadableProcessGroup.GROUPS.get(pid, [])
+        logger.info(f"Reloading {len(reloadable_groups)} process groups in pid {pid}")
+        old_new_group = old_new_group_dict.get(pid)
+        for reloadable_group in reloadable_groups:
             if reloadable_group.group is not None:
                 continue
             group = old_new_group(ranks=reloadable_group.group_info["ranks"], backend="nccl")
