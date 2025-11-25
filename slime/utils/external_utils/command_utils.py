@@ -26,7 +26,10 @@ def convert_checkpoint(
     multinode: bool = False,
     extra_args: str = "",
     dir_dst: str = "/root",
+    hf_checkpoint: Optional[str] = None,
 ):
+    hf_checkpoint = hf_checkpoint or f"/root/models/{model_name}"
+
     # TODO shall we make it in host-mapped folder and thus can cache it to speedup CI
     path_dst = f"{dir_dst}/{model_name}_torch_dist"
     if Path(path_dst).exists():
@@ -55,7 +58,7 @@ def convert_checkpoint(
         f"{multinode_args}"
         f"tools/convert_hf_to_torch_dist.py "
         "${MODEL_ARGS[@]} "
-        f"--hf-checkpoint /root/models/{model_name} "
+        f"--hf-checkpoint {hf_checkpoint} "
         f"--save {path_dst}"
         f"{extra_args}"
     )
@@ -68,6 +71,16 @@ def rsync_simple(path_src: str, path_dst: str):
 def hf_download_dataset(full_name: str):
     _, partial_name = full_name.split("/")
     exec_command(f"hf download --repo-type dataset {full_name} --local-dir /root/datasets/{partial_name}")
+
+
+def fp8_cast_bf16(path_src, path_dst):
+    if Path(path_dst).exists():
+        print(f"fp8_cast_bf16 skip {path_dst} since exists")
+        return
+
+    exec_command(
+        "python tools/fp8_cast_bf16.py " f"--input-fp8-hf-path {path_src} " f"--output-bf16-hf-path {path_dst} "
+    )
 
 
 # This class can be extended by concrete scripts

@@ -4,7 +4,6 @@ This file is in preview, and will be further refined and optimized.
 
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
 
 import typer
@@ -46,18 +45,10 @@ def prepare_single(args: ScriptArgs):
             U.hf_download_dataset("zhuzilin/aime-2024")
         case "gsm8k":
             U.hf_download_dataset("zhuzilin/gsm8k")
-    _fp8_cast_bf16(args)
 
-
-def _fp8_cast_bf16(args: ScriptArgs):
-    path_bf16_hf = f"/root/models/{args.model_name}-bf16/"
-    if Path(path_bf16_hf).exists():
-        return
-
-    U.exec_command(
-        "python tools/fp8_cast_bf16.py "
-        f"--input-fp8-hf-path /root/models/{args.model_name} "
-        f"--output-bf16-hf-path {path_bf16_hf} "
+    U.fp8_cast_bf16(
+        path_src=f"/root/models/{args.model_name}",
+        path_dst=f"/root/models/{args.model_name}-bf16/",
     )
 
 
@@ -83,6 +74,7 @@ def prepare_spmd(args: ScriptArgs):
 
     U.convert_checkpoint(
         model_name=args.model_name,
+        hf_checkpoint=f"/root/models/{args.model_name}-bf16",
         megatron_model_type=args.megatron_model_type,
         num_gpus_per_node=args.num_gpus_per_node,
         multinode=True,
