@@ -20,7 +20,7 @@ For training tasks, we need to add these flags:
 ```
 Then ensure the `NVTE_FP8_BLOCK_SCALING_FP32_SCALES` environment variable is enabled.
 
-Note that only `Linear` and `GroupLinear` layers in TransformerEngine use fp8 format. `embedding` and `lm_head` remain in their original precision. If `--fp8-param-gather` is not enabled, weights in TransformerEngine remain in bf16 format and are only cast to fp8 format during `GEMM` or `GroupGEMM` operations.
+Note that only `Linear` and `GroupLinear` layers in TransformerEngine use fp8 format. `embedding` and `lm_head` remain in their original precision. If `--fp8-param-gather` is not enabled, weights in TransformerEngine remain in bf16 format, only being cast to fp8 format during `GEMM` or `GroupGEMM` operations.
 
 2. Convert your HuggingFace model weights to FP8 format. 
 
