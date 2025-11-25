@@ -5,7 +5,6 @@ from pathlib import Path
 from megatron.training.checkpointing import load_checkpoint as _load_checkpoint_megatron
 from megatron.training.checkpointing import save_checkpoint
 from megatron.training.global_vars import get_args
-from transformers import AutoConfig
 from slime.utils import megatron_bridge_utils
 
 logger = logging.getLogger(__name__)
