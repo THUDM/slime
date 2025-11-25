@@ -278,6 +278,9 @@ class SGLangEngine(RayActor):
             {"tags": tags},
         )
 
+    def check_weights(self, action: str):
+        return self._make_request("check_weights", {"action": action})
+
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
         return self._make_request(
             "init_weights_update_group",
