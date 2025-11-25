@@ -10,7 +10,9 @@ This is an example of FP8 training and FP8 inference. Under FP8 training and inf
 
 ### Quick Start
 
-1. Check if your training script is properly configured. For training tasks, we need to add these flags:
+1. Check if your training script is properly configured. 
+
+For training tasks, we need to add these flags:
 ```bash
 --fp8-format e4m3
 --fp8-recipe blockwise
@@ -18,12 +20,13 @@ This is an example of FP8 training and FP8 inference. Under FP8 training and inf
 ```
 Then ensure the `NVTE_FP8_BLOCK_SCALING_FP32_SCALES` environment variable is enabled.
 
-Note that only `Linear` and `GroupLinear` layers in TransformerEngine use fp8 format; `embedding` and `lm_head` remain in their original precision. If `--fp8-param-gather` is not enabled, weights in TransformerEngine remain in bf16 format and are only cast to fp8 format during `GEMM` or `GroupGEMM` operations.
+Note that only `Linear` and `GroupLinear` layers in TransformerEngine use fp8 format. `embedding` and `lm_head` remain in their original precision. If `--fp8-param-gather` is not enabled, weights in TransformerEngine remain in bf16 format and are only cast to fp8 format during `GEMM` or `GroupGEMM` operations.
 
+2. Convert your HuggingFace model weights to FP8 format. 
 
-2. Convert your HuggingFace model weights to FP8 format. You can use `tools/convert_hf_to_fp8` to convert bf16 weights to fp8 format. Ensure that the `--hf-checkpoint` parameter points to a directory where the `config.json` contains the correct `quantization_config`. slime will automatically use FP8 quantization during weight updates. 
+You can use `tools/convert_hf_to_fp8` to convert bf16 weights to fp8 format. Ensure that the `--hf-checkpoint` parameter points to a directory where the `config.json` contains the correct `quantization_config`. slime will automatically use FP8 quantization during weight updates. 
 
-3. Start FP8 training
+3. Start FP8 training.
 
 ```
 cd slime
@@ -34,10 +37,9 @@ bash examples/low_precision/run-qwen3-4b-fp8.sh
 # Qwen3‑30B‑A3B FP8 training (two nodes)
 bash examples/low_precision/run-qwen3-30b-a3b-fp8-two-nodes.sh
 ```
-
 Following the above command will launch FP8 training. 
 
-4. Use the saved checkpoint for evaluation
+4. Use the saved checkpoint for evaluation. 
 
 Note that TransformerEngine does not specifically save FP8 quantized weights; the saved torch dist remains in original precision (usually bf16). If you want to evaluate under FP8, you need to convert the checkpoint from `torch_dist` to HuggingFace format, then convert to FP8 HuggingFace format.
 
