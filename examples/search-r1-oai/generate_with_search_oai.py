@@ -26,7 +26,7 @@ SEARCH_R1_CONFIGS = {
     "request_timeout": float(os.getenv("SEARCH_TIMEOUT", "60.0")),  # Request timeout in seconds
     # rm
     "format_score": 0.2,
-    "max_context_length": 32768,  # Maximum context length in tokens
+    "max_context_length": 16384,  # Maximum context length in tokens
     "log_sample_rate": 64,  # Sample 1/N for detailed logging
     "log_truncate_length": 200,  # Character limit for log truncation
 }
