@@ -24,7 +24,7 @@ Note that only `Linear` and `GroupLinear` layers in TransformerEngine use fp8 fo
 
 2. Convert your HuggingFace model weights to FP8 format. 
 
-You can use `tools/convert_hf_to_fp8` to convert bf16 weights to fp8 format. Ensure that the `--hf-checkpoint` parameter points to a directory where the `config.json` contains the correct `quantization_config`. slime will automatically use FP8 quantization during weight updates. 
+You can use `tools/convert_hf_to_fp8.py` to convert bf16 weights to fp8 format. Ensure that the `--hf-checkpoint` parameter points to a directory where the `config.json` contains the correct `quantization_config`. slime will automatically use FP8 quantization during weight updates. 
 
 3. Start FP8 training.
 
