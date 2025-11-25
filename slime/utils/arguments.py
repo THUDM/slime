@@ -1486,6 +1486,9 @@ def slime_validate_args(args):
 
 def hf_validate_args(args, hf_config):
     equal = lambda x, y: x == y
+
+    errors = []
+
     for hf_config_name, megatron_config_name, compare_fn in [
         ("hidden_size", "hidden_size", equal),
         ("num_attention_heads", "num_attention_heads", equal),
@@ -1496,10 +1499,14 @@ def hf_validate_args(args, hf_config):
         ("rope_theta", "rotary_base", equal),
     ]:
         if hasattr(hf_config, hf_config_name):
-            assert compare_fn(getattr(hf_config, hf_config_name), getattr(args, megatron_config_name)), (
-                f"{hf_config_name} in hf config {getattr(hf_config, hf_config_name)} is not equal to "
-                f"{megatron_config_name} {getattr(args, megatron_config_name)}, please check the config."
-            )
+            if not compare_fn(getattr(hf_config, hf_config_name), getattr(args, megatron_config_name)):
+                errors.append(
+                    f"{hf_config_name} in hf config {getattr(hf_config, hf_config_name)} is not equal to "
+                    f"{megatron_config_name} {getattr(args, megatron_config_name)}, please check the config."
+                )
+
+    if len(errors) > 0:
+        raise AssertionError(f"hf_validate_args failed: " + "; ".join(errors))
 
 
 def _validate_and_update_megatron_args_from_hf(args, args_from_hf_config: Dict[str, Any]):
