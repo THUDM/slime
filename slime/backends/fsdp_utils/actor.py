@@ -6,7 +6,6 @@ import ray
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from packaging import version
 from ring_flash_attn import substitute_hf_flash_attn, update_ring_flash_attn_params
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
@@ -75,12 +74,11 @@ class FSDPTrainRayActor(TrainRayActor):
             self.vlm_processor = AutoProcessor.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
 
         # Load model
-        with torch.autocast(device_type=f"cuda:{torch.cuda.current_device()}"):
-            model = AutoModelForCausalLM.from_pretrained(
-                self.args.hf_checkpoint,
-                trust_remote_code=True,
-                attn_implementation=self.args.attn_implementation,
-            )
+        model = AutoModelForCausalLM.from_pretrained(
+            self.args.hf_checkpoint,
+            trust_remote_code=True,
+            attn_implementation=self.args.attn_implementation,
+        )
         model.train()
 
         if args.gradient_checkpointing:
@@ -267,12 +265,10 @@ class FSDPTrainRayActor(TrainRayActor):
                 for batch in self.prof.iterate_train_log_probs(
                     tqdm(packed_batches, desc=f"{store_prefix}log_probs", disable=dist.get_rank() != 0)
                 ):
-                    # TODO: remove the autocast in the future
-                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                        model_args = self._get_model_inputs_args(batch)
-                        if "pixel_values" in batch:
-                            model_args["pixel_values"] = batch["pixel_values"]
-                        logits = self.model(**model_args).logits.squeeze(0)
+                    model_args = self._get_model_inputs_args(batch)
+                    if "pixel_values" in batch:
+                        model_args["pixel_values"] = batch["pixel_values"]
+                    logits = self.model(**model_args).logits.squeeze(0)
                     log_probs_result, entropy_result = get_logprob_and_entropy_with_cp(
                         logits=logits,
                         target_tokens=batch["tokens"],
@@ -472,13 +468,9 @@ class FSDPTrainRayActor(TrainRayActor):
             self.ref_model.cpu()  # Keep ref in CPU
 
     def _train_step(self, packed_batch, reported_accum, mbs_id, grad_accum):
-        # TODO: remove the autocast in the future
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            # Prepare model inputs
-            model_args = self._get_model_inputs_args(packed_batch)
-            logits = self.model(
-                **model_args,
-            ).logits.squeeze(0)
+        # Prepare model inputs
+        model_args = self._get_model_inputs_args(packed_batch)
+        logits = self.model(**model_args).logits.squeeze(0)
 
         # Compute log probs and entropy (unified for both CP and non-CP modes)
         log_probs, entropy_result = get_logprob_and_entropy_with_cp(
@@ -674,12 +666,11 @@ class FSDPTrainRayActor(TrainRayActor):
             logger.info(f"[Rank {dist.get_rank()}] Creating separate ref model from {ref_load_path}")
 
             # Load model same way as actor model
-            with torch.autocast(device_type=f"cuda:{torch.cuda.current_device()}"):
-                ref_model = AutoModelForCausalLM.from_pretrained(
-                    ref_load_path,
-                    trust_remote_code=True,
-                    attn_implementation=self.args.attn_implementation,
-                )
+            ref_model = AutoModelForCausalLM.from_pretrained(
+                ref_load_path,
+                trust_remote_code=True,
+                attn_implementation=self.args.attn_implementation,
+            )
 
             ref_model = apply_fsdp2(ref_model, mesh=self.dp_mesh)
             ref_model.cpu()
@@ -905,14 +896,7 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False):
 
     Ref: https://github.com/volcengine/verl/blob/main/verl/utils/fsdp_utils.py
     """
-    # Import FSDP v2 components based on PyTorch version
-    if version.parse(torch.__version__) >= version.parse("2.6"):
-        from torch.distributed.fsdp import CPUOffloadPolicy, fully_shard
-    elif version.parse(torch.__version__) >= version.parse("2.4"):
-        from torch.distributed._composable.fsdp import fully_shard
-        from torch.distributed._composable.fsdp.fully_shard import CPUOffloadPolicy
-    else:
-        raise ImportError("FSDP v2 not available")
+    from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy, fully_shard
 
     offload_policy = CPUOffloadPolicy() if cpu_offload else None
 
@@ -926,11 +910,20 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False):
         or (isinstance(module, torch.nn.Embedding) and not model.config.tie_word_embeddings)
     ]
 
+    fsdp_kwargs = {
+        "mp_policy": MixedPrecisionPolicy(
+            param_dtype=torch.bfloat16,
+            reduce_dtype=torch.float32,
+        ),
+        "offload_policy": offload_policy,
+        "mesh": mesh,
+    }
+
     # Apply FSDP to each module (offload_policy=None is equivalent to not passing it)
     for module in modules:
-        fully_shard(module, mesh=mesh, offload_policy=offload_policy)
+        fully_shard(module, **fsdp_kwargs)
 
     # Apply FSDP to the top-level model
-    fully_shard(model, mesh=mesh, offload_policy=offload_policy)
+    fully_shard(model, **fsdp_kwargs)
 
     return model
