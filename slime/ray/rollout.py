@@ -258,6 +258,9 @@ class RolloutManager:
         if samples[0].train_metadata is not None:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
 
+        if samples[0].multimodal_inputs is not None:
+            train_data["multimodal_inputs"] = [sample.multimodal_inputs for sample in samples]
+
         if "teacher_log_probs" in samples[0].__dict__:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
 
