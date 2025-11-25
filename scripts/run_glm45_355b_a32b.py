@@ -26,7 +26,7 @@ class ScriptArgs(U.ExecuteTrainConfig):
     rollout_fp8: bool = False
     dynamic_sampling: bool = False
     # TODO use more complex task
-    task: Literal["dapo_aime", "gsm8k"] = "gsm8k"
+    task: Literal["dapo_aime", "gsm8k"] = "dapo_aime"
 
 
 @app.command()
@@ -107,8 +107,8 @@ def train(args: ScriptArgs):
         f"--ref-load /root/local_data/{args.model_name}_torch_dist "
         f"--load {load_save_path} "
         f"--save {load_save_path} "
-        f"--save-interval {2 if args.mode == 'debug_minimal' else 20} "
-        f"--save-retain-interval {2 if args.mode == 'debug_minimal' else 20} "
+        f"--save-interval {2 if args.mode == 'debug_minimal' else 10} "
+        f"--save-retain-interval {2 if args.mode == 'debug_minimal' else 10} "
     )
 
     rollout_args = (
@@ -228,7 +228,7 @@ def train(args: ScriptArgs):
     # sglang_attn_tp_size = sglang_world_size // sglang_attn_dp_size
     sglang_args = (
         f"--rollout-num-gpus-per-engine {sglang_world_size} "
-        "--sglang-mem-fraction-static 0.85 "
+        "--sglang-mem-fraction-static 0.8 "
         f"--sglang-tp-size {sglang_world_size} "
         # f"--sglang-ep-size {sglang_world_size} "
         # dp attention
