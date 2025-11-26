@@ -1478,10 +1478,9 @@ def slime_validate_args(args):
         with open(args.custom_config_path, "r") as f:
             data = yaml.safe_load(f) or {}
         for k, v in data.items():
-            if not hasattr(args, k):
-                setattr(args, k, v)
-            else:
-                logger.info(f"Warning: Argument {k} is already set to {getattr(args, k)}, will not override with {v}.")
+            if hasattr(args, k):
+                logger.info(f"Warning: Argument {k} is already set to {getattr(args, k)}, will override with {v}.")
+            setattr(args, k, v)
 
 
 def hf_validate_args(args, hf_config):
