@@ -172,7 +172,11 @@ class SGLangEngine(RayActor):
 
         url = f"http://{self.server_host}:{self.server_port}/{endpoint}"
         response = requests.post(url, json=payload or {})
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            e.add_note(f"{response.text=}")
+            raise
         return response.json()
 
     def health_generate(self, timeout: float = 5.0) -> bool:
@@ -277,6 +281,9 @@ class SGLangEngine(RayActor):
             "resume_memory_occupation",
             {"tags": tags},
         )
+
+    def check_weights(self, action: str):
+        return self._make_request("check_weights", {"action": action})
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
         return self._make_request(

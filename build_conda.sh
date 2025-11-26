@@ -70,6 +70,6 @@ fi
 
 # apply patch
 cd $BASE_DIR/sglang
-git apply $SLIME_DIR/docker/patch/v0.5.0rc0-cu126/sglang.patch
+git apply $SLIME_DIR/docker/patch/v0.5.5.post1/sglang.patch
 cd $BASE_DIR/Megatron-LM
-git apply $SLIME_DIR/docker/patch/v0.5.0rc0-cu126/megatron.patch
+git apply $SLIME_DIR/docker/patch/v0.5.5.post1/megatron.patch

@@ -155,7 +155,7 @@ def all_gather_with_cp(tensor: torch.Tensor, total_length: int, response_length:
     return full_tensor
 
 
-def slice_with_cp(tokens: torch.Tensor, pad_value: int) -> torch.Tensor:
+def slice_with_cp(tokens: torch.Tensor, pad_value: tuple[int, float, Callable]) -> torch.Tensor:
     cp_rank = mpu.get_context_parallel_rank()
     cp_size = mpu.get_context_parallel_world_size()
 
@@ -165,9 +165,13 @@ def slice_with_cp(tokens: torch.Tensor, pad_value: int) -> torch.Tensor:
     # pad
     chunk_size = (len(tokens) + 2 * cp_size - 1) // (2 * cp_size)
     pad = 2 * cp_size * chunk_size - len(tokens)
-    # pad on the first dimension
-    pad_tuple = (0, 0) * (tokens.dim() - 1) + (0, pad)
-    tokens = F.pad(tokens, pad_tuple, value=pad_value)
+    if isinstance(pad_value, Callable):
+        pad_func = pad_value
+        tokens = pad_func(tokens, pad)
+    else:
+        # pad on the first dimension
+        pad_tuple = (0, 0) * (tokens.dim() - 1) + (0, pad)
+        tokens = F.pad(tokens, pad_tuple, value=pad_value)
     # get 2 chunk for thd cp
     start_1, end_1 = chunk_size * cp_rank, chunk_size * (cp_rank + 1)
     start_2, end_2 = chunk_size * (2 * cp_size - cp_rank - 1), chunk_size * (2 * cp_size - cp_rank)

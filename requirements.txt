@@ -3,9 +3,7 @@ blobfile
 datasets
 httpx[http2]
 mcp[cli]
-megatron-bridge @ git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl
 memray  # needed for debugging (but is lightweight), we can put it to dev mode when using pyproject.toml
-nvidia-modelopt[torch]>=0.37.0  # needed by megatron-bridge
 omegaconf
 pillow
 pylatexenc

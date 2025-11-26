@@ -13,6 +13,7 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
         super().__init__(*args, **kwargs)
 
         from megatron.bridge import AutoBridge
+        import slime_plugins.megatron_bridge  # noqa: F401
 
         self._bridge = AutoBridge.from_hf_pretrained(self.args.hf_checkpoint)
 

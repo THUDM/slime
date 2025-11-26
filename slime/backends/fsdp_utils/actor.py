@@ -416,6 +416,13 @@ class FSDPTrainRayActor(TrainRayActor):
             log_dict["rollout/step"] = compute_rollout_step(self.args, rollout_id)
             tracking_utils.log(self.args, log_dict, step_key="rollout/step")
 
+        if self.args.ci_test and self.args.true_on_policy_mode:
+            assert log_dict["rollout/log_probs"] == log_dict["rollout/rollout_log_probs"], (
+                f"CI check failed: true_on_policy_mode is enabled, but log_probs "
+                f"({log_dict['rollout/log_probs']}) != rollout_log_probs "
+                f"({log_dict['rollout/rollout_log_probs']})"
+            )
+
     def _train_core(self, rollout_id: int, rollout_data) -> None:
         if self.args.advantage_estimator in ["grpo", "gspo"]:
             rollout_data["advantages"] = rollout_data["returns"] = [
@@ -488,7 +495,18 @@ class FSDPTrainRayActor(TrainRayActor):
 
         unpacked_batches = unpack_sequences(packed_batch)
 
-        old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
+        old_log_prob_key = "rollout_log_probs" if self.args.use_rollout_logprobs else "log_probs"
+        missing_old_log_probs = [
+            idx
+            for idx, batch in enumerate(unpacked_batches)
+            if old_log_prob_key not in batch or not isinstance(batch[old_log_prob_key], torch.Tensor)
+        ]
+        if missing_old_log_probs:
+            raise KeyError(
+                f"{old_log_prob_key} must be provided as torch.Tensor for all microbatches when "
+                f"use_rollout_logprobs is set to {self.args.use_rollout_logprobs}. Missing in batches: {missing_old_log_probs}"
+            )
+        old_log_probs = torch.cat([batch[old_log_prob_key] for batch in unpacked_batches], dim=0)
         log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
         advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
         loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
@@ -513,16 +531,22 @@ class FSDPTrainRayActor(TrainRayActor):
 
         pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, self.args.eps_clip, self.args.eps_clip_high)
 
-        rollout_log_probs = torch.cat([batch["rollout_log_probs"] for batch in unpacked_batches], dim=0)
+        def _has_rollout_log_probs(batch) -> bool:
+            rollout_tensor = batch.get("rollout_log_probs")
+            return isinstance(rollout_tensor, torch.Tensor) and rollout_tensor.numel() > 0
+
+        has_rollout_log_probs = all(_has_rollout_log_probs(batch) for batch in unpacked_batches)
+        rollout_log_probs = (
+            torch.cat([batch["rollout_log_probs"] for batch in unpacked_batches], dim=0)
+            if has_rollout_log_probs
+            else None
+        )
 
         # Apply TIS before sample mean calculation
         if self.args.use_tis:
             # Apply TIS off-policy correction using importance sampling
-            assert all(
-                "rollout_log_probs" in batch
-                and isinstance(batch["rollout_log_probs"], torch.Tensor)
-                and batch["rollout_log_probs"].numel() > 0
-                for batch in unpacked_batches
+            assert (
+                has_rollout_log_probs and rollout_log_probs is not None
             ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS"
 
             tis = torch.exp(old_log_probs - rollout_log_probs)
@@ -539,10 +563,13 @@ class FSDPTrainRayActor(TrainRayActor):
         pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
         ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
 
-        train_rollout_logprob_abs_diff = (old_log_probs - rollout_log_probs).abs()
-        train_rollout_logprob_abs_diff = sum_of_sample_mean(
-            train_rollout_logprob_abs_diff, response_lengths, loss_masks
-        ).detach()
+        # Only compare rollout vs. train log probs when they originate from different stages.
+        train_rollout_logprob_abs_diff = None
+        if not self.args.use_rollout_logprobs and rollout_log_probs is not None:
+            train_rollout_logprob_abs_diff = (old_log_probs - rollout_log_probs).abs()
+            train_rollout_logprob_abs_diff = sum_of_sample_mean(
+                train_rollout_logprob_abs_diff, response_lengths, loss_masks
+            ).detach()
 
         entropy = torch.cat([batch["entropy"] for batch in unpacked_batches], dim=0)
         entropy_loss = sum_of_sample_mean(entropy, response_lengths, loss_masks)
@@ -566,8 +593,10 @@ class FSDPTrainRayActor(TrainRayActor):
             "pg_clipfrac": pg_clipfrac.detach(),
             "ppo_kl": ppo_kl.detach(),
             "entropy_loss": entropy_loss.detach(),
-            "train_rollout_logprob_abs_diff": train_rollout_logprob_abs_diff,
         }
+
+        if train_rollout_logprob_abs_diff is not None:
+            reported["train_rollout_logprob_abs_diff"] = train_rollout_logprob_abs_diff
 
         if self.args.use_kl_loss:
             reported["kl_loss"] = kl_loss.detach()

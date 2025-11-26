@@ -130,6 +130,9 @@ class RolloutManager:
     def onload(self, tags: List[str] = None):
         return ray.get([engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines])
 
+    def check_weights(self, action: str):
+        return ray.get([engine.check_weights.remote(action=action) for engine in self.rollout_engines])
+
     def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
             data = torch.load(
