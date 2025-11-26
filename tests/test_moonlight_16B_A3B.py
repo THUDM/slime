@@ -68,8 +68,6 @@ def execute():
         "--kl-coef 0.00 "
         "--entropy-coef 0.00 "
         "--eps-clip 4e-4 "
-        "--use-tis "
-        "--use-routing-replay "
     )
 
     optimizer_args = (
@@ -85,13 +83,7 @@ def execute():
     )
 
     sglang_args = (
-        "--rollout-num-gpus-per-engine 2 "
-        "--sglang-mem-fraction-static 0.8 "
-        "--sglang-moe-a2a-backend deepep "
-        "--sglang-deepep-mode auto "
-        "--sglang-max-running-requests 512 "
-        "--sglang-disable-radix-cache "
-        "--sglang-enable-metrics "
+        "--rollout-num-gpus-per-engine 2 " "--sglang-mem-fraction-static 0.8 " "--sglang-max-running-requests 512 "
     )
 
     ci_args = "--ci-test "
