@@ -382,7 +382,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 `rollout_log_probs`, etc.). It will be fetched and partitioned
                 by `process_rollout_data` based on data-parallel rank/size.
         """
-        if self.args.offload_train and not self.fsdp_cpu_offload:
+        if self.args.offload_train:
             self.wake_up()
 
         with inverse_timer("train_wait"), timer("train"):
