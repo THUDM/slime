@@ -49,3 +49,7 @@ Specifically, slime currently provides the following parameters for separate deb
 4.  `--load-debug-rollout-data /your/saved/debug/data_{rollout_id}.pt`
 
     When enabled, data will be loaded from `args.load_debug_rollout_data.format(rollout_id=rollout_id)`, and SGLang will not be initialized (automatically setting `debug_train_only=True`). This method allows you to fix the input for the training part to tune it, for example, by switching between different parallelization strategies.
+
+5.  `--save-readable-rollout-data /your/saved/debug/data_{rollout_id}.json`
+
+    When enabled, the first `--save-readable-rollout-data-limit` samples of each rollout are dumped as JSON Lines so you can quickly inspect the prompts, responses, and metadata without loading PyTorch tensors; if the limit is not set, the complete rollout is logged.

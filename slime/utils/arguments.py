@@ -968,6 +968,21 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--save-readable-rollout-data",
+                type=str,
+                default=None,
+                help=(
+                    "Save the readable rollout data to this path. "
+                    "The file will be saved to `save_readable_rollout_data.format(rollout_id)`."
+                ),
+            )
+            parser.add_argument(
+                "--save-readable-rollout-data-limit",
+                type=int,
+                default=None,
+                help="Limit the number of samples to save to the readable rollout data.",
+            )
+            parser.add_argument(
                 "--dump-details",
                 type=str,
                 default=None,
