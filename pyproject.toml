@@ -30,6 +30,7 @@ line-length = 119
 # -vv will also display tests with durration = 0.00s
 addopts = "--verbose --pyargs --durations=0 --strict-markers"  # always add these arguments to pytest
 testpaths = ["./tests"]  # must be an explicit path to avoid importing another "tests" module
+asyncio_mode = "auto"  # Enable automatic async test handling for pytest-asyncio
 # directories to ignore when discovering tests
 norecursedirs = [
     "external",

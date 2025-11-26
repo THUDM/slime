@@ -357,7 +357,8 @@ class ChatCompletionHandler:
                 raise RuntimeError("Messages template resulted in empty text")
 
             # Step 3: Query radix cache to get token_ids
-            token_ids, _, _, _ = await radix_tree.get_or_create_tokenization_async(text)
+            # Note: retrieve_from_text is synchronous, but safe to call in async context
+            token_ids, logprobs, loss_mask = radix_tree.retrieve_from_text(text, return_logprob=True)
 
             if not token_ids:
                 raise RuntimeError("Failed to get tokens from radix tree")
@@ -371,7 +372,9 @@ class ChatCompletionHandler:
         # Step 4: Call SGLang /generate directly with tokens (token in, token out)
         sampling_params = self._build_sampling_params(request_data)
 
-        return await self._non_stream_generate_with_cache(token_ids, sampling_params, radix_tree, text, request_data)
+        return await self._non_stream_generate_with_cache(
+            token_ids, sampling_params, radix_tree, text, request_data, input_logprobs=logprobs
+        )
 
     def _build_sampling_params(
         self, request_data: dict
@@ -411,7 +414,8 @@ class ChatCompletionHandler:
         return {k: v for k, v in sampling_params.items() if v is not None}
 
     async def _non_stream_generate_with_cache(
-        self, token_ids: list, sampling_params: dict, radix_tree, input_text: str, request_data: dict
+        self, token_ids: list, sampling_params: dict, radix_tree, input_text: str, request_data: dict,
+        input_logprobs: list = None
     ):
         """
         Non-streaming generation with direct SGLang call and cache maintenance.
@@ -493,8 +497,10 @@ class ChatCompletionHandler:
             try:
                 # Combine input and output tokens for cache insertion
                 full_text = input_text + generated_text
+                # Combine input logprobs + output logprobs
+                full_logprobs = (input_logprobs or []) + output_logprobs
                 await radix_tree.insert(
-                    full_text, token_ids + output_ids, output_logprobs
+                    full_text, token_ids + output_ids, full_logprobs
                 )  # TODO implement insert async
             except Exception as e:
                 if getattr(self.args, "verbose", False):
@@ -523,7 +529,12 @@ class ChatCompletionHandler:
             finish_reason = "tool_calls"
         else:
             try:
-                finish_reason = generate_data.get("meta_info", {}).get("finish_reason", "stop")
+                finish_reason_obj = generate_data.get("meta_info", {}).get("finish_reason", "stop")
+                # finish_reason can be a dict {"type": "stop"} or a string "stop"
+                if isinstance(finish_reason_obj, dict):
+                    finish_reason = finish_reason_obj.get("type", "stop")
+                else:
+                    finish_reason = finish_reason_obj
             except Exception as e:
                 if getattr(self.args, "verbose", False):
                     print(f"[slime-router] Warning: Failed to get finish_reason: {e}, defaulting to 'stop'")
