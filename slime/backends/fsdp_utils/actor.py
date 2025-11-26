@@ -416,6 +416,13 @@ class FSDPTrainRayActor(TrainRayActor):
             log_dict["rollout/step"] = compute_rollout_step(self.args, rollout_id)
             tracking_utils.log(self.args, log_dict, step_key="rollout/step")
 
+        if self.args.ci_test and self.args.true_on_policy_mode:
+            assert log_dict["rollout/log_probs"] == log_dict["rollout/rollout_log_probs"], (
+                f"CI check failed: true_on_policy_mode is enabled, but log_probs "
+                f"({log_dict['rollout/log_probs']}) != rollout_log_probs "
+                f"({log_dict['rollout/rollout_log_probs']})"
+            )
+
     def _train_core(self, rollout_id: int, rollout_data) -> None:
         if self.args.advantage_estimator in ["grpo", "gspo"]:
             rollout_data["advantages"] = rollout_data["returns"] = [
