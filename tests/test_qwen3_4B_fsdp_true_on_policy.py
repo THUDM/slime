@@ -34,8 +34,8 @@ def execute():
 
     eval_args = (
         f"{'--eval-interval 20 ' if ENABLE_EVAL else ''}"
-        '--eval-prompt-data "aime /root/datasets/aime-2024/aime-2024.jsonl" '
-        "--n-samples-per-eval-prompt 32 "
+        "--eval-prompt-data aime /root/datasets/aime-2024/aime-2024.jsonl "
+        "--n-samples-per-eval-prompt 1 "
         "--eval-max-response-len 4096 "
         "--eval-top-p 0.7 "
     )
