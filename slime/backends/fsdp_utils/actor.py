@@ -483,6 +483,7 @@ class FSDPTrainRayActor(TrainRayActor):
             # Copy actor model state to ref model
             actor_state = self.model.state_dict()
             self.ref_model.load_state_dict(actor_state)
+            self.ref_model.cpu() 
 
     def _train_step(self, packed_batch, reported_accum, mbs_id, grad_accum):
         # Prepare model inputs
@@ -714,6 +715,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
             # Apply FSDP without CPU offload (ref model manages its own CPU placement)
             ref_model = apply_fsdp2(ref_model, mesh=self.dp_mesh, cpu_offload=False)
+            ref_model.cpu()
 
             logger.info(f"[Rank {dist.get_rank()}] Reference model created and offloaded to CPU")
             return ref_model
