@@ -13,14 +13,19 @@ class ScriptArgs(U.ExecuteTrainConfig):
     model_name: str = "Qwen3-4B"
     megatron_model_type: Optional[str] = None
     num_gpus_per_node: Optional[int] = None
-    hardware: Literal["H100", "GB300"] = "H100"
+    hardware: Literal["H100", "GB200", "GB300"] = "H100"
     extra_args: str = ""
     multi_eval: bool = False
     true_on_policy: bool = False
     dynamic_sampling: bool = False
     enable_eval: bool = True
     train_backend: Literal["fsdp", "megatron"] = "megatron"
+    rollout_fp8: bool = False
+    train_fp8: bool = False
     enable_megatron_bridge: bool = False
+    enable_mis: bool = False
+    # TODO improve, should be able to override more easily
+    tis_use_rs: bool = True
 
     def __post_init__(self):
         if self.train_backend == "megatron":
@@ -43,6 +48,11 @@ def prepare(args: ScriptArgs):
         U.hf_download_dataset("zyzshishui0627/gpqa_diamond")
         U.hf_download_dataset("zyzshishui0627/IFBench")
 
+    if args.rollout_fp8:
+        U.exec_command(
+            f"huggingface-cli download Qwen/{args.model_name}-FP8 --local-dir /root/models/{args.model_name}-FP8"
+        )
+
     if (args.train_backend == "megatron") and not args.enable_megatron_bridge:
         U.convert_checkpoint(
             model_name=args.model_name,
@@ -55,7 +65,7 @@ def prepare(args: ScriptArgs):
 def execute(args: ScriptArgs):
     load_save_path = f"/root/shared_data/{args.run_id}/checkpoints"
     ckpt_args = (
-        f"--hf-checkpoint /root/models/{args.model_name} "
+        f"--hf-checkpoint /root/models/{args.model_name}{'-FP8' if args.rollout_fp8 else ''} "
         f"--load {load_save_path} "
         f"--save {load_save_path} "
         f"--save-interval {2 if args.mode == 'debug_minimal' else 20} "
@@ -132,7 +142,7 @@ eval:
 
     grpo_args = (
         "--advantage-estimator grpo "
-        # "--use-kl-loss "
+        "--use-kl-loss "
         "--kl-loss-coef 0.00 "
         "--kl-loss-type low_var_kl "
         "--entropy-coef 0.00 "
@@ -200,7 +210,6 @@ eval:
         "--use-fault-tolerance "
         f"--dump-details /root/shared_data/{args.run_id}/dump_details "
     )
-
     misc_env_vars = {}
 
     if args.model_name == "Qwen3-4B-Base":
@@ -209,8 +218,39 @@ eval:
             "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN": "1",
         }
 
+    if args.train_fp8:
+        misc_args += (
+            "--transformer-impl transformer_engine "
+            "--bf16 "
+            "--fp8-format e4m3 "
+            "--fp8-recipe blockwise "
+            "--fp8-param-gather "
+        )
+        misc_env_vars |= {
+            "NVTE_FP8_BLOCK_SCALING_FP32_SCALES": "1",
+        }
+
     if args.enable_megatron_bridge:
         misc_args += "--megatron-to-hf-mode bridge "
+
+    if args.enable_mis:
+        config_text = f"""
+use_tis: true
+use_rs: {"true" if args.tis_use_rs else "false"}
+tis_level: "token"
+rs_level: "token"
+tis_mode: "truncate"
+tis_lower_bound: 0.5
+tis_upper_bound: 2.0
+rs_lower_bound: null
+rs_upper_bound: null
+rs_veto_threshold: 1.0e-4
+tis_batch_normalize: true
+""".strip()
+        misc_args += (
+            f"--custom-config-path {U.save_to_temp_file(config_text, 'yaml')} "
+            "--custom-tis-function-path examples.train_infer_mismatch_helper.mis.compute_mis_weights_with_cp "
+        )
 
     true_on_policy_args = ""
     true_on_policy_envs = {}

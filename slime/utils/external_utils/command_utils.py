@@ -256,5 +256,6 @@ def save_to_temp_file(text: str, ext: str):
 
 NUM_GPUS_OF_HARDWARE = {
     "H100": 8,
+    "GB200": 4,
     "GB300": 4,
 }

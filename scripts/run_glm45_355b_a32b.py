@@ -89,6 +89,11 @@ def _prepare_cp(args: ScriptArgs):
         path_src=f"/root/models/{args.model_name}",
         path_dst=f"/root/local_data/{args.model_name}",
     )
+    if args.rollout_fp8:
+        U.rsync_simple(
+            path_src=f"/root/models/{args.model_name}-FP8",
+            path_dst=f"/root/local_data/{args.model_name}-FP8",
+        )
 
 
 @app.command()
@@ -98,7 +103,7 @@ def train(args: ScriptArgs):
     _prepare_cp(args)
 
     hf_checkpoint = (
-        f"/root/models/{args.model_name}_FP8" if args.rollout_fp8 else f"/root/local_data/{args.model_name}"
+        f"/root/local_data/{args.model_name}-FP8" if args.rollout_fp8 else f"/root/local_data/{args.model_name}"
     )
 
     load_save_path = f"/root/shared_data/{args.run_id}/checkpoints"
@@ -170,8 +175,8 @@ def train(args: ScriptArgs):
             "--tensor-model-parallel-size 4 "
             "--sequence-parallel "
             f"--pipeline-model-parallel-size 1 "
-            "--context-parallel-size 2 "
-            "--expert-model-parallel-size 8 "
+            "--context-parallel-size 1 "
+            "--expert-model-parallel-size 4 "
             "--expert-tensor-parallel-size 1 "
         )
     else:
