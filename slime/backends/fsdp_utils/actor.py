@@ -55,6 +55,11 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.debug_rollout_only:
             return 0
 
+        self.fsdp_cpu_offload = getattr(self.args, "fsdp_cpu_offload", False)
+        # Offload train and fsdp cpu offload cannot be used together, fsdp_cpu_offload is more aggressive
+        if self.args.offload_train and self.fsdp_cpu_offload:
+            self.args.offload_train = False
+
         self._enable_true_on_policy_optimizations(args)
         if dist.get_rank() == 0:
             init_tracking(args, primary=False)
@@ -78,6 +83,7 @@ class FSDPTrainRayActor(TrainRayActor):
             self.args.hf_checkpoint,
             trust_remote_code=True,
             attn_implementation=self.args.attn_implementation,
+            device_map="cpu",
         )
         model.train()
 
@@ -85,8 +91,7 @@ class FSDPTrainRayActor(TrainRayActor):
             model.gradient_checkpointing_enable()
 
         # Apply FSDP with DP mesh and CPU offload policy if requested
-        cpu_offload = getattr(args, "fsdp_cpu_offload", False)
-        self.model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=cpu_offload)
+        self.model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=self.fsdp_cpu_offload)
 
         if args.optimizer == "adam":
             self.optimizer = torch.optim.AdamW(
@@ -246,14 +251,16 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         # Select which model to use
         if model_tag == "ref" and self.ref_model is not None:
-            # Offload actor model to CPU to save GPU memory
-            logger.info("[Rank {}] Offloading actor model to CPU".format(dist.get_rank()))
-            self.model.cpu()
-            torch.cuda.empty_cache()
+            if not self.fsdp_cpu_offload:
+                logger.info("[Rank {}] Offloading actor model to CPU".format(dist.get_rank()))
+                self.model.cpu()
+                torch.cuda.empty_cache()
+                dist.barrier(group=get_gloo_group())
 
             # Load ref model to GPU
             logger.info("[Rank {}] Loading ref model to GPU".format(dist.get_rank()))
             self.ref_model.cuda()
+            dist.barrier(group=get_gloo_group())
             active_model = self.ref_model
             active_model.eval()
         else:
@@ -289,7 +296,11 @@ class FSDPTrainRayActor(TrainRayActor):
             if model_tag == "ref" and self.ref_model is not None:
                 self.ref_model.cpu()
                 torch.cuda.empty_cache()
-                self.model.cuda()
+                dist.barrier(group=get_gloo_group())
+                
+                if not self.fsdp_cpu_offload:
+                    self.model.cuda()
+                    dist.barrier(group=get_gloo_group())
 
     def packed_data(
         self, rollout_data: dict[str, list[torch.Tensor]]
@@ -371,7 +382,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 `rollout_log_probs`, etc.). It will be fetched and partitioned
                 by `process_rollout_data` based on data-parallel rank/size.
         """
-        if self.args.offload_train:
+        if self.args.offload_train and not self.fsdp_cpu_offload:
             self.wake_up()
 
         with inverse_timer("train_wait"), timer("train"):
@@ -472,7 +483,6 @@ class FSDPTrainRayActor(TrainRayActor):
             # Copy actor model state to ref model
             actor_state = self.model.state_dict()
             self.ref_model.load_state_dict(actor_state)
-            self.ref_model.cpu()  # Keep ref in CPU
 
     def _train_step(self, packed_batch, reported_accum, mbs_id, grad_accum):
         # Prepare model inputs
@@ -694,15 +704,16 @@ class FSDPTrainRayActor(TrainRayActor):
         if os.path.isdir(ref_load_path):
             logger.info(f"[Rank {dist.get_rank()}] Creating separate ref model from {ref_load_path}")
 
-            # Load model same way as actor model
+            # Load ref model to CPU (ref model is always kept on CPU)
             ref_model = AutoModelForCausalLM.from_pretrained(
                 ref_load_path,
                 trust_remote_code=True,
                 attn_implementation=self.args.attn_implementation,
+                device_map="cpu",
             )
 
-            ref_model = apply_fsdp2(ref_model, mesh=self.dp_mesh)
-            ref_model.cpu()
+            # Apply FSDP without CPU offload (ref model manages its own CPU placement)
+            ref_model = apply_fsdp2(ref_model, mesh=self.dp_mesh, cpu_offload=False)
 
             logger.info(f"[Rank {dist.get_rank()}] Reference model created and offloaded to CPU")
             return ref_model
