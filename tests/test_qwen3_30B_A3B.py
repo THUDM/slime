@@ -92,7 +92,6 @@ def execute():
         "--sglang-moe-a2a-backend deepep "
         "--sglang-deepep-mode auto "
         "--sglang-max-running-requests 512 "
-        "--sglang-disable-radix-cache "
         "--sglang-enable-metrics "
     )
 
