@@ -87,9 +87,10 @@ RUN cd Megatron-LM && \
     fi && \
     rm megatron.patch
 
-# TODO temporarily skip patching for GB300 (and require users to bring their own sglang version). should add back later.
+# TODO temporarily skip patching for GB200/GB300 (and require users to bring their own sglang version). should add back later.
+ARG ENABLE_SGLANG_PATCH=1
 COPY docker/patch/${PATCH_VERSION}/sglang.patch /sgl-workspace/sglang/
-RUN if [ "$ENABLE_CUDA_13" = "0" ]; then \
+RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
   cd /sgl-workspace/sglang && \
   git update-index --refresh && \
   git apply sglang.patch && \
