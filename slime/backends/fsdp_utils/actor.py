@@ -89,18 +89,16 @@ class FSDPTrainRayActor(TrainRayActor):
         
         model.train()
 
-        # Non-rank-0 will receive weights via broadcast
-        if dist.get_rank() == 0:
-            full_state = model.state_dict()
-        else:
-            full_state = {} 
+        full_state = model.state_dict()
 
-        self.model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=self.fsdp_cpu_offload)
+        model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=self.fsdp_cpu_offload)
         
-        self.model = self._fsdp2_load_full_state_dict(
-            self.model, full_state, self.dp_mesh, 
+        model = self._fsdp2_load_full_state_dict(
+            model, full_state, self.dp_mesh, 
             cpu_offload=True if self.fsdp_cpu_offload else None
         )
+        
+        self.model = model
 
         if args.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
@@ -209,19 +207,27 @@ class FSDPTrainRayActor(TrainRayActor):
         """Get context manager for model initialization.
         
         Returns a callable that creates a context manager.
-        Uses meta device (no memory allocation) for non-rank-0 processes.
-        Only rank 0 loads actual weights from checkpoint.
+        Uses meta device (no memory allocation) for non-rank-0 processes,
+        UNLESS tie_word_embeddings=True (which causes hangs with meta tensors).
         
         Ref: veRL's approach in verl/utils/fsdp_utils.py::get_init_weight_context_manager
+        NOTE: tie_word_embedding causes meta_tensor init to hang (veRL comment)
         """
-        from contextlib import nullcontext
         from accelerate import init_empty_weights
         
-        # Only rank 0 loads actual weights, others use meta device
-        if dist.get_rank() == 0:
-            return nullcontext  # Normal loading for rank 0
+        # Check if model uses tied word embeddings (which doesn't work with meta tensors)
+        use_meta_tensor = not self.hf_config.tie_word_embeddings
+        
+        # CPU init for all ranks when tie_word_embeddings=True
+        cpu_init_weights = lambda: torch.device("cpu")
+        
+        if use_meta_tensor:
+            # Rank 0: CPU, others: meta device (memory efficient for large models)
+            return init_empty_weights if dist.get_rank() != 0 else cpu_init_weights
         else:
-            return init_empty_weights  # Meta device for other ranks
+            # All ranks use CPU when tie_word_embeddings=True (required for correctness)
+            logger.info(f"[Rank {dist.get_rank()}] tie_word_embeddings=True, loading full model to CPU on all ranks")
+            return cpu_init_weights
 
     def _fsdp2_load_full_state_dict(self, model, full_state, device_mesh, cpu_offload):
         """Load full state dict into FSDP2 model with efficient broadcast from rank 0.
@@ -257,21 +263,16 @@ class FSDPTrainRayActor(TrainRayActor):
         
         set_model_state_dict(model, full_state, options=options)
         
-        
-        # Verify model has weights loaded
-        try:
-            first_param = next(model.parameters())
-            param_norm = first_param.norm().item()
-            param_device = first_param.device
-            logger.info(f"[Rank {dist.get_rank()}] Model verification: first param norm={param_norm:.4f}, device={param_device}")
-        except Exception as e:
-            logger.error(f"[Rank {dist.get_rank()}] Failed to verify model weights: {e}")
+        # Buffers (like rotary_emb, attention masks) are not in state_dict, 
+        for name, buf in model.named_buffers():
+            dist.broadcast(buf, src=0)
         
         # If cpu_offload is enabled, manually move model to CPU after loading
         if is_cpu_offload:
-            logger.info(f"[Rank {dist.get_rank()}] Moving model to CPU for CPUOffloadPolicy...")
             model.to("cpu", non_blocking=True)
-        
+            # After moving to CPU, buffers need to be on GPU for FSDP operations
+            for buf in model.buffers():
+                buf.data = buf.data.to(torch.cuda.current_device())
         
         return model
 
