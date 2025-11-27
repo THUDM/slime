@@ -1,0 +1,3 @@
+strands-agents
+strands-agents-tools
+camel-ai
