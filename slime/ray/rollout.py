@@ -306,7 +306,10 @@ def init_rollout_engines(args, pg, all_rollout_engines):
         }
 
         # TODO: currently the amem position is hardcoded, change to a better way later.
-        if len(glob("/usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libamem_nccl.so*")) > 0:
+        if (
+            args.offload_rollout
+            and len(glob("/usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libamem_nccl.so*")) > 0
+        ):
             logger.info("Enable AMEM for rollout engine.")
             ld_library_path = (
                 os.environ.get("LD_LIBRARY_PATH", "") + ":/usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib"
