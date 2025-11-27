@@ -54,7 +54,7 @@
     <link rel="prev" title="8xH100 训练 GLM4-9B" href="glm4-9B.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2025 年 11 月 26 日"/>
+    <meta name="docbuild:last-update" content="2025 年 11 月 27 日"/>
   </head>
   
   
@@ -433,6 +433,7 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">环境准备</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">执行训练</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">参数简介</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#bf16-fp8">bf16 训练 fp8 推理</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">多机支持</a></li>
 </ul>
 </li>
@@ -515,6 +516,20 @@ bash<span class="w"> </span>scripts/run-qwen3-30B-A3B.sh
 </li>
 </ol>
 </section>
+<section id="bf16-fp8">
+<h3>bf16 训练 fp8 推理<a class="headerlink" href="#bf16-fp8" title="Link to this heading">#</a></h3>
+<p>slime 还支持 bf16 训练，fp8 推理。对于 Qwen3-30B-A3B 模型，只需要下载如下模型：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>huggingface-cli<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-30B-A3B-FP8<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-30B-A3B-FP8
+</pre></div>
+</div>
+<p>并将 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 替换为：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1">#--hf-checkpoint /root/Qwen3-30B-A3B</span>
+--hf-checkpoint<span class="w"> </span>/root/Qwen3-30B-A3B-FP8
+</pre></div>
+</div>
+<p>即可触发 fp8 训练。目前我们会将 bf16 权重直接 cast 为 fp8，后续会逐渐添加对精度影响更小的量化方案。</p>
+<p>⚠️  训练的 megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的。</p>
+</section>
 <section id="id4">
 <h3>多机支持<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
 <p>对于多机环境，需要进行如下的几点修改：</p>
@@ -593,6 +608,7 @@ bash<span class="w"> </span>scripts/run-qwen3-30B-A3B.sh
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">环境准备</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">执行训练</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">参数简介</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#bf16-fp8">bf16 训练 fp8 推理</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">多机支持</a></li>
 </ul>
 </li>
@@ -629,7 +645,7 @@ bash<span class="w"> </span>scripts/run-qwen3-30B-A3B.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2025 年 11 月 26 日.
+  最后更新于 2025 年 11 月 27 日.
   <br/>
 </p>
   </div>
