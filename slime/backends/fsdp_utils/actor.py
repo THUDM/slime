@@ -241,13 +241,11 @@ class FSDPTrainRayActor(TrainRayActor):
         from torch.distributed.checkpoint.state_dict import StateDictOptions, set_model_state_dict
         
         # Rank 0: move with weights, others: allocate empty tensors on device
-        logger.info(f"[Rank {dist.get_rank()}] Moving model to GPU for broadcast...")
         if dist.get_rank() == 0:
             model = model.to(device=torch.cuda.current_device(), non_blocking=True)
         else:
             # to_empty creates tensors on device without initializing memory
             model = model.to_empty(device=torch.cuda.current_device())
-        logger.info(f"[Rank {dist.get_rank()}] Model moved to GPU")
         
         # Set options for efficient broadcast from rank 0 (veRL's approach)
         is_cpu_offload = cpu_offload is not None  # True if parameter is passed (veRL's logic)
@@ -257,14 +255,8 @@ class FSDPTrainRayActor(TrainRayActor):
             broadcast_from_rank0=True
         )
         
-        logger.info(f"[Rank {dist.get_rank()}] Starting set_model_state_dict...")
         set_model_state_dict(model, full_state, options=options)
-        logger.info(f"[Rank {dist.get_rank()}] Finished set_model_state_dict")
         
-        for name, buf in model.named_buffers():
-            dist.broadcast(buf, src=0)
-        
-        logger.info(f"[Rank {dist.get_rank()}] Finished broadcasting buffers")
         
         # Verify model has weights loaded
         try:
@@ -279,13 +271,8 @@ class FSDPTrainRayActor(TrainRayActor):
         if is_cpu_offload:
             logger.info(f"[Rank {dist.get_rank()}] Moving model to CPU for CPUOffloadPolicy...")
             model.to("cpu", non_blocking=True)
-            # Keep buffers on GPU for efficiency
-            for buf in model.buffers():
-                buf.data = buf.data.to(torch.cuda.current_device())
         
-        logger.info(f"[Rank {dist.get_rank()}] FSDP2 model loaded with efficient broadcast from rank 0")
         
-        # Return the model (it may have been reassigned by .to() calls)
         return model
 
     @timer
@@ -812,7 +799,9 @@ class FSDPTrainRayActor(TrainRayActor):
             
             full_state = ref_model.state_dict()
 
-            # TODO: cpu_offload/model.cpu(), which one is faster?
+            # TODO: cpu_offload/model.cpu(), which one is faster? 
+            # We should do further test on this later.
+            # We use cpu_offload here for simplicity.
             ref_model = apply_fsdp2(ref_model, mesh=self.dp_mesh, cpu_offload=True)
             
             ref_model = self._fsdp2_load_full_state_dict(ref_model, full_state, self.dp_mesh, cpu_offload=True)
