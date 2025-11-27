@@ -1,3 +1,50 @@
+diff --git a/python/sglang/srt/distributed/device_communicators/pynccl.py b/python/sglang/srt/distributed/device_communicators/pynccl.py
+index f485c24c2..901010610 100644
+--- a/python/sglang/srt/distributed/device_communicators/pynccl.py
++++ b/python/sglang/srt/distributed/device_communicators/pynccl.py
+@@ -352,3 +352,9 @@ class PyNcclCommunicator:
+ 
+         self.disabled = old_disable
+         self.stream = old_stream
++
++    def nccl_pause(self):
++        self.nccl.ncclPause(self.comm)
++
++    def nccl_resume(self):
++        self.nccl.ncclResume(self.comm)
+diff --git a/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py b/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
+index 579811777..3c0854550 100644
+--- a/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
++++ b/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
+@@ -304,6 +304,15 @@ class NCCLLibrary:
+         Function("ncclGroupEnd", ncclResult_t, []),
+     ]
+ 
++    if os.environ.get("AMEM_ENABLE", "0") == "1":
++        exported_functions.extend([
++            # ncclResult_t ncclPause(ncclComm_t comm);
++            Function("ncclPause", ncclResult_t, [ncclComm_t]),
++            # ncclResult_t ncclResume(ncclComm_t comm);
++            Function("ncclResume", ncclResult_t, [ncclComm_t]),
++            Function("ncclSetGroupID", ncclResult_t, [ctypes.c_int]),
++        ])
++
+     exported_functions_symm_mem = [
+         # ncclResult_t ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags);
+         Function(
+@@ -551,6 +560,12 @@ class NCCLLibrary:
+     def ncclGroupEnd(self) -> None:
+         self.NCCL_CHECK(self._funcs["ncclGroupEnd"]())
+ 
++    def ncclPause(self, comm: ncclComm_t) -> None:
++        self.NCCL_CHECK(self._funcs["ncclPause"](comm))
++
++    def ncclResume(self, comm: ncclComm_t) -> None:
++        self.NCCL_CHECK(self._funcs["ncclResume"](comm))
++
+ 
+ __all__ = [
+     "NCCLLibrary",
 diff --git a/python/sglang/srt/distributed/parallel_state.py b/python/sglang/srt/distributed/parallel_state.py
 index c954d1e52..c5d2067b2 100644
 --- a/python/sglang/srt/distributed/parallel_state.py
@@ -687,10 +734,27 @@ index e6f59e5b0..c199b987b 100644
          self._check_req_pool()
  
 diff --git a/python/sglang/srt/managers/scheduler_update_weights_mixin.py b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
-index 9bed7030d..6e64dc36f 100644
+index 9bed7030d..a12deed3a 100644
 --- a/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
-@@ -76,7 +76,8 @@ class SchedulerUpdateWeightsMixin:
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+ import logging
++import os
+ from typing import TYPE_CHECKING, Tuple
+ 
+ import torch
+@@ -11,6 +12,8 @@ from sglang.srt.constants import (
+     GPU_MEMORY_TYPE_KV_CACHE,
+     GPU_MEMORY_TYPE_WEIGHTS,
+ )
++from sglang.srt.distributed import get_moe_ep_group, get_moe_tp_group, get_tp_group
++from sglang.srt.layers.dp_attention import get_attention_tp_group
+ from sglang.srt.managers.io_struct import (
+     DestroyWeightsUpdateGroupReqInput,
+     DestroyWeightsUpdateGroupReqOutput,
+@@ -76,7 +79,8 @@ class SchedulerUpdateWeightsMixin:
  
      def update_weights_from_tensor(self, recv_req: UpdateWeightsFromTensorReqInput):
          """Update the online model parameter from tensors."""
@@ -700,6 +764,48 @@ index 9bed7030d..6e64dc36f 100644
          # TODO extract common code b/t update_weights_from_distributed and update_weights_from_tensor later
          if success:
              if recv_req.flush_cache:
+@@ -132,6 +136,20 @@ class SchedulerUpdateWeightsMixin:
+         if GPU_MEMORY_TYPE_CUDA_GRAPH in tags:
+             self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_CUDA_GRAPH)
+ 
++            if os.environ.get("AMEM_ENABLE", "0") == "1":
++                tp_group = get_tp_group()
++                if tp_group is not None and tp_group.pynccl_comm is not None:
++                    tp_group.pynccl_comm.nccl_pause()
++                attn_tp_group = get_attention_tp_group()
++                if attn_tp_group is not None and attn_tp_group.pynccl_comm is not None:
++                    attn_tp_group.pynccl_comm.nccl_pause()
++                moe_ep_group = get_moe_ep_group()
++                if moe_ep_group is not None and moe_ep_group.pynccl_comm is not None:
++                    moe_ep_group.pynccl_comm.nccl_pause()
++                moe_tp_group = get_moe_tp_group()
++                if moe_tp_group is not None and moe_tp_group.pynccl_comm is not None:
++                    moe_tp_group.pynccl_comm.nccl_pause()
++
+         torch.cuda.synchronize()
+ 
+         return ReleaseMemoryOccupationReqOutput()
+@@ -150,6 +168,20 @@ class SchedulerUpdateWeightsMixin:
+         if GPU_MEMORY_TYPE_CUDA_GRAPH in tags:
+             self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_CUDA_GRAPH)
+ 
++            if os.environ.get("AMEM_ENABLE", "0") == "1":
++                tp_group = get_tp_group()
++                if tp_group is not None and tp_group.pynccl_comm is not None:
++                    tp_group.pynccl_comm.nccl_resume()
++                attn_tp_group = get_attention_tp_group()
++                if attn_tp_group is not None and attn_tp_group.pynccl_comm is not None:
++                    attn_tp_group.pynccl_comm.nccl_resume()
++                moe_ep_group = get_moe_ep_group()
++                if moe_ep_group is not None and moe_ep_group.pynccl_comm is not None:
++                    moe_ep_group.pynccl_comm.nccl_resume()
++                moe_tp_group = get_moe_tp_group()
++                if moe_tp_group is not None and moe_tp_group.pynccl_comm is not None:
++                    moe_tp_group.pynccl_comm.nccl_resume()
++
+         if GPU_MEMORY_TYPE_WEIGHTS in tags:
+             self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_WEIGHTS)
+             torch.distributed.barrier(self.tp_cpu_group)
 diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
 index c5a2e35ed..403cfcd9b 100644
 --- a/python/sglang/srt/managers/tokenizer_manager.py
