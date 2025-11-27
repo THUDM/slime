@@ -209,22 +209,20 @@ class FSDPTrainRayActor(TrainRayActor):
         Uses meta device (no memory allocation) for non-rank-0 processes,
         UNLESS tie_word_embeddings=True (which causes hangs with meta tensors).
 
-        Ref: veRL's approach in verl/utils/fsdp_utils.py::get_init_weight_context_manager
-        NOTE: tie_word_embedding causes meta_tensor init to hang (veRL comment)
+        Ref: verl/utils/fsdp_utils.py::get_init_weight_context_manager
+        NOTE: tie_word_embedding causes meta_tensor init to hang
         """
         from accelerate import init_empty_weights
 
         # Check if model uses tied word embeddings (which doesn't work with meta tensors)
         use_meta_tensor = not self.hf_config.tie_word_embeddings
 
-        # CPU init for all ranks when tie_word_embeddings=True
         cpu_init_weights = lambda: torch.device("cpu")
 
         if use_meta_tensor:
             # Rank 0: CPU, others: meta device (memory efficient for large models)
             return init_empty_weights if dist.get_rank() != 0 else cpu_init_weights
         else:
-            # All ranks use CPU when tie_word_embeddings=True (required for correctness)
             logger.info(f"[Rank {dist.get_rank()}] tie_word_embeddings=True, loading full model to CPU on all ranks")
             return cpu_init_weights
 
@@ -238,10 +236,9 @@ class FSDPTrainRayActor(TrainRayActor):
             model: FSDP2-wrapped model
             full_state: State dict (only rank 0 has real weights, others have empty dict)
             device_mesh: Device mesh for FSDP
-            cpu_offload: If not None, enables StateDictOptions cpu_offload (veRL's logic)
-                        Pass True for FSDP2 CPUOffloadPolicy, None for manual management
+            cpu_offload: If not None, enables StateDictOptions cpu_offload
 
-        Ref: veRL's actual implementation in verl/utils/fsdp_utils.py::fsdp2_load_full_state_dict (Lines 451-486)
+        Ref:verl/utils/fsdp_utils.py::fsdp2_load_full_state_dict
         """
         from torch.distributed.checkpoint.state_dict import StateDictOptions, set_model_state_dict
 
@@ -252,20 +249,17 @@ class FSDPTrainRayActor(TrainRayActor):
             # to_empty creates tensors on device without initializing memory
             model = model.to_empty(device=torch.cuda.current_device())
 
-        # Set options for efficient broadcast from rank 0 (veRL's approach)
-        is_cpu_offload = cpu_offload is not None  # True if parameter is passed (veRL's logic)
+        is_cpu_offload = cpu_offload is not None
         options = StateDictOptions(full_state_dict=True, cpu_offload=is_cpu_offload, broadcast_from_rank0=True)
 
         set_model_state_dict(model, full_state, options=options)
 
-        # Buffers (like rotary_emb, attention masks) are not in state_dict,
+        # set_model_state_dict will not broadcast buffers, so we need to broadcast them manually.
         for name, buf in model.named_buffers():
             dist.broadcast(buf, src=0)
 
-        # If cpu_offload is enabled, manually move model to CPU after loading
         if is_cpu_offload:
             model.to("cpu", non_blocking=True)
-            # After moving to CPU, buffers need to be on GPU for FSDP operations
             for buf in model.buffers():
                 buf.data = buf.data.to(torch.cuda.current_device())
 
@@ -771,10 +765,6 @@ class FSDPTrainRayActor(TrainRayActor):
             Creates a separate FSDP2 model instance for the reference model.
             ALWAYS uses CPUOffloadPolicy for the reference model to save memory,
             regardless of the actor model's CPU offload setting.
-
-            veRL Reference: "We force reference policy to use CPUOffload to save memory.
-            We force turn off CPUOffload for actor because it causes incorrect results
-            when using grad accumulation"
         """
         if ref_load_path is None:
             raise ValueError("ref_load_path must be provided when loading reference model")
