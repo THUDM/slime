@@ -324,13 +324,10 @@ class FSDPTrainRayActor(TrainRayActor):
         # Select which model to use
         if model_tag == "ref" and self.ref_model is not None:
             if not self.fsdp_cpu_offload:
-                logger.info("[Rank {}] Offloading actor model to CPU".format(dist.get_rank()))
                 self.model.cpu()
                 torch.cuda.empty_cache()
                 dist.barrier(group=get_gloo_group())
 
-            # Ref model uses FSDP2 CPUOffloadPolicy - don't manually move to GPU
-            logger.info("[Rank {}] Using ref model with FSDP2 CPUOffloadPolicy".format(dist.get_rank()))
             active_model = self.ref_model
             active_model.eval()
         else:
