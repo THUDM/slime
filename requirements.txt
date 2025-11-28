@@ -9,6 +9,7 @@ nvidia-modelopt[torch]>=0.37.0  # needed by megatron-bridge
 omegaconf
 pillow
 pylatexenc
+qwen_vl_utils # temporary dependency for geo3k vlm example, will be removed
 pyyaml
 ray[default]
 ring_flash_attn
