@@ -372,6 +372,21 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 nargs="+",
                 help="Address and ports of the external engines.",
             )
+            # from https://github.com/Risc-lt/sglang/blob/cc8883ff7bf63dda8627cc696d49055e0c573d5b/python/sglang/srt/model_executor/model_runner.py
+            parser.add_argument(
+                "--update-weights-p2p-transfer",
+                action="store_true",
+                default=False,
+                help="Enable P2P weight transfer between GPUs when updating model weights in RL training.",
+            )
+            parser.add_argument(
+                "--p2p-transfer-ib-device",
+                type=str,
+                default=None,
+                help="The InfiniBand devices for P2P transfer, accepts single device (e.g., --p2p-transfer-ib-device mlx5_0) "
+                "or multiple comma-separated devices (e.g., --p2p-transfer-ib-device mlx5_0,mlx5_1). "
+                "Default is None, which triggers automatic device detection when mooncake backend is enabled.",
+            )            
             return parser
 
         def add_fault_tolerance_arguments(parser):

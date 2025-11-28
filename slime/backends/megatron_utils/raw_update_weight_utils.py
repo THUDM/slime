@@ -1,10 +1,26 @@
+"""
+TODO s:
+- entrypoint function in `slime/slime/backends/sglang_utils/sglang_engine.py`
+- entrypoint function in `UpdateWeightsFromDistributedReqInput` of sglang, "/mnt/home/xinji1/clean_sglang/sglang/python/sglang/srt/managers/io_struct.py"
+- if it's better to specifiy the port directly in __init__ of  P2PTransferEngine?  rather than creating the session id over and over again?
+- merge `init_p2p_transfer_engine` into `init_distributed_weight`
+- replace dict with Sequence[str, ...]
+
+Q:
+- always re-connect/rebuild the communication group? why?
+- zmq should be build only once or multiple times?
+- mooncake `store?`
+- `disconnect_rollout_engines_from_distributed`?
+- destroy the transfer_engine in the end?
+"""
+
 import inspect
 import re
 import socket
 import time
 from argparse import Namespace
 from collections.abc import Iterator, Mapping, Sequence
-from typing import Callable
+from typing import Callable, Optional
 
 import ray
 import torch
@@ -13,7 +29,7 @@ from megatron.core import mpu
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
 from ray import ObjectRef
 from ray.actor import ActorHandle
-
+import zmq
 try:
     from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
 except:
@@ -36,6 +52,17 @@ try:
 except Exception:
     use_flattened_tensor_bucket = False
 
+import zmq
+from collections import defaultdict
+from queue import Queue
+from typing import Dict, Optional
+import logging
+logger = logging.getLogger(__name__)
+try:
+    from slime.backends.sglang_utils.sglang_rdma_p2p_transfer import P2PTransferEngine
+    support_sglang_p2p_transfer = True
+except Exception:
+    support_sglang_p2p_transfer = False
 
 def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     """
@@ -584,10 +611,17 @@ class UpdateWeightFromTensor:
             return refs
         return []
 
+# TODO(xinji1): where the updates for:
+# - accept the signals from rollout engines that weights from training side could be sent now.
+# - collect the weights within each pp group
+# - mapping ?
+# - start sending weights
+# - wait for the signals from rollout workers.
 
-class UpdateWeightFromDistributed:
+
+class UpdateWeightFromDistributedRDMA:
     """
-    Update distributed engines via NCCL. Each PP rank: group "slime-pp_{pp_rank}",
+    Update distributed engines via p2p Transfer. Each PP rank: group "slime-pp_{pp_rank}",
     only DP=TP=0 broadcasts. Non-expert (TP) and expert (EP) params separate.
     """
 
@@ -611,13 +645,58 @@ class UpdateWeightFromDistributed:
         self.quantization_config = quantization_config
         self.weight_version = 0
         self._model_update_groups = None
+        # The following params are for p2p rdma transfering
+        assert self.args.update_weights_p2p_transfer
+        master_address, master_port = get_master_address_and_port()
+        self.master_address = master_address
+        # In NCCL, master_port is for NCCL communication;
+        # In p2p RDMA, master_port is for the zmq communication
+        self.master_port = master_port
+        
+        self.rollout_engines_index_mapping : dict[int, Optional[list[int]]]| None = None
+        self.selected_rollout_engines: Sequence[ActorHandle] | None = None
+        
+        self.training_p2p_transfer_engine = P2PTransferEngine(
+            hostname = self.master_address,
+            gpu_id=0, # training host
+            ib_device= None # TODO : check
+        )
+
+        
+        # TODO(xinji1): type
+        # TODO(xinji1): if it's necessary that we need to destory the 
+        self.context = None
+        self.router_socket = None
+        # index mapping from pp_rank to the ranks of rollout_engines,
+        # indicating that which rollout_engines should be linked
+        
+        if self.args.update_weights_p2p_transfer:
+            assert support_sglang_p2p_transfer, "Please check the importing of `MooncakeTransferEngine` in sglang"
+
+    # a message loop is needed
+    def 
+    
+    def _initial_rollout_mapping(self):
+        """ build the index mapping from training ranks of different pp_src_ranks to the gpus/nodes of rollout engines"""
+        # TODO: how to build the index mapping from pp_src_rank to rollout_engine ranks
+        # This function should initialize `self.rollout_engines_index_mapping`
+        pass
+    
+    def select_rollout_engines(self, rollout_engines: Sequence[ActorHandle], pp_rank: int) -> None:
+        """Select rollout engins given pp_rank"""
+        if self.rollout_engines_index_mapping is None:
+            self.selected_rollout_engines = rollout_engines
+        else:
+            candidates = [engine for i, engine in enumerate(rollout_engines) if i in self.rollout_engines_index_mapping[pp_rank]]
+            self.selected_rollout_engines = Sequence(candidates) 
 
     def connect_rollout_engines(
         self, rollout_engines: Sequence[ActorHandle], rollout_engine_lock: ActorHandle
     ) -> None:
         """
-        Create NCCL "slime-pp_{pp_rank}" if PP source (DP=TP=0). Lock prevents concurrent broadcasts.
+        Create NCCL/P2P RDMA "slime-pp_{pp_rank}" if PP source (DP=TP=0). Lock prevents concurrent broadcasts.
         """
+        self._initial_rollout_mapping()
         self.rollout_engines = rollout_engines
         self.rollout_engine_lock = rollout_engine_lock
 
@@ -628,20 +707,40 @@ class UpdateWeightFromDistributed:
             mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
         )
         pp_rank = mpu.get_pipeline_model_parallel_rank()
+        # TODO: should we update the selected rollout engines every time
+        self.select_rollout_engines(rollout_engines=rollout_engines, pp_rank=pp_rank)
+
         if self._is_pp_src_rank:
             self._group_name = f"slime-pp_{pp_rank}"
 
         if self._is_pp_src_rank:
             if self._model_update_groups is not None:
                 disconnect_rollout_engines_from_distributed(
-                    self.args, self._group_name, self._model_update_groups, self.rollout_engines
+                    self.args, self._group_name, self._model_update_groups, self.rollout_engines,
                 )
-            self._model_update_groups = connect_rollout_engines_from_distributed(
-                self.args, self._group_name, rollout_engines
+            # initialize address and port
+            # TODO(xinji1): whether we should move this part into __init__ ? 
+            master_address, master_port = get_master_address_and_port()
+            self.context, self.router_socket = initialize_socket_for_weight_transfering(
+                master_address=master_address,
+                master_port=master_port
             )
-
+            self._model_update_groups = connect_rollout_engines_from_distributed(
+                self.args, 
+                self._group_name, 
+                rollout_engines, 
+                rollout_engines_index_mapping=None, # TBD
+                master_address=master_address,
+                master_port=master_port,
+            )
     @torch.no_grad()
     def update_weights(self) -> None:
+        if self.args.update_weights_p2p_transfer:
+            self.update_weights_rdma()
+        else:
+            self.update_weights_nccl()
+
+    def update_weights_nccl(self) -> None:
         """
         Pause → flush → non-expert (TP) → expert (EP) → continue. Progress on PP source.
         """
@@ -682,6 +781,56 @@ class UpdateWeightFromDistributed:
             self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
 
         dist.barrier(group=get_gloo_group())
+        if dist.get_rank() == 0:
+            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
+        dist.barrier(group=get_gloo_group())
+
+    def update_weights_rdma(self) -> None:
+        """
+        Update weights with P2P rdma
+        Pause → flush → non-expert (TP) → expert (EP) → continue. Progress on PP source.
+        """
+        self.weight_version += 1
+        
+        
+        # TODO(): we may choose to pause engine/flush_chache based on the pp_src_rank(self._group_name)
+        if dist.get_rank() == 0:
+            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
+            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
+            # TODO(xinji1): For rollout, whether we should decouple `prepare_tensor_buffer_and_send_sync_status`,
+            # and `transfering weight from training side`? 
+        dist.barrier(group=get_gloo_group())
+        buffer_size = 0
+        converted_named_tensors = []
+        # non expert params
+        pbar = tqdm(desc=f"[{self._group_name}] Update weights through P2P RDMA", total=0) if self._is_pp_src_rank else None
+
+        for name, param in named_parameters(self.args, self.model):
+            if ".experts." in name:
+                continue
+            buffer_size = self._update_weight_from_distributed(
+                name, param, converted_named_tensors, buffer_size, pbar=pbar
+            )
+
+        if converted_named_tensors:
+            self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
+
+        dist.barrier(group=get_gloo_group())
+
+        buffer_size = 0
+        named_tensors = []
+        for name, param in named_parameters(self.args, self.model):
+            if ".experts." not in name:
+                continue
+            buffer_size = self._update_expert_weight_from_distributed(
+                name, param, named_tensors, buffer_size, pbar=pbar
+            )
+
+        if named_tensors:
+            self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
+
+        dist.barrier(group=get_gloo_group())
+        # TODO: close the zmq socket.
         if dist.get_rank() == 0:
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
@@ -777,6 +926,41 @@ class UpdateWeightFromDistributed:
     def _update_bucket_weights_from_distributed(
         self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
     ) -> None:
+        if self.args.update_weights_p2p_transfer:
+            self._update_bucket_weights_from_distributed_rdma(converted_named_tensors=converted_named_tensors, pbar=pbar)
+        else:
+            self._update_bucket_weights_from_distributed_nccl(converted_named_tensors=converted_named_tensors, pbar=pbar)
+
+    def _update_bucket_weights_from_distributed_rdma(
+        self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
+    ) -> None:
+        """
+        Lock → broadcast → clear → unlock → pbar++. 
+        """
+        # lock the rollout engines to prevent dead lock on broadcast.
+        # TODO(xinji1): if rdma needs it too.
+        while not ray.get(self.rollout_engine_lock.acquire.remote()):
+            time.sleep(0.1)
+
+        refs = update_weights_from_distributed(
+            self.args,
+            self._group_name,
+            self._model_update_groups,
+            self.weight_version,
+            self.selected_rollout_engines, # selected ones
+            converted_named_tensors,
+            self.context, 
+            self.router_socket,
+        )
+
+        ray.get(refs)
+        converted_named_tensors.clear()
+        ray.get(self.rollout_engine_lock.release.remote())
+        pbar.update(1)
+
+    def _update_bucket_weights_from_distributed_nccl(
+        self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
+    ) -> None:
         """
         Lock → broadcast → clear → unlock → pbar++. Lock prevents NCCL deadlock.
         """
@@ -799,50 +983,348 @@ class UpdateWeightFromDistributed:
         pbar.update(1)
 
 
-def connect_rollout_engines_from_distributed(
-    args: Namespace, group_name: str, rollout_engines: Sequence[ActorHandle]
-) -> dist.ProcessGroup:
-    """
-    Create NCCL group: training rank 0 + all engine GPUs. Blocks until joined.
-    """
+
+def get_master_address_and_port() -> tuple[str, int]:
     master_address = ray._private.services.get_node_ip_address()
     with socket.socket() as sock:
         sock.bind(("", 0))
         master_port = sock.getsockname()[1]
-    world_size = len(rollout_engines) * args.rollout_num_gpus_per_engine + 1
+    return master_address, master_port
 
-    refs = [
-        engine.init_weights_update_group.remote(
-            master_address,
-            master_port,
-            i * args.rollout_num_gpus_per_engine + 1,
-            world_size,
-            group_name,
-            backend="nccl",
+def initialize_socket_for_weight_transfering(master_address: str, master_port: int):
+    """
+    Build context/socket for the weight transfering between training side and rollout side.
+    Specifically, the socket is used for:
+    - Rollout side: sending messages to training side, that the buffer is ready, and weights
+        could be transfered from training side.
+    - Training side: sending messages to rollout side, that the weight transfering is done.
+       
+    # TODO(): may be replaced with Mooncake's TransferEngine store?
+    """
+    context = zmq.Context()
+    router_socket = context.socket(zmq.ROUTER)
+    router_socket.bind(f"tcp://{master_address}:{master_port}")
+    return context, router_socket
+
+def connect_rollout_engines_from_distributed(
+    args: Namespace, group_name: str, rollout_engines: Sequence[ActorHandle],
+    rollout_engines_index_mapping: list[int] | None = None,
+    master_address: str | None = None,
+    master_port: int | None = None,
+) -> dist.ProcessGroup:
+    """
+    Create NCCL group: training rank 0 + all engine GPUs. Blocks until joined.
+    
+    Args:
+        rollout_engines_index_mapping: list[int]. which rollout engines should be
+            connected with TransferEngine, when p2p weight transfering
+            enabled.
+    """
+    if master_address is None or master_port is None:
+        master_address, master_port = get_master_address_and_port()
+    world_size = len(rollout_engines) * args.rollout_num_gpus_per_engine + 1
+    # NOTE(xinji1): where the init group of weight_transfer in traning side
+    # happens. Note that currently the group is only for the pp_src_rank of 
+    # pp group for training side.
+    # TODO(xinji1):
+    # in unittest, build other remote groups like the op here.
+    # TODO(xinji1): build a new class for RDMA transfering (nccl, rdma)
+    if args.update_weights_p2p_transfer:
+        # TODO: new function
+        # build the p2p link from the host to the file 
+        # TODO: To get the best mapping, from current host to the 
+        # ranks in rollout engine. 
+        # TODO: when # training senders > # rollout engines.
+        # 1. send weights to some of the gpus in one rollout engine.
+        # 2. send weights to all gpus of one rollout engine, then split
+        # the weights from rollout side.
+        # Method 2 should be more strightforward?
+        if rollout_engines_index_mapping is None:
+            # default: connect the host to all rollout_engines
+            rollout_engines_index_mapping = list(range(len(rollout_engines)))
+        selected_rollout_engines = [engine for i, engine in enumerate(rollout_engines) if i in rollout_engines_index_mapping ]
+        # Build p2p for the selected engines    
+        refs = [
+            engine.init_p2p_transfer_engine.remote(
+                master_address, # TODO(xinji1): if it's right to use master_address only?
+                master_port, # TODO(xinji1): p2p transfer port should be intiialized here.
+                i * args.rollout_num_gpus_per_engine + 1, # TODO(xinji1): another offset in `init_p2p_transfer_engine` is necessary?
+            )
+            for i, engine in enumerate(selected_rollout_engines) # TODO(xinji1): seems not necessary to build p2p for all engines
+        ]
+        
+        model_update_groups = P2PTransferEngine(
+            hostname=master_address,
+            gpu_id=0, # let rank of training side be 0
+            ib_device=None, # TODO(xinji1): None?
         )
-        for i, engine in enumerate(rollout_engines)
-    ]
-    model_update_groups = init_process_group(
-        backend="nccl",
-        init_method=f"tcp://{master_address}:{master_port}",
-        world_size=world_size,
-        rank=0,
-        group_name=group_name,
-    )
-    ray.get(refs)
+    else:
+        # here there's one process group of pp_src_rank 
+        # and all the other ranks in rollout engine.
+        refs = [
+            engine.init_weights_update_group.remote(
+                master_address,
+                master_port,
+                i * args.rollout_num_gpus_per_engine + 1,
+                world_size,
+                group_name,
+                backend="nccl",
+            )
+            for i, engine in enumerate(rollout_engines)
+        ]
+        model_update_groups = init_process_group(
+            backend="nccl",
+            init_method=f"tcp://{master_address}:{master_port}",
+            world_size=world_size,
+            rank=0,
+            group_name=group_name,
+        )
+        ray.get(refs) # to get the result from remote
     return model_update_groups
 
 
 def disconnect_rollout_engines_from_distributed(args, group_name, model_update_groups, rollout_engines):
     """
-    Destroy NCCL on training and engines.
+    Destroy NCCL/p2p RDMA commucation on training and engines.
     """
-    refs = [engine.destroy_weights_update_group.remote(group_name) for engine in rollout_engines]
-    dist.destroy_process_group(model_update_groups)
-    ray.get(refs)
+    if args.update_weights_p2p_transfer:
+        raise NotImplementedError("not support destorying the p2p RDMA yet")
+    else:
+        refs = [engine.destroy_weights_update_group.remote(group_name) for engine in rollout_engines]
+        dist.destroy_process_group(model_update_groups)
+        ray.get(refs)
 
 
 def update_weights_from_distributed(
+    args: Namespace,
+    group_name: str,
+    group: dist.ProcessGroup,
+    weight_version: int,
+    rollout_engines: Sequence[ActorHandle],
+    converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
+    context,
+    router_socket,
+) -> list[ObjectRef]:
+    """
+    Send metadata (Ray), broadcast tensors.
+    """
+    if args.update_weights_p2p_transfer:
+        return update_weights_from_distributed_rdma(
+            args, group_name, group, weight_version, rollout_engines, converted_named_tensors,
+            context, router_socket
+        )
+    else:
+        return update_weights_from_distributed_nccl(
+            args, group_name, group, weight_version, rollout_engines, converted_named_tensors
+        )
+
+# TODO(xinji1): it's better to involve it into a class..
+def update_weights_from_distributed_rdma(
+    args: Namespace,
+    group_name: str,
+    group: dist.ProcessGroup,
+    weight_version: int,
+    rollout_engines: Sequence[ActorHandle],
+    converted_named_tensors: Sequence[tuple[str, torch.Tensor]],
+    context,
+    router_socket,
+) -> list[ObjectRef]:
+    """
+    Send metadata (Ray), passing tensors with P2P RDMA.
+
+    Prerequisites:
+    - there're two types of seesion id in this case that should be kept in mind:
+      - p2p_session_id: for the zmq communication of training and rollout, like
+          syncing the buffer status. Usually it's `host_ip:port`
+      - transfer_session_id: locally generated from Mooncake's Engine, indicating
+          the id of weight transfering session.
+
+    Steps:
+    - Enable the update_weights_from_distributed so that the training host could get 
+      - whether the buffer of rollout engine is ready
+      - session_id
+    """
+    # TODO(xinji1):  build thread pool. If we could use different ports to pass weights? 
+    
+    refs = [
+        engine.update_weights_from_distributed.remote(
+            names=[name for name, _ in converted_named_tensors],
+            dtypes=[param.dtype for _, param in converted_named_tensors],
+            shapes=[param.shape for _, param in converted_named_tensors],
+            group_name=group_name,
+            weight_version=str(weight_version),
+        )
+        for engine in rollout_engines
+    ]
+    
+    # first round syncing: buffer ready/ transfer_session_id from zmq
+    assert context is not None and router_socket is not None, "for p2p transfering, the zmq should be initialized first."
+    rollout_count = len(rollout_engines)
+    while rollout_count > 0:
+        # TODO(xinji1): right?
+        try:
+            if router_socket.poll(timeout=100):  # 100ms timeout
+                # ROUTER receives frames from DEALER
+                frames = router_socket.recv_multipart()
+
+                logger.debug(f"[Slime Weights Updating] Received {len(frames)} frames, "
+                            f"frame lengths: {[len(f) for f in frames]}")
+
+                if len(frames) < 2:
+                    logger.warning(f"[Slime Weights Updating] Received malformed message with {len(frames)} frames")
+                    continue
+
+                # ROUTER adds identity as first frame
+                # Format is typically: [identity, delimiter (empty), actual_message]
+                identity = frames[0]
+
+                # Try to find the JSON payload
+                message = None
+                for i in range(1, len(frames)):
+                    try:
+                        if len(frames[i]) > 0:  # Skip empty frames
+                            message = zmq.utils.jsonapi.loads(frames[i])
+                            logger.debug(f"[Slime Weights Updating] Found JSON in frame {i}")
+                            break
+                    except Exception:
+                        continue
+
+                if message is None:
+                    logger.error(f"[Slime Weights Updating] Could not decode JSON from any frame")
+                    continue
+
+                msg_type = message.get("type", "")
+
+                if msg_type == "sync_status":
+                    # Handle sync_status from rollout worker
+                    # where the weights transfering happens.
+                    _handle_sync_status(identity, message)
+                else:
+                    logger.warning(f"[Slime Weights Updating] Unknown message type: {msg_type}")
+                
+                rollout_count -=1
+        except zmq.ZMQError as e:
+            if rollout_count > 0:
+                logger.error(f"[Slime Weights Updating] ZMQ error: {e}")
+            break
+        except Exception as e:
+            logger.error(f"[Slime Weights Updating] Error in message loop: {e}", exc_info=True)
+
+
+    # handles = []
+    # for _, param in converted_named_tensors:
+    #     handles.append(dist.broadcast(param.data, 0, group=group, async_op=True))
+    # for handle in handles:
+    #     handle.wait()
+
+    return refs
+
+def _handle_sync_status(identity: bytes, message: dict, converted_named_tensors:  Sequence[tuple[str, torch.Tensor]], engine, router_socket):
+    """
+    Handle sync_status message from rollout worker.
+    Message format:
+    {
+        "type": "sync_status",
+        "p2p_session_id": "training_ip:training_port",  # Training's ZMQ address
+        "status": "ready",
+        "ip": rollout_ip,
+        "transfer_session_id": rollout_mooncake_session_id,  # Rollout's Mooncake RPC address
+        "ptr": rollout_ptr,
+        "length": buffer_length,
+        "task_id": task_id
+    }
+    """
+    # Log the raw message for debugging
+    logger.debug(f"[Slime Weights Updating] Raw message: {message}")
+
+    p2p_session_id = message.get("p2p_session_id", "")
+    rollout_ip = message.get("ip", "")
+    rollout_transfer_session_id = message.get("transfer_session_id", "")
+    rollout_ptr = message.get("ptr", 0)
+    rollout_length = message.get("length", 0)
+    task_id = message.get("task_id", "")
+
+    logger.info(
+        f"[Slime Weights Updating] Received sync_status: "
+        f"p2p_session_id={p2p_session_id}, "
+        f"task_id={task_id}, "
+        f"rollout_transfer_session_id={rollout_transfer_session_id}, "
+        f"rollout_ip={rollout_ip}, "
+        f"rollout_ptr={rollout_ptr:#x}"
+    )
+
+    try:
+        # # Get the weights to send (for now, use the first registered weights)
+        # if not weight_buffers:
+        #     raise RuntimeError("No weights registered")        
+        # TODO(xinji1): per tensor level or per bucket level? should be per tensor level
+        # TODO(xinji1): build a worker pool instead? 
+        for weight_name, weight in converted_named_tensors:
+            
+            # TODO(xinji1): make them as the dict? so that there's no need to recompute them?
+            src_ptr = weight.data_ptr()
+            src_length = weight.numel() * weight.element_size()
+
+            # Verify length matches
+            if src_length != rollout_length:
+                raise RuntimeError(
+                    f"Length mismatch: src={src_length}, dst={rollout_length}"
+                )
+
+            # Validate that we have rollout_transfer_session_id
+            if not rollout_transfer_session_id:
+                raise RuntimeError(
+                    "Missing rollout_transfer_session_id in sync_status message. "
+                    "This is required for establishing RDMA connection."
+                )
+
+            logger.info(
+                f"[Slime Weights Updating] Performing RDMA write: "
+                f"src_ptr={src_ptr:#x} -> dst_ptr={rollout_ptr:#x}, "
+                f"length={src_length}, "
+                f"target_session={rollout_transfer_session_id}"
+            )
+
+            # Perform RDMA write using Mooncake transfer engine
+            # Use rollout's Mooncake transfer_session_id for RDMA connection
+            status = engine.transfer_sync(
+                session_id=rollout_transfer_session_id,
+                buffer=src_ptr,
+                peer_buffer_address=rollout_ptr,
+                length=src_length,
+            )
+
+            if status != 0:
+                raise RuntimeError(f"RDMA transfer failed with status {status}")
+
+            logger.info(
+                f"[Slime Weights Updating] RDMA write completed successfully for task {task_id}"
+            )
+
+            # Send success confirmation back to rollout worker
+            # ROUTER to DEALER: [identity, empty_delimiter, payload]
+            response_data = zmq.utils.jsonapi.dumps({
+                "type": "transfer_complete",
+                "status": "success",
+                "task_id": task_id,
+            })
+            router_socket.send_multipart([identity, b"", response_data])
+
+            logger.info(f"[TrainingWeightSender] Sent success confirmation for task {task_id}")
+
+    except Exception as e:
+        logger.error(f"[TrainingWeightSender] Error handling sync_status: {e}", exc_info=True)
+
+        # Send failure confirmation
+        response_data = zmq.utils.jsonapi.dumps({
+            "type": "transfer_complete",
+            "status": "failed",
+            "error": str(e),
+            "task_id": task_id,
+        })
+        router_socket.send_multipart([identity, b"", response_data])
+
+def update_weights_from_distributed_nccl(
     args: Namespace,
     group_name: str,
     group: dist.ProcessGroup,
@@ -871,249 +1353,3 @@ def update_weights_from_distributed(
         handle.wait()
 
     return refs
-
-
-class UpdateWeightFromDistributedRDMA:
-    """
-    Update distributed engines via P2P RDMA transfer. Each PP rank: group "slime-pp_{pp_rank}",
-    only DP=TP=0 transfers. Uses P2PTrainingTransferEngine for RDMA communication.
-    """
-
-    def __init__(
-        self,
-        args: Namespace,
-        model: Sequence[torch.nn.Module],
-        weights_getter: Callable[[], Mapping[str, torch.Tensor]],
-        *,
-        model_name: str,
-        quantization_config: dict[str, int | str | list[str]] | None,
-        vocab_size: int,
-    ) -> None:
-        """
-        Initialize. P2PTrainingTransferEngine created in connect_rollout_engines.
-        """
-        self.args = args
-        self.model = model
-        self.model_name = model_name
-        self.vocab_size = vocab_size
-        self.quantization_config = quantization_config
-        self.weight_version = 0
-        self._model_update_groups = None
-
-        # P2P RDMA specific initialization
-        self.training_p2p_transfer_engine = None
-        self.master_addr = None
-        self.master_port = None
-
-    def connect_rollout_engines(
-        self, rollout_engines: Sequence[ActorHandle], rollout_engine_lock: ActorHandle
-    ) -> None:
-        """
-        Initialize P2PTrainingTransferEngine if PP source (DP=TP=0).
-        Set master address/port and start the engine.
-        """
-        self.rollout_engines = rollout_engines
-        self.rollout_engine_lock = rollout_engine_lock
-
-        # For TP:
-        #   1. AllGather parameters to rank 0
-        #   2. P2P transfer parameters from rank 0 to all sglang engines
-        self._is_pp_src_rank = (
-            mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
-        )
-        pp_rank = mpu.get_pipeline_model_parallel_rank()
-
-        if self._is_pp_src_rank:
-            self._group_name = f"slime-pp_{pp_rank}"
-
-            # Stop existing engine if running (following task requirement)
-            if self._model_update_groups is not None:
-                if self.training_p2p_transfer_engine is not None:
-                    self.training_p2p_transfer_engine.stop()
-                    self.master_addr = None  # Reset as per task requirement
-                    self.master_port = None  # Reset as per task requirement
-                self._model_update_groups = None
-
-            # Get master address and port for P2P communication
-            self.master_addr = ray._private.services.get_node_ip_address()
-            with socket.socket() as sock:
-                sock.bind(("", 0))
-                self.master_port = sock.getsockname()[1]
-
-            # Import P2PTrainingTransferEngine from our implementation
-            from slime.backends.sglang_utils.sglang_rdma_p2p_transfer import P2PTrainingTransferEngine
-
-            # Initialize P2PTrainingTransferEngine
-            self.training_p2p_transfer_engine = P2PTrainingTransferEngine(
-                master_ip=self.master_addr,
-                master_port=self.master_port,
-                gpu_id=0,  # Training host GPU
-                ib_device=None  # Auto-detect InfiniBand device
-            )
-
-            # Start the training transfer engine
-            self.training_p2p_transfer_engine.start()
-
-            # Indicate that P2P system is active (as per task requirement)
-            self._model_update_groups = "p2p_active"  # Use as indicator
-
-            logger.info(f"P2PTrainingTransferEngine started on {self.master_addr}:{self.master_port}")
-
-    @torch.no_grad()
-    def update_weights(self) -> None:
-        """
-        Pause → flush → non-expert (TP) → expert (EP) → continue. Progress on PP source.
-        """
-        self.weight_version += 1
-
-        if dist.get_rank() == 0:
-            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
-            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
-        dist.barrier(group=get_gloo_group())
-
-        buffer_size = 0
-        converted_named_tensors = []
-        # non expert params
-        pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
-
-        for name, param in named_parameters(self.args, self.model):
-            if ".experts." in name:
-                continue
-            buffer_size = self._update_weight_from_distributed(
-                name, param, converted_named_tensors, buffer_size, pbar=pbar
-            )
-
-        if converted_named_tensors:
-            self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
-
-        dist.barrier(group=get_gloo_group())
-
-        buffer_size = 0
-        named_tensors = []
-        for name, param in named_parameters(self.args, self.model):
-            if ".experts." not in name:
-                continue
-            buffer_size = self._update_expert_weight_from_distributed(
-                name, param, named_tensors, buffer_size, pbar=pbar
-            )
-
-        if named_tensors:
-            self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
-
-        dist.barrier(group=get_gloo_group())
-        if dist.get_rank() == 0:
-            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
-        dist.barrier(group=get_gloo_group())
-
-    def _update_weight_from_distributed(
-        self,
-        name: str,
-        param: torch.nn.Parameter,
-        converted_named_tensors: list[tuple[str, torch.Tensor]],
-        buffer_size: int,
-        pbar: tqdm | None = None,
-    ) -> int | None:
-        """
-        Non-expert: gather TP → rm pad → HF → buffer (flush if full). All gather, PP source buffers.
-        Returns updated bytes on source, None on non-source.
-        """
-        param = all_gather_param(name, param)
-        param = remove_padding(name, param, self.vocab_size)
-        if not self._is_pp_src_rank:
-            return
-
-        param_size = param.numel() * param.element_size()
-        if buffer_size + param_size > self.args.update_weight_buffer_size:
-            self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
-            buffer_size = 0
-        converted_named_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
-        buffer_size += param_size
-        return buffer_size
-
-    def _update_expert_weight_from_distributed(
-        self,
-        name: str,
-        param: torch.nn.Parameter,
-        named_tensors: list[tuple[str, torch.Tensor]],
-        buffer_size: int,
-        pbar: tqdm | None = None,
-    ) -> int:
-        """
-        Expert: gather TP → rm pad → buffer. EP gather + HF deferred. Threshold × EP size.
-        """
-        param = all_gather_param(name, param)
-        param = remove_padding(name, param, self.vocab_size)
-
-        param_size = param.numel() * param.element_size()
-        if (
-            buffer_size + param_size
-            > self.args.update_weight_buffer_size * mpu.get_expert_model_parallel_world_size()
-        ):
-            self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
-            buffer_size = 0
-
-        named_tensors.append((name, param))
-        buffer_size += param_size
-        return buffer_size
-
-    def _update_bucket_weights_from_distributed(
-        self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
-    ) -> None:
-        """
-        Register weights with P2PTrainingTransferEngine and wait for transfers to complete.
-        Based on lines 518-545 in SGLang test: register_weights pattern.
-        """
-        if not self._is_pp_src_rank or not converted_named_tensors:
-            return
-
-        # Lock the rollout engines to prevent concurrent operations
-        while not ray.get(self.rollout_engine_lock.acquire.remote()):
-            time.sleep(0.1)
-
-        try:
-            # Register all weights with the P2P training transfer engine
-            # This follows the pattern from SGLang test lines 518-537
-            for name, tensor in converted_named_tensors:
-                self.training_p2p_transfer_engine.register_buffer(name, tensor)
-                if pbar:
-                    pbar.update(1)
-
-            # Send metadata to rollout engines (similar to original NCCL version)
-            refs = [
-                engine.update_weights_from_distributed.remote(
-                    names=[name for name, _ in converted_named_tensors],
-                    dtypes=[param.dtype for _, param in converted_named_tensors],
-                    shapes=[param.shape for _, param in converted_named_tensors],
-                    group_name=self._group_name,
-                    weight_version=str(self.weight_version),
-                    session_id=f"{self.master_addr}:{self.master_port}",  # Pass P2P session info
-                )
-                for engine in self.rollout_engines
-            ]
-
-            # Wait for all P2P transfers to complete
-            ray.get(refs)
-            converted_named_tensors.clear()
-
-        finally:
-            # Release the lock
-            ray.get(self.rollout_engine_lock.release.remote())
-
-    def _update_expert_bucket_weights_from_distributed(
-        self, named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
-    ) -> None:
-        """
-        Expert weights: gather across EP before HF conversion, then P2P transfer.
-        """
-        if not named_tensors:
-            return
-
-        converted_named_tensors = []
-        for name, param in named_tensors:
-            param = all_gather_param_across_ep(name, param)
-            converted_named_tensors += convert_to_hf(
-                self.args, self.model_name, name, param, self.quantization_config
-            )
-
-        self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
-        named_tensors.clear()
