@@ -1,6 +1,7 @@
-import os
-import sys
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[2] / "tests"))
@@ -15,31 +16,47 @@ EXTERNAL_RAY = int(os.environ.get("SLIME_SCRIPT_EXTERNAL_RAY", "0"))
 MASTER_ADDR = os.environ.get("MASTER_ADDR", "127.0.0.1")
 
 
+def detect_nvlink():
+    """Detect if NVLink is available on the system."""
+    try:
+        result = subprocess.run(["nvidia-smi"], capture_output=True, text=True, check=True)
+        nvlink_count = result.stdout.count("NVLink")
+        has_nvlink = 1 if nvlink_count > 0 else 0
+        print(f"HAS_NVLINK: {has_nvlink} (detected {nvlink_count} NVLink references)")
+        return has_nvlink
+    except Exception as e:
+        print(f"Failed to detect NVLink: {e}")
+        return 0
+
+
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
-    dataset_name = "hiyouga/geometry3k"
+    dataset_name = "chenhegu/geo3k_imgurl"
     _, partial_name = dataset_name.split("/")
     U.exec_command(f"hf download --repo-type dataset {dataset_name} --local-dir /root/datasets/{partial_name}")
 
-    try:
-        # Rename the dataset directory and files to match expected structure
-        U.exec_command("mv /root/datasets/geometry3k /root/datasets/geo3k")
-        U.exec_command("mv /root/datasets/geo3k/data/train-00000-of-00001.parquet /root/datasets/geo3k/data/train.parquet")
-        U.exec_command("mv /root/datasets/geo3k/data/test-00000-of-00001.parquet /root/datasets/geo3k/data/test.parquet")
-        U.exec_command("mv /root/datasets/geo3k/data/validation-00000-of-00001.parquet /root/datasets/geo3k/data/val.parquet")
-    except Exception as e:
-        pass
+    # try:
+    #     # Rename the dataset directory and files to match expected structure
+    #     U.exec_command("mv /root/datasets/geometry3k /root/datasets/geo3k")
+    #     U.exec_command("mv /root/datasets/geo3k/data/train-00000-of-00001.parquet /root/datasets/geo3k/data/train.parquet")
+    #     U.exec_command("mv /root/datasets/geo3k/data/test-00000-of-00001.parquet /root/datasets/geo3k/data/test.parquet")
+    #     U.exec_command("mv /root/datasets/geo3k/data/validation-00000-of-00001.parquet /root/datasets/geo3k/data/val.parquet")
+    # except Exception as e:
+    #     pass
 
 
 def execute():
+    # Detect NVLink for optimized NCCL settings
+    has_nvlink = detect_nvlink()
+
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} "
 
     rollout_args = (
-        "--prompt-data /root/datasets/geo3k/data/train.parquet "
-        "--input-key problem "
-        "--label-key answer "
-        "--multimodal-keys '{\"image\": \"images\"}' "
+        "--prompt-data /root/datasets/geo3k_imgurl/train.parquet "
+        "--input-key prompt "
+        "--label-key label "
+        '--multimodal-keys \'{"image": "images"}\' '
         "--apply-chat-template "
         "--rollout-shuffle "
         "--rm-type geo3k "
@@ -48,15 +65,13 @@ def execute():
         f"--n-samples-per-prompt 8 "
         f"--rollout-max-response-len 8192 "
         "--rollout-temperature 0.8 "
-        # temp remove this to make test easier
-        # "--over-sampling-batch-size 64 "
-        # "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "
-        f"--global-batch-size 64 "
+        f"--global-batch-size 128 "
+        "--use-fault-tolerance "
     )
 
     eval_args = (
         "--eval-interval 20 "
-        "--eval-prompt-data geo3k-test /root/datasets/geo3k/data/test.parquet "
+        "--eval-prompt-data geo3k-test /root/datasets/geo3k_imgurl/test.parquet "
         "--n-samples-per-eval-prompt 1 "
         "--eval-max-response-len 16384 "
         "--eval-top-k 1 "
@@ -84,49 +99,58 @@ def execute():
 
     sglang_args = (
         "--rollout-num-gpus-per-engine 1 "
-        "--sglang-decode-log-interval 1000 "
-        "--sglang-enable-metrics "
-        "--sglang-mem-fraction-static 0.4 "
-        "--sglang-disable-cuda-graph "
+        "--sglang-mem-fraction-static 0.6 "
+        f"--sglang-cuda-graph-bs {' '.join(map(str, [1, 2, 4, 8] + list(range(16, 257, 8))))} "
+        # "--sglang-decode-log-interval 1000 "
+        # "--sglang-enable-metrics "
+        # "--sglang-disable-cuda-graph "
     )
 
-    fsdp_args = (
-        # Set to true for FULL_STATE_DICT mode, false for SHARDED_STATE_DICT mode (default)
-        # "--fsdp-full-params "  # Uncomment this line to enable full params mode
-        # Set the bucket size for weight update
-        "--update-weight-buffer-size 536870912 "  # 512MB
-    )
+    # fsdp_args = (
+    #     # Set to true for FULL_STATE_DICT mode, false for SHARDED_STATE_DICT mode (default)
+    #     # "--fsdp-full-params "  # Uncomment this line to enable full params mode
+    #     # Set the bucket size for weight update
+    #     "--update-weight-buffer-size 536870912 "  # 512MB
+    # )
 
-    ci_args = (
-        "--ci-test "
-        "--ci-disable-kl-checker "
-        "--ci-metric-checker-key eval/geo3k "
-        "--ci-metric-checker-threshold 0.71 "  # loose threshold at 60 step
+    # ci_args = (
+    #     "--ci-test "
+    #     "--ci-disable-kl-checker "
+    #     "--ci-metric-checker-key eval/geo3k-test"
+    #     "--ci-metric-checker-threshold 0.71 "  # loose threshold at 60 step
+    # )
+
+    wandb_args = (
+        "--use-wandb "
+        f"--wandb-project geo3k-vlm "
+        f"--wandb-group geo3k-vlm "
+        f"--wandb-key ${{WANDB_API_KEY}} "
+        "--disable-wandb-random-suffix "
     )
 
     misc_args = "--actor-num-nodes 1 " f"--actor-num-gpus-per-node {NUM_GPUS} " "--colocate " "--train-backend fsdp "
 
-    misc_args += (
-        "--use-dynamic-batch-size "
-        # TODO pick a good value
-        "--max-tokens-per-gpu 2048 "
-    )
+    # misc_args += (
+    #     "--use-dynamic-batch-size "
+    #     # TODO pick a good value
+    #     "--max-tokens-per-gpu 2048 "
+    # )
 
-    true_on_policy_args = (
-        "--sglang-enable-deterministic-inference "
-        "--sglang-rl-on-policy-target fsdp "
-        "--sglang-attention-backend fa3 "
-        "--attn-implementation flash_attention_3 "
-        "--deterministic-mode "
-        "--true-on-policy-mode "
-    )
-    true_on_policy_envs = {
-        # TODO note: "Ring" in original RL PR, "allreduce:tree" in SGLang
-        # "NCCL_ALGO": "Ring",
-        "NCCL_ALGO": "allreduce:tree",
-        "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
-        "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
-    }
+    # true_on_policy_args = (
+    #     "--sglang-enable-deterministic-inference "
+    #     "--sglang-rl-on-policy-target fsdp "
+    #     "--sglang-attention-backend fa3 "
+    #     "--attn-implementation flash_attention_3 "
+    #     "--deterministic-mode "
+    #     "--true-on-policy-mode "
+    # )
+    # true_on_policy_envs = {
+    #     # TODO note: "Ring" in original RL PR, "allreduce:tree" in SGLang
+    #     # "NCCL_ALGO": "Ring",
+    #     "NCCL_ALGO": "allreduce:tree",
+    #     "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
+    #     "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+    # }
 
     train_args = (
         f"{ckpt_args} "
@@ -135,10 +159,11 @@ def execute():
         f"{grpo_args} "
         f"{sglang_args} "
         f"{eval_args} "
-        f"{fsdp_args} "
-        f"{ci_args} "
         f"{misc_args} "
-        f"{true_on_policy_args} "
+        f"{wandb_args} "
+        # f"{fsdp_args} "
+        # f"{ci_args} "
+        # f"{true_on_policy_args} "
     )
 
     # Kill existing processes
@@ -159,18 +184,21 @@ def execute():
         # Start Ray
         U.exec_command(
             f"export PYTHONBUFFERED=16 && "
-            f"ray start --head --node-ip-address {MASTER_ADDR} --num-gpus {NUM_GPUS} --disable-usage-stats"
+            f"ray start --head --node-ip-address {MASTER_ADDR} --num-gpus {NUM_GPUS} "
+            f"--disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265"
         )
 
     # Prepare runtime environment
     runtime_env_json = json.dumps(
         {
             "env_vars": {
-                "no_proxy": f"127.0.0.1,{MASTER_ADDR}",
-                "MASTER_ADDR": MASTER_ADDR,
-                **true_on_policy_envs,
-                "SGLANG_DUMPER_ENABLE": "0",
-                "SGLANG_TEMP_UTILS_ENABLE_DEBUG_PRINT": "0",
+                "CUDA_DEVICE_MAX_CONNECTIONS": "1",
+                "NCCL_NVLS_ENABLE": str(has_nvlink),
+                # "no_proxy": f"127.0.0.1,{MASTER_ADDR}",
+                # "MASTER_ADDR": MASTER_ADDR,
+                # **true_on_policy_envs,
+                # "SGLANG_DUMPER_ENABLE": "0",
+                # "SGLANG_TEMP_UTILS_ENABLE_DEBUG_PRINT": "0",
             }
         }
     )

@@ -139,6 +139,7 @@ class FSDPTrainRayActor(TrainRayActor):
             from transformers import AutoModelForCausalLM
 
             return AutoModelForCausalLM
+
     def _enable_true_on_policy_optimizations(self, args):
         if args.true_on_policy_mode:
             from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
