@@ -60,12 +60,12 @@ def execute():
         "--apply-chat-template "
         "--rollout-shuffle "
         "--rm-type geo3k "
-        f"--num-rollout 3000 "
-        f"--rollout-batch-size 32 "
-        f"--n-samples-per-prompt 8 "
-        f"--rollout-max-response-len 8192 "
+        "--num-rollout 3000 "
+        "--rollout-batch-size 32 "
+        "--n-samples-per-prompt 8 "
+        "--rollout-max-response-len 8192 "
         "--rollout-temperature 0.8 "
-        f"--global-batch-size 128 "
+        "--global-batch-size 128 "
         "--use-fault-tolerance "
     )
 
@@ -74,7 +74,7 @@ def execute():
         "--eval-prompt-data geo3k-test /root/datasets/geo3k_imgurl/test.parquet "
         "--n-samples-per-eval-prompt 1 "
         "--eval-max-response-len 16384 "
-        "--eval-top-k 1 "
+        "--eval-top-k 0.7 "
     )
 
     grpo_args = (
