@@ -137,13 +137,18 @@ class TestSamplingParams:
 class TestErrorHandling:
     """Test error handling for various failure scenarios."""
 
+    @pytest.mark.parametrize("status_code,error_fixture,expected_text", [
+        (400, get_sglang_error_400, "temperature"),
+        (500, get_sglang_error_500, "inference service error"),
+        (429, get_sglang_error_429, "rate limit"),
+    ])
     @pytest.mark.asyncio
     @respx.mock
-    async def test_sglang_400_error(self, mock_router):
-        """Test handling of SGLang 400 error."""
-        error_response = get_sglang_error_400()
+    async def test_sglang_errors(self, mock_router, status_code, error_fixture, expected_text):
+        """Test handling of SGLang errors (400/500/429)."""
+        error_response = error_fixture()
         respx.post("http://localhost:30000/v1/chat/completions").mock(
-            return_value=Response(400, json=error_response)
+            return_value=Response(status_code, json=error_response)
         )
 
         handler = ChatCompletionHandler(mock_router)
@@ -151,42 +156,8 @@ class TestErrorHandling:
 
         with pytest.raises(HTTPException) as exc_info:
             await handler._proxy_to_sglang_chat_from_data(request_data)
-        assert exc_info.value.status_code == 400
-        assert "temperature" in exc_info.value.detail.lower()
-
-    @pytest.mark.asyncio
-    @respx.mock
-    async def test_sglang_500_error(self, mock_router):
-        """Test handling of SGLang 500 error."""
-        error_response = get_sglang_error_500()
-        respx.post("http://localhost:30000/v1/chat/completions").mock(
-            return_value=Response(500, json=error_response)
-        )
-
-        handler = ChatCompletionHandler(mock_router)
-        request_data = get_simple_chat_request()
-
-        with pytest.raises(HTTPException) as exc_info:
-            await handler._proxy_to_sglang_chat_from_data(request_data)
-        assert exc_info.value.status_code == 500
-        assert "inference service error" in exc_info.value.detail.lower()
-
-    @pytest.mark.asyncio
-    @respx.mock
-    async def test_sglang_429_rate_limit(self, mock_router):
-        """Test handling of SGLang 429 rate limit error."""
-        error_response = get_sglang_error_429()
-        respx.post("http://localhost:30000/v1/chat/completions").mock(
-            return_value=Response(429, json=error_response)
-        )
-
-        handler = ChatCompletionHandler(mock_router)
-        request_data = get_simple_chat_request()
-
-        with pytest.raises(HTTPException) as exc_info:
-            await handler._proxy_to_sglang_chat_from_data(request_data)
-        assert exc_info.value.status_code == 429
-        assert "rate limit" in exc_info.value.detail.lower()
+        assert exc_info.value.status_code == status_code
+        assert expected_text in exc_info.value.detail.lower()
 
     @pytest.mark.asyncio
     async def test_connection_error(self, mock_router):
@@ -417,3 +388,115 @@ class TestDirectProxyMode:
         # Verify the request was made with correct data
         assert route.called
         # Note: respx doesn't easily expose request JSON, but we can verify it was called
+
+
+class TestEndToEndIntegration:
+    """Test complete end-to-end flow from request to response."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_handle_request_with_cache_available_e2e(
+        self, mock_router_with_components, mock_radix_tree, mock_tokenizer, mock_request
+    ):
+        """Test complete flow: request → validation → cache → generate → response."""
+        mock_router_with_components._check_cache_availability.return_value = True
+
+        generate_response = get_sglang_generate_success()
+        respx.post("http://localhost:30000/generate").mock(
+            return_value=Response(200, json=generate_response)
+        )
+
+        handler = ChatCompletionHandler(mock_router_with_components)
+        response = await handler.handle_request(mock_request)
+
+        # Verify complete flow
+        assert response.status_code == 200
+        content = json.loads(response.body.decode())
+        assert "id" in content
+        assert content["object"] == "chat.completion"
+        assert "choices" in content
+        assert "usage" in content
+
+        # Verify cache was used
+        mock_radix_tree.retrieve_from_text.assert_called_once()
+        mock_radix_tree.insert.assert_called_once()
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_handle_request_without_cache_e2e(self, mock_router, mock_request):
+        """Test complete flow when cache is unavailable."""
+        from tests.router.fixtures.mock_responses import get_sglang_chat_completion_success
+
+        mock_router._check_cache_availability.return_value = False
+
+        mock_response = get_sglang_chat_completion_success()
+        respx.post("http://localhost:30000/v1/chat/completions").mock(
+            return_value=Response(200, json=mock_response)
+        )
+
+        handler = ChatCompletionHandler(mock_router)
+        response = await handler.handle_request(mock_request)
+
+        assert response.status_code == 200
+        content = json.loads(response.body.decode())
+        assert content["object"] == "chat.completion"
+
+
+class TestSGLangResponseParsing:
+    """Test SGLang response parsing edge cases."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_generation_missing_output_token_logprobs(
+        self, mock_router_with_components, mock_radix_tree, mock_tokenizer
+    ):
+        """Test fallback when output_token_logprobs missing."""
+        generate_response = {
+            "text": "Response without logprobs",
+            "meta_info": {
+                "finish_reason": {"type": "stop"}
+            }
+        }
+        respx.post("http://localhost:30000/generate").mock(
+            return_value=Response(200, json=generate_response)
+        )
+
+        mock_tokenizer.decode.return_value = "Response without logprobs"
+        mock_tokenizer.encode.return_value = [10, 20, 30]
+
+        handler = ChatCompletionHandler(mock_router_with_components)
+
+        response = await handler._non_stream_generate_with_cache(
+            [1, 2], {}, mock_radix_tree, "test", {}
+        )
+
+        # Should succeed with fallback
+        content = json.loads(response.body.decode())
+        assert content["choices"][0]["message"]["content"] == "Response without logprobs"
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_generation_malformed_meta_info(
+        self, mock_router_with_components, mock_radix_tree, mock_tokenizer
+    ):
+        """Test handling of malformed meta_info structure."""
+        generate_response = {
+            "text": "Response with malformed meta_info",
+            "meta_info": {}  # Missing finish_reason
+        }
+        respx.post("http://localhost:30000/generate").mock(
+            return_value=Response(200, json=generate_response)
+        )
+
+        mock_tokenizer.decode.return_value = "Response with malformed meta_info"
+        mock_tokenizer.encode.return_value = [10, 20, 30]
+
+        handler = ChatCompletionHandler(mock_router_with_components)
+
+        response = await handler._non_stream_generate_with_cache(
+            [1, 2], {}, mock_radix_tree, "test", {}
+        )
+
+        # Should handle gracefully with default finish_reason
+        content = json.loads(response.body.decode())
+        assert content["choices"][0]["finish_reason"] == "stop"

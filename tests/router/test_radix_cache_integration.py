@@ -2,8 +2,10 @@
 
 import pytest
 import json
+import httpx
 from unittest.mock import Mock, AsyncMock
 from httpx import Response
+from fastapi import HTTPException
 import respx
 
 from slime.router.handlers.openai_chat_completion import ChatCompletionHandler
@@ -100,6 +102,81 @@ class TestRadixCacheRetrieval:
 
         # Should fallback to direct proxy
         handler._proxy_to_sglang_chat_from_data.assert_called_once()
+
+
+class TestCacheRetrievalEdgeCases:
+    """Test cache retrieval edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_retrieve_from_text_returns_none(
+        self, mock_router, mock_radix_tree, mock_tokenizer
+    ):
+        """Test handling when retrieve_from_text returns None."""
+        mock_router.component_registry.get.side_effect = lambda x: {
+            "radix_tree": mock_radix_tree,
+            "tokenizer": mock_tokenizer
+        }[x]
+        mock_router.args.verbose = True
+
+        # Simulate None return
+        mock_radix_tree.retrieve_from_text.return_value = None
+
+        handler = ChatCompletionHandler(mock_router)
+        handler._proxy_to_sglang_chat_from_data = AsyncMock(
+            return_value=Response(content=b'{"result": "success"}', status_code=200)
+        )
+
+        request_data = get_simple_chat_request()
+        await handler._handle_with_radix_cache(request_data)
+
+        # Should fallback to direct proxy
+        handler._proxy_to_sglang_chat_from_data.assert_called_once()
+
+class TestResourceCleanup:
+    """Test resource cleanup on exceptions."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_finish_url_called_on_timeout(
+        self, mock_router_with_components, mock_radix_tree, mock_tokenizer
+    ):
+        """Test that _finish_url is called even when timeout occurs."""
+        mock_router_with_components.args.slime_router_generation_timeout = 60.0
+        mock_router_with_components.client.post = AsyncMock(
+            side_effect=httpx.TimeoutException("Request timeout")
+        )
+
+        handler = ChatCompletionHandler(mock_router_with_components)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await handler._non_stream_generate_with_cache(
+                [1, 2, 3], {}, mock_radix_tree, "test", {}
+            )
+
+        # Verify _finish_url was called despite exception
+        mock_router_with_components._finish_url.assert_called_once()
+        assert exc_info.value.status_code == 504
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_finish_url_called_on_http_error(
+        self, mock_router_with_components, mock_radix_tree, mock_tokenizer
+    ):
+        """Test that _finish_url is called even when HTTP error occurs."""
+        respx.post("http://localhost:30000/generate").mock(
+            return_value=Response(500, json={"error": "Internal error"})
+        )
+
+        handler = ChatCompletionHandler(mock_router_with_components)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await handler._non_stream_generate_with_cache(
+                [1, 2, 3], {}, mock_radix_tree, "test", {}
+            )
+
+        # Verify _finish_url was called despite exception
+        mock_router_with_components._finish_url.assert_called_once()
+        assert exc_info.value.status_code == 500
 
 
 class TestRadixCacheInsertion:
@@ -374,6 +451,81 @@ class TestCacheFallbackScenarios:
         # Should fallback to direct proxy
         handler._proxy_to_sglang_chat_from_data.assert_called_once()
 
+
+class TestCacheRetrievalEdgeCases:
+    """Test cache retrieval edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_retrieve_from_text_returns_none(
+        self, mock_router, mock_radix_tree, mock_tokenizer
+    ):
+        """Test handling when retrieve_from_text returns None."""
+        mock_router.component_registry.get.side_effect = lambda x: {
+            "radix_tree": mock_radix_tree,
+            "tokenizer": mock_tokenizer
+        }[x]
+        mock_router.args.verbose = True
+
+        # Simulate None return
+        mock_radix_tree.retrieve_from_text.return_value = None
+
+        handler = ChatCompletionHandler(mock_router)
+        handler._proxy_to_sglang_chat_from_data = AsyncMock(
+            return_value=Response(content=b'{"result": "success"}', status_code=200)
+        )
+
+        request_data = get_simple_chat_request()
+        await handler._handle_with_radix_cache(request_data)
+
+        # Should fallback to direct proxy
+        handler._proxy_to_sglang_chat_from_data.assert_called_once()
+
+class TestResourceCleanup:
+    """Test resource cleanup on exceptions."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_finish_url_called_on_timeout(
+        self, mock_router_with_components, mock_radix_tree, mock_tokenizer
+    ):
+        """Test that _finish_url is called even when timeout occurs."""
+        mock_router_with_components.args.slime_router_generation_timeout = 60.0
+        mock_router_with_components.client.post = AsyncMock(
+            side_effect=httpx.TimeoutException("Request timeout")
+        )
+
+        handler = ChatCompletionHandler(mock_router_with_components)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await handler._non_stream_generate_with_cache(
+                [1, 2, 3], {}, mock_radix_tree, "test", {}
+            )
+
+        # Verify _finish_url was called despite exception
+        mock_router_with_components._finish_url.assert_called_once()
+        assert exc_info.value.status_code == 504
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_finish_url_called_on_http_error(
+        self, mock_router_with_components, mock_radix_tree, mock_tokenizer
+    ):
+        """Test that _finish_url is called even when HTTP error occurs."""
+        respx.post("http://localhost:30000/generate").mock(
+            return_value=Response(500, json={"error": "Internal error"})
+        )
+
+        handler = ChatCompletionHandler(mock_router_with_components)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await handler._non_stream_generate_with_cache(
+                [1, 2, 3], {}, mock_radix_tree, "test", {}
+            )
+
+        # Verify _finish_url was called despite exception
+        mock_router_with_components._finish_url.assert_called_once()
+        assert exc_info.value.status_code == 500
+
     @pytest.mark.asyncio
     async def test_tokenization_failure_fallback(
         self, mock_router, mock_radix_tree, mock_tokenizer
@@ -398,3 +550,78 @@ class TestCacheFallbackScenarios:
 
         # Should fallback to direct proxy
         handler._proxy_to_sglang_chat_from_data.assert_called_once()
+
+
+class TestCacheRetrievalEdgeCases:
+    """Test cache retrieval edge cases."""
+
+    @pytest.mark.asyncio
+    async def test_retrieve_from_text_returns_none(
+        self, mock_router, mock_radix_tree, mock_tokenizer
+    ):
+        """Test handling when retrieve_from_text returns None."""
+        mock_router.component_registry.get.side_effect = lambda x: {
+            "radix_tree": mock_radix_tree,
+            "tokenizer": mock_tokenizer
+        }[x]
+        mock_router.args.verbose = True
+
+        # Simulate None return
+        mock_radix_tree.retrieve_from_text.return_value = None
+
+        handler = ChatCompletionHandler(mock_router)
+        handler._proxy_to_sglang_chat_from_data = AsyncMock(
+            return_value=Response(content=b'{"result": "success"}', status_code=200)
+        )
+
+        request_data = get_simple_chat_request()
+        await handler._handle_with_radix_cache(request_data)
+
+        # Should fallback to direct proxy
+        handler._proxy_to_sglang_chat_from_data.assert_called_once()
+
+class TestResourceCleanup:
+    """Test resource cleanup on exceptions."""
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_finish_url_called_on_timeout(
+        self, mock_router_with_components, mock_radix_tree, mock_tokenizer
+    ):
+        """Test that _finish_url is called even when timeout occurs."""
+        mock_router_with_components.args.slime_router_generation_timeout = 60.0
+        mock_router_with_components.client.post = AsyncMock(
+            side_effect=httpx.TimeoutException("Request timeout")
+        )
+
+        handler = ChatCompletionHandler(mock_router_with_components)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await handler._non_stream_generate_with_cache(
+                [1, 2, 3], {}, mock_radix_tree, "test", {}
+            )
+
+        # Verify _finish_url was called despite exception
+        mock_router_with_components._finish_url.assert_called_once()
+        assert exc_info.value.status_code == 504
+
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_finish_url_called_on_http_error(
+        self, mock_router_with_components, mock_radix_tree, mock_tokenizer
+    ):
+        """Test that _finish_url is called even when HTTP error occurs."""
+        respx.post("http://localhost:30000/generate").mock(
+            return_value=Response(500, json={"error": "Internal error"})
+        )
+
+        handler = ChatCompletionHandler(mock_router_with_components)
+
+        with pytest.raises(HTTPException) as exc_info:
+            await handler._non_stream_generate_with_cache(
+                [1, 2, 3], {}, mock_radix_tree, "test", {}
+            )
+
+        # Verify _finish_url was called despite exception
+        mock_router_with_components._finish_url.assert_called_once()
+        assert exc_info.value.status_code == 500

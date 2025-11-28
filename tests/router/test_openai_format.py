@@ -293,3 +293,35 @@ class TestOpenAIFormatCompatibility:
         # Both should start with "chatcmpl-"
         assert data1["id"].startswith("chatcmpl-")
         assert data2["id"].startswith("chatcmpl-")
+
+    @pytest.mark.parametrize("finish_reason_input,expected", [
+        ({"type": "stop"}, "stop"),           # Dict format
+        ("stop", "stop"),                      # String format
+        ({"type": "length"}, "length"),        # Length limit
+        ({}, "stop"),                          # Missing type field (default)
+    ])
+    @pytest.mark.asyncio
+    @respx.mock
+    async def test_finish_reason_extraction(
+        self, mock_router_with_components, mock_radix_tree, mock_tokenizer,
+        finish_reason_input, expected
+    ):
+        """Test finish_reason extraction handles both dict and string formats."""
+        mock_generate_response = {
+            "text": "Test response",
+            "meta_info": {
+                "output_token_logprobs": [[-0.1, 10], [-0.2, 20]],
+                "finish_reason": finish_reason_input
+            }
+        }
+        respx.post("http://localhost:30000/generate").mock(
+            return_value=Response(200, json=mock_generate_response)
+        )
+
+        handler = ChatCompletionHandler(mock_router_with_components)
+        request_data = get_simple_chat_request()
+
+        response = await handler._handle_with_radix_cache(request_data)
+        response_data = json.loads(response.body.decode())
+
+        assert response_data["choices"][0]["finish_reason"] == expected

@@ -9,6 +9,27 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 
+def mock_generate_endpoint(response_json, status_code=200, url="http://localhost:30000/generate"):
+    """Setup mock for /generate endpoint with respx.
+
+    Helper function to reduce duplication in tests that mock the SGLang /generate endpoint.
+
+    Args:
+        response_json: JSON response data
+        status_code: HTTP status code (default: 200)
+        url: Endpoint URL (default: http://localhost:30000/generate)
+
+    Example:
+        @respx.mock
+        async def test_something():
+            mock_generate_endpoint(get_sglang_generate_success())
+            # ... test code ...
+    """
+    import respx
+    from httpx import Response
+    respx.post(url).mock(return_value=Response(status_code, json=response_json))
+
+
 @pytest.fixture
 def mock_router():
     """Mock SlimeRouter with all necessary attributes."""
@@ -163,3 +184,17 @@ def mock_function_call_parser():
         return_value=("", [tool_call_item])  # (remaining_text, tool_calls)
     )
     return parser
+
+
+@pytest.fixture
+def mock_router_with_components(mock_router, mock_radix_tree, mock_tokenizer):
+    """Router with mocked component registry (radix_tree + tokenizer).
+
+    This fixture eliminates the need to manually set up component_registry.get.side_effect
+    in each test. Use this when your test needs both radix_tree and tokenizer components.
+    """
+    mock_router.component_registry.get.side_effect = lambda x: {
+        "radix_tree": mock_radix_tree,
+        "tokenizer": mock_tokenizer
+    }[x]
+    return mock_router

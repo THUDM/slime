@@ -284,3 +284,44 @@ class TestNoToolsProvided:
         # Function parser should not be initialized
         assert handler._function_call_parser is None
         assert tool_calls is None
+
+
+class TestParserCombinations:
+    """Test scenarios where multiple parsers are used together."""
+
+    def test_reasoning_and_tool_calls_together(
+        self, mock_router, mock_reasoning_parser, mock_function_call_parser
+    ):
+        """Test when output contains both reasoning and tool calls."""
+        mock_router.args.sglang_reasoning_parser = "deepseek"
+        mock_router.args.sglang_tool_call_parser = "hermes"
+        handler = ChatCompletionHandler(mock_router)
+        handler._reasoning_parser = mock_reasoning_parser
+        handler._function_call_parser = mock_function_call_parser
+
+        # Mock parsers return both reasoning and tool calls
+        mock_reasoning_parser.parse_non_stream.return_value = (
+            "Reasoning content", "Remaining text after reasoning"
+        )
+
+        tool_call_item = Mock()
+        tool_call_item.name = "search"
+        tool_call_item.arguments = {"query": "test"}
+        mock_function_call_parser.parse_non_stream.return_value = (
+            "", [tool_call_item]
+        )
+
+        request_data = {"tools": [{"type": "function", "function": {"name": "search"}}]}
+        text, tool_calls, reasoning = handler._parse_generated_output(
+            "Full response text", request_data
+        )
+
+        # Both parsers should be called
+        mock_reasoning_parser.parse_non_stream.assert_called_once()
+        mock_function_call_parser.parse_non_stream.assert_called_once()
+
+        # Both results should be present
+        assert reasoning == "Reasoning content"
+        assert tool_calls is not None
+        assert len(tool_calls) == 1
+        assert tool_calls[0]["function"]["name"] == "search"
