@@ -13,7 +13,6 @@ import torch
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
-from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import tracking_utils
 from slime.utils.health_monitor import RolloutHealthMonitor
@@ -50,7 +49,8 @@ class RolloutManager:
         init_tracking(args, primary=False, router_addr=f"http://{args.sglang_router_ip}:{args.sglang_router_port}")
         init_http_client(args)
 
-        self.data_source = RolloutDataSourceWithBuffer(args)
+        data_source_cls = load_function(self.args.data_source_path)
+        self.data_source = data_source_cls(args)
 
         self.generate_rollout = load_function(self.args.rollout_function_path)
         self.eval_generate_rollout = load_function(self.args.eval_function_path)

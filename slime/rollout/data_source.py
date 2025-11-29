@@ -1,3 +1,4 @@
+import abc
 import copy
 import logging
 import os
@@ -13,8 +14,34 @@ from slime.utils.types import Sample
 logger = logging.getLogger(__name__)
 
 
+class DataSource(abc.ABC):
+    @abc.abstractmethod
+    def get_samples(self, num_samples: int) -> list[list[Sample]]:
+        """
+        Return num_samples samples
+        """
+
+    @abc.abstractmethod
+    def add_samples(self, samples: list[list[Sample]]):
+        """
+        Add samples to the data source
+        """
+
+    @abc.abstractmethod
+    def save(self, rollout_id):
+        """
+        Save the state of the data source
+        """
+
+    @abc.abstractmethod
+    def load(self, rollout_id=None):
+        """
+        Load the state of the data source
+        """
+
+
 # TODO may further refactor data-loading part later
-class RolloutDataSource:
+class RolloutDataSource(DataSource):
     def __init__(self, args):
         self.args = args
 
