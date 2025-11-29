@@ -1,11 +1,16 @@
+accelerate
+blobfile
 datasets
 httpx[http2]
 mcp[cli]
+memray  # needed for debugging (but is lightweight), we can put it to dev mode when using pyproject.toml
 omegaconf
 pillow
 pylatexenc
 pyyaml
 ray[default]
+ring_flash_attn
+sglang-router>=0.2.3
 tensorboard
 transformers
 wandb

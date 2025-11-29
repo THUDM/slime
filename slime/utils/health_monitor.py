@@ -4,6 +4,9 @@ import threading
 import ray
 
 
+logger = logging.getLogger(__name__)
+
+
 class RolloutHealthMonitor:
     def __init__(self, rollout_manager, args):
         # TODO may remove this dependency after refactoring
@@ -67,7 +70,7 @@ class RolloutHealthMonitor:
         try:
             ray.get(engine.health_generate.remote(timeout=self._check_timeout))
         except Exception as e:
-            print(
+            logger.info(
                 f"Health check timed out for rollout engine {rollout_engine_id} (ray timeout). Killing actor. (original exception: {e})"
             )
             self._kill_engine(rollout_engine_id=rollout_engine_id)
@@ -82,5 +85,5 @@ class RolloutHealthMonitor:
                 ray.get(engine.shutdown.remote())
                 ray.kill(engine)
             except Exception as e:
-                print(f"Fail to kill engine and skip (e: {e})")
+                logger.info(f"Fail to kill engine and skip (e: {e})")
             self._rollout_manager.all_rollout_engines[i] = None

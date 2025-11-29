@@ -33,14 +33,17 @@ class SlimeRouter:
         self.worker_urls: dict[str, int] = {}
         self.max_weight_version = None
 
-        # TODO: remove this hardcode
+        max_connections = getattr(args, "slime_router_max_connections", None)
+        if max_connections is None:
+            max_connections = (
+                args.sglang_server_concurrency * args.rollout_num_gpus // args.rollout_num_gpus_per_engine
+            )
+
+        timeout = getattr(args, "slime_router_timeout", None)
+
         self.client = httpx.AsyncClient(
-            limits=httpx.Limits(
-                max_connections=args.sglang_server_concurrency
-                * args.rollout_num_gpus
-                // args.rollout_num_gpus_per_engine
-            ),
-            timeout=httpx.Timeout(None),
+            limits=httpx.Limits(max_connections=max_connections),
+            timeout=httpx.Timeout(timeout),
         )
 
         self._setup_routes()
@@ -69,7 +72,6 @@ class SlimeRouter:
         # Forward all other paths to SGLang router
         worker_url = self._use_url()
         url = f"{worker_url}/{path}"
-        # print("path",path)
 
         # Get request body and headers
         body = await request.body()
@@ -153,10 +155,6 @@ class SlimeRouter:
             "rollout_logp": logp,
         }
 
-        # # Add logp to response if requested
-        # if sum(logp) > 0:
-        #     result["rollout_logp"] = logp
-
         return result
 
     def _use_url(self):
@@ -176,10 +174,6 @@ class SlimeRouter:
 
 
 if __name__ == "__main__":
-    import argparse
-
-    import uvicorn
-
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=30000)

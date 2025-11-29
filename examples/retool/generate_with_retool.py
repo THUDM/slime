@@ -234,6 +234,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         payload = {
             "text": prompt + response,
             "sampling_params": sampling_params,
+            "return_logprob": True,  # Request log probabilities for training
         }
 
         # Log payload to wandb for debugging
@@ -265,10 +266,17 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             return sample
 
         cur_response = output["text"]
-        cur_response = postprocess_responses(cur_response)
 
-        # Record current response tokens
-        cur_response_token_ids = state.tokenizer(cur_response, add_special_tokens=False)["input_ids"]
+        if "output_token_logprobs" in output["meta_info"]:
+            cur_response_token_ids = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
+            cur_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
+            if sample.rollout_log_probs is None:
+                sample.rollout_log_probs = []
+            sample.rollout_log_probs += cur_log_probs
+        else:
+            cur_response = postprocess_responses(cur_response)
+            cur_response_token_ids = state.tokenizer(cur_response, add_special_tokens=False)["input_ids"]
+
         response += cur_response
         response_token_ids += cur_response_token_ids
         loss_masks += [1] * len(cur_response_token_ids)
@@ -292,7 +300,15 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         response_token_ids += obs_tokens_ids
         loss_masks += [0] * len(obs_tokens_ids)
 
+        # Add dummy log probs for observation tokens (they won't be used due to loss_mask=0)
         # Check if maximum tool call count reached
+        if sample.rollout_log_probs is not None:
+            sample.rollout_log_probs += [0.0] * len(obs_tokens_ids)
+
+            assert len(response_token_ids) == len(
+                sample.rollout_log_probs
+            ), f"Token/logp length mismatch at turn {turn}: {len(response_token_ids)} tokens vs {len(sample.rollout_log_probs)} logps"
+
         if turn >= TOOL_CONFIGS["max_tool_calls"]:
             break
 

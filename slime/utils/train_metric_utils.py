@@ -1,10 +1,12 @@
+import logging
 from argparse import Namespace
 from copy import deepcopy
 from typing import Callable
-
-import wandb
-
+from slime.utils import tracking_utils
+from slime.utils.metric_utils import compute_rollout_step
 from slime.utils.timer import Timer
+
+logger = logging.getLogger(__name__)
 
 
 def log_perf_data_raw(
@@ -38,19 +40,8 @@ def log_perf_data_raw(
             log_dict["perf/step_time"] = total_time
             log_dict["perf/wait_time_ratio"] = log_dict["perf/train_wait_time"] / total_time
 
-    print(f"perf {rollout_id}: {log_dict}")
+    logger.info(f"perf {rollout_id}: {log_dict}")
 
-    step = (
-        rollout_id
-        if not args.wandb_always_use_train_step
-        else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-    )
-    if args.use_wandb:
-        log_dict["rollout/step"] = step
-        wandb.log(log_dict)
-
-    if args.use_tensorboard:
-        from slime.utils.tensorboard_utils import _TensorboardAdapter
-
-        tb = _TensorboardAdapter(args)
-        tb.log(data=log_dict, step=step)
+    step = compute_rollout_step(args, rollout_id)
+    log_dict["rollout/step"] = step
+    tracking_utils.log(args, log_dict, step_key="rollout/step")

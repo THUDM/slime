@@ -74,6 +74,25 @@ Here, we will briefly introduce the MoE-related parts in the [run-qwen3-30B-A3B.
        --sglang-dp-size 8
     ```
 
+### BF16 Training with FP8 Inference
+
+slime also supports BF16 training with FP8 inference. For the Qwen3-30B-A3B model, you just need to download the following model:
+
+```bash
+huggingface-cli download Qwen/Qwen3-30B-A3B-FP8 --local-dir /root/Qwen3-30B-A3B-FP8
+```
+
+And replace `--hf-checkpoint` with:
+
+```bash
+#--hf-checkpoint /root/Qwen3-30B-A3B
+--hf-checkpoint /root/Qwen3-30B-A3B-FP8
+```
+
+This will trigger FP8 inference. Currently, we directly cast the BF16 weights to FP8. In the future, we will gradually add more sophisticated quantization schemes that have less impact on precision.
+
+⚠️ The Megatron checkpoint for training still needs to be the one that was originally converted from the BF16 Hugging Face model.
+
 ### Multi-Node Support
 
 For a multi-node environment, the following modifications are necessary:

@@ -37,7 +37,6 @@ MODEL_ARGS=(
     --moe-layer-freq [0]*$N_DENSE_LAYERS+[1]*$N_MOE_LAYERS
     --num-experts 160
     --moe-grouped-gemm
-    --moe-router-topk-scaling-factor 2.5
     --moe-router-dtype fp32
     --moe-permute-fusion
     --moe-aux-loss-coeff 0

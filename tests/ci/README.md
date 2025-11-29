@@ -28,7 +28,7 @@ ls -alh /home/runner/externals
 ### Step 3: Run
 
 ```shell
-cd /data/tom/primary_synced/slime/tests/ci/github_runner
+cd /mnt/data/tom/primary_synced/slime/tests/ci/github_runner
 docker compose up -d
 ```
 
@@ -37,11 +37,21 @@ docker compose up -d
 Logs
 
 ```shell
+# All containers
 docker compose logs -f
+
+# One container
+docker logs -f github_runner-runner-1
 ```
 
 Exec
 
 ```shell
 docker exec -it github_runner-runner-1 /bin/bash
+```
+
+An example of quickly iterate
+
+```shell
+docker compose down -v && docker compose up -d && docker logs -f github_runner-runner-1
 ```

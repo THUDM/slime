@@ -27,7 +27,7 @@ line-length = 119
 
 [tool.pytest.ini_options]
 # durations=0 will display all tests execution time, sorted in ascending order starting from from the slowest one.
-# -vv will also display tests with durration = 0.00s
+# -vv will also display tests with duration = 0.00s
 addopts = "--verbose --pyargs --durations=0 --strict-markers"  # always add these arguments to pytest
 testpaths = ["./tests"]  # must be an explicit path to avoid importing another "tests" module
 # directories to ignore when discovering tests

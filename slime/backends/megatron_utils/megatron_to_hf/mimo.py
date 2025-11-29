@@ -1,4 +1,5 @@
 import re
+import torch
 from .qwen2 import convert_qwen2_to_hf
 
 
@@ -43,6 +44,9 @@ def convert_mimo_mtp_param(args, name, param):
         "eh_proj.weight": f"model.mtp_layers.{layer_idx}.input_proj.weight",
         "final_layernorm.weight": f"model.mtp_layers.{layer_idx}.final_layernorm.weight",
     }
+    if component == "eh_proj.weight":
+        first_half, second_half = param.chunk(2, dim=1)
+        param = torch.cat([second_half, first_half], dim=1)
 
     # Check direct mappings first
     if component in direct_mappings:

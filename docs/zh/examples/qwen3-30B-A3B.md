@@ -73,6 +73,25 @@ bash scripts/run-qwen3-30B-A3B.sh
       --sglang-dp-size 8
    ```
 
+### bf16 训练 fp8 推理
+
+slime 还支持 bf16 训练，fp8 推理。对于 Qwen3-30B-A3B 模型，只需要下载如下模型：
+
+```bash
+huggingface-cli download Qwen/Qwen3-30B-A3B-FP8 --local-dir /root/Qwen3-30B-A3B-FP8
+```
+
+并将 `--hf-checkpoint` 替换为：
+
+```bash
+#--hf-checkpoint /root/Qwen3-30B-A3B
+--hf-checkpoint /root/Qwen3-30B-A3B-FP8
+```
+
+即可触发 fp8 训练。目前我们会将 bf16 权重直接 cast 为 fp8，后续会逐渐添加对精度影响更小的量化方案。
+
+⚠️  训练的 megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的。
+
 ### 多机支持
 
 对于多机环境，需要进行如下的几点修改：

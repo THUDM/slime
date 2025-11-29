@@ -1,21 +1,20 @@
-import os
+import slime.utils.external_utils.command_utils as U
 
-import command_utils_v0 as U
+ENABLE_EVAL = U.get_bool_env_var("SLIME_TEST_ENABLE_EVAL", "1")
+TIGHT_DEVICE_MEMORY = U.get_bool_env_var("SLIME_TEST_TIGHT_DEVICE_MEMORY", "1")
 
 MODEL_NAME = "GLM-Z1-9B-0414"
 MODEL_TYPE = "glm4-9B"
-
-ENABLE_EVAL = bool(int(os.environ.get("SLIME_TEST_ENABLE_EVAL", "1")))
-TIGHT_HOST_MEMORY = bool(int(os.environ.get("SLIME_TEST_TIGHT_HOST_MEMORY", "1")))
+NUM_GPUS = 8
 
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command("hf download zai-org/GLM-Z1-9B-0414 --local-dir /root/models/GLM-Z1-9B-0414")
-    U.exec_command("hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir /root/datasets/dapo-math-17k")
-    U.exec_command("hf download --repo-type dataset zhuzilin/aime-2024 --local-dir /root/datasets/aime-2024")
+    U.hf_download_dataset("zhuzilin/dapo-math-17k")
+    U.hf_download_dataset("zhuzilin/aime-2024")
 
-    U.convert_checkpoint(model_name=MODEL_NAME, model_type=MODEL_TYPE)
+    U.convert_checkpoint(model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS)
 
 
 def execute():
@@ -56,7 +55,7 @@ def execute():
         "--recompute-method uniform "
         "--recompute-num-layers 1 "
         "--use-dynamic-batch-size "
-        f"--max-tokens-per-gpu {2048 if TIGHT_HOST_MEMORY else 4608} "
+        f"--max-tokens-per-gpu {2048 if TIGHT_DEVICE_MEMORY else 4608} "
     )
 
     grpo_args = (
@@ -82,6 +81,8 @@ def execute():
 
     sglang_args = "--rollout-num-gpus-per-engine 2 " "--use-slime-router "
 
+    ci_args = "--ci-test "
+
     misc_args = (
         # default dropout in megatron is 0.1
         "--attention-dropout 0.0 "
@@ -91,7 +92,6 @@ def execute():
         "--attention-softmax-in-fp32 "
         # need to comment this when using model with MLA
         "--attention-backend flash "
-        "--ci-test "
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 4 "
         "--rollout-num-gpus 4 "
@@ -106,13 +106,14 @@ def execute():
         f"{perf_args} "
         f"{eval_args} "
         f"{sglang_args} "
+        f"{ci_args} "
         f"{misc_args} "
     )
 
     U.execute_train(
         train_args=train_args,
-        num_gpus=8,
-        model_type=MODEL_TYPE,
+        num_gpus_per_node=NUM_GPUS,
+        megatron_model_type=MODEL_TYPE,
     )
 
 

@@ -1,10 +1,7 @@
 import os
-import sys
-from pathlib import Path
 
-sys.path.append(str(Path(__file__).resolve().parents[2] / "tests"))
 
-import command_utils as U
+import slime.utils.external_utils.command_utils as U
 
 MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-0.6B")
 assert MODEL_NAME in {"Qwen3-0.6B", "Qwen3-4B"}
@@ -61,8 +58,6 @@ def execute():
         "--entropy-coef 0.00 "
         "--eps-clip 0.2 "
         "--eps-clip-high 0.28 "
-        # mainly to look at its metric
-        "--use-tis "
     )
 
     optimizer_args = (
@@ -137,8 +132,8 @@ def execute():
 
     U.execute_train(
         train_args=train_args,
-        num_gpus=NUM_GPUS,
-        model_type=None,
+        num_gpus_per_node=NUM_GPUS,
+        megatron_model_type=None,
         extra_env_vars={
             **true_on_policy_envs,
             "SGLANG_DUMPER_ENABLE": "1" if MODE == "debug_one_sample" else "0",

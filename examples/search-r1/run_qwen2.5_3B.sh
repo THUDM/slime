@@ -21,13 +21,13 @@ source "${SCRIPT_DIR}/../../scripts/models/qwen2.5-3B.sh"
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen2.5-3B/
    --ref-load /root/Qwen2.5-3B_torch_dist/
-   --load /root/Qwen2.5-3B_slime/
-   --save /root/Qwen2.5-3B_slime/
-   --save-interval 20
+   # --load /root/Qwen2.5-3B_slime/
+   # --save /root/Qwen2.5-3B_slime/
+   # --save-interval 20
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /root/nq_search/train.parquet
+   --prompt-data /root/Search-R1/data/nq_hotpotqa_train/train.parquet
    --input-key prompt
    --label-key reward_model
    --apply-chat-template
@@ -36,7 +36,15 @@ ROLLOUT_ARGS=(
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 512
-   --rollout-temperature 0.8
+   --rollout-temperature 1
+
+   # eval args
+   # --eval-interval 25
+   # --eval-prompt-data nq_test /root/Search-R1/data/nq_hotpotqa_train/test.parquet@[0:3000]
+   # # --eval-prompt-data nq_test /root/nq_search/test.parquet
+   # --eval-input-key prompt
+   # --eval-label-key reward_model
+   # --n-samples-per-eval-prompt 1
 
    --global-batch-size 256
    --balance-data
@@ -62,18 +70,21 @@ PERF_ARGS=(
 GRPO_ARGS=(
    --advantage-estimator grpo
    --use-kl-loss
-   --kl-loss-coef 0.00
+   --kl-loss-coef 0.001
    --kl-loss-type low_var_kl
    --entropy-coef 0.00
    --eps-clip 0.2
    --eps-clip-high 0.28
+
+   # whether enabling TIS
+   # --use-tis
 )
 
 OPTIMIZER_ARGS=(
    --optimizer adam
    --lr 1e-6
    --lr-decay-style constant
-   --weight-decay 0.1
+   --weight-decay 0.01
    --adam-beta1 0.9
    --adam-beta2 0.98
 )
@@ -104,6 +115,10 @@ MISC_ARGS=(
 CUSTOM_ARGS=(
    --custom-generate-function-path generate_with_search.generate
    --custom-rm-path generate_with_search.reward_func
+
+   # TIS-related args, recommended to enable when using TIS
+   # --custom-config-path examples/train_infer_mismatch_helper/mis.yaml
+   # --custom-tis-function-path examples.train_infer_mismatch_helper.mis.compute_mis_weights_with_cp
 )
 
 # launch the master node of ray in container

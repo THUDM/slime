@@ -134,11 +134,11 @@ def compute_mis_weights(
         metrics: The metrics for the importance sampling weights, a dict of list[torch.Tensor]. 1D tensor each.
     """
 
-    level: str = args.mis_level
     metrics: Dict[str, list[torch.Tensor]] = {}
 
-    if args.mis_lower_bound is None:
-        return 1.0 / args.mis_upper_bound
+    tis_lower_bound = args.tis_lower_bound if args.tis_lower_bound is not None else 1.0 / args.tis_upper_bound
+    rs_lower_bound = args.rs_lower_bound if args.rs_lower_bound is not None else tis_lower_bound
+    rs_upper_bound = args.rs_upper_bound if args.rs_upper_bound is not None else args.tis_upper_bound
 
     # Validate input lists have same length and each sequence has matching shapes
     assert (
@@ -154,71 +154,100 @@ def compute_mis_weights(
     all_weights = []
     all_modified_masks = []
 
+    def compute_log_ratio(raw_log_diff: torch.Tensor, mask: torch.Tensor, level: str) -> torch.Tensor:
+        if level == "token":
+            return raw_log_diff
+        elif level == "sequence":
+            return masked_sum(raw_log_diff, mask, expand=True)
+        elif level == "geometric":
+            return masked_mean(raw_log_diff, mask, expand=True)
+        else:
+            raise ValueError(f"Invalid level: {level}")
+
+    for train_log_prob, rollout_log_prob, loss_mask in zip(train_log_probs, rollout_log_probs, loss_masks):
+        add_ppl_metrics(train_log_prob, rollout_log_prob, loss_mask, metrics)
+
+    # only calculate mismatch metrics if TIS is not used
+    if not args.use_tis:
+        return None, loss_masks, metrics
+
     # handle each sequence independently
     for train_log_prob, rollout_log_prob, loss_mask in zip(train_log_probs, rollout_log_probs, loss_masks):
         loss_mask = loss_mask.float()
-        add_ppl_metrics(train_log_prob, rollout_log_prob, loss_mask, metrics)
         raw_log_ratio_diff = train_log_prob - rollout_log_prob
-
-        # level: The aggregation level for the importance sampling weights.
-        if level == "token":
-            # Per-token ratio (biased)
-            log_ratio_for_metrics = raw_log_ratio_diff
-        elif level == "sequence":
-            # Product of ratios (unbiased but high variance)
-            log_ratio_for_metrics = masked_sum(raw_log_ratio_diff, loss_mask, expand=True)
-        elif level == "geometric":
-            # Geometric mean of ratios (biased but low variance)
-            log_ratio_for_metrics = masked_mean(raw_log_ratio_diff, loss_mask, expand=True)
-        else:
-            raise ValueError(f"Invalid importance sampling level: {level}")
-
-        log_ratio_safe = torch.clamp(log_ratio_for_metrics, min=-SAFETY_BOUND, max=SAFETY_BOUND)
-        weights = torch.exp(log_ratio_safe)
-        metrics_append(metrics, "mean_is_weight_before_clip", weights)
-
         modified_mask = loss_mask.clone().float()
 
-        # mode: how to handle the importance sampling weights exceeding the thresholds.
-        if args.mis_mode == "truncate":
-            # Cap the importance sampling weights at the upper threshold
-            # https://fengyao.notion.site/off-policy-rl#279721e3f6c48092bbe2fcfe0e9c6b33
-            weights = truncate(weights, loss_mask, metrics, args.mis_upper_bound)
-        elif args.mis_mode == "mask":
-            # Preserve safety-bounded weights; apply thresholds via modified_mask
-            # https://yingru.notion.site/When-Speed-Kills-Stability-Demystifying-RL-Collapse-from-the-Training-Inference-Mismatch-271211a558b7808d8b12d403fd15edda
-            weights, modified_mask = mask(
-                weights,
-                loss_mask,
-                metrics,
-                args.mis_lower_bound,
-                args.mis_upper_bound,
-            )
-        elif args.mis_mode == "clip":
-            # Clip the importance sampling weights to the [lower, upper] range.
-            # Original behavior in slime.
-            weights = clip(
-                weights,
-                loss_mask,
-                metrics,
-                args.mis_lower_bound,
-                args.mis_upper_bound,
-            )
+        # IS (Importance Sampling): Modify IS weights
+        if args.use_tis:
+            log_ratio_tis = compute_log_ratio(raw_log_ratio_diff, loss_mask, args.tis_level)
+            log_ratio_safe = torch.clamp(log_ratio_tis, min=-SAFETY_BOUND, max=SAFETY_BOUND)
+            weights = torch.exp(log_ratio_safe)
+            metrics_append(metrics, "tis_weight_before_bound", weights)
+
+            if args.tis_mode == "truncate":
+                weights = truncate(weights, loss_mask, metrics, args.tis_upper_bound)
+            elif args.tis_mode == "clip":
+                weights = clip(weights, loss_mask, metrics, tis_lower_bound, args.tis_upper_bound)
+            elif args.tis_mode == "mask":
+                weights, modified_mask = mask(weights, loss_mask, metrics, tis_lower_bound, args.tis_upper_bound)
+            else:
+                raise ValueError(f"Unsupported tis_mode: {args.tis_mode}")
+
+            metrics_append(metrics, "tis_weight_after_bound", weights)
         else:
-            raise ValueError(f"Unsupported mis_mode: {args.mis_mode}")
+            weights = torch.ones_like(raw_log_ratio_diff)
 
-        # Veto on raw per-token ratios (sequence-wise rejection)
-        # Works independently of truncate/mask mode and does NOT modify IS weights
-        if args.mis_veto_threshold is not None:
-            veto_mask = calculate_veto_mask(raw_log_ratio_diff, loss_mask, args.mis_veto_threshold, metrics)
-            modified_mask = modified_mask * veto_mask
+        # RS (Rejection Sampling): Modify mask
+        if args.use_rs:
+            if args.use_tis and args.rs_level == args.tis_level:
+                log_ratio_rs = log_ratio_tis
+            else:
+                log_ratio_rs = compute_log_ratio(raw_log_ratio_diff, loss_mask, args.rs_level)
 
-        metrics_append(metrics, "ratio_mean_after_mis", weights)
+            log_ratio_safe_rs = torch.clamp(log_ratio_rs, min=-SAFETY_BOUND, max=SAFETY_BOUND)
+            rs_weights = torch.exp(log_ratio_safe_rs)
+
+            # Apply mask-based rejection sampling
+            _, modified_mask = mask(rs_weights, modified_mask, metrics, rs_lower_bound, rs_upper_bound)
+
+            # Veto on raw per-token ratios (sequence-wise rejection)
+            if args.rs_veto_threshold is not None:
+                veto_mask = calculate_veto_mask(raw_log_ratio_diff, loss_mask, args.rs_veto_threshold, metrics)
+                modified_mask = modified_mask * veto_mask
+
+        metrics_append(metrics, "ratio_mean_after_tis", weights)
 
         weights = weights.detach()
         modified_mask = modified_mask.detach()
         all_weights.append(weights)
         all_modified_masks.append(modified_mask)
+
+    # Apply batch normalization if enabled (normalize to mean=1.0 across entire batch)
+    if args.tis_batch_normalize:
+        # Compute mean based on TIS aggregation level
+        tis_level = args.tis_level if args.use_tis else "token"
+        if tis_level == "token":
+            # Token-level: normalize over all token weights
+            total_weights_sum = sum(masked_sum(w, m) for w, m in zip(all_weights, loss_masks))
+            total_mask_count = sum(m.sum() for m in loss_masks)
+            weights_mean = total_weights_sum / torch.clamp_min(total_mask_count, 1)
+        elif tis_level == "sequence":
+            # Sequence-level: normalize over sequence weights (one weight per sequence)
+            # For each sequence, compute mean over valid tokens (they all have the same weight)
+            # then average across sequences
+            seq_weights_means = [masked_mean(w, m) for w, m in zip(all_weights, loss_masks)]
+            weights_mean = sum(seq_weights_means) / len(seq_weights_means)
+        else:
+            raise ValueError(f"Unsupported tis_level: {tis_level}")
+
+        # Normalize to mean=1.0 (avoid division by zero)
+        if weights_mean > 1e-8:
+            all_weights = [w / weights_mean for w in all_weights]
+            for w in all_weights:
+                metrics_append(metrics, "batch_norm_factor", weights_mean.expand_as(w))
+        else:
+            for w in all_weights:
+                metrics_append(metrics, "batch_norm_factor", torch.ones_like(w))
 
     return all_weights, all_modified_masks, metrics
 
@@ -277,14 +306,14 @@ def compute_mis_weights_with_cp(
         return torch.cat(values, dim=0)
 
     result_metrics = {}
-    is_weights = slice_cp_and_concat(is_weights, total_lengths, response_lengths)
+    if is_weights is not None:
+        is_weights = slice_cp_and_concat(is_weights, total_lengths, response_lengths)
+        pg_loss = pg_loss * is_weights
 
     for key, values in is_metrics.items():
         key_name = f"mis_{key}"
         values = slice_cp_and_concat(values, total_lengths, response_lengths)
         result_metrics[key_name] = values
-
-    pg_loss = pg_loss * is_weights
 
     return pg_loss, modified_masks, result_metrics
 
@@ -297,7 +326,6 @@ def add_ppl_metrics(
 ):
     loss_mask = loss_mask.float()
 
-    # 1. Training policy perplexity metrics
     mean_log_prob_training = masked_mean(train_log_prob, loss_mask, expand=True)
     training_log_ppl = -mean_log_prob_training
     training_ppl = torch.exp(training_log_ppl)
@@ -338,3 +366,24 @@ def add_ppl_metrics(
     # Note: log_ppl_diff = log(ppl_ratio), so ppl_ratio = exp(log_ppl_diff)
     ppl_ratio = torch.exp(log_ppl_diff)
     metrics_append(metrics, "ppl_ratio", ppl_ratio)
+
+    # 4a. Token-level chi-squared divergence
+    # χ²(π_training || π_rollout) = E[ρ²] - 1, where ρ = π_training / π_rollout
+    # This measures the second moment of the importance weights
+    SAFETY_BOUND = 20.0
+    log_ratio = train_log_prob - rollout_log_prob
+    log_ratio_safe = torch.clamp(log_ratio, min=-SAFETY_BOUND, max=SAFETY_BOUND)
+    rho_token = torch.exp(log_ratio_safe)  # ρ = π_training / π_rollout
+    rho_squared_token = rho_token.square()
+    chi2_token_value = masked_mean(rho_squared_token, loss_mask) - 1.0
+    chi2_token = chi2_token_value.expand_as(train_log_prob)
+    metrics_append(metrics, "chi2_token", chi2_token)
+
+    # 4b. Sequence-level chi-squared divergence
+    # Computes (Π ρ_t)² - 1 for the entire sequence
+    # This captures the squared product of importance ratios
+    log_ratio_sum = masked_sum(log_ratio, loss_mask, expand=True)
+    log_ratio_sum_safe = torch.clamp(log_ratio_sum, min=-SAFETY_BOUND, max=SAFETY_BOUND)
+    rho_squared_seq = torch.exp(2.0 * log_ratio_sum_safe)  # (Π ρ_t)²
+    chi2_seq = rho_squared_seq - 1.0
+    metrics_append(metrics, "chi2_seq", chi2_seq)

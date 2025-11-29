@@ -184,7 +184,7 @@ class Attention(HuggingfaceAttention):
         self.linear_attn = Qwen3NextGatedDeltaNet(self.hf_config, self.hf_layer_idx)
         self.input_layernorm = Qwen3NextRMSNorm(self.hf_config.hidden_size, eps=self.hf_config.rms_norm_eps)
 
-    def hf_forward(self, hidden_states, position_ids, packed_seq_params):
+    def hf_forward(self, hidden_states, packed_seq_params):
         hidden_states = self.input_layernorm(hidden_states)
         hidden_states = self.linear_attn(
             hidden_states=hidden_states,

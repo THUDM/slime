@@ -1,8 +1,12 @@
+import logging
+
 from transformers import AutoTokenizer
 
 from slime.utils.mask_utils import MultiTurnLossMaskGenerator
 
 __all__ = ["generate_rollout"]
+
+logger = logging.getLogger(__name__)
 
 
 TOKENIZER = None
@@ -46,7 +50,7 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
         sample.loss_mask = loss_mask[-response_length:]
 
         if i == 0 and not SAMPLE_PRINTED:
-            print(
+            logger.info(
                 f"sft_rollout::generate_rollout example data: {sample=} (raw){messages=} (raw){token_ids=} (raw){loss_mask=} {response_length=}"
             )
             SAMPLE_PRINTED = True

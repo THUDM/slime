@@ -1,46 +1,53 @@
 import logging
 import multiprocessing
+import os
 import random
 import time
+from glob import glob
 from pathlib import Path
 from typing import List, Union
 
+import numpy as np
 import ray
 import torch
-import wandb
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
 from slime.rollout.base_types import call_rollout_fn
+from slime.utils import tracking_utils
 from slime.utils.health_monitor import RolloutHealthMonitor
-from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
+from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.iter_utils import group_by
+from slime.utils.logging_utils import configure_logger
 from slime.utils.metric_checker import MetricChecker
-from slime.utils.metric_utils import compute_pass_rate, compute_statistics, dict_add_prefix
+from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
+from slime.utils.tracking_utils import init_tracking
 from slime.utils.types import Sample
-from slime.utils.wandb_utils import init_wandb_secondary
 
+from ..utils.metric_utils import has_repetition
 from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
+
+logger = logging.getLogger(__name__)
 
 
 @ray.remote
 class RolloutManager:
     """The class to run rollout and convert rollout data to training data."""
 
-    def __init__(self, args, pg, wandb_run_id):
+    def __init__(self, args, pg):
+        configure_logger()
+
         self.args = args
         self.pg = pg
         _start_router(args)
         # TODO make args immutable
-        init_wandb_secondary(
-            args, wandb_run_id, router_addr=f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
-        )
+        init_tracking(args, primary=False, router_addr=f"http://{args.sglang_router_ip}:{args.sglang_router_port}")
         init_http_client(args)
 
         self.data_source = RolloutDataSourceWithBuffer(args)
@@ -50,8 +57,8 @@ class RolloutManager:
         self.custom_reward_post_process_func = None
         if self.args.custom_reward_post_process_path is not None:
             self.custom_reward_post_process_func = load_function(self.args.custom_reward_post_process_path)
-        print(f"import {self.args.rollout_function_path} as generate_rollout function.")
-        print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
+        logger.info(f"import {self.args.rollout_function_path} as generate_rollout function.")
+        logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
         if self.args.debug_train_only:
             self.all_rollout_engines = []
@@ -125,6 +132,9 @@ class RolloutManager:
     def onload(self, tags: List[str] = None):
         return ray.get([engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines])
 
+    def check_weights(self, action: str):
+        return ray.get([engine.check_weights.remote(action=action) for engine in self.rollout_engines])
+
     def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
             data = torch.load(
@@ -136,7 +146,7 @@ class RolloutManager:
                 original_num_rows = len(data)
                 rough_subsample_num_rows = int(original_num_rows * ratio)
                 data = data[: rough_subsample_num_rows // 2] + data[-rough_subsample_num_rows // 2 :]
-                print(
+                logger.info(
                     f"Subsample loaded debug rollout data using {ratio=} and change num rows {original_num_rows} -> {len(data)}"
                 )
             metrics = None
@@ -152,14 +162,14 @@ class RolloutManager:
                 trim_len = (len(data) // self.args.global_batch_size) * self.args.global_batch_size
                 origin_data_length = len(data)
                 data = data[:trim_len]
-                print(f"trim number of samples from {origin_data_length} to {trim_len}")
+                logger.info(f"trim number of samples from {origin_data_length} to {trim_len}")
         return data, metrics
 
     def _save_debug_rollout_data(self, data, rollout_id, evaluation: bool):
         # TODO to be refactored (originally Buffer._set_data)
         if (path_template := self.args.save_debug_rollout_data) is not None:
             path = Path(path_template.format(rollout_id=("eval_" if evaluation else "") + str(rollout_id)))
-            print(f"Save debug rollout data to {path}")
+            logger.info(f"Save debug rollout data to {path}")
             path.parent.mkdir(parents=True, exist_ok=True)
 
             # TODO may improve the format
@@ -228,6 +238,7 @@ class RolloutManager:
             # always instantiate loss_mask if not provided
             if sample.loss_mask is None:
                 sample.loss_mask = [1] * sample.response_length
+
             assert (
                 len(sample.loss_mask) == sample.response_length
             ), f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
@@ -246,8 +257,14 @@ class RolloutManager:
         if samples[0].rollout_log_probs is not None:
             train_data["rollout_log_probs"] = [sample.rollout_log_probs for sample in samples]
 
+        if samples[0].rollout_routed_experts is not None:
+            train_data["rollout_routed_experts"] = [sample.rollout_routed_experts for sample in samples]
+
         if samples[0].train_metadata is not None:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
+
+        if "teacher_log_probs" in samples[0].__dict__:
+            train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
 
         return train_data
 
@@ -278,19 +295,41 @@ def init_rollout_engines(args, pg, all_rollout_engines):
             placement_group_bundle_index=reordered_bundle_indices[i * num_gpu_per_engine],
         )
 
+        env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST} | {
+            "SGL_JIT_DEEPGEMM_PRECOMPILE": "false",
+            "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
+            "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+            "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+            "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
+            "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
+            "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
+        }
+
+        # TODO: currently the amem position is hardcoded, change to a better way later.
+        # note that amem does not work with update weights from distributed.
+        if (
+            args.offload_rollout
+            and args.actor_num_nodes * args.actor_num_gpus_per_node >= args.rollout_num_gpus
+            and len(glob("/usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libamem_nccl.so*")) > 0
+        ):
+            logger.info("Enable AMEM for rollout engine.")
+            ld_library_path = (
+                os.environ.get("LD_LIBRARY_PATH", "") + ":/usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib"
+            )
+            env_vars |= {
+                "LD_LIBRARY_PATH": ld_library_path,
+                "NCCL_CUMEM_ENABLE": "1",
+                "AMEM_ENABLE": "1",
+                "AMEM_GROUPID": "0",
+                "GMM_LOG": "2",
+            }
+
         rollout_engine = RolloutRayActor.options(
             num_cpus=num_cpus,
             num_gpus=num_gpus,
             scheduling_strategy=scheduling_strategy,
             runtime_env={
-                "env_vars": {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST}
-                | {
-                    "SGL_JIT_DEEPGEMM_PRECOMPILE": "false",
-                    "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
-                    "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
-                    "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
-                    "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
-                }
+                "env_vars": env_vars,
             },
         ).remote(args, rank=i)
 
@@ -393,7 +432,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
     for i, _ in rollout_engines:
         for key in ["port", "nccl_port", "dist_init_addr"]:
             assert key in addr_and_ports[i], f"Engine {i} {key} is not set."
-        print(f"Ports for engine {i}: {addr_and_ports[i]}")
+        logger.info(f"Ports for engine {i}: {addr_and_ports[i]}")
 
     return addr_and_ports
 
@@ -403,7 +442,7 @@ def _start_router(args):
     if args.sglang_router_ip is not None:
         return
 
-    args.sglang_router_ip = get_host_info()[1]
+    args.sglang_router_ip = _wrap_ipv6(get_host_info()[1])
     if args.sglang_router_port is None:
         args.sglang_router_port = find_available_port(random.randint(3000, 4000))
 
@@ -417,18 +456,19 @@ def _start_router(args):
 
         from slime.utils.http_utils import run_router
 
-        router_args = RouterArgs(
-            host=args.sglang_router_ip,
-            port=args.sglang_router_port,
-            balance_abs_threshold=0,
-            prometheus_port=find_available_port(random.randint(4000, 5000)),
-        )
+        router_args = RouterArgs.from_cli_args(args, use_router_prefix=True)
+        router_args.host = args.sglang_router_ip
+        router_args.port = args.sglang_router_port
+        router_args.balance_abs_threshold = 0
+        router_args.prometheus_port = find_available_port(random.randint(4000, 5000))
 
         if hasattr(router_args, "log_level"):
             router_args.log_level = "warn"
 
         if hasattr(router_args, "request_timeout_secs"):
             router_args.request_timeout_secs = args.sglang_router_request_timeout_secs
+
+        logger.info(f"Launch router with args: {router_args}")
 
     process = multiprocessing.Process(
         target=run_router,
@@ -439,7 +479,7 @@ def _start_router(args):
     # Wait 3 seconds
     time.sleep(3)
     assert process.is_alive()
-    print(f"Router launched at {args.sglang_router_ip}:{args.sglang_router_port}")
+    logger.info(f"Router launched at {args.sglang_router_ip}:{args.sglang_router_port}")
 
 
 def _log_eval_rollout_data(rollout_id, args, data):
@@ -448,7 +488,7 @@ def _log_eval_rollout_data(rollout_id, args, data):
         rewards = data[key]["rewards"]
         log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
         if (samples := data[key].get("samples")) is not None:
-            log_dict |= dict_add_prefix(_compute_reward_cat_metrics(args, samples), f"eval/{key}-")
+            log_dict |= dict_add_prefix(_compute_metrics_from_samples(args, samples), f"eval/{key}/")
         if "truncated" in data[key]:
             truncated = data[key]["truncated"]
             log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
@@ -461,22 +501,11 @@ def _log_eval_rollout_data(rollout_id, args, data):
                 f"eval/{key}-",
             )
 
-    print(f"eval {rollout_id}: {log_dict}")
+    logger.info(f"eval {rollout_id}: {log_dict}")
 
-    step = (
-        rollout_id
-        if not args.wandb_always_use_train_step
-        else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-    )
-    if args.use_wandb:
-        log_dict["eval/step"] = step
-        wandb.log(log_dict)
-
-    if args.use_tensorboard:
-        from slime.utils.tensorboard_utils import _TensorboardAdapter
-
-        tb = _TensorboardAdapter(args)
-        tb.log(data=log_dict, step=step)
+    step = compute_rollout_step(args, rollout_id)
+    log_dict["eval/step"] = step
+    tracking_utils.log(args, log_dict, step_key="eval/step")
 
     return log_dict
 
@@ -486,32 +515,29 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
         return
 
     log_dict = {**(rollout_extra_metrics or {})}
-    response_lengths = [
-        sum(sample.loss_mask) if sample.loss_mask is not None else sample.response_length for sample in samples
-    ]
+    response_lengths = [sample.effective_response_length for sample in samples]
     log_dict["perf/rollout_time"] = rollout_time
     if args.rollout_num_gpus:
         log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
-    log_dict |= dict_add_prefix(compute_statistics(response_lengths), f"rollout/response_len/")
+    log_dict |= dict_add_prefix(_compute_metrics_from_samples(args, samples), f"rollout/")
+    logger.info(f"perf {rollout_id}: {log_dict}")
+    step = compute_rollout_step(args, rollout_id)
+    log_dict["rollout/step"] = step
+    tracking_utils.log(args, log_dict, step_key="rollout/step")
+
+
+def _compute_metrics_from_samples(args, samples):
+    response_lengths = [sample.effective_response_length for sample in samples]
+
+    log_dict = {}
+    log_dict |= dict_add_prefix(compute_statistics(response_lengths), f"response_len/")
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_spec_metrics(args, samples)
-    log_dict |= dict_add_prefix(_compute_reward_cat_metrics(args, samples), f"rollout/")
-    print(f"perf {rollout_id}: {log_dict}")
-    step = (
-        rollout_id
-        if not args.wandb_always_use_train_step
-        else rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
-    )
-    if args.use_wandb:
-        log_dict["rollout/step"] = step
-        wandb.log(log_dict)
-
-    if args.use_tensorboard:
-        from slime.utils.tensorboard_utils import _TensorboardAdapter
-
-        tb = _TensorboardAdapter(args)
-        tb.log(data=log_dict, step=step)
+    log_dict |= _compute_reward_cat_metrics(args, samples)
+    log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
+    log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
+    return log_dict
 
 
 def _compute_zero_std_metrics(args, all_samples: List[Sample]):
@@ -528,7 +554,7 @@ def _compute_zero_std_metrics(args, all_samples: List[Sample]):
 
     interesting_rewards = [str(round(g[0].get_reward_value(args), 1)) for g in interesting_sample_groups]
 
-    return {f"rollout/zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
+    return {f"zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
 
 
 def _compute_spec_metrics(args, all_samples: List[Sample]):

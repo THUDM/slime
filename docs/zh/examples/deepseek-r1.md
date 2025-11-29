@@ -184,7 +184,6 @@ SGLANG_ARGS=(
    --sglang-dp-size 8
    --sglang-moe-dense-tp-size 1
    --sglang-enable-dp-lm-head
-   --sglang-disable-radix-cache
 
    # enable deepep for sglang
    --sglang-enable-deepep-moe

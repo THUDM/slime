@@ -250,25 +250,6 @@ This means that each time, the data corresponding to the first `num_samples` pro
 
 ⚠️ The `sample.metadata` of each partial rollout sample stores the rollout ID from its initial generation, which can be used for data filtering.
 
-### BF16 Training with FP8 Inference
-
-slime also supports BF16 training with FP8 inference. For the Qwen3-4B model, you just need to download the following model:
-
-```bash
-huggingface-cli download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
-```
-
-And replace `--hf-checkpoint` with:
-
-```bash
-#--hf-checkpoint /root/Qwen3-4B
---hf-checkpoint /root/Qwen3-4B-FP8
-```
-
-This will trigger FP8 inference. Currently, we directly cast the BF16 weights to FP8. In the future, we will gradually add more sophisticated quantization schemes that have less impact on precision.
-
-⚠️ The Megatron checkpoint for training still needs to be the one that was originally converted from the BF16 Hugging Face model.
-
 ### Decoupled Training and Inference
 
 In the original script, the resource configuration is as follows:

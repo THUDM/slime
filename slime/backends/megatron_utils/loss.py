@@ -12,7 +12,7 @@ from slime.utils.ppo_utils import (
     compute_approx_kl,
     compute_cispo_loss,
     compute_policy_loss,
-    get_advantages_and_returns,
+    get_advantages_and_returns_batch,
     get_grpo_returns,
     get_reinforce_plus_plus_baseline_advantages,
     get_reinforce_plus_plus_returns,
@@ -153,6 +153,7 @@ def get_values(
     unconcat_tokens: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
+    with_entropy: bool = False,
     non_loss_data: bool = True,
 ) -> dict[str, list[torch.Tensor]]:
     """Extract per-token value predictions over response tokens.
@@ -211,7 +212,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             "total_lengths"). Modified in-place to add "advantages" and
             "returns" keys, each mapping to lists of tensors per sample.
     """
-    log_probs: list[torch.Tensor] = rollout_data.get("log_probs")
+    log_probs: list[torch.Tensor] = rollout_data.get("rollout_log_probs" if args.use_rollout_logprobs else "log_probs")
     ref_log_probs: list[torch.Tensor] = rollout_data.get("ref_log_probs")
     rewards: list[float] = rollout_data.get("rewards")
     values: Union[None, list[torch.Tensor]] = rollout_data.get("values")
@@ -253,15 +254,8 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             if cp_rank == 0:
                 k[-1] += reward
             rewards.append(k)
-        advantages, returns = list(
-            zip(
-                *[
-                    get_advantages_and_returns(total_length, response_length, value, reward, args.gamma, args.lambd)
-                    for total_length, response_length, value, reward in zip(
-                        total_lengths, response_lengths, values, rewards
-                    )
-                ]
-            )
+        advantages, returns = get_advantages_and_returns_batch(
+            total_lengths, response_lengths, values, rewards, args.gamma, args.lambd
         )
 
     elif args.advantage_estimator == "reinforce_plus_plus":
@@ -285,6 +279,21 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             loss_masks=loss_masks,
             kl_coef=args.kl_coef,
         )
+        returns = advantages
+
+    elif args.advantage_estimator == "on_policy_distillation":
+        student_log_probs = log_probs
+        teacher_log_probs = rollout_data.get("teacher_log_probs")
+        response_lengths = rollout_data.get("response_lengths")
+        device = student_log_probs[0].device
+        teacher_log_probs = [t_log_prob.to(device=device) for t_log_prob in teacher_log_probs]
+        teacher_log_probs = [
+            t_log_prob[-response_length:] for t_log_prob, response_length in zip(teacher_log_probs, response_lengths)
+        ]
+        advantages = [
+            teacher_log_prob - student_log_prob
+            for teacher_log_prob, student_log_prob in zip(teacher_log_probs, student_log_probs)
+        ]
         returns = advantages
 
     else:
@@ -411,6 +420,7 @@ def policy_loss_function(
         ]
         ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, log_probs)]
         ppo_kl = torch.cat(ppo_kl, dim=0)
+        old_log_probs = torch.cat(old_log_probs, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
     else:
         old_log_probs = torch.cat(old_log_probs, dim=0)
@@ -424,7 +434,7 @@ def policy_loss_function(
         pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
 
     # Apply off-policy correction using importance sampling if enabled
-    if args.use_tis:
+    if args.get_mismatch_metrics or args.use_tis:
 
         def vanilla_tis_function(
             args,
@@ -502,7 +512,7 @@ def policy_loss_function(
         loss += 0 * logits.sum()
 
     train_rollout_logprob_abs_diff = None
-    if "rollout_log_probs" in batch:
+    if "rollout_log_probs" in batch and batch["rollout_log_probs"]:
         rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
         train_rollout_logprob_abs_diff = sum_of_sample_mean((old_log_probs - rollout_log_probs).abs())
 
@@ -520,7 +530,7 @@ def policy_loss_function(
     if args.use_kl_loss:
         reported_loss["kl_loss"] = kl_loss.clone().detach()
 
-    if args.use_tis:
+    if args.get_mismatch_metrics or args.use_tis:
         reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
         # Assume all metrics are already cloned and detached
         for metric_key, metric_value in tis_metrics.items():

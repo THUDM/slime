@@ -2,10 +2,14 @@ import asyncio
 import base64
 import copy
 import io
+import logging
 from argparse import Namespace
 from collections import defaultdict
 from typing import Any, Callable, Optional, Union
 
+import numpy as np
+import sglang_router
+from packaging.version import parse
 from PIL import Image
 from tqdm import tqdm
 from transformers import AutoTokenizer
@@ -23,6 +27,8 @@ from slime.utils.types import Sample
 from .rm_hub import async_rm, batched_async_rm
 
 __all__ = ["generate_rollout"]
+
+logger = logging.getLogger(__name__)
 
 
 def _load_and_encode_image(path: str) -> str:
@@ -112,7 +118,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
                     img_b64 = await asyncio.to_thread(_load_and_encode_image, part["path"])
                     image_data.append(img_b64)
                 except Exception as e:
-                    print(f"Error processing image {part['path']}: {e}")
+                    logger.info(f"Error processing image {part['path']}: {e}")
                     sample.status = Sample.Status.ABORTED
                     return sample
 
@@ -133,6 +139,10 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         "sampling_params": sampling_params,
         "return_logprob": True,
     }
+
+    if args.use_rollout_routing_replay:
+        payload["return_routed_experts"] = True
+
     if image_data:
         payload["image_data"] = image_data
 
@@ -186,6 +196,10 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
     if "weight_version" in output["meta_info"]:
         sample.weight_versions.append(output["meta_info"]["weight_version"])
+
+    if "routed_experts" in output["meta_info"]:
+        assert len(output["meta_info"]["routed_experts"]) == len(sample.tokens)
+        sample.rollout_routed_experts = np.array(output["meta_info"]["routed_experts"])
 
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":
@@ -244,8 +258,9 @@ async def generate_and_rm(
     else:
         if sample.status == Sample.Status.ABORTED:
             return sample
-
-        sample.reward = await async_rm(args, sample)
+        # for multi-turn environment, a reward could be assigned to the agent.
+        if sample.reward is None:
+            sample.reward = await async_rm(args, sample)
 
     return sample
 
@@ -283,11 +298,16 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
     state = GenerateState(args)
     assert not state.aborted
     state.aborted = True
-    response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers")
 
-    # abort all the requests
-    for url in response["urls"]:
-        print(f"Abort request for {url}", flush=True)
+    if parse(sglang_router.__version__) <= parse("0.2.1") or args.use_slime_router:
+        response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/list_workers")
+        urls = response["urls"]
+    else:
+        response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
+        urls = [worker["url"] for worker in response["workers"]]
+
+    for url in urls:
+        logger.info(f"Abort request for {url}")
         await post(f"{url}/abort_request", {"abort_all": True})
 
     # make sure all the pending tasks are finished
@@ -308,7 +328,7 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
             count += len(group)
 
     if args.partial_rollout:
-        print(f"Collected {count} partial samples into the data buffer", flush=True)
+        logger.info(f"Collected {count} partial samples into the data buffer")
 
     return aborted_samples
 
@@ -358,9 +378,8 @@ async def generate_rollout_async(
 
             if do_print:
                 sample = group[0][0] if isinstance(group[0], list) else group[0]
-                print(
+                logger.info(
                     f"First rollout sample: {[str(sample.prompt) + sample.response]}, label: {sample.label}, reward: {sample.reward}",
-                    flush=True,
                 )
                 do_print = False
 
@@ -379,9 +398,8 @@ async def generate_rollout_async(
 
     pbar.close()
     sample = data[-1][0][0] if isinstance(data[-1][0], list) else data[-1][0]
-    print(
+    logger.info(
         f"Finish rollout: {[str(sample.prompt) + sample.response]}, label: {sample.label}, reward: {sample.reward}",
-        flush=True,
     )
 
     # there are still some unfinished requests, abort them
@@ -392,6 +410,10 @@ async def generate_rollout_async(
 
     # reset the global state to prevent effects on the next rollout or eval.
     state.reset()
+    if args.rollout_sample_filter_path is not None:
+        filter_func = load_function(args.rollout_sample_filter_path)
+        filter_func(args, data)
+
     return RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect()), aborted_samples
 
 
@@ -429,9 +451,14 @@ EVAL_PROMPT_DATASET = {}
 
 async def eval_rollout(args: Namespace, rollout_id: int) -> tuple[dict[str, dict[str, list[Any]]], list[list[Sample]]]:
     assert not args.group_rm, "Group RM is not supported for eval rollout"
-    results = {}
+
+    coros = []
     for dataset_cfg in getattr(args, "eval_datasets", []) or []:
-        results.update(await eval_rollout_single_dataset(args, rollout_id, dataset_cfg))
+        coros.append(eval_rollout_single_dataset(args, rollout_id, dataset_cfg))
+    results_list = await asyncio.gather(*coros)
+    results = {}
+    for r in results_list:
+        results.update(r)
     return RolloutFnEvalOutput(data=results), []
 
 
@@ -560,11 +587,10 @@ async def eval_rollout_single_dataset(
     for coro in asyncio.as_completed(tasks):
         sample = await coro
         if do_print:
-            print(
-                "eval_rollout_single_dataset example data:",
-                [str(sample.prompt) + sample.response],
-                f"reward={sample.reward}",
-                flush=True,
+            logger.info(
+                "eval_rollout_single_dataset example data: "
+                f"{[str(sample.prompt) + sample.response]} "
+                f"reward={sample.reward}"
             )
             do_print = False
         if isinstance(sample, list):

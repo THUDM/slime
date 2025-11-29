@@ -23,7 +23,7 @@ def mathd_normalize_answer(answer: Optional[str]) -> Optional[str]:
         if m is not None:
             answer = m.group("text").strip()
         return _strip_string(answer)
-    except:
+    except Exception:
         return answer
 
 
@@ -40,7 +40,7 @@ def _strip_string(string):
                 else:
                     try:
                         assert len(substr) >= 2
-                    except:
+                    except Exception:
                         return string
                     a = substr[0]
                     b = substr[1]
@@ -70,7 +70,7 @@ def _strip_string(string):
             assert string == "{}/{}".format(a, b)
             new_string = "\\frac{" + str(a) + "}{" + str(b) + "}"
             return new_string
-        except:
+        except Exception:
             return string
 
     def _remove_right_units(string):
@@ -98,25 +98,20 @@ def _strip_string(string):
 
     # linebreaks
     string = string.replace("\n", "")
-    # print(string)
 
     # remove inverse spaces
     string = string.replace("\\!", "")
-    # print(string)
 
     # replace \\ with \
     string = string.replace("\\\\", "\\")
-    # print(string)
 
     # replace tfrac and dfrac with frac
     string = string.replace("tfrac", "frac")
     string = string.replace("dfrac", "frac")
-    # print(string)
 
     # remove \left and \right
     string = string.replace("\\left", "")
     string = string.replace("\\right", "")
-    # print(string)
 
     # Remove circ (degrees)
     string = string.replace("^{\\circ}", "")
