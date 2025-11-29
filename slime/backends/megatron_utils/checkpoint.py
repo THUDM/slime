@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 
 # TODO: may need to copy those 2 functions and do refactoring.
@@ -16,6 +17,10 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
     # ref: how megatron `load_checkpoint` gets directory
     args = get_args()
     load_path = args.load
+
+    assert Path(load_path).exists() and _is_dir_nonempty(
+        load_path
+    ), f"{args.load=} does not exist or is an empty directory. Did you specify the wrong folder?"
 
     if _is_megatron_checkpoint(load_path):
         return _load_checkpoint_megatron(
@@ -58,3 +63,8 @@ def _load_checkpoint_hf(ddp_model, optimizer, args, load_path: str):
     iteration = 0
     num_floating_point_operations_so_far = 0
     return iteration, num_floating_point_operations_so_far
+
+
+def _is_dir_nonempty(path):
+    with os.scandir(path) as it:
+        return any(it)
