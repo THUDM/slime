@@ -117,11 +117,26 @@ def named_params_and_buffers(
     args: Namespace,
     model: Sequence[torch.nn.Module],
     convert_to_global_name: bool = True,
+    translate_gpu_to_cpu: bool = False,
 ) -> Iterator[tuple[str, torch.Tensor]]:
     if convert_to_global_name:
-        return _named_params_and_buffers_global(args, model)
+        ans = _named_params_and_buffers_global(args, model)
     else:
-        return _named_params_and_buffers_vanilla(model)
+        ans = _named_params_and_buffers_vanilla(model)
+
+    if translate_gpu_to_cpu:
+        ans = ((name, _maybe_get_cpu_backup(tensor)) for name, tensor in ans)
+
+    return ans
+
+
+def _maybe_get_cpu_backup(x: torch.Tensor):
+    from torch_memory_saver import torch_memory_saver
+
+    if (cpu_tensor := torch_memory_saver.get_cpu_backup(x)) is not None:
+        return cpu_tensor
+
+    return x
 
 
 def _named_params_and_buffers_vanilla(model: Sequence[torch.nn.Module]) -> Iterator[tuple[str, torch.Tensor]]:

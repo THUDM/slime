@@ -91,7 +91,10 @@ class MegatronTrainRayActor(TrainRayActor):
 
         self.weights_backuper = TensorBackuper.create(
             source_getter=lambda: named_params_and_buffers(
-                self.args, self.model, convert_to_global_name=args.megatron_to_hf_mode == "raw"
+                self.args,
+                self.model,
+                convert_to_global_name=args.megatron_to_hf_mode == "raw",
+                translate_gpu_to_cpu=not self.args.enable_weights_backuper,
             ),
             single_tag=None if args.enable_weights_backuper else "actor",
         )
