@@ -1,5 +1,6 @@
 from argparse import Namespace
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Callable
 
 import ray
@@ -392,8 +393,9 @@ def _get_megatron_local_param_infos(args: Namespace, model: Sequence[torch.nn.Mo
             for name, info in infos.items():
                 if name not in param_infos:
                     # here we need to set the src_rank to the rank within the expert model parallel group
-                    info.src_rank = src_rank
-                    param_infos[name] = info
+                    # ParamInfo is frozen, so we need to create a new instance with updated src_rank
+                    updated_info = replace(info, src_rank=src_rank)
+                    param_infos[name] = updated_info
 
     param_infos = list(param_infos.values())
     param_infos = sorted(param_infos, key=lambda info: info.name)
