@@ -74,7 +74,7 @@ def execute():
         "--eval-prompt-data geo3k-test /root/datasets/geo3k_imgurl/test.parquet "
         "--n-samples-per-eval-prompt 1 "
         "--eval-max-response-len 16384 "
-        "--eval-top-k 0.7 "
+        "--eval-top-k 1 "
     )
 
     grpo_args = (
