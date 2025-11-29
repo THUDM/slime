@@ -12,6 +12,8 @@ from slime.backends.sglang_utils.arguments import add_sglang_arguments
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
 
+from slime.utils.logging_utils import configure_logger
+
 logger = logging.getLogger(__name__)
 
 
@@ -139,6 +141,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_false",
                 dest="enable_weights_backuper",
                 help="Whether to disable weights backuper to save host memory.",
+            )
+            parser.add_argument(
+                "--megatron-to-hf-mode",
+                choices=["raw", "bridge"],
+                default="raw",
+                help="The method to convert megatron weights to hugging face weights for SGLang.",
             )
 
             return parser
@@ -989,6 +997,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 choices=["torch", "memray"],
                 default="torch",
             )
+            parser.add_argument("--check-weight-update-equal", action="store_true")
             return parser
 
         def add_network_arguments(parser):
@@ -1084,6 +1093,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=int,
                 default=128,
                 help="Multiplier for data padding size in data processing.",
+            )
+            parser.add_argument(
+                "--rollout-sample-filter-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to the rollout sample filter function. "
+                    "This function determines whether a sample will participate in loss calculation. "
+                    "The function should take args and samples (list[Sample]) as input, and return None. "
+                    "Please directly modify the remove_sample attribute of Sample. "
+                    "Note: This attribute does not determine whether the sample participates in advantage normalization."
+                ),
             )
             return parser
 
@@ -1193,6 +1214,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
 
 def parse_args(add_custom_arguments=None):
+    # Users may call `parse_args` very early, thus we ensure logger is configured here
+    configure_logger()
+
     add_slime_arguments = get_slime_extra_args_provider(add_custom_arguments)
 
     backend = parse_args_train_backend()
@@ -1393,6 +1417,9 @@ def slime_validate_args(args):
             args.actor_num_nodes = args.rollout_num_gpus // args.actor_num_gpus_per_node
         args.colocate = False
         args.offload_train = args.offload_rollout = False
+        if args.train_memory_margin_bytes > 0:
+            logger.warning("Force train_memory_margin_bytes=0 since debug_rollout_only does not support it")
+            args.train_memory_margin_bytes = 0
 
     assert not (args.debug_rollout_only and args.debug_train_only), (
         "debug_rollout_only and debug_train_only cannot be set at the same time, " "please set only one of them."
@@ -1472,14 +1499,16 @@ def slime_validate_args(args):
         with open(args.custom_config_path, "r") as f:
             data = yaml.safe_load(f) or {}
         for k, v in data.items():
-            if not hasattr(args, k):
-                setattr(args, k, v)
-            else:
-                logger.info(f"Warning: Argument {k} is already set to {getattr(args, k)}, will not override with {v}.")
+            if hasattr(args, k):
+                logger.info(f"Warning: Argument {k} is already set to {getattr(args, k)}, will override with {v}.")
+            setattr(args, k, v)
 
 
 def hf_validate_args(args, hf_config):
     equal = lambda x, y: x == y
+
+    errors = []
+
     for hf_config_name, megatron_config_name, compare_fn in [
         ("hidden_size", "hidden_size", equal),
         ("num_attention_heads", "num_attention_heads", equal),
@@ -1490,10 +1519,14 @@ def hf_validate_args(args, hf_config):
         ("rope_theta", "rotary_base", equal),
     ]:
         if hasattr(hf_config, hf_config_name):
-            assert compare_fn(getattr(hf_config, hf_config_name), getattr(args, megatron_config_name)), (
-                f"{hf_config_name} in hf config {getattr(hf_config, hf_config_name)} is not equal to "
-                f"{megatron_config_name} {getattr(args, megatron_config_name)}, please check the config."
-            )
+            if not compare_fn(getattr(hf_config, hf_config_name), getattr(args, megatron_config_name)):
+                errors.append(
+                    f"{hf_config_name} in hf config {getattr(hf_config, hf_config_name)} is not equal to "
+                    f"{megatron_config_name} {getattr(args, megatron_config_name)}, please check the config."
+                )
+
+    if len(errors) > 0:
+        raise AssertionError(f"hf_validate_args failed: " + "; ".join(errors))
 
 
 def _validate_and_update_megatron_args_from_hf(args, args_from_hf_config: Dict[str, Any]):

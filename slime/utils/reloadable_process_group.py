@@ -131,10 +131,16 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
     @staticmethod
     def destroy_process_groups():
         pid = os.getpid()
-        for reloadable_group in ReloadableProcessGroup.GROUPS[pid]:
+        for reloadable_group in ReloadableProcessGroup.GROUPS.get(pid, []):
             if reloadable_group.group is None:
                 continue
-            dist.destroy_process_group(reloadable_group.group)
+            try:
+                dist.destroy_process_group(reloadable_group.group)
+            except ValueError as e:
+                logger.warning(
+                    f"Process group already invalid/destroyed; skipping cleanup. Exception: {e}",
+                    exc_info=True,
+                )
 
             del reloadable_group.group
             reloadable_group.group = None
@@ -142,9 +148,10 @@ class ReloadableProcessGroup(torch.distributed.ProcessGroup):
     @staticmethod
     def reload_process_groups():
         pid = os.getpid()
-        logger.info(f"Reloading {len(ReloadableProcessGroup.GROUPS[pid])} process groups in pid {pid}")
-        old_new_group = old_new_group_dict[pid]
-        for reloadable_group in ReloadableProcessGroup.GROUPS[pid]:
+        reloadable_groups = ReloadableProcessGroup.GROUPS.get(pid, [])
+        logger.info(f"Reloading {len(reloadable_groups)} process groups in pid {pid}")
+        old_new_group = old_new_group_dict.get(pid)
+        for reloadable_group in reloadable_groups:
             if reloadable_group.group is not None:
                 continue
             group = old_new_group(ranks=reloadable_group.group_info["ranks"], backend="nccl")

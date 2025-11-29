@@ -6,7 +6,6 @@ import ray
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
-from packaging import version
 from ring_flash_attn import substitute_hf_flash_attn, update_ring_flash_attn_params
 from tqdm import tqdm
 from transformers import AutoConfig, AutoModelForCausalLM, AutoProcessor, AutoTokenizer
@@ -56,6 +55,11 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.debug_rollout_only:
             return 0
 
+        self.fsdp_cpu_offload = getattr(self.args, "fsdp_cpu_offload", False)
+        # Offload train and fsdp cpu offload cannot be used together, fsdp_cpu_offload is more aggressive
+        if self.args.offload_train and self.fsdp_cpu_offload:
+            self.args.offload_train = False
+
         self._enable_true_on_policy_optimizations(args)
         if dist.get_rank() == 0:
             init_tracking(args, primary=False)
@@ -74,21 +78,29 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.multimodal_keys:
             self.vlm_processor = AutoProcessor.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
 
-        # Load model
-        with torch.autocast(device_type=f"cuda:{torch.cuda.current_device()}"):
+        init_context = self._get_init_weight_context_manager()
+
+        with init_context():
             model = AutoModelForCausalLM.from_pretrained(
                 self.args.hf_checkpoint,
                 trust_remote_code=True,
                 attn_implementation=self.args.attn_implementation,
             )
+
         model.train()
 
-        if args.gradient_checkpointing:
-            model.gradient_checkpointing_enable()
+        full_state = model.state_dict()
 
-        # Apply FSDP with DP mesh and CPU offload policy if requested
-        cpu_offload = getattr(args, "fsdp_cpu_offload", False)
-        self.model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=cpu_offload)
+        model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=self.fsdp_cpu_offload)
+
+        model = self._fsdp2_load_full_state_dict(
+            model, full_state, self.dp_mesh, cpu_offload=True if self.fsdp_cpu_offload else None
+        )
+
+        self.model = model
+
+        if args.gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
 
         if args.optimizer == "adam":
             self.optimizer = torch.optim.AdamW(
@@ -132,7 +144,7 @@ class FSDPTrainRayActor(TrainRayActor):
     def _enable_true_on_policy_optimizations(self, args):
         if args.true_on_policy_mode:
             from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
-            from transformers.models.qwen3 import modeling_qwen3
+            from .models.qwen3_moe import apply_true_on_policy_patch_for_qwen3_moe
 
             logger.info("FSDPTrainRayActor call enable_batch_invariant_mode for true-on-policy")
             enable_batch_invariant_mode(
@@ -141,7 +153,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 enable_bmm=False,
             )
 
-            modeling_qwen3.apply_rotary_pos_emb = torch.compile(dynamic=True)(modeling_qwen3.apply_rotary_pos_emb)
+            apply_true_on_policy_patch_for_qwen3_moe()
 
     def setup_device_mesh(self) -> None:
         """Setup device mesh for parallelism (always called, handles both CP and non-CP cases).
@@ -189,6 +201,69 @@ class FSDPTrainRayActor(TrainRayActor):
             logger.info(f"[Rank {rank}] CP initialized via device mesh")
         else:
             logger.info(f"[Rank {rank}] Pure DP mode (cp_size=1)")
+
+    def _get_init_weight_context_manager(self):
+        """Get context manager for model initialization.
+
+        Returns a callable that creates a context manager.
+        Uses meta device (no memory allocation) for non-rank-0 processes,
+        UNLESS tie_word_embeddings=True (which causes hangs with meta tensors).
+
+        Ref: verl/utils/fsdp_utils.py::get_init_weight_context_manager
+        NOTE: tie_word_embedding causes meta_tensor init to hang
+        """
+        from accelerate import init_empty_weights
+
+        # Check if model uses tied word embeddings (which doesn't work with meta tensors)
+        use_meta_tensor = not self.hf_config.tie_word_embeddings
+
+        cpu_init_weights = lambda: torch.device("cpu")
+
+        if use_meta_tensor:
+            # Rank 0: CPU, others: meta device (memory efficient for large models)
+            return init_empty_weights if dist.get_rank() != 0 else cpu_init_weights
+        else:
+            logger.info(f"[Rank {dist.get_rank()}] tie_word_embeddings=True, loading full model to CPU on all ranks")
+            return cpu_init_weights
+
+    def _fsdp2_load_full_state_dict(self, model, full_state, device_mesh, cpu_offload):
+        """Load full state dict into FSDP2 model with efficient broadcast from rank 0.
+
+        This function loads weights from rank 0 and broadcasts to all other ranks,
+        avoiding the need for each rank to load the full model from disk.
+
+        Args:
+            model: FSDP2-wrapped model
+            full_state: State dict (only rank 0 has real weights, others have empty dict)
+            device_mesh: Device mesh for FSDP
+            cpu_offload: If not None, enables StateDictOptions cpu_offload
+
+        Ref:verl/utils/fsdp_utils.py::fsdp2_load_full_state_dict
+        """
+        from torch.distributed.checkpoint.state_dict import StateDictOptions, set_model_state_dict
+
+        # Rank 0: move with weights, others: allocate empty tensors on device
+        if dist.get_rank() == 0:
+            model = model.to(device=torch.cuda.current_device(), non_blocking=True)
+        else:
+            # to_empty creates tensors on device without initializing memory
+            model = model.to_empty(device=torch.cuda.current_device())
+
+        is_cpu_offload = cpu_offload is not None
+        options = StateDictOptions(full_state_dict=True, cpu_offload=is_cpu_offload, broadcast_from_rank0=True)
+
+        set_model_state_dict(model, full_state, options=options)
+
+        # set_model_state_dict will not broadcast buffers, so we need to broadcast them manually.
+        for name, buf in model.named_buffers():
+            dist.broadcast(buf, src=0)
+
+        if is_cpu_offload:
+            model.to("cpu", non_blocking=True)
+            for buf in model.buffers():
+                buf.data = buf.data.to(torch.cuda.current_device())
+
+        return model
 
     @timer
     def sleep(self) -> None:
@@ -248,14 +323,11 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         # Select which model to use
         if model_tag == "ref" and self.ref_model is not None:
-            # Offload actor model to CPU to save GPU memory
-            logger.info("[Rank {}] Offloading actor model to CPU".format(dist.get_rank()))
-            self.model.cpu()
-            torch.cuda.empty_cache()
+            if not self.fsdp_cpu_offload:
+                self.model.cpu()
+                torch.cuda.empty_cache()
+                dist.barrier(group=get_gloo_group())
 
-            # Load ref model to GPU
-            logger.info("[Rank {}] Loading ref model to GPU".format(dist.get_rank()))
-            self.ref_model.cuda()
             active_model = self.ref_model
             active_model.eval()
         else:
@@ -267,12 +339,10 @@ class FSDPTrainRayActor(TrainRayActor):
                 for batch in self.prof.iterate_train_log_probs(
                     tqdm(packed_batches, desc=f"{store_prefix}log_probs", disable=dist.get_rank() != 0)
                 ):
-                    # TODO: remove the autocast in the future
-                    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-                        model_args = self._get_model_inputs_args(batch)
-                        if "pixel_values" in batch:
-                            model_args["pixel_values"] = batch["pixel_values"]
-                        logits = self.model(**model_args).logits.squeeze(0)
+                    model_args = self._get_model_inputs_args(batch)
+                    if "pixel_values" in batch:
+                        model_args["pixel_values"] = batch["pixel_values"]
+                    logits = active_model(**model_args).logits.squeeze(0).float()
                     log_probs_result, entropy_result = get_logprob_and_entropy_with_cp(
                         logits=logits,
                         target_tokens=batch["tokens"],
@@ -289,11 +359,14 @@ class FSDPTrainRayActor(TrainRayActor):
             return rollout_data
 
         finally:
-            # Offload ref model back to CPU
+            # Restore actor model if it was offloaded
             if model_tag == "ref" and self.ref_model is not None:
-                self.ref_model.cpu()
                 torch.cuda.empty_cache()
-                self.model.cuda()
+                dist.barrier(group=get_gloo_group())
+
+                if not self.fsdp_cpu_offload:
+                    self.model.cuda()
+                    dist.barrier(group=get_gloo_group())
 
     def packed_data(
         self, rollout_data: dict[str, list[torch.Tensor]]
@@ -420,6 +493,13 @@ class FSDPTrainRayActor(TrainRayActor):
             log_dict["rollout/step"] = compute_rollout_step(self.args, rollout_id)
             tracking_utils.log(self.args, log_dict, step_key="rollout/step")
 
+        if self.args.ci_test and self.args.true_on_policy_mode:
+            assert log_dict["rollout/log_probs"] == log_dict["rollout/rollout_log_probs"], (
+                f"CI check failed: true_on_policy_mode is enabled, but log_probs "
+                f"({log_dict['rollout/log_probs']}) != rollout_log_probs "
+                f"({log_dict['rollout/rollout_log_probs']})"
+            )
+
     def _train_core(self, rollout_id: int, rollout_data) -> None:
         if self.args.advantage_estimator in ["grpo", "gspo"]:
             rollout_data["advantages"] = rollout_data["returns"] = [
@@ -469,16 +549,12 @@ class FSDPTrainRayActor(TrainRayActor):
             # Copy actor model state to ref model
             actor_state = self.model.state_dict()
             self.ref_model.load_state_dict(actor_state)
-            self.ref_model.cpu()  # Keep ref in CPU
+            self.ref_model.cpu()
 
     def _train_step(self, packed_batch, reported_accum, mbs_id, grad_accum):
-        # TODO: remove the autocast in the future
-        with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
-            # Prepare model inputs
-            model_args = self._get_model_inputs_args(packed_batch)
-            logits = self.model(
-                **model_args,
-            ).logits.squeeze(0)
+        # Prepare model inputs
+        model_args = self._get_model_inputs_args(packed_batch)
+        logits = self.model(**model_args).logits.squeeze(0).float()
 
         # Compute log probs and entropy (unified for both CP and non-CP modes)
         log_probs, entropy_result = get_logprob_and_entropy_with_cp(
@@ -496,7 +572,18 @@ class FSDPTrainRayActor(TrainRayActor):
 
         unpacked_batches = unpack_sequences(packed_batch)
 
-        old_log_probs = torch.cat([batch["log_probs"] for batch in unpacked_batches], dim=0)
+        old_log_prob_key = "rollout_log_probs" if self.args.use_rollout_logprobs else "log_probs"
+        missing_old_log_probs = [
+            idx
+            for idx, batch in enumerate(unpacked_batches)
+            if old_log_prob_key not in batch or not isinstance(batch[old_log_prob_key], torch.Tensor)
+        ]
+        if missing_old_log_probs:
+            raise KeyError(
+                f"{old_log_prob_key} must be provided as torch.Tensor for all microbatches when "
+                f"use_rollout_logprobs is set to {self.args.use_rollout_logprobs}. Missing in batches: {missing_old_log_probs}"
+            )
+        old_log_probs = torch.cat([batch[old_log_prob_key] for batch in unpacked_batches], dim=0)
         log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
         advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
         loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
@@ -521,17 +608,22 @@ class FSDPTrainRayActor(TrainRayActor):
 
         pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, self.args.eps_clip, self.args.eps_clip_high)
 
-        rollout_log_probs = torch.cat([batch["rollout_log_probs"] for batch in unpacked_batches], dim=0)
-        rollout_log_probs = rollout_log_probs.to(device=log_probs.device)
+        def _has_rollout_log_probs(batch) -> bool:
+            rollout_tensor = batch.get("rollout_log_probs")
+            return isinstance(rollout_tensor, torch.Tensor) and rollout_tensor.numel() > 0
+
+        has_rollout_log_probs = all(_has_rollout_log_probs(batch) for batch in unpacked_batches)
+        rollout_log_probs = (
+            torch.cat([batch["rollout_log_probs"] for batch in unpacked_batches], dim=0)
+            if has_rollout_log_probs
+            else None
+        )
 
         # Apply TIS before sample mean calculation
         if self.args.use_tis:
             # Apply TIS off-policy correction using importance sampling
-            assert all(
-                "rollout_log_probs" in batch
-                and isinstance(batch["rollout_log_probs"], torch.Tensor)
-                and batch["rollout_log_probs"].numel() > 0
-                for batch in unpacked_batches
+            assert (
+                has_rollout_log_probs and rollout_log_probs is not None
             ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS"
 
             tis = torch.exp(old_log_probs - rollout_log_probs)
@@ -548,10 +640,13 @@ class FSDPTrainRayActor(TrainRayActor):
         pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
         ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
 
-        train_rollout_logprob_abs_diff = (old_log_probs - rollout_log_probs).abs()
-        train_rollout_logprob_abs_diff = sum_of_sample_mean(
-            train_rollout_logprob_abs_diff, response_lengths, loss_masks
-        ).detach()
+        # Only compare rollout vs. train log probs when they originate from different stages.
+        train_rollout_logprob_abs_diff = None
+        if not self.args.use_rollout_logprobs and rollout_log_probs is not None:
+            train_rollout_logprob_abs_diff = (old_log_probs - rollout_log_probs).abs()
+            train_rollout_logprob_abs_diff = sum_of_sample_mean(
+                train_rollout_logprob_abs_diff, response_lengths, loss_masks
+            ).detach()
 
         entropy = torch.cat([batch["entropy"] for batch in unpacked_batches], dim=0)
         entropy_loss = sum_of_sample_mean(entropy, response_lengths, loss_masks)
@@ -575,8 +670,10 @@ class FSDPTrainRayActor(TrainRayActor):
             "pg_clipfrac": pg_clipfrac.detach(),
             "ppo_kl": ppo_kl.detach(),
             "entropy_loss": entropy_loss.detach(),
-            "train_rollout_logprob_abs_diff": train_rollout_logprob_abs_diff,
         }
+
+        if train_rollout_logprob_abs_diff is not None:
+            reported["train_rollout_logprob_abs_diff"] = train_rollout_logprob_abs_diff
 
         if self.args.use_kl_loss:
             reported["kl_loss"] = kl_loss.detach()
@@ -652,19 +749,19 @@ class FSDPTrainRayActor(TrainRayActor):
         clear_memory()
 
     def create_ref_model(self, ref_load_path: str | None):
-        """Create and initialize a separate reference model (kept in CPU).
+        """Create and initialize a separate reference model with FSDP2 CPUOffloadPolicy.
 
         Parameters:
             ref_load_path: Path to a directory containing a HF checkpoint. If
                 None, a ValueError is raised.
 
         Returns:
-            FSDP-wrapped ref model in CPU memory
+            FSDP2-wrapped ref model with CPU offload enabled
 
         Note:
-            Creates a separate FSDP model instance for the reference model.
-            This model is kept in CPU and loaded to GPU only when needed in
-            compute_log_prob(). This approach is cleaner than weight swapping.
+            Creates a separate FSDP2 model instance for the reference model.
+            ALWAYS uses CPUOffloadPolicy for the reference model to save memory,
+            regardless of the actor model's CPU offload setting.
         """
         if ref_load_path is None:
             raise ValueError("ref_load_path must be provided when loading reference model")
@@ -674,18 +771,22 @@ class FSDPTrainRayActor(TrainRayActor):
         if os.path.isdir(ref_load_path):
             logger.info(f"[Rank {dist.get_rank()}] Creating separate ref model from {ref_load_path}")
 
-            # Load model same way as actor model
-            with torch.autocast(device_type=f"cuda:{torch.cuda.current_device()}"):
+            init_context = self._get_init_weight_context_manager()
+
+            with init_context():
                 ref_model = AutoModelForCausalLM.from_pretrained(
                     ref_load_path,
                     trust_remote_code=True,
                     attn_implementation=self.args.attn_implementation,
                 )
 
-            ref_model = apply_fsdp2(ref_model, mesh=self.dp_mesh)
-            ref_model.cpu()
+            full_state = ref_model.state_dict()
 
-            logger.info(f"[Rank {dist.get_rank()}] Reference model created and offloaded to CPU")
+            # Always use CPUOffloadPolicy for reference, let FSDP2 handle the offload. It is faster than model.cpu().
+            ref_model = apply_fsdp2(ref_model, mesh=self.dp_mesh, cpu_offload=True)
+            ref_model = self._fsdp2_load_full_state_dict(ref_model, full_state, self.dp_mesh, cpu_offload=True)
+
+            logger.info(f"[Rank {dist.get_rank()}] Reference model created with FSDP2 CPUOffloadPolicy")
             return ref_model
         else:
             raise NotImplementedError(f"Loading from checkpoint file {ref_load_path} not yet implemented")
@@ -906,14 +1007,7 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False):
 
     Ref: https://github.com/volcengine/verl/blob/main/verl/utils/fsdp_utils.py
     """
-    # Import FSDP v2 components based on PyTorch version
-    if version.parse(torch.__version__) >= version.parse("2.6"):
-        from torch.distributed.fsdp import CPUOffloadPolicy, fully_shard
-    elif version.parse(torch.__version__) >= version.parse("2.4"):
-        from torch.distributed._composable.fsdp import fully_shard
-        from torch.distributed._composable.fsdp.fully_shard import CPUOffloadPolicy
-    else:
-        raise ImportError("FSDP v2 not available")
+    from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy, fully_shard
 
     offload_policy = CPUOffloadPolicy() if cpu_offload else None
 
@@ -927,11 +1021,20 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False):
         or (isinstance(module, torch.nn.Embedding) and not model.config.tie_word_embeddings)
     ]
 
+    fsdp_kwargs = {
+        "mp_policy": MixedPrecisionPolicy(
+            param_dtype=torch.bfloat16,
+            reduce_dtype=torch.float32,
+        ),
+        "offload_policy": offload_policy,
+        "mesh": mesh,
+    }
+
     # Apply FSDP to each module (offload_policy=None is equivalent to not passing it)
     for module in modules:
-        fully_shard(module, mesh=mesh, offload_policy=offload_policy)
+        fully_shard(module, **fsdp_kwargs)
 
     # Apply FSDP to the top-level model
-    fully_shard(model, mesh=mesh, offload_policy=offload_policy)
+    fully_shard(model, **fsdp_kwargs)
 
     return model

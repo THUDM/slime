@@ -410,6 +410,10 @@ async def generate_rollout_async(
 
     # reset the global state to prevent effects on the next rollout or eval.
     state.reset()
+    if args.rollout_sample_filter_path is not None:
+        filter_func = load_function(args.rollout_sample_filter_path)
+        filter_func(args, data)
+
     return RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect()), aborted_samples
 
 
@@ -447,9 +451,14 @@ EVAL_PROMPT_DATASET = {}
 
 async def eval_rollout(args: Namespace, rollout_id: int) -> tuple[dict[str, dict[str, list[Any]]], list[list[Sample]]]:
     assert not args.group_rm, "Group RM is not supported for eval rollout"
-    results = {}
+
+    coros = []
     for dataset_cfg in getattr(args, "eval_datasets", []) or []:
-        results.update(await eval_rollout_single_dataset(args, rollout_id, dataset_cfg))
+        coros.append(eval_rollout_single_dataset(args, rollout_id, dataset_cfg))
+    results_list = await asyncio.gather(*coros)
+    results = {}
+    for r in results_list:
+        results.update(r)
     return RolloutFnEvalOutput(data=results), []
 
 

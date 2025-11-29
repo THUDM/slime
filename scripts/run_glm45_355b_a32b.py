@@ -26,7 +26,7 @@ class ScriptArgs(U.ExecuteTrainConfig):
     rollout_fp8: bool = False
     dynamic_sampling: bool = False
     # TODO use more complex task
-    task: Literal["dapo_aime", "gsm8k"] = "gsm8k"
+    task: Literal["dapo_aime", "gsm8k"] = "dapo_aime"
 
 
 @app.command()
@@ -89,6 +89,11 @@ def _prepare_cp(args: ScriptArgs):
         path_src=f"/root/models/{args.model_name}",
         path_dst=f"/root/local_data/{args.model_name}",
     )
+    if args.rollout_fp8:
+        U.rsync_simple(
+            path_src=f"/root/models/{args.model_name}-FP8",
+            path_dst=f"/root/local_data/{args.model_name}-FP8",
+        )
 
 
 @app.command()
@@ -98,7 +103,7 @@ def train(args: ScriptArgs):
     _prepare_cp(args)
 
     hf_checkpoint = (
-        f"/root/models/{args.model_name}_FP8" if args.rollout_fp8 else f"/root/local_data/{args.model_name}"
+        f"/root/local_data/{args.model_name}-FP8" if args.rollout_fp8 else f"/root/local_data/{args.model_name}"
     )
 
     load_save_path = f"/root/shared_data/{args.run_id}/checkpoints"
@@ -107,8 +112,8 @@ def train(args: ScriptArgs):
         f"--ref-load /root/local_data/{args.model_name}_torch_dist "
         f"--load {load_save_path} "
         f"--save {load_save_path} "
-        f"--save-interval {2 if args.mode == 'debug_minimal' else 20} "
-        f"--save-retain-interval {2 if args.mode == 'debug_minimal' else 20} "
+        f"--save-interval {2 if args.mode == 'debug_minimal' else 10} "
+        f"--save-retain-interval {2 if args.mode == 'debug_minimal' else 10} "
     )
 
     rollout_args = (
@@ -170,8 +175,8 @@ def train(args: ScriptArgs):
             "--tensor-model-parallel-size 4 "
             "--sequence-parallel "
             f"--pipeline-model-parallel-size 1 "
-            "--context-parallel-size 2 "
-            "--expert-model-parallel-size 8 "
+            "--context-parallel-size 1 "
+            "--expert-model-parallel-size 4 "
             "--expert-tensor-parallel-size 1 "
         )
     else:
@@ -228,7 +233,7 @@ def train(args: ScriptArgs):
     # sglang_attn_tp_size = sglang_world_size // sglang_attn_dp_size
     sglang_args = (
         f"--rollout-num-gpus-per-engine {sglang_world_size} "
-        "--sglang-mem-fraction-static 0.85 "
+        "--sglang-mem-fraction-static 0.8 "
         f"--sglang-tp-size {sglang_world_size} "
         # f"--sglang-ep-size {sglang_world_size} "
         # dp attention
@@ -236,8 +241,6 @@ def train(args: ScriptArgs):
         # f"--sglang-dp-size {sglang_attn_dp_size} "
         # "--sglang-moe-dense-tp-size 1 "
         # "--sglang-enable-dp-lm-head "
-        # TODO why disable?
-        # "--sglang-disable-radix-cache "
         # enable deepep for sglang
         # "--sglang-moe-a2a-backend deepep "
         # "--sglang-deepep-mode low_latency "
@@ -278,6 +281,9 @@ def train(args: ScriptArgs):
         "--use-fault-tolerance "
         f"--dump-details /root/shared_data/{args.run_id}/dump_details "
         "--disable-weights-backuper "
+        # TODO if good, also configure to other scripts
+        "--router-health-success-threshold 1 "
+        "--router-health-check-interval-secs 15 "
     )
 
     train_args = (

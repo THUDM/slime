@@ -2,6 +2,7 @@ from argparse import Namespace
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import Callable
+from typing import Any, Callable, Tuple
 
 import ray
 import torch
@@ -9,29 +10,16 @@ import torch.distributed as dist
 from megatron.core import mpu
 from ray import ObjectRef
 from ray.actor import ActorHandle
+from sglang.srt.utils import MultiprocessingSerializer
 
-# TODO do not use it here
-from slime.backends.megatron_utils.megatron_to_hf.processors.padding_remover import remove_padding
+from slime.utils.distributed_utils import get_gloo_group
 
+from .hf_weight_iterator_base import HfWeightIteratorBase
 from .update_weight_from_distributed import (
     connect_rollout_engines_from_distributed,
     disconnect_rollout_engines_from_distributed,
     update_weights_from_distributed,
 )
-
-try:
-    from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
-except:
-    from sglang.srt.patch_torch import monkey_patch_torch_reductions
-
-from sglang.srt.utils import MultiprocessingSerializer
-from tqdm import tqdm
-
-from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.types import ParamInfo
-
-from ..megatron_to_hf import convert_to_hf
-from .common import all_gather_params_async, named_parameters
 
 try:
     try:
@@ -60,7 +48,6 @@ class UpdateWeightFromTensor:
         *,
         model_name: str,
         quantization_config: dict[str, int | str | list[str]] | None,
-        vocab_size: int,
     ) -> None:
         """
         Compute param buckets, create IPC Gloo groups (rollout_num_gpus_per_engine ranks/group).
@@ -69,10 +56,12 @@ class UpdateWeightFromTensor:
         self.model = model
         self.weights_getter = weights_getter
         self.model_name = model_name
-        self.vocab_size = vocab_size
         self.quantization_config = quantization_config
-        self.megatron_local_param_info_buckets = _get_megatron_local_param_info_buckets(self.args, self.model)
         self.weight_version = 0
+
+        self._hf_weight_iterator = HfWeightIteratorBase.create(
+            args=args, model=model, model_name=model_name, quantization_config=quantization_config
+        )
 
         # create the group within megatron.
         for start_rank in range(0, dist.get_world_size(), self.args.rollout_num_gpus_per_engine):
@@ -139,30 +128,17 @@ class UpdateWeightFromTensor:
 
         megatron_local_weights = self.weights_getter()
 
-        for megatron_local_param_infos in tqdm(
-            self.megatron_local_param_info_buckets, disable=rank != 0, desc="Update weights"
-        ):
-            megatron_full_params = _get_megatron_full_params(megatron_local_param_infos, megatron_local_weights)
-            hf_named_tensors = self._convert_to_hf_named_tensors(megatron_full_params, megatron_local_param_infos)
-            refs = self._send_hf_params(hf_named_tensors)
+        for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights):
+            refs, long_lived_tensors = self._send_hf_params(hf_named_tensors)
             ray.get(refs)
-            del megatron_full_params
+            del long_lived_tensors
 
         dist.barrier(group=get_gloo_group())
 
-    def _convert_to_hf_named_tensors(self, megatron_full_params: Sequence[torch.Tensor], param_infos: list[ParamInfo]):
-        hf_named_tensors = []
-        for info, param in zip(param_infos, megatron_full_params):
-            param = remove_padding(info.name, param, self.vocab_size)
-            hf_named_tensors.extend(
-                convert_to_hf(self.args, self.model_name, info.name, param, self.quantization_config)
-            )
-        return hf_named_tensors
-
-    def _send_hf_params(self, hf_named_tensors) -> list[ObjectRef]:
+    def _send_hf_params(self, hf_named_tensors) -> Tuple[list[ObjectRef], Any]:
         all_refs = []
 
-        refs_colocated = _send_to_colocated_engine(
+        refs_colocated, long_lived_tensors = _send_to_colocated_engine(
             hf_named_tensors,
             ipc_engine=self._ipc_engine,
             ipc_gather_src=self._ipc_gather_src,
@@ -182,7 +158,7 @@ class UpdateWeightFromTensor:
             if refs_distributed:
                 all_refs.extend(refs_distributed)
 
-        return all_refs
+        return all_refs, long_lived_tensors
 
 
 def _send_to_colocated_engine(
@@ -192,7 +168,10 @@ def _send_to_colocated_engine(
     ipc_gather_src,
     ipc_gather_group,
     weight_version,
-) -> list[ObjectRef]:
+) -> Tuple[list[ObjectRef], Any]:
+    # TODO improve
+    long_live_tensors = []
+
     if use_flattened_tensor_bucket:
         if getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
             converted_named_tensors_by_dtypes = {"dtype": hf_named_tensors}
@@ -212,8 +191,10 @@ def _send_to_colocated_engine(
                 "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
                 "metadata": metadata,
             }
+            long_live_tensors.append(flattened_tensor_data)
             serialized_tensors.append(MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True))
     else:
+        long_live_tensors.append(hf_named_tensors)
         serialized_tensors = MultiprocessingSerializer.serialize(hf_named_tensors, output_str=True)
 
     serialized_named_tensors = (
@@ -226,8 +207,8 @@ def _send_to_colocated_engine(
         group=ipc_gather_group,
     )
 
+    refs = []
     if dist.get_rank() == ipc_gather_src:
-        refs = []
         if use_flattened_tensor_bucket:
             # TODO: here we assume all ranks have the same number of dtypes, not sure if that is correct.
             num_dtypes = len(serialized_named_tensors[0])
@@ -417,4 +398,4 @@ def _get_megatron_local_param_infos(args: Namespace, model: Sequence[torch.nn.Mo
                 infos[i].dtype == param_info.dtype
             ), f"Parameter dtype mismatch: {infos[i].dtype} != {param_info.dtype}"
 
-    return param_infos
+    return refs, long_live_tensors
