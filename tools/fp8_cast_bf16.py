@@ -42,6 +42,7 @@ def main(fp8_path, bf16_path):
     os.system("cp -rf " + fp8_path + "/config.json " + bf16_path)
     os.system("cp -rf " + fp8_path + "/*.py " + bf16_path)
     os.system("cp -rf " + fp8_path + "/tokenizer* " + bf16_path)
+    os.system("cp -rf " + fp8_path + "/chat_template* " + bf16_path)
     model_index_file = os.path.join(fp8_path, "model.safetensors.index.json")
     with open(model_index_file, "r") as f:
         model_index = json.load(f)
@@ -62,6 +63,7 @@ def main(fp8_path, bf16_path):
     safetensor_files = list(glob(os.path.join(fp8_path, "*.safetensors")))
     safetensor_files.sort()
     for safetensor_file in tqdm(safetensor_files):
+        print(f"Handling file: {safetensor_file}")
         file_name = os.path.basename(safetensor_file)
         current_state_dict = load_file(safetensor_file, device="cuda")
         loaded_files[file_name] = current_state_dict
