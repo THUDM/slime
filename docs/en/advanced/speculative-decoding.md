@@ -11,6 +11,7 @@ For models with MTP layers (e.g., GLM-4.6, DeepSeek-V3/R1), simply add:
 --sglang-speculative-num-steps 3
 --sglang-speculative-eagle-topk 1
 --sglang-speculative-num-draft-tokens 4
+--sglang-enable-draft-weights-cpu-backup
 ```
 
 If you want to use a separately trained draft model (e.g., one trained with [SpecForge](https://docs.sglang.ai/SpecForge/)), also set:

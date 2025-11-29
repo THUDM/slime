@@ -113,6 +113,7 @@ SGLANG_ARGS=(
    --sglang-speculative-num-steps 3
    --sglang-speculative-eagle-topk 1
    --sglang-speculative-num-draft-tokens 4
+   --sglang-enable-draft-weights-cpu-backup
 )
 
 MISC_ARGS=(
