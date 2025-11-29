@@ -15,7 +15,7 @@ WORKDIR /root/
 # ======================================== Apt dependencies =============================================
 
 RUN apt update
-RUN apt install -y nvtop rsync
+RUN apt install -y nvtop rsync dnsutils
 
 # ====================================== Python dependencies ============================================
 
