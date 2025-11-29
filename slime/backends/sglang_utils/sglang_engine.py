@@ -98,7 +98,7 @@ class SGLangEngine(RayActor):
 
         def _format_v6_uri(addr):
             if not addr or addr.startswith("["):
-                return addr··
+                return addr
             try:
                 if ipaddress.ip_address(addr).version == 6:
                     return f"[{addr}]"
