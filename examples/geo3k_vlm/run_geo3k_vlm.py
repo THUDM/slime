@@ -106,12 +106,16 @@ def execute():
         # "--sglang-disable-cuda-graph "
     )
 
-    # fsdp_args = (
-    #     # Set to true for FULL_STATE_DICT mode, false for SHARDED_STATE_DICT mode (default)
-    #     # "--fsdp-full-params "  # Uncomment this line to enable full params mode
-    #     # Set the bucket size for weight update
-    #     "--update-weight-buffer-size 536870912 "  # 512MB
-    # )
+    fsdp_args = (
+        # Set to true for FULL_STATE_DICT mode, false for SHARDED_STATE_DICT mode (default)
+        # "--fsdp-full-params "  # Uncomment this line to enable full params mode
+        # Set the bucket size for weight update
+        "--update-weight-buffer-size 536870912 "  # 512MB
+        "--train-backend fsdp "
+        "--gradient-checkpointing "
+        "--sglang-attention-backend fa3 "
+        "--attn-implementation flash_attention_3 "
+    )
 
     # ci_args = (
     #     "--ci-test "
@@ -128,7 +132,7 @@ def execute():
         "--disable-wandb-random-suffix "
     )
 
-    misc_args = "--actor-num-nodes 1 " f"--actor-num-gpus-per-node {NUM_GPUS} " "--colocate " "--train-backend fsdp "
+    misc_args = "--actor-num-nodes 1 " f"--actor-num-gpus-per-node {NUM_GPUS} " "--colocate "
 
     # misc_args += (
     #     "--use-dynamic-batch-size "
@@ -158,10 +162,10 @@ def execute():
         f"{optimizer_args} "
         f"{grpo_args} "
         f"{sglang_args} "
+        f"{fsdp_args} "
         f"{eval_args} "
         f"{misc_args} "
         f"{wandb_args} "
-        # f"{fsdp_args} "
         # f"{ci_args} "
         # f"{true_on_policy_args} "
     )

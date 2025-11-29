@@ -29,6 +29,7 @@ ROLLOUT_ARGS=(
    --prompt-data /root/geo3k/train.parquet
    --input-key prompt
    --label-key label
+   --multimodal-keys '{"image": "images"}'
    --apply-chat-template
    --rollout-shuffle
    --rm-type geo3k
@@ -73,6 +74,23 @@ SGLANG_ARGS=(
    --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
 )
 
+FSDP_ARGS=(
+   # Set to true for FULL_STATE_DICT mode, false for SHARDED_STATE_DICT mode (default)
+   # --fsdp-full-params  # Uncomment this line to enable full params mode
+   --train-backend fsdp
+   # Set the bucket size for weight update
+   --update-weight-buffer-size $((512 * 1024 * 1024)) # 512MB
+   # --attn-implementation flash_attention_2
+   --gradient-checkpointing
+   --sglang-attention-backend fa3
+   --attn-implementation flash_attention_3
+)
+
+MISC_ARGS=(
+   --actor-num-nodes 1
+   --actor-num-gpus-per-node ${NUM_GPUS}
+   --colocate
+)
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
@@ -88,14 +106,11 @@ RUNTIME_ENV_JSON="{
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
-   --actor-num-nodes 1 \
-   --actor-num-gpus-per-node ${NUM_GPUS} \
-   --colocate \
-   --train-backend fsdp \
-   --multimodal-keys '{"image": "images"}' \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
    ${GRPO_ARGS[@]} \
    ${EVAL_ARGS[@]} \
-   ${SGLANG_ARGS[@]}
+   ${SGLANG_ARGS[@]} \
+   ${FSDP_ARGS[@]} \
+   ${MISC_ARGS[@]}
