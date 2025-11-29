@@ -1,4 +1,5 @@
 import inspect
+import logging
 import re
 import socket
 import time
@@ -26,6 +27,8 @@ from slime.utils.types import ParamInfo
 
 from .megatron_to_hf import convert_to_hf  # noqa: F401
 
+logger = logging.getLogger(__name__)
+
 try:
     try:
         from sglang.srt.weight_sync.tensor_bucket import FlattenedTensorBucket  # type: ignore[import]
@@ -35,7 +38,8 @@ try:
     use_flattened_tensor_bucket = True
 except Exception:
     use_flattened_tensor_bucket = False
-
+            # Import P2PTrainingTransferEngine from our implementation
+from slime.backends.sglang_utils.sglang_rdma_p2p_transfer import P2PTrainingTransferEngine
 
 def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     """
@@ -873,10 +877,13 @@ def update_weights_from_distributed(
     return refs
 
 
-class UpdateWeightFromDistributedRDMA:
+class UpdateWeightFromDistributedRDMA(UpdateWeightFromDistributed):
     """
     Update distributed engines via P2P RDMA transfer. Each PP rank: group "slime-pp_{pp_rank}",
     only DP=TP=0 transfers. Uses P2PTrainingTransferEngine for RDMA communication.
+
+    Inherits from UpdateWeightFromDistributed and overrides only the RDMA-specific methods.
+    This reduces code duplication and improves maintainability.
     """
 
     def __init__(
@@ -891,14 +898,15 @@ class UpdateWeightFromDistributedRDMA:
     ) -> None:
         """
         Initialize. P2PTrainingTransferEngine created in connect_rollout_engines.
+        Calls parent constructor and adds P2P RDMA specific attributes.
         """
-        self.args = args
-        self.model = model
-        self.model_name = model_name
-        self.vocab_size = vocab_size
-        self.quantization_config = quantization_config
-        self.weight_version = 0
-        self._model_update_groups = None
+        # Call parent constructor to initialize all base attributes
+        super().__init__(
+            args, model, weights_getter,
+            model_name=model_name,
+            quantization_config=quantization_config,
+            vocab_size=vocab_size
+        )
 
         # P2P RDMA specific initialization
         self.training_p2p_transfer_engine = None
@@ -910,14 +918,13 @@ class UpdateWeightFromDistributedRDMA:
     ) -> None:
         """
         Initialize P2PTrainingTransferEngine if PP source (DP=TP=0).
-        Set master address/port and start the engine.
+        Overrides parent method to use P2P RDMA instead of NCCL.
         """
+        # Store rollout engines and lock (same as parent)
         self.rollout_engines = rollout_engines
         self.rollout_engine_lock = rollout_engine_lock
 
-        # For TP:
-        #   1. AllGather parameters to rank 0
-        #   2. P2P transfer parameters from rank 0 to all sglang engines
+        # Determine if this is a PP source rank (same logic as parent)
         self._is_pp_src_rank = (
             mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
         )
@@ -926,7 +933,7 @@ class UpdateWeightFromDistributedRDMA:
         if self._is_pp_src_rank:
             self._group_name = f"slime-pp_{pp_rank}"
 
-            # Stop existing engine if running (following task requirement)
+            # Stop existing P2P engine if running (task requirement)
             if self._model_update_groups is not None:
                 if self.training_p2p_transfer_engine is not None:
                     self.training_p2p_transfer_engine.stop()
@@ -959,114 +966,18 @@ class UpdateWeightFromDistributedRDMA:
 
             logger.info(f"P2PTrainingTransferEngine started on {self.master_addr}:{self.master_port}")
 
-    @torch.no_grad()
-    def update_weights(self) -> None:
-        """
-        Pause → flush → non-expert (TP) → expert (EP) → continue. Progress on PP source.
-        """
-        self.weight_version += 1
-
-        if dist.get_rank() == 0:
-            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
-            ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
-        dist.barrier(group=get_gloo_group())
-
-        buffer_size = 0
-        converted_named_tensors = []
-        # non expert params
-        pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
-
-        for name, param in named_parameters(self.args, self.model):
-            if ".experts." in name:
-                continue
-            buffer_size = self._update_weight_from_distributed(
-                name, param, converted_named_tensors, buffer_size, pbar=pbar
-            )
-
-        if converted_named_tensors:
-            self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
-
-        dist.barrier(group=get_gloo_group())
-
-        buffer_size = 0
-        named_tensors = []
-        for name, param in named_parameters(self.args, self.model):
-            if ".experts." not in name:
-                continue
-            buffer_size = self._update_expert_weight_from_distributed(
-                name, param, named_tensors, buffer_size, pbar=pbar
-            )
-
-        if named_tensors:
-            self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
-
-        dist.barrier(group=get_gloo_group())
-        if dist.get_rank() == 0:
-            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
-        dist.barrier(group=get_gloo_group())
-
-    def _update_weight_from_distributed(
-        self,
-        name: str,
-        param: torch.nn.Parameter,
-        converted_named_tensors: list[tuple[str, torch.Tensor]],
-        buffer_size: int,
-        pbar: tqdm | None = None,
-    ) -> int | None:
-        """
-        Non-expert: gather TP → rm pad → HF → buffer (flush if full). All gather, PP source buffers.
-        Returns updated bytes on source, None on non-source.
-        """
-        param = all_gather_param(name, param)
-        param = remove_padding(name, param, self.vocab_size)
-        if not self._is_pp_src_rank:
-            return
-
-        param_size = param.numel() * param.element_size()
-        if buffer_size + param_size > self.args.update_weight_buffer_size:
-            self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
-            buffer_size = 0
-        converted_named_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
-        buffer_size += param_size
-        return buffer_size
-
-    def _update_expert_weight_from_distributed(
-        self,
-        name: str,
-        param: torch.nn.Parameter,
-        named_tensors: list[tuple[str, torch.Tensor]],
-        buffer_size: int,
-        pbar: tqdm | None = None,
-    ) -> int:
-        """
-        Expert: gather TP → rm pad → buffer. EP gather + HF deferred. Threshold × EP size.
-        """
-        param = all_gather_param(name, param)
-        param = remove_padding(name, param, self.vocab_size)
-
-        param_size = param.numel() * param.element_size()
-        if (
-            buffer_size + param_size
-            > self.args.update_weight_buffer_size * mpu.get_expert_model_parallel_world_size()
-        ):
-            self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
-            buffer_size = 0
-
-        named_tensors.append((name, param))
-        buffer_size += param_size
-        return buffer_size
-
     def _update_bucket_weights_from_distributed(
         self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
     ) -> None:
         """
         Register weights with P2PTrainingTransferEngine and wait for transfers to complete.
         Based on lines 518-545 in SGLang test: register_weights pattern.
+        Overrides parent method to use P2P RDMA instead of NCCL broadcast.
         """
         if not self._is_pp_src_rank or not converted_named_tensors:
             return
 
-        # Lock the rollout engines to prevent concurrent operations
+        # Lock the rollout engines to prevent concurrent operations (same as parent)
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)
 
@@ -1075,10 +986,9 @@ class UpdateWeightFromDistributedRDMA:
             # This follows the pattern from SGLang test lines 518-537
             for name, tensor in converted_named_tensors:
                 self.training_p2p_transfer_engine.register_buffer(name, tensor)
-                if pbar:
-                    pbar.update(1)
 
-            # Send metadata to rollout engines (similar to original NCCL version)
+
+            # Send metadata to rollout engines (similar to parent NCCL version)
             refs = [
                 engine.update_weights_from_distributed.remote(
                     names=[name for name, _ in converted_named_tensors],
@@ -1096,24 +1006,17 @@ class UpdateWeightFromDistributedRDMA:
             converted_named_tensors.clear()
 
         finally:
-            # Release the lock
+            # Release the lock (same as parent)
             ray.get(self.rollout_engine_lock.release.remote())
+            if pbar:
+                pbar.update(1)
+    # Note: We inherit all other methods from UpdateWeightFromDistributed:
+    # - update_weights() - The main workflow is identical
+    # - _update_weight_from_distributed() - Weight processing logic is the same
+    # - _update_expert_weight_from_distributed() - Expert weight logic is the same
+    # - _update_expert_bucket_weights_from_distributed() - Expert bucket logic is the same
+    #
+    # Only connect_rollout_engines() and _update_bucket_weights_from_distributed()
+    # needed to be overridden for P2P RDMA functionality.
 
-    def _update_expert_bucket_weights_from_distributed(
-        self, named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
-    ) -> None:
-        """
-        Expert weights: gather across EP before HF conversion, then P2P transfer.
-        """
-        if not named_tensors:
-            return
 
-        converted_named_tensors = []
-        for name, param in named_tensors:
-            param = all_gather_param_across_ep(name, param)
-            converted_named_tensors += convert_to_hf(
-                self.args, self.model_name, name, param, self.quantization_config
-            )
-
-        self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
-        named_tensors.clear()

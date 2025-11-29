@@ -13,6 +13,7 @@ import logging
 import os
 import threading
 import zmq
+import torch
 
 from collections import defaultdict
 from queue import Queue
@@ -156,6 +157,19 @@ class P2PTrainingTransferEngine:
             }
 
             logger.info(f"Registered weight buffer: {name}, ptr={ptr:#x}, length={length}")
+
+    def register_weights(self, weights_dict: Dict[str, torch.Tensor]) -> None:
+        """
+        SGLang-compatible method for registering multiple weight tensors.
+        This is a wrapper around register_buffer to match TrainingWeightSender interface.
+
+        Args:
+            weights_dict: Dictionary mapping weight names to tensor objects
+        """
+        for name, tensor in weights_dict.items():
+            self.register_buffer(name, tensor)
+
+        logger.info(f"[P2PTrainingTransferEngine] Registered {len(weights_dict)} weight tensors")
 
     def start(self) -> None:
         """
