@@ -1,7 +1,6 @@
 from argparse import Namespace
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
-from typing import Callable
 from typing import Any, Callable, Tuple
 
 import ray
@@ -398,4 +397,4 @@ def _get_megatron_local_param_infos(args: Namespace, model: Sequence[torch.nn.Mo
                 infos[i].dtype == param_info.dtype
             ), f"Parameter dtype mismatch: {infos[i].dtype} != {param_info.dtype}"
 
-    return refs, long_live_tensors
+    return param_infos
