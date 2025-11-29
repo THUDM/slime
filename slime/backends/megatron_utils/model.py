@@ -127,10 +127,10 @@ def setup_model_and_optimizer(
         use_gloo_process_groups=args.enable_gloo_process_groups,
     )
     opt_param_scheduler = get_optimizer_param_scheduler(args, optimizer)
-    for optimizer in optimizer.chained_optimizers:
-        if not getattr(optimizer, "init_state_fn", None):
+    for sub_optimizer in optimizer.chained_optimizers:
+        if not getattr(sub_optimizer, "init_state_fn", None):
             continue
-        optimizer.init_state_fn(optimizer.optimizer, optimizer.config)
+        sub_optimizer.init_state_fn(sub_optimizer.optimizer, sub_optimizer.config)
 
     return model, optimizer, opt_param_scheduler
 
