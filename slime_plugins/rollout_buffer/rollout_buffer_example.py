@@ -2,13 +2,12 @@ import asyncio
 import time
 from typing import Any, Dict, List
 
+import wandb
 import aiohttp
 import requests
-import wandb
-from transformers import AutoTokenizer
+
 
 from slime.utils.async_utils import run
-from slime.utils.mask_utils import MultiTurnLossMaskGenerator
 from slime.utils.types import Sample
 
 __all__ = ["generate_rollout"]
@@ -54,8 +53,8 @@ def select_rollout_data(args, results, need_length):
         for item in group_items:
             if "timestamp" in item:
                 timestamps.append(float(item["timestamp"]))
-            elif "extra_info" in item and "timestamp" in item["extra_info"]:
-                timestamps.append(float(item["extra_info"]["timestamp"]))
+            elif "metadata" in item and "timestamp" in item["metadata"]:
+                timestamps.append(float(item["metadata"]["timestamp"]))
         return max(timestamps) if timestamps else 0
 
     # Create list of (group_id, timestamp, samples) and sort by timestamp
@@ -161,8 +160,9 @@ async def get_rollout_data(api_base_url: str) -> tuple[List[Dict[str, Any]], Dic
             if "data" in data:
                 meta_info = data["meta_info"]
                 data = data["data"]
-        print(f"Meta info: {meta_info}")
-        required_keys = {"uid", "instance_id", "messages", "reward", "extra_info"}
+        print(f"Meta info: {meta_info}", flush=True)
+
+        required_keys = {"instance_id", "reward", "metadata"}
         for item in data:
             if not required_keys.issubset(item.keys()):
                 raise ValueError(f"Missing required keys in response item: {item}")
@@ -175,20 +175,32 @@ def start_rollout(api_base_url: str, args, metadata):
     print(f"metadata: {metadata}")
     finished_groups_instance_id_list = [item for sublist in metadata.values() for item in sublist]
     payload = {
-        "num_process": str(getattr(args, "rollout_num_process", 100)),
-        "num_epoch": str(args.num_epoch or 3),
+        "args":{
+            "rollout_temperature": args.rollout_temperature,
+            "rollout_top_p": args.rollout_top_p,
+            "rollout_top_k": args.rollout_top_k,
+            "rollout_max_response_len": args.rollout_max_response_len,
+            "rollout_stop": args.rollout_stop,
+            "rollout_stop_token_ids": args.rollout_stop_token_ids,
+            "rollout_skip_special_tokens": args.rollout_skip_special_tokens,
+            "hf_checkpoint": args.hf_checkpoint,
+            "prompt_data": args.prompt_data,
+            "rollout_max_prompt_len": args.rollout_max_prompt_len,
+            "input_key": args.input_key,
+            "label_key": args.label_key,
+            "metadata_key": args.metadata_key,
+            "tool_key": args.tool_key,
+            "apply_chat_template": args.apply_chat_template,
+            "rollout_seed": args.rollout_seed
+        },
+        "num_process": str(getattr(args, "rollout_num_process", 128)),
+        "num_epochs": str(getattr(args, "num_epoch", None) or 10),
         "remote_engine_url": f"http://{args.sglang_router_ip}:{args.sglang_router_port}",
         "remote_buffer_url": args.rollout_buffer_url,
         "task_type": args.rollout_task_type,
         "input_file": args.prompt_data,
-        "num_repeat_per_sample": str(args.n_samples_per_prompt),
-        "max_tokens": str(args.rollout_max_response_len),
-        "sampling_params": {
-            "max_tokens": args.rollout_max_response_len,
-            "temperature": args.rollout_temperature,
-            "top_p": args.rollout_top_p,
-        },
-        "tokenizer_path": args.hf_checkpoint,
+        "num_repeat_per_sample": args.n_samples_per_prompt,
+        "abort_sleep_time": getattr(args, "abort_sleep_time", 30),
         "skip_instance_ids": finished_groups_instance_id_list,
     }
     print("start rollout with payload: ", payload)
@@ -226,12 +238,15 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
     assert (
         data_number_to_fetch % args.n_samples_per_prompt == 0
     ), "data_number_to_fetch must be a multiple of n_samples_per_prompt"
-    print(f"INFO: buffer length: {data_buffer.get_buffer_length()}, data_number_to_fetch: {data_number_to_fetch}")
-    base_url = args.rollout_buffer_url
-    tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+    
+    print(f"INFO: buffer length: {data_buffer.get_buffer_length()}, data_number_to_fetch: {data_number_to_fetch}", flush=True)
+
     retry_times = 0
     results = []
     all_meta_info = []
+
+    # 增加 drop_first_buffer_data 标志
+    first_fetch = True
 
     if args.fetch_trajectory_retry_times == -1:
         print(
@@ -240,9 +255,18 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
     while args.fetch_trajectory_retry_times == -1 or retry_times < args.fetch_trajectory_retry_times:
         try:
             while len(results) < data_number_to_fetch:
-                time.sleep(5)
-                data, meta_info = await get_rollout_data(api_base_url=base_url)
+                time.sleep(3)
+                data, meta_info = await get_rollout_data(api_base_url=args.rollout_buffer_url)
+
+                # 如果第一次取数据并且启用了drop_first_buffer_data，则丢弃
+                if first_fetch and getattr(args, "drop_first_buffer_data", False):
+                    print("⚠️ Dropping first batch of rollout data due to drop_first_buffer_data=True")
+                    first_fetch = False
+                    continue  # 直接跳过此次循环，不添加数据
+
                 results.extend(data)
+                first_fetch = False
+                
                 if meta_info:
                     all_meta_info.append(meta_info)
                 print(f"get rollout data with length: {len(results)}")
@@ -263,42 +287,27 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
 
         data_buffer.update_metadata({str(rollout_id): finished_groups_instance_id_list})
 
-    print("finally get rollout data with length: ", len(results))
+    print(f"finally get rollout data with length: {len(results)}", flush=True)
     sample_results = []
 
-    for i, group_record in enumerate(results):
+    for group_record in results:
         group_results = []
         for record in group_record:
-            oai_messages = record["messages"]
-
-            mask_generator = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type=args.loss_mask_type)
-            token_ids, loss_mask = mask_generator.get_loss_mask(oai_messages)
-            response_length = mask_generator.get_response_lengths([loss_mask])[0]
-
-            loss_mask = loss_mask[-response_length:]
-
-            group_results.append(
-                Sample(
-                    index=record["instance_id"],
-                    prompt=record["uid"],
-                    tokens=token_ids,
-                    response_length=response_length,
-                    reward=record["reward"],
-                    status=(
-                        Sample.Status.COMPLETED
-                        if "finish_reason" not in record["extra_info"]
-                        or record["extra_info"]["finish_reason"] != "length"
-                        else Sample.Status.TRUNCATED
-                    ),
-                    loss_mask=loss_mask,
-                    metadata={**record["extra_info"]},
-                )
-            )
+            instance_id = record.pop("instance_id")
+            group_results.append(Sample.from_dict(record))
         sample_results.append(group_results)
+
+    print(
+        f"prompt:{repr(sample_results[-1][0].prompt)}\n"
+        f"response:{repr(sample_results[-1][0].response)}\n"
+        f"label:{sample_results[-1][0].label}\n"
+        f"reward:{sample_results[-1][0].reward}\n",
+        flush=True
+    )
 
     data_buffer.add_samples(sample_results)
     final_return_results = data_buffer.get_samples(args.rollout_batch_size)  # type: ignore
-
+    
     return final_return_results
 
 

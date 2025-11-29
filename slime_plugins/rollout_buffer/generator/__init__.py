@@ -1,6 +1,6 @@
-from .base_generator import BaseGenerator, query_single_turn
+from .base_generator import BaseGenerator, math_rollout_func
 
 __all__ = [
     "BaseGenerator",
-    "query_single_turn",
+    "math_rollout_func",
 ]
