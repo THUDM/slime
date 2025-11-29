@@ -17,8 +17,12 @@ class ScriptArgs(U.ExecuteTrainConfig):
     enable_eval: bool = True
     extra_args: str = ""
     rollout_fp8: bool = False
+    rollout_attn_fp8: bool = False
     train_fp8: bool = False
     enable_megatron_bridge: bool = False
+    enable_mis: bool = False
+    # TODO improve, should be able to override more easily
+    tis_use_rs: bool = True
 
     def __post_init__(self):
         self.num_gpus_per_node = self.num_gpus_per_node or U.NUM_GPUS_OF_HARDWARE[self.hardware]
@@ -135,16 +139,32 @@ def execute(args: ScriptArgs):
     misc_env_vars = {}
 
     if args.train_fp8:
-        misc_args += (
-            "--transformer-impl transformer_engine "
-            "--bf16 "
-            "--fp8-format e4m3 "
-            "--fp8-recipe blockwise "
-            # "--fp8-param-gather "
-        )
-        misc_env_vars |= {
-            "NVTE_FP8_BLOCK_SCALING_FP32_SCALES": "1",
-        }
+        match args.hardware:
+            case "GB200" | "GB300":
+                # It can run but accuracy is incorrect currently
+                raise NotImplementedError
+                # ref: Megatron-MoE-ModelZoo
+                misc_args += (
+                    "--transformer-impl transformer_engine "
+                    "--bf16 "
+                    "--fp8-format e4m3 "
+                    "--fp8-recipe mxfp8 "
+                    "--fp8-param-gather "
+                    "--reuse-grad-buf-for-mxfp8-param-ag "
+                    # --moe-router-padding-for-quantization
+                )
+            case "H100" | "H200":
+                # ref: fp8 blog
+                misc_args += (
+                    "--transformer-impl transformer_engine "
+                    "--bf16 "
+                    "--fp8-format e4m3 "
+                    "--fp8-recipe blockwise "
+                    # "--fp8-param-gather "
+                )
+                misc_env_vars |= {
+                    "NVTE_FP8_BLOCK_SCALING_FP32_SCALES": "1",
+                }
 
     if args.enable_megatron_bridge:
         misc_args += "--megatron-to-hf-mode bridge "
@@ -197,6 +217,28 @@ def execute(args: ScriptArgs):
                 sglang_args += "--sglang-cuda-graph-max-bs 512 "
         case _:
             raise NotImplementedError
+
+    if args.rollout_attn_fp8:
+        sglang_args += "--sglang-kv-cache-dtype fp8_e4m3 "
+
+    if args.enable_mis:
+        config_text = f"""
+use_tis: true
+use_rs: {"true" if args.tis_use_rs else "false"}
+tis_level: "token"
+rs_level: "token"
+tis_mode: "truncate"
+tis_lower_bound: 0.5
+tis_upper_bound: 2.0
+rs_lower_bound: null
+rs_upper_bound: null
+rs_veto_threshold: 1.0e-4
+tis_batch_normalize: true
+""".strip()
+        misc_args += (
+            f"--custom-config-path {U.save_to_temp_file(config_text, 'yaml')} "
+            "--custom-tis-function-path examples.train_infer_mismatch_helper.mis.compute_mis_weights_with_cp "
+        )
 
     train_args = (
         f"{ckpt_args} "
