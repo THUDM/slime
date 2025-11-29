@@ -29,7 +29,6 @@ ROLLOUT_ARGS=(
    --prompt-data /root/geo3k/train.parquet
    --input-key prompt
    --label-key label
-   --multimodal-keys '{"image": "images"}'
    --apply-chat-template
    --rollout-shuffle
    --rm-type geo3k
@@ -106,6 +105,7 @@ RUNTIME_ENV_JSON="{
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
+   --multimodal-keys '{"image": "images"}' \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
