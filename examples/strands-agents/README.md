@@ -52,27 +52,5 @@ Assuming `/root/slime` is up-to-date (if this PR is not merged you may need to s
 ```
 cd /root/slime
 export WANDB_KEY=$your_wandb_key
-bash examples/strands-agents/strands_qwen3_8B.sh
-```
-
-## Quick Testing - Optional
-
-The `test_generate.py` script is used for quick testing of the `generate` function.
-
-First, we launch a SGLang server using:
-
-```
-nohup python -m sglang.launch_server \
-    --model-path Qwen/Qwen3-8B \
-    --port 8000 \
-    --host 0.0.0.0 \
-    --tool-call-parser qwen \
-    --tp-size 8 \
-    --mem-fraction-static 0.9 &
-```
-
-Then, we can directly run `test_generate.py` with:
-
-```
-python test_generate.py
+bash examples/strands-agents/strands_qwen3_4b.sh
 ```
