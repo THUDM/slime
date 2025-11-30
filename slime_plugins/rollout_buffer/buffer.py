@@ -5,7 +5,7 @@ import json
 import pathlib
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional, List
 
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
@@ -334,7 +334,6 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=8889,
-        limit_concurrency=1000,  # Connection concurrency limit
-        # limit_max_requests=1000000,  # Maximum request limit
+        limit_concurrency=8192,  # Connection concurrency limit
         timeout_keep_alive=5,  # Keep-alive timeout,
     )
