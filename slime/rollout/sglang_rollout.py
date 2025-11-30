@@ -509,7 +509,7 @@ async def eval_rollout_single_dataset(
         EVAL_PROMPT_DATASET[cache_key] = Dataset(
             path,
             tokenizer=tokenizer,
-            max_length=args.rollout_max_prompt_len,
+            max_length=args.eval_max_prompt_len,
             prompt_key=prompt_key,
             label_key=label_key,
             multimodal_keys=args.multimodal_keys,
