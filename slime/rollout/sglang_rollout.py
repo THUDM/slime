@@ -283,7 +283,7 @@ async def generate_and_rm_group(
 
     group = await asyncio.gather(*tasks)
 
-    # for the rm that need the whole group, we will not do the rm here
+    # for the rm that need the whole group, we will do the rm here
     if not state.aborted and args.group_rm:
         rewards = await batched_async_rm(args, group)
         for sample, reward in zip(group, rewards):
