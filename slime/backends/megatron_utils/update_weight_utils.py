@@ -952,9 +952,9 @@ class UpdateWeightFromDistributedRDMA(UpdateWeightFromDistributed):
 
             # Initialize P2PTrainingTransferEngine
             self.training_p2p_transfer_engine = P2PTrainingTransferEngine(
-                master_ip=self.master_addr,
+                master_ip=self.master_addr, # TODO(ask): Engine should be localhost?
                 master_port=self.master_port,
-                gpu_id=0,  # Training host GPU
+                gpu_id=0,  ## TODO(ask): gpu_id works or not in this case?
                 ib_device=None  # Auto-detect InfiniBand device
             )
 
@@ -962,6 +962,7 @@ class UpdateWeightFromDistributedRDMA(UpdateWeightFromDistributed):
             self.training_p2p_transfer_engine.start()
 
             # Indicate that P2P system is active (as per task requirement)
+            # TODO(jsf):  check if `self._model_update_groups` is redundant
             self._model_update_groups = "p2p_active"  # Use as indicator
 
             logger.info(f"P2PTrainingTransferEngine started on {self.master_addr}:{self.master_port}")
@@ -989,6 +990,9 @@ class UpdateWeightFromDistributedRDMA(UpdateWeightFromDistributed):
 
 
             # Send metadata to rollout engines (similar to parent NCCL version)
+            # NOTE: training node will broadcast all weights to all rollout nodes,
+            # while different rollout engines may need different weights. We need
+            # a mask list here inidicating the weights for different rollout engines.
             refs = [
                 engine.update_weights_from_distributed.remote(
                     names=[name for name, _ in converted_named_tensors],

@@ -76,6 +76,10 @@ class P2PTrainingTransferEngine:
     1. Listens for sync_status messages from rollout processes
     2. Performs RDMA transfers to send updated weights
     3. Sends completion confirmations back to rollout processes
+    
+    TODO(xinji1): should we put `P2PTrainingTransferEngine` to the `__init__`,
+      or the `connect_rollout_engines`? Since the engine only needs
+      the localhost as the host name.
     """
 
     def __init__(self, master_ip: str, master_port: int, gpu_id: int, ib_device: Optional[str] = None):
@@ -83,7 +87,7 @@ class P2PTrainingTransferEngine:
         Initialize the training transfer engine.
 
         Args:
-            master_ip: IP address to bind ZMQ socket
+            master_ip: IP address to bind ZMQ socket. It should be the local ip.
             master_port: Port to bind ZMQ socket
             gpu_id: GPU device ID
             ib_device: InfiniBand device name (optional)
@@ -276,11 +280,12 @@ class P2PTrainingTransferEngine:
             identity: ZMQ identity of the requesting rollout process
             rollout_message: Parsed sync_status message from rollout
         """
-        # Parse rollout_message (similar to line 438 in SGLang test)
+        # Parse rollout_message
         rollout_transfer_session_id = rollout_message.get("transfer_session_id", "")
         rollout_ptr = rollout_message.get("ptr", 0)
         rollout_length = rollout_message.get("length", 0)
         task_id = rollout_message.get("task_id", "")
+        rollout_weight_name = rollout_message.get("rollout_weight_name", "")
 
         logger.info(
             f"Processing transfer task: task_id={task_id}, "
@@ -288,28 +293,22 @@ class P2PTrainingTransferEngine:
         )
 
         try:
-            # Find the weight with matching length
             weight_info = None
             weight_name = None
 
-            with self.registration_lock:
-                # TODO(xinji1): use model key instead of length?
-                for name, info in self.weight_buffers.items():
-                    if info['length'] == rollout_length:
-                        weight_info = info
-                        weight_name = name
-                        break
-
+            with self.registration_lock:                
+                weight_info = self.weight_buffers.get(rollout_weight_name, None)
+                
             # Check if we found a matching weight
             if weight_info is None:
-                available_lengths = [info['length'] for info in self.weight_buffers.values()]
+                available_names = [name for name in self.weight_buffers.keys()]
                 error_msg = (
-                    f"No weight found with length {rollout_length}. "
-                    f"Available lengths: {available_lengths}"
+                    f"No weight found with name {rollout_weight_name}. "
+                    f"All names: {available_names}"
                 )
                 logger.error(f"[Task {task_id}] {error_msg}")
                 raise RuntimeError(error_msg)
-
+            weight_name = rollout_weight_name
             src_ptr = weight_info['ptr']
             src_length = weight_info['length']
 
@@ -508,7 +507,9 @@ class P2PTrainingTransferEngineManager(P2PTrainingTransferEngine):
         rollout_transfer_session_id = rollout_message.get("transfer_session_id", "")
         rollout_ptr = rollout_message.get("ptr", 0)
         rollout_length = rollout_message.get("length", 0)
+        rollout_weight_name = rollout_message.get("rollout_weight_name", "")
         task_id = rollout_message.get("task_id", "")
+        
 
         logger.info(
             f"Processing transfer task: task_id={task_id}, "
@@ -519,28 +520,24 @@ class P2PTrainingTransferEngineManager(P2PTrainingTransferEngine):
             # Select engine based on session_id hash
             selected_engine = self._select_engine_by_session_id(rollout_transfer_session_id)
 
-            # Find the weight with matching length
             weight_info = None
             weight_name = None
 
-            with self.registration_lock:
-                # TODO(xinji1): use model key instead of length?
-                for name, info in self.weight_buffers.items():
-                    if info['length'] == rollout_length:
-                        weight_info = info
-                        weight_name = name
-                        break
+            with self.registration_lock:                
+                weight_info = self.weight_buffers.get(rollout_weight_name, None)
+                
 
             # Check if we found a matching weight
             if weight_info is None:
-                available_lengths = [info['length'] for info in self.weight_buffers.values()]
+                available_names = [name for name in self.weight_buffers.keys()]
                 error_msg = (
-                    f"No weight found with length {rollout_length}. "
-                    f"Available lengths: {available_lengths}"
+                    f"No weight found with name {rollout_weight_name}. "
+                    f"All names: {available_names}"
                 )
                 logger.error(f"[Task {task_id}] {error_msg}")
                 raise RuntimeError(error_msg)
-
+            
+            weight_name = rollout_weight_name
             src_ptr = weight_info['ptr']
             src_length = weight_info['length']
 

@@ -44,6 +44,7 @@ def simple_training_process_with_p2p_engine(
     world_size: int,
     result_queue: mp.Queue,
     barrier: mp.Barrier,
+    name: str,
     hostname: str = "127.0.0.1",
     port: int = 50000,
 ):
@@ -63,7 +64,7 @@ def simple_training_process_with_p2p_engine(
         # Create deterministic test weight for verification
         torch.manual_seed(42)  # Ensure deterministic values
         weight = torch.randn(128 * 128, device=device, dtype=torch.float16).reshape(128, 128)
-        weights = {"test_weight": weight}
+        weights = {name: weight}
 
         total_size_kb = weight.numel() * weight.element_size() / 1e3
         logger.info(f"[P2PTrainingEngine] Weight size: {total_size_kb:.2f}KB")
@@ -104,6 +105,7 @@ def simple_rollout_process_with_p2p_engine(
     world_size: int,
     result_queue: mp.Queue,
     barrier: mp.Barrier,
+    name: str,
     training_hostname: str = "127.0.0.1",
     training_port: int = 50000,
 ):
@@ -135,6 +137,7 @@ def simple_rollout_process_with_p2p_engine(
             session_id=session_id,
             ptr=ptr,
             length=length,
+            name=name,
         )
         handle.wait()
         torch.cuda.synchronize()
@@ -171,16 +174,18 @@ def p2p_worker_process(
     world_size: int,
     result_queue: mp.Queue,
     barrier: mp.Barrier,
+    name: str,
     training_port: int = 50000,
+    
 ):
     """Entry point for P2PTrainingTransferEngine test worker."""
     os.environ["NCCL_CUMEM_ENABLE"] = "0"
     os.environ["NCCL_NVLS_ENABLE"] = "0"
 
     if rank == 0:
-        simple_training_process_with_p2p_engine(rank, world_size, result_queue, barrier, "127.0.0.1", training_port)
+        simple_training_process_with_p2p_engine(rank, world_size, result_queue, barrier, name, "127.0.0.1", training_port)
     else:
-        simple_rollout_process_with_p2p_engine(rank, world_size, result_queue, barrier, "127.0.0.1", training_port)
+        simple_rollout_process_with_p2p_engine(rank, world_size, result_queue, barrier, name, "127.0.0.1", training_port)
 
 
 class TestP2PTrainingTransferEngine(unittest.TestCase):
@@ -293,7 +298,7 @@ class TestP2PTrainingTransferEngine(unittest.TestCase):
 
         world_size = 2
         training_port = 50300
-
+        name = "temp_name_weight"
         print("\n" + "="*80)
         print("Testing P2PTrainingTransferEngine Correctness")
         print("="*80 + "\n")
@@ -306,7 +311,7 @@ class TestP2PTrainingTransferEngine(unittest.TestCase):
 
         processes = []
         for rank in range(world_size):
-            p = mp.Process(target=p2p_worker_process, args=(rank, world_size, result_queue, barrier, training_port))
+            p = mp.Process(target=p2p_worker_process, args=(rank, world_size, result_queue, barrier, name ,training_port))
             p.start()
             processes.append(p)
 

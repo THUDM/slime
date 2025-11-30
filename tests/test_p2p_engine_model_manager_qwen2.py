@@ -6,10 +6,10 @@ This test suite validates P2P weight transfer for Qwen32B model between
 
 Test configuration:
 - 1 Training process using P2PTrainingTransferEngine (GPU 0)
-- 2 Rollout processes using P2PTransferEngine (GPU 1, GPU 2)
+- 2 Rollout processes using P2PTransferManager (GPU 1, GPU 2)
 - Qwen32B model weight simulation with realistic tensor sizes
 
-cmd: python -m pytest tests/test_p2p_engine_model_qwen2.py::TestQwen32BP2PTransfer::test_qwen32b_model_transfer -v -s --tb=short --capture=no
+cmd: python -m pytest tests/test_p2p_engine_model_manager_qwen2.py::TestQwen32BP2PTransfer::test_qwen32b_model_transfer -v -s --tb=short --capture=no
 """
 
 import gc
@@ -26,10 +26,10 @@ import torch
 import zmq
 
 # Import SGLang rollout-side components
-from slime.backends.sglang_utils.sglang_rollout_side_tool import P2PTransferEngine
+from slime.backends.sglang_utils.sglang_rollout_side_tool import P2PTransferManager
 
 # Import our training-side implementation
-from slime.backends.sglang_utils.sglang_rdma_p2p_transfer import P2PTrainingTransferEngine
+from slime.backends.sglang_utils.sglang_rdma_p2p_transfer import P2PTrainingTransferEngineManager
 
 logger = logging.getLogger(__name__)
 
@@ -115,15 +115,15 @@ def qwen32b_training_process(
     hostname: str = "127.0.0.1",
     port: int = 51000,
 ):
-    """Training process using P2PTrainingTransferEngine with Qwen32B weights."""
+    """Training process using P2PTrainingTransferEngineManager with Qwen32B weights."""
     try:
         torch.cuda.set_device(rank)
         device = torch.device(f"cuda:{rank}")
 
         logger.info(f"[QwenTraining-{rank}] Starting on GPU {rank}")
 
-        # Initialize P2PTrainingTransferEngine
-        training_engine = P2PTrainingTransferEngine(
+        # Initialize P2PTrainingTransferEngineManager
+        training_engine = P2PTrainingTransferEngineManager(
             master_ip=hostname,
             master_port=port,
             gpu_id=rank,
@@ -186,15 +186,15 @@ def qwen32b_rollout_process(
     training_hostname: str = "127.0.0.1",
     training_port: int = 51000,
 ):
-    """Rollout process using P2PTransferEngine to receive Qwen32B weights."""
+    """Rollout process using P2PTransferManager to receive Qwen32B weights."""
     try:
         torch.cuda.set_device(rank)
         device = torch.device(f"cuda:{rank}")
 
         logger.info(f"[QwenRollout-{rank}] Starting on GPU {rank}")
 
-        # Initialize P2PTransferEngine
-        transfer_engine = P2PTransferEngine(
+        # Initialize P2PTransferManager
+        transfer_engine = P2PTransferManager(
             hostname="127.0.0.1",
             gpu_id=rank,
             ib_device=None,

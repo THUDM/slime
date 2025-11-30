@@ -6,7 +6,7 @@ which extends P2PTrainingTransferEngine with engine pool functionality.
 
 Based on test_p2p_engine.py patterns with additional tests for engine pool behavior.
 
-cmd: python -m pytest tests/test_p2p_engine_bonus.py::TestP2PTrainingTransferEngineManager::test_manager_correctness -v -s 2>&1 | tee manager_correctness_test_logs_full.txt
+cmd: python -m pytest tests/test_p2p_engine_manager.py::TestP2PTrainingTransferEngineManager::test_manager_correctness -v -s 2>&1 | tee manager_correctness_test_logs_full.txt
 """
 
 import gc
@@ -23,7 +23,7 @@ import torch
 import zmq
 
 # Import SGLang rollout-side components
-from slime.backends.sglang_utils.sglang_rollout_side_tool import P2PTransferEngine
+from slime.backends.sglang_utils.sglang_rollout_side_tool import P2PTransferManager
 
 # Import our training-side implementations
 from slime.backends.sglang_utils.sglang_rdma_p2p_transfer import (
@@ -124,8 +124,8 @@ def rollout_process_with_manager(
 
         logger.info(f"[P2PRollout-{rank}] Testing with {num_transfers} transfers")
 
-        # Initialize P2PTransferEngine from SGLang
-        transfer_engine = P2PTransferEngine(
+        # Initialize P2PTransferManager from SGLang
+        transfer_engine = P2PTransferManager(
             hostname="127.0.0.1",
             gpu_id=rank,
             ib_device=None,
@@ -158,6 +158,7 @@ def rollout_process_with_manager(
                 session_id=session_id,
                 ptr=ptr,
                 length=length,
+                name=weight_name
             )
             handle.wait()
             torch.cuda.synchronize()
@@ -267,10 +268,10 @@ def simple_rollout_process_with_manager_correctness(
         torch.cuda.set_device(rank)
         device = torch.device(f"cuda:{rank}")
 
-        logger.info(f"[P2PRollout-{rank}] Using P2PTransferEngine for manager correctness test on GPU {rank}")
+        logger.info(f"[P2PRollout-{rank}] Using P2PTransferManager for manager correctness test on GPU {rank}")
 
-        # Initialize P2PTransferEngine from SGLang
-        transfer_engine = P2PTransferEngine(
+        # Initialize P2PTransferManager from SGLang
+        transfer_engine = P2PTransferManager(
             hostname="127.0.0.1",
             gpu_id=rank,
             ib_device=None,
@@ -292,6 +293,7 @@ def simple_rollout_process_with_manager_correctness(
             session_id=session_id,
             ptr=ptr,
             length=length,
+            name = "test_weight"
         )
         handle.wait()
         torch.cuda.synchronize()

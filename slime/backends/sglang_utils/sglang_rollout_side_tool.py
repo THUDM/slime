@@ -52,6 +52,7 @@ class TransferTask:
         length: int,
         socket_cache: Dict,
         socket_lock: threading.Lock,
+        name: str
     ):
         self.task_id = task_id
         self.training_p2p_session_id = training_p2p_session_id  # ZMQ communication endpoint (training ip:port)
@@ -60,6 +61,7 @@ class TransferTask:
         self.length = length
         self.handle = TransferHandle(task_id, socket_cache, socket_lock)
         self.engine_idx: Optional[int] = None  # Engine index for P2PTransferManager
+        self.name = name
 
 class P2PTransferEngine:
 
@@ -124,7 +126,7 @@ class P2PTransferEngine:
         return task_id
 
     def submit_transfer_task(
-        self, session_id: str, ptr: int, length: int
+        self, session_id: str, ptr: int, length: int, name : str
     ) -> TransferHandle:
         """
         Submit a transfer task to the queue for processing.
@@ -155,7 +157,8 @@ class P2PTransferEngine:
             ptr=ptr,
             length=length,
             socket_cache=self.socket_cache,
-            socket_lock=self.socket_lock
+            socket_lock=self.socket_lock,
+            name=name
         )
 
         # Shard task to queue based on session_id
@@ -205,6 +208,7 @@ class P2PTransferEngine:
         rollout_transfer_session_id = task.rollout_transfer_session_id
         ptr = task.ptr
         length = task.length
+        name= task.name
 
         # Register memory region if not already registered
         with self.registration_lock:
@@ -226,7 +230,8 @@ class P2PTransferEngine:
             training_p2p_session_id=training_p2p_session_id,
             rollout_transfer_session_id=rollout_transfer_session_id,
             ptr=ptr,
-            length=length
+            length=length,
+            name=name,
         )
 
     def _send_sync_status_and_wait(
@@ -235,7 +240,8 @@ class P2PTransferEngine:
         training_p2p_session_id: str,
         rollout_transfer_session_id: str,
         ptr: int,
-        length: int
+        length: int,
+        name: str
     ):
         """
         Send sync_status message to training side and wait for confirmation.
@@ -282,11 +288,12 @@ class P2PTransferEngine:
                     "ptr": ptr,
                     "length": length,
                     "task_id": task_id,
+                    "rollout_weight_name":name
                 }
             )
             logger.info(
                 f"Sent sync_status to {remote_ip}:{remote_port} for session {training_p2p_session_id}, "
-                f"task_id={task_id}, rollout_transfer_session_id={rollout_transfer_session_id}, ptr={ptr:#x}"
+                f"task_id={task_id}, rollout_transfer_session_id={rollout_transfer_session_id}, rollout_weight_name={name}, ptr={ptr:#x}"
             )
 
             # Wait for confirmation from training side
@@ -463,7 +470,7 @@ class P2PTransferManager:
         return task_id
 
     def submit_transfer_task(
-        self, session_id: str, ptr: int, length: int
+        self, session_id: str, ptr: int, length: int, name: str
     ) -> TransferHandle:
         """
         Submit a transfer task for processing.
@@ -501,10 +508,12 @@ class P2PTransferManager:
                 session_id,
                 ptr,
                 length,
+                name,
                 engine_idx,
                 handle,
                 socket_cache,
-                socket_lock
+                socket_lock,
+
             ),
             daemon=True
         )
@@ -523,6 +532,7 @@ class P2PTransferManager:
         session_id: str,
         ptr: int,
         length: int,
+        name: str,
         engine_idx: int,
         handle: TransferHandle,
         socket_cache: Dict,
@@ -562,6 +572,7 @@ class P2PTransferManager:
                 rollout_transfer_session_id=local_transfer_session_id,
                 ptr=ptr,
                 length=length,
+                name=name,
                 engine_idx=engine_idx,
                 socket_cache=socket_cache,
                 socket_lock=socket_lock
@@ -584,6 +595,7 @@ class P2PTransferManager:
         rollout_transfer_session_id: str,
         ptr: int,
         length: int,
+        name:str,
         engine_idx: int,
         socket_cache: Dict,
         socket_lock: threading.Lock
@@ -618,11 +630,12 @@ class P2PTransferManager:
                     "ptr": ptr,
                     "length": length,
                     "task_id": task_id,
+                    "rollout_weight_name": name,
                 }
             )
             logger.info(
                 f"Sent sync_status to {remote_ip}:{remote_port} for session {training_p2p_session_id}, "
-                f"task_id={task_id}, engine={engine_idx}, rollout_transfer_session_id={rollout_transfer_session_id}, ptr={ptr:#x}"
+                f"task_id={task_id}, engine={engine_idx}, rollout_transfer_session_id={rollout_transfer_session_id}, rollout_weight_name={name}, ptr={ptr:#x}"
             )
 
             # Wait for confirmation from training side
