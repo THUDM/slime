@@ -16,20 +16,20 @@ This is a running example that connects the [Strands-Agents](https://github.com/
 
 ```bash
 # hf checkpoint
-huggingface-cli download Qwen/Qwen3-8B --local-dir /root/models/qwen3-8B
+huggingface-cli download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/models/Qwen/Qwen3-4B-Instruct-2507
 
 # mcore checkpoint
 cd /root/slime
-source scripts/models/qwen3-8B.sh
+source scripts/models/qwen3-4B.sh
 PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
-    --hf-checkpoint /root/models/qwen3-8B \
-    --save /root/models/qwen3-8B_torch_dist
+    --hf-checkpoint /root/models/Qwen/Qwen3-4B-Instruct-2507 \
+    --save /root/models/Qwen/Qwen3-4B-Instruct-2507_torch_dist
 ```
 
 ## Prepare Dataset
 
-We used `dapo-math-17k` as training data:
+Following [Retool](https://arxiv.org/abs/2504.11536), we used `dapo-math-17k` as training data:
 
 ```
 from datasets import load_dataset
@@ -52,7 +52,7 @@ Assuming `/root/slime` is up-to-date (if this PR is not merged you may need to s
 ```
 cd /root/slime
 export WANDB_KEY=$your_wandb_key
-bash examples/strands-agents/run_qwen3_8B.sh
+bash examples/strands-agents/strands_qwen3_8B.sh
 ```
 
 ## Quick Testing - Optional
@@ -70,8 +70,6 @@ nohup python -m sglang.launch_server \
     --tp-size 8 \
     --mem-fraction-static 0.9 &
 ```
-
-> Remember to change `tp-size` and `mem-fraction-static` to match your machine
 
 Then, we can directly run `test_generate.py` with:
 

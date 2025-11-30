@@ -23,17 +23,22 @@ else
 fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
-source "/root/slime/scripts/models/qwen3-8B.sh"
+source "/root/slime/scripts/models/qwen3-4B.sh"
+
+# Generate timestamp suffix for save path
+TIMESTAMP_SUFFIX=$(date +%Y%m%d_%H%M%S)
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/models/qwen3-8B
-   --ref-load /root/models/qwen3-8B_torch_dist
-   --save /root/models/qwen3-8B_strands_dapo
+   --hf-checkpoint /root/models/Qwen/Qwen3-4B-Instruct-2507
+   --ref-load /root/models/Qwen/Qwen3-4B-Instruct-2507_torch_dist
+   # --load Qwen3-4B-Instruct-2507_strands_dapo_1129
+   --save /root/models/Qwen/Qwen3-4B-Instruct-2507_strands_dapo_${TIMESTAMP_SUFFIX}
    --save-interval 20
+   --rotary-base 5000000
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /root/data/dapo-math-17k.jsonl
+   --prompt-data /root/data/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
    --rollout-shuffle
@@ -41,9 +46,8 @@ ROLLOUT_ARGS=(
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-response-len 20480
-   --rollout-temperature 1.0
-   --rollout-top-p 0.7
+   --rollout-max-response-len 8192
+   --rollout-temperature 0.8
 
    --global-batch-size 256
    --balance-data
@@ -51,10 +55,9 @@ ROLLOUT_ARGS=(
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data aime  /root/data/aime-2024.jsonl
-   --n-samples-per-eval-prompt 8
-   --eval-max-response-len 20480
-   --eval-temperature 1.0
+   --eval-prompt-data aime  /root/data/aime-2024/aime-2024.jsonl
+   --n-samples-per-eval-prompt 16
+   --eval-max-response-len 16384
    --eval-top-p 0.7
 )
 
@@ -70,8 +73,9 @@ PERF_ARGS=(
    --recompute-method uniform
    --recompute-num-layers 1
 
+   # --micro-batch-size 1
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 16384
+   --max-tokens-per-gpu 9216
 )
 
 GRPO_ARGS=(
@@ -96,14 +100,14 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=(
    --use-wandb
    --wandb-project strands-slime
-   --wandb-group qwen3-8B-strands-dapo
+   --wandb-group Qwen3-4B-Instruct-2507-strands-dapo
    --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
-   --sglang-mem-fraction-static 0.4
-   --sglang-tool-call-parser qwen
+   --sglang-mem-fraction-static 0.7
+   --sglang-tool-call-parser qwen  # Enable tool call parsing for Strands Agent
 )
 
 MISC_ARGS=(
@@ -129,7 +133,7 @@ ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-s
 # Build the runtime environment JSON with proper variable substitution
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
-    \"PYTHONPATH\": \"/root/Megatron-LM:/root/slime\",
+    \"PYTHONPATH\": \"/root/Megatron-LM/:${SCRIPT_DIR}:/root/slime\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\"
   }

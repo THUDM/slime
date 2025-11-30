@@ -1,6 +1,6 @@
 import logging
 
-from camel.toolkits.code_execution import CodeExecutionToolkit
+from camel.interpreters import SubprocessInterpreter
 import openai
 from strands import Agent, tool
 from strands.models.openai import OpenAIModel
@@ -31,8 +31,12 @@ Guidelines:
 - After completing your reasoning, present the final result enclosed in \\boxed{}.
 """.strip()
 
+MAX_NUM_MESSAGES = 16  # messages beyond this will be truncated
+
 
 def create_strands_agent(args, sampling_params):
+    """Create a strands agent that connects to the SGLang rollout server"""
+
     # Create an OpenAI model from the SGLang server
     model_params = {
         "max_tokens": sampling_params["max_new_tokens"],
@@ -48,12 +52,13 @@ def create_strands_agent(args, sampling_params):
         client_args={
             "api_key": "EMPTY",
             "base_url": sglang_server_url,
-            "timeout": 300.0,  # tool parser requires some time buffer
+            "timeout": 300.0,  # needed for tool calls
         },
         model_id=args.hf_checkpoint.split("/")[-1],
         params=model_params,
     )
 
+    # Define the `execute_python_code` tool using camel-ai's subprocess interpreter
     @tool
     def execute_python_code(code: str) -> str:
         r"""Execute a given Python code snippet.
@@ -64,18 +69,26 @@ def create_strands_agent(args, sampling_params):
         Returns:
             str: The text output from the Code Execution tool call.
         """
-        code_execution_toolkit = CodeExecutionToolkit(
-            sandbox="subprocess",
-            timeout=60.0,  # 1 minute
+        interpreter = SubprocessInterpreter(
+            require_confirm=False,
+            print_stdout=False,
+            print_stderr=False,
+            execution_timeout=60.0,
         )
-        return code_execution_toolkit.execute_code(code=code, code_type="python")
+        result = interpreter.run(code=code, code_type="python")
+        logger.info(
+            f"[Strands Agents] executing Python code: ```python\n{code}\n``` and get execution result: ```python\n{result}\n```"
+        )
+        return result
 
+    # Create the strands agent
     agent = Agent(
         model=model,
         tools=[execute_python_code],
         system_prompt=SYSTEM_PROMPT,
         callback_handler=None,
     )
+
     return agent
 
 
@@ -93,30 +106,26 @@ async def run_strands_agent(agent: Agent, prompt: str) -> Sample.Status:
             and isinstance(e.original_exception, openai.APIError)
             and "context length" in str(e.original_exception).lower(),
         ]
-
         if any(truncated_conditions):
             sample_status = Sample.Status.TRUNCATED
+            logger.warning(f"[Strands Agents] sample is TRUNCATED due to {type(e).__name__}: {e}")
         else:
             sample_status = Sample.Status.ABORTED
-        logger.error(f"[Strands Agents] inference not completed due to exception: {e}")
+            logger.error(f"[Strands Agents] sample is ABORTED due to {type(e).__name__}: {e}")
 
     return sample_status
 
 
 def get_trajectory(agent: Agent) -> list[dict]:
-    """Get the chat template-compatible trajectory of the strands agent."""
+    """Get the chat template-compatible trajectory from strands agent's messages."""
     openai_model: OpenAIModel = agent.model
     trajectory = openai_model.format_request_messages(messages=agent.messages, system_prompt=agent.system_prompt)
-    # Convert content from list[dict] format to string format for chat template
-    # The strands library returns content as [{"type": "text", "text": "..."}]
-    # but the tokenizer's chat template expects just the string
     for message in trajectory:
         if "content" in message and isinstance(message["content"], list):
             if len(message["content"]) > 0 and "text" in message["content"][0]:
                 message["content"] = message["content"][0]["text"]
             else:
                 message["content"] = ""
-
     return trajectory
 
 
@@ -126,24 +135,28 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
     state = GenerateState(args)
 
-    # Create strands agent and run it with the sample prompt
+    # Create strands agent
     agent = create_strands_agent(args, sampling_params)
-    prompt_text = sample.prompt if isinstance(sample.prompt, str) else sample.prompt[0]["content"]
 
     # Run the strands agent
+    prompt_text = sample.prompt if isinstance(sample.prompt, str) else sample.prompt[0]["content"]
     sample.status = await run_strands_agent(agent, prompt_text)
 
+    # Early return if sample is aborted
     if sample.status == Sample.Status.ABORTED:
+        agent.cleanup()
         return sample
 
-    # Get the trajectory from the agent
+    # Get the trajectory from the agent and further truncate if necessary
     trajectory = get_trajectory(agent)
-    # Check if the trajectory is None, this is an infra bug, not a “recoverable” case
-    if trajectory is None:
-        raise RuntimeError(
-            "[Strands Agents] trajectory is `None` after `await agent.invoke_async(prompt=prompt)`; "
-            "this run should not be used for training."
+    if len(trajectory) > MAX_NUM_MESSAGES:
+        logger.warning(
+            f"[Strands Agents] sample is TRUNCATED due to number of messages (={len(trajectory)}) exceeding limit (={MAX_NUM_MESSAGES})"
         )
+        # This post-processing is not optimal but just for simplicity
+        # We should implement a hook in strands-agents to handle this truncation
+        trajectory = trajectory[:MAX_NUM_MESSAGES]
+        sample.status = Sample.Status.TRUNCATED
 
     # Get the initial prompt (system + user message)
     initial_prompt_messages = [msg for msg in trajectory if msg["role"] in ["system", "user"]]
@@ -184,10 +197,12 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         assert len(message_tokens) == message_token_length, "Message tokens length mismatch"
         response_token_ids.extend(message_tokens)
 
-        # Mask: 1 for assistant messages (we train on these), 0 for tool results
+        # Align message tokens with loss masks
         if message["role"] == "assistant":
+            # We train on assistant messages
             loss_masks.extend([1] * message_token_length)
-        else:  # tool messages
+        else:
+            # We don't train on tool messages
             loss_masks.extend([0] * message_token_length)
 
         prev_token_count = new_token_count
@@ -198,25 +213,22 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     )
     response_text = full_conversation_text[len(prompt_text) :]
 
-    # Set sample attributes
+    # Set sample attributes and some debug information
     sample.tokens = prompt_tokens_ids + response_token_ids
     sample.response_length = len(response_token_ids)
     sample.response = response_text
     sample.loss_mask = loss_masks
-
-    # Store information for wandb logging
     sample.payload_text = prompt_text + response_text
     sample.payload_has_system = True
     sample.payload_has_tools = len(agent.tool_names) > 0
-
-    # Store tool call count for reward calculation
     sample.tool_call_count = [message["role"] == "tool" for message in trajectory].count(True)
+    sample.num_messages = len(trajectory)
 
     # Log to wandb if available
     if wandb.run is not None:
         wandb.log(
             {
-                "debug/response_length": len(response_text),
+                "debug/response_length": sample.response_length,
                 "debug/available_tools": len(agent.tool_names),
                 "debug/tool_calls": sample.tool_call_count,
                 "debug/num_messages": len(trajectory),
@@ -224,6 +236,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             }
         )
 
+    agent.cleanup()
     return sample
 
 
@@ -232,14 +245,10 @@ async def reward_func(args, sample, **kwargs):
     if not isinstance(sample, Sample):
         raise TypeError("Sample must be an instance of Sample class.")
 
-    # Build complete solution string
+    # Extract information from sample
     solution_str = sample.payload_text
-
-    # Get ground truth answer - label is a string, not a dict
     ground_truth = sample.label if sample.label is not None else ""
-
-    # Get tool call count as num_turns
-    num_turns = getattr(sample, "tool_call_count", 0)
+    tool_call_count = getattr(sample, "tool_call_count", 0)
 
     # Accept both Answer: ... and \\boxed{...} answer
     result = math_dapo_compute_score(solution_str, ground_truth, strict_box_verify=False)
@@ -249,7 +258,7 @@ async def reward_func(args, sample, **kwargs):
 
     # Encourage model to call tools
     if result["score"] < 0:
-        tool_call_reward = (num_turns - 2) / 2 * 0.1
+        tool_call_reward = (tool_call_count - 2) / 2 * 0.1
         result["score"] = min(-0.6, result["score"] + tool_call_reward)
 
     if result["pred"] is None:
