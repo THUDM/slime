@@ -47,33 +47,6 @@ def _convert_to_hf_core(args, model_name, name, param):
         converted_named_tensors = convert_qwen2_to_hf(args, name, param)
     elif "deepseekv3" in model_name:
         converted_named_tensors = convert_deepseekv3_to_hf(args, name, param)
-        # to compatible with sglang implementation
-        if args.q_lora_rank is not None:
-            old_converted_named_tensors = converted_named_tensors
-            converted_named_tensors = []
-            for converted_name, converted_param in old_converted_named_tensors:
-                if "q_a_proj" in converted_name:
-                    pair_name = converted_name.replace("q_a_proj", "kv_a_proj_with_mqa")
-                    if pair_name in _cached_tensors:
-                        converted_named_tensors += [
-                            (converted_name, converted_param),
-                            (pair_name, _cached_tensors[pair_name]),
-                        ]
-                        del _cached_tensors[pair_name]
-                    else:
-                        _cached_tensors[converted_name] = converted_param
-                elif "kv_a_proj_with_mqa" in converted_name:
-                    pair_name = converted_name.replace("kv_a_proj_with_mqa", "q_a_proj")
-                    if pair_name in _cached_tensors:
-                        converted_named_tensors += [
-                            (converted_name, converted_param),
-                            (pair_name, _cached_tensors[pair_name]),
-                        ]
-                        del _cached_tensors[pair_name]
-                    else:
-                        _cached_tensors[converted_name] = converted_param
-                else:
-                    converted_named_tensors.append((converted_name, converted_param))
 
     elif "llama" in model_name:
         converted_named_tensors = convert_llama_to_hf(args, name, param)
@@ -82,4 +55,31 @@ def _convert_to_hf_core(args, model_name, name, param):
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
+    # to compatible with sglang implementation
+    if args.q_lora_rank is not None:
+        old_converted_named_tensors = converted_named_tensors
+        converted_named_tensors = []
+        for converted_name, converted_param in old_converted_named_tensors:
+            if "q_a_proj" in converted_name:
+                pair_name = converted_name.replace("q_a_proj", "kv_a_proj_with_mqa")
+                if pair_name in _cached_tensors:
+                    converted_named_tensors += [
+                        (converted_name, converted_param),
+                        (pair_name, _cached_tensors[pair_name]),
+                    ]
+                    del _cached_tensors[pair_name]
+                else:
+                    _cached_tensors[converted_name] = converted_param
+            elif "kv_a_proj_with_mqa" in converted_name:
+                pair_name = converted_name.replace("kv_a_proj_with_mqa", "q_a_proj")
+                if pair_name in _cached_tensors:
+                    converted_named_tensors += [
+                        (converted_name, converted_param),
+                        (pair_name, _cached_tensors[pair_name]),
+                    ]
+                    del _cached_tensors[pair_name]
+                else:
+                    _cached_tensors[converted_name] = converted_param
+            else:
+                converted_named_tensors.append((converted_name, converted_param))
     return converted_named_tensors

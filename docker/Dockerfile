@@ -76,6 +76,20 @@ RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
     curl -L https://github.com/NVIDIA/TransformerEngine/pull/2286.patch -o /root/te2286.patch && (cd /usr/local/lib/python3.12/dist-packages/transformer_engine && (patch -p2 < /root/te2286.patch)); \
   fi
 
+# AMEM
+# we need to create a fake libcuda.so.1 to make the linker happy when building AMEM
+ENV CUDA_DIR=/usr/local/cuda
+ENV CUDA_STUBS=${CUDA_DIR}/lib64/stubs
+RUN ln -s ${CUDA_STUBS}/libcuda.so ${CUDA_STUBS}/libcuda.so.1 && \
+    echo "${CUDA_STUBS}" > /etc/ld.so.conf.d/z-cuda-stubs.conf && \
+    ldconfig
+RUN git clone https://github.com/inclusionAI/asystem-amem.git && \
+    cd asystem-amem && git checkout 6483bb17c9a98b51c3a94b7048467d5b50fbad4b && \
+    git submodule init && git submodule update && \
+    MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi/ ./build.sh && \
+    mv /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libnccl.so.2 /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libnccl.so.2.bak && \
+    cp -r third_party/nccl/build/lib/* /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/
+
 RUN rm /root/.tmux.conf
 
 # ====================================== Patches ============================================

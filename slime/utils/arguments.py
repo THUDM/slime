@@ -1094,6 +1094,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=128,
                 help="Multiplier for data padding size in data processing.",
             )
+            parser.add_argument(
+                "--rollout-sample-filter-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to the rollout sample filter function. "
+                    "This function determines whether a sample will participate in loss calculation. "
+                    "The function should take args and samples (list[Sample]) as input, and return None. "
+                    "Please directly modify the remove_sample attribute of Sample. "
+                    "Note: This attribute does not determine whether the sample participates in advantage normalization."
+                ),
+            )
             return parser
 
         def add_custom_megatron_plugins_arguments(parser):

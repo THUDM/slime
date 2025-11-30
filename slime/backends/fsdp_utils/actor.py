@@ -55,6 +55,11 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.debug_rollout_only:
             return 0
 
+        self.fsdp_cpu_offload = getattr(self.args, "fsdp_cpu_offload", False)
+        # Offload train and fsdp cpu offload cannot be used together, fsdp_cpu_offload is more aggressive
+        if self.args.offload_train and self.fsdp_cpu_offload:
+            self.args.offload_train = False
+
         self._enable_true_on_policy_optimizations(args)
         if dist.get_rank() == 0:
             init_tracking(args, primary=False)
@@ -73,20 +78,29 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.multimodal_keys:
             self.vlm_processor = AutoProcessor.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
 
-        # Load model
-        model = AutoModelForCausalLM.from_pretrained(
-            self.args.hf_checkpoint,
-            trust_remote_code=True,
-            attn_implementation=self.args.attn_implementation,
-        )
+        init_context = self._get_init_weight_context_manager()
+
+        with init_context():
+            model = AutoModelForCausalLM.from_pretrained(
+                self.args.hf_checkpoint,
+                trust_remote_code=True,
+                attn_implementation=self.args.attn_implementation,
+            )
+
         model.train()
 
-        if args.gradient_checkpointing:
-            model.gradient_checkpointing_enable()
+        full_state = model.state_dict()
 
-        # Apply FSDP with DP mesh and CPU offload policy if requested
-        cpu_offload = getattr(args, "fsdp_cpu_offload", False)
-        self.model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=cpu_offload)
+        model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=self.fsdp_cpu_offload)
+
+        model = self._fsdp2_load_full_state_dict(
+            model, full_state, self.dp_mesh, cpu_offload=True if self.fsdp_cpu_offload else None
+        )
+
+        self.model = model
+
+        if args.gradient_checkpointing:
+            self.model.gradient_checkpointing_enable()
 
         if args.optimizer == "adam":
             self.optimizer = torch.optim.AdamW(
@@ -188,6 +202,69 @@ class FSDPTrainRayActor(TrainRayActor):
         else:
             logger.info(f"[Rank {rank}] Pure DP mode (cp_size=1)")
 
+    def _get_init_weight_context_manager(self):
+        """Get context manager for model initialization.
+
+        Returns a callable that creates a context manager.
+        Uses meta device (no memory allocation) for non-rank-0 processes,
+        UNLESS tie_word_embeddings=True (which causes hangs with meta tensors).
+
+        Ref: verl/utils/fsdp_utils.py::get_init_weight_context_manager
+        NOTE: tie_word_embedding causes meta_tensor init to hang
+        """
+        from accelerate import init_empty_weights
+
+        # Check if model uses tied word embeddings (which doesn't work with meta tensors)
+        use_meta_tensor = not self.hf_config.tie_word_embeddings
+
+        cpu_init_weights = lambda: torch.device("cpu")
+
+        if use_meta_tensor:
+            # Rank 0: CPU, others: meta device (memory efficient for large models)
+            return init_empty_weights if dist.get_rank() != 0 else cpu_init_weights
+        else:
+            logger.info(f"[Rank {dist.get_rank()}] tie_word_embeddings=True, loading full model to CPU on all ranks")
+            return cpu_init_weights
+
+    def _fsdp2_load_full_state_dict(self, model, full_state, device_mesh, cpu_offload):
+        """Load full state dict into FSDP2 model with efficient broadcast from rank 0.
+
+        This function loads weights from rank 0 and broadcasts to all other ranks,
+        avoiding the need for each rank to load the full model from disk.
+
+        Args:
+            model: FSDP2-wrapped model
+            full_state: State dict (only rank 0 has real weights, others have empty dict)
+            device_mesh: Device mesh for FSDP
+            cpu_offload: If not None, enables StateDictOptions cpu_offload
+
+        Ref:verl/utils/fsdp_utils.py::fsdp2_load_full_state_dict
+        """
+        from torch.distributed.checkpoint.state_dict import StateDictOptions, set_model_state_dict
+
+        # Rank 0: move with weights, others: allocate empty tensors on device
+        if dist.get_rank() == 0:
+            model = model.to(device=torch.cuda.current_device(), non_blocking=True)
+        else:
+            # to_empty creates tensors on device without initializing memory
+            model = model.to_empty(device=torch.cuda.current_device())
+
+        is_cpu_offload = cpu_offload is not None
+        options = StateDictOptions(full_state_dict=True, cpu_offload=is_cpu_offload, broadcast_from_rank0=True)
+
+        set_model_state_dict(model, full_state, options=options)
+
+        # set_model_state_dict will not broadcast buffers, so we need to broadcast them manually.
+        for name, buf in model.named_buffers():
+            dist.broadcast(buf, src=0)
+
+        if is_cpu_offload:
+            model.to("cpu", non_blocking=True)
+            for buf in model.buffers():
+                buf.data = buf.data.to(torch.cuda.current_device())
+
+        return model
+
     @timer
     def sleep(self) -> None:
         """Pause CUDA memory for all tracked tensors."""
@@ -246,14 +323,11 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         # Select which model to use
         if model_tag == "ref" and self.ref_model is not None:
-            # Offload actor model to CPU to save GPU memory
-            logger.info("[Rank {}] Offloading actor model to CPU".format(dist.get_rank()))
-            self.model.cpu()
-            torch.cuda.empty_cache()
+            if not self.fsdp_cpu_offload:
+                self.model.cpu()
+                torch.cuda.empty_cache()
+                dist.barrier(group=get_gloo_group())
 
-            # Load ref model to GPU
-            logger.info("[Rank {}] Loading ref model to GPU".format(dist.get_rank()))
-            self.ref_model.cuda()
             active_model = self.ref_model
             active_model.eval()
         else:
@@ -285,11 +359,14 @@ class FSDPTrainRayActor(TrainRayActor):
             return rollout_data
 
         finally:
-            # Offload ref model back to CPU
+            # Restore actor model if it was offloaded
             if model_tag == "ref" and self.ref_model is not None:
-                self.ref_model.cpu()
                 torch.cuda.empty_cache()
-                self.model.cuda()
+                dist.barrier(group=get_gloo_group())
+
+                if not self.fsdp_cpu_offload:
+                    self.model.cuda()
+                    dist.barrier(group=get_gloo_group())
 
     def packed_data(
         self, rollout_data: dict[str, list[torch.Tensor]]
@@ -472,7 +549,7 @@ class FSDPTrainRayActor(TrainRayActor):
             # Copy actor model state to ref model
             actor_state = self.model.state_dict()
             self.ref_model.load_state_dict(actor_state)
-            self.ref_model.cpu()  # Keep ref in CPU
+            self.ref_model.cpu()
 
     def _train_step(self, packed_batch, reported_accum, mbs_id, grad_accum):
         # Prepare model inputs
@@ -672,19 +749,19 @@ class FSDPTrainRayActor(TrainRayActor):
         clear_memory()
 
     def create_ref_model(self, ref_load_path: str | None):
-        """Create and initialize a separate reference model (kept in CPU).
+        """Create and initialize a separate reference model with FSDP2 CPUOffloadPolicy.
 
         Parameters:
             ref_load_path: Path to a directory containing a HF checkpoint. If
                 None, a ValueError is raised.
 
         Returns:
-            FSDP-wrapped ref model in CPU memory
+            FSDP2-wrapped ref model with CPU offload enabled
 
         Note:
-            Creates a separate FSDP model instance for the reference model.
-            This model is kept in CPU and loaded to GPU only when needed in
-            compute_log_prob(). This approach is cleaner than weight swapping.
+            Creates a separate FSDP2 model instance for the reference model.
+            ALWAYS uses CPUOffloadPolicy for the reference model to save memory,
+            regardless of the actor model's CPU offload setting.
         """
         if ref_load_path is None:
             raise ValueError("ref_load_path must be provided when loading reference model")
@@ -694,17 +771,22 @@ class FSDPTrainRayActor(TrainRayActor):
         if os.path.isdir(ref_load_path):
             logger.info(f"[Rank {dist.get_rank()}] Creating separate ref model from {ref_load_path}")
 
-            # Load model same way as actor model
-            ref_model = AutoModelForCausalLM.from_pretrained(
-                ref_load_path,
-                trust_remote_code=True,
-                attn_implementation=self.args.attn_implementation,
-            )
+            init_context = self._get_init_weight_context_manager()
 
-            ref_model = apply_fsdp2(ref_model, mesh=self.dp_mesh)
-            ref_model.cpu()
+            with init_context():
+                ref_model = AutoModelForCausalLM.from_pretrained(
+                    ref_load_path,
+                    trust_remote_code=True,
+                    attn_implementation=self.args.attn_implementation,
+                )
 
-            logger.info(f"[Rank {dist.get_rank()}] Reference model created and offloaded to CPU")
+            full_state = ref_model.state_dict()
+
+            # Always use CPUOffloadPolicy for reference, let FSDP2 handle the offload. It is faster than model.cpu().
+            ref_model = apply_fsdp2(ref_model, mesh=self.dp_mesh, cpu_offload=True)
+            ref_model = self._fsdp2_load_full_state_dict(ref_model, full_state, self.dp_mesh, cpu_offload=True)
+
+            logger.info(f"[Rank {dist.get_rank()}] Reference model created with FSDP2 CPUOffloadPolicy")
             return ref_model
         else:
             raise NotImplementedError(f"Loading from checkpoint file {ref_load_path} not yet implemented")
