@@ -122,8 +122,8 @@ MISC_ARGS=(
 )
 
 CUSTOM_ARGS=(
-   --custom-generate-function-path examples.strands_agent.generate_with_strands.generate
-   --custom-rm-path examples.strands_agent.generate_with_strands.reward_func
+   --custom-generate-function-path examples.strands-agents.generate_with_strands.generate
+   --custom-rm-path examples.strands-agents.generate_with_strands.reward_func
 )
 
 # launch the master node of ray in container
