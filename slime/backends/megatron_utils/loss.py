@@ -702,9 +702,13 @@ def loss_function(
             raise ValueError(f"Unknown loss type: {args.loss_type}")
 
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
-    loss = (
-        loss * num_microbatches / args.global_batch_size * mpu.get_data_parallel_world_size(with_context_parallel=True)
-    )
+    if not args.calculate_per_token_loss:
+        loss = (
+            loss
+            * num_microbatches
+            / args.global_batch_size
+            * mpu.get_data_parallel_world_size(with_context_parallel=True)
+        )
 
     return (
         loss,
