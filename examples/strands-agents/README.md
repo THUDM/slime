@@ -5,9 +5,9 @@ This is a running example that connects the [Strands-Agents](https://github.com/
 ## Install Dependencies
 
 1. Pull the `slimerl/slime:latest` image and enter it
-2. Goes to slime folder: `cd /root/slime`
+2. Goes to slime folder: `cd /root/slime` (Clone the repository if not already there: `cd /root && git clone https://github.com/THUDM/slime.git`)
 3. Install Slime: `pip install -e .`
-4. Goes to the example folder: `cd /root/slime/examples/strands_agent`
+4. Goes to the example folder: `cd /root/slime/examples/strands-agents`
 5. Install other dependencies: `pip install -r requirements.txt`
 
 > NOTE: we use camel-ai's subprocess code interpreter for python code execution, which is NOT a good practice; it's just for convenience of this example and the dependencies for solving math problems are usually ready in `slime`'s docker

@@ -218,11 +218,8 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     sample.response_length = len(response_token_ids)
     sample.response = response_text
     sample.loss_mask = loss_masks
-    sample.payload_text = prompt_text + response_text
-    sample.payload_has_system = True
-    sample.payload_has_tools = len(agent.tool_names) > 0
+    # Store tool call count for reward calculation
     sample.tool_call_count = [message["role"] == "tool" for message in trajectory].count(True)
-    sample.num_messages = len(trajectory)
 
     # Log to wandb if available
     if wandb.run is not None:
@@ -246,7 +243,7 @@ async def reward_func(args, sample, **kwargs):
         raise TypeError("Sample must be an instance of Sample class.")
 
     # Extract information from sample
-    solution_str = sample.payload_text
+    solution_str = sample.response
     ground_truth = sample.label if sample.label is not None else ""
     tool_call_count = getattr(sample, "tool_call_count", 0)
 
