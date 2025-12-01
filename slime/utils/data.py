@@ -98,11 +98,11 @@ class Dataset:
                 prompt = prompt_content
 
             # TODO: this is slow.
-            if max_length is not None:
+            # Only check token length for string prompts, skip for multimodal and message lists (SFT)
+            if max_length is not None and not multimodal_keys and isinstance(prompt, str):
                 raw_prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
-                if not multimodal_keys:
-                    if len(raw_prompt_ids) > max_length:
-                        continue
+                if len(raw_prompt_ids) > max_length:
+                    continue
 
             self.origin_samples.append(
                 Sample(
