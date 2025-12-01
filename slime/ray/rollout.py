@@ -97,6 +97,7 @@ class RolloutManager:
         try:
             data, metrics = self._get_rollout_data(rollout_id=rollout_id)
             self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
+            self._save_readable_rollout_data(data, rollout_id=rollout_id, evaluation=False)
             _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
             data = self._convert_samples_to_train_data(data)
             return Box(ray.put(data))
@@ -116,6 +117,7 @@ class RolloutManager:
             self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True
         ).data
         self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=True)
+        self._save_readable_rollout_data(data, rollout_id=rollout_id, evaluation=True)
         metrics = _log_eval_rollout_data(rollout_id, self.args, data)
         if self._metric_checker is not None:
             self._metric_checker.on_eval(metrics)
@@ -183,6 +185,34 @@ class RolloutManager:
                 )
 
             torch.save(dict(rollout_id=rollout_id, **dump_data), path)
+
+    def _save_readable_rollout_data(self, data, rollout_id, evaluation: bool):
+        if (path_template := self.args.save_readable_rollout_data) is not None:
+            import json
+
+            def save_data(path, samples):
+                logger.info(f"Save readable rollout data to {path}")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if self.args.save_readable_rollout_data_limit is not None:
+                    num_samples = min(self.args.save_readable_rollout_data_limit, len(samples))
+                    output_data = samples[:num_samples]
+                else:
+                    output_data = samples
+                excluded_fields = {"tokens", "rollout_log_probs", "loss_mask", "rollout_routed_experts"}
+                with open(path, "w") as f:
+                    for sample in output_data:
+                        sample_dict = sample.to_dict()
+                        for field in excluded_fields:
+                            sample_dict.pop(field, None)
+                        f.write(json.dumps(sample_dict) + "\n")
+
+            if evaluation:
+                for dataset_name, info in data.items():
+                    path = Path(path_template.format(rollout_id=("eval_" + dataset_name + "_") + str(rollout_id)))
+                    save_data(path, info["samples"])
+            else:
+                path = Path(path_template.format(rollout_id=str(rollout_id)))
+                save_data(path, data)
 
     def _post_process_rewards(self, samples: Union[list[Sample], list[list[Sample]]]):
         if self.custom_reward_post_process_func is not None:

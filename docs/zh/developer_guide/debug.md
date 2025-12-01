@@ -47,3 +47,7 @@ slime 支持将训练部分和推理部分分开进行调试，从而实现：
 3. `--load-debug-rollout-data /your/saved/debug/data_{rollout_id}.pt`
 
    开启后，会从 `args.load_debug_rollout_data.format(rollout_id=rollout_id)` 来加载数据，并且不会初始化 sglang（自动设置 `debug_train_only=True`）。可以以这种方式来固定训练部分的输入，对训练部分进行调优，例如切换各种并行。
+
+4. `--save-readable-rollout-data /your/saved/debug/data_{rollout_id}.json`
+
+   配合 `--save-readable-rollout-data-limit` 使用时，会把每个 rollout 的前若干条样本以 JSON Lines 形式落盘，便于快速查看 prompt、response 和 metadata，而无需加载 PyTorch tensor；如果不设置该 limit，会默认保存所有样本。
