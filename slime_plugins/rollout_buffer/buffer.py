@@ -271,7 +271,7 @@ async def write_to_buffer(request: Request):
         import traceback
 
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Write failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Write failed: {str(e)}") from e
 
 
 @app.post("/get_rollout_data", response_model=BufferResponse)

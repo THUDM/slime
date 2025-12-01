@@ -71,7 +71,7 @@ def select_rollout_data(args, results, need_length):
 
     # Flatten selected groups back to sample list
     selected_results = []
-    for group_id, _timestamp, group_items in selected_groups:
+    for _group_id, _timestamp, group_items in selected_groups:
         selected_results.append(group_items)
 
     # Statistics for monitoring
