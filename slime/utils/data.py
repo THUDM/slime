@@ -2,6 +2,8 @@ import json
 import logging
 import random
 import re
+from io import BytesIO
+from PIL import Image
 
 import numpy as np
 import pandas as pd
@@ -61,7 +63,9 @@ def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
     messages = data.get(prompt_key)
 
     if isinstance(messages, str):
-        return [{"role": "user", "content": messages}]
+        # hack for geo3k prompting, will remove after testing
+        messages = "Solve the following math problem step by step. The last line of your response should be of the form Answer: \\boxed{$Answer} where $Answer is the answer to the problem.\n\n" + messages
+        messages = [{"role": "user", "content": messages}]
 
     if multimodal_keys:
         # Build mapping: placeholder -> (MultimodalType, content_list)
@@ -81,7 +85,9 @@ def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
                         continue
                     if segment in multimodals:
                         mt, content = multimodals[segment]
-                        content_list.append({"type": mt.name, mt.name: content.pop(0)})
+                        multimodal_content = content.pop(0)
+                        multimodal_content = Image.open(BytesIO(multimodal_content["bytes"]))
+                        content_list.append({"type": mt.name, mt.name: multimodal_content})
                     else:
                         content_list.append({"type": "text", "text": segment})
                 message["content"] = content_list

@@ -32,18 +32,18 @@ def detect_nvlink():
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
-    dataset_name = "chenhegu/geo3k_imgurl"
+    dataset_name = "hiyouga/geometry3k"
     _, partial_name = dataset_name.split("/")
     U.exec_command(f"hf download --repo-type dataset {dataset_name} --local-dir /root/datasets/{partial_name}")
 
-    # try:
-    #     # Rename the dataset directory and files to match expected structure
-    #     U.exec_command("mv /root/datasets/geometry3k /root/datasets/geo3k")
-    #     U.exec_command("mv /root/datasets/geo3k/data/train-00000-of-00001.parquet /root/datasets/geo3k/data/train.parquet")
-    #     U.exec_command("mv /root/datasets/geo3k/data/test-00000-of-00001.parquet /root/datasets/geo3k/data/test.parquet")
-    #     U.exec_command("mv /root/datasets/geo3k/data/validation-00000-of-00001.parquet /root/datasets/geo3k/data/val.parquet")
-    # except Exception as e:
-    #     pass
+    try:
+        # Rename the dataset directory and files to match expected structure
+        U.exec_command("mv /root/datasets/geometry3k /root/datasets/geo3k")
+        U.exec_command("mv /root/datasets/geo3k/data/train-00000-of-00001.parquet /root/datasets/geo3k/train.parquet")
+        U.exec_command("mv /root/datasets/geo3k/data/test-00000-of-00001.parquet /root/datasets/geo3k/test.parquet")
+        U.exec_command("mv /root/datasets/geo3k/data/validation-00000-of-00001.parquet /root/datasets/geo3k/val.parquet")
+    except Exception as e:
+        pass
 
 
 def execute():
@@ -53,28 +53,28 @@ def execute():
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} "
 
     rollout_args = (
-        "--prompt-data /root/datasets/geo3k_imgurl/train.parquet "
-        "--input-key prompt "
-        "--label-key label "
+        "--prompt-data /root/datasets/geo3k/train.parquet "
+        "--input-key problem "
+        "--label-key answer "
         '--multimodal-keys \'{"image": "images"}\' '
         "--apply-chat-template "
         "--rollout-shuffle "
-        "--rm-type geo3k "
+        "--rm-type math "
         "--num-rollout 3000 "
-        "--rollout-batch-size 32 "
+        "--rollout-batch-size 64 "
         "--n-samples-per-prompt 8 "
-        "--rollout-max-response-len 8192 "
+        "--rollout-max-response-len 4096 "
         "--rollout-temperature 0.8 "
-        "--global-batch-size 128 "
-        "--use-fault-tolerance "
+        "--global-batch-size 512 "
+        # "--use-fault-tolerance "
     )
 
     eval_args = (
-        "--eval-interval 20 "
-        "--eval-prompt-data geo3k-test /root/datasets/geo3k_imgurl/test.parquet "
+        # "--eval-interval 20 "
+        "--eval-prompt-data geo3k-test /root/datasets/geo3k/test.parquet "
         "--n-samples-per-eval-prompt 1 "
-        "--eval-max-response-len 16384 "
-        "--eval-top-k 0.7 "
+        "--eval-max-response-len 4096 "
+        "--eval-top-k 1 "
     )
 
     grpo_args = (
