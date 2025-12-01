@@ -73,7 +73,7 @@ def get_expert_param(args, name, param):
     if not match:
         assert param.shape[0] == num_experts
         for expert_id in range(num_experts):
-            expert_name = name.replace(".experts.experts.", f".experts.") + str(expert_id)
+            expert_name = name.replace(".experts.experts.", ".experts.") + str(expert_id)
             expert_param = param[expert_id]
             yield expert_name, expert_param
     else:

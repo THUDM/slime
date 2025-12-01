@@ -180,7 +180,7 @@ def compute_score_em(
     do_print = random.randint(1, 64) == 1
 
     if do_print:
-        print(f"--------------------------------")
+        print("--------------------------------")
         print(f"Golden answers: {ground_truth['target']}")
         print(f"Extracted answer: {answer}")
         print(f"Solution string: {solution_str}")

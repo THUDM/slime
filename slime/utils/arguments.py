@@ -1550,7 +1550,7 @@ def hf_validate_args(args, hf_config):
                 )
 
     if len(errors) > 0:
-        raise AssertionError(f"hf_validate_args failed: " + "; ".join(errors))
+        raise AssertionError("hf_validate_args failed: " + "; ".join(errors))
 
 
 def _validate_and_update_megatron_args_from_hf(args, args_from_hf_config: Dict[str, Any]):

@@ -158,7 +158,7 @@ def train(args: ScriptArgs):
                 "--prompt-data /root/datasets/gsm8k/train.parquet "
                 "--input-key messages "
                 # Deliberately make it very short for this easy task
-                f"--rollout-max-response-len 256 "
+                "--rollout-max-response-len 256 "
             )
             eval_args += (
                 "--eval-prompt-data gsm8k /root/datasets/gsm8k/test.parquet "

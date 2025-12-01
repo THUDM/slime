@@ -166,7 +166,7 @@ def train(args: ScriptArgs):
                 "--prompt-data /root/datasets/gsm8k/train.parquet "
                 "--input-key messages "
                 # Deliberately make it very short for this easy task
-                f"--rollout-max-response-len 256 "
+                "--rollout-max-response-len 256 "
             )
             eval_args += (
                 "--eval-prompt-data gsm8k /root/datasets/gsm8k/test.parquet "
@@ -179,7 +179,7 @@ def train(args: ScriptArgs):
         perf_args = (
             "--tensor-model-parallel-size 4 "
             "--sequence-parallel "
-            f"--pipeline-model-parallel-size 1 "
+            "--pipeline-model-parallel-size 1 "
             "--context-parallel-size 1 "
             "--expert-model-parallel-size 4 "
             "--expert-tensor-parallel-size 1 "

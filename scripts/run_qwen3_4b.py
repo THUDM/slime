@@ -160,7 +160,7 @@ eval:
         "--adam-beta2 0.98 "
     )
 
-    sglang_args = f"--rollout-num-gpus-per-engine 1 " "--sglang-chunked-prefill-size 4096 "
+    sglang_args = "--rollout-num-gpus-per-engine 1 " "--sglang-chunked-prefill-size 4096 "
 
     match args.train_backend:
         case "fsdp":
@@ -171,7 +171,7 @@ eval:
                 f"--update-weight-buffer-size {512 * 1024 * 1024} "  # 512MB
                 """--train-env-vars '{"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}' """
             )
-            sglang_args += f"--sglang-mem-fraction-static 0.75 "
+            sglang_args += "--sglang-mem-fraction-static 0.75 "
             perf_args = "--use-dynamic-batch-size " "--max-tokens-per-gpu 32768 "
 
         case "megatron":
@@ -196,7 +196,7 @@ eval:
                 "--train-memory-margin-bytes 3221225472 "
             )
             # TODO improve
-            sglang_args += f"--sglang-mem-fraction-static 0.7 "
+            sglang_args += "--sglang-mem-fraction-static 0.7 "
             perf_args = "--use-dynamic-batch-size " "--max-tokens-per-gpu 9216 "
 
         case _:
