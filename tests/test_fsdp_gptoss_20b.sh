@@ -9,6 +9,7 @@ pkill -9 python
 
 set -ex
 
+# ref link in verl: https://github.com/volcengine/verl/pull/3212/files
 cat > convert_model.py << EOF
 import torch
 import os
