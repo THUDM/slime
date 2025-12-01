@@ -71,7 +71,7 @@ def select_rollout_data(args, results, need_length):
 
     # Flatten selected groups back to sample list
     selected_results = []
-    for group_id, timestamp, group_items in selected_groups:
+    for group_id, _timestamp, group_items in selected_groups:
         selected_results.append(group_items)
 
     # Statistics for monitoring
@@ -266,7 +266,7 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
     print("finally get rollout data with length: ", len(results))
     sample_results = []
 
-    for i, group_record in enumerate(results):
+    for _i, group_record in enumerate(results):
         group_results = []
         for record in group_record:
             oai_messages = record["messages"]

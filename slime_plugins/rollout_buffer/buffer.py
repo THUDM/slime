@@ -36,7 +36,7 @@ def default_get_group_data_meta_info(temp_data: dict[str, list[dict[str, Any]]])
 
     all_rewards = []
     # Calculate per-group statistics
-    for instance_id, samples in temp_data.items():
+    for _instance_id, samples in temp_data.items():
         group_size = len(samples)
         group_rewards = [s["reward"] for s in samples]  # Calculate group reward standard deviation
         meta_info["total_samples"] += group_size

@@ -48,7 +48,7 @@ def query_single_turn(client, messages, sampling_params, tools=None):
     accumulated_tokens = 0
     finish_reason = "stop"
 
-    for attempt in range(6):
+    for _attempt in range(6):
         try:
             # Create a fresh payload for each attempt
             current_payload = copy.deepcopy(base_payload)
@@ -266,7 +266,7 @@ class BaseGenerator:
 
     def entry(self, input_file, rollout_func, reward_func, num_epoch=1):
         for _ in range(num_epoch):
-            status = self.run(input_file, rollout_func, reward_func)
+            self.run(input_file, rollout_func, reward_func)
 
 
 def run_rollout(data: dict):
