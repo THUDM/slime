@@ -6,7 +6,6 @@ import uuid
 from functools import partial
 from multiprocessing import Process, Queue
 from time import sleep
-from typing import List, Optional
 
 import requests
 from openai import OpenAI
@@ -152,7 +151,7 @@ class BaseGenerator:
         task_type="math",
         max_tokens=4096,
         num_repeats=10,
-        skip_instance_ids: Optional[List[str]] = None,
+        skip_instance_ids: list[str] | None = None,
     ):
         self.queue_size = queue_size
         self.num_process = num_process
@@ -197,7 +196,7 @@ class BaseGenerator:
             cnt = 0
             items = []
             skipped_count = 0
-            with open(input_file, "r") as f:
+            with open(input_file) as f:
                 for i, line in enumerate(f):
                     item = json.loads(line)
                     if "instance_id" not in item:
@@ -277,7 +276,7 @@ def run_rollout(data: dict):
     rollout_func = query_single_turn
     reward_func = get_rule_based_math_reward
 
-    print(f"Waiting for 10 seconds for buffer server to start")
+    print("Waiting for 10 seconds for buffer server to start")
     time.sleep(10)
     global SAMPLING_PARAMS
     for k, v in data["sampling_params"].items():

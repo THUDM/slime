@@ -12,7 +12,7 @@ NUM_GPUS = 8
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(
-        f"hf download moonshotai/Moonlight-16B-A3B-Instruct --local-dir /root/models/Moonlight-16B-A3B-Instruct"
+        "hf download moonshotai/Moonlight-16B-A3B-Instruct --local-dir /root/models/Moonlight-16B-A3B-Instruct"
     )
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
     U.hf_download_dataset("zhuzilin/aime-2024")
