@@ -9,7 +9,6 @@ import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from slime.utils.misc import exec_command
 from slime.utils.typer_utils import dataclass_cli
@@ -26,7 +25,7 @@ def convert_checkpoint(
     multinode: bool = False,
     extra_args: str = "",
     dir_dst: str = "/root",
-    hf_checkpoint: Optional[str] = None,
+    hf_checkpoint: str | None = None,
 ):
     hf_checkpoint = hf_checkpoint or f"/root/models/{model_name}"
 
@@ -94,11 +93,11 @@ class ExecuteTrainConfig:
 def execute_train(
     train_args: str,
     num_gpus_per_node: int,
-    megatron_model_type: Optional[str],
+    megatron_model_type: str | None,
     train_script: str = "train.py",
     before_ray_job_submit=None,
     extra_env_vars=None,
-    config: Optional[ExecuteTrainConfig] = None,
+    config: ExecuteTrainConfig | None = None,
 ):
     if extra_env_vars is None:
         extra_env_vars = {}
@@ -198,7 +197,7 @@ def check_has_nvlink():
     return int(output) > 0
 
 
-def get_default_wandb_args(test_file: str, run_name_prefix: Optional[str] = None, run_id: Optional[str] = None):
+def get_default_wandb_args(test_file: str, run_name_prefix: str | None = None, run_id: str | None = None):
     if not os.environ.get("WANDB_API_KEY"):
         print("Skip wandb configuration since WANDB_API_KEY is not found")
         return ""

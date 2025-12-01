@@ -2,14 +2,13 @@ import asyncio
 import os
 import random
 import re
-from typing import Dict, List
 
 import aiohttp
 import chardet
 
 
 # --- Utilities ---
-def parse_snippet(snippet: str) -> List[str]:
+def parse_snippet(snippet: str) -> list[str]:
     segments = snippet.split("...")
     return [s.strip() for s in segments if len(s.strip().split()) > 5]
 
@@ -28,7 +27,7 @@ def sanitize_search_query(query: str) -> str:
     return sanitized_query
 
 
-def filter_links(search_results: List[Dict]) -> List[str]:
+def filter_links(search_results: list[dict]) -> list[str]:
     links = []
     for result in search_results:
         for item in result.get("items", []):
@@ -61,7 +60,7 @@ async def fetch(session: aiohttp.ClientSession, url: str, semaphore: asyncio.Sem
             return ""
 
 
-async def fetch_all(urls: List[str], limit: int = 8) -> List[str]:
+async def fetch_all(urls: list[str], limit: int = 8) -> list[str]:
     semaphore = asyncio.Semaphore(limit)
     timeout = aiohttp.ClientTimeout(total=5)
     connector = aiohttp.TCPConnector(limit_per_host=limit, force_close=True)
@@ -92,7 +91,7 @@ def collect_context(snippet: str, doc: str) -> str:
     return "\n".join(ctx_paras)
 
 
-async def google_search(api_key, query, top_k=5, timeout: int = 60, proxy=None, snippet_only=False) -> List[Dict]:
+async def google_search(api_key, query, top_k=5, timeout: int = 60, proxy=None, snippet_only=False) -> list[dict]:
     timeout_obj = aiohttp.ClientTimeout(total=timeout)
     session_kwargs = {}
     if proxy:

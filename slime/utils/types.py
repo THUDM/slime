@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any
 
 import torch
 
@@ -9,20 +9,20 @@ import torch
 class Sample:
     """The sample generated"""
 
-    group_index: Optional[int] = None
-    index: Optional[int] = None
+    group_index: int | None = None
+    index: int | None = None
     # prompt
-    prompt: Union[str, list[dict[str, str]]] = ""
+    prompt: str | list[dict[str, str]] = ""
     tokens: list[int] = field(default_factory=list)
     # response
     response: str = ""
     response_length: int = 0
-    label: Optional[str] = None
-    reward: Optional[Union[float, dict[str, Any]]] = None
-    loss_mask: Optional[list[int]] = None
+    label: str | None = None
+    reward: float | dict[str, Any] | None = None
+    loss_mask: list[int] | None = None
     weight_versions: list[str] = field(default_factory=list)
-    rollout_log_probs: Optional[list[float]] = None  # Log probabilities from rollout engine
-    rollout_routed_experts: Optional[list[list[int]]] = None  # Routed experts from rollout engine
+    rollout_log_probs: list[float] | None = None  # Log probabilities from rollout engine
+    rollout_routed_experts: list[list[int]] | None = None  # Routed experts from rollout engine
     remove_sample: bool = False
 
     class Status(Enum):
@@ -35,7 +35,7 @@ class Sample:
 
     metadata: dict = field(default_factory=dict)
     # metadata used during training, e.g., what loss to use for this sample.
-    train_metadata: Optional[dict] = None
+    train_metadata: dict | None = None
 
     class SpecInfo:
         spec_accept_token_num: int = 0

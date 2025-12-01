@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import Any, Dict, Optional
+from typing import Any
 
 import requests
 from examples.eval.eval_delegate import EvalClient, EvalDelegateError
@@ -28,7 +28,7 @@ class SkillsEvalClient(EvalClient):
             return None
         return cls(config, router_url)
 
-    def evaluate(self, args, rollout_id: int) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    def evaluate(self, args, rollout_id: int) -> tuple[dict[str, Any], dict[str, Any]]:
         if not self._config.datasets:
             logger.warning("No Skills datasets configured; skipping delegate evaluation.")
             return {}, {}
@@ -38,7 +38,7 @@ class SkillsEvalClient(EvalClient):
         metrics = response["raw_metrics"]
         return metrics, response
 
-    def _build_payload(self, args, rollout_id: int) -> Dict[str, Any]:
+    def _build_payload(self, args, rollout_id: int) -> dict[str, Any]:
         benchmarks = [cfg.to_payload() for cfg in self._config.datasets]
         benchmarks = [cfg for cfg in benchmarks if cfg]
         return {
@@ -47,8 +47,8 @@ class SkillsEvalClient(EvalClient):
             "benchmarks": benchmarks,
         }
 
-    def _request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        last_error: Optional[Exception] = None
+    def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        last_error: Exception | None = None
         for attempt in range(1, self._max_retries + 1):
             try:
                 response = self._session.post(

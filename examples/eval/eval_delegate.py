@@ -1,6 +1,7 @@
 import logging
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence
+from typing import Any, Optional
 
 from omegaconf import OmegaConf
 
@@ -14,7 +15,7 @@ def _first_not_none(*values: Any) -> Any:
     return None
 
 
-def _pick_from_mapping(data: Optional[Mapping[str, Any]], keys: Iterable[str]) -> Any:
+def _pick_from_mapping(data: Mapping[str, Any] | None, keys: Iterable[str]) -> Any:
     if not data:
         return None
     for key in keys:
@@ -28,11 +29,11 @@ class EvalEnvDatasetConfig:
     """Dataset-level generation parameters shared across delegate clients."""
 
     name: str = ""
-    n_samples_per_eval_prompt: Optional[int] = None
-    temperature: Optional[float] = None
-    top_p: Optional[float] = None
-    top_k: Optional[int] = None
-    max_response_len: Optional[int] = None
+    n_samples_per_eval_prompt: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    top_k: int | None = None
+    max_response_len: int | None = None
 
     # TODO: This is ugly, temporarily leave this. We should unify all the config name for dataset, default, and args. (advice from Tom.)
     FIELD_SPECS = {
@@ -75,7 +76,7 @@ class EvalEnvDatasetConfig:
                 "Colon in dataset name is not allowed; use `n_samples_per_eval_prompt` to configure samples per prompt."
             )
 
-        values: Dict[str, Any] = {"name": name}
+        values: dict[str, Any] = {"name": name}
         for field_name, spec in cls.FIELD_SPECS.items():
             dataset_value = _pick_from_mapping(dataset_cfg, spec["dataset_keys"])
             default_value = _pick_from_mapping(defaults, spec["default_keys"])
@@ -88,9 +89,9 @@ class EvalEnvDatasetConfig:
             obj = cls(**obj)
         return obj
 
-    def to_payload(self) -> Dict[str, Any]:
+    def to_payload(self) -> dict[str, Any]:
         """Return a JSON-serializable payload for this dataset configuration."""
-        payload: Dict[str, Any] = {}
+        payload: dict[str, Any] = {}
         for field_info in fields(self):
             value = getattr(self, field_info.name)
             if value is None:
@@ -104,11 +105,11 @@ class EvalEnvConfig:
     """Environment definition shared across delegate implementations."""
 
     name: str = ""
-    url: Optional[str] = None
+    url: str | None = None
     timeout_secs: int = 3600
     max_retries: int = 1
-    headers: Dict[str, Any] = field(default_factory=dict)
-    defaults: Dict[str, Any] = field(default_factory=dict)
+    headers: dict[str, Any] = field(default_factory=dict)
+    defaults: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def parse(cls, raw: Mapping[str, Any], defaults: Mapping[str, Any]) -> "EvalEnvConfig":
@@ -121,9 +122,9 @@ class EvalEnvConfig:
 
 
 def _rebuild_delegate_config(
-    args, raw_delegate_config: Optional[Sequence[Mapping[str, Any]]], defaults: Optional[Mapping[str, Any]]
-) -> List[EvalEnvConfig]:
-    envs: List[EvalEnvConfig] = []
+    args, raw_delegate_config: Sequence[Mapping[str, Any]] | None, defaults: Mapping[str, Any] | None
+) -> list[EvalEnvConfig]:
+    envs: list[EvalEnvConfig] = []
     defaults = defaults or {}
     for env in raw_delegate_config or []:
         env_name = str(env.get("name", "")).strip().lower()
@@ -151,13 +152,13 @@ class EvalClient:
     def __init__(self, name: str):
         self.name = name
 
-    def evaluate(self, args, rollout_id: int) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    def evaluate(self, args, rollout_id: int) -> tuple[dict[str, Any], dict[str, Any]]:
         raise NotImplementedError("Subclasses must implement this method")
 
 
-def _flatten(result: Dict[str, Any], prefix: Optional[str] = None) -> Dict[str, Any]:
+def _flatten(result: dict[str, Any], prefix: str | None = None) -> dict[str, Any]:
     """Flatten nested metric dicts into slash separated keys."""
-    flattened: Dict[str, Any] = {}
+    flattened: dict[str, Any] = {}
     for key, value in (result or {}).items():
         full_key = f"{prefix}/{key}" if prefix else key
         if isinstance(value, dict):
@@ -174,15 +175,13 @@ class EvalDelegateClient:
         self._delegates = list(delegates)
 
     @classmethod
-    def maybe_create(
-        cls, args, env_configs: Optional[Sequence[EvalEnvConfig]] = None
-    ) -> Optional["EvalDelegateClient"]:
+    def maybe_create(cls, args, env_configs: Sequence[EvalEnvConfig] | None = None) -> Optional["EvalDelegateClient"]:
         env_configs = list(env_configs) if env_configs is not None else getattr(args, "eval_delegate_config", None)
         if not env_configs:
             return None
 
         router_addr = f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
-        delegates: List[EvalClient] = []
+        delegates: list[EvalClient] = []
         for env_cfg in env_configs:
             delegate = cls._create_delegate(env_cfg, router_addr)
             if delegate is not None:
@@ -201,9 +200,9 @@ class EvalDelegateClient:
         logger.warning("No delegate client registered for environment: %s", env_name)
         return None
 
-    def evaluate(self, args, rollout_id: int) -> tuple[Dict[str, Any], Dict[str, Any]]:
-        aggregated_metrics: Dict[str, Any] = {}
-        raw_responses: Dict[str, Any] = {}
+    def evaluate(self, args, rollout_id: int) -> tuple[dict[str, Any], dict[str, Any]]:
+        aggregated_metrics: dict[str, Any] = {}
+        raw_responses: dict[str, Any] = {}
         for delegate in self._delegates:
             metrics, response = delegate.evaluate(args, rollout_id)
             if metrics:

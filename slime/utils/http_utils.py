@@ -6,7 +6,6 @@ import multiprocessing
 import os
 import random
 import socket
-from typing import Optional
 
 import httpx
 
@@ -34,7 +33,7 @@ def is_port_available(port):
             s.bind(("", port))
             s.listen(1)
             return True
-        except socket.error:
+        except OSError:
             return False
         except OverflowError:
             return False
@@ -115,7 +114,7 @@ def terminate_process(process: multiprocessing.Process, timeout: float = 1.0) ->
         process.join()
 
 
-_http_client: Optional[httpx.AsyncClient] = None
+_http_client: httpx.AsyncClient | None = None
 _client_concurrency: int = 0
 
 # Optional Ray-based distributed POST dispatch

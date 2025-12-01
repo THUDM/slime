@@ -1,4 +1,4 @@
-from typing import Callable, Union
+from collections.abc import Callable
 
 import torch
 import torch.distributed as dist
@@ -184,10 +184,10 @@ def slice_with_cp(tokens: torch.Tensor, pad_value: tuple[int, float, Callable]) 
 
 
 def slice_log_prob_with_cp(
-    log_prob: Union[list[float], torch.Tensor],
+    log_prob: list[float] | torch.Tensor,
     total_length: int,
     response_length: int,
-) -> Union[list[float], torch.Tensor]:
+) -> list[float] | torch.Tensor:
     assert len(log_prob) == response_length
 
     cp_size = mpu.get_context_parallel_world_size()

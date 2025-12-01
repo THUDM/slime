@@ -1,6 +1,6 @@
 # Adapted from https://github.com/volcengine/verl/blob/cb809d66e46dfd3342d008628891a14a054fa424/recipe/retool/retool.py
 import re
-from typing import Any, Dict, List
+from typing import Any
 
 try:
     from jinja2 import Template
@@ -59,7 +59,7 @@ For each function call, return a json object with function name and arguments wi
 
 
 def format_conversation_with_tools(
-    prompt: str, tools: List[Dict[str, Any]] = None, system_prompt: str = None, messages: List[Dict[str, Any]] = None
+    prompt: str, tools: list[dict[str, Any]] = None, system_prompt: str = None, messages: list[dict[str, Any]] = None
 ) -> str:
     """Format conversation using Jinja2 template with tool support"""
     template = Template(TOOL_TEMPLATE)

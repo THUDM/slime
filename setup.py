@@ -6,7 +6,7 @@ from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
 
 def _fetch_requirements(path):
-    with open(path, "r") as fd:
+    with open(path) as fd:
         return [r.strip() for r in fd.readlines() if r.strip() and not r.startswith("#")]
 
 

@@ -3,7 +3,6 @@ import re
 import time
 import traceback
 from copy import deepcopy
-from typing import List
 
 from slime.rollout.rm_hub import batched_async_rm
 from slime.utils.http_utils import post
@@ -114,7 +113,7 @@ class RewriterAgent(Agent):
     def __init__(self):
         super().__init__()
 
-    async def rewrite(self, args, problem_statement, previous_solutions: List[str]) -> str:
+    async def rewrite(self, args, problem_statement, previous_solutions: list[str]) -> str:
         """Generates the rewrited solution."""
 
         # 动态生成模板
@@ -135,7 +134,7 @@ class SelectorAgent(Agent):
     def __init__(self):
         super().__init__()
 
-    async def select(self, args, problem_statement, candidate_solutions: List[str]) -> str:
+    async def select(self, args, problem_statement, candidate_solutions: list[str]) -> str:
         """Generates the rewrited solution."""
 
         # 动态生成模板
@@ -149,7 +148,7 @@ class SelectorAgent(Agent):
         prompt = template.format(**format_params)
         return await self.run(args, prompt, max_retries=10, key="selector")
 
-    def extract_selected_solution_idx(self, response: str, candidate_solutions: List[str]) -> int:
+    def extract_selected_solution_idx(self, response: str, candidate_solutions: list[str]) -> int:
         """Extracts the selected solution ID from the response."""
         PATTERN = re.compile("Judgment:\s*(\d+)")
         matched = PATTERN.findall(response)

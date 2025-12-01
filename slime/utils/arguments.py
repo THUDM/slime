@@ -2,7 +2,7 @@ import argparse
 import json
 import logging
 import os
-from typing import Any, Dict
+from typing import Any
 
 import yaml
 from sglang_router.launch_router import RouterArgs
@@ -1282,7 +1282,7 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
     Build evaluation dataset configurations from either --eval-config or --eval-prompt-data.
     """
     datasets_config = []
-    defaults: Dict[str, Any] = {}
+    defaults: dict[str, Any] = {}
 
     if args.eval_config:
         from omegaconf import OmegaConf
@@ -1498,7 +1498,7 @@ def slime_validate_args(args):
         args.use_routing_replay = True
 
     if args.custom_config_path:
-        with open(args.custom_config_path, "r") as f:
+        with open(args.custom_config_path) as f:
             data = yaml.safe_load(f) or {}
         for k, v in data.items():
             if hasattr(args, k):
@@ -1554,7 +1554,7 @@ def hf_validate_args(args, hf_config):
         raise AssertionError("hf_validate_args failed: " + "; ".join(errors))
 
 
-def _validate_and_update_megatron_args_from_hf(args, args_from_hf_config: Dict[str, Any]):
+def _validate_and_update_megatron_args_from_hf(args, args_from_hf_config: dict[str, Any]):
     for key, value in args_from_hf_config.items():
         if hasattr(args, key) and getattr(args, key) != value:
             raise ValueError(

@@ -1,5 +1,4 @@
 from abc import ABC, abstractmethod
-from typing import Optional, Tuple, Union
 
 import torch
 import torch.distributed as dist
@@ -39,17 +38,17 @@ class HuggingfaceAttention(MegatronModule, ABC):
         self,
         hidden_states: torch.Tensor,
         attention_mask: torch.Tensor,
-        key_value_states: Optional[torch.Tensor] = None,
-        inference_context: Optional[BaseInferenceContext] = None,
-        rotary_pos_emb: Optional[Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]] = None,
-        rotary_pos_cos: Optional[torch.Tensor] = None,
-        rotary_pos_sin: Optional[torch.Tensor] = None,
-        attention_bias: Optional[torch.Tensor] = None,
-        packed_seq_params: Optional[PackedSeqParams] = None,
-        sequence_len_offset: Optional[int] = None,
+        key_value_states: torch.Tensor | None = None,
+        inference_context: BaseInferenceContext | None = None,
+        rotary_pos_emb: torch.Tensor | tuple[torch.Tensor, torch.Tensor] | None = None,
+        rotary_pos_cos: torch.Tensor | None = None,
+        rotary_pos_sin: torch.Tensor | None = None,
+        attention_bias: torch.Tensor | None = None,
+        packed_seq_params: PackedSeqParams | None = None,
+        sequence_len_offset: int | None = None,
         *,
-        inference_params: Optional[BaseInferenceContext] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        inference_params: BaseInferenceContext | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         assert packed_seq_params is not None
         cu_seqlens = packed_seq_params.cu_seqlens_q
 

@@ -1,7 +1,8 @@
 import logging
 from argparse import Namespace
+from collections.abc import Callable
 from copy import deepcopy
-from typing import Callable
+
 from slime.utils import tracking_utils
 from slime.utils.metric_utils import compute_rollout_step
 from slime.utils.timer import Timer

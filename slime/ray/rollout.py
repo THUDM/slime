@@ -5,7 +5,7 @@ import random
 import time
 from glob import glob
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import numpy as np
 import ray
@@ -129,7 +129,7 @@ class RolloutManager:
     def offload(self):
         return ray.get([engine.release_memory_occupation.remote() for engine in self.rollout_engines])
 
-    def onload(self, tags: List[str] = None):
+    def onload(self, tags: list[str] = None):
         return ray.get([engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines])
 
     def check_weights(self, action: str):
@@ -184,7 +184,7 @@ class RolloutManager:
 
             torch.save(dict(rollout_id=rollout_id, **dump_data), path)
 
-    def _post_process_rewards(self, samples: Union[list[Sample], list[list[Sample]]]):
+    def _post_process_rewards(self, samples: list[Sample] | list[list[Sample]]):
         if self.custom_reward_post_process_func is not None:
             return self.custom_reward_post_process_func(self.args, samples)
 
@@ -211,7 +211,7 @@ class RolloutManager:
 
         return raw_rewards, raw_rewards
 
-    def _convert_samples_to_train_data(self, samples: Union[list[Sample], list[list[Sample]]]):
+    def _convert_samples_to_train_data(self, samples: list[Sample] | list[list[Sample]]):
         """
         Convert inference generated samples to training data.
         """
@@ -484,7 +484,7 @@ def _start_router(args):
     logger.info(f"Router launched at {args.sglang_router_ip}:{args.sglang_router_port}")
 
 
-def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: Optional[Dict[str, Any]] = None):
+def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any] | None = None):
     log_dict = extra_metrics or {}
     for key in data.keys():
         rewards = data[key]["rewards"]
@@ -542,12 +542,12 @@ def _compute_metrics_from_samples(args, samples):
     return log_dict
 
 
-def _compute_zero_std_metrics(args, all_samples: List[Sample]):
+def _compute_zero_std_metrics(args, all_samples: list[Sample]):
     # only compute in GRPO-like algorithms where one prompt has multiple responses
     if args.advantage_estimator == "ppo":
         return {}
 
-    def _is_zero_std(samples: List[Sample]):
+    def _is_zero_std(samples: list[Sample]):
         rewards = [sample.get_reward_value(args) for sample in samples]
         return len(rewards) == 0 or all(rewards[0] == r for r in rewards)
 
@@ -559,7 +559,7 @@ def _compute_zero_std_metrics(args, all_samples: List[Sample]):
     return {f"zero_std/count_{reward}": len(items) for reward, items in group_by(interesting_rewards).items()}
 
 
-def _compute_spec_metrics(args, all_samples: List[Sample]):
+def _compute_spec_metrics(args, all_samples: list[Sample]):
     if args.sglang_speculative_algorithm is None:
         return {}
     num_samples = len(all_samples)
@@ -573,7 +573,7 @@ def _compute_spec_metrics(args, all_samples: List[Sample]):
     return metrics
 
 
-def _compute_reward_cat_metrics(args, all_samples: List[Sample]):
+def _compute_reward_cat_metrics(args, all_samples: list[Sample]):
     reward_cat_key = args.log_reward_category
     if reward_cat_key is None:
         return {}

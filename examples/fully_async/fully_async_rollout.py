@@ -3,7 +3,6 @@ import atexit
 import queue
 import threading
 import time
-from typing import List
 
 # Import core functions from sglang_rollout directly to avoid code duplication
 from slime.rollout.sglang_rollout import GenerateState, generate_and_rm_group
@@ -131,7 +130,7 @@ class AsyncRolloutWorker:
             self.worker_thread.join(timeout=5)
         print("Stopped async worker thread")
 
-    def get_completed_groups(self) -> List[tuple]:
+    def get_completed_groups(self) -> list[tuple]:
         """Get completed sample groups"""
         completed = []
         while True:
@@ -147,7 +146,7 @@ class AsyncRolloutWorker:
         return self.output_queue.qsize()
 
 
-async def generate_rollout_async(args, rollout_id: int, data_buffer) -> List[List[Sample]]:
+async def generate_rollout_async(args, rollout_id: int, data_buffer) -> list[list[Sample]]:
     """
     Simplified asynchronous rollout generation - using global continuous worker
     """

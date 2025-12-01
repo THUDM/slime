@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import torch
 
@@ -15,7 +15,7 @@ def masked_mean(x: torch.Tensor, loss_mask: torch.Tensor, expand: bool = False) 
     return result.expand_as(x) if expand else result
 
 
-def metrics_append(metrics: Dict[str, list[torch.Tensor]], key: str, value: torch.Tensor) -> None:
+def metrics_append(metrics: dict[str, list[torch.Tensor]], key: str, value: torch.Tensor) -> None:
     """
 
     Every metrics-dict value is a list of 1D tensor, i.e., [torch.Tensor] with shapes exactly the same as log_probs.
@@ -58,14 +58,14 @@ def metrics_append(metrics: Dict[str, list[torch.Tensor]], key: str, value: torc
 def calculate_veto_mask(
     log_ratio: torch.Tensor,
     loss_mask: torch.Tensor,
-    veto_threshold: Optional[float],
-    metrics: Dict[str, list[torch.Tensor]],
+    veto_threshold: float | None,
+    metrics: dict[str, list[torch.Tensor]],
 ) -> torch.Tensor:
     if veto_threshold is None:
         return torch.ones_like(log_ratio)
     log_veto_threshold = torch.log(torch.tensor(veto_threshold, device=log_ratio.device))
     # For each sequence, if it has any catastrophic tokens, return 0 for the sequence
-    catastrophic_tokens = ((log_ratio < log_veto_threshold)) & loss_mask.bool()
+    catastrophic_tokens = (log_ratio < log_veto_threshold) & loss_mask.bool()
     has_catastrophic = catastrophic_tokens.any()
     veto_mask = (~has_catastrophic).float().expand_as(log_ratio)
 
@@ -75,7 +75,7 @@ def calculate_veto_mask(
 
 
 def truncate(
-    weights: torch.Tensor, loss_mask: torch.Tensor, metrics: Dict[str, list[torch.Tensor]], upper_bound: float
+    weights: torch.Tensor, loss_mask: torch.Tensor, metrics: dict[str, list[torch.Tensor]], upper_bound: float
 ) -> torch.Tensor:
     assert upper_bound is not None
     metrics_append(metrics, "truncate_fraction", (weights > upper_bound).int())
@@ -85,7 +85,7 @@ def truncate(
 def clip(
     weights: torch.Tensor,
     loss_mask: torch.Tensor,
-    metrics: Dict[str, list[torch.Tensor]],
+    metrics: dict[str, list[torch.Tensor]],
     lower_bound: float,
     upper_bound: float,
 ) -> torch.Tensor:
@@ -98,10 +98,10 @@ def clip(
 def mask(
     weights: torch.Tensor,
     loss_mask: torch.Tensor,
-    metrics: Dict[str, list[torch.Tensor]],
+    metrics: dict[str, list[torch.Tensor]],
     lower_bound: float,
     upper_bound: float,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     assert lower_bound is not None and upper_bound is not None and lower_bound < upper_bound
     metrics_append(metrics, "mask_fraction_low", (weights < lower_bound).int())
     metrics_append(metrics, "mask_fraction_high", (weights > upper_bound).int())
@@ -118,7 +118,7 @@ def compute_mis_weights(
     train_log_probs: list[torch.Tensor],
     rollout_log_probs: list[torch.Tensor],
     loss_masks: list[torch.Tensor],
-) -> Tuple[list[torch.Tensor], list[torch.Tensor], Dict[str, list[torch.Tensor]]]:
+) -> tuple[list[torch.Tensor], list[torch.Tensor], dict[str, list[torch.Tensor]]]:
     """
     Compute the importance sampling (IS) weights and metrics between the inference and training engine.
     Args:
@@ -134,7 +134,7 @@ def compute_mis_weights(
         metrics: The metrics for the importance sampling weights, a dict of list[torch.Tensor]. 1D tensor each.
     """
 
-    metrics: Dict[str, list[torch.Tensor]] = {}
+    metrics: dict[str, list[torch.Tensor]] = {}
 
     tis_lower_bound = args.tis_lower_bound if args.tis_lower_bound is not None else 1.0 / args.tis_upper_bound
     rs_lower_bound = args.rs_lower_bound if args.rs_lower_bound is not None else tis_lower_bound
@@ -266,7 +266,7 @@ def compute_mis_weights_with_cp(
     total_lengths: list[int],
     response_lengths: list[int],
     **kwargs: Any,
-) -> Tuple[torch.Tensor, list[torch.Tensor], Dict[str, torch.Tensor]]:
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
     """
     Compute the importance sampling (IS) weights and metrics with context parallel.
     Args:
@@ -330,7 +330,7 @@ def add_ppl_metrics(
     train_log_prob: torch.Tensor,
     rollout_log_prob: torch.Tensor,
     loss_mask: torch.Tensor,
-    metrics: Dict[str, list[torch.Tensor]],
+    metrics: dict[str, list[torch.Tensor]],
 ):
     loss_mask = loss_mask.float()
 

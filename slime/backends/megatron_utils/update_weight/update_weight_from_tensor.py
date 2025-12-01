@@ -1,6 +1,6 @@
 from argparse import Namespace
-from collections.abc import Mapping, Sequence
-from typing import Any, Callable, Tuple
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any
 
 import ray
 import torch
@@ -133,7 +133,7 @@ class UpdateWeightFromTensor:
 
         dist.barrier(group=get_gloo_group())
 
-    def _send_hf_params(self, hf_named_tensors) -> Tuple[list[ObjectRef], Any]:
+    def _send_hf_params(self, hf_named_tensors) -> tuple[list[ObjectRef], Any]:
         all_refs = []
 
         refs_colocated, long_lived_tensors = _send_to_colocated_engine(
@@ -166,7 +166,7 @@ def _send_to_colocated_engine(
     ipc_gather_src,
     ipc_gather_group,
     weight_version,
-) -> Tuple[list[ObjectRef], Any]:
+) -> tuple[list[ObjectRef], Any]:
     # TODO improve
     long_live_tensors = []
 

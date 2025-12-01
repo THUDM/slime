@@ -30,9 +30,10 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Mapping
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 if str(REPO_ROOT) not in sys.path:
@@ -56,8 +57,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(me
 class EvalRequestPayload:
     rollout_id: int
     router_url: str
-    defaults: Dict[str, Any] = field(default_factory=dict)
-    benchmarks: List[SkillsEvalEnvDatasetConfig] = field(default_factory=list)
+    defaults: dict[str, Any] = field(default_factory=dict)
+    benchmarks: list[SkillsEvalEnvDatasetConfig] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -83,8 +84,8 @@ def _hydra_overrides_from_benchmark(
     router_url: str,
     openai_model_name: str,
     max_concurrent_requests: int,
-) -> List[str]:
-    overrides: List[str] = []
+) -> list[str]:
+    overrides: list[str] = []
     for key, hydra_key in HYDRA_OVERRIDE_MAP.items():
         value = getattr(benchmark_cfg, key, None)
         if value is None:
@@ -114,7 +115,7 @@ class ServerConfig:
     max_concurrent_requests: int = 512
 
     @classmethod
-    def from_args(cls, args: argparse.Namespace) -> "ServerConfig":
+    def from_args(cls, args: argparse.Namespace) -> ServerConfig:
         return cls(
             output_root=Path(args.output_root).expanduser().resolve(),
             cluster=args.cluster,
@@ -130,7 +131,7 @@ class SkillsEvaluator:
         self._lock = threading.Lock()
         self._config.output_root.mkdir(parents=True, exist_ok=True)
 
-    def evaluate(self, payload: EvalRequestPayload) -> Dict[str, Any]:
+    def evaluate(self, payload: EvalRequestPayload) -> dict[str, Any]:
         if not payload.benchmarks:
             warning_msg = "No benchmarks specified in delegate config; skipping NeMo Skills evaluation."
             logger.warning(warning_msg)
@@ -149,8 +150,8 @@ class SkillsEvaluator:
         run_dir = self._config.output_root / f"{int(time.time())}-{exp_name}"
         run_dir.mkdir(parents=True, exist_ok=True)
 
-        runs: List[Dict[str, Any]] = []
-        raw_metrics: Dict[str, Any] = {}
+        runs: list[dict[str, Any]] = []
+        raw_metrics: dict[str, Any] = {}
         with self._lock:
             for benchmark in payload.benchmarks:
                 result = self._run_single_benchmark(
@@ -182,7 +183,7 @@ class SkillsEvaluator:
         exp_name: str,
         router_url: str,
         run_dir: Path,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         name = benchmark.name
         benchmark_run_dir = run_dir / name
         benchmark_run_dir.mkdir(parents=True, exist_ok=True)
@@ -220,7 +221,7 @@ class SkillsEvaluator:
         run_dir: Path,
         defaults: Mapping[str, Any],
         benchmark_cfg: SkillsEvalEnvDatasetConfig,
-    ) -> List[str]:
+    ) -> list[str]:
         base_cmd = [
             "ns",
             "eval",
@@ -250,29 +251,29 @@ class SkillsEvaluator:
         )
         return base_cmd + hydra_overrides
 
-    def _build_env(self) -> Dict[str, str]:
+    def _build_env(self) -> dict[str, str]:
         env = os.environ.copy()
         return env
 
     @staticmethod
-    def _run_command(cmd: List[str], *, env: Dict[str, str], log_path: Path):
+    def _run_command(cmd: list[str], *, env: dict[str, str], log_path: Path):
         with open(log_path, "w", encoding="utf-8") as log_file:
             process = subprocess.Popen(cmd, stdout=log_file, stderr=subprocess.STDOUT, env=env)
             retcode = process.wait()
         if retcode != 0:
-            with open(log_path, "r", encoding="utf-8", errors="ignore") as log_file:
+            with open(log_path, encoding="utf-8", errors="ignore") as log_file:
                 tail = "".join(log_file.readlines()[-200:])
             raise RuntimeError(f"`ns eval` failed with exit code {retcode}. See {log_path}\n{tail}")
 
     @staticmethod
-    def _collect_metrics(run_dir: Path, benchmark: str) -> Dict[str, Any]:
+    def _collect_metrics(run_dir: Path, benchmark: str) -> dict[str, Any]:
         benchmark_name = benchmark.split(":")[0]
         metrics_path = run_dir / "eval-results" / benchmark_name / "metrics.json"
         if not metrics_path.exists():
             logger.warning("Metrics file missing for %s at %s", benchmark_name, metrics_path)
             return {}
         try:
-            with open(metrics_path, "r", encoding="utf-8") as fp:
+            with open(metrics_path, encoding="utf-8") as fp:
                 metrics_data = json.load(fp)
         except json.JSONDecodeError as exc:
             logger.warning("Failed to parse %s: %s", metrics_path, exc)

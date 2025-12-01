@@ -5,7 +5,6 @@ Answer checker API that uses sympy to simplify expressions and check for equalit
 Call grade_answer(given_answer: str, ground_truth: str).
 """
 import re
-from typing import Optional
 
 import sympy
 from pylatexenc import latex2text
@@ -13,7 +12,7 @@ from sympy.parsing import sympy_parser
 
 
 # Dan Hendrycks' code
-def mathd_normalize_answer(answer: Optional[str]) -> Optional[str]:
+def mathd_normalize_answer(answer: str | None) -> str | None:
     if answer is None:
         return None
     answer = answer.strip()
@@ -67,7 +66,7 @@ def _strip_string(string):
         try:
             a = int(a)
             b = int(b)
-            assert string == "{}/{}".format(a, b)
+            assert string == f"{a}/{b}"
             new_string = "\\frac{" + str(a) + "}{" + str(b) + "}"
             return new_string
         except Exception:

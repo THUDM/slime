@@ -63,7 +63,7 @@ def init(args):
 
     # Random seeds for reproducibility.
     if args.rank == 0:
-        logger.info("> setting random seeds to {} ...".format(args.seed))
+        logger.info(f"> setting random seeds to {args.seed} ...")
     _set_random_seed(
         args.seed,
         args.data_parallel_random_init,

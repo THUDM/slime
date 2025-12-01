@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Annotated, List
+from typing import Annotated
 
 import torch
 import typer
@@ -27,7 +27,7 @@ def main(
     load_debug_rollout_data: Annotated[str, typer.Option()],
     show_metrics: bool = True,
     show_samples: bool = True,
-    category: List[str] = None,
+    category: list[str] = None,
 ):
     if category is None:
         category = ["train", "eval"]
@@ -56,7 +56,7 @@ def main(
                 print(json.dumps({k: v for k, v in sample.items() if k in _WHITELIST_KEYS}))
 
 
-def _get_rollout_dump_paths(load_debug_rollout_data: str, categories: List[str]):
+def _get_rollout_dump_paths(load_debug_rollout_data: str, categories: list[str]):
     # may improve later
     for rollout_id in range(1000):
         for category in categories:

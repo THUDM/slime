@@ -1,10 +1,10 @@
 from abc import ABC, abstractmethod
 from collections import defaultdict
-from typing import Callable, Dict, Iterable, Tuple
+from collections.abc import Callable, Iterable
 
 import torch
 
-_SourceGetter = Callable[[], Iterable[Tuple[str, torch.Tensor]]]
+_SourceGetter = Callable[[], Iterable[tuple[str, torch.Tensor]]]
 
 
 class TensorBackuper(ABC):
@@ -43,7 +43,7 @@ class TensorBackuper(ABC):
 class _TensorBackuperNormal(TensorBackuper):
     def __init__(self, source_getter):
         super().__init__(source_getter=source_getter)
-        self._backups: Dict[str, Dict[str, torch.Tensor]] = defaultdict(dict)
+        self._backups: dict[str, dict[str, torch.Tensor]] = defaultdict(dict)
 
     @property
     def backup_tags(self):
@@ -103,7 +103,7 @@ class _TensorBackuperNoop(TensorBackuper):
         torch.cuda.synchronize()
 
 
-def _compute_hash_dict(tensors: Dict[str, torch.Tensor]):
+def _compute_hash_dict(tensors: dict[str, torch.Tensor]):
     return {k: _compute_hash_tensor(v) for k, v in tensors.items()}
 
 

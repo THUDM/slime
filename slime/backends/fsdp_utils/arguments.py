@@ -75,7 +75,7 @@ def parse_fsdp_cli(extra_args_provider=None):
 def load_fsdp_args(extra_args_provider=None):
     args = parse_fsdp_cli(extra_args_provider)
     if args.config:
-        with open(args.config, "r") as f:
+        with open(args.config) as f:
             data = yaml.safe_load(f) or {}
         for k, v in data.items():
             if not hasattr(args, k):

@@ -6,7 +6,6 @@ import re
 import shutil
 import time
 
-from typing import Optional
 
 import safetensors.torch
 import torch
@@ -51,7 +50,7 @@ class EmptyStateDictLoadPlanner(dist_cp.default_planner.DefaultLoadPlanner):
     def set_up_planner(
         self,
         state_dict: dist_cp.metadata.STATE_DICT_TYPE,
-        metadata: Optional[dist_cp.metadata.Metadata] = None,
+        metadata: dist_cp.metadata.Metadata | None = None,
         is_coordinator: bool = False,
     ) -> None:
         for k, v in metadata.state_dict_metadata.items():

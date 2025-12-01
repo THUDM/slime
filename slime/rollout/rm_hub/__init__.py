@@ -1,5 +1,4 @@
 import asyncio
-from typing import Union
 
 import aiohttp
 
@@ -68,7 +67,7 @@ async def batched_async_rm(
     args,
     samples: list[Sample],
     **kwargs,
-) -> list[Union[int, float]]:
+) -> list[int | float]:
     if args.custom_rm_path is not None:
         # Ensure the custom reward function is implemented in batch mode
         rm_function = load_function(args.custom_rm_path)

@@ -1,8 +1,7 @@
 import socket
 import time
 from argparse import Namespace
-from collections.abc import Mapping, Sequence
-from typing import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 import ray
 import torch

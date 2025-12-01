@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Literal, Optional
+from typing import Literal
 
 import typer
 
@@ -12,7 +12,7 @@ class ScriptArgs(U.ExecuteTrainConfig):
     run_id: str = U.create_run_id()
     model_name: str = "Qwen3-30B-A3B"
     megatron_model_type: str = "qwen3-30B-A3B"
-    num_gpus_per_node: Optional[int] = None
+    num_gpus_per_node: int | None = None
     hardware: Literal["H100", "GB200", "GB300"] = "H100"
     enable_eval: bool = True
     extra_args: str = ""

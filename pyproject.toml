@@ -28,7 +28,7 @@ select = [
     "E",      # Pycodestyle Errors (Structural/Fundamental Errors like bad indentation)
     "F",      # Pyflakes (Core Errors: Unused imports, undefined names)
     "B",      # Flake8-Bugbear (Logic Bugs: Variable shadowing, dangerous default arguments)
-    # "UP",     # pyupgrade (Modernization and compatibility issues) # TODO
+    "UP",     # pyupgrade (Modernization and compatibility issues)
 ]
 ignore = [
     "E402", # module-import-not-at-top-of-file

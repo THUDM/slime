@@ -1,5 +1,6 @@
 from collections import defaultdict
-from typing import Any, Callable, Iterable, List, Tuple
+from collections.abc import Callable, Iterable
+from typing import Any
 
 import torch
 
@@ -14,7 +15,7 @@ def group_by(iterable, key=None):
 
 
 # TODO fsdp can also use this
-def chunk_named_params_by_size(named_params: Iterable[Tuple[str, torch.Tensor]], chunk_size: int):
+def chunk_named_params_by_size(named_params: Iterable[tuple[str, torch.Tensor]], chunk_size: int):
     return _chunk_by_size(
         named_params,
         compute_size=lambda named_weight: named_weight[1].nbytes,
@@ -23,7 +24,7 @@ def chunk_named_params_by_size(named_params: Iterable[Tuple[str, torch.Tensor]],
 
 
 def _chunk_by_size(objects: Iterable[Any], compute_size: Callable[[Any], int], chunk_size: int):
-    bucket: List[Any] = []
+    bucket: list[Any] = []
     bucket_size = 0
 
     for obj in objects:

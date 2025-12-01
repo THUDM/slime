@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from examples.eval.eval_delegate import EvalDelegateClient, _rebuild_delegate_config
 from omegaconf import OmegaConf
@@ -13,7 +13,7 @@ from slime.rollout.sglang_rollout import generate_rollout as base_generate_rollo
 
 logger = logging.getLogger(__name__)
 
-_DELEGATE_CACHE: dict[str, tuple[Optional[float], Optional[EvalDelegateClient]]] = {}
+_DELEGATE_CACHE: dict[str, tuple[float | None, EvalDelegateClient | None]] = {}
 
 
 def generate_rollout(
@@ -32,7 +32,7 @@ def generate_rollout(
     return result
 
 
-def _get_delegate_client(args) -> Optional[EvalDelegateClient]:
+def _get_delegate_client(args) -> EvalDelegateClient | None:
     config_path = getattr(args, "eval_config", None)
     if not config_path:
         return None
@@ -48,7 +48,7 @@ def _get_delegate_client(args) -> Optional[EvalDelegateClient]:
     return client
 
 
-def _build_delegate_client(args, config_path: str) -> Optional[EvalDelegateClient]:
+def _build_delegate_client(args, config_path: str) -> EvalDelegateClient | None:
     cfg = OmegaConf.load(config_path)
     cfg_dict = OmegaConf.to_container(cfg, resolve=True)
     if not isinstance(cfg_dict, dict):
@@ -70,14 +70,14 @@ def _build_delegate_client(args, config_path: str) -> Optional[EvalDelegateClien
     return EvalDelegateClient.maybe_create(args, env_configs=env_configs)
 
 
-def _safe_mtime(path: str) -> Optional[float]:
+def _safe_mtime(path: str) -> float | None:
     try:
         return os.path.getmtime(path)
     except OSError:
         return None
 
 
-def _log_delegate_metrics(args, rollout_id: int, metrics: dict | None, raw_response: Optional[dict]) -> dict:
+def _log_delegate_metrics(args, rollout_id: int, metrics: dict | None, raw_response: dict | None) -> dict:
     flattened = _flatten_metrics(metrics)
     if raw_response is not None:
         logger.info("External eval raw response for rollout %s: %s", rollout_id, raw_response)
@@ -85,7 +85,7 @@ def _log_delegate_metrics(args, rollout_id: int, metrics: dict | None, raw_respo
     return flattened
 
 
-def _flatten_metrics(metric_source: Optional[dict]) -> dict:
+def _flatten_metrics(metric_source: dict | None) -> dict:
     flattened_metrics: dict[str, float] = {}
     if not isinstance(metric_source, dict):
         return flattened_metrics

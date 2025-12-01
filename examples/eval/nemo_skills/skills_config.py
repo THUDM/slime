@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, List, Mapping
+from typing import Any
 
 from examples.eval.eval_delegate import EvalEnvConfig, EvalEnvDatasetConfig
 
@@ -35,10 +36,10 @@ class SkillsEvalEnvDatasetConfig(EvalEnvDatasetConfig):
 class SkillsEvalEnvConfig(EvalEnvConfig):
     """Environment configuration shared by the Skills client/server."""
 
-    datasets: List[SkillsEvalEnvDatasetConfig] = field(default_factory=list)
+    datasets: list[SkillsEvalEnvDatasetConfig] = field(default_factory=list)
 
     @classmethod
-    def parse(cls, args, raw_env_config: Mapping[str, Any], defaults: Mapping[str, Any]) -> "SkillsEvalEnvConfig":
+    def parse(cls, args, raw_env_config: Mapping[str, Any], defaults: Mapping[str, Any]) -> SkillsEvalEnvConfig:
         base_cfg: SkillsEvalEnvConfig = super().parse(raw_env_config, defaults)
         datasets = raw_env_config.get("datasets") or []
         base_cfg.datasets = [

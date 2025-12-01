@@ -1,6 +1,5 @@
 # Adapt from https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/models/utils.py
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
-from typing import List, Optional, Tuple
 
 import torch
 import torch.distributed as dist
@@ -52,7 +51,7 @@ def compute_policy_loss(
     advantages: torch.Tensor,
     eps_clip: float,
     eps_clip_high: float,
-    eps_clip_c: Optional[float] = None,
+    eps_clip_c: float | None = None,
 ):
     ratio = (-ppo_kl).exp()
     pg_losses1 = -ratio * advantages
@@ -73,7 +72,7 @@ def compute_policy_loss(
     return pg_losses, clipfrac
 
 
-def compute_log_probs(logits: torch.Tensor, tokens: torch.Tensor, process_group: Optional[dist.ProcessGroup]):
+def compute_log_probs(logits: torch.Tensor, tokens: torch.Tensor, process_group: dist.ProcessGroup | None):
     from megatron.core.fusions.fused_cross_entropy import fused_vocab_parallel_cross_entropy
 
     # convert to [seq_len, batch_size, vocab_size] as expected by fused_vocab_parallel_cross_entropy
@@ -134,13 +133,13 @@ def get_grpo_returns(
 
 def get_reinforce_plus_plus_returns(
     rewards: torch.Tensor,
-    kl: List[torch.Tensor],
-    loss_masks: List[torch.Tensor],
-    response_lengths: List[int],
-    total_lengths: List[int],
+    kl: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    response_lengths: list[int],
+    total_lengths: list[int],
     kl_coef: float,
     gamma: float,
-) -> List[torch.Tensor]:
+) -> list[torch.Tensor]:
     """
     Calculates discounted returns for REINFORCE++ (https://arxiv.org/pdf/2501.03262)
 
@@ -203,10 +202,10 @@ def get_reinforce_plus_plus_returns(
 
 def get_reinforce_plus_plus_baseline_advantages(
     rewards: torch.Tensor,
-    kl: List[torch.Tensor],
-    loss_masks: List[torch.Tensor],
+    kl: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
     kl_coef: float,
-) -> List[torch.Tensor]:
+) -> list[torch.Tensor]:
     """
     Calculates the unwhitened advantages for the REINFORCE++-baseline algorithm.
     Broadcasting the scalar (reward - group_baseline) to each token.
@@ -238,7 +237,7 @@ def get_advantages_and_returns(
     rewards: torch.Tensor,
     gamma: float,
     lambd: float,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Function that computes advantages and returns from rewards and values.
     Calculated as in the original PPO paper: https://arxiv.org/abs/1707.06347
     Note that rewards may include a KL divergence loss term.
