@@ -10,7 +10,6 @@ from omegaconf import OmegaConf
 
 from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from slime.rollout.sglang_rollout import generate_rollout as base_generate_rollout
-from slime.utils.metric_utils import compute_rollout_step
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +82,6 @@ def _log_delegate_metrics(args, rollout_id: int, metrics: dict | None, raw_respo
     if raw_response is not None:
         logger.info("External eval raw response for rollout %s: %s", rollout_id, raw_response)
     logger.info("eval %s (external): %s", rollout_id, flattened)
-    step = compute_rollout_step(args, rollout_id)
     return flattened
 
 

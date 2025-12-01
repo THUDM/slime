@@ -5,6 +5,7 @@ import pickle
 import re
 import shutil
 import time
+
 from typing import Optional
 
 import safetensors.torch
@@ -38,7 +39,7 @@ class WrappedStorageReader(dist_cp.FileSystemReader):
         with self.fs.create_stream(path, "rb") as metadata_file:
             metadata = UnpicklerWrapper(metadata_file).load()
         if getattr(metadata, "storage_meta", None) is None:
-            metadata.storage_meta = StorageMeta()
+            metadata.storage_meta = dist_cp.StorageMeta()
         metadata.storage_meta.load_id = self.load_id
         if metadata.planner_data is None:
             metadata.planner_data = {}

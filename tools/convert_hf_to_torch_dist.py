@@ -23,7 +23,7 @@ def add_convertion_args(parser):
     parser.add_argument("--hf-checkpoint", type=str, required=True, help="HuggingFace model path")
     try:
         parser.add_argument("--padded-vocab-size", type=int, default=None)
-    except:
+    except Exception:
         pass
     return parser
 
@@ -43,7 +43,8 @@ def get_args():
         "You are using too many GPUs for this conversion."
     )
 
-    ceildiv = lambda a, b: -(a // -b)  # Ceiling division
+    def ceildiv(a, b):
+        return -(a // -b)
 
     if args.pipeline_model_parallel_size == 1 and world_size > 1:
         pp_size = world_size

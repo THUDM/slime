@@ -67,7 +67,10 @@ def blockwise_cast_to_fp8_triton(x: torch.Tensor, block_size=None) -> Tuple[torc
     M, N = x.shape
     y = torch.empty(M, N, device=x.device, dtype=torch.float8_e4m3fn)
     s = torch.empty(ceil_div(M, BLOCK_M), ceil_div(N, BLOCK_N), dtype=torch.float32, device=x.device)
-    grid = lambda meta: (triton.cdiv(M, meta["BLOCK_M"]), triton.cdiv(N, meta["BLOCK_N"]))
+
+    def grid(meta):
+        return (triton.cdiv(M, meta["BLOCK_M"]), triton.cdiv(N, meta["BLOCK_N"]))
+
     if x.is_contiguous():
         kwargs = {"BLOCK_M": BLOCK_M, "BLOCK_N": BLOCK_N, "num_warps": 8, "num_stages": 2}
     else:

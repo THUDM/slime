@@ -360,7 +360,7 @@ def retrieve_endpoint(request: QueryRequest):
     scores = []
     try:
         results, scores = tmp
-    except:
+    except ValueError:
         results = tmp
 
     # Format response

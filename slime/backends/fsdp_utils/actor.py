@@ -217,7 +217,8 @@ class FSDPTrainRayActor(TrainRayActor):
         # Check if model uses tied word embeddings (which doesn't work with meta tensors)
         use_meta_tensor = not self.hf_config.tie_word_embeddings
 
-        cpu_init_weights = lambda: torch.device("cpu")
+        def cpu_init_weights():
+            return torch.device("cpu")
 
         if use_meta_tensor:
             # Rank 0: CPU, others: meta device (memory efficient for large models)

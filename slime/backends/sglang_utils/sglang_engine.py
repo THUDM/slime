@@ -306,7 +306,7 @@ class SGLangEngine(RayActor):
                     "group_name": group_name,
                 },
             )
-        except:
+        except requests.exceptions.RequestException:
             # catch the case there the engine is just created and does not have the group.
             pass
 

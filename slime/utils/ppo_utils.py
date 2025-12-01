@@ -160,7 +160,6 @@ def get_reinforce_plus_plus_returns(
     from megatron.core import mpu
 
     cp_size = mpu.get_context_parallel_world_size()
-    cp_rank = mpu.get_context_parallel_rank()
 
     final_returns_chunks = []
     for i in range(len(rewards)):

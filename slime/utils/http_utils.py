@@ -1,5 +1,6 @@
 import asyncio
 import ipaddress
+import json
 import logging
 import multiprocessing
 import os
@@ -140,7 +141,7 @@ async def _post(client, url, payload, max_retries=60):
             response.raise_for_status()
             try:
                 output = response.json()
-            except:
+            except json.JSONDecodeError:
                 output = response.text
         except Exception as e:
             retry_count += 1

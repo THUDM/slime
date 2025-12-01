@@ -10,7 +10,7 @@ from .hf_weight_iterator_base import HfWeightIteratorBase
 
 try:
     from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
-except:
+except ImportError:
     from sglang.srt.patch_torch import monkey_patch_torch_reductions
 
 from tqdm import tqdm

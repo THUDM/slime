@@ -1,4 +1,5 @@
 import asyncio
+import atexit
 import queue
 import threading
 import time
@@ -259,6 +260,5 @@ def generate_rollout_fully_async(args, rollout_id, data_buffer, evaluation=False
 
 
 # Register exit cleanup function
-import atexit
 
 atexit.register(stop_global_worker)
