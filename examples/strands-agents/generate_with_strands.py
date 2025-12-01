@@ -1,19 +1,13 @@
 import logging
 
-from camel.interpreters import SubprocessInterpreter
 import openai
+import wandb
+from camel.interpreters import SubprocessInterpreter
 from strands import Agent, tool
 from strands.models.openai import OpenAIModel
-from strands.types.exceptions import (
-    ContextWindowOverflowException,
-    EventLoopException,
-    MaxTokensReachedException,
-)
-import wandb
+from strands.types.exceptions import ContextWindowOverflowException, EventLoopException, MaxTokensReachedException
 
-from slime.rollout.rm_hub.math_dapo_utils import (
-    compute_score as math_dapo_compute_score,
-)
+from slime.rollout.rm_hub.math_dapo_utils import compute_score as math_dapo_compute_score
 from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.types import Sample
 
