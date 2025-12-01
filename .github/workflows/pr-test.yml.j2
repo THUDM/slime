@@ -18,6 +18,12 @@
         {'test_file': 'test_qwen3_0.6B_fsdp_distributed.py', 'num_gpus': 2},
       ],
     },
+    'e2e-test-precision': {
+      'label': 'run-ci-precision',
+      'tests': [
+        {'test_file': 'test_qwen3_4B_cp_loss_check.py', 'num_gpus': 8},
+      ],
+    },
 } %>
 name: PR Test
 

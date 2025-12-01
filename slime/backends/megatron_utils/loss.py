@@ -709,6 +709,8 @@ def loss_function(
             / args.global_batch_size
             * mpu.get_data_parallel_world_size(with_context_parallel=True)
         )
+    else:
+        loss = loss * mpu.get_context_parallel_world_size()
 
     return (
         loss,

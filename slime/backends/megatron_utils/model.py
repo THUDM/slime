@@ -647,6 +647,27 @@ def train(
                     assert log_dict["train/kl_loss"] == 0.0, f"{log_dict=}"
 
             logger.info(f"{role_tag}step {accumulated_step_id}: {log_dict}")
+
+            if args.ci_save_grad_norm is not None:
+                ci_save_grad_norm_path = args.ci_save_grad_norm.format(
+                    role=role,
+                    rollout_id=rollout_id,
+                    step_id=step_id,
+                )
+                torch.save(grad_norm, ci_save_grad_norm_path)
+            elif args.ci_load_grad_norm is not None:
+                ci_load_grad_norm_path = args.ci_load_grad_norm.format(
+                    role=role,
+                    rollout_id=rollout_id,
+                    step_id=step_id,
+                )
+                expected_grad_norm = torch.load(ci_load_grad_norm_path)
+                assert math.isclose(
+                    grad_norm,
+                    expected_grad_norm,
+                    rel_tol=0.01,
+                    abs_tol=0.1,
+                ), f"grad norm mismatch: {grad_norm} != {expected_grad_norm}"
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
     if pre_hook_enabled:
         disable_forward_pre_hook(model)
