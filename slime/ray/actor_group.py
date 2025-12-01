@@ -136,7 +136,7 @@ class RayTrainGroup:
         return ray.get(
             [
                 actor.connect_actor_critic.remote((critic))
-                for actor, critic in zip(self._actor_handlers, critic_group._actor_handlers)
+                for actor, critic in zip(self._actor_handlers, critic_group._actor_handlers, strict=False)
             ]
         )
 

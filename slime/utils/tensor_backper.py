@@ -1,4 +1,4 @@
-from abc import ABC
+from abc import ABC, abstractmethod
 from collections import defaultdict
 from typing import Callable, Dict, Iterable, Tuple
 
@@ -19,18 +19,23 @@ class TensorBackuper(ABC):
         self._source_getter = source_getter
 
     @property
+    @abstractmethod
     def backup_tags(self):
         raise NotImplementedError
 
+    @abstractmethod
     def get(self, tag: str):
         raise NotImplementedError
 
+    @abstractmethod
     def backup(self, tag: str):
         raise NotImplementedError
 
+    @abstractmethod
     def copy(self, *, src_tag: str, dst_tag: str):
         raise NotImplementedError
 
+    @abstractmethod
     def restore(self, tag: str):
         raise NotImplementedError
 

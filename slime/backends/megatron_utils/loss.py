@@ -58,7 +58,7 @@ def get_responses(
 
     cp_size = mpu.get_context_parallel_world_size()
     end = 0
-    for tokens, total_length, response_length in zip(unconcat_tokens, total_lengths, response_lengths):
+    for tokens, total_length, response_length in zip(unconcat_tokens, total_lengths, response_lengths, strict=False):
         if cp_size == 1:
             end += total_length
             start = end - response_length
@@ -247,7 +247,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         # TODO: optimize this
         old_rewards = rewards
         rewards = []
-        for reward, k in zip(old_rewards, kl):
+        for reward, k in zip(old_rewards, kl, strict=False):
             k *= -args.kl_coef
             cp_rank = mpu.get_context_parallel_rank()
             if cp_rank == 0:
@@ -287,11 +287,12 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         device = student_log_probs[0].device
         teacher_log_probs = [t_log_prob.to(device=device) for t_log_prob in teacher_log_probs]
         teacher_log_probs = [
-            t_log_prob[-response_length:] for t_log_prob, response_length in zip(teacher_log_probs, response_lengths)
+            t_log_prob[-response_length:]
+            for t_log_prob, response_length in zip(teacher_log_probs, response_lengths, strict=False)
         ]
         advantages = [
             teacher_log_prob - student_log_prob
-            for teacher_log_prob, student_log_prob in zip(teacher_log_probs, student_log_probs)
+            for teacher_log_prob, student_log_prob in zip(teacher_log_probs, student_log_probs, strict=False)
         ]
         returns = advantages
 
@@ -405,19 +406,23 @@ def policy_loss_function(
     if args.advantage_estimator == "gspo":
         full_log_probs = [
             all_gather_with_cp(log_prob, total_length, response_length)
-            for log_prob, total_length, response_length in zip(log_probs, total_lengths, response_lengths)
+            for log_prob, total_length, response_length in zip(
+                log_probs, total_lengths, response_lengths, strict=False
+            )
         ]
         full_old_log_probs = [
             all_gather_with_cp(old_log_prob, total_length, response_length)
-            for old_log_prob, total_length, response_length in zip(old_log_probs, total_lengths, response_lengths)
+            for old_log_prob, total_length, response_length in zip(
+                old_log_probs, total_lengths, response_lengths, strict=False
+            )
         ]
 
         loss_masks = batch["loss_masks"]
         ppo_kl = [
             ((old_logprob - log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
-            for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks)
+            for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks, strict=False)
         ]
-        ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, log_probs)]
+        ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, log_probs, strict=False)]
         ppo_kl = torch.cat(ppo_kl, dim=0)
         old_log_probs = torch.cat(old_log_probs, dim=0)
         log_probs = torch.cat(log_probs, dim=0)

@@ -117,7 +117,7 @@ def karmarkar_karp(seqlen_list: List[int], k_partitions: int, equal_size: bool):
     final_state = states_pq[0]
     partitions = final_state.get_partitions()
     if equal_size:
-        for i, partition in enumerate(partitions):
+        for _i, partition in enumerate(partitions):
             assert len(partition) * k_partitions == len(
                 seqlen_list
             ), f"{len(partition)} * {k_partitions} != {len(seqlen_list)}"
@@ -137,7 +137,7 @@ def greedy_partition(seqlen_list: List[int], k_partitions: int, equal_size: bool
         partitions[min_idx].append(i)
         partition_sums[min_idx] += seqlen
     if equal_size:
-        for i, partition in enumerate(partitions):
+        for _i, partition in enumerate(partitions):
             assert len(partition) * k_partitions == len(
                 seqlen_list
             ), f"{len(partition)} * {k_partitions} != {len(seqlen_list)}"
@@ -166,11 +166,11 @@ def get_seqlen_balanced_partitions(seqlen_list: List[int], k_partitions: int, eq
         assert len(partitions) == k_partitions, f"{len(partitions)} != {k_partitions}"
         seen_idx = set()
         sorted_partitions = [None] * k_partitions
-        for i, partition in enumerate(partitions):
-            assert len(partition) > 0, f"the {i}-th partition is empty"
+        for _i, partition in enumerate(partitions):
+            assert len(partition) > 0, f"the {_i}-th partition is empty"
             for idx in partition:
                 seen_idx.add(idx)
-            sorted_partitions[i] = sorted(partition)
+            sorted_partitions[_i] = sorted(partition)
         assert seen_idx == set(range(len(seqlen_list)))
         return sorted_partitions
 

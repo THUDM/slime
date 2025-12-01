@@ -281,7 +281,7 @@ def forward_only(
                 # TODO: move this out of the loop.
                 origin_values = [None] * len(values)
                 origin_indices = sum(data_iterator[0].micro_batch_indices, [])
-                for value, origin_index in zip(values, origin_indices):
+                for value, origin_index in zip(values, origin_indices, strict=False):
                     origin_values[origin_index] = value
                 values = origin_values
             rollout_data[f"{store_prefix}{key}"] = values
@@ -374,7 +374,7 @@ def train_one_step(
 
             mask_chunks: list[torch.Tensor] = []
             for total_len, response_len, resp_mask in zip(
-                batch["total_lengths"], batch["response_lengths"], batch["loss_masks"]
+                batch["total_lengths"], batch["response_lengths"], batch["loss_masks"], strict=False
             ):
                 assert (
                     resp_mask.numel() == response_len
@@ -489,7 +489,7 @@ def train_one_step(
         loss_reduced = {}
         values = values.tolist()
         num_samples_or_tokens = values[0]
-        for key, value in zip(keys, values[1:]):
+        for key, value in zip(keys, values[1:], strict=False):
             loss_reduced[key] = value * mpu.get_context_parallel_world_size() / num_samples_or_tokens
         return loss_reduced, grad_norm
     return {}, grad_norm
@@ -694,7 +694,7 @@ def initialize_model_and_optimizer(
             DDP-wrapped model chunks, optimizer, scheduler, and iteration index.
     """
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args, role)
-    setattr(model[0], "role", role)
+    model[0].role = role
     clear_memory()
     iteration, _ = load_checkpoint(
         model,

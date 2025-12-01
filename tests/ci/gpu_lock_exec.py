@@ -104,9 +104,9 @@ def _try_acquire_specific(devs: List[int], path_pattern: str, timeout: int):
                 try:
                     fd_lock.lock()
                     break
-                except BlockingIOError:
+                except BlockingIOError as e:
                     if time.time() - start > timeout:
-                        raise TimeoutError(f"Timeout while waiting for GPU {gpu_id}")
+                        raise TimeoutError(f"Timeout while waiting for GPU {gpu_id}") from e
                     time.sleep(SLEEP_BACKOFF * random.random())
             fd_locks.append(fd_lock)
         return fd_locks

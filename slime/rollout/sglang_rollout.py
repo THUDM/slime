@@ -252,7 +252,7 @@ async def generate_and_rm(
         # for multi agent system, the reward of some sample is calculated during generation.
         samples_need_reward = [sample for sample in samples if sample.reward is None]
         rewards = await batched_async_rm(args, samples_need_reward)
-        for sample, reward in zip(samples_need_reward, rewards):
+        for sample, reward in zip(samples_need_reward, rewards, strict=False):
             sample.reward = reward
         return samples
     else:
@@ -286,7 +286,7 @@ async def generate_and_rm_group(
     # for the rm that need the whole group, we will not do the rm here
     if not state.aborted and args.group_rm:
         rewards = await batched_async_rm(args, group)
-        for sample, reward in zip(group, rewards):
+        for sample, reward in zip(group, rewards, strict=False):
             sample.reward = reward
 
     return group
@@ -561,7 +561,7 @@ async def eval_rollout_single_dataset(
     tasks = []
     # do multiple samples for eval prompts
     sample_index = 0
-    for i, prompt_sample in enumerate(dataset.samples):
+    for _i, prompt_sample in enumerate(dataset.samples):
         for j in range(n_samples_per_prompt):
             # use the same prompt for multiple samples
             sample = copy.deepcopy(prompt_sample)

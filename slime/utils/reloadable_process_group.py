@@ -22,7 +22,7 @@ def monkey_patch_torch_dist():
 
     old_new_group = dist.new_group
     old_new_group_dict[pid] = old_new_group
-    setattr(dist, "old_new_group", old_new_group)
+    dist.old_new_group = old_new_group
 
     def new_group(*args, **kwargs):
         group = old_new_group(*args, **kwargs)

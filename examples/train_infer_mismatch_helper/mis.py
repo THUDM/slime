@@ -145,7 +145,7 @@ def compute_mis_weights(
         len(train_log_probs) == len(rollout_log_probs) == len(loss_masks)
     ), f"Input lists must have the same number of sequences: {len(train_log_probs)} vs {len(rollout_log_probs)} vs {len(loss_masks)}"
 
-    for i, (train, rollout, loss_mask) in enumerate(zip(train_log_probs, rollout_log_probs, loss_masks)):
+    for i, (train, rollout, loss_mask) in enumerate(zip(train_log_probs, rollout_log_probs, loss_masks, strict=False)):
         assert (
             train.shape == rollout.shape == loss_mask.shape
         ), f"Sequence {i}: shapes must match - train: {train.shape}, rollout: {rollout.shape}, loss_mask: {loss_mask.shape}"
@@ -164,7 +164,9 @@ def compute_mis_weights(
         else:
             raise ValueError(f"Invalid level: {level}")
 
-    for train_log_prob, rollout_log_prob, loss_mask in zip(train_log_probs, rollout_log_probs, loss_masks):
+    for train_log_prob, rollout_log_prob, loss_mask in zip(
+        train_log_probs, rollout_log_probs, loss_masks, strict=False
+    ):
         add_ppl_metrics(train_log_prob, rollout_log_prob, loss_mask, metrics)
 
     # only calculate mismatch metrics if TIS is not used
@@ -172,7 +174,9 @@ def compute_mis_weights(
         return None, loss_masks, metrics
 
     # handle each sequence independently
-    for train_log_prob, rollout_log_prob, loss_mask in zip(train_log_probs, rollout_log_probs, loss_masks):
+    for train_log_prob, rollout_log_prob, loss_mask in zip(
+        train_log_probs, rollout_log_probs, loss_masks, strict=False
+    ):
         loss_mask = loss_mask.float()
         raw_log_ratio_diff = train_log_prob - rollout_log_prob
         modified_mask = loss_mask.clone().float()
@@ -228,14 +232,14 @@ def compute_mis_weights(
         tis_level = args.tis_level if args.use_tis else "token"
         if tis_level == "token":
             # Token-level: normalize over all token weights
-            total_weights_sum = sum(masked_sum(w, m) for w, m in zip(all_weights, loss_masks))
+            total_weights_sum = sum(masked_sum(w, m) for w, m in zip(all_weights, loss_masks, strict=False))
             total_mask_count = sum(m.sum() for m in loss_masks)
             weights_mean = total_weights_sum / torch.clamp_min(total_mask_count, 1)
         elif tis_level == "sequence":
             # Sequence-level: normalize over sequence weights (one weight per sequence)
             # For each sequence, compute mean over valid tokens (they all have the same weight)
             # then average across sequences
-            seq_weights_means = [masked_mean(w, m) for w, m in zip(all_weights, loss_masks)]
+            seq_weights_means = [masked_mean(w, m) for w, m in zip(all_weights, loss_masks, strict=False)]
             weights_mean = sum(seq_weights_means) / len(seq_weights_means)
         else:
             raise ValueError(f"Unsupported tis_level: {tis_level}")
@@ -279,11 +283,15 @@ def compute_mis_weights_with_cp(
     # Gather cp slice from other cp ranks
     full_rollout_log_probs = [
         all_gather_with_cp(log_prob, total_length, response_length)
-        for log_prob, total_length, response_length in zip(rollout_log_probs, total_lengths, response_lengths)
+        for log_prob, total_length, response_length in zip(
+            rollout_log_probs, total_lengths, response_lengths, strict=False
+        )
     ]
     full_old_log_probs = [
         all_gather_with_cp(old_log_prob, total_length, response_length)
-        for old_log_prob, total_length, response_length in zip(train_log_probs, total_lengths, response_lengths)
+        for old_log_prob, total_length, response_length in zip(
+            train_log_probs, total_lengths, response_lengths, strict=False
+        )
     ]
 
     # Main logic for is (decoupled)

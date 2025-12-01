@@ -27,8 +27,10 @@ def main(
     load_debug_rollout_data: Annotated[str, typer.Option()],
     show_metrics: bool = True,
     show_samples: bool = True,
-    category: List[str] = ["train", "eval"],
+    category: List[str] = None,
 ):
+    if category is None:
+        category = ["train", "eval"]
     for rollout_id, path in _get_rollout_dump_paths(load_debug_rollout_data, category):
         print("-" * 80)
         print(f"{rollout_id=} {path=}")

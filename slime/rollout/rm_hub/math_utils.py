@@ -197,7 +197,7 @@ def _is_float(num: str) -> bool:
     try:
         float(num)
         return True
-    except ValueError:
+    except Exception:
         return False
 
 
@@ -217,7 +217,7 @@ def _str_is_int(x: str) -> bool:
         x = _strip_properly_formatted_commas(x)
         x = float(x)
         return abs(x - int(round(x))) <= 1e-7
-    except ValueError:
+    except Exception:
         return False
 
 
@@ -411,7 +411,7 @@ def remove_boxed(s):
         assert s[: len(left)] == left
         assert s[-1] == "}"
         return s[len(left) : -1]
-    except AssertionError:
+    except Exception:
         return None
 
 
@@ -445,7 +445,7 @@ def grade_answer_sympy(given_answer: str, ground_truth: str) -> bool:
     elif len(ground_truth_elems) != len(given_elems):
         is_correct = False
     else:
-        for ground_truth_elem, given_elem in zip(ground_truth_elems, given_elems):
+        for ground_truth_elem, given_elem in zip(ground_truth_elems, given_elems, strict=False):
             if _is_frac(ground_truth_elem) and _is_frac(given_elem):
                 # if fractions aren't reduced, then shouldn't be marked as correct
                 # so, we don't want to allow sympy.simplify in this case

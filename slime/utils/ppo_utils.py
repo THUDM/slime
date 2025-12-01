@@ -224,7 +224,8 @@ def get_reinforce_plus_plus_baseline_advantages(
     """
     # Broadcast to get unwhitened advantages
     unwhitened_advantages = [
-        torch.ones_like(kl_tensor) * reward_val - kl_coef * kl_tensor for kl_tensor, reward_val in zip(kl, rewards)
+        torch.ones_like(kl_tensor) * reward_val - kl_coef * kl_tensor
+        for kl_tensor, reward_val in zip(kl, rewards, strict=False)
     ]
 
     return unwhitened_advantages
@@ -331,7 +332,9 @@ def get_advantages_and_returns_batch(
             full_values_list = []
             full_rewards_list = []
 
-            for total_len, resp_len, v, r in zip(total_lengths, response_lengths, values_list, rewards_list):
+            for total_len, resp_len, v, r in zip(
+                total_lengths, response_lengths, values_list, rewards_list, strict=False
+            ):
                 full_v = all_gather_with_cp(v, total_len, resp_len)
                 full_r = all_gather_with_cp(r, total_len, resp_len)
                 full_values_list.append(full_v)
@@ -379,6 +382,7 @@ def get_advantages_and_returns_batch(
                 response_lengths,
                 full_advantages,
                 full_returns,
+                strict=False,
             ):
                 adv_full = adv_row  # shape = [resp_len_i padded to max_len]
                 ret_full = ret_row

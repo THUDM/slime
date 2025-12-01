@@ -256,7 +256,7 @@ class FSDPTrainRayActor(TrainRayActor):
         set_model_state_dict(model, full_state, options=options)
 
         # set_model_state_dict will not broadcast buffers, so we need to broadcast them manually.
-        for name, buf in model.named_buffers():
+        for _name, buf in model.named_buffers():
             dist.broadcast(buf, src=0)
 
         if is_cpu_offload:
@@ -476,7 +476,7 @@ class FSDPTrainRayActor(TrainRayActor):
             if metric_key not in packed_batches[0]:
                 continue
             val = torch.tensor([0.0], device=torch.cuda.current_device())
-            for mbs_id, batches in enumerate(packed_batches):
+            for _mbs_id, batches in enumerate(packed_batches):
                 unpacked_batches = unpack_sequences(batches)
                 for unpacked_batch in unpacked_batches:
                     if isinstance(unpacked_batch[metric_key], torch.Tensor):
@@ -598,11 +598,11 @@ class FSDPTrainRayActor(TrainRayActor):
 
             seq_kls = [
                 ((log_ratio_i * mask_i).sum() / mask_i.sum().clamp_min(1))
-                for log_ratio_i, mask_i in zip(log_ratio_splits, loss_masks)
+                for log_ratio_i, mask_i in zip(log_ratio_splits, loss_masks, strict=False)
             ]
 
             ppo_kl_list = []
-            for seq_kl, length in zip(seq_kls, response_lengths):
+            for seq_kl, length in zip(seq_kls, response_lengths, strict=False):
                 ppo_kl_list.append(seq_kl.expand(length))
 
             ppo_kl = torch.cat(ppo_kl_list)
@@ -976,7 +976,7 @@ def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks:
     return sum(
         [
             (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)
-            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks)
+            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
         ]
     )
 

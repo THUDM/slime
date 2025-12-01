@@ -78,7 +78,7 @@ def is_valid_sequence(text):
     state = "start"  # start -> think -> search -> information -> think -> ... -> answer -> end
 
     # 3. Check each part
-    for i, part in enumerate(parts):
+    for _i, part in enumerate(parts):
         # Skip empty parts
         if not part.strip():
             continue

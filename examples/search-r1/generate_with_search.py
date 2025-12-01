@@ -157,7 +157,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     loss_mask = []
     rollout_log_probs = [] if SEARCH_R1_CONFIGS["return_logprob"] else None
 
-    for turn_idx in range(SEARCH_R1_CONFIGS["max_turns"]):
+    for _turn_idx in range(SEARCH_R1_CONFIGS["max_turns"]):
         payload = {
             "text": prompt + response,
             "sampling_params": sampling_params,

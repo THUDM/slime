@@ -50,7 +50,7 @@ def _estimate_pass_at_k(num_samples, num_correct, k):
             return 1.0
         return 1.0 - np.prod(1.0 - k / np.arange(n - c + 1, n + 1))
 
-    return np.array([estimator(int(n), int(c), k) for n, c in zip(num_samples, num_correct)])
+    return np.array([estimator(int(n), int(c), k) for n, c in zip(num_samples, num_correct, strict=False)])
 
 
 def compute_statistics(values: List[float]) -> Dict[str, float]:

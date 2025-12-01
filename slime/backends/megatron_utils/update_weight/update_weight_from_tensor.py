@@ -182,7 +182,7 @@ def _send_to_colocated_engine(
                 converted_named_tensors_by_dtypes[dtype].append((name, tensor))
 
         serialized_tensors = []
-        for dtype, named_tensors in converted_named_tensors_by_dtypes.items():
+        for _dtype, named_tensors in converted_named_tensors_by_dtypes.items():
             flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
             metadata = flattened_tensor_bucket.get_metadata()
             flattened_tensor_data = {
