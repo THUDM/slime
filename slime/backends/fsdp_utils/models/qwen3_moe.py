@@ -54,7 +54,6 @@ def fused_experts_impl(
     # We execute the fused_moe kernel in chunks to circumvent this issue:
     # https://github.com/vllm-project/vllm/issues/5938
     CHUNK_SIZE = 64 * 1024
-    M = min(num_tokens, CHUNK_SIZE)
 
     # default deterministic config
     config = {
@@ -67,19 +66,31 @@ def fused_experts_impl(
 
     down_moe_use_tma = False
     topk = topk_ids.shape[1]
-    total_tokens = M * topk
-    cache = torch.empty(
-        total_tokens * max(N, w2.shape[1]),
+
+    intermediate_cache1 = torch.empty(
+        (num_tokens * topk, N),
         device=hidden_states.device,
         dtype=hidden_states.dtype,
     )
-    intermediate_cache3 = cache[: M * topk * w2.shape[1]].view(
-        (M, topk, w2.shape[1]),
+
+    intermediate_cache2 = torch.empty(
+        (num_tokens * topk, N // 2),
+        device=hidden_states.device,
+        dtype=hidden_states.dtype,
+    )
+
+    intermediate_cache3 = torch.empty(
+        (num_tokens, topk, w2.shape[1]),
+        device=hidden_states.device,
+        dtype=hidden_states.dtype,
     )
 
     compute_type = tl.bfloat16
 
-    out_hidden_states = hidden_states
+    out_hidden_states = torch.empty_like(hidden_states)
+
+    if routed_scaling_factor is None:
+        routed_scaling_factor = 1.0
 
     for chunk in range((num_tokens // CHUNK_SIZE) + 1):
         begin_chunk_idx, end_chunk_idx = (
@@ -87,25 +98,8 @@ def fused_experts_impl(
             min((chunk + 1) * CHUNK_SIZE, num_tokens),
         )
         curr_hidden_states = hidden_states[begin_chunk_idx:end_chunk_idx]
-        tokens_in_chunk, _ = curr_hidden_states.shape
-
-        if tokens_in_chunk == 0:
-            break
-
-        if tokens_in_chunk < CHUNK_SIZE and chunk > 0:
-            # Adjust the intermediate cache size and config for the last
-            # chunk.
-            intermediate_cache3 = intermediate_cache3[:tokens_in_chunk]
-
-        total_tokens = tokens_in_chunk * topk
-        intermediate_cache1 = cache[: total_tokens * N].view(
-            (total_tokens, N),
-        )
-        intermediate_cache2 = torch.empty(
-            (total_tokens, N // 2),
-            device=hidden_states.device,
-            dtype=hidden_states.dtype,
-        )
+        cur_intermediate_cache1 = intermediate_cache1[begin_chunk_idx * topk : end_chunk_idx * topk]
+        cur_intermediate_cache2 = intermediate_cache2[begin_chunk_idx * topk : end_chunk_idx * topk]
 
         curr_topk_ids = topk_ids[begin_chunk_idx:end_chunk_idx]
         curr_topk_weights = topk_weights[begin_chunk_idx:end_chunk_idx]
@@ -118,7 +112,7 @@ def fused_experts_impl(
             curr_hidden_states,
             w1,
             b1,
-            intermediate_cache1,
+            cur_intermediate_cache1,
             a1_scale,
             w1_scale,
             w1_zp,
@@ -140,17 +134,28 @@ def fused_experts_impl(
             c_sorted=down_moe_use_tma,
             filter_expert=filter_expert,
         )
-        silu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
 
+    silu_and_mul(intermediate_cache1.view(-1, N), intermediate_cache2)
+
+    for chunk in range((num_tokens // CHUNK_SIZE) + 1):
+        begin_chunk_idx, end_chunk_idx = (
+            chunk * CHUNK_SIZE,
+            min((chunk + 1) * CHUNK_SIZE, num_tokens),
+        )
+        cur_intermediate_cache2 = intermediate_cache2[begin_chunk_idx * topk : end_chunk_idx * topk]
+        cur_intermediate_cache3 = intermediate_cache3[begin_chunk_idx:end_chunk_idx]
+
+        curr_topk_ids = topk_ids[begin_chunk_idx:end_chunk_idx]
+        curr_topk_weights = topk_weights[begin_chunk_idx:end_chunk_idx]
+
+        sorted_token_ids, expert_ids, num_tokens_post_padded = moe_align_block_size(
+            curr_topk_ids, config["BLOCK_SIZE_M"], E
+        )
         invoke_fused_moe_kernel(
-            intermediate_cache2,
+            cur_intermediate_cache2,
             w2,
             b2,
-            (
-                intermediate_cache3
-                if not no_combine and topk_ids.shape[1] != 1
-                else out_hidden_states[begin_chunk_idx:end_chunk_idx].unsqueeze(0)
-            ),
+            cur_intermediate_cache3,
             a2_scale,
             w2_scale,
             w2_zp,
@@ -174,23 +179,11 @@ def fused_experts_impl(
             filter_expert=filter_expert,
         )
 
-        if routed_scaling_factor is None:
-            routed_scaling_factor = 1.0
-
-        if topk_ids.shape[1] == 1 and routed_scaling_factor == 1.0:
-            pass  # we write directly into out_hidden_states
-        elif topk_ids.shape[1] == 2 and routed_scaling_factor == 1.0:
-            torch.add(
-                intermediate_cache3[:, 0],
-                intermediate_cache3[:, 1],
-                out=out_hidden_states[begin_chunk_idx:end_chunk_idx],
-            ).squeeze(dim=1)
-        else:
-            moe_sum_reduce(
-                intermediate_cache3.view(*intermediate_cache3.shape),
-                out_hidden_states[begin_chunk_idx:end_chunk_idx],
-                routed_scaling_factor,
-            )
+    moe_sum_reduce(
+        intermediate_cache3,
+        out_hidden_states,
+        routed_scaling_factor,
+    )
 
     return out_hidden_states
 
