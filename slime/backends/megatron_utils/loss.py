@@ -444,7 +444,6 @@ def policy_loss_function(
         )
         old_log_probs = torch.cat(old_log_probs, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
-        old_log_probs = torch.cat(old_log_probs, dim=0)
     else:
         old_log_probs = torch.cat(old_log_probs, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
