@@ -133,10 +133,12 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
 
-    if image_data or video_data:
+    if image_data:
         payload["image_data"] = [_encode_image_for_rollout_engine(image) for image in image_data]
-        payload["video_data"] = video_data
         sample.multimodal_inputs = multimodal_inputs
+    
+    if video_data:
+        raise NotImplementedError("Video data is not supported yet")
 
     # Use existing tokens for multi-turn or tokenize the new prompt
     if len(sample.response) > 0:
