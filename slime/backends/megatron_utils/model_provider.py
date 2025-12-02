@@ -2,7 +2,7 @@
 import argparse
 import inspect
 from contextlib import nullcontext
-from typing import Literal, Optional
+from typing import Literal
 
 import torch
 from megatron.core import tensor_parallel
@@ -39,8 +39,8 @@ class LinearForLastLayer(torch.nn.Linear):
     def forward(
         self,
         input_: torch.Tensor,
-        weight: Optional[torch.Tensor] = None,
-        runtime_gather_output: Optional[bool] = None,
+        weight: torch.Tensor | None = None,
+        runtime_gather_output: bool | None = None,
     ) -> tuple[torch.Tensor, None]:
         logits = super().forward(input_)
         logits = logits.float()
@@ -53,9 +53,7 @@ def get_model_provider_func(
     args: argparse.Namespace,
     role: Literal["actor", "critic"] = "actor",
 ):
-    def model_provider(
-        pre_process: bool = True, post_process: bool = True, vp_stage: Optional[int] = None
-    ) -> GPTModel:
+    def model_provider(pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None) -> GPTModel:
         """Builds the model.
 
         If you set the use_legacy_models to True, it will return the legacy GPT model and if not the mcore GPT model.
@@ -118,10 +116,10 @@ def get_model_provider_func(
                 # Check if fp8_model_init supports preserve_high_precision_init_val
                 if "preserve_high_precision_init_val" in inspect.signature(fp8_model_init).parameters:
                     build_model_context_args["preserve_high_precision_init_val"] = True
-            except Exception:
+            except Exception as e:
                 raise RuntimeError(
                     "--fp8-param-gather requires `fp8_model_init` from TransformerEngine, but not found."
-                )
+                ) from e
 
         kwargs = {
             "config": config,

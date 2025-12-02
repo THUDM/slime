@@ -1,7 +1,7 @@
 import multiprocessing
 import time
 
-import command_utils as U
+import slime.utils.external_utils.command_utils as U
 
 MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
@@ -16,7 +16,7 @@ def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct --local-dir /root/models/{MODEL_NAME}")
     U.hf_download_dataset("zhuzilin/gsm8k")
-    U.convert_checkpoint(model_name=MODEL_NAME, model_type=MODEL_TYPE, num_gpus=NUM_GPUS)
+    U.convert_checkpoint(model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS)
 
 
 def execute():
@@ -78,7 +78,7 @@ def execute():
         "--adam-beta2 0.98 "
     )
 
-    sglang_args = "--rollout-num-gpus-per-engine 2 " f"--sglang-mem-fraction-static 0.6 "
+    sglang_args = "--rollout-num-gpus-per-engine 2 " "--sglang-mem-fraction-static 0.6 "
 
     ci_args = (
         "--ci-test "
@@ -123,8 +123,8 @@ def execute():
 
     U.execute_train(
         train_args=train_args,
-        num_gpus=NUM_GPUS,
-        model_type=MODEL_TYPE,
+        num_gpus_per_node=NUM_GPUS,
+        megatron_model_type=MODEL_TYPE,
         before_ray_job_submit=_launch_background,
     )
 

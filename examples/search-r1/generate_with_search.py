@@ -134,7 +134,7 @@ async def execute_predictions(prediction: str) -> str:
         next_obs = ""
         done = True
     else:
-        next_obs = f"\nMy previous action is invalid. \
+        next_obs = "\nMy previous action is invalid. \
 If I want to search, I should put the query between <search> and </search>. \
 If I want to give the final answer, I should put the answer between <answer> and </answer>. Let me try again.\n"
         done = False
@@ -143,7 +143,7 @@ If I want to give the final answer, I should put the answer between <answer> and
 
 
 async def generate(args, sample: Sample, sampling_params) -> Sample:
-    assert not args.partial_rollout, f"Partial rollout is not supported for this function at the moment."
+    assert not args.partial_rollout, "Partial rollout is not supported for this function at the moment."
 
     state = GenerateState(args)
 
@@ -157,7 +157,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     loss_mask = []
     rollout_log_probs = [] if SEARCH_R1_CONFIGS["return_logprob"] else None
 
-    for turn_idx in range(SEARCH_R1_CONFIGS["max_turns"]):
+    for _turn_idx in range(SEARCH_R1_CONFIGS["max_turns"]):
         payload = {
             "text": prompt + response,
             "sampling_params": sampling_params,

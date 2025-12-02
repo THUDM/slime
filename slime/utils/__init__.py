@@ -1,3 +1,1 @@
-from .arguments import parse_args
-
-__all__ = ["parse_args"]
+"""Utility package root for Slime."""

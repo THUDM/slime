@@ -8,7 +8,7 @@ import yaml
 @dataclass
 class FSDPArgs:
     # Optim
-    optimizer: str = "adam"  # Options: "adam" (GPU-based AdamW), "deepspeed_cpu_adam" (CPU-offloaded optimizer states)
+    optimizer: str = "adam"  # Optimizer type: "adam" (AdamW)
     lr: float = 2e-5
     lr_decay_style: str = "constant"
     weight_decay: float = 0.0
@@ -28,8 +28,13 @@ class FSDPArgs:
     fp16: bool = False
 
     # FSDP configuration
-    fsdp_full_params: bool = False  # If True, use full_tensor; if False, use shard_tensor
     fsdp_state_dict_cpu_offload: bool = True  # If True, offload full state dict to CPU during collection.
+    fsdp_cpu_offload: bool = (
+        False  # If True, offload parameters, gradients, and optimizer states to CPU (optimizer runs on CPU)
+    )
+    fsdp_cpu_backend: str | None = (
+        "gloo"  # CPU backend for FSDP CPU offload (e.g., "gloo"). Set to None to disable hybrid backend.
+    )
 
     deterministic_mode: bool = False  # This name must be the same as Megatron's
 
@@ -70,7 +75,7 @@ def parse_fsdp_cli(extra_args_provider=None):
 def load_fsdp_args(extra_args_provider=None):
     args = parse_fsdp_cli(extra_args_provider)
     if args.config:
-        with open(args.config, "r") as f:
+        with open(args.config) as f:
             data = yaml.safe_load(f) or {}
         for k, v in data.items():
             if not hasattr(args, k):

@@ -14,7 +14,7 @@ import re
 import subprocess
 import tempfile
 from contextlib import contextmanager
-from typing import Any, Dict, List
+from typing import Any
 
 import psutil
 
@@ -328,15 +328,15 @@ class ToolRegistry:
             },
         )
 
-    def register_tool(self, name: str, tool_spec: Dict[str, Any]):
+    def register_tool(self, name: str, tool_spec: dict[str, Any]):
         """Register a new tool in the registry"""
         self.tools[name] = tool_spec
 
-    def get_tool_specs(self) -> List[Dict[str, Any]]:
+    def get_tool_specs(self) -> list[dict[str, Any]]:
         """Get all tool specifications as a list"""
         return list(self.tools.values())
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
         """Execute a tool call with the given arguments"""
         if tool_name not in self.tools:
             return f"Error: Tool '{tool_name}' not found"
@@ -347,7 +347,7 @@ class ToolRegistry:
             else:
                 return f"Error: Tool '{tool_name}' not implemented"
 
-    async def _execute_python(self, arguments: Dict[str, Any]) -> str:
+    async def _execute_python(self, arguments: dict[str, Any]) -> str:
         """Execute Python code using the sandbox"""
         code = arguments.get("code", "")
         if not code.strip():

@@ -6,7 +6,7 @@ from wheel.bdist_wheel import bdist_wheel as _bdist_wheel
 
 
 def _fetch_requirements(path):
-    with open(path, "r") as fd:
+    with open(path) as fd:
         return [r.strip() for r in fd.readlines() if r.strip() and not r.startswith("#")]
 
 
@@ -32,7 +32,7 @@ class bdist_wheel(_bdist_wheel):
 setup(
     author="slime Team",
     name="slime",
-    version="0.1.0",
+    version="0.2.0.post1",
     packages=find_packages(include=["slime*", "slime_plugins*"]),
     include_package_data=True,
     install_requires=_fetch_requirements("requirements.txt"),

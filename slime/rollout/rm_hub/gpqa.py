@@ -1,6 +1,6 @@
 import re
 import string
-from typing import Iterable, Optional
+from collections.abc import Iterable
 
 DEFAULT_VALID_LETTERS = list(string.ascii_uppercase[:8])
 
@@ -19,7 +19,7 @@ def _normalize_text(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
 
 
-def _extract_letter_from_response(response: str, valid_letters: Iterable[str]) -> Optional[str]:
+def _extract_letter_from_response(response: str, valid_letters: Iterable[str]) -> str | None:
     """
     Best-effort extraction of the selected option letter from the model response.
     """
@@ -51,7 +51,7 @@ def _extract_letter_from_response(response: str, valid_letters: Iterable[str]) -
     return None
 
 
-def compute_gpqa_reward(response: str, label, metadata: Optional[dict] = None) -> float:
+def compute_gpqa_reward(response: str, label, metadata: dict | None = None) -> float:
     """Rule-based scorer for GPQA-style multiple-choice evaluation."""
     if response is None:
         return 0.0

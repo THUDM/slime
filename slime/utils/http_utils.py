@@ -1,10 +1,11 @@
 import asyncio
+import ipaddress
+import json
 import logging
 import multiprocessing
 import os
 import random
 import socket
-from typing import Optional
 
 import httpx
 
@@ -32,7 +33,7 @@ def is_port_available(port):
             s.bind(("", port))
             s.listen(1)
             return True
-        except socket.error:
+        except OSError:
             return False
         except OverflowError:
             return False
@@ -42,16 +43,45 @@ def get_host_info():
     hostname = socket.gethostname()
 
     if env_overwrite_local_ip := os.getenv(SLIME_HOST_IP_ENV, None):
-        local_ip = env_overwrite_local_ip
-    else:
-        try:
-            local_ip = socket.gethostbyname(hostname)
-        except socket.gaierror:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_sock:
-                udp_sock.connect(("8.8.8.8", 80))  # Google DNS
-                local_ip = udp_sock.getsockname()[0]
+        return hostname, env_overwrite_local_ip
 
-    return hostname, local_ip
+    # try DNS
+    try:
+        return hostname, socket.gethostbyname(hostname)
+    except socket.gaierror:
+        pass
+
+    # try IPv4
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as udp_sock:
+            udp_sock.connect(("8.8.8.8", 80))  # Google DNS
+            return hostname, udp_sock.getsockname()[0]
+    except OSError:
+        pass
+
+    # try IPv6
+    try:
+        with socket.socket(socket.AF_INET6, socket.SOCK_DGRAM) as s6:
+            s6.connect(("2001:4860:4860::8888", 80))
+            return hostname, s6.getsockname()[0]
+    except OSError:
+        pass
+
+    # hostname -I
+    try:
+        local_ip = os.popen("hostname -I | awk '{print $1}'").read().strip()
+        return hostname, local_ip or "::1"
+    except Exception:
+        return hostname, "::1"
+
+
+def _wrap_ipv6(host):
+    """Wrap IPv6 address in [] if needed."""
+    try:
+        ipaddress.IPv6Address(host.strip("[]"))
+        return f"[{host.strip('[]')}]"
+    except ipaddress.AddressValueError:
+        return host
 
 
 def run_router(args):
@@ -84,7 +114,7 @@ def terminate_process(process: multiprocessing.Process, timeout: float = 1.0) ->
         process.join()
 
 
-_http_client: Optional[httpx.AsyncClient] = None
+_http_client: httpx.AsyncClient | None = None
 _client_concurrency: int = 0
 
 # Optional Ray-based distributed POST dispatch
@@ -110,7 +140,7 @@ async def _post(client, url, payload, max_retries=60):
             response.raise_for_status()
             try:
                 output = response.json()
-            except:
+            except json.JSONDecodeError:
                 output = response.text
         except Exception as e:
             retry_count += 1

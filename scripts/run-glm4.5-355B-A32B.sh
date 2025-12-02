@@ -113,6 +113,17 @@ SGLANG_ARGS=(
    --sglang-mem-fraction-static 0.7
    --sglang-enable-dp-attention
    --sglang-dp-size 4
+   --sglang-ep-size 32
+   --sglang-enable-dp-lm-head
+   --sglang-moe-dense-tp-size 1
+
+   # mtp
+   --sglang-speculative-algorithm EAGLE
+   --sglang-speculative-num-steps 1
+   --sglang-speculative-eagle-topk 1
+   --sglang-speculative-num-draft-tokens 2
+   --sglang-enable-draft-weights-cpu-backup
+
 )
 
 MISC_ARGS=(
@@ -124,6 +135,9 @@ MISC_ARGS=(
    --attention-softmax-in-fp32
    # need to comment this when using model with MLA
    --attention-backend flash
+
+   --moe-token-dispatcher-type flex
+   --moe-enable-deepep
 )
 
 # launch the master node of ray in container
@@ -139,16 +153,6 @@ for WORKER_IP in $(awk '{print $1}' /root/mpi_rack_hostfile); do
     "pkill -9 sglang ; ray stop --force ; pkill -9 python ; ray start --address=${MASTER_ADDR}:6379 --num-gpus 8 --node-ip-address ${WORKER_IP} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265" &
 done
 wait
-
-
-# Build the runtime environment JSON with proper variable substitution
-RUNTIME_ENV_JSON="{
-  \"env_vars\": {
-    \"PYTHONPATH\": \"/root/Megatron-LM/\",
-    \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\"
-  }
-}"
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{

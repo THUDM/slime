@@ -7,10 +7,12 @@ import torch.distributed as dist
 logger = logging.getLogger(__name__)
 
 
-def clear_memory():
+def clear_memory(clear_host_memory: bool = False):
     torch.cuda.synchronize()
     gc.collect()
     torch.cuda.empty_cache()
+    if clear_host_memory:
+        torch._C._host_emptyCache()
 
 
 def available_memory():
@@ -37,7 +39,6 @@ def print_memory(msg, clear_before_print: bool = False):
     memory_info = available_memory()
     # Need to print for all ranks, b/c different rank can have different behaviors
     logger.info(
-        f"[Rank {dist.get_rank()}] Memory-Usage {msg}{' (cleared before print)' if clear_before_print else ''}:",
-        memory_info,
+        f"[Rank {dist.get_rank()}] Memory-Usage {msg}{' (cleared before print)' if clear_before_print else ''}: {memory_info}"
     )
     return memory_info

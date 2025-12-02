@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any
 
 import torch
 
@@ -9,20 +9,21 @@ import torch
 class Sample:
     """The sample generated"""
 
-    group_index: Optional[int] = None
-    index: Optional[int] = None
+    group_index: int | None = None
+    index: int | None = None
     # prompt
-    prompt: Union[str, list[dict[str, str]]] = ""
+    prompt: str | list[dict[str, str]] = ""
     tokens: list[int] = field(default_factory=list)
     # response
     response: str = ""
     response_length: int = 0
-    label: Optional[str] = None
-    reward: Optional[Union[float, dict[str, Any]]] = None
-    loss_mask: Optional[list[int]] = None
+    label: str | None = None
+    reward: float | dict[str, Any] | None = None
+    loss_mask: list[int] | None = None
     weight_versions: list[str] = field(default_factory=list)
-    rollout_log_probs: Optional[list[float]] = None  # Log probabilities from rollout engine
-    rollout_routed_experts: Optional[list[list[int]]] = None  # Routed experts from rollout engine
+    rollout_log_probs: list[float] | None = None  # Log probabilities from rollout engine
+    rollout_routed_experts: list[list[int]] | None = None  # Routed experts from rollout engine
+    remove_sample: bool = False
 
     class Status(Enum):
         PENDING = "pending"
@@ -34,7 +35,7 @@ class Sample:
 
     metadata: dict = field(default_factory=dict)
     # metadata used during training, e.g., what loss to use for this sample.
-    train_metadata: Optional[dict] = None
+    train_metadata: dict | None = None
 
     class SpecInfo:
         spec_accept_token_num: int = 0
@@ -54,16 +55,37 @@ class Sample:
             if self.spec_verify_ct > 0:
                 self.spec_accept_length = response_length / self.spec_verify_ct
 
+        def to_dict(self):
+            return {
+                "spec_accept_token_num": self.spec_accept_token_num,
+                "spec_draft_token_num": self.spec_draft_token_num,
+                "spec_verify_ct": self.spec_verify_ct,
+                "spec_accept_rate": self.spec_accept_rate,
+                "spec_accept_length": self.spec_accept_length,
+            }
+
+        @staticmethod
+        def from_dict(data: dict):
+            info = Sample.SpecInfo()
+            info.spec_accept_token_num = data.get("spec_accept_token_num", 0)
+            info.spec_draft_token_num = data.get("spec_draft_token_num", 0)
+            info.spec_verify_ct = data.get("spec_verify_ct", 0)
+            info.spec_accept_rate = data.get("spec_accept_rate", 0.0)
+            info.spec_accept_length = data.get("spec_accept_length", 0.0)
+            return info
+
     spec_info: SpecInfo = field(default_factory=SpecInfo)
 
     def to_dict(self):
         value = self.__dict__.copy()
         value["status"] = self.status.value
+        value["spec_info"] = self.spec_info.to_dict()
         return value
 
     @staticmethod
     def from_dict(data: dict):
         data["status"] = Sample.Status(data["status"])
+        data["spec_info"] = Sample.SpecInfo.from_dict(data.get("spec_info", {}))
         return Sample(**data)
 
     def get_reward_value(self, args) -> float:
@@ -74,7 +96,7 @@ class Sample:
         return sum(self.loss_mask) if self.loss_mask is not None else self.response_length
 
 
-@dataclass
+@dataclass(frozen=True)
 class ParamInfo:
     name: str
     dtype: torch.dtype

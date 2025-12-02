@@ -5,7 +5,7 @@ import pickle
 import re
 import shutil
 import time
-from typing import Optional
+
 
 import safetensors.torch
 import torch
@@ -38,7 +38,7 @@ class WrappedStorageReader(dist_cp.FileSystemReader):
         with self.fs.create_stream(path, "rb") as metadata_file:
             metadata = UnpicklerWrapper(metadata_file).load()
         if getattr(metadata, "storage_meta", None) is None:
-            metadata.storage_meta = StorageMeta()
+            metadata.storage_meta = dist_cp.StorageMeta()
         metadata.storage_meta.load_id = self.load_id
         if metadata.planner_data is None:
             metadata.planner_data = {}
@@ -50,7 +50,7 @@ class EmptyStateDictLoadPlanner(dist_cp.default_planner.DefaultLoadPlanner):
     def set_up_planner(
         self,
         state_dict: dist_cp.metadata.STATE_DICT_TYPE,
-        metadata: Optional[dist_cp.metadata.Metadata] = None,
+        metadata: dist_cp.metadata.Metadata | None = None,
         is_coordinator: bool = False,
     ) -> None:
         for k, v in metadata.state_dict_metadata.items():
@@ -73,7 +73,7 @@ def get_expert_param(args, name, param):
     if not match:
         assert param.shape[0] == num_experts
         for expert_id in range(num_experts):
-            expert_name = name.replace(".experts.experts.", f".experts.") + str(expert_id)
+            expert_name = name.replace(".experts.experts.", ".experts.") + str(expert_id)
             expert_param = param[expert_id]
             yield expert_name, expert_param
     else:
@@ -105,7 +105,7 @@ def get_named_params(args, state_dict):
 
 def save_tensors(args, model_name, state_dict, output_dir, chunk_size, vocab_size=None):
     # for slime update_weight compatible
-    setattr(args, "sglang_enable_ep_moe", False)
+    args.sglang_enable_ep_moe = False
 
     print(f"start saving to {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
