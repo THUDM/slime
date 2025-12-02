@@ -14,4 +14,4 @@ SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-2B-Instruct SLIME_SCRIPT_EXTERNAL_RAY=1 SLIME_S
 
 ## Notes
 
-The GEO3K dataset contains some ground truth answers with rounding issues (e.g., exact answer `8/15` vs. ground truth `0.53`). The reward model uses a tolerance of 0.05 when comparing predicted answers to accommodate these discrepancies.
+The GEO3K dataset has some ground truth answers that are not exact, because they are rounded to just 1 or 2 decimal places (for example, the true answer might be `8/15`, but the ground truth is recorded as `0.53`). To handle this, the reward model checks if the model’s predicted answer is within 0.05 of the ground truth value if the value does not match in string space. This allows for occasional rounding discrepancies in the label data. These cases are rare, so using this tolerance does not cause the reward model to frequently give incorrect high rewards.
