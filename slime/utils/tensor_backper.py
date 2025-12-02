@@ -59,6 +59,18 @@ class _TensorBackuperNormal(TensorBackuper):
             if name not in backup_dict:
                 backup_dict[name] = torch.empty_like(param, device=torch.device("cpu"), pin_memory=True)
             backup_dict[name].copy_(param.detach(), non_blocking=True)
+
+            if self.args.direct_update_fp8_weight and is_float8tensor(param):
+                weight_name = name + ".fp8_weight"
+                scale_name = name + ".fp8_scale"
+                weight, scale = get_fp8_weight_and_scale(param)
+                if weight_name not in params_dict:
+                    params_dict[weight_name] = torch.empty_like(weight, device=torch.device("cpu"), pin_memory=True)
+                if scale_name not in params_dict:
+                    params_dict[scale_name] = torch.empty_like(scale, device=torch.device("cpu"), pin_memory=True)
+
+                params_dict[weight_name].copy_(weight.detach(), non_blocking=True)
+                params_dict[scale_name].copy_(scale.detach(), non_blocking=True)
         torch.cuda.synchronize()
 
     @torch.no_grad()

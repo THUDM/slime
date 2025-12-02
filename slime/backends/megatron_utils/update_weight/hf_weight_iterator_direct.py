@@ -17,6 +17,7 @@ from tqdm import tqdm
 
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.types import ParamInfo
+from slime.backends.megatron_utils.fp8 import is_float8tensor, get_fp8_weight_and_scale
 
 from ..megatron_to_hf import convert_to_hf
 from .common import all_gather_params_async, named_params_and_buffers
@@ -152,19 +153,55 @@ def _get_megatron_local_param_infos(args: Namespace, model: Sequence[torch.nn.Mo
     param_infos = {}
     rank = dist.get_rank()
     for name, param in named_params_and_buffers(args, model):
-        param_infos[name] = ParamInfo(
-            name=name,
-            dtype=param.dtype,
-            shape=param.shape,
-            attrs={
-                "tensor_model_parallel": getattr(param, "tensor_model_parallel", False),
-                "partition_dim": getattr(param, "partition_dim", -1),
-                "partition_stride": getattr(param, "partition_stride", 1),
-                "parallel_mode": getattr(param, "parallel_mode", None),
-            },
-            size=param.numel() * param.element_size(),
-            src_rank=rank,
-        )
+        # check for fp8 weight. If true, we save two tensor for weight and scale
+        if args.direct_update_fp8_weight and is_float8tensor(param):
+            fp8_param_name = name + ".fp8_weight"
+            fp8_scale_name = name + ".fp8_scale"
+            # same name as params_dict
+            fp8_param, fp8_scale = get_fp8_weight_and_scale(param)
+
+            # for param
+            param_infos[fp8_param_name] = ParamInfo(
+                name=fp8_param_name,
+                dtype=fp8_param.dtype,  # uint8
+                shape=fp8_param.shape,
+                attrs={
+                    "tensor_model_parallel": getattr(param, "tensor_model_parallel", False),
+                    "partition_dim": getattr(param, "partition_dim", -1),
+                    "partition_stride": getattr(param, "partition_stride", 1),
+                    "parallel_mode": getattr(param, "parallel_mode", None),
+                },
+                size=fp8_param.numel() * fp8_param.element_size(),
+                src_rank=rank,
+            )
+            # for scale
+            param_infos[fp8_scale_name] = ParamInfo(
+                name=fp8_scale_name,
+                dtype=fp8_scale.dtype,  # float32
+                shape=fp8_scale.shape,
+                attrs={
+                    "tensor_model_parallel": getattr(param, "tensor_model_parallel", False),
+                    "partition_dim": getattr(param, "partition_dim", -1),
+                    "partition_stride": getattr(param, "partition_stride", 1),
+                    "parallel_mode": getattr(param, "parallel_mode", None),
+                },
+                size=fp8_scale.numel() * fp8_scale.element_size(),
+                src_rank=rank,
+            )
+        else:
+            param_infos[name] = ParamInfo(
+                name=name,
+                dtype=param.dtype,
+                shape=param.shape,
+                attrs={
+                    "tensor_model_parallel": getattr(param, "tensor_model_parallel", False),
+                    "partition_dim": getattr(param, "partition_dim", -1),
+                    "partition_stride": getattr(param, "partition_stride", 1),
+                    "parallel_mode": getattr(param, "parallel_mode", None),
+                },
+                size=param.numel() * param.element_size(),
+                src_rank=rank,
+            )
 
     if pp_size > 1:
         param_infos_list = [None] * pp_size
