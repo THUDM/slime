@@ -84,7 +84,7 @@ class GenerateState(metaclass=SingletonMeta):
         self.remaining_batch_size += len(samples)
 
 
-def _load_and_encode_image(image) -> str:
+def _encode_image_for_rollout_engine(image) -> str:
     """Load an image from path, ensure RGB, encode as JPEG base64 string."""
     buffer = io.BytesIO()
     if image.mode != "RGB":
@@ -134,7 +134,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         payload["return_routed_experts"] = True
 
     if image_data or video_data:
-        payload["image_data"] = [_load_and_encode_image(image) for image in image_data]
+        payload["image_data"] = [_encode_image_for_rollout_engine(image) for image in image_data]
         payload["video_data"] = video_data
         sample.multimodal_inputs = multimodal_inputs
 
