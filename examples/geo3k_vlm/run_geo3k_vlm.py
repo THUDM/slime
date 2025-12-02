@@ -57,7 +57,6 @@ def execute():
         "--rollout-max-response-len 4096 "
         "--rollout-temperature 0.8 "
         "--global-batch-size 512 "
-        # "--use-fault-tolerance "
     )
 
     eval_args = (
@@ -92,9 +91,6 @@ def execute():
         "--rollout-num-gpus-per-engine 1 "
         "--sglang-mem-fraction-static 0.6 "
         f"--sglang-cuda-graph-bs {' '.join(map(str, [1, 2, 4, 8] + list(range(16, 257, 8))))} "
-        # "--sglang-decode-log-interval 1000 "
-        # "--sglang-enable-metrics "
-        # "--sglang-disable-cuda-graph "
     )
 
     fsdp_args = (
@@ -127,8 +123,6 @@ def execute():
     # true_on_policy_args = (
     #     "--sglang-enable-deterministic-inference "
     #     "--sglang-rl-on-policy-target fsdp "
-    #     "--sglang-attention-backend fa3 "
-    #     "--attn-implementation flash_attention_3 "
     #     "--deterministic-mode "
     #     "--true-on-policy-mode "
     # )
