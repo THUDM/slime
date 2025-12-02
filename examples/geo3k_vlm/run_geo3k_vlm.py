@@ -32,20 +32,9 @@ def detect_nvlink():
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
-    dataset_name = "hiyouga/geometry3k"
+    dataset_name = "chenhegu/geo3k_imgurl"
     _, partial_name = dataset_name.split("/")
     U.exec_command(f"hf download --repo-type dataset {dataset_name} --local-dir /root/datasets/{partial_name}")
-
-    # try:
-    #     # Rename the dataset directory and files to match expected structure
-    #     U.exec_command("mv /root/datasets/geometry3k /root/datasets/geo3k")
-    #     U.exec_command("mv /root/datasets/geo3k/data/train-00000-of-00001.parquet /root/datasets/geo3k/train.parquet")
-    #     U.exec_command("mv /root/datasets/geo3k/data/test-00000-of-00001.parquet /root/datasets/geo3k/test.parquet")
-    #     U.exec_command(
-    #         "mv /root/datasets/geo3k/data/validation-00000-of-00001.parquet /root/datasets/geo3k/val.parquet"
-    #     )
-    # except Exception:
-    #     pass
 
 
 def execute():
@@ -55,7 +44,7 @@ def execute():
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} "
 
     rollout_args = (
-        "--prompt-data /root/datasets/geo3k/train.parquet "
+        "--prompt-data /root/datasets/geo3k_imgurl/train.parquet "
         "--input-key problem "
         "--label-key answer "
         '--multimodal-keys \'{"image": "images"}\' '
@@ -73,7 +62,7 @@ def execute():
 
     eval_args = (
         # "--eval-interval 20 "
-        "--eval-prompt-data geo3k-test /root/datasets/geo3k/test.parquet "
+        "--eval-prompt-data geo3k-test /root/datasets/geo3k_imgurl/test.parquet "
         "--n-samples-per-eval-prompt 1 "
         "--eval-max-response-len 4096 "
         "--eval-top-k 1 "
