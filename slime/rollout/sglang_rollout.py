@@ -1,7 +1,5 @@
 import asyncio
-import base64
 import copy
-import io
 import logging
 from argparse import Namespace
 from collections import defaultdict
@@ -21,7 +19,12 @@ from slime.utils.eval_config import EvalDatasetConfig
 from slime.utils.http_utils import get, post
 from slime.utils.mask_utils import get_response_lengths
 from slime.utils.misc import SingletonMeta, load_function
-from slime.utils.tokenizer_utils import load_processor, load_tokenizer, prepare_model_inputs
+from slime.utils.processing_utils import (
+    encode_image_for_rollout_engine,
+    load_processor,
+    load_tokenizer,
+    prepare_model_inputs,
+)
 from slime.utils.types import Sample
 
 from .rm_hub import async_rm, batched_async_rm
@@ -84,15 +87,6 @@ class GenerateState(metaclass=SingletonMeta):
         self.remaining_batch_size += len(samples)
 
 
-def _encode_image_for_rollout_engine(image) -> str:
-    """Load an image from path, ensure RGB, encode as JPEG base64 string."""
-    buffer = io.BytesIO()
-    if image.mode != "RGB":
-        image = image.convert("RGB")
-    image.save(buffer, format="JPEG")
-    return base64.b64encode(buffer.getvalue()).decode("utf-8")
-
-
 async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, Any]) -> Sample:
     """Generate using traditional SGLang router with token-based workflow"""
     state = GenerateState(args)
@@ -134,9 +128,9 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         payload["return_routed_experts"] = True
 
     if image_data:
-        payload["image_data"] = [_encode_image_for_rollout_engine(image) for image in image_data]
+        payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
         sample.multimodal_inputs = multimodal_inputs
-    
+
     if video_data:
         raise NotImplementedError("Video data is not supported yet")
 

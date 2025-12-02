@@ -51,7 +51,7 @@ def _should_skip_prompt(prompt, tokenizer, processor, max_length, apply_chat_tem
     if max_length is None:
         return False
 
-    from slime.utils.tokenizer_utils import prepare_model_inputs
+    from slime.utils.processing_utils import prepare_model_inputs
 
     input_ids, _ = prepare_model_inputs(prompt, tokenizer, processor, None, apply_chat_template_kwargs)
     return len(input_ids) > max_length

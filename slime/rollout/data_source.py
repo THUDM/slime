@@ -8,7 +8,7 @@ import torch
 
 from slime.utils.data import Dataset
 from slime.utils.misc import load_function
-from slime.utils.tokenizer_utils import load_processor, load_tokenizer
+from slime.utils.processing_utils import load_processor, load_tokenizer
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)

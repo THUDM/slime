@@ -1,5 +1,6 @@
 from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
-
+import io
+import base64
 
 def load_tokenizer(name_or_path: str, **kwargs):
     return AutoTokenizer.from_pretrained(name_or_path, **kwargs)
@@ -58,3 +59,11 @@ def prepare_model_inputs(prompt, tokenizer, processor=None, metadata=None, apply
         }
 
         return input_ids, extra_info
+
+def encode_image_for_rollout_engine(image) -> str:
+    """Load an image from path, ensure RGB, encode as JPEG base64 string."""
+    buffer = io.BytesIO()
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+    image.save(buffer, format="JPEG")
+    return base64.b64encode(buffer.getvalue()).decode("utf-8")

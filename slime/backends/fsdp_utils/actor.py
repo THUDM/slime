@@ -18,9 +18,9 @@ from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.metric_utils import compute_rollout_step
 from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
+from slime.utils.processing_utils import load_processor, load_tokenizer
 from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, inverse_timer, timer
-from slime.utils.tokenizer_utils import load_processor, load_tokenizer
 from slime.utils.tracking_utils import init_tracking
 
 from ...utils import tracking_utils
@@ -154,6 +154,7 @@ class FSDPTrainRayActor(TrainRayActor):
     def _enable_true_on_policy_optimizations(self, args):
         if args.true_on_policy_mode:
             from sglang.srt.batch_invariant_ops import enable_batch_invariant_mode
+
             from .models.qwen3_moe import apply_true_on_policy_patch_for_qwen3_moe
 
             logger.info("FSDPTrainRayActor call enable_batch_invariant_mode for true-on-policy")
