@@ -9,14 +9,16 @@ pkill -9 python
 
 set -ex
 
+export WANDB_API_KEY="a37f4796e6205800c4212556a38e1319b5f144b7"
+
 # ref link in verl: https://github.com/volcengine/verl/pull/3212/files
 cat > convert_model.py << EOF
 import torch
 import os
 from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
 
-model_id = "/root/gpt-oss-20B"
-output_dir = "/root/gpt-oss-20b-bf16"
+model_id = "openai/gpt-oss-20b"
+output_dir = "/root/models/gpt-oss-20b-bf16"
 
 if os.path.exists(output_dir):
     print(f"Model already exists at {output_dir}, skipping conversion.")
@@ -51,7 +53,7 @@ export PYTHONBUFFERED=16
 export CUDA_VISIBLE_DEVICES=4,5,6,7
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/gpt-oss-20b-bf16
+   --hf-checkpoint /root/models/gpt-oss-20b-bf16
 )
 
 ROLLOUT_ARGS=(
@@ -92,15 +94,17 @@ OPTIMIZER_ARGS=(
 
 SGLANG_ARGS=(
    # Set equal to the number of GPUs per node for colocated mode
-   --rollout-num-gpus-per-engine 2
+   --rollout-num-gpus-per-engine 4
+   --sglang-tensor-parallel-size 1
+   --sglang-dtype bfloat16
    --sglang-decode-log-interval 1000
 )
 
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-project "slime-fsdp"
-   --wandb-group "fsdp-4B200-colocated"
+   --wandb-project "slime-fsdp-gpt"
+   --wandb-group "20b-bf16"
    --wandb-key ${WANDB_API_KEY}
 )
 
@@ -118,6 +122,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --actor-num-gpus-per-node 4 \
    --colocate \
    --train-backend fsdp \
+   --bf16 \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \

@@ -91,7 +91,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         full_state = model.state_dict()
 
-        model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=self.fsdp_cpu_offload)
+        model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=self.fsdp_cpu_offload, args=self.args)
 
         model = self._fsdp2_load_full_state_dict(
             model, full_state, self.dp_mesh, cpu_offload=True if self.fsdp_cpu_offload else None
@@ -996,7 +996,7 @@ def move_torch_optimizer(optimizer, device):
     torch.cuda.synchronize()
 
 
-def apply_fsdp2(model, mesh=None, cpu_offload=False):
+def apply_fsdp2(model, mesh=None, cpu_offload=False, args=None):
     """Apply FSDP v2 to the model.
 
     Args:
@@ -1004,6 +1004,7 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False):
         mesh: Optional DeviceMesh for FSDP. If None, uses all ranks.
         cpu_offload: If True, offload parameters, gradients, and optimizer states
             to CPU. The optimizer step will run on CPU. (Default: False)
+        args: Arguments containing precision settings (fp16/bf16)
 
     Ref: https://github.com/volcengine/verl/blob/main/verl/utils/fsdp_utils.py
     """
@@ -1021,10 +1022,22 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False):
         or (isinstance(module, torch.nn.Embedding) and not model.config.tie_word_embeddings)
     ]
 
+    # Determine precision policy based on args
+    param_dtype = torch.bfloat16  # Default to bf16 as before
+    reduce_dtype = torch.float32
+    
+    if args:
+        if args.fp16:
+            param_dtype = torch.float16
+        elif args.bf16:
+            param_dtype = torch.bfloat16
+    
+    logger.info(f"FSDP MixedPrecision Policy: param_dtype={param_dtype}, reduce_dtype={reduce_dtype}")
+
     fsdp_kwargs = {
         "mp_policy": MixedPrecisionPolicy(
-            param_dtype=torch.bfloat16,
-            reduce_dtype=torch.float32,
+            param_dtype=param_dtype,
+            reduce_dtype=reduce_dtype,
         ),
         "offload_policy": offload_policy,
         "mesh": mesh,

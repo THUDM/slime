@@ -41,7 +41,7 @@ def add_sglang_arguments(parser):
 
     skipped_args = [
         "model_path",
-        "dtype",
+       # "dtype",
         "trust_remote_code",
         "random_seed",
         # memory
