@@ -102,7 +102,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
     ), f"Sample status is {sample.status}"
 
-    prompt_ids, encoding_info = prepare_model_inputs(
+    prompt_ids, extra_info = prepare_model_inputs(
         sample.prompt,
         state.tokenizer,
         state.processor,
@@ -110,9 +110,9 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         args.apply_chat_template_kwargs,
     )
 
-    image_data = encoding_info.get("images", [])
-    video_data = encoding_info.get("videos", [])
-    multimodal_inputs = encoding_info.get("multimodal_inputs", None)
+    image_data = extra_info.get("images", [])
+    video_data = extra_info.get("videos", [])
+    multimodal_inputs = extra_info.get("multimodal_inputs", None)
 
     if len(sample.response) > 0:
         sampling_params["max_new_tokens"] -= len(sample.tokens) - len(prompt_ids)

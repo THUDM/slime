@@ -22,9 +22,9 @@ def prepare_model_inputs(prompt, tokenizer, processor=None, metadata=None, apply
     """Prepare all inputs for model inference.
 
     Returns:
-        tuple: (input_ids, encoding_info)
+        tuple: (input_ids, extra_info)
             - input_ids: Token IDs for the prompt
-            - encoding_info: Dict with 'images', 'videos', 'multimodal_inputs' (or empty dict)
+            - extra_info: Dict with 'images', 'videos', 'multimodal_inputs' (or empty dict)
     """
     tools = metadata.get("tools") if metadata else None
     text_prompt = tokenizer.apply_chat_template(
@@ -51,10 +51,10 @@ def prepare_model_inputs(prompt, tokenizer, processor=None, metadata=None, apply
         # Extract multimodal tokens (exclude text-related tokens)
         multimodal_inputs = {k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]}
 
-        encoding_info = {
+        extra_info = {
             "images": images,
             "videos": videos,
             "multimodal_inputs": multimodal_inputs,
         }
 
-        return input_ids, encoding_info
+        return input_ids, extra_info
