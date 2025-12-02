@@ -38,8 +38,8 @@ try:
     use_flattened_tensor_bucket = True
 except Exception:
     use_flattened_tensor_bucket = False
-            # Import P2PTrainingTransferEngine from our implementation
-from slime.backends.sglang_utils.sglang_rdma_p2p_transfer import P2PTrainingTransferEngine
+# Import P2PTrainingTransferEngine from our implementation
+from slime.backends.sglang_utils.sglang_training_rdma_p2p import P2PTrainingTransferEngine
 
 def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
     """
@@ -947,9 +947,6 @@ class UpdateWeightFromDistributedRDMA(UpdateWeightFromDistributed):
                 sock.bind(("", 0))
                 self.master_port = sock.getsockname()[1]
 
-            # Import P2PTrainingTransferEngine from our implementation
-            from slime.backends.sglang_utils.sglang_rdma_p2p_transfer import P2PTrainingTransferEngine
-
             # Initialize P2PTrainingTransferEngine
             self.training_p2p_transfer_engine = P2PTrainingTransferEngine(
                 master_ip=self.master_addr, # TODO(ask): Engine should be localhost?
@@ -993,6 +990,7 @@ class UpdateWeightFromDistributedRDMA(UpdateWeightFromDistributed):
             # NOTE: training node will broadcast all weights to all rollout nodes,
             # while different rollout engines may need different weights. We need
             # a mask list here inidicating the weights for different rollout engines.
+            # TODO(JD): where the training_host<->rollout_nodes mapping happens?
             refs = [
                 engine.update_weights_from_distributed.remote(
                     names=[name for name, _ in converted_named_tensors],
@@ -1014,13 +1012,5 @@ class UpdateWeightFromDistributedRDMA(UpdateWeightFromDistributed):
             ray.get(self.rollout_engine_lock.release.remote())
             if pbar:
                 pbar.update(1)
-    # Note: We inherit all other methods from UpdateWeightFromDistributed:
-    # - update_weights() - The main workflow is identical
-    # - _update_weight_from_distributed() - Weight processing logic is the same
-    # - _update_expert_weight_from_distributed() - Expert weight logic is the same
-    # - _update_expert_bucket_weights_from_distributed() - Expert bucket logic is the same
-    #
-    # Only connect_rollout_engines() and _update_bucket_weights_from_distributed()
-    # needed to be overridden for P2P RDMA functionality.
 
 

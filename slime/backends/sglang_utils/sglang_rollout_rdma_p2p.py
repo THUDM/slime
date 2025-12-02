@@ -1,3 +1,6 @@
+"""
+Only used in tests like slime/tests/test_p2p_engine.py. Maybe remove it in the future.
+"""
 import concurrent.futures
 import logging
 import os

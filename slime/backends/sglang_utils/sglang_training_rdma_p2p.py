@@ -26,48 +26,6 @@ from sglang.srt.utils.common import format_tcp_address
 logger = logging.getLogger(__name__)
 
 
-class TrainingTransferHandle:
-    """A handle that mimics torch.distributed handle interface for compatibility on training side"""
-
-    def __init__(self, task_id: str):
-        self.completed = False
-        self.success = False
-        self._event = threading.Event()
-        self.task_id = task_id
-
-    def wait(self):
-        """Wait for the transfer to complete"""
-        self._event.wait()
-
-        if not self.success:
-            raise RuntimeError("P2P training weight transfer failed")
-
-    def _mark_done(self, success: bool):
-        """Internal method to mark completion"""
-        self.success = success
-        self.completed = True
-        self._event.set()
-
-
-class TrainingTransferTask:
-    """Represents a weight transfer task to be processed by training workers"""
-
-    def __init__(
-        self,
-        task_id: str,
-        rollout_transfer_session_id: str,
-        rollout_ptr: int,
-        rollout_length: int,
-        weight_name: Optional[str] = None,
-    ):
-        self.task_id = task_id
-        self.rollout_transfer_session_id = rollout_transfer_session_id  # Remote Mooncake session_id for RDMA
-        self.rollout_ptr = rollout_ptr  # Remote memory pointer
-        self.rollout_length = rollout_length  # Buffer length
-        self.weight_name = weight_name  # Name of the weight being transferred
-        self.handle = TrainingTransferHandle(task_id)
-
-
 class P2PTrainingTransferEngine:
     """
     Training-side P2P transfer engine that handles RDMA write operations.

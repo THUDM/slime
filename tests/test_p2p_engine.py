@@ -23,10 +23,10 @@ import torch
 import zmq
 
 # Import SGLang rollout-side components
-from slime.backends.sglang_utils.sglang_rollout_side_tool import P2PTransferEngine
+from slime.backends.sglang_utils.sglang_rollout_rdma_p2p import P2PTransferEngine
 
 # Import our training-side implementation
-from slime.backends.sglang_utils.sglang_rdma_p2p_transfer import P2PTrainingTransferEngine
+from slime.backends.sglang_utils.sglang_training_rdma_p2p import P2PTrainingTransferEngine
 
 logger = logging.getLogger(__name__)
 
