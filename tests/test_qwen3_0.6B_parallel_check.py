@@ -37,7 +37,6 @@ def execute():
         "--rollout-max-response-len 8192 "
         "--rollout-temperature 0.8 "
         "--global-batch-size 32 "
-        "--balance-data "
     )
 
     ppo_args = (
@@ -113,8 +112,8 @@ def execute():
                             f"--load-debug-rollout-data data-{i}.pt "
                             f"--ci-load-grad-norm grad_norms-{i}.pt "
                             f"--context-parallel-size {cp_size} "
-                            f"--tensor-parallel-size {tp_size} "
-                            f"--pipeline-parallel-size {pp_size} "
+                            f"--tensor-model-parallel-size {tp_size} "
+                            f"--pipeline-model-parallel-size {pp_size} "
                             "--sequence-parallel "
                             f"--actor-num-gpus-per-node {num_gpus} "
                             "--use-dynamic-batch-size "
