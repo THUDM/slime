@@ -86,7 +86,6 @@ def execute():
         "--rollout-num-gpus 8 "
         "--sglang-mem-fraction-static 0.8 "
         "--sglang-max-running-requests 512 "
-        "--sglang-disable-radix-cache "
         "--sglang-enable-metrics "
     )
 

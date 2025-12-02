@@ -1,4 +1,4 @@
-from typing import Any, Dict, Optional, Tuple
+from typing import Any
 
 import torch
 
@@ -15,7 +15,7 @@ def masked_mean(x: torch.Tensor, loss_mask: torch.Tensor, expand: bool = False) 
     return result.expand_as(x) if expand else result
 
 
-def metrics_append(metrics: Dict[str, list[torch.Tensor]], key: str, value: torch.Tensor) -> None:
+def metrics_append(metrics: dict[str, list[torch.Tensor]], key: str, value: torch.Tensor) -> None:
     """
 
     Every metrics-dict value is a list of 1D tensor, i.e., [torch.Tensor] with shapes exactly the same as log_probs.
@@ -58,14 +58,14 @@ def metrics_append(metrics: Dict[str, list[torch.Tensor]], key: str, value: torc
 def calculate_veto_mask(
     log_ratio: torch.Tensor,
     loss_mask: torch.Tensor,
-    veto_threshold: Optional[float],
-    metrics: Dict[str, list[torch.Tensor]],
+    veto_threshold: float | None,
+    metrics: dict[str, list[torch.Tensor]],
 ) -> torch.Tensor:
     if veto_threshold is None:
         return torch.ones_like(log_ratio)
     log_veto_threshold = torch.log(torch.tensor(veto_threshold, device=log_ratio.device))
     # For each sequence, if it has any catastrophic tokens, return 0 for the sequence
-    catastrophic_tokens = ((log_ratio < log_veto_threshold)) & loss_mask.bool()
+    catastrophic_tokens = (log_ratio < log_veto_threshold) & loss_mask.bool()
     has_catastrophic = catastrophic_tokens.any()
     veto_mask = (~has_catastrophic).float().expand_as(log_ratio)
 
@@ -75,7 +75,7 @@ def calculate_veto_mask(
 
 
 def truncate(
-    weights: torch.Tensor, loss_mask: torch.Tensor, metrics: Dict[str, list[torch.Tensor]], upper_bound: float
+    weights: torch.Tensor, loss_mask: torch.Tensor, metrics: dict[str, list[torch.Tensor]], upper_bound: float
 ) -> torch.Tensor:
     assert upper_bound is not None
     metrics_append(metrics, "truncate_fraction", (weights > upper_bound).int())
@@ -85,7 +85,7 @@ def truncate(
 def clip(
     weights: torch.Tensor,
     loss_mask: torch.Tensor,
-    metrics: Dict[str, list[torch.Tensor]],
+    metrics: dict[str, list[torch.Tensor]],
     lower_bound: float,
     upper_bound: float,
 ) -> torch.Tensor:
@@ -98,10 +98,10 @@ def clip(
 def mask(
     weights: torch.Tensor,
     loss_mask: torch.Tensor,
-    metrics: Dict[str, list[torch.Tensor]],
+    metrics: dict[str, list[torch.Tensor]],
     lower_bound: float,
     upper_bound: float,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     assert lower_bound is not None and upper_bound is not None and lower_bound < upper_bound
     metrics_append(metrics, "mask_fraction_low", (weights < lower_bound).int())
     metrics_append(metrics, "mask_fraction_high", (weights > upper_bound).int())
@@ -118,7 +118,7 @@ def compute_mis_weights(
     train_log_probs: list[torch.Tensor],
     rollout_log_probs: list[torch.Tensor],
     loss_masks: list[torch.Tensor],
-) -> Tuple[list[torch.Tensor], list[torch.Tensor], Dict[str, list[torch.Tensor]]]:
+) -> tuple[list[torch.Tensor], list[torch.Tensor], dict[str, list[torch.Tensor]]]:
     """
     Compute the importance sampling (IS) weights and metrics between the inference and training engine.
     Args:
@@ -134,7 +134,7 @@ def compute_mis_weights(
         metrics: The metrics for the importance sampling weights, a dict of list[torch.Tensor]. 1D tensor each.
     """
 
-    metrics: Dict[str, list[torch.Tensor]] = {}
+    metrics: dict[str, list[torch.Tensor]] = {}
 
     tis_lower_bound = args.tis_lower_bound if args.tis_lower_bound is not None else 1.0 / args.tis_upper_bound
     rs_lower_bound = args.rs_lower_bound if args.rs_lower_bound is not None else tis_lower_bound
@@ -145,7 +145,7 @@ def compute_mis_weights(
         len(train_log_probs) == len(rollout_log_probs) == len(loss_masks)
     ), f"Input lists must have the same number of sequences: {len(train_log_probs)} vs {len(rollout_log_probs)} vs {len(loss_masks)}"
 
-    for i, (train, rollout, loss_mask) in enumerate(zip(train_log_probs, rollout_log_probs, loss_masks)):
+    for i, (train, rollout, loss_mask) in enumerate(zip(train_log_probs, rollout_log_probs, loss_masks, strict=False)):
         assert (
             train.shape == rollout.shape == loss_mask.shape
         ), f"Sequence {i}: shapes must match - train: {train.shape}, rollout: {rollout.shape}, loss_mask: {loss_mask.shape}"
@@ -164,7 +164,9 @@ def compute_mis_weights(
         else:
             raise ValueError(f"Invalid level: {level}")
 
-    for train_log_prob, rollout_log_prob, loss_mask in zip(train_log_probs, rollout_log_probs, loss_masks):
+    for train_log_prob, rollout_log_prob, loss_mask in zip(
+        train_log_probs, rollout_log_probs, loss_masks, strict=False
+    ):
         add_ppl_metrics(train_log_prob, rollout_log_prob, loss_mask, metrics)
 
     # only calculate mismatch metrics if TIS is not used
@@ -172,7 +174,9 @@ def compute_mis_weights(
         return None, loss_masks, metrics
 
     # handle each sequence independently
-    for train_log_prob, rollout_log_prob, loss_mask in zip(train_log_probs, rollout_log_probs, loss_masks):
+    for train_log_prob, rollout_log_prob, loss_mask in zip(
+        train_log_probs, rollout_log_probs, loss_masks, strict=False
+    ):
         loss_mask = loss_mask.float()
         raw_log_ratio_diff = train_log_prob - rollout_log_prob
         modified_mask = loss_mask.clone().float()
@@ -228,14 +232,14 @@ def compute_mis_weights(
         tis_level = args.tis_level if args.use_tis else "token"
         if tis_level == "token":
             # Token-level: normalize over all token weights
-            total_weights_sum = sum(masked_sum(w, m) for w, m in zip(all_weights, loss_masks))
+            total_weights_sum = sum(masked_sum(w, m) for w, m in zip(all_weights, loss_masks, strict=False))
             total_mask_count = sum(m.sum() for m in loss_masks)
             weights_mean = total_weights_sum / torch.clamp_min(total_mask_count, 1)
         elif tis_level == "sequence":
             # Sequence-level: normalize over sequence weights (one weight per sequence)
             # For each sequence, compute mean over valid tokens (they all have the same weight)
             # then average across sequences
-            seq_weights_means = [masked_mean(w, m) for w, m in zip(all_weights, loss_masks)]
+            seq_weights_means = [masked_mean(w, m) for w, m in zip(all_weights, loss_masks, strict=False)]
             weights_mean = sum(seq_weights_means) / len(seq_weights_means)
         else:
             raise ValueError(f"Unsupported tis_level: {tis_level}")
@@ -262,7 +266,7 @@ def compute_mis_weights_with_cp(
     total_lengths: list[int],
     response_lengths: list[int],
     **kwargs: Any,
-) -> Tuple[torch.Tensor, list[torch.Tensor], Dict[str, torch.Tensor]]:
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
     """
     Compute the importance sampling (IS) weights and metrics with context parallel.
     Args:
@@ -279,11 +283,15 @@ def compute_mis_weights_with_cp(
     # Gather cp slice from other cp ranks
     full_rollout_log_probs = [
         all_gather_with_cp(log_prob, total_length, response_length)
-        for log_prob, total_length, response_length in zip(rollout_log_probs, total_lengths, response_lengths)
+        for log_prob, total_length, response_length in zip(
+            rollout_log_probs, total_lengths, response_lengths, strict=False
+        )
     ]
     full_old_log_probs = [
         all_gather_with_cp(old_log_prob, total_length, response_length)
-        for old_log_prob, total_length, response_length in zip(train_log_probs, total_lengths, response_lengths)
+        for old_log_prob, total_length, response_length in zip(
+            train_log_probs, total_lengths, response_lengths, strict=False
+        )
     ]
 
     # Main logic for is (decoupled)
@@ -322,7 +330,7 @@ def add_ppl_metrics(
     train_log_prob: torch.Tensor,
     rollout_log_prob: torch.Tensor,
     loss_mask: torch.Tensor,
-    metrics: Dict[str, list[torch.Tensor]],
+    metrics: dict[str, list[torch.Tensor]],
 ):
     loss_mask = loss_mask.float()
 

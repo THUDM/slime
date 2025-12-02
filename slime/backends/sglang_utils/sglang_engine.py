@@ -2,7 +2,6 @@ import dataclasses
 import logging
 import multiprocessing
 import time
-from typing import List, Optional
 
 import requests
 import sglang_router
@@ -158,7 +157,7 @@ class SGLangEngine(RayActor):
                 )
             response.raise_for_status()
 
-    def _make_request(self, endpoint: str, payload: Optional[dict] = None):
+    def _make_request(self, endpoint: str, payload: dict | None = None):
         """Make a POST request to the specified endpoint with the given payload.
 
         Args:
@@ -173,7 +172,11 @@ class SGLangEngine(RayActor):
 
         url = f"http://{self.server_host}:{self.server_port}/{endpoint}"
         response = requests.post(url, json=payload or {})
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            e.add_note(f"{response.text=}")
+            raise
         return response.json()
 
     def health_generate(self, timeout: float = 5.0) -> bool:
@@ -200,10 +203,10 @@ class SGLangEngine(RayActor):
 
     def update_weights_from_tensor(
         self,
-        serialized_named_tensors: List[str],
-        load_format: Optional[str] = None,
+        serialized_named_tensors: list[str],
+        load_format: str | None = None,
         flush_cache: bool = False,
-        weight_version: Optional[str] = None,
+        weight_version: str | None = None,
     ):
         """
         Update model weights from tensor data. The HTTP server will only post meta data, and the real weights will be copied directly from GPUs.
@@ -270,7 +273,7 @@ class SGLangEngine(RayActor):
         self.flush_cache()
         return self._make_request("release_memory_occupation")
 
-    def resume_memory_occupation(self, tags: List[str] = None):
+    def resume_memory_occupation(self, tags: list[str] = None):
         """
         Available tags for multi-stage resume: weights, kv_cache
         """
@@ -278,6 +281,9 @@ class SGLangEngine(RayActor):
             "resume_memory_occupation",
             {"tags": tags},
         )
+
+    def check_weights(self, action: str):
+        return self._make_request("check_weights", {"action": action})
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
         return self._make_request(
@@ -300,12 +306,12 @@ class SGLangEngine(RayActor):
                     "group_name": group_name,
                 },
             )
-        except:
+        except requests.exceptions.RequestException:
             # catch the case there the engine is just created and does not have the group.
             pass
 
     def update_weights_from_distributed(
-        self, names, dtypes, shapes, group_name, flush_cache=False, weight_version: Optional[str] = None
+        self, names, dtypes, shapes, group_name, flush_cache=False, weight_version: str | None = None
     ):
         payload = {
             "names": names,
@@ -334,16 +340,16 @@ class SGLangEngine(RayActor):
     def start_profile(
         self,
         # The output directory
-        output_dir: Optional[str] = None,
+        output_dir: str | None = None,
         # If set, it profile as many as this number of steps.
         # If it is set, profiling is automatically stopped after this step, and
         # the caller doesn't need to run stop_profile.
-        start_step: Optional[int] = None,
-        num_steps: Optional[int] = None,
-        activities: Optional[List[str]] = None,
+        start_step: int | None = None,
+        num_steps: int | None = None,
+        activities: list[str] | None = None,
         profile_by_stage: bool = False,
-        with_stack: Optional[bool] = None,
-        record_shapes: Optional[bool] = None,
+        with_stack: bool | None = None,
+        record_shapes: bool | None = None,
     ):
         response = requests.post(
             f"http://{self.server_host}:{self.server_port}/start_profile",

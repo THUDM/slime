@@ -1,8 +1,7 @@
 import socket
 import time
 from argparse import Namespace
-from collections.abc import Mapping, Sequence
-from typing import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 import ray
 import torch
@@ -15,7 +14,7 @@ from tqdm import tqdm
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 
 from ..megatron_to_hf import convert_to_hf
-from .common import all_gather_param, named_parameters
+from .common import all_gather_param, named_params_and_buffers
 
 
 class UpdateWeightFromDistributed:
@@ -88,7 +87,7 @@ class UpdateWeightFromDistributed:
         # non expert params
         pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
 
-        for name, param in named_parameters(self.args, self.model):
+        for name, param in named_params_and_buffers(self.args, self.model):
             if ".experts." in name:
                 continue
             buffer_size = self._update_weight_from_distributed(
@@ -102,7 +101,7 @@ class UpdateWeightFromDistributed:
 
         buffer_size = 0
         named_tensors = []
-        for name, param in named_parameters(self.args, self.model):
+        for name, param in named_params_and_buffers(self.args, self.model):
             if ".experts." not in name:
                 continue
             buffer_size = self._update_expert_weight_from_distributed(
@@ -180,7 +179,7 @@ class UpdateWeightFromDistributed:
 
         all_gathered_params = [[] for _ in range(mpu.get_expert_model_parallel_world_size())]
         handles = []
-        for i, (name, param) in enumerate(named_tensors):
+        for i, (_name, param) in enumerate(named_tensors):
             params = [
                 torch.empty_like(param.data, device=torch.cuda.current_device())
                 for _ in range(mpu.get_expert_model_parallel_world_size())

@@ -3,12 +3,12 @@ import logging
 import random
 import re
 from io import BytesIO
-from PIL import Image
 
 import numpy as np
 import pandas as pd
 import ray
 import torch.distributed as dist
+from PIL import Image
 
 from slime.utils.types import MultimodalTypes, Sample
 
@@ -64,7 +64,10 @@ def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
 
     if isinstance(messages, str):
         # hack for geo3k prompting, will remove after testing
-        messages = "Solve the following math problem step by step. The last line of your response should be of the form Answer: \\boxed{$Answer} where $Answer is the answer to the problem.\n\n" + messages
+        messages = (
+            "Solve the following math problem step by step. The last line of your response should be of the form Answer: \\boxed{$Answer} where $Answer is the answer to the problem.\n\n"
+            + messages
+        )
         messages = [{"role": "user", "content": messages}]
 
     if multimodal_keys:
@@ -179,13 +182,13 @@ class Dataset:
 def get_minimum_num_micro_batch_size(total_lengths, max_tokens_per_gpu):
     # use first fit to get the number of micro batches
     batches = []
-    for l in total_lengths:
+    for length in total_lengths:
         for i in range(len(batches)):
-            if batches[i] + l <= max_tokens_per_gpu:
-                batches[i] += l
+            if batches[i] + length <= max_tokens_per_gpu:
+                batches[i] += length
                 break
         else:
-            batches.append(l)
+            batches.append(length)
 
     return len(batches)
 

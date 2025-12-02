@@ -18,7 +18,6 @@
 import argparse
 import json
 import warnings
-from typing import Optional
 
 import datasets
 import faiss
@@ -319,7 +318,7 @@ class Config:
 
 class QueryRequest(BaseModel):
     queries: list[str]
-    topk: Optional[int] = None
+    topk: int | None = None
     return_scores: bool = False
 
 
@@ -360,7 +359,7 @@ def retrieve_endpoint(request: QueryRequest):
     scores = []
     try:
         results, scores = tmp
-    except:
+    except ValueError:
         results = tmp
 
     # Format response

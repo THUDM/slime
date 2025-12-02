@@ -37,7 +37,6 @@ def ceildiv(a, b):
 
 
 def block_fp8(weight, block_size):
-    dtype = weight.dtype
 
     # per block quant
     block_n, block_k = block_size[0], block_size[1]
@@ -72,7 +71,6 @@ def block_fp8(weight, block_size):
 
 
 def channel_fp8(weight):
-    dtype = weight.dtype
     channel_max = torch.max(weight.abs(), dim=-1, keepdim=True)[0]
     scale = channel_max.clamp(min=1e-12).to(torch.float32) / FP8_MAX
     qweight = (weight / scale).clamp(min=FP8_MIN, max=FP8_MAX)
@@ -81,7 +79,6 @@ def channel_fp8(weight):
 
 
 def tensor_fp8(weight):
-    dtype = weight.dtype
     scale = weight.abs().max().clamp(min=1e-12).to(torch.float32) / FP8_MAX
     qweight = (weight / scale).clamp(min=FP8_MIN, max=FP8_MAX)
     qweight = qweight.to(torch.float8_e4m3fn)

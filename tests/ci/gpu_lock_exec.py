@@ -5,7 +5,6 @@ import os
 import random
 import sys
 import time
-from typing import List
 
 SLEEP_BACKOFF = 5.0
 
@@ -92,7 +91,7 @@ def _try_acquire(args):
         return _try_acquire_count(args.count, args.total_gpus, args.lock_path_pattern, args.timeout)
 
 
-def _try_acquire_specific(devs: List[int], path_pattern: str, timeout: int):
+def _try_acquire_specific(devs: list[int], path_pattern: str, timeout: int):
     fd_locks = []
     start = time.time()
     try:
@@ -104,9 +103,9 @@ def _try_acquire_specific(devs: List[int], path_pattern: str, timeout: int):
                 try:
                     fd_lock.lock()
                     break
-                except BlockingIOError:
+                except BlockingIOError as e:
                     if time.time() - start > timeout:
-                        raise TimeoutError(f"Timeout while waiting for GPU {gpu_id}")
+                        raise TimeoutError(f"Timeout while waiting for GPU {gpu_id}") from e
                     time.sleep(SLEEP_BACKOFF * random.random())
             fd_locks.append(fd_lock)
         return fd_locks
@@ -121,7 +120,7 @@ def _try_acquire_count(count: int, total_gpus: int, path_pattern: str, timeout: 
     start = time.time()
     _ensure_lock_files(path_pattern, total_gpus)
     while True:
-        fd_locks: List = []
+        fd_locks: list = []
         for gpu_id in range(total_gpus):
             fd_lock = FdLock(path_pattern, gpu_id=gpu_id)
             fd_lock.open()
@@ -188,7 +187,7 @@ def _get_lock_path(path_pattern: str, gpu_id: int) -> str:
     return path_pattern.format(gpu_id=gpu_id)
 
 
-def _parse_devices(s: str) -> List[int]:
+def _parse_devices(s: str) -> list[int]:
     return [int(x) for x in s.split(",") if x.strip() != ""]
 
 

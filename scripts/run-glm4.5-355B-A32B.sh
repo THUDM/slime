@@ -113,6 +113,17 @@ SGLANG_ARGS=(
    --sglang-mem-fraction-static 0.7
    --sglang-enable-dp-attention
    --sglang-dp-size 4
+   --sglang-ep-size 32
+   --sglang-enable-dp-lm-head
+   --sglang-moe-dense-tp-size 1
+
+   # mtp
+   --sglang-speculative-algorithm EAGLE
+   --sglang-speculative-num-steps 1
+   --sglang-speculative-eagle-topk 1
+   --sglang-speculative-num-draft-tokens 2
+   --sglang-enable-draft-weights-cpu-backup
+
 )
 
 MISC_ARGS=(
@@ -124,6 +135,9 @@ MISC_ARGS=(
    --attention-softmax-in-fp32
    # need to comment this when using model with MLA
    --attention-backend flash
+
+   --moe-token-dispatcher-type flex
+   --moe-enable-deepep
 )
 
 # launch the master node of ray in container

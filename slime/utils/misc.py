@@ -1,6 +1,5 @@
 import importlib
 import subprocess
-from typing import Optional
 
 import ray
 
@@ -32,7 +31,7 @@ class SingletonMeta(type):
         return cls._instances[cls]
 
 
-def exec_command(cmd: str, capture_output: bool = False) -> Optional[str]:
+def exec_command(cmd: str, capture_output: bool = False) -> str | None:
     print(f"EXEC: {cmd}", flush=True)
 
     try:

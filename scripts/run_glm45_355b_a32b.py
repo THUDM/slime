@@ -21,12 +21,14 @@ class ScriptArgs(U.ExecuteTrainConfig):
     model_name: str = "GLM-4.5"
     megatron_model_type: str = "glm4.5-355B-A32B"
     num_gpus_per_node: int = 4
+    hardware: Literal["H100", "GB200", "GB300"] = "H100"
     enable_eval: bool = True
     extra_args: str = ""
     rollout_fp8: bool = False
+    enable_mtp: bool = False  # TODO enable by default
     dynamic_sampling: bool = False
-    # TODO use more complex task
-    task: Literal["dapo_aime", "gsm8k"] = "gsm8k"
+    enable_benchmark: bool = False
+    task: Literal["dapo_aime", "gsm8k"] = "dapo_aime"
 
 
 @app.command()
@@ -41,6 +43,7 @@ def prepare_single(args: ScriptArgs):
         case "dapo_aime":
             U.hf_download_dataset("zhuzilin/dapo-math-17k")
             U.hf_download_dataset("zhuzilin/aime-2024")
+            U.hf_download_dataset("zhuzilin/aime-2025")
         case "gsm8k":
             U.hf_download_dataset("zhuzilin/gsm8k")
 
@@ -89,6 +92,11 @@ def _prepare_cp(args: ScriptArgs):
         path_src=f"/root/models/{args.model_name}",
         path_dst=f"/root/local_data/{args.model_name}",
     )
+    if args.rollout_fp8:
+        U.rsync_simple(
+            path_src=f"/root/models/{args.model_name}-FP8",
+            path_dst=f"/root/local_data/{args.model_name}-FP8",
+        )
 
 
 @app.command()
@@ -97,8 +105,10 @@ def train(args: ScriptArgs):
     # ensure files are there is it was not synced before
     _prepare_cp(args)
 
+    assert args.hardware != "H100", "H100 is not yet supported in this script"
+
     hf_checkpoint = (
-        f"/root/models/{args.model_name}_FP8" if args.rollout_fp8 else f"/root/local_data/{args.model_name}"
+        f"/root/local_data/{args.model_name}-FP8" if args.rollout_fp8 else f"/root/local_data/{args.model_name}"
     )
 
     load_save_path = f"/root/shared_data/{args.run_id}/checkpoints"
@@ -107,8 +117,8 @@ def train(args: ScriptArgs):
         f"--ref-load /root/local_data/{args.model_name}_torch_dist "
         f"--load {load_save_path} "
         f"--save {load_save_path} "
-        f"--save-interval {2 if args.mode == 'debug_minimal' else 20} "
-        f"--save-retain-interval {2 if args.mode == 'debug_minimal' else 20} "
+        f"--save-interval {2 if args.mode == 'debug_minimal' else 10} "
+        f"--save-retain-interval {2 if args.mode == 'debug_minimal' else 10} "
     )
 
     rollout_args = (
@@ -156,7 +166,7 @@ def train(args: ScriptArgs):
                 "--prompt-data /root/datasets/gsm8k/train.parquet "
                 "--input-key messages "
                 # Deliberately make it very short for this easy task
-                f"--rollout-max-response-len 256 "
+                "--rollout-max-response-len 256 "
             )
             eval_args += (
                 "--eval-prompt-data gsm8k /root/datasets/gsm8k/test.parquet "
@@ -169,9 +179,9 @@ def train(args: ScriptArgs):
         perf_args = (
             "--tensor-model-parallel-size 4 "
             "--sequence-parallel "
-            f"--pipeline-model-parallel-size 1 "
-            "--context-parallel-size 2 "
-            "--expert-model-parallel-size 8 "
+            "--pipeline-model-parallel-size 1 "
+            "--context-parallel-size 1 "
+            "--expert-model-parallel-size 4 "
             "--expert-tensor-parallel-size 1 "
         )
     else:
@@ -220,40 +230,50 @@ def train(args: ScriptArgs):
         # "--use-precision-aware-optimizer "
     )
 
-    # TODO optimize parameters, especially for FP8
-    # TODO pure tp attention is very inefficient
-    # sglang_decode_max_bs = 256
     sglang_world_size = min(32, args.num_gpus_per_node * args.num_nodes)
-    # sglang_attn_dp_size = 4
-    # sglang_attn_tp_size = sglang_world_size // sglang_attn_dp_size
     sglang_args = (
         f"--rollout-num-gpus-per-engine {sglang_world_size} "
-        "--sglang-mem-fraction-static 0.85 "
+        # TODO improve
+        f"--sglang-mem-fraction-static {0.8 if args.hardware == 'GB300' else 0.7} "
         f"--sglang-tp-size {sglang_world_size} "
-        # f"--sglang-ep-size {sglang_world_size} "
-        # dp attention
-        # "--sglang-enable-dp-attention "
-        # f"--sglang-dp-size {sglang_attn_dp_size} "
-        # "--sglang-moe-dense-tp-size 1 "
-        # "--sglang-enable-dp-lm-head "
-        # TODO why disable?
-        # "--sglang-disable-radix-cache "
-        # enable deepep for sglang
-        # "--sglang-moe-a2a-backend deepep "
-        # "--sglang-deepep-mode low_latency "
+        f"--sglang-chunked-prefill-size {sglang_world_size * 2048} "
         # make every dp rank has 128 concurrency
         # "--sglang-server-concurrency 1024 "
-        # f"--sglang-max-running-requests {sglang_world_size * sglang_decode_max_bs // sglang_attn_tp_size} "
-        # f"--sglang-chunked-prefill-size {sglang_world_size * sglang_decode_max_bs} "
-        # f"--sglang-cuda-graph-max-bs {sglang_decode_max_bs} "
         # For quick experiments
         # """--sglang-json-model-override-args '{"num_hidden_layers": 5}' """
-        f"--sglang-chunked-prefill-size {sglang_world_size * 2048} "
     )
     sglang_extra_env_vars = {}
-    # sglang_extra_env_vars = {
-    #     "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK": f"{sglang_decode_max_bs}",
-    # }
+    if args.rollout_fp8:
+        sglang_decode_max_bs = 256
+        sglang_attn_tp_size = 8
+        sglang_attn_dp_size = sglang_world_size // sglang_attn_tp_size
+        sglang_args += (
+            f"--sglang-ep-size {sglang_world_size} "
+            "--sglang-enable-dp-attention "
+            f"--sglang-dp-size {sglang_attn_dp_size} "
+            "--sglang-moe-dense-tp-size 1 "
+            "--sglang-enable-dp-lm-head "
+            "--sglang-moe-runner-backend deep_gemm "
+            "--sglang-moe-a2a-backend deepep "
+            "--sglang-deepep-mode low_latency "
+            f"--sglang-max-running-requests {sglang_world_size * sglang_decode_max_bs // sglang_attn_tp_size} "
+            f"--sglang-chunked-prefill-size {sglang_world_size * sglang_decode_max_bs} "
+            f"--sglang-cuda-graph-max-bs {sglang_decode_max_bs} "
+        )
+        sglang_extra_env_vars |= {
+            "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK": f"{sglang_decode_max_bs}",
+        }
+    if args.enable_mtp:
+        sglang_args += (
+            "--sglang-speculative-algorithm EAGLE "
+            "--sglang-speculative-num-steps 1 "
+            "--sglang-speculative-eagle-topk 1 "
+            "--sglang-speculative-num-draft-tokens 2 "
+            "--sglang-enable-draft-weights-cpu-backup "
+        )
+        sglang_extra_env_vars |= {
+            "SGLANG_ENABLE_SPEC_V2": "1",
+        }
 
     misc_args = (
         # default dropout in megatron is 0.1
@@ -282,6 +302,11 @@ def train(args: ScriptArgs):
         "--router-health-success-threshold 1 "
         "--router-health-check-interval-secs 15 "
     )
+
+    if args.enable_benchmark:
+        misc_args += (
+            "--custom-generate-function-path slime.rollout.generate_hub.benchmarkers.generate_with_random_osl "
+        )
 
     train_args = (
         f"{ckpt_args} "

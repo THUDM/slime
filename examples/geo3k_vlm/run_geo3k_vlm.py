@@ -41,8 +41,10 @@ def prepare():
         U.exec_command("mv /root/datasets/geometry3k /root/datasets/geo3k")
         U.exec_command("mv /root/datasets/geo3k/data/train-00000-of-00001.parquet /root/datasets/geo3k/train.parquet")
         U.exec_command("mv /root/datasets/geo3k/data/test-00000-of-00001.parquet /root/datasets/geo3k/test.parquet")
-        U.exec_command("mv /root/datasets/geo3k/data/validation-00000-of-00001.parquet /root/datasets/geo3k/val.parquet")
-    except Exception as e:
+        U.exec_command(
+            "mv /root/datasets/geo3k/data/validation-00000-of-00001.parquet /root/datasets/geo3k/val.parquet"
+        )
+    except Exception:
         pass
 
 
@@ -126,9 +128,9 @@ def execute():
 
     wandb_args = (
         "--use-wandb "
-        f"--wandb-project geo3k-vlm "
-        f"--wandb-group geo3k-vlm "
-        f"--wandb-key ${{WANDB_API_KEY}} "
+        "--wandb-project geo3k-vlm "
+        "--wandb-group geo3k-vlm "
+        "--wandb-key ${WANDB_API_KEY} "
         "--disable-wandb-random-suffix "
     )
 

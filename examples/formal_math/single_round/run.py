@@ -134,7 +134,7 @@ def execute():
 
     sglang_args = (
         # "--rollout-num-gpus-per-engine 2 "
-        f"--rollout-num-gpus-per-engine 8 "  # temp use 1 engine per node to avoid flashinfer err
+        "--rollout-num-gpus-per-engine 8 "  # temp use 1 engine per node to avoid flashinfer err
         "--sglang-mem-fraction-static 0.7 "
     )
 

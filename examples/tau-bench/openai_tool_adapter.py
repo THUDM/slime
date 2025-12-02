@@ -1,7 +1,7 @@
 import json
 import logging
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from sglang_tool_parser import parse_tools
 from tau_bench.agents.tool_calling_agent import RESPOND_ACTION_NAME
@@ -17,7 +17,7 @@ class OpenAIToolCall:
 
     id: str
     type: str = "function"
-    function: Dict[str, Any] = None
+    function: dict[str, Any] = None
 
 
 @dataclass
@@ -25,8 +25,8 @@ class OpenAIAssistantMessage:
     """OpenAI format assistant message structure"""
 
     role: str = "assistant"
-    content: Optional[str] = None
-    tool_calls: Optional[List[OpenAIToolCall]] = None
+    content: str | None = None
+    tool_calls: list[OpenAIToolCall] | None = None
 
 
 class OpenAICompatibleToolCallAdapter:
@@ -37,7 +37,7 @@ class OpenAICompatibleToolCallAdapter:
     and provides OpenAI format output interface.
     """
 
-    def __init__(self, tools_info: List[Dict[str, Any]], parser_type: str = "qwen25"):
+    def __init__(self, tools_info: list[dict[str, Any]], parser_type: str = "qwen25"):
         """
         Initialize adapter
 
@@ -48,7 +48,7 @@ class OpenAICompatibleToolCallAdapter:
         self.tools_info = tools_info
         self.parser_type = parser_type
 
-    def parse_response_to_openai_format(self, response: str) -> Dict[str, Any]:
+    def parse_response_to_openai_format(self, response: str) -> dict[str, Any]:
         """
         Parse sglang response to OpenAI compatible format
 
@@ -78,7 +78,7 @@ class OpenAICompatibleToolCallAdapter:
             logger.warning(f"Parsing failed with error: {str(e)}")
             return {"openai_message": None, "parsed_result": None, "success": False, "error": str(e)}
 
-    def _convert_to_openai_message(self, normal_text: str, calls: List[Dict[str, Any]]) -> OpenAIAssistantMessage:
+    def _convert_to_openai_message(self, normal_text: str, calls: list[dict[str, Any]]) -> OpenAIAssistantMessage:
         """
         Convert parsing results to OpenAI format assistant message
 
@@ -108,7 +108,7 @@ class OpenAICompatibleToolCallAdapter:
         )
         return result
 
-    def _call_to_action_sglang(self, calls: List[Any], text_response: str) -> Action:
+    def _call_to_action_sglang(self, calls: list[Any], text_response: str) -> Action:
         """
         Convert sglang tool calls to Action object
 
@@ -136,7 +136,7 @@ class OpenAICompatibleToolCallAdapter:
 
         return action
 
-    def get_openai_tools_format(self) -> List[Dict[str, Any]]:
+    def get_openai_tools_format(self) -> list[dict[str, Any]]:
         """
         Get OpenAI format tool definitions
 
@@ -160,7 +160,7 @@ class OpenAICompatibleToolCallAdapter:
 
 # Usage examples and factory functions
 def create_openai_adapter(
-    tools_info: List[Dict[str, Any]], parser_type: str = "qwen25"
+    tools_info: list[dict[str, Any]], parser_type: str = "qwen25"
 ) -> OpenAICompatibleToolCallAdapter:
     """
     Factory function to create OpenAI compatible tool call adapter

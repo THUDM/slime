@@ -1,4 +1,4 @@
-from typing import Callable, Union
+from collections.abc import Callable
 
 import torch
 import torch.distributed as dist
@@ -60,20 +60,23 @@ def get_sum_of_sample_mean(
             return sum(
                 [
                     (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)
-                    for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks)
+                    for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
                 ]
             )
 
         def sum_of_token(x: torch.Tensor) -> torch.Tensor:
             return sum(
-                [(x_i * loss_mask_i).sum() for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks)]
+                [
+                    (x_i * loss_mask_i).sum()
+                    for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
+                ]
             )
 
     else:
         cp_chunk_lengths = []
         chunked_loss_masks = []
         for i, (total_length, response_length, loss_mask) in enumerate(
-            zip(total_lengths, response_lengths, loss_masks)
+            zip(total_lengths, response_lengths, loss_masks, strict=False)
         ):
             prompt_length = total_length - response_length
             _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(total_length, response_length)
@@ -87,7 +90,7 @@ def get_sum_of_sample_mean(
                 [
                     (x_i * chunked_loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
                     for x_i, chunked_loss_mask, loss_mask in zip(
-                        x.split(cp_chunk_lengths, dim=0), chunked_loss_masks, loss_masks
+                        x.split(cp_chunk_lengths, dim=0), chunked_loss_masks, loss_masks, strict=False
                     )
                 ]
             )
@@ -96,7 +99,9 @@ def get_sum_of_sample_mean(
             return sum(
                 [
                     (x_i * chunked_loss_mask).sum()
-                    for x_i, chunked_loss_mask in zip(x.split(cp_chunk_lengths, dim=0), chunked_loss_masks)
+                    for x_i, chunked_loss_mask in zip(
+                        x.split(cp_chunk_lengths, dim=0), chunked_loss_masks, strict=False
+                    )
                 ]
             )
 
@@ -155,7 +160,7 @@ def all_gather_with_cp(tensor: torch.Tensor, total_length: int, response_length:
     return full_tensor
 
 
-def slice_with_cp(tokens: torch.Tensor, pad_value: int) -> torch.Tensor:
+def slice_with_cp(tokens: torch.Tensor, pad_value: tuple[int, float, Callable]) -> torch.Tensor:
     cp_rank = mpu.get_context_parallel_rank()
     cp_size = mpu.get_context_parallel_world_size()
 
@@ -165,9 +170,13 @@ def slice_with_cp(tokens: torch.Tensor, pad_value: int) -> torch.Tensor:
     # pad
     chunk_size = (len(tokens) + 2 * cp_size - 1) // (2 * cp_size)
     pad = 2 * cp_size * chunk_size - len(tokens)
-    # pad on the first dimension
-    pad_tuple = (0, 0) * (tokens.dim() - 1) + (0, pad)
-    tokens = F.pad(tokens, pad_tuple, value=pad_value)
+    if isinstance(pad_value, Callable):
+        pad_func = pad_value
+        tokens = pad_func(tokens, pad)
+    else:
+        # pad on the first dimension
+        pad_tuple = (0, 0) * (tokens.dim() - 1) + (0, pad)
+        tokens = F.pad(tokens, pad_tuple, value=pad_value)
     # get 2 chunk for thd cp
     start_1, end_1 = chunk_size * cp_rank, chunk_size * (cp_rank + 1)
     start_2, end_2 = chunk_size * (2 * cp_size - cp_rank - 1), chunk_size * (2 * cp_size - cp_rank)
@@ -175,10 +184,10 @@ def slice_with_cp(tokens: torch.Tensor, pad_value: int) -> torch.Tensor:
 
 
 def slice_log_prob_with_cp(
-    log_prob: Union[list[float], torch.Tensor],
+    log_prob: list[float] | torch.Tensor,
     total_length: int,
     response_length: int,
-) -> Union[list[float], torch.Tensor]:
+) -> list[float] | torch.Tensor:
     assert len(log_prob) == response_length
 
     cp_size = mpu.get_context_parallel_world_size()

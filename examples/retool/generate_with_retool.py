@@ -1,11 +1,11 @@
 # Adapted from https://github.com/volcengine/verl/blob/cb809d66e46dfd3342d008628891a14a054fa424/recipe/retool/retool.py
 import re
-from typing import Any, Dict, List
+from typing import Any
 
 try:
     from jinja2 import Template
-except ImportError:
-    raise ImportError("Jinja2 is required. Please install it with: pip install jinja2")
+except ImportError as e:
+    raise ImportError("Jinja2 is required. Please install it with: pip install jinja2") from e
 
 from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.http_utils import post
@@ -14,8 +14,8 @@ from slime.utils.types import Sample
 # Import reward models
 try:
     from slime.rollout.rm_hub.math_dapo_utils import compute_score as math_dapo_compute_score
-except ImportError:
-    raise ImportError("MathDapo is not installed")
+except ImportError as e:
+    raise ImportError("MathDapo is not installed") from e
 
 # Import tool sandbox functionality
 from tool_sandbox import SEMAPHORE, TOOL_CONFIGS, tool_registry
@@ -59,7 +59,7 @@ For each function call, return a json object with function name and arguments wi
 
 
 def format_conversation_with_tools(
-    prompt: str, tools: List[Dict[str, Any]] = None, system_prompt: str = None, messages: List[Dict[str, Any]] = None
+    prompt: str, tools: list[dict[str, Any]] = None, system_prompt: str = None, messages: list[dict[str, Any]] = None
 ) -> str:
     """Format conversation using Jinja2 template with tool support"""
     template = Template(TOOL_TEMPLATE)

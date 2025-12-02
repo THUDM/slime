@@ -28,7 +28,6 @@ import json
 import os
 import shutil
 from collections import defaultdict
-from typing import Optional, Tuple
 
 import torch
 from compressed_tensors.compressors import unpack_from_int32
@@ -36,10 +35,10 @@ from safetensors.torch import safe_open, save_file
 from tqdm import tqdm
 
 
-def _load_config(model_dir: str, config_path: Optional[str]) -> Tuple[int, int, int]:
+def _load_config(model_dir: str, config_path: str | None) -> tuple[int, int, int]:
     """Read config.json and return hidden_size, inter_size, and group_size."""
     cfg_path = config_path or os.path.join(model_dir, "config.json")
-    with open(cfg_path, "r") as f:
+    with open(cfg_path) as f:
         cfg = json.load(f)
     hidden_size = int(cfg.get("hidden_size"))
     inter_size = int(cfg.get("moe_intermediate_size"))

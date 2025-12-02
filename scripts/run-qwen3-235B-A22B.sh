@@ -126,7 +126,6 @@ SGLANG_ARGS=(
    --sglang-ep-size 32
    --sglang-enable-dp-lm-head
    --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
-   --sglang-disable-radix-cache
 
    --sglang-moe-a2a-backend deepep
    --sglang-deepep-mode auto
