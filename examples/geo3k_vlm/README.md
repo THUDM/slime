@@ -9,7 +9,7 @@ Training VLMs with FSDP on single-turn reasoning task using GRPO on the [GEO3K d
 ```bash
 export WANDB_API_KEY=your_wandb_api_key
 
-SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-2B-Instruct SLIME_SCRIPT_EXTERNAL_RAY=1 SLIME_SCRIPT_NUM_GPUS=8 python examples/geo3k_vlm/run_geo3k_vlm.py 2>&1 | tee run_simple.log
+SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-2B-Instruct SLIME_SCRIPT_NUM_GPUS=8 python examples/geo3k_vlm/run_geo3k_vlm.py 2>&1 | tee run_simple.log
 ```
 
 ## Notes
