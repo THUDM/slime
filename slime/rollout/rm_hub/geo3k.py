@@ -14,11 +14,11 @@ def acc_reward(predict_str: str, ground_truth: str, use_boxed: bool = True) -> f
         answer = extract_boxed_answer(predict_str)
     else:
         answer = predict_str
-    return 1.0 if grade_answer_sympy(answer, ground_truth) else 0.0
+    return 1.0 if grade_answer_sympy(answer, ground_truth, tol=0.05) else 0.0
 
 
 def compute_score_geo3k(
-    predict_str: str, ground_truth: str, use_boxed: bool = True, format_score: float = 0.1
+    predict_str: str, ground_truth: str, use_boxed: bool = True, format_score: float = 0.0
 ) -> float:
     return (1.0 - format_score) * acc_reward(predict_str, ground_truth, use_boxed) + format_score * format_reward(
         predict_str

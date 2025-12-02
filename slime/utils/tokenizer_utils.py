@@ -38,23 +38,23 @@ def prepare_model_inputs(prompt, tokenizer, processor=None, metadata=None, apply
     if not processor:
         input_ids = tokenizer.encode(text_prompt, add_special_tokens=False)
         return input_ids, {}
+    else:
+        # temporary solution, will write image utils for slime later
+        from qwen_vl_utils import process_vision_info
 
-    # temporary solution, will write image utils for slime later
-    from qwen_vl_utils import process_vision_info
+        images, videos = process_vision_info(prompt)
 
-    images, videos = process_vision_info(prompt)
+        # Get input IDs with full prompt (text + multimodal)
+        processor_output = processor(text=text_prompt, images=images, videos=videos)
+        input_ids = processor_output["input_ids"][0]
 
-    # Get input IDs with full prompt (text + multimodal)
-    processor_output = processor(text=text_prompt, images=images, videos=videos)
-    input_ids = processor_output["input_ids"][0]
+        # Extract multimodal tokens (exclude text-related tokens)
+        multimodal_inputs = {k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]}
 
-    # Extract multimodal tokens (exclude text-related tokens)
-    multimodal_inputs = {k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]}
+        encoding_info = {
+            "images": images,
+            "videos": videos,
+            "multimodal_inputs": multimodal_inputs,
+        }
 
-    encoding_info = {
-        "images": images,
-        "videos": videos,
-        "multimodal_inputs": multimodal_inputs,
-    }
-
-    return input_ids, encoding_info
+        return input_ids, encoding_info

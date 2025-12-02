@@ -9,7 +9,7 @@ sys.path.append(str(Path(__file__).resolve().parents[2] / "tests"))
 import slime.utils.misc as U
 
 MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")
-assert MODEL_NAME in {"Qwen3-VL-2B-Instruct", "Qwen3-VL-4B-Instruct", "Qwen3-VL-8B-Instruct"}
+assert MODEL_NAME in {"Qwen2.5-VL-3B-Instruct", "Qwen3-VL-2B-Instruct", "Qwen3-VL-4B-Instruct", "Qwen3-VL-8B-Instruct"}
 
 NUM_GPUS = int(os.environ.get("SLIME_SCRIPT_NUM_GPUS", "1"))
 EXTERNAL_RAY = int(os.environ.get("SLIME_SCRIPT_EXTERNAL_RAY", "0"))
@@ -36,16 +36,16 @@ def prepare():
     _, partial_name = dataset_name.split("/")
     U.exec_command(f"hf download --repo-type dataset {dataset_name} --local-dir /root/datasets/{partial_name}")
 
-    try:
-        # Rename the dataset directory and files to match expected structure
-        U.exec_command("mv /root/datasets/geometry3k /root/datasets/geo3k")
-        U.exec_command("mv /root/datasets/geo3k/data/train-00000-of-00001.parquet /root/datasets/geo3k/train.parquet")
-        U.exec_command("mv /root/datasets/geo3k/data/test-00000-of-00001.parquet /root/datasets/geo3k/test.parquet")
-        U.exec_command(
-            "mv /root/datasets/geo3k/data/validation-00000-of-00001.parquet /root/datasets/geo3k/val.parquet"
-        )
-    except Exception:
-        pass
+    # try:
+    #     # Rename the dataset directory and files to match expected structure
+    #     U.exec_command("mv /root/datasets/geometry3k /root/datasets/geo3k")
+    #     U.exec_command("mv /root/datasets/geo3k/data/train-00000-of-00001.parquet /root/datasets/geo3k/train.parquet")
+    #     U.exec_command("mv /root/datasets/geo3k/data/test-00000-of-00001.parquet /root/datasets/geo3k/test.parquet")
+    #     U.exec_command(
+    #         "mv /root/datasets/geo3k/data/validation-00000-of-00001.parquet /root/datasets/geo3k/val.parquet"
+    #     )
+    # except Exception:
+    #     pass
 
 
 def execute():
@@ -61,7 +61,7 @@ def execute():
         '--multimodal-keys \'{"image": "images"}\' '
         "--apply-chat-template "
         "--rollout-shuffle "
-        "--rm-type math "
+        "--rm-type geo3k "
         "--num-rollout 3000 "
         "--rollout-batch-size 64 "
         "--n-samples-per-prompt 8 "
@@ -119,13 +119,6 @@ def execute():
         "--attn-implementation flash_attention_3 "
     )
 
-    # ci_args = (
-    #     "--ci-test "
-    #     "--ci-disable-kl-checker "
-    #     "--ci-metric-checker-key eval/geo3k-test"
-    #     "--ci-metric-checker-threshold 0.71 "  # loose threshold at 60 step
-    # )
-
     wandb_args = (
         "--use-wandb "
         "--wandb-project geo3k-vlm "
@@ -168,7 +161,6 @@ def execute():
         f"{eval_args} "
         f"{misc_args} "
         f"{wandb_args} "
-        # f"{ci_args} "
         # f"{true_on_policy_args} "
     )
 
@@ -200,8 +192,6 @@ def execute():
             "env_vars": {
                 "CUDA_DEVICE_MAX_CONNECTIONS": "1",
                 "NCCL_NVLS_ENABLE": str(has_nvlink),
-                # "no_proxy": f"127.0.0.1,{MASTER_ADDR}",
-                # "MASTER_ADDR": MASTER_ADDR,
                 # **true_on_policy_envs,
                 # "SGLANG_DUMPER_ENABLE": "0",
                 # "SGLANG_TEMP_UTILS_ENABLE_DEBUG_PRINT": "0",

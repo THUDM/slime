@@ -8,7 +8,7 @@ omegaconf
 pillow
 pylatexenc
 pyyaml
-qwen_vl_utils # temporary dependency for geo3k vlm example, will be removed
+qwen_vl_utils # for VLM
 ray[default]
 ring_flash_attn
 sglang-router>=0.2.3
