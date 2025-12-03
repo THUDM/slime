@@ -17,7 +17,7 @@ from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_d
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.metric_utils import compute_rollout_step
-from slime.utils.ppo_utils import compute_approx_kl, compute_policy_loss
+from slime.utils.ppo_utils import compute_approx_kl, compute_gspo_kl, compute_opsm_mask, compute_policy_loss
 from slime.utils.processing_utils import load_processor, load_tokenizer
 from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, inverse_timer, timer
