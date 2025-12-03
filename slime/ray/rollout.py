@@ -158,7 +158,7 @@ class RolloutManager:
             while isinstance(data[0], list):
                 data = sum(data, [])
 
-            if not self.args.rollout_disable_trim_samples and len(data) % self.args.global_batch_size != 0:
+            if not self.args.disable_rollout_trim_samples and len(data) % self.args.global_batch_size != 0:
                 trim_len = (len(data) // self.args.global_batch_size) * self.args.global_batch_size
                 origin_data_length = len(data)
                 data = data[:trim_len]
