@@ -104,24 +104,37 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
     # Process prompt to create text and image payload
     image_data = []
+    text_prompt = ""
+
     if isinstance(sample.prompt, str):
         text_prompt = sample.prompt
-    else:  # Multimodal prompt (list of dicts)
-        text_prompt = ""
-        # sglang uses a placeholder to insert image features
-        image_token = state.tokenizer.special_tokens_map.get("image_token", "<image>")
-        for part in sample.prompt:
-            if part["type"] == "text":
-                text_prompt += part["text"]
-            elif part["type"] == "image":
-                text_prompt += image_token
-                try:
-                    img_b64 = await asyncio.to_thread(_load_and_encode_image, part["path"])
-                    image_data.append(img_b64)
-                except Exception as e:
-                    logger.info(f"Error processing image {part['path']}: {e}")
-                    sample.status = Sample.Status.ABORTED
-                    return sample
+    elif isinstance(sample.prompt, list):
+        # Check if it's a multimodal prompt (has 'type') or structured chat messages
+        if len(sample.prompt) > 0 and "type" in sample.prompt[0]:
+            # Multimodal prompt (list of dicts)
+            # sglang uses a placeholder to insert image features
+            image_token = state.tokenizer.special_tokens_map.get("image_token", "<image>")
+            for part in sample.prompt:
+                if part["type"] == "text":
+                    text_prompt += part["text"]
+                elif part["type"] == "image":
+                    text_prompt += image_token
+                    try:
+                        img_b64 = await asyncio.to_thread(_load_and_encode_image, part["path"])
+                        image_data.append(img_b64)
+                    except Exception as e:
+                        logger.info(f"Error processing image {part['path']}: {e}")
+                        sample.status = Sample.Status.ABORTED
+                        return sample
+        else:
+            # Chat messages (logic for Tools/Structured SFT)
+            # Extract tools from metadata if available
+            tools = sample.metadata.get("tools", None)
+
+            # Apply chat template locally to get the string prompt used for length calculation
+            text_prompt = state.tokenizer.apply_chat_template(
+                sample.prompt, tools=tools, tokenize=False, add_generation_prompt=True
+            )
 
     if len(sample.response) > 0:
         # Adjust max_new_tokens for subsequent generation turns
@@ -163,7 +176,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if args.use_slime_router and "RadixTreeMiddleware" in args.slime_router_middleware_paths:
         assert not args.partial_rollout, "Currently parital rollout is not suppurted when using slime router"
         retrieve_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/retrieve_from_text"
-        retrieve_payload = {"text": sample.prompt + output["text"], "return_logp": True}
+        retrieve_payload = {"text": text_prompt + output["text"], "return_logp": True}
         retrieve_output = await post(retrieve_url, retrieve_payload)
         sample.tokens = retrieve_output["tokens"]
         sample.response += output["text"]
