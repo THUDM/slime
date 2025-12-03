@@ -6,8 +6,8 @@ import slime.utils.external_utils.command_utils as U
 ENABLE_EVAL = bool(int(os.environ.get("SLIME_TEST_ENABLE_EVAL", "1")))
 TIGHT_HOST_MEMORY = bool(int(os.environ.get("SLIME_TEST_TIGHT_HOST_MEMORY", "1")))
 
-MODEL_NAME = "Qwen3-4B"
-MODEL_TYPE = "qwen3-4B"
+MODEL_NAME = "Qwen3-0.6B"
+MODEL_TYPE = "qwen3-0.6B"
 NUM_GPUS = 8
 
 
@@ -15,7 +15,6 @@ def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
-    U.hf_download_dataset("zhuzilin/aime-2024")
 
     U.convert_checkpoint(
         model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS, dir_dst="/root/models"
@@ -38,18 +37,6 @@ def execute():
         "--rollout-max-response-len 8192 "
         "--rollout-temperature 0.8 "
         "--global-batch-size 32 "
-        "--balance-data "
-    )
-
-    perf_args = (
-        "--tensor-model-parallel-size 2 "
-        "--sequence-parallel "
-        "--pipeline-model-parallel-size 1 "
-        "--recompute-granularity full "
-        "--recompute-method uniform "
-        "--recompute-num-layers 1 "
-        "--use-dynamic-batch-size "
-        "--max-tokens-per-gpu 2048 "
     )
 
     ppo_args = (
@@ -93,7 +80,6 @@ def execute():
         f"{optimizer_args} "
         f"{ppo_args} "
         f"{U.get_default_wandb_args(__file__)} "
-        f"{perf_args} "
         f"{sglang_args} "
         f"{ci_args} "
         f"{misc_args} "
@@ -105,29 +91,40 @@ def execute():
             + (
                 f"--save-debug-rollout-data data-{i}.pt "
                 f"--ci-save-grad-norm grad_norms-{i}.pt "
-                "--context-parallel-size 1 "
                 f"--actor-num-gpus-per-node {NUM_GPUS} "
             ),
             num_gpus_per_node=NUM_GPUS,
             megatron_model_type=MODEL_TYPE,
         )
         # 8 GPU CPU 1
-        for num_gpus in [8, 4]:
-            for cp_size in [1, 2, 4]:
-                if num_gpus // cp_size < 2:
-                    continue
+        for num_gpus in [8, 4, 2]:
+            remaining_gpus = num_gpus
+            for tp_size in [1, 2, 4, 8]:
+                remaining_gpus /= tp_size
+                for pp_size in [1, 2, 4]:
+                    if remaining_gpus < pp_size:
+                        continue
+                    remaining_gpus /= pp_size
+                    for cp_size in [1, 2, 4, 8]:
+                        if remaining_gpus < cp_size:
+                            continue
+                        args = train_args + (
+                            f"--load-debug-rollout-data data-{i}.pt "
+                            f"--ci-load-grad-norm grad_norms-{i}.pt "
+                            f"--context-parallel-size {cp_size} "
+                            f"--tensor-model-parallel-size {tp_size} "
+                            f"--pipeline-model-parallel-size {pp_size} "
+                            "--sequence-parallel "
+                            f"--actor-num-gpus-per-node {num_gpus} "
+                            "--use-dynamic-batch-size "
+                            "--max-tokens-per-gpu 8192 "
+                        )
 
-                U.execute_train(
-                    train_args=train_args
-                    + (
-                        f"--load-debug-rollout-data data-{i}.pt "
-                        f"--ci-load-grad-norm grad_norms-{i}.pt "
-                        f"--context-parallel-size {cp_size} "
-                        f"--actor-num-gpus-per-node {num_gpus} "
-                    ),
-                    num_gpus_per_node=num_gpus,
-                    megatron_model_type=MODEL_TYPE,
-                )
+                        U.execute_train(
+                            train_args=args,
+                            num_gpus_per_node=num_gpus,
+                            megatron_model_type=MODEL_TYPE,
+                        )
         train_args += "--calculate-per-token-loss "
 
 

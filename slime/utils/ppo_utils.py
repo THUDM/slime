@@ -1,6 +1,8 @@
 # Adapt from https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/models/utils.py
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
 
+from argparse import Namespace
+
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -27,7 +29,6 @@ def compute_approx_kl(
     if kl_loss_type == "k1":
         return log_ratio
     elif kl_loss_type == "k2":
-        log_ratio = log_probs.float() - log_probs_base.float()
         log_ratio = log_ratio**2 / 2.0
         return log_ratio
     elif kl_loss_type == "k3":
@@ -43,6 +44,76 @@ def compute_approx_kl(
         return torch.clamp(log_ratio, min=-10, max=10)
     else:
         raise ValueError(f"Unknown kl_loss_type: {kl_loss_type}")
+
+
+def compute_opsm_mask(
+    args: Namespace,
+    full_log_probs: list[torch.Tensor],
+    full_old_log_probs: list[torch.Tensor],
+    advantages: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute Off-Policy Sequence Masking (OPSM) mask.
+
+    Args:
+        args: Configuration containing `opsm_delta` threshold.
+        full_log_probs: Current policy log-probs per sample.
+        full_old_log_probs: Old policy log-probs per sample.
+        advantages: Advantage values per sample.
+        loss_masks: Loss masks per sample.
+
+    Returns:
+        Tuple of `(opsm_mask, opsm_clipfrac)` where `opsm_mask` is a
+        concatenated tensor of per-token masks and
+        `opsm_clipfrac` is the count of masked sequences.
+    """
+    opsm_mask_list = []
+    device = advantages[0].device
+    opsm_clipfrac = torch.tensor(0.0, device=device)
+
+    for full_log_prob, full_old_log_prob, advantage, loss_mask in zip(
+        full_log_probs, full_old_log_probs, advantages, loss_masks, strict=False
+    ):
+        # Calculate sequence-level KL
+        seq_kl = ((full_old_log_prob - full_log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+
+        # Create mask: 0 if (advantage < 0 and seq_kl > delta), else 1
+        mask = ((advantage < 0) & (seq_kl > args.opsm_delta)).float()
+        opsm_clipfrac += mask.sum() / torch.clamp_min(loss_mask.sum(), 1)
+
+        opsm_mask_list.append(1 - mask)
+
+    opsm_mask = torch.cat(opsm_mask_list, dim=0)
+    return opsm_mask, opsm_clipfrac
+
+
+def compute_gspo_kl(
+    full_log_probs: list[torch.Tensor],
+    full_old_log_probs: list[torch.Tensor],
+    local_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+) -> torch.Tensor:
+    """Compute GSPO-style per-sequence KL divergence.
+
+    Args:
+        full_log_probs: Current policy log-probs per sample (full or CP-local).
+        full_old_log_probs: Old policy log-probs per sample (full or CP-local).
+        local_log_probs: Local (CP-local) log-probs for expansion shape reference.
+        loss_masks: Loss masks per sample.
+
+    Returns:
+        Concatenated tensor of per-token KL values where each token in a
+        sequence has the same KL value (the sequence-level KL).
+    """
+    # Compute sequence-level KL and expand to per-token
+    ppo_kl = [
+        ((old_logprob - log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+        for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks, strict=False)
+    ]
+    ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, local_log_probs, strict=False)]
+    ppo_kl = torch.cat(ppo_kl, dim=0)
+
+    return ppo_kl
 
 
 @torch.compile(dynamic=True)

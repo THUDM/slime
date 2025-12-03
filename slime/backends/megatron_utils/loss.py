@@ -10,6 +10,8 @@ from slime.utils.misc import load_function
 from slime.utils.ppo_utils import (
     calculate_log_probs_and_entropy,
     compute_approx_kl,
+    compute_gspo_kl,
+    compute_opsm_mask,
     compute_policy_loss,
     get_advantages_and_returns_batch,
     get_grpo_returns,
@@ -356,6 +358,56 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     rollout_data["returns"] = returns
 
 
+def vanilla_tis_function(
+    args,
+    *,
+    pg_loss: torch.Tensor,
+    train_log_probs: list[torch.Tensor],
+    rollout_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    **kwargs: Any,
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
+    rollout_log_probs = torch.cat(rollout_log_probs, dim=0)
+    old_log_probs = torch.cat(train_log_probs, dim=0)
+    tis = torch.exp(old_log_probs - rollout_log_probs)
+    tis_abs = (torch.exp(old_log_probs - rollout_log_probs) - 1).abs()
+    tis_weights = torch.clamp(tis, min=args.tis_clip_low, max=args.tis_clip)
+    tis_clipfrac = (tis_weights != tis).float()
+    metrics = {
+        "tis": tis.clone().detach(),
+        "tis_clipfrac": tis_clipfrac.clone().detach(),
+        "tis_abs": tis_abs.clone().detach(),
+    }
+    pg_loss = pg_loss * tis_weights
+    return pg_loss, loss_masks, metrics
+
+
+def icepop_function(
+    args,
+    *,
+    pg_loss: torch.Tensor,
+    train_log_probs: list[torch.Tensor],
+    rollout_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    **kwargs: Any,
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
+    rollout_log_probs = torch.cat(rollout_log_probs, dim=0)
+    old_log_probs = torch.cat(train_log_probs, dim=0)
+    ice_ratio = torch.exp(old_log_probs - rollout_log_probs)
+    ice_abs = (torch.exp(old_log_probs - rollout_log_probs) - 1).abs()
+    ice_weight = torch.where(
+        (ice_ratio >= args.tis_clip_low) & (ice_ratio <= args.tis_clip), ice_ratio, torch.zeros_like(ice_ratio)
+    )
+    ice_clipfrac = (ice_weight != ice_ratio).float()
+    metrics = {
+        "tis": ice_ratio.clone().detach(),
+        "tis_clipfrac": ice_clipfrac.clone().detach(),
+        "tis_abs": ice_abs.clone().detach(),
+    }
+    pg_loss = pg_loss * ice_weight
+    return pg_loss, loss_masks, metrics
+
+
 def policy_loss_function(
     args: Namespace,
     batch: RolloutBatch,
@@ -403,7 +455,12 @@ def policy_loss_function(
 
     log_probs = log_probs_and_entropy["log_probs"]
 
-    if args.advantage_estimator == "gspo":
+    # Pre-gather log probs if needed by OPSM or GSPO to avoid duplicate gathering
+    need_full_log_probs = args.use_opsm or args.advantage_estimator == "gspo"
+
+    full_log_probs = None
+    full_old_log_probs = None
+    if need_full_log_probs:
         full_log_probs = [
             all_gather_with_cp(log_prob, total_length, response_length)
             for log_prob, total_length, response_length in zip(
@@ -417,13 +474,24 @@ def policy_loss_function(
             )
         ]
 
-        loss_masks = batch["loss_masks"]
-        ppo_kl = [
-            ((old_logprob - log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
-            for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks, strict=False)
-        ]
-        ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, log_probs, strict=False)]
-        ppo_kl = torch.cat(ppo_kl, dim=0)
+    # Compute OPSM mask if enabled
+    if args.use_opsm:
+        opsm_mask, opsm_clipfrac = compute_opsm_mask(
+            args=args,
+            full_log_probs=full_log_probs,
+            full_old_log_probs=full_old_log_probs,
+            advantages=batch["advantages"],
+            loss_masks=batch["loss_masks"],
+        )
+
+    # Compute KL divergence (GSPO uses sequence-level KL, others use per-token KL)
+    if args.advantage_estimator == "gspo":
+        ppo_kl = compute_gspo_kl(
+            full_log_probs=full_log_probs,
+            full_old_log_probs=full_old_log_probs,
+            local_log_probs=log_probs,
+            loss_masks=batch["loss_masks"],
+        )
         old_log_probs = torch.cat(old_log_probs, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
     else:
@@ -433,32 +501,11 @@ def policy_loss_function(
 
     pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
 
+    if args.use_opsm:
+        pg_loss = pg_loss * opsm_mask
+
     # Apply off-policy correction using importance sampling if enabled
     if args.get_mismatch_metrics or args.use_tis:
-
-        def vanilla_tis_function(
-            args,
-            *,
-            pg_loss: torch.Tensor,
-            train_log_probs: list[torch.Tensor],
-            rollout_log_probs: list[torch.Tensor],
-            loss_masks: list[torch.Tensor],
-            **kwargs: Any,
-        ) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
-            rollout_log_probs = torch.cat(rollout_log_probs, dim=0)
-            old_log_probs = torch.cat(train_log_probs, dim=0)
-            tis = torch.exp(old_log_probs - rollout_log_probs)
-            tis_abs = torch.exp((old_log_probs - rollout_log_probs).abs())
-            tis_weights = torch.clamp(tis, min=args.tis_clip_low, max=args.tis_clip)
-            tis_clipfrac = (tis_weights != tis).float()
-            metrics = {
-                "tis": tis.clone().detach(),
-                "tis_clipfrac": tis_clipfrac.clone().detach(),
-                "tis_abs": tis_abs.clone().detach(),
-            }
-            pg_loss = pg_loss * tis_weights
-            return pg_loss, loss_masks, metrics
-
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
 
         ois = (-ppo_kl).exp()
@@ -536,6 +583,9 @@ def policy_loss_function(
         for metric_key, metric_value in tis_metrics.items():
             key_name = f"{metric_key}"
             reported_loss[key_name] = sum_of_sample_mean(metric_value)
+
+    if args.use_opsm:
+        reported_loss["opsm_clipfrac"] = opsm_clipfrac
 
     return loss, reported_loss
 

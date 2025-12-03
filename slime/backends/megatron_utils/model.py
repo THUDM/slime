@@ -666,7 +666,7 @@ def train(
                     grad_norm,
                     expected_grad_norm,
                     rel_tol=0.01,
-                    abs_tol=0.1,
+                    abs_tol=0.01,
                 ), f"grad norm mismatch: {grad_norm} != {expected_grad_norm}"
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
     if pre_hook_enabled:

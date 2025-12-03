@@ -2,6 +2,7 @@ import logging
 from argparse import Namespace
 from itertools import accumulate
 
+
 import ray
 import torch
 import torch.distributed as dist
@@ -165,6 +166,10 @@ class FSDPTrainRayActor(TrainRayActor):
             )
 
             apply_true_on_policy_patch_for_qwen3_moe()
+        else:
+            from .models.qwen3_moe_hf import apply_fsdp_moe_patch
+
+            apply_fsdp_moe_patch()
 
     def _setup_device_mesh(self) -> None:
         """Setup device mesh for parallelism (always called, handles both CP and non-CP cases).
@@ -603,23 +608,30 @@ class FSDPTrainRayActor(TrainRayActor):
         response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
 
         advantages = advantages.to(device=log_probs.device)
-        ppo_kl = old_log_probs.to(device=log_probs.device) - log_probs
+        old_log_probs = old_log_probs.to(device=log_probs.device)
+        ppo_kl = old_log_probs - log_probs
+
+        if self.args.use_opsm:
+            opsm_mask, opsm_clipfrac = compute_opsm_mask(
+                args=self.args,
+                full_log_probs=[batch["cur_log_probs"] for batch in unpacked_batches],
+                full_old_log_probs=[batch[old_log_prob_key] for batch in unpacked_batches],
+                advantages=[batch["advantages"] for batch in unpacked_batches],
+                loss_masks=loss_masks,
+            )
 
         if self.args.advantage_estimator == "gspo":
-            log_ratio_splits = torch.split(ppo_kl, response_lengths, dim=0)
-
-            seq_kls = [
-                ((log_ratio_i * mask_i).sum() / mask_i.sum().clamp_min(1))
-                for log_ratio_i, mask_i in zip(log_ratio_splits, loss_masks, strict=False)
-            ]
-
-            ppo_kl_list = []
-            for seq_kl, length in zip(seq_kls, response_lengths, strict=False):
-                ppo_kl_list.append(seq_kl.expand(length))
-
-            ppo_kl = torch.cat(ppo_kl_list)
+            ppo_kl = compute_gspo_kl(
+                full_log_probs=[batch["cur_log_probs"] for batch in unpacked_batches],
+                full_old_log_probs=[batch[old_log_prob_key] for batch in unpacked_batches],
+                local_log_probs=[batch["cur_log_probs"] for batch in unpacked_batches],
+                loss_masks=loss_masks,
+            )
 
         pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, self.args.eps_clip, self.args.eps_clip_high)
+
+        if self.args.use_opsm:
+            pg_loss = pg_loss * opsm_mask
 
         def _has_rollout_log_probs(batch) -> bool:
             rollout_tensor = batch.get("rollout_log_probs")
@@ -690,6 +702,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if self.args.use_kl_loss:
             reported["kl_loss"] = kl_loss.detach()
+
+        if self.args.use_opsm:
+            reported["opsm_clipfrac"] = opsm_clipfrac
 
         if self.args.use_tis and tis is not None:
             reported["tis"] = sum_of_sample_mean(tis, response_lengths, loss_masks).detach()

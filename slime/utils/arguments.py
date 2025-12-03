@@ -811,6 +811,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=False,
                 help="The rollout routing replay technique from https://arxiv.org/abs/2510.11370",
             )
+            parser.add_argument(
+                "--use-opsm",
+                action="store_true",
+                default=False,
+                help="Whether to enable Off-Policy Sequence Masking (OPSM).",
+            )
+            parser.add_argument(
+                "--opsm-delta",
+                type=float,
+                default=1e-4,
+                help="The threshold for Off-Policy Sequence Masking (OPSM).",
+            )
             return parser
 
         def add_router_arguments(parser):
