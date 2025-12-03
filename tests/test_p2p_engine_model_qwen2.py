@@ -191,8 +191,8 @@ def qwen32b_training_process(
         timing_results = {
             'register_and_start_time': register_end_time - register_start_time,
             'update_weights_time': update_end_time - update_start_time,
-            'stop_time': stop_end_time - stop_start_time,
-            'total_time': stop_end_time - register_start_time
+            'stop_engine_time': stop_end_time - stop_start_time,
+            # 'total_time': stop_end_time - register_start_time
         }
 
         result_queue.put(("training_success", "Qwen32B training completed"))
@@ -300,9 +300,7 @@ def qwen32b_rollout_process(
             'submit_tasks_time': submit_end_time - submit_start_time,
             'wait_transfers_time': wait_end_time - wait_start_time,
             'sync_time': sync_end_time - wait_end_time,
-            'verify_time': verify_end_time - verify_start_time,
             'total_transfer_time': sync_end_time - submit_start_time,
-            'total_time': verify_end_time - submit_start_time
         }
 
         # Wait for all rollout processes to complete
@@ -365,10 +363,8 @@ def qwen32b_distributed_training_process(
         init_end_time = time.time()
 
         # Move weights to the correct device
-        move_start_time = time.time()
         for name in weights:
             weights[name] = weights[name].to(device)
-        move_end_time = time.time()
 
         # Calculate total weight info for logging
         total_size_mb = sum(
@@ -388,7 +384,6 @@ def qwen32b_distributed_training_process(
         broadcast_end_time = time.time()
 
         # Prepare expected results for verification
-        prepare_start_time = time.time()
         expected_results = {}
         for name, weight in weights.items():
             expected_results[name] = {
@@ -399,7 +394,6 @@ def qwen32b_distributed_training_process(
                 'element_count': weight.numel(),
                 'tensor_data': weight.cpu().detach().numpy()
             }
-        prepare_end_time = time.time()
 
         logger.info(f"[DistTraining-{rank}] Weights broadcasted successfully")
 
@@ -413,11 +407,9 @@ def qwen32b_distributed_training_process(
         # Calculate timing results
         timing_results = {
             'init_process_group_time': init_end_time - init_start_time,
-            'move_to_device_time': move_end_time - move_start_time,
             'broadcast_time': broadcast_end_time - broadcast_start_time,
-            'prepare_results_time': prepare_end_time - prepare_start_time,
             'destroy_group_time': destroy_end_time - destroy_start_time,
-            'total_time': destroy_end_time - init_start_time
+            # 'total_time': destroy_end_time - init_start_time
         }
 
         result_queue.put(("training_success", "Qwen32B distributed training completed"))
@@ -457,11 +449,9 @@ def qwen32b_distributed_rollout_process(
         init_end_time = time.time()
 
         # Move weights to the correct device and zero them out
-        move_start_time = time.time()
         for name in weights:
             weights[name] = weights[name].to(device)
             weights[name].zero_()
-        move_end_time = time.time()
 
         # Store original (zero) data for comparison
         original_data = {name: weight.clone() for name, weight in weights.items()}
@@ -481,7 +471,6 @@ def qwen32b_distributed_rollout_process(
         sync_end_time = time.time()
 
         # Verify data changed from original zeros
-        verify_start_time = time.time()
         weights_changed = {}
         received_results = {}
 
@@ -503,7 +492,6 @@ def qwen32b_distributed_rollout_process(
 
         total_changed = sum(weights_changed.values())
         logger.info(f"[DistRollout-{rank}] Weights changed: {total_changed}/{len(weights)}")
-        verify_end_time = time.time()
 
         # Wait for all rollout processes to complete
         barrier.wait()
@@ -515,13 +503,11 @@ def qwen32b_distributed_rollout_process(
         # Calculate timing results
         timing_results = {
             'init_process_group_time': init_end_time - init_start_time,
-            'move_to_device_time': move_end_time - move_start_time,
             'broadcast_time': broadcast_end_time - broadcast_start_time,
             'sync_time': sync_end_time - broadcast_end_time,
-            'verify_time': verify_end_time - verify_start_time,
             'destroy_group_time': destroy_end_time - destroy_start_time,
             'total_transfer_time': sync_end_time - broadcast_start_time,
-            'total_time': destroy_end_time - init_start_time
+            # 'total_time': destroy_end_time - init_start_time
         }
 
         result_queue.put((f"rollout_{rank}_success", total_changed == len(weights)))
