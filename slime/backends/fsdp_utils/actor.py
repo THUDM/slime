@@ -156,6 +156,10 @@ class FSDPTrainRayActor(TrainRayActor):
             )
 
             apply_true_on_policy_patch_for_qwen3_moe()
+        else:
+            from .models.qwen3_moe_hf import apply_fsdp_moe_patch
+
+            apply_fsdp_moe_patch()
 
     def _setup_device_mesh(self) -> None:
         """Setup device mesh for parallelism (always called, handles both CP and non-CP cases).
