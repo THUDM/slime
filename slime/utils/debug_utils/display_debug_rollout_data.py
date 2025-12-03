@@ -6,7 +6,7 @@ from typing import Annotated
 import torch
 import typer
 
-from slime.ray.rollout import _compute_metrics_from_samples
+from slime.ray.rollout import compute_metrics_from_samples
 from slime.utils.types import Sample
 
 _WHITELIST_KEYS = [
@@ -47,8 +47,7 @@ def main(
                 log_reward_category=None,
             )
             sample_objects = [Sample.from_dict(s) for s in sample_dicts]
-            # TODO make the function public
-            metrics = _compute_metrics_from_samples(args, sample_objects)
+            metrics = compute_metrics_from_samples(args, sample_objects)
             print("metrics", metrics)
 
         if show_samples:
