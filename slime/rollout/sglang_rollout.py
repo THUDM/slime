@@ -40,7 +40,7 @@ class GenerateState(metaclass=SingletonMeta):
     """
 
     def __init__(self, args: Namespace) -> None:
-        # persistant state for the generation process
+        # persistent state for the generation process
         self.args = args
         self.tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         self.processor = load_processor(args.hf_checkpoint, trust_remote_code=True)

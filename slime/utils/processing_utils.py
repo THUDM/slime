@@ -1,7 +1,10 @@
 import base64
 import io
+import logging
 
 from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
+
+logger = logging.getLogger(__name__)
 
 
 def load_tokenizer(name_or_path: str, **kwargs):
@@ -11,7 +14,8 @@ def load_tokenizer(name_or_path: str, **kwargs):
 def load_processor(name_or_path: str, **kwargs):
     try:
         proc = AutoProcessor.from_pretrained(name_or_path, **kwargs)
-    except Exception:
+    except (OSError, ValueError) as e:
+        logger.warning(f"Failed to load processor from {name_or_path}: {e}")
         proc = None
 
     # If HF returned a tokenizer, discard it.

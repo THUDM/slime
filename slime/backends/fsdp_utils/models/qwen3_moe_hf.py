@@ -41,4 +41,3 @@ def apply_fsdp_moe_patch():
         return final_hidden_states, router_logits
 
     modeling_qwen3_moe.Qwen3MoeSparseMoeBlock.forward = _forward
-

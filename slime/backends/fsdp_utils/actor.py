@@ -1,7 +1,7 @@
 import logging
+import os
 from argparse import Namespace
 from itertools import accumulate
-
 
 import ray
 import torch
@@ -793,8 +793,6 @@ class FSDPTrainRayActor(TrainRayActor):
         """
         if ref_load_path is None:
             raise ValueError("ref_load_path must be provided when loading reference model")
-
-        import os
 
         if os.path.isdir(ref_load_path):
             logger.info(f"[Rank {dist.get_rank()}] Creating separate ref model from {ref_load_path}")

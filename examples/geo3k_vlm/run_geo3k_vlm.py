@@ -1,10 +1,6 @@
 import json
 import os
 import subprocess
-import sys
-from pathlib import Path
-
-sys.path.append(str(Path(__file__).resolve().parents[2] / "tests"))
 
 import slime.utils.misc as U
 

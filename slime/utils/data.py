@@ -96,7 +96,7 @@ def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
                 #     },
                 #     {"type": "text", "text": "Describe this image."},
                 # ],
-                print("Warning: message['content'] is a list of dicts, no processing will be done.")
+                logger.warning("message['content'] is a list of dicts, no processing will be done.")
                 continue
             else:
                 raise ValueError(

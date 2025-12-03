@@ -94,7 +94,7 @@ def pack_sequences(
                         multimodal_data[key] = mm_tensor
                         multimodal_num_items[key] = [mm_tensor.size(0)]
                     else:
-                        multimodal_data[key] = torch.cat(multimodal_data[key], mm_tensor)
+                        multimodal_data[key] = torch.cat([multimodal_data[key], mm_tensor], dim=0)
                         multimodal_num_items[key].append(mm_tensor.size(0))
 
         result.append(
