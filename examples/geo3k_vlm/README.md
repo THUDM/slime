@@ -2,7 +2,9 @@
 
 Training VLMs with FSDP on single-turn reasoning task using GRPO on the [GEO3K dataset](https://huggingface.co/datasets/hiyouga/geometry3k). We used processed version [here](https://huggingface.co/datasets/chenhegu/geo3k_imgurl).
 
-![Reward Plot](reward.png)
+<p align="center">
+  <img src="rewards.png" alt="Reward Plot" width="800">
+</p>
 
 ## Reproduce
 
