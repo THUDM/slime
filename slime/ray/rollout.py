@@ -163,6 +163,8 @@ class RolloutManager:
                 origin_data_length = len(data)
                 data = data[:trim_len]
                 logger.info(f"trim number of samples from {origin_data_length} to {trim_len}")
+            else:
+                logger.info(f"Collectd {len(data)} samples from rollout to train")
         return data, metrics
 
     def _save_debug_rollout_data(self, data, rollout_id, evaluation: bool):

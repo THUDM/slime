@@ -1128,9 +1128,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             )
             parser.add_argument(
                 "--rollout-disable-trim-samples",
-                type=bool,
+                action="store_true",
                 default=False,
-                help="Whether to disable trim samples in rollout buffer when converting samples to train data",
+                help="disable trim samples in rollout buffer when converting samples to train data",
             )
             return parser
 
