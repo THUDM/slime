@@ -108,7 +108,17 @@ class SiluAndMulFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         (intermediate_cache1,) = ctx.saved_tensors
-        return torch.zeros_like(intermediate_cache1)
+        N = intermediate_cache1.shape[-1]
+        x1, x2 = intermediate_cache1.view(-1, N).chunk(2, dim=-1)
+        silu_x1 = torch.nn.functional.silu(x1)
+
+        sig = torch.sigmoid(x1)
+        dsilu_dx1 = sig + x1 * sig * (1 - sig)
+        grad_x1 = grad_output * x2 * dsilu_dx1
+        grad_x2 = grad_output * silu_x1
+        grad_input = torch.cat([grad_x1, grad_x2], dim=-1)
+
+        return grad_input.view_as(intermediate_cache1)
 
 
 class DownProjFunction(torch.autograd.Function):
@@ -215,4 +225,4 @@ class MoeSumReduceFunction(torch.autograd.Function):
     @staticmethod
     def backward(ctx, grad_output):
         (intermediate_cache3,) = ctx.saved_tensors
-        return torch.zeros_like(intermediate_cache3), None
+        return grad_output.unsqueeze(1).expand_as(intermediate_cache3), None
