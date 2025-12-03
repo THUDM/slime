@@ -50,7 +50,7 @@ def execute():
         '--multimodal-keys \'{"image": "images"}\' '
         "--apply-chat-template "
         "--rollout-shuffle "
-        "--rm-type geo3k "
+        "--rm-type math "
         "--num-rollout 3000 "
         "--rollout-batch-size 64 "
         "--n-samples-per-prompt 8 "
