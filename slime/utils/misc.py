@@ -67,13 +67,13 @@ def get_free_port(start_port=10000, consecutive=1):
     return port
 
 
-def should_run_checkpoint_action(
+def should_run_periodic_action(
     rollout_id: int,
     interval: int | None,
     num_rollout_per_epoch: int | None = None,
 ) -> bool:
     """
-    Return True when a periodic checkpoint action (eval/save) should run.
+    Return True when a periodic action (eval/save/checkpoint) should run.
 
     Args:
         rollout_id: The current rollout index (0-based).
