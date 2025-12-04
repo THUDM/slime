@@ -70,8 +70,6 @@ def pack_sequences(
         flat_advantages = []
         flat_returns = []
         flat_rollout_log_probs = []
-        multimodal_data = {}  # key -> list of tensors to concatenate
-        multimodal_num_items = {}  # key -> list of item counts per sequence
 
         for i in indices:
             seq_tokens = tokens[i]
@@ -87,16 +85,6 @@ def pack_sequences(
                 flat_rollout_log_probs.extend(rollout_log_probs[i])
             cu_seqlens.append(cu_seqlens[-1] + len(seq_tokens))
 
-            # Collect multimodal inputs for this sequence
-            if multimodal_inputs:
-                for key, mm_tensor in multimodal_inputs[i].items():
-                    if key not in multimodal_data:
-                        multimodal_data[key] = mm_tensor
-                        multimodal_num_items[key] = [mm_tensor.size(0)]
-                    else:
-                        multimodal_data[key] = torch.cat([multimodal_data[key], mm_tensor], dim=0)
-                        multimodal_num_items[key].append(mm_tensor.size(0))
-
         packed_batch = {
             "tokens": torch.tensor(flat_tokens, dtype=torch.long),
             "loss_masks": torch.tensor(flat_masks, dtype=torch.int),
@@ -111,11 +99,22 @@ def pack_sequences(
                 flat_rollout_log_probs, dtype=torch.float32, device=torch.cuda.current_device()
             ),
         }
+
+        # Collect and add multimodal inputs for this partition
         if multimodal_inputs:
-            packed_batch.update({
-                "multimodal_inputs": multimodal_data,
-                "multimodal_num_items": multimodal_num_items,
-            })
+            multimodal_data = {}  # key -> concatenated tensor
+            multimodal_num_items = {}  # key -> list of item counts per sequence
+            for i in indices:
+                for key, mm_tensor in multimodal_inputs[i].items():
+                    if key not in multimodal_data:
+                        multimodal_data[key] = mm_tensor
+                        multimodal_num_items[key] = [mm_tensor.size(0)]
+                    else:
+                        multimodal_data[key] = torch.cat([multimodal_data[key], mm_tensor], dim=0)
+                        multimodal_num_items[key].append(mm_tensor.size(0))
+            packed_batch["multimodal_inputs"] = multimodal_data
+            packed_batch["multimodal_num_items"] = multimodal_num_items
+
         result.append(packed_batch)
 
     return result
