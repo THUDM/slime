@@ -1025,14 +1025,10 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False, args=None):
     # Determine precision policy based on args
     param_dtype = torch.bfloat16  # Default to bf16 as before
     reduce_dtype = torch.float32
-    
-    if args:
-        if args.fp16:
-            param_dtype = torch.float16
-        elif args.bf16:
-            param_dtype = torch.bfloat16
-            reduce_dtype = torch.float32
-    
+
+    if args.fp16:
+        param_dtype = torch.float16
+
     logger.info(f"FSDP MixedPrecision Policy: param_dtype={param_dtype}, reduce_dtype={reduce_dtype}")
 
     fsdp_kwargs = {
