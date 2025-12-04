@@ -97,24 +97,26 @@ def pack_sequences(
                         multimodal_data[key] = torch.cat([multimodal_data[key], mm_tensor], dim=0)
                         multimodal_num_items[key].append(mm_tensor.size(0))
 
-        result.append(
-            {
-                "tokens": torch.tensor(flat_tokens, dtype=torch.long),
-                "loss_masks": torch.tensor(flat_masks, dtype=torch.int),
-                "position_ids": torch.tensor(flat_positionids, dtype=torch.int),
-                "cu_seqlens": torch.tensor(cu_seqlens, dtype=torch.int32),
-                "rewards": torch.tensor([rewards[i] for i in indices], dtype=torch.float32),
-                "raw_reward": [raw_rewards[i] for i in indices],
-                "response_lengths": [response_lengths[i] for i in indices],
-                "advantages": torch.tensor(flat_advantages, dtype=torch.float32),
-                "returns": torch.tensor(flat_returns, dtype=torch.float32),
-                "rollout_log_probs": torch.tensor(
-                    flat_rollout_log_probs, dtype=torch.float32, device=torch.cuda.current_device()
-                ),
+        packed_batch = {
+            "tokens": torch.tensor(flat_tokens, dtype=torch.long),
+            "loss_masks": torch.tensor(flat_masks, dtype=torch.int),
+            "position_ids": torch.tensor(flat_positionids, dtype=torch.int),
+            "cu_seqlens": torch.tensor(cu_seqlens, dtype=torch.int32),
+            "rewards": torch.tensor([rewards[i] for i in indices], dtype=torch.float32),
+            "raw_reward": [raw_rewards[i] for i in indices],
+            "response_lengths": [response_lengths[i] for i in indices],
+            "advantages": torch.tensor(flat_advantages, dtype=torch.float32),
+            "returns": torch.tensor(flat_returns, dtype=torch.float32),
+            "rollout_log_probs": torch.tensor(
+                flat_rollout_log_probs, dtype=torch.float32, device=torch.cuda.current_device()
+            ),
+        }
+        if multimodal_inputs:
+            packed_batch.update({
                 "multimodal_inputs": multimodal_data,
                 "multimodal_num_items": multimodal_num_items,
-            }
-        )
+            })
+        result.append(packed_batch)
 
     return result
 
