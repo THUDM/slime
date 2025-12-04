@@ -8,26 +8,16 @@ import torch.distributed as dist
 from megatron.core import mpu
 from ray import ObjectRef
 from ray.actor import ActorHandle
-from sglang.srt.utils import MultiprocessingSerializer
 
 from slime.utils.distributed_utils import get_gloo_group
 
+from ..sglang import FlattenedTensorBucket, MultiprocessingSerializer, use_flattened_tensor_bucket
 from .hf_weight_iterator_base import HfWeightIteratorBase
 from .update_weight_from_distributed import (
     connect_rollout_engines_from_distributed,
     disconnect_rollout_engines_from_distributed,
     update_weights_from_distributed,
 )
-
-try:
-    try:
-        from sglang.srt.weight_sync.tensor_bucket import FlattenedTensorBucket  # type: ignore[import]
-    except ImportError:
-        from sglang.srt.model_executor.model_runner import FlattenedTensorBucket  # type: ignore[import]
-
-    use_flattened_tensor_bucket = True
-except Exception:
-    use_flattened_tensor_bucket = False
 
 
 class UpdateWeightFromTensor:

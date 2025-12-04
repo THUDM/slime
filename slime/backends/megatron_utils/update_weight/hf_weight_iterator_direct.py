@@ -5,21 +5,15 @@ from collections.abc import Sequence
 import torch
 import torch.distributed as dist
 from megatron.core import mpu
-
-from .hf_weight_iterator_base import HfWeightIteratorBase
-
-try:
-    from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
-except ImportError:
-    from sglang.srt.patch_torch import monkey_patch_torch_reductions
-
 from tqdm import tqdm
 
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.types import ParamInfo
 
 from ..megatron_to_hf import convert_to_hf
+from ..sglang import monkey_patch_torch_reductions
 from .common import all_gather_params_async, named_params_and_buffers
+from .hf_weight_iterator_base import HfWeightIteratorBase
 
 
 class HfWeightIteratorDirect(HfWeightIteratorBase):
