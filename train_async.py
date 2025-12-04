@@ -3,6 +3,7 @@ import ray
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.logging_utils import configure_logger
+from slime.utils.misc import should_run_checkpoint_action
 from slime.utils.tracking_utils import init_tracking
 
 
@@ -46,10 +47,7 @@ def train(args):
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))
 
-        if args.save_interval is not None and (
-            (rollout_id + 1) % args.save_interval == 0
-            or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
-        ):
+        if should_run_checkpoint_action(rollout_id, args.save_interval, num_rollout_per_epoch):
             actor_model.save_model(rollout_id)
             if args.use_critic:
                 critic_model.save_model(rollout_id)
@@ -62,10 +60,7 @@ def train(args):
             rollout_data_next_future = None
             actor_model.update_weights()
 
-        if args.eval_interval is not None and (
-            (rollout_id + 1) % args.eval_interval == 0
-            or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
-        ):
+        if should_run_checkpoint_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             ray.get(rollout_manager.eval.remote(rollout_id))
 
     ray.get(rollout_manager.dispose.remote())
