@@ -343,14 +343,14 @@ def should_allow_eval(expr: str):
     return True
 
 
-def are_equal_under_sympy(ground_truth_normalized: str, given_normalized: str, tol: float = 0.0):
+def are_equal_under_sympy(ground_truth_normalized: str, given_normalized: str):
     are_equal = False
     try:
         expr = f"({ground_truth_normalized})-({given_normalized})"
         if should_allow_eval(expr):
             sympy_diff = _sympy_parse(expr)
             simplified = sympy.simplify(sympy_diff)
-            if abs(simplified) <= tol:
+            if simplified == 0:
                 are_equal = True
     except Exception:
         pass
@@ -421,11 +421,11 @@ def extract_boxed_answer(solution: str) -> str:
     return solution
 
 
-def grade_answer_sympy(given_answer: str, ground_truth: str, tol: float = 0.0) -> bool:
+def grade_answer_sympy(given_answer: str, ground_truth: str) -> bool:
     ground_truth_normalized = _normalize(ground_truth)
     given_normalized = _normalize(given_answer)
 
-    if ground_truth_normalized is None or given_normalized is None:
+    if ground_truth_normalized is None:
         return False
 
     if ground_truth_normalized == given_normalized:
@@ -453,7 +453,7 @@ def grade_answer_sympy(given_answer: str, ground_truth: str, tol: float = 0.0) -
                 # if the ground truth answer is an integer, we require the given answer to be a strict match (no sympy.simplify)
                 is_correct = False
             else:
-                is_correct = are_equal_under_sympy(ground_truth_elem, given_elem, tol=tol)
+                is_correct = are_equal_under_sympy(ground_truth_elem, given_elem)
             if not is_correct:
                 break
 
