@@ -456,7 +456,7 @@ ROLLOUT_ARGS=(
    --prompt-data /root/nq_search/train_processed.json
 
    # 2. Map "question" column to input prompt
-   --prompt-key question
+   --input-key question
 
    # 3. Map "final_answer" column to evaluation label
    --label-key final_answer
