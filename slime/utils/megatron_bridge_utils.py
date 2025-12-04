@@ -1,5 +1,9 @@
 from contextlib import contextmanager
-from megatron.core.utils import unwrap_model
+
+try:
+    from megatron.core.utils import unwrap_model
+except ImportError:
+    unwrap_model = None
 
 
 @contextmanager
