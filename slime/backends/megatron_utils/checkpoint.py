@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 from pathlib import Path
 
 # TODO: may need to copy those 2 functions and do refactoring.
@@ -40,7 +41,9 @@ def load_checkpoint(ddp_model, optimizer, opt_param_scheduler, checkpointing_con
 
 
 def _is_megatron_checkpoint(path: str | Path) -> bool:
-    return (Path(path) / "latest_checkpointed_iteration.txt").is_file()
+    return (Path(path) / "latest_checkpointed_iteration.txt").is_file() or bool(
+        re.fullmatch(r"iter_\d{7}", Path(path).name)
+    )
 
 
 def _load_checkpoint_hf(ddp_model, optimizer, args, load_path: str):

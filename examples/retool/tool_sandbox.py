@@ -218,7 +218,7 @@ import resource
 # Set memory limit (4GB)
 try:
     resource.setrlimit(resource.RLIMIT_AS, (4 * 1024 * 1024 * 1024, -1))
-except:
+except Exception:
     pass
 
 # Redirect stdout and stderr

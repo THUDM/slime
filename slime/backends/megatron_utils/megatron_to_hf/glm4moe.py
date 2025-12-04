@@ -1,8 +1,6 @@
 import re
 
-import sglang
 import torch
-from packaging.version import parse
 
 
 def convert_glm4moe_to_hf(args, name, param):
@@ -40,17 +38,6 @@ def convert_glm4moe_to_hf(args, name, param):
                 outputs = [
                     (f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.weight", param),
                 ]
-                if parse(sglang.__version__) < parse("0.4.9.post5") and args.sglang_enable_ep_moe:
-                    outputs += [
-                        (
-                            f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.input_scale",
-                            torch.tensor(1.0, dtype=torch.float32, device=param.device),
-                        ),
-                        (
-                            f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.weight_scale",
-                            torch.tensor(1.0, dtype=torch.float32, device=param.device),
-                        ),
-                    ]
                 return outputs
             else:
                 raise ValueError(f"Unknown expert parameter name: {name}")

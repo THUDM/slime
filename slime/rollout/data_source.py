@@ -5,10 +5,10 @@ import os
 from pathlib import Path
 
 import torch
-from transformers import AutoTokenizer
 
 from slime.utils.data import Dataset
 from slime.utils.misc import load_function
+from slime.utils.processing_utils import load_processor, load_tokenizer
 from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
@@ -53,17 +53,22 @@ class RolloutDataSource(DataSource):
         self.metadata = {}
 
         if args.rollout_global_dataset:
-            tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+            tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
+            processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
             # TODO move (during the refactor)
             if (d := args.dump_details) is not None:
                 tokenizer.save_pretrained(Path(d) / "tokenizer")
+                if processor:
+                    processor.save_pretrained(Path(d) / "processor")
 
             self.dataset = Dataset(
                 args.prompt_data,
                 tokenizer=tokenizer,
+                processor=processor,
                 max_length=args.rollout_max_prompt_len,
                 prompt_key=args.input_key,
+                multimodal_keys=args.multimodal_keys,
                 label_key=args.label_key,
                 metadata_key=args.metadata_key,
                 tool_key=args.tool_key,

@@ -1,27 +1,12 @@
 import logging
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, fields
 from typing import Any, Optional
 
 from omegaconf import OmegaConf
+from slime.utils.eval_config import DATASET_RUNTIME_SPECS, _apply_dataset_field_overrides
 
 logger = logging.getLogger(__name__)
-
-
-def _first_not_none(*values: Any) -> Any:
-    for value in values:
-        if value is not None:
-            return value
-    return None
-
-
-def _pick_from_mapping(data: Mapping[str, Any] | None, keys: Iterable[str]) -> Any:
-    if not data:
-        return None
-    for key in keys:
-        if key in data and data[key] is not None:
-            return data[key]
-    return None
 
 
 @dataclass
@@ -35,34 +20,8 @@ class EvalEnvDatasetConfig:
     top_k: int | None = None
     max_response_len: int | None = None
 
-    # TODO: This is ugly, temporarily leave this. We should unify all the config name for dataset, default, and args. (advice from Tom.)
-    FIELD_SPECS = {
-        "n_samples_per_eval_prompt": {
-            "dataset_keys": ("n_samples_per_eval_prompt",),
-            "default_keys": ("n_samples_per_eval_prompt",),
-            "arg_attrs": ("n_samples_per_eval_prompt", "n_samples_per_prompt"),
-        },
-        "temperature": {
-            "dataset_keys": ("temperature",),
-            "default_keys": ("temperature",),
-            "arg_attrs": ("eval_temperature", "rollout_temperature"),
-        },
-        "top_p": {
-            "dataset_keys": ("top_p",),
-            "default_keys": ("top_p",),
-            "arg_attrs": ("eval_top_p", "rollout_top_p"),
-        },
-        "top_k": {
-            "dataset_keys": ("top_k",),
-            "default_keys": ("top_k",),
-            "arg_attrs": ("eval_top_k", "rollout_top_k"),
-        },
-        "max_response_len": {
-            "dataset_keys": ("max_response_len",),
-            "default_keys": ("max_response_len",),
-            "arg_attrs": ("eval_max_response_len", "rollout_max_response_len"),
-        },
-    }
+    FIELD_NAMES = ("n_samples_per_eval_prompt", "temperature", "top_p", "top_k", "max_response_len")
+    FIELD_SPECS = {field: DATASET_RUNTIME_SPECS[field] for field in FIELD_NAMES}
 
     @classmethod
     def parse(cls, args, dataset_cfg: Mapping[str, Any], defaults: Mapping[str, Any]) -> "EvalEnvDatasetConfig":
@@ -76,14 +35,9 @@ class EvalEnvDatasetConfig:
                 "Colon in dataset name is not allowed; use `n_samples_per_eval_prompt` to configure samples per prompt."
             )
 
-        values: dict[str, Any] = {"name": name}
-        for field_name, spec in cls.FIELD_SPECS.items():
-            dataset_value = _pick_from_mapping(dataset_cfg, spec["dataset_keys"])
-            default_value = _pick_from_mapping(defaults, spec["default_keys"])
-            arg_values = [getattr(args, attr, None) for attr in spec["arg_attrs"]]
-            values[field_name] = _first_not_none(dataset_value, default_value, *arg_values)
+        _apply_dataset_field_overrides(args, dataset_cfg, defaults, cls.FIELD_SPECS)
 
-        cfg = OmegaConf.merge(OmegaConf.structured(cls), OmegaConf.create(values))
+        cfg = OmegaConf.merge(OmegaConf.structured(cls), OmegaConf.create(dataset_cfg))
         obj = OmegaConf.to_object(cfg)
         if not isinstance(obj, cls):
             obj = cls(**obj)
