@@ -16,9 +16,17 @@ SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-2B-Instruct SLIME_SCRIPT_NUM_GPUS=8 python exam
 
 ## Notes
 
+### Reward Model Configuration
+
 We experimented with three reward model configurations:
 1. A geo3k-specific RM with tolerance=0.05 (to handle rounding in ground truth labels)
 2. A geo3k-specific RM with tolerance=0.0 (strict matching)
 3. The default math RM
 
-All three configurations performed similarly, so we use the default math RM for simplicity.
+All three performed similarly, so we use the default math RM for simplicity.
+
+### Numerical Precision with Non-Binary Rewards
+
+Our initial geo3k-specific verifier produced "format scores" (**0 and 0.9**) instead of clean binary rewards. Under **fp32**, fractional values like 0.9 can't be exactly represented, so when all samples in a group have the same reward, `reward - mean` doesn't equal zero—creating spurious gradient signal.
+
+We fixed this by: (1) switching to the default math RM with clean **binary 0/1 rewards**, and (2) changing reward normalization from fp32 to **fp16** to truncate precision artifacts.
