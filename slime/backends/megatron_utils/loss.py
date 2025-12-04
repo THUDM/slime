@@ -450,9 +450,9 @@ def policy_loss_function(
         log_probs = torch.cat(log_probs, dim=0)
         ppo_kl = old_log_probs - log_probs
 
-    # Compute policy loss: CISPO uses upper truncation with stop-gradient
+    # Compute policy loss: CISPO uses asymmetric clipping with stop-gradient
     if args.advantage_estimator == "cispo":
-        pg_loss, pg_clipfrac = compute_cispo_loss(ppo_kl, log_probs, advantages, args.eps_clip_high)
+        pg_loss, pg_clipfrac = compute_cispo_loss(ppo_kl, log_probs, advantages, args.eps_clip, args.eps_clip_high)
     else:
         pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
 
