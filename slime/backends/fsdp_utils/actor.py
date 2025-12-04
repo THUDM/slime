@@ -1031,6 +1031,7 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False, args=None):
             param_dtype = torch.float16
         elif args.bf16:
             param_dtype = torch.bfloat16
+            reduce_dtype = torch.float32
     
     logger.info(f"FSDP MixedPrecision Policy: param_dtype={param_dtype}, reduce_dtype={reduce_dtype}")
 

@@ -9,8 +9,6 @@ pkill -9 python
 
 set -ex
 
-export WANDB_API_KEY="a37f4796e6205800c4212556a38e1319b5f144b7"
-
 # ref link in verl: https://github.com/volcengine/verl/pull/3212/files
 cat > convert_model.py << EOF
 import torch
@@ -123,6 +121,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --colocate \
    --train-backend fsdp \
    --bf16 \
+   --attn-implementation eager \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
