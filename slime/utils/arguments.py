@@ -731,7 +731,10 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--use-unbiased-kl",
                 action="store_true",
                 default=False,
-                help="Whether to enable unbiased KL estimation.",
+                help=(
+                    "Apply importance sampling (π_θ/π_old) to KL loss for off-policy correction. "
+                    "Only works correctly with --kl-loss-type k3 or low_var_kl."
+                ),
             )
             parser.add_argument(
                 "--ref-update-interval",
@@ -1394,6 +1397,14 @@ def slime_validate_args(args):
         assert args.save is not None, "'--save' is required when save_interval is set."
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
+
+    if args.use_unbiased_kl and args.kl_loss_type not in ["k3", "low_var_kl"]:
+        logger.info(
+            f"--use-unbiased-kl only provides correct gradients with "
+            f"--kl-loss-type k3 or low_var_kl. Got: {args.kl_loss_type}. "
+            f"Setting use_unbiased_kl=False."
+        )
+        args.use_unbiased_kl = False
 
     if args.advantage_estimator in ["reinforce_plus_plus", "reinforce_plus_plus_baseline"]:
         assert args.normalize_advantages, (
