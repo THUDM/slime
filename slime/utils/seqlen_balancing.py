@@ -15,10 +15,9 @@
 
 import copy
 import heapq
-from typing import List, Tuple
 
 
-def karmarkar_karp(seqlen_list: List[int], k_partitions: int, equal_size: bool):
+def karmarkar_karp(seqlen_list: list[int], k_partitions: int, equal_size: bool):
     # see: https://en.wikipedia.org/wiki/Largest_differencing_method
     class Set:
 
@@ -44,7 +43,7 @@ def karmarkar_karp(seqlen_list: List[int], k_partitions: int, equal_size: bool):
 
     class State:
 
-        def __init__(self, items: List[Tuple[int, int]], k: int) -> None:
+        def __init__(self, items: list[tuple[int, int]], k: int) -> None:
             self.k = k
             # sets should always be decreasing order
             self.sets = [Set() for _ in range(k)]
@@ -52,9 +51,6 @@ def karmarkar_karp(seqlen_list: List[int], k_partitions: int, equal_size: bool):
             for i, (idx, seqlen) in enumerate(items):
                 self.sets[i].add(idx=idx, val=seqlen)
             self.sets = sorted(self.sets, reverse=True)
-
-        def spread(self):
-            return self.sets[0].sum - self.sets[-1].sum
 
         def get_partitions(self):
             partitions = []
@@ -120,14 +116,14 @@ def karmarkar_karp(seqlen_list: List[int], k_partitions: int, equal_size: bool):
     final_state = states_pq[0]
     partitions = final_state.get_partitions()
     if equal_size:
-        for i, partition in enumerate(partitions):
+        for _i, partition in enumerate(partitions):
             assert len(partition) * k_partitions == len(
                 seqlen_list
             ), f"{len(partition)} * {k_partitions} != {len(seqlen_list)}"
     return partitions
 
 
-def greedy_partition(seqlen_list: List[int], k_partitions: int, equal_size: bool):
+def greedy_partition(seqlen_list: list[int], k_partitions: int, equal_size: bool):
     bias = sum(seqlen_list) + 1 if equal_size else 0
     sorted_seqlen = [(seqlen + bias, i) for i, seqlen in enumerate(seqlen_list)]
     partitions = [[] for _ in range(k_partitions)]
@@ -140,14 +136,14 @@ def greedy_partition(seqlen_list: List[int], k_partitions: int, equal_size: bool
         partitions[min_idx].append(i)
         partition_sums[min_idx] += seqlen
     if equal_size:
-        for i, partition in enumerate(partitions):
+        for _i, partition in enumerate(partitions):
             assert len(partition) * k_partitions == len(
                 seqlen_list
             ), f"{len(partition)} * {k_partitions} != {len(seqlen_list)}"
     return partitions
 
 
-def get_seqlen_balanced_partitions(seqlen_list: List[int], k_partitions: int, equal_size: bool):
+def get_seqlen_balanced_partitions(seqlen_list: list[int], k_partitions: int, equal_size: bool):
     """get order of seq lengths to make partitions balanced, this is
         used in balacing sum of seqlength across dp ranks and microbatches
     Parameters:
@@ -169,11 +165,11 @@ def get_seqlen_balanced_partitions(seqlen_list: List[int], k_partitions: int, eq
         assert len(partitions) == k_partitions, f"{len(partitions)} != {k_partitions}"
         seen_idx = set()
         sorted_partitions = [None] * k_partitions
-        for i, partition in enumerate(partitions):
-            assert len(partition) > 0, f"the {i}-th partition is empty"
+        for _i, partition in enumerate(partitions):
+            assert len(partition) > 0, f"the {_i}-th partition is empty"
             for idx in partition:
                 seen_idx.add(idx)
-            sorted_partitions[i] = sorted(partition)
+            sorted_partitions[_i] = sorted(partition)
         assert seen_idx == set(range(len(seqlen_list)))
         return sorted_partitions
 

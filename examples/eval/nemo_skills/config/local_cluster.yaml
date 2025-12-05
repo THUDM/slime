@@ -1,0 +1,18 @@
+# Minimal cluster config for running `ns eval` directly on the current host
+# without spinning up containers or mount checks.
+
+executor: none
+
+# Provide stub container entries so pipeline code can reference them even
+# though we do not launch actual containers when executor == "none".
+containers:
+  nemo-skills: ""
+  sglang: ""
+  trtllm: ""
+  vllm: ""
+
+# No mount enforcement in "none" mode, but keep the field for completeness.
+mounts: []
+
+# Optional default env vars propagated to ns jobs. Leave empty unless needed.
+env_vars: []

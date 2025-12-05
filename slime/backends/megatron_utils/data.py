@@ -1,6 +1,6 @@
 import logging
 from argparse import Namespace
-from typing import Optional, Sequence, Union
+from collections.abc import Sequence
 
 import numpy as np
 import torch
@@ -26,7 +26,7 @@ def get_batch(
     data_iterator: "DataIterator",
     keys: Sequence[str],
     pad_multiplier: int = 128,
-) -> dict[str, Union[torch.Tensor, PackedSeqParams, list[torch.Tensor], None]]:
+) -> dict[str, torch.Tensor | PackedSeqParams | list[torch.Tensor] | None]:
     """
     Generate a CP-ready micro-batch with packed sequence parameters.
 
@@ -98,7 +98,7 @@ def gather_log_data(
     args: Namespace,
     rollout_id: int,
     log_dict: dict[str, float],
-) -> Optional[dict[str, float]]:
+) -> dict[str, float] | None:
     """
     Gather per-rank metrics, reduce by mean on the DP source rank, and log.
 
@@ -150,8 +150,8 @@ class DataIterator:
     def __init__(
         self,
         rollout_data: RolloutBatch,
-        micro_batch_size: Optional[int] = None,
-        micro_batch_indices: Optional[list[list[int]]] = None,
+        micro_batch_size: int | None = None,
+        micro_batch_indices: list[list[int]] | None = None,
     ) -> None:
         """Initialize an iterator over `rollout_data`.
 
@@ -167,7 +167,7 @@ class DataIterator:
         assert micro_batch_size is None or micro_batch_indices is None
         self.offset = 0
 
-    def get_next(self, keys: Sequence[str]) -> dict[str, Optional[list[object]]]:
+    def get_next(self, keys: Sequence[str]) -> dict[str, list[object] | None]:
         """Return the next micro-batch for the requested keys.
 
         - If `micro_batch_indices` is provided, selects rows according to the current
@@ -206,7 +206,7 @@ class DataIterator:
 
 def get_data_iterator(
     args: Namespace,
-    model: Union[torch.nn.Module, Sequence[torch.nn.Module]],
+    model: torch.nn.Module | Sequence[torch.nn.Module],
     rollout_data: RolloutBatch,
 ) -> tuple[list[DataIterator], list[int]]:
     """
@@ -438,8 +438,8 @@ def log_perf_data(rollout_id: int, args: Namespace) -> None:
 
 def sync_actor_critic_data(
     args: Namespace,
-    rollout_data: Optional[RolloutBatch] = None,
-    group: Optional[dist.ProcessGroup] = None,
+    rollout_data: RolloutBatch | None = None,
+    group: dist.ProcessGroup | None = None,
 ) -> None:
     """
     Broadcast `values` (from critic) and optionally `log_probs`/`ref_log_probs`
@@ -468,7 +468,7 @@ def sync_actor_critic_data(
             log_probs = [torch.empty_like(value) for value in values]
         if not ref_log_probs:
             ref_log_probs = [torch.empty_like(value) for value in values]
-        for ref_log_prob, log_prob in zip(ref_log_probs, log_probs):
+        for ref_log_prob, log_prob in zip(ref_log_probs, log_probs, strict=False):
             handles.append(dist.broadcast(log_prob, src=0, group=group, async_op=True))
             handles.append(dist.broadcast(ref_log_prob, src=0, group=group, async_op=True))
 

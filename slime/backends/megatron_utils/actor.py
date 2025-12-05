@@ -3,12 +3,10 @@ import os
 import socket
 from argparse import Namespace
 from contextlib import nullcontext
-from typing import Dict, Optional
 
 import ray
 import torch
 import torch.distributed as dist
-import torch.nn.functional as F
 from megatron.core import mpu
 from ray.actor import ActorHandle
 from torch_memory_saver import torch_memory_saver
@@ -35,7 +33,7 @@ from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_da
 from .initialize import init, is_megatron_main_rank
 from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
-from .update_weight.common import named_parameters
+from .update_weight.common import named_params_and_buffers
 from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
 from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
 
@@ -51,7 +49,7 @@ class MegatronTrainRayActor(TrainRayActor):
         args: Namespace,
         role: str,
         with_ref: bool = False,
-    ) -> Optional[int]:
+    ) -> int | None:
         monkey_patch_torch_dist()
 
         super().init(args, role, with_ref)
@@ -91,7 +89,12 @@ class MegatronTrainRayActor(TrainRayActor):
         start_rollout_id = loaded_rollout_id + 1
 
         self.weights_backuper = TensorBackuper.create(
-            source_getter=lambda: named_parameters(self.args, self.model),
+            source_getter=lambda: named_params_and_buffers(
+                self.args,
+                self.model,
+                convert_to_global_name=args.megatron_to_hf_mode == "raw",
+                translate_gpu_to_cpu=not self.args.enable_weights_backuper,
+            ),
             single_tag=None if args.enable_weights_backuper else "actor",
         )
         self.weights_backuper.backup("actor")
@@ -106,6 +109,9 @@ class MegatronTrainRayActor(TrainRayActor):
             if args.update_weights_interval == 1:
                 self.weights_backuper.backup("rollout_actor")
 
+        if self.args.vocab_size is None:
+            self.args.vocab_size = self.tokenizer.vocab_size
+
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
         self.weight_updater = update_weight_cls(
             self.args,
@@ -113,7 +119,6 @@ class MegatronTrainRayActor(TrainRayActor):
             weights_getter=lambda: self.weights_backuper.get("actor"),
             model_name=type(self.hf_config).__name__.lower() if self.args.model_name is None else self.args.model_name,
             quantization_config=getattr(self.hf_config, "quantization_config", None),
-            vocab_size=self.tokenizer.vocab_size if self.args.vocab_size is None else self.args.vocab_size,
         )
 
         # empty cache after initialization
@@ -184,7 +189,10 @@ class MegatronTrainRayActor(TrainRayActor):
                     dtype=torch.float32,
                 )
                 for log_prob, total_length, response_length in zip(
-                    rollout_data["rollout_log_probs"], rollout_data["total_lengths"], rollout_data["response_lengths"]
+                    rollout_data["rollout_log_probs"],
+                    rollout_data["total_lengths"],
+                    rollout_data["response_lengths"],
+                    strict=False,
                 )
             ]
         if "rollout_routed_experts" in rollout_data:
@@ -210,21 +218,33 @@ class MegatronTrainRayActor(TrainRayActor):
         tp_rank = mpu.get_tensor_model_parallel_rank()
         tp_size = mpu.get_tensor_model_parallel_world_size()
 
+        def pad_func(experts, pad):
+            _, num_layers, topk = experts.shape
+            pad = (
+                torch.arange(
+                    pad * num_layers * topk,
+                    device=experts.device,
+                    dtype=experts.dtype,
+                ).reshape((pad, num_layers, topk))
+                % self.args.num_experts
+            )
+            return torch.cat([experts, pad], dim=0)
+
         for _ in range(sum(num_microbatches)):
             batch = data_iterator[0].get_next(["rollout_routed_experts", "tokens"])
             rollout_routed_experts = batch["rollout_routed_experts"]
             tokens = batch["tokens"]
             assert len(rollout_routed_experts) == len(tokens)
-            for a, b in zip(rollout_routed_experts, tokens):
+            for a, b in zip(rollout_routed_experts, tokens, strict=False):
                 assert a.shape[0] == b.shape[0], f"{a.shape}, {b.shape}"
 
             # TODO: maybe extract a common process function for here and get_batch?
-            rollout_routed_experts = [slice_with_cp(r, 0) for r in rollout_routed_experts]
+            rollout_routed_experts = [slice_with_cp(r, pad_func) for r in rollout_routed_experts]
             rollout_routed_experts = torch.cat(rollout_routed_experts, dim=0)
             pad_size = mpu.get_tensor_model_parallel_world_size() * 128
             pad = (pad_size - rollout_routed_experts.size(0) % pad_size) % pad_size
             if pad != 0:
-                rollout_routed_experts = F.pad(rollout_routed_experts, (0, 0, 0, 0, 0, pad), value=0)
+                rollout_routed_experts = pad_func(rollout_routed_experts, pad)
 
             if self.args.sequence_parallel:
                 seqlen = rollout_routed_experts.size(0)
@@ -262,7 +282,7 @@ class MegatronTrainRayActor(TrainRayActor):
         data_iterator: list[DataIterator],
         num_microbatches: list[int],
         store_prefix: str = "",
-    ) -> Dict[str, list[torch.Tensor]]:
+    ) -> dict[str, list[torch.Tensor]]:
         self.weights_backuper.restore(model_tag)
 
         with timer(f"{store_prefix}log_probs"):
@@ -480,9 +500,9 @@ class MegatronTrainRayActor(TrainRayActor):
 
     def connect_actor_critic(
         self,
-        actor_handle: Optional[ActorHandle] = None,
-        master_address: Optional[str] = None,
-        master_port: Optional[int] = None,
+        actor_handle: ActorHandle | None = None,
+        master_address: str | None = None,
+        master_port: int | None = None,
     ) -> None:
         if self.role == "actor":
             master_address = ray.util.get_node_ip_address()

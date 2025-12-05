@@ -4,7 +4,7 @@ import random
 import re
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import polars as pl
 import torch
@@ -33,7 +33,7 @@ def process_flc(
     dir_output: Path,
     train_flc_select_num_rows: int,
     val_flc_select_num_rows: int,
-    filter_difficulty: Optional[int],
+    filter_difficulty: int | None,
     filter_solvable_by_rollout_dumps: str,
 ):
     ds = load_dataset("m-a-p/FineLeanCorpus", split="train")
@@ -235,8 +235,8 @@ def main(
     output_name: Annotated[str, typer.Option()] = None,
     train_flc_select_num_rows: Annotated[int, typer.Option()] = 20000,
     val_flc_select_num_rows: Annotated[int, typer.Option()] = 100,
-    filter_difficulty: Annotated[Optional[int], typer.Option()] = None,
-    filter_solvable_by_rollout_dumps: Annotated[Optional[str], typer.Option()] = None,
+    filter_difficulty: Annotated[int | None, typer.Option()] = None,
+    filter_solvable_by_rollout_dumps: Annotated[str | None, typer.Option()] = None,
 ):
     dir_output = Path(dir_output_base) / (
         output_name or f"{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}-{random.randint(0, 1000000)}"

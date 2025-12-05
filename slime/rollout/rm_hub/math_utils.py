@@ -5,7 +5,6 @@ Answer checker API that uses sympy to simplify expressions and check for equalit
 Call grade_answer(given_answer: str, ground_truth: str).
 """
 import re
-from typing import Optional
 
 import sympy
 from pylatexenc import latex2text
@@ -13,7 +12,7 @@ from sympy.parsing import sympy_parser
 
 
 # Dan Hendrycks' code
-def mathd_normalize_answer(answer: Optional[str]) -> Optional[str]:
+def mathd_normalize_answer(answer: str | None) -> str | None:
     if answer is None:
         return None
     answer = answer.strip()
@@ -67,7 +66,7 @@ def _strip_string(string):
         try:
             a = int(a)
             b = int(b)
-            assert string == "{}/{}".format(a, b)
+            assert string == f"{a}/{b}"
             new_string = "\\frac{" + str(a) + "}{" + str(b) + "}"
             return new_string
         except Exception:
@@ -197,14 +196,14 @@ def _is_float(num: str) -> bool:
     try:
         float(num)
         return True
-    except ValueError:
+    except Exception:
         return False
 
 
 def _is_int(x: float) -> bool:
     try:
         return abs(x - int(round(x))) <= 1e-7
-    except:
+    except Exception:
         return False
 
 
@@ -217,7 +216,7 @@ def _str_is_int(x: str) -> bool:
         x = _strip_properly_formatted_commas(x)
         x = float(x)
         return abs(x - int(round(x))) <= 1e-7
-    except:
+    except Exception:
         return False
 
 
@@ -288,7 +287,7 @@ def _normalize(expr: str) -> str:
         "yard",
     ]:
         expr = re.sub(f"{unit}(es)?(s)? *(\^[0-9]+)?", "", expr)
-    expr = re.sub(f"\^ *\\\\circ", "", expr)
+    expr = re.sub("\^ *\\\\circ", "", expr)
 
     if len(expr) > 0 and expr[0] == "{" and expr[-1] == "}":
         expr = expr[1:-1]
@@ -299,7 +298,7 @@ def _normalize(expr: str) -> str:
     if "\\" in expr:
         try:
             expr = _parse_latex(expr)
-        except:
+        except Exception:
             pass
 
     # edge case with mixed numbers and negative signs
@@ -353,7 +352,7 @@ def are_equal_under_sympy(ground_truth_normalized: str, given_normalized: str):
             simplified = sympy.simplify(sympy_diff)
             if simplified == 0:
                 are_equal = True
-    except:
+    except Exception:
         pass
     return are_equal
 
@@ -397,7 +396,7 @@ def last_boxed_only_string(string):
                 break
         i += 1
 
-    if right_brace_idx == None:
+    if right_brace_idx is None:
         retval = None
     else:
         retval = string[idx : right_brace_idx + 1]
@@ -411,7 +410,7 @@ def remove_boxed(s):
         assert s[: len(left)] == left
         assert s[-1] == "}"
         return s[len(left) : -1]
-    except:
+    except Exception:
         return None
 
 
@@ -445,7 +444,7 @@ def grade_answer_sympy(given_answer: str, ground_truth: str) -> bool:
     elif len(ground_truth_elems) != len(given_elems):
         is_correct = False
     else:
-        for ground_truth_elem, given_elem in zip(ground_truth_elems, given_elems):
+        for ground_truth_elem, given_elem in zip(ground_truth_elems, given_elems, strict=False):
             if _is_frac(ground_truth_elem) and _is_frac(given_elem):
                 # if fractions aren't reduced, then shouldn't be marked as correct
                 # so, we don't want to allow sympy.simplify in this case

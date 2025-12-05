@@ -1,8 +1,7 @@
 import socket
 import time
 from argparse import Namespace
-from collections.abc import Mapping, Sequence
-from typing import Callable
+from collections.abc import Callable, Mapping, Sequence
 
 import ray
 import torch
@@ -12,12 +11,10 @@ from ray import ObjectRef
 from ray.actor import ActorHandle
 from tqdm import tqdm
 
-# TODO do not use it here
-from slime.backends.megatron_utils.megatron_to_hf.processors.padding_remover import remove_padding
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 
 from ..megatron_to_hf import convert_to_hf
-from .common import all_gather_param, named_parameters
+from .common import all_gather_param, named_params_and_buffers
 
 
 class UpdateWeightFromDistributed:
@@ -34,7 +31,6 @@ class UpdateWeightFromDistributed:
         *,
         model_name: str,
         quantization_config: dict[str, int | str | list[str]] | None,
-        vocab_size: int,
     ) -> None:
         """
         Initialize. Groups created in connect_rollout_engines.
@@ -42,7 +38,6 @@ class UpdateWeightFromDistributed:
         self.args = args
         self.model = model
         self.model_name = model_name
-        self.vocab_size = vocab_size
         self.quantization_config = quantization_config
         self.weight_version = 0
         self._model_update_groups = None
@@ -92,7 +87,7 @@ class UpdateWeightFromDistributed:
         # non expert params
         pbar = tqdm(desc=f"[{self._group_name}] Update weights", total=0) if self._is_pp_src_rank else None
 
-        for name, param in named_parameters(self.args, self.model):
+        for name, param in named_params_and_buffers(self.args, self.model):
             if ".experts." in name:
                 continue
             buffer_size = self._update_weight_from_distributed(
@@ -106,7 +101,7 @@ class UpdateWeightFromDistributed:
 
         buffer_size = 0
         named_tensors = []
-        for name, param in named_parameters(self.args, self.model):
+        for name, param in named_params_and_buffers(self.args, self.model):
             if ".experts." not in name:
                 continue
             buffer_size = self._update_expert_weight_from_distributed(
@@ -134,7 +129,6 @@ class UpdateWeightFromDistributed:
         Returns updated bytes on source, None on non-source.
         """
         param = all_gather_param(name, param)
-        param = remove_padding(name, param, self.vocab_size)
         if not self._is_pp_src_rank:
             return
 
@@ -158,7 +152,6 @@ class UpdateWeightFromDistributed:
         Expert: gather TP → rm pad → buffer. EP gather + HF deferred. Threshold × EP size.
         """
         param = all_gather_param(name, param)
-        param = remove_padding(name, param, self.vocab_size)
 
         param_size = param.numel() * param.element_size()
         if (
@@ -186,7 +179,7 @@ class UpdateWeightFromDistributed:
 
         all_gathered_params = [[] for _ in range(mpu.get_expert_model_parallel_world_size())]
         handles = []
-        for i, (name, param) in enumerate(named_tensors):
+        for i, (_name, param) in enumerate(named_tensors):
             params = [
                 torch.empty_like(param.data, device=torch.cuda.current_device())
                 for _ in range(mpu.get_expert_model_parallel_world_size())

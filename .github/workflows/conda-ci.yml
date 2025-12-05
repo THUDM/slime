@@ -77,7 +77,7 @@ jobs:
           micromamba activate slime
           export CUDA_HOME="$CONDA_PREFIX"
 
-          bash tests/test_qwen3-30B-A3B.sh
+          SLIME_TEST_USE_DEEPEP=0 SLIME_TEST_USE_FP8_ROLLOUT=0 python tests/test_qwen3_30B_A3B.py
         shell: bash
           
       - name: Cleanup

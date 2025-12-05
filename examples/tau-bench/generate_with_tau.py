@@ -8,7 +8,7 @@ results to the format expected by slime's training pipeline.
 
 import logging
 import os
-from typing import Any, Dict
+from typing import Any
 
 from tau_bench.envs import get_env
 from tau_bench.types import RunConfig
@@ -97,7 +97,7 @@ def res_to_sample(res: InteractionResult, task_index: int) -> Sample:
     return sample
 
 
-async def generate(args: Dict[str, Any], sample: Sample, sampling_params: dict) -> Sample:
+async def generate(args: dict[str, Any], sample: Sample, sampling_params: dict) -> Sample:
     """
     Generate a complete agent-environment interaction trajectory for tau-bench.
 

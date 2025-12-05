@@ -2,7 +2,7 @@ import json
 import logging
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 from openai_tool_adapter import create_openai_adapter
 from tau_bench.agents.base import Agent
@@ -27,15 +27,15 @@ class Status(Enum):
 class InteractionResult:
     prompt: str
     reward: float
-    messages: List[Dict[str, Any]]
-    info: Dict[str, Any]
+    messages: list[dict[str, Any]]
+    info: dict[str, Any]
     response: str = ""
-    loss_mask: Optional[List[int]] = None
-    tokens: Optional[int] = None
+    loss_mask: list[int] | None = None
+    tokens: int | None = None
     status: Status = Status.COMPLETED
 
 
-def call_to_action_sglang(calls: List[Any], text_response: str) -> Action:
+def call_to_action_sglang(calls: list[Any], text_response: str) -> Action:
     """
     Convert sglang response message to Action, similar to original message_to_action
     but adapted for sglang response format.
@@ -87,7 +87,7 @@ class TrainableAgentMixin:
         """
         return text.replace("You may call one or more functions to assist with the user query.", TOOL_INSTRUCTION)
 
-    async def _call_llm(self, url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    async def _call_llm(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         """
         Make an LLM call tracking.
 
@@ -100,7 +100,7 @@ class TrainableAgentMixin:
         """
         return await post(url, payload)
 
-    def _parse_tool(self, response: str) -> Dict[str, Any]:
+    def _parse_tool(self, response: str) -> dict[str, Any]:
         """
         Parse tool calls from LLM response string.
 
@@ -125,7 +125,7 @@ class TrainableAgentMixin:
         """
         return env.step(action)
 
-    def _initialize_environment(self, env, task_index: Optional[int]) -> Tuple[str, Dict[str, Any]]:
+    def _initialize_environment(self, env, task_index: int | None) -> tuple[str, dict[str, Any]]:
         """
         Initialize the environment and get initial observation.
 
@@ -142,7 +142,7 @@ class TrainableAgentMixin:
             env_reset_res = env.reset()
         return env_reset_res.observation, env_reset_res.info.model_dump()
 
-    def _build_initial_messages(self, obs: str) -> List[Dict[str, Any]]:
+    def _build_initial_messages(self, obs: str) -> list[dict[str, Any]]:
         """
         Build initial conversation messages.
 
@@ -154,7 +154,7 @@ class TrainableAgentMixin:
         """
         return [{"role": "system", "content": self.wiki}, {"role": "user", "content": obs}]
 
-    def _prepare_prompt_tokens(self, state: GenerateState, messages: List[Dict[str, Any]]) -> Tuple[str, List[int]]:
+    def _prepare_prompt_tokens(self, state: GenerateState, messages: list[dict[str, Any]]) -> tuple[str, list[int]]:
         """
         Prepare prompt text and tokenize it.
 
@@ -176,9 +176,9 @@ class TrainableAgentMixin:
     async def asolve(
         self,
         env,
-        rollout_args: Dict[str, Any],
-        sampling_params: Dict[str, Any],
-        task_index: Optional[int] = None,
+        rollout_args: dict[str, Any],
+        sampling_params: dict[str, Any],
+        task_index: int | None = None,
         max_num_steps: int = 30,
     ) -> InteractionResult:
         """
@@ -331,7 +331,7 @@ class TrainableAgentMixin:
             res, total_reward, info, messages, loss_masks, prompt_token_ids, response_token_ids
         )
 
-    def _get_token_delta(self, tokenizer: AutoTokenizer, messages: List[Dict]) -> Tuple[List[int], List[int]]:
+    def _get_token_delta(self, tokenizer: AutoTokenizer, messages: list[dict]) -> tuple[list[int], list[int]]:
         """
         Calculate token delta for multi-turn conversations.
 
@@ -370,11 +370,11 @@ class TrainableAgentMixin:
         self,
         res: InteractionResult,
         total_reward: float,
-        info: Dict[str, Any],
-        messages: List[Dict[str, Any]],
-        loss_masks: List[int],
-        prompt_token_ids: List[int],
-        response_token_ids: List[int],
+        info: dict[str, Any],
+        messages: list[dict[str, Any]],
+        loss_masks: list[int],
+        prompt_token_ids: list[int],
+        response_token_ids: list[int],
     ) -> InteractionResult:
         """
         Build the final interaction result with all collected data.
@@ -420,13 +420,13 @@ class TrainableToolCallingAgent(ToolCallingAgent, TrainableAgentMixin):
 
     def __init__(
         self,
-        tools_info: List[Dict[str, Any]],
+        tools_info: list[dict[str, Any]],
         wiki: str,
         model: str,
         provider: str,
         temperature: float = 0.0,
-        rollout_args: Optional[Dict[str, Any]] = None,
-        sampling_params: Optional[Dict[str, Any]] = None,
+        rollout_args: dict[str, Any] | None = None,
+        sampling_params: dict[str, Any] | None = None,
     ):
         # Initialize the parent ToolCallingAgent
         super().__init__(
@@ -454,11 +454,11 @@ class TrainableToolCallingAgent(ToolCallingAgent, TrainableAgentMixin):
 
 
 def agent_factory(
-    tools_info: List[Dict[str, Any]],
+    tools_info: list[dict[str, Any]],
     wiki,
     config: RunConfig,
-    rollout_args: Optional[Dict[str, Any]] = None,
-    sampling_params: Optional[Dict[str, Any]] = None,
+    rollout_args: dict[str, Any] | None = None,
+    sampling_params: dict[str, Any] | None = None,
 ) -> Agent:
     if config.agent_strategy == "tool-calling":
         return TrainableToolCallingAgent(

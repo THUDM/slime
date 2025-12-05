@@ -1,17 +1,17 @@
 import math
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Literal
 
 import numpy as np
 
 
-def dict_add_prefix(d: Dict[str, Any], prefix: str) -> Dict[str, Any]:
+def dict_add_prefix(d: dict[str, Any], prefix: str) -> dict[str, Any]:
     return {f"{prefix}{k}": v for k, v in d.items()}
 
 
 def compute_pass_rate(
-    flat_rewards: List[float],
+    flat_rewards: list[float],
     group_size: int,
-    num_groups: Optional[int] = None,
+    num_groups: int | None = None,
 ):
     if group_size == 1:
         return {}
@@ -50,10 +50,10 @@ def _estimate_pass_at_k(num_samples, num_correct, k):
             return 1.0
         return 1.0 - np.prod(1.0 - k / np.arange(n - c + 1, n + 1))
 
-    return np.array([estimator(int(n), int(c), k) for n, c in zip(num_samples, num_correct)])
+    return np.array([estimator(int(n), int(c), k) for n, c in zip(num_samples, num_correct, strict=False)])
 
 
-def compute_statistics(values: List[float]) -> Dict[str, float]:
+def compute_statistics(values: list[float]) -> dict[str, float]:
     values = np.array(values)
     return {
         "mean": np.mean(values).item(),
@@ -62,12 +62,12 @@ def compute_statistics(values: List[float]) -> Dict[str, float]:
 
 
 def compression_ratio(
-    data: Union[str, bytes],
+    data: str | bytes,
     *,
     encoding: str = "utf-8",
     algorithm: Literal["zlib", "gzip", "bz2", "lzma"] = "zlib",
     level: int = 9,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     if isinstance(data, str):
         raw = data.encode(encoding)
     else:

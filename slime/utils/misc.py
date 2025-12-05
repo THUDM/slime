@@ -1,6 +1,5 @@
 import importlib
 import subprocess
-from typing import Optional
 
 import ray
 
@@ -32,7 +31,7 @@ class SingletonMeta(type):
         return cls._instances[cls]
 
 
-def exec_command(cmd: str, capture_output: bool = False) -> Optional[str]:
+def exec_command(cmd: str, capture_output: bool = False) -> str | None:
     print(f"EXEC: {cmd}", flush=True)
 
     try:
@@ -66,3 +65,23 @@ def get_free_port(start_port=10000, consecutive=1):
     while not all(is_port_available(port + i) for i in range(consecutive)):
         port += 1
     return port
+
+
+def should_run_periodic_action(
+    rollout_id: int,
+    interval: int | None,
+    num_rollout_per_epoch: int | None = None,
+) -> bool:
+    """
+    Return True when a periodic action (eval/save/checkpoint) should run.
+
+    Args:
+        rollout_id: The current rollout index (0-based).
+        interval: Desired cadence; disables checks when None.
+        num_rollout_per_epoch: Optional epoch boundary to treat as a trigger.
+    """
+    if interval is None:
+        return False
+
+    step = rollout_id + 1
+    return (step % interval == 0) or (num_rollout_per_epoch is not None and step % num_rollout_per_epoch == 0)

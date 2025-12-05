@@ -24,7 +24,7 @@ def add_sglang_router_arguments(parser):
     parser.add_argument(
         "--sglang-router-request-timeout-secs",
         type=int,
-        default=3600,
+        default=14400,
         help="Timeout for requests to the SGLang router in seconds",
     )
     return parser

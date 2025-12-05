@@ -12,7 +12,7 @@ def convert_glm4_to_hf(args, name, param):
 
     try:
         head_dim = args.kv_channels if args.kv_channels is not None else args.hidden_size // args.num_attention_heads
-    except:
+    except AttributeError:
         head_dim = args.hidden_size // args.num_attention_heads
     value_num_per_group = args.num_attention_heads // args.num_query_groups
 

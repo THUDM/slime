@@ -5,7 +5,7 @@ import json
 import pathlib
 import threading
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 import uvicorn
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
@@ -19,7 +19,7 @@ def default_is_valid_group(group_data, min_valid_group_size, task_type):
     return len(samples) >= min_valid_group_size
 
 
-def default_get_group_data_meta_info(temp_data: Dict[str, List[Dict[str, Any]]]) -> Dict[str, Any]:
+def default_get_group_data_meta_info(temp_data: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
     """
     Default implementation for getting meta information about the temporary data
     collected between get_batch calls.
@@ -36,7 +36,7 @@ def default_get_group_data_meta_info(temp_data: Dict[str, List[Dict[str, Any]]])
 
     all_rewards = []
     # Calculate per-group statistics
-    for instance_id, samples in temp_data.items():
+    for _instance_id, samples in temp_data.items():
         group_size = len(samples)
         group_rewards = [s["reward"] for s in samples]  # Calculate group reward standard deviation
         meta_info["total_samples"] += group_size
@@ -84,11 +84,11 @@ def discover_generators():
                 print(f"Warning: {file_path} does not define run_rollout function")
                 continue
 
-            task_type = getattr(module, "TASK_TYPE")
+            task_type = module.TASK_TYPE
             generator_info = {
                 "module": module,
                 "file_path": file_path,
-                "run_rollout": getattr(module, "run_rollout"),
+                "run_rollout": module.run_rollout,
             }
 
             # Check for optional functions and use defaults if not present
@@ -119,7 +119,7 @@ async def set_body_size(request: Request, call_next):
 class BufferResponse(BaseModel):
     success: bool
     message: str = ""
-    data: Optional[Dict[str, Any]] = None
+    data: dict[str, Any] | None = None
 
 
 class BufferQueue:
@@ -271,7 +271,7 @@ async def write_to_buffer(request: Request):
         import traceback
 
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Write failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Write failed: {str(e)}") from e
 
 
 @app.post("/get_rollout_data", response_model=BufferResponse)
