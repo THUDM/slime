@@ -53,6 +53,7 @@ class GenerateState(metaclass=SingletonMeta):
             top_p=args.rollout_top_p,
             top_k=args.rollout_top_k,
             max_new_tokens=args.rollout_max_response_len,
+            max_context_len=args.rollout_max_context_len,
             stop=args.rollout_stop,
             stop_token_ids=args.rollout_stop_token_ids,
             skip_special_tokens=args.rollout_skip_special_tokens,
@@ -220,8 +221,12 @@ async def generate_and_rm(
             sample.status = Sample.Status.ABORTED
             return sample
 
-        if args.custom_generate_function_path is not None:
-            custom_generate_func = load_function(args.custom_generate_function_path)
+        # sample param level > args level
+        override_generate_path = (
+            sampling_params.get("custom_generate_function_path", None) or args.custom_generate_function_path
+        )
+        if override_generate_path is not None:
+            custom_generate_func = load_function(override_generate_path)
             sample = await custom_generate_func(args, sample, sampling_params)
         else:
             sample = await generate(args, sample, sampling_params)
@@ -463,7 +468,7 @@ async def eval_rollout_single_dataset(
 
     global EVAL_PROMPT_DATASET
 
-    cache_key = dataset_cfg.cache_key + (args.hf_checkpoint, args.apply_chat_template)
+    cache_key = dataset_cfg.cache_key + (args.hf_checkpoint, dataset_cfg.apply_chat_template)
     if cache_key not in EVAL_PROMPT_DATASET:
         tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
         processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
@@ -477,7 +482,7 @@ async def eval_rollout_single_dataset(
             multimodal_keys=args.multimodal_keys,
             metadata_key=dataset_cfg.metadata_key,
             tool_key=dataset_cfg.tool_key,
-            apply_chat_template=args.apply_chat_template,
+            apply_chat_template=dataset_cfg.apply_chat_template,
             apply_chat_template_kwargs=args.apply_chat_template_kwargs,
         )
     dataset = EVAL_PROMPT_DATASET[cache_key]
@@ -487,11 +492,13 @@ async def eval_rollout_single_dataset(
         top_p=dataset_cfg.top_p,
         top_k=dataset_cfg.top_k,
         max_new_tokens=dataset_cfg.max_response_len,
+        max_context_len=dataset_cfg.max_context_len,
         stop=args.rollout_stop,
         stop_token_ids=args.rollout_stop_token_ids,
         skip_special_tokens=args.rollout_skip_special_tokens,
         no_stop_trim=True,
         spaces_between_special_tokens=False,
+        custom_generate_function_path=dataset_cfg.custom_generate_function_path,
     )
 
     tasks = []
