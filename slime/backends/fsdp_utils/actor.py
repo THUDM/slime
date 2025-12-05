@@ -735,7 +735,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
             self.optimizer.step()
             # Update learning rate
-            self.lr_scheduler.step(increment=1)
+            self.lr_scheduler.step()
             self.optimizer.zero_grad(set_to_none=True)
             # Aggregate logs
             aggregated = {k: torch.stack(v).sum().item() for k, v in reported_accum.items()}

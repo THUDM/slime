@@ -30,6 +30,7 @@ class FSDPLRScheduler(LRScheduler):
         wsd_decay_steps (int, optional): Number of weight decay decay steps.
         lr_wsd_decay_style (str, optional): Decay style for learning rate during weight decay decay
             steps.
+        last_epoch (int, optional): The index of last epoch. Default: -1.
     """
 
     def __init__(
@@ -45,9 +46,9 @@ class FSDPLRScheduler(LRScheduler):
         override_lr_scheduler: Optional[bool] = False,
         wsd_decay_steps: Optional[int] = None,
         lr_wsd_decay_style: Optional[str] = None,
+        last_epoch: int = -1,
     ) -> None:
-        # Class values.
-        self.optimizer = optimizer
+        # Store our custom parameters
         self.init_lr = init_lr
         self.max_lr = float(max_lr)
         self.min_lr = min_lr
@@ -56,7 +57,6 @@ class FSDPLRScheduler(LRScheduler):
         assert self.init_lr <= self.max_lr
 
         self.lr_warmup_steps = lr_warmup_steps
-        self.num_steps = 0
         self.lr_decay_steps = lr_decay_steps
         self.wsd_decay_steps = wsd_decay_steps
         self.lr_wsd_decay_style = lr_wsd_decay_style
@@ -76,25 +76,27 @@ class FSDPLRScheduler(LRScheduler):
                 "both override and use-checkpoint are set."
             )
 
-        # Set the learning rate
-        self.step(0)
+        # Initialize parent class
+        super().__init__(optimizer, last_epoch)
 
         logger.info(f"> learning rate decay style: {self.lr_decay_style}")
 
-    def get_lr(self, param_group: Optional[dict] = None) -> float:
-        """Learning rate decay functions from:
-        https://openreview.net/pdf?id=BJYwwY9ll pg. 4
+    def _get_lr_for_group(self, param_group: dict) -> float:
+        """Compute learning rate for a specific parameter group.
 
         Args:
-            param_group (dict, optional): parameter group from the optimizer.
+            param_group (dict): parameter group from the optimizer.
+
+        Returns:
+            float: learning rate for this parameter group.
         """
-        max_lr = param_group.get('max_lr', self.max_lr) if param_group else self.max_lr
-        min_lr = param_group.get('min_lr', self.min_lr) if param_group else self.min_lr
+        max_lr = param_group.get('max_lr', self.max_lr)
+        min_lr = param_group.get('min_lr', self.min_lr)
 
         # Use linear warmup for the initial part.
-        if self.lr_warmup_steps > 0 and self.num_steps <= self.lr_warmup_steps:
+        if self.lr_warmup_steps > 0 and self.last_epoch <= self.lr_warmup_steps:
             return self.init_lr + (
-                (max_lr - self.init_lr) * float(self.num_steps) / float(self.lr_warmup_steps)
+                (max_lr - self.init_lr) * float(self.last_epoch) / float(self.lr_warmup_steps)
             )
 
         # If the learning rate is constant, just return the initial value.
@@ -102,17 +104,17 @@ class FSDPLRScheduler(LRScheduler):
             return max_lr
 
         # For any steps larger than `self.lr_decay_steps`, use `min_lr`.
-        if self.num_steps > self.lr_decay_steps:
+        if self.last_epoch > self.lr_decay_steps:
             return min_lr
 
         # If we are done with the warmup period, use the decay style.
         if self.lr_decay_style == "inverse-square-root":
             warmup_steps = max(self.lr_warmup_steps, 1)
-            num_steps = max(self.num_steps, 1)
+            num_steps = max(self.last_epoch, 1)
             lr = max_lr * warmup_steps**0.5 / (num_steps**0.5)
             return max(min_lr, lr)
 
-        num_steps_ = self.num_steps - self.lr_warmup_steps
+        num_steps_ = self.last_epoch - self.lr_warmup_steps
         decay_steps_ = self.lr_decay_steps - self.lr_warmup_steps
         decay_ratio = float(num_steps_) / float(decay_steps_)
         assert decay_ratio >= 0.0
@@ -127,10 +129,10 @@ class FSDPLRScheduler(LRScheduler):
             coeff = 0.5 * (math.cos(math.pi * decay_ratio) + 1.0)
         elif self.lr_decay_style == "WSD":
             wsd_anneal_start_ = self.lr_decay_steps - self.wsd_decay_steps
-            if self.num_steps <= wsd_anneal_start_:
+            if self.last_epoch <= wsd_anneal_start_:
                 coeff = 1.0
             else:
-                wsd_steps = self.num_steps - wsd_anneal_start_
+                wsd_steps = self.last_epoch - wsd_anneal_start_
                 wsd_decay_ratio = float(wsd_steps) / float(self.wsd_decay_steps)
                 if self.lr_wsd_decay_style == "linear":
                     coeff = 1.0 - wsd_decay_ratio
@@ -146,102 +148,54 @@ class FSDPLRScheduler(LRScheduler):
         assert coeff is not None
         return min_lr + coeff * delta_lr
 
-    def step(self, increment: int = 1) -> None:
-        """Set lr for all parameters groups.
+    def get_lr(self) -> list[float]:
+        """Compute the learning rates for each parameter group.
 
-        Args:
-            increment (int): number of steps to increment
+        Returns:
+            list[float]: A list of learning rates, one for each parameter group.
         """
-        self.num_steps += increment
-
-        for param_group in self.optimizer.param_groups:
-            param_group["lr"] = self.get_lr(param_group)
+        return [self._get_lr_for_group(group) for group in self.optimizer.param_groups]
 
     def state_dict(self) -> dict:
-        """Return the state dict."""
-        state_dict = {
-            "max_lr": self.max_lr,
-            "lr_warmup_steps": self.lr_warmup_steps,
-            "num_steps": self.num_steps,
-            "lr_decay_style": self.lr_decay_style,
-            "lr_decay_steps": self.lr_decay_steps,
-            "min_lr": self.min_lr,
-        }
+        """Return the state of the scheduler as a dict."""
+        # Get parent class state
+        state_dict = super().state_dict()
+
+        # Add our custom attributes
+        state_dict.update({
+            'init_lr': self.init_lr,
+            'max_lr': self.max_lr,
+            'min_lr': self.min_lr,
+            'lr_warmup_steps': self.lr_warmup_steps,
+            'lr_decay_steps': self.lr_decay_steps,
+            'lr_decay_style': self.lr_decay_style,
+            'wsd_decay_steps': self.wsd_decay_steps,
+            'lr_wsd_decay_style': self.lr_wsd_decay_style,
+            'override_lr_scheduler': self.override_lr_scheduler,
+            'use_checkpoint_lr_scheduler': self.use_checkpoint_lr_scheduler,
+        })
         return state_dict
 
-    def _check_and_set(self, cls_value: float, sd_value: float, name: str) -> float:
-        """Auxiliary function for checking the values in the checkpoint and
-        setting them.
-
-        Args:
-            cls_value (float): class value
-            sd_value (float): checkpoint value
-            name (str): name of the parameter
-        """
-        if self.override_lr_scheduler:
-            logger.info(f"> overriding {name} value to {cls_value}")
-            return cls_value
-        if not self.use_checkpoint_lr_scheduler:
-            assert cls_value == sd_value, (
-                f"FSDPLRScheduler: class input value {cls_value} and checkpoint"
-                f"value {sd_value} for {name} do not match"
-            )
-        logger.info(f"> using checkpoint value {sd_value} for {name}")
-        return sd_value
-
     def load_state_dict(self, state_dict: dict) -> None:
-        """Load the state dict.
+        """Load the scheduler's state.
 
         Args:
-            state_dict (dict): state dict to be load
+            state_dict (dict): scheduler state.
         """
-        if "start_lr" in state_dict:
-            max_lr_ = state_dict["start_lr"]
-        else:
-            max_lr_ = state_dict["max_lr"]
+        # Load our custom attributes first
+        self.init_lr = state_dict.get('init_lr', self.init_lr)
+        self.max_lr = state_dict.get('max_lr', self.max_lr)
+        self.min_lr = state_dict.get('min_lr', self.min_lr)
+        self.lr_warmup_steps = state_dict.get('lr_warmup_steps', self.lr_warmup_steps)
+        self.lr_decay_steps = state_dict.get('lr_decay_steps', self.lr_decay_steps)
+        self.lr_decay_style = state_dict.get('lr_decay_style', self.lr_decay_style)
+        self.wsd_decay_steps = state_dict.get('wsd_decay_steps', self.wsd_decay_steps)
+        self.lr_wsd_decay_style = state_dict.get('lr_wsd_decay_style', self.lr_wsd_decay_style)
+        self.override_lr_scheduler = state_dict.get('override_lr_scheduler', self.override_lr_scheduler)
+        self.use_checkpoint_lr_scheduler = state_dict.get('use_checkpoint_lr_scheduler', self.use_checkpoint_lr_scheduler)
 
-        self.max_lr = self._check_and_set(self.max_lr, max_lr_, "learning rate")
-        self.min_lr = self._check_and_set(
-            self.min_lr, state_dict["min_lr"], "minimum learning rate"
-        )
-
-        if "warmup_iter" in state_dict:
-            lr_warmup_steps_ = state_dict["warmup_iter"]
-        elif "warmup_steps" in state_dict:
-            lr_warmup_steps_ = state_dict["warmup_steps"]
-        else:
-            lr_warmup_steps_ = state_dict["lr_warmup_steps"]
-
-        self.lr_warmup_steps = self._check_and_set(
-            self.lr_warmup_steps, lr_warmup_steps_, "warmup iterations"
-        )
-
-        if "end_iter" in state_dict:
-            lr_decay_steps_ = state_dict["end_iter"]
-        elif "decay_steps" in state_dict:
-            lr_decay_steps_ = state_dict["decay_steps"]
-        else:
-            lr_decay_steps_ = state_dict["lr_decay_steps"]
-
-        self.lr_decay_steps = self._check_and_set(
-            self.lr_decay_steps, lr_decay_steps_, "total number of iterations"
-        )
-
-        if "decay_style" in state_dict:
-            lr_decay_style_ = state_dict["decay_style"]
-        else:
-            lr_decay_style_ = state_dict["lr_decay_style"]
-
-        self.lr_decay_style = self._check_and_set(
-            self.lr_decay_style, lr_decay_style_, "learning rate decay style"
-        )
-
-        if "num_iters" in state_dict:
-            num_steps = state_dict["num_iters"]
-        else:
-            num_steps = state_dict["num_steps"]
-
-        self.step(increment=num_steps)
+        # Load parent class state
+        super().load_state_dict(state_dict)
 
 
 def get_lr_scheduler(args, optimizer: torch.optim.Optimizer) -> FSDPLRScheduler:
