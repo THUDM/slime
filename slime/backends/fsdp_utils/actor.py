@@ -752,8 +752,10 @@ class FSDPTrainRayActor(TrainRayActor):
                 }
                 log_dict["train/grad_norm"] = grad_norm
 
-                for gid, group in enumerate(self.optimizer.param_groups):
-                    log_dict[f"train/lr-pg_{gid}"] = self.lr_scheduler.get_lr(group)
+                # Log learning rate per parameter group; use scheduler's last computed LRs
+                lr_values = self.lr_scheduler.get_last_lr()
+                for gid, _group in enumerate(self.optimizer.param_groups):
+                    log_dict[f"train/lr-pg_{gid}"] = lr_values[gid]
 
                 kl_info = ""
                 if self.args.use_kl_loss and "kl_loss" in aggregated:
