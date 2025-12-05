@@ -153,10 +153,9 @@ class FSDPLRScheduler(LRScheduler):
             increment (int): number of steps to increment
         """
         self.num_steps += increment
-        current_lr = self.get_lr()
 
         for param_group in self.optimizer.param_groups:
-            param_group["lr"] = current_lr
+            param_group["lr"] = self.get_lr(param_group)
 
     def state_dict(self) -> dict:
         """Return the state dict."""
