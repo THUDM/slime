@@ -62,6 +62,10 @@ def train(args):
     # train loop.
     # note that for async training, one can change the position of the sync operation(ray.get).
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
+        if rollout_id == args.ci_early_stop:
+            print(f"CI early stop at rollout {rollout_id}")
+            break
+
         if args.eval_interval is not None and rollout_id == 0:
             ray.get(rollout_manager.eval.remote(rollout_id))
 

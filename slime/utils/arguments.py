@@ -1220,6 +1220,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
             )
+            parser.add_argument(
+                "--ci-early-stop",
+                type=int,
+                default=None,
+            )
             return parser
 
         def add_sglang_tp_size():
