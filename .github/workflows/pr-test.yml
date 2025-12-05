@@ -38,6 +38,10 @@ jobs:
         --ulimit stack=67108864
         --memory=0
         --memory-swap=0
+        -e http_proxy=$http_proxy
+        -e https_proxy=$https_proxy
+        -e HTTP_PROXY=$HTTP_PROXY
+        -e HTTPS_PROXY=$HTTPS_PROXY
         -v /mnt/nvme0n1/slime_ci:/data/slime_ci
         -v /mnt/nvme0n1/slime_ci/models:/root/models
         -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
@@ -78,6 +82,10 @@ jobs:
         --ulimit stack=67108864
         --memory=0
         --memory-swap=0
+        -e http_proxy=$http_proxy
+        -e https_proxy=$https_proxy
+        -e HTTP_PROXY=$HTTP_PROXY
+        -e HTTPS_PROXY=$HTTPS_PROXY
         -v /mnt/nvme0n1/slime_ci:/data/slime_ci
         -v /mnt/nvme0n1/slime_ci/models:/root/models
         -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
@@ -118,6 +126,10 @@ jobs:
         --ulimit stack=67108864
         --memory=0
         --memory-swap=0
+        -e http_proxy=$http_proxy
+        -e https_proxy=$https_proxy
+        -e HTTP_PROXY=$HTTP_PROXY
+        -e HTTPS_PROXY=$HTTPS_PROXY
         -v /mnt/nvme0n1/slime_ci:/data/slime_ci
         -v /mnt/nvme0n1/slime_ci/models:/root/models
         -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
