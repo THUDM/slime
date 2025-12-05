@@ -16,7 +16,7 @@ import os
 from transformers import AutoModelForCausalLM, AutoTokenizer, Mxfp4Config
 
 model_id = "openai/gpt-oss-20b"
-output_dir = "/root/models/gpt-oss-20b-bf16"
+output_dir = "/github/home/models/gpt-oss-20b-bf16"
 
 if os.path.exists(output_dir):
     print(f"Model already exists at {output_dir}, skipping conversion.")
@@ -51,7 +51,7 @@ export PYTHONBUFFERED=16
 export CUDA_VISIBLE_DEVICES=4,5,6,7
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/models/gpt-oss-20b-bf16
+   --hf-checkpoint /github/home/models/gpt-oss-20b-bf16
 )
 
 ROLLOUT_ARGS=(

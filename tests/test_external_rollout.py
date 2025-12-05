@@ -13,17 +13,17 @@ SGLANG_ENGINE_PORT = 32000
 
 
 def prepare():
-    U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct --local-dir /root/models/{MODEL_NAME}")
+    U.exec_command("mkdir -p /github/home/models /github/home/datasets")
+    U.exec_command(f"huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct --local-dir /github/home/models/{MODEL_NAME}")
     U.hf_download_dataset("zhuzilin/gsm8k")
     U.convert_checkpoint(model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS)
 
 
 def execute():
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/{MODEL_NAME}_torch_dist/ "
+    ckpt_args = f"--hf-checkpoint /github/home/models/{MODEL_NAME}/ " f"--ref-load /root/{MODEL_NAME}_torch_dist/ "
 
     rollout_args = (
-        "--prompt-data /root/datasets/gsm8k/train.parquet "
+        "--prompt-data /github/home/datasets/gsm8k/train.parquet "
         "--input-key messages "
         "--label-key label "
         "--apply-chat-template "
@@ -41,7 +41,7 @@ def execute():
 
     eval_args = (
         "--eval-interval 20 "
-        "--eval-prompt-data gsm8k /root/datasets/gsm8k/test.parquet "
+        "--eval-prompt-data gsm8k /github/home/datasets/gsm8k/test.parquet "
         "--n-samples-per-eval-prompt 1 "
         "--eval-max-response-len 1024 "
         "--eval-top-k 1 "
@@ -166,7 +166,7 @@ def _launch_sglang_engine():
     print("launch_sglang_engine", flush=True)
     launch_server_process(
         ServerArgs(
-            model_path=f"/root/models/{MODEL_NAME}/",
+            model_path=f"/github/home/models/{MODEL_NAME}/",
             trust_remote_code=True,
             enable_memory_saver=True,
             host=SGLANG_ENGINE_IP,

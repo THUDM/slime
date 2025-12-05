@@ -14,9 +14,9 @@ NUM_GPUS = 8
 
 
 def prepare():
-    U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command("hf download Qwen/Qwen3-30B-A3B --local-dir /root/models/Qwen3-30B-A3B")
-    U.exec_command("hf download Qwen/Qwen3-30B-A3B-FP8 --local-dir /root/models/Qwen3-30B-A3B-FP8")
+    U.exec_command("mkdir -p /github/home/models /github/home/datasets")
+    U.exec_command("hf download Qwen/Qwen3-30B-A3B --local-dir /github/home/models/Qwen3-30B-A3B")
+    U.exec_command("hf download Qwen/Qwen3-30B-A3B-FP8 --local-dir /github/home/models/Qwen3-30B-A3B-FP8")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
     U.hf_download_dataset("zhuzilin/aime-2024")
 
@@ -25,12 +25,14 @@ def prepare():
 
 def execute():
     if USE_FP8_ROLLOUT:
-        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}-FP8 " f"--ref-load /root/{MODEL_NAME}_torch_dist "
+        ckpt_args = (
+            f"--hf-checkpoint /github/home/models/{MODEL_NAME}-FP8 " f"--ref-load /root/{MODEL_NAME}_torch_dist "
+        )
     else:
-        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} " f"--ref-load /root/{MODEL_NAME}_torch_dist "
+        ckpt_args = f"--hf-checkpoint /github/home/models/{MODEL_NAME} " f"--ref-load /root/{MODEL_NAME}_torch_dist "
 
     rollout_args = (
-        "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
+        "--prompt-data /github/home/datasets/dapo-math-17k/dapo-math-17k.jsonl "
         "--input-key prompt "
         "--label-key label "
         "--apply-chat-template "
@@ -47,7 +49,7 @@ def execute():
 
     eval_args = (
         f"{'--eval-interval 20 ' if ENABLE_EVAL else ''}"
-        "--eval-prompt-data aime24 /root/datasets/aime-2024/aime-2024.jsonl "
+        "--eval-prompt-data aime24 /github/home/datasets/aime-2024/aime-2024.jsonl "
         "--n-samples-per-eval-prompt 1 "
         "--eval-max-response-len 16384 "
         "--eval-top-k 1 "

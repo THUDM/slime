@@ -12,20 +12,26 @@ NUM_GPUS = 8
 
 
 def prepare():
-    U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    U.exec_command("mkdir -p /github/home/models /github/home/datasets")
+    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /github/home/models/{MODEL_NAME}")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
 
     U.convert_checkpoint(
-        model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS, dir_dst="/root/models"
+        model_name=MODEL_NAME,
+        megatron_model_type=MODEL_TYPE,
+        num_gpus_per_node=NUM_GPUS,
+        dir_dst="/github/home/models",
     )
 
 
 def execute():
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}_torch_dist "
+    ckpt_args = (
+        f"--hf-checkpoint /github/home/models/{MODEL_NAME}/ "
+        f"--ref-load /github/home/models/{MODEL_NAME}_torch_dist "
+    )
 
     rollout_args = (
-        "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
+        "--prompt-data /github/home/datasets/dapo-math-17k/dapo-math-17k.jsonl "
         "--input-key prompt "
         "--label-key label "
         "--apply-chat-template "

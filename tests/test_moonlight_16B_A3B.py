@@ -10,9 +10,9 @@ NUM_GPUS = 8
 
 
 def prepare():
-    U.exec_command("mkdir -p /root/models /root/datasets")
+    U.exec_command("mkdir -p /github/home/models /github/home/datasets")
     U.exec_command(
-        "hf download moonshotai/Moonlight-16B-A3B-Instruct --local-dir /root/models/Moonlight-16B-A3B-Instruct"
+        "hf download moonshotai/Moonlight-16B-A3B-Instruct --local-dir /github/home/models/Moonlight-16B-A3B-Instruct"
     )
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
     U.hf_download_dataset("zhuzilin/aime-2024")
@@ -21,10 +21,10 @@ def prepare():
 
 
 def execute():
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} " f"--ref-load /root/{MODEL_NAME}_torch_dist "
+    ckpt_args = f"--hf-checkpoint /github/home/models/{MODEL_NAME} " f"--ref-load /root/{MODEL_NAME}_torch_dist "
 
     rollout_args = (
-        "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
+        "--prompt-data /github/home/datasets/dapo-math-17k/dapo-math-17k.jsonl "
         "--input-key prompt "
         "--label-key label "
         "--apply-chat-template "
@@ -40,7 +40,7 @@ def execute():
 
     eval_args = (
         f"{'--eval-interval 20 ' if ENABLE_EVAL else ''}"
-        "--eval-prompt-data aime /root/datasets/aime-2024/aime-2024.jsonl "
+        "--eval-prompt-data aime /github/home/datasets/aime-2024/aime-2024.jsonl "
         "--n-samples-per-eval-prompt 1 "
         "--eval-max-response-len 4096 "
         "--eval-top-k 1 "
