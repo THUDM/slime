@@ -10,7 +10,15 @@ class FSDPArgs:
     # Optim
     optimizer: str = "adam"  # Optimizer type: "adam" (AdamW)
     lr: float = 2e-5
+    min_lr: float = 0.0
     lr_decay_style: str = "constant"
+    lr_decay_iters: int | None = None
+    lr_warmup_iters: int = 0
+    lr_warmup_fraction: float | None = None
+    lr_wsd_decay_iters: int | None = None
+    lr_wsd_decay_style: str | None = None
+    use_checkpoint_lr_scheduler: bool = True
+    override_lr_scheduler: bool = False
     weight_decay: float = 0.0
     adam_beta1: float = 0.9
     adam_beta2: float = 0.95
