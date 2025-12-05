@@ -68,7 +68,13 @@ def parse_fsdp_cli(extra_args_provider=None):
         if f.name == "config":
             continue
 
-        arg_type = str if f.type == (str | None) else f.type
+        # Handle union types like int | None, str | None, etc.
+        if hasattr(f.type, "__args__"):  # Check if it's a Union type
+            # For T | None, use T as the type
+            non_none_types = [t for t in f.type.__args__ if t is not type(None)]
+            arg_type = non_none_types[0] if non_none_types else str
+        else:
+            arg_type = f.type
 
         if arg_type is bool:
             parser.add_argument(f"--{f.name.replace('_', '-')}", action="store_true")
