@@ -13,7 +13,8 @@ NUM_GPUS = 8
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command("hf download Qwen/Qwen3-4B --local-dir /root/models/Qwen3-4B")
+    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    U.exec_command(f"rm -rf /root/models/{MODEL_NAME}_slime")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
     U.hf_download_dataset("zhuzilin/aime-2024")
 
@@ -27,8 +28,8 @@ def execute():
         f"--hf-checkpoint /root/models/{MODEL_NAME}/ "
         f"--ref-load /root/models/{MODEL_NAME}_torch_dist "
         "--save-interval 1 "
-        f"--load /root/{MODEL_NAME}_slime "
-        f"--save /root/{MODEL_NAME}_slime "
+        f"--load /root/models/{MODEL_NAME}_slime "
+        f"--save /root/models/{MODEL_NAME}_slime "
     )
 
     rollout_args = (
@@ -61,7 +62,6 @@ def execute():
 
     ppo_args = (
         "--advantage-estimator grpo "
-        f"{'' if TIGHT_HOST_MEMORY else '--use-kl-loss '}"
         "--kl-loss-coef 0.00 "
         "--kl-loss-type k1 "
         "--kl-coef 0.00 "
@@ -78,12 +78,7 @@ def execute():
         "--adam-beta2 0.98 "
     )
 
-    sglang_args = (
-        "--rollout-num-gpus-per-engine 2 "
-        "--sglang-mem-fraction-static 0.8 "
-        "--sglang-max-running-requests 512 "
-        "--sglang-enable-metrics "
-    )
+    sglang_args = "--rollout-num-gpus-per-engine 2 " "--sglang-mem-fraction-static 0.8 "
 
     ci_args = "--ci-test "
 
@@ -97,7 +92,7 @@ def execute():
         # need to comment this when using model with MLA
         "--attention-backend flash "
         "--actor-num-nodes 1 "
-        "--actor-num-gpus-per-node 4 "
+        "--actor-num-gpus-per-node 8 "
         "--colocate "
     )
 

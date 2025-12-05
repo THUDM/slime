@@ -45,7 +45,7 @@ def execute():
         "--kl-loss-type k1 "
         "--kl-coef 0.00 "
         "--entropy-coef 0.00 "
-        "--eps-clip 4e-4 "
+        "--eps-clip 0.2 "
     )
 
     optimizer_args = (
