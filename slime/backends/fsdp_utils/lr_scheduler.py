@@ -211,36 +211,20 @@ def get_lr_scheduler(args, optimizer: torch.optim.Optimizer) -> FSDPLRScheduler:
     Returns:
         FSDPLRScheduler: Initialized scheduler bound to ``optimizer``.
     """
-    # Iteration-based training.
-    if hasattr(args, 'train_iters') and hasattr(args, 'global_batch_size'):
-        train_iters = args.train_iters
-        global_batch_size = args.global_batch_size
-    else:
-        # Fallback for cases where these attributes don't exist
-        # In FSDP, we might not have these, so we'll use simpler logic
-        train_iters = getattr(args, 'lr_decay_iters', None)
-        global_batch_size = 1
-
+    args.train_iters = args.num_rollout * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
     if args.lr_decay_iters is None:
-        if train_iters is not None:
-            args.lr_decay_iters = train_iters
-        else:
-            # Default to a reasonable value if not specified
-            args.lr_decay_iters = 100000
-
-    lr_decay_steps = args.lr_decay_iters * global_batch_size
+        args.lr_decay_iters = args.train_iters
+    lr_decay_steps = args.lr_decay_iters * args.global_batch_size
     wsd_decay_steps = None
     if args.lr_wsd_decay_iters is not None:
-        wsd_decay_steps = args.lr_wsd_decay_iters * global_batch_size
-
+        wsd_decay_steps = args.lr_wsd_decay_iters * args.global_batch_size
     if args.lr_warmup_fraction is not None:
         lr_warmup_steps = args.lr_warmup_fraction * lr_decay_steps
     else:
-        lr_warmup_steps = args.lr_warmup_iters * global_batch_size
-
+        lr_warmup_steps = args.lr_warmup_iters * args.global_batch_size
     lr_scheduler = FSDPLRScheduler(
         optimizer,
-        init_lr=args.lr,
+        init_lr=args.lr_warmup_init,
         max_lr=args.lr,
         min_lr=args.min_lr,
         lr_warmup_steps=lr_warmup_steps,
