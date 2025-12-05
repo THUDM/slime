@@ -1,0 +1,79 @@
+# RLVE Starter Pack Configuration
+# =================================
+# Uses RLVE's identifier2environment registry directly.
+# Prompts are generated on-the-fly (not pre-generated) to enable curriculum learning.
+#
+# Environment weights determine sampling probability. Higher weight = more samples.
+# kwargs are passed to env.generator(parameter=kwargs) for problem generation.
+# Parameter names follow RLVE env definitions (some use N, others MAX_M_N/MAX_N_M).
+
+environments:
+  # Core math environments (RLVE's vetted base set)
+  Multiplication:
+    weight: 1.0
+    kwargs:
+      digit_num: 3  # 3-digit multiplication problems
+
+  Division:
+    weight: 1.0
+    kwargs:
+      divisor_digit_num: 2
+      answer_digit_num: 2
+
+  Sorting:
+    weight: 1.0
+    kwargs:
+      N: 10  # Array length (NOT MAX_M_N)
+
+  EuclidGame:
+    weight: 1.0
+    kwargs:
+      MAX_X_Y: 100  # Max value for X and Y
+
+  # Additional variety environments (lower weight)
+  ShortestPath:
+    weight: 1.0
+    kwargs:
+      N: 6  # Graph size
+      edge_density: 0.3
+
+  SpiralMatrix:
+    weight: 1.0
+    kwargs:
+      MAX_M_N: 5  # Matrix dimension
+
+  LightUpPuzzle:
+    weight: 1.0
+    kwargs:
+      MAX_N_M: 5  # Puzzle dimension
+      density: 0.3  # Fraction of black cells with numbers
+
+# Answer format markers
+# Model must wrap final answer with these tags for verifier to extract
+answer_markers:
+  start: "<answer>"
+  end: "</answer>"
+
+# Format reward bonus coefficient (matches RLVE's tinker integration)
+# total_reward = base_reward + format_coef * format_score
+# Set > 0 to reward correct answer formatting even when answer is wrong
+format_coef: 0.0
+
+# Curriculum learning settings (Phase 2)
+# When use_controllers is true, environments use RLVE's difficulty controllers
+# to progressively increase problem difficulty based on success rate.
+use_controllers: false
+
+# Starting difficulty level for all environments (0 = easiest)
+initial_difficulty: 0
+
+# Number of recent difficulty levels to sample from (sliding window)
+# e.g., if max_difficulty=5 and window=2, samples from difficulties 4 and 5
+difficulty_sliding_window_size: 1
+
+# Accuracy threshold to advance difficulty (when use_controllers: true)
+min_metric_to_increase_difficulty: 0.5
+
+# Minimum prompts before checking if difficulty should advance
+# Threshold = min_prompts_before_difficulty_check * n_samples_per_prompt
+min_prompts_before_difficulty_check: 8
