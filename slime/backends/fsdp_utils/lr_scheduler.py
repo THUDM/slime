@@ -7,6 +7,7 @@ import math
 
 import torch
 from torch.optim.lr_scheduler import LRScheduler
+from typing_extensions import override
 
 logger = logging.getLogger(__name__)
 
@@ -143,6 +144,7 @@ class FSDPLRScheduler(LRScheduler):
         assert coeff is not None
         return min_lr + coeff * delta_lr
 
+    @override
     def get_lr(self) -> list[float]:
         """Compute the learning rates for each parameter group.
 
@@ -151,6 +153,7 @@ class FSDPLRScheduler(LRScheduler):
         """
         return [self._get_lr_for_group(group) for group in self.optimizer.param_groups]
 
+    @override
     def state_dict(self) -> dict:
         """Return the state of the scheduler as a dict."""
         # Get parent class state
@@ -173,6 +176,7 @@ class FSDPLRScheduler(LRScheduler):
         )
         return state_dict
 
+    @override
     def load_state_dict(self, state_dict: dict) -> None:
         """Load the scheduler's state.
 
@@ -213,14 +217,14 @@ def get_lr_scheduler(args, optimizer: torch.optim.Optimizer) -> FSDPLRScheduler:
     args.train_iters = args.num_rollout * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
     if args.lr_decay_iters is None:
         args.lr_decay_iters = args.train_iters
-    lr_decay_steps = args.lr_decay_iters * args.global_batch_size
+    lr_decay_steps = args.lr_decay_iters
     wsd_decay_steps = None
     if args.lr_wsd_decay_iters is not None:
-        wsd_decay_steps = args.lr_wsd_decay_iters * args.global_batch_size
+        wsd_decay_steps = args.lr_wsd_decay_iters
     if args.lr_warmup_fraction is not None:
         lr_warmup_steps = args.lr_warmup_fraction * lr_decay_steps
     else:
-        lr_warmup_steps = args.lr_warmup_iters * args.global_batch_size
+        lr_warmup_steps = args.lr_warmup_iters
     lr_scheduler = FSDPLRScheduler(
         optimizer,
         init_lr=args.lr_warmup_init,
