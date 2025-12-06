@@ -1448,91 +1448,6 @@ index 08e6516bc..37b4c3f85 100644
  
  @torch.compile(dynamic=True, disable=_is_npu)
  def get_last_loc_large_page_size_top_k_1(
-diff --git a/python/sglang/srt/speculative/eagle_worker_v2.py b/python/sglang/srt/speculative/eagle_worker_v2.py
-index 7d8cd62a0..b8f1c2ae5 100644
---- a/python/sglang/srt/speculative/eagle_worker_v2.py
-+++ b/python/sglang/srt/speculative/eagle_worker_v2.py
-@@ -7,6 +7,7 @@ import time
- from typing import List, Optional, Tuple
- 
- import torch
- 
-+from sglang.srt.managers.io_struct import UpdateWeightsFromDistributedReqInput, UpdateWeightsFromTensorReqInput
- from sglang.srt.environ import envs
- from sglang.srt.layers.moe.utils import speculative_moe_backend_context
- from sglang.srt.managers.schedule_batch import ModelWorkerBatch
-@@ -32,6 +33,7 @@ from sglang.srt.speculative.eagle_info_v2 import (
-     select_top_k_tokens_tmp,
- )
- from sglang.srt.speculative.eagle_utils import TreeMaskMode, build_tree_kernel_efficient
- from sglang.srt.speculative.spec_info import SpeculativeAlgorithm
- from sglang.srt.speculative.spec_utils import (
-     detect_nan,
-     draft_tp_context,
-     load_token_map,
- )
- from sglang.srt.utils.common import (
-     empty_context,
-     fast_topk,
-     get_available_gpu_memory,
-     is_npu,
-     next_power_of_2,
- )
-+from sglang.srt.utils import MultiprocessingSerializer
-+from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
- 
- _is_npu = is_npu()
- 
- logger = logging.getLogger(__name__)
-@@
-     def move_accepted_tokens_to_target_kvcache(
-         self,
-         batch: ModelWorkerBatch,
-         accept_index: torch.Tensor,
-         accept_length: torch.Tensor,
-     ):
-         """
-         Move accepted tokens to the target KV cache.
- 
-@@
-         assign_extend_cache_locs[(bs,)](
-             batch.req_pool_indices,
-             self.req_to_token_pool.req_to_token,
-             batch.seq_lens,
-             batch.seq_lens + accept_length,
-             tgt_cache_loc,
-             self.req_to_token_pool.req_to_token.shape[1],
-             next_power_of_2(bs),
-         )
-         fill_accepted_out_cache_loc[(size,)](
-             accept_index,
-             batch.out_cache_loc,
-             accepted_out_cache_loc,
-             next_power_of_2(size),
-         )
-         self.token_to_kv_pool_allocator.get_kvcache().move_kv_cache(
-             tgt_cache_loc, accepted_out_cache_loc
-         )
-+
-+    def update_weights_from_tensor(self, recv_req: UpdateWeightsFromTensorReqInput):
-+        monkey_patch_torch_reductions()
-+        named_tensors = MultiprocessingSerializer.deserialize(
-+            recv_req.serialized_named_tensors[self._draft_worker.tp_rank]
-+        )
-+        success, message = self._draft_worker.draft_worker.model_runner.update_weights_from_tensor(
-+            named_tensors=named_tensors,
-+            load_format=recv_req.load_format,
-+        )
-+        if not success:
-+            return success, message
-+
-+        success, message = self._target_worker.model_runner.update_weights_from_tensor(
-+            named_tensors=named_tensors,
-+            load_format=recv_req.load_format,
-+        )
-+        return success, message
-+
- 
 diff --git a/python/sglang/srt/weight_sync/tensor_bucket.py b/python/sglang/srt/weight_sync/tensor_bucket.py
 index 44273713f..c1d592ddb 100644
 --- a/python/sglang/srt/weight_sync/tensor_bucket.py
@@ -1574,4 +1489,55 @@ index 44273713f..c1d592ddb 100644
 -
              reconstructed[i] = (meta.name, tensor)
  
-         return reconstructed
+         return reconstructeddiff --git a/python/sglang/srt/speculative/eagle_worker_v2.py b/python/sglang/srt/speculative/eagle_worker_v2.py
+index 6e7bc55..cea6a0b 100644
+--- a/python/sglang/srt/speculative/eagle_worker_v2.py
++++ b/python/sglang/srt/speculative/eagle_worker_v2.py
+@@ -7,6 +7,7 @@ import torch
+ 
+ from sglang.srt.environ import envs
+ from sglang.srt.layers.moe.utils import speculative_moe_backend_context
++from sglang.srt.managers.io_struct import UpdateWeightsFromTensorReqInput
+ from sglang.srt.managers.schedule_batch import ModelWorkerBatch
+ from sglang.srt.managers.scheduler import GenerationBatchResult
+ from sglang.srt.managers.tp_worker import TpModelWorker
+@@ -34,6 +35,7 @@ from sglang.srt.speculative.spec_utils import (
+     draft_tp_context,
+     load_token_map,
+ )
++from sglang.srt.utils import MultiprocessingSerializer
+ from sglang.srt.utils.common import (
+     empty_context,
+     fast_topk,
+@@ -41,6 +43,7 @@ from sglang.srt.utils.common import (
+     is_npu,
+     next_power_of_2,
+ )
++from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
+ 
+ _is_npu = is_npu()
+ 
+@@ -709,3 +712,23 @@ class EAGLEWorkerV2(BaseSpecWorker):
+         self.token_to_kv_pool_allocator.get_kvcache().move_kv_cache(
+             tgt_cache_loc, accepted_out_cache_loc
+         )
++
++    def update_weights_from_tensor(self, recv_req: UpdateWeightsFromTensorReqInput):
++        monkey_patch_torch_reductions()
++        named_tensors = MultiprocessingSerializer.deserialize(
++            recv_req.serialized_named_tensors[self._draft_worker.tp_rank]
++        )
++        success, message = (
++            self._draft_worker.draft_worker.model_runner.update_weights_from_tensor(
++                named_tensors=named_tensors,
++                load_format=recv_req.load_format,
++            )
++        )
++        if not success:
++            return success, message
++
++        success, message = self._target_worker.model_runner.update_weights_from_tensor(
++            named_tensors=named_tensors,
++            load_format=recv_req.load_format,
++        )
++        return success, message
