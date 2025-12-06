@@ -4,7 +4,7 @@ FROM lmsysorg/sglang:${SGLANG_IMAGE_TAG} AS sglang
 # ======================================== Arguments =============================================
 
 ARG PATCH_VERSION=latest
-ARG MEGATRON_COMMIT=core_v0.14.0
+ARG MEGATRON_COMMIT=core_v0.15.0
 
 ARG ENABLE_CUDA_13=0
 
