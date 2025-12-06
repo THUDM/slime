@@ -28,6 +28,7 @@ from ...utils import tracking_utils
 from ...utils.profile_utils import TrainProfiler
 from . import checkpoint
 from .data_packing import pack_sequences, pad_packed_sequence_with_cp, unpack_sequences
+from .lr_scheduler import get_lr_scheduler
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
 logger = logging.getLogger(__name__)
@@ -113,6 +114,9 @@ class FSDPTrainRayActor(TrainRayActor):
             )
         else:
             raise ValueError(f"Unsupported optimizer: {args.optimizer}. Supported options: 'adam'")
+
+        # Initialize LR scheduler
+        self.lr_scheduler = get_lr_scheduler(args, self.optimizer)
 
         self.global_step = 0
         self.micro_step = 0
@@ -730,6 +734,8 @@ class FSDPTrainRayActor(TrainRayActor):
             grad_norm = float(grad_norm)
 
             self.optimizer.step()
+            # Update learning rate
+            self.lr_scheduler.step()
             self.optimizer.zero_grad(set_to_none=True)
             # Aggregate logs
             aggregated = {k: torch.stack(v).sum().item() for k, v in reported_accum.items()}
@@ -746,9 +752,10 @@ class FSDPTrainRayActor(TrainRayActor):
                 }
                 log_dict["train/grad_norm"] = grad_norm
 
-                for gid, group in enumerate(self.optimizer.param_groups):
-                    if "lr" in group:
-                        log_dict[f"train/lr-pg_{gid}"] = group["lr"]
+                # Log learning rate per parameter group; use scheduler's last computed LRs
+                lr_values = self.lr_scheduler.get_last_lr()
+                for gid, _group in enumerate(self.optimizer.param_groups):
+                    log_dict[f"train/lr-pg_{gid}"] = lr_values[gid]
 
                 kl_info = ""
                 if self.args.use_kl_loss and "kl_loss" in aggregated:
