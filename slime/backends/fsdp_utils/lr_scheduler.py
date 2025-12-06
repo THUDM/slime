@@ -153,53 +153,6 @@ class FSDPLRScheduler(LRScheduler):
         """
         return [self._get_lr_for_group(group) for group in self.optimizer.param_groups]
 
-    @override
-    def state_dict(self) -> dict:
-        """Return the state of the scheduler as a dict."""
-        # Get parent class state
-        state_dict = super().state_dict()
-
-        # Add our custom attributes
-        state_dict.update(
-            {
-                "init_lr": self.init_lr,
-                "max_lr": self.max_lr,
-                "min_lr": self.min_lr,
-                "lr_warmup_steps": self.lr_warmup_steps,
-                "lr_decay_steps": self.lr_decay_steps,
-                "lr_decay_style": self.lr_decay_style,
-                "wsd_decay_steps": self.wsd_decay_steps,
-                "lr_wsd_decay_style": self.lr_wsd_decay_style,
-                "override_lr_scheduler": self.override_lr_scheduler,
-                "use_checkpoint_lr_scheduler": self.use_checkpoint_lr_scheduler,
-            }
-        )
-        return state_dict
-
-    @override
-    def load_state_dict(self, state_dict: dict) -> None:
-        """Load the scheduler's state.
-
-        Args:
-            state_dict (dict): scheduler state.
-        """
-        # Load our custom attributes first
-        self.init_lr = state_dict.get("init_lr", self.init_lr)
-        self.max_lr = state_dict.get("max_lr", self.max_lr)
-        self.min_lr = state_dict.get("min_lr", self.min_lr)
-        self.lr_warmup_steps = state_dict.get("lr_warmup_steps", self.lr_warmup_steps)
-        self.lr_decay_steps = state_dict.get("lr_decay_steps", self.lr_decay_steps)
-        self.lr_decay_style = state_dict.get("lr_decay_style", self.lr_decay_style)
-        self.wsd_decay_steps = state_dict.get("wsd_decay_steps", self.wsd_decay_steps)
-        self.lr_wsd_decay_style = state_dict.get("lr_wsd_decay_style", self.lr_wsd_decay_style)
-        self.override_lr_scheduler = state_dict.get("override_lr_scheduler", self.override_lr_scheduler)
-        self.use_checkpoint_lr_scheduler = state_dict.get(
-            "use_checkpoint_lr_scheduler", self.use_checkpoint_lr_scheduler
-        )
-
-        # Load parent class state
-        super().load_state_dict(state_dict)
-
 
 def get_lr_scheduler(args, optimizer: torch.optim.Optimizer) -> FSDPLRScheduler:
     """Create and configure the learning-rate scheduler.
