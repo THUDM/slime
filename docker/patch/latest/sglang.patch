@@ -1,3 +1,63 @@
+diff --git a/python/sglang/srt/disaggregation/decode.py b/python/sglang/srt/disaggregation/decode.py
+index 42acacb6e..8f4abfe8b 100644
+--- a/python/sglang/srt/disaggregation/decode.py
++++ b/python/sglang/srt/disaggregation/decode.py
+@@ -292,6 +292,13 @@ class DecodePreallocQueue:
+         )
+         return kv_manager
+ 
++    def release_memory_occupation(self):
++        if hasattr(self.kv_manager, "close"):
++            self.kv_manager.close()
++
++    def resume_memory_occupation(self):
++        self.kv_manager = self._init_kv_manager()
++
+     def add(self, req: Req, is_retracted: bool = False) -> None:
+         """Add a request to the pending queue."""
+         if self._check_if_req_exceed_kv_capacity(req):
+diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
+index 0e1f844a5..32664d476 100644
+--- a/python/sglang/srt/disaggregation/mooncake/conn.py
++++ b/python/sglang/srt/disaggregation/mooncake/conn.py
+@@ -1080,6 +1080,19 @@ class MooncakeKVManager(CommonKVManager):
+             f"Losing connection with prefill instance (bootstrap_addr: {failed_bootstrap_addr}), {len(affected_rooms)} requests affected"
+         )
+ 
++    def close(self):
++        # Batch deregister KV data buffers
++        if self.kv_args.kv_data_ptrs:
++            self.engine.batch_deregister(self.kv_args.kv_data_ptrs)
++
++        # Batch deregister auxiliary data buffers
++        if self.kv_args.aux_data_ptrs:
++            self.engine.batch_deregister(self.kv_args.aux_data_ptrs)
++
++        # Batch deregister state/extra pool data buffers
++        if self.kv_args.state_data_ptrs:
++            self.engine.batch_deregister(self.kv_args.state_data_ptrs)
++
+ 
+ class MooncakeKVSender(CommonKVSender):
+ 
+diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
+index 508ce1def..0e8fa9b4e 100644
+--- a/python/sglang/srt/disaggregation/prefill.py
++++ b/python/sglang/srt/disaggregation/prefill.py
+@@ -305,6 +305,13 @@ class PrefillBootstrapQueue:
+         else:
+             return bootstrapped_reqs, failed_reqs
+ 
++    def release_memory_occupation(self):
++        if hasattr(self.kv_manager, "close"):
++            self.kv_manager.close()
++
++    def resume_memory_occupation(self):
++        self.kv_manager = self._init_kv_manager()
++
+ 
+ class SchedulerDisaggregationPrefillMixin:
+     """
 diff --git a/python/sglang/srt/distributed/device_communicators/pynccl.py b/python/sglang/srt/distributed/device_communicators/pynccl.py
 index f485c24c2..901010610 100644
 --- a/python/sglang/srt/distributed/device_communicators/pynccl.py
@@ -13,26 +73,28 @@ index f485c24c2..901010610 100644
 +    def nccl_resume(self):
 +        self.nccl.ncclResume(self.comm)
 diff --git a/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py b/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
-index 579811777..3c0854550 100644
+index 579811777..89136f42d 100644
 --- a/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
 +++ b/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
-@@ -304,6 +304,15 @@ class NCCLLibrary:
+@@ -304,6 +304,17 @@ class NCCLLibrary:
          Function("ncclGroupEnd", ncclResult_t, []),
      ]
  
 +    if os.environ.get("AMEM_ENABLE", "0") == "1":
-+        exported_functions.extend([
-+            # ncclResult_t ncclPause(ncclComm_t comm);
-+            Function("ncclPause", ncclResult_t, [ncclComm_t]),
-+            # ncclResult_t ncclResume(ncclComm_t comm);
-+            Function("ncclResume", ncclResult_t, [ncclComm_t]),
-+            Function("ncclSetGroupID", ncclResult_t, [ctypes.c_int]),
-+        ])
++        exported_functions.extend(
++            [
++                # ncclResult_t ncclPause(ncclComm_t comm);
++                Function("ncclPause", ncclResult_t, [ncclComm_t]),
++                # ncclResult_t ncclResume(ncclComm_t comm);
++                Function("ncclResume", ncclResult_t, [ncclComm_t]),
++                Function("ncclSetGroupID", ncclResult_t, [ctypes.c_int]),
++            ]
++        )
 +
      exported_functions_symm_mem = [
          # ncclResult_t ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags);
          Function(
-@@ -551,6 +560,12 @@ class NCCLLibrary:
+@@ -551,6 +562,12 @@ class NCCLLibrary:
      def ncclGroupEnd(self) -> None:
          self.NCCL_CHECK(self._funcs["ncclGroupEnd"]())
  
@@ -734,7 +796,7 @@ index e6f59e5b0..c199b987b 100644
          self._check_req_pool()
  
 diff --git a/python/sglang/srt/managers/scheduler_update_weights_mixin.py b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
-index 9bed7030d..a12deed3a 100644
+index 9bed7030d..a375b2fb2 100644
 --- a/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 @@ -1,6 +1,7 @@
@@ -745,16 +807,17 @@ index 9bed7030d..a12deed3a 100644
  from typing import TYPE_CHECKING, Tuple
  
  import torch
-@@ -11,6 +12,8 @@ from sglang.srt.constants import (
+@@ -11,6 +12,9 @@ from sglang.srt.constants import (
      GPU_MEMORY_TYPE_KV_CACHE,
      GPU_MEMORY_TYPE_WEIGHTS,
  )
++from sglang.srt.disaggregation.utils import DisaggregationMode
 +from sglang.srt.distributed import get_moe_ep_group, get_moe_tp_group, get_tp_group
 +from sglang.srt.layers.dp_attention import get_attention_tp_group
  from sglang.srt.managers.io_struct import (
      DestroyWeightsUpdateGroupReqInput,
      DestroyWeightsUpdateGroupReqOutput,
-@@ -76,7 +79,8 @@ class SchedulerUpdateWeightsMixin:
+@@ -76,7 +80,8 @@ class SchedulerUpdateWeightsMixin:
  
      def update_weights_from_tensor(self, recv_req: UpdateWeightsFromTensorReqInput):
          """Update the online model parameter from tensors."""
@@ -764,7 +827,21 @@ index 9bed7030d..a12deed3a 100644
          # TODO extract common code b/t update_weights_from_distributed and update_weights_from_tensor later
          if success:
              if recv_req.flush_cache:
-@@ -132,6 +136,20 @@ class SchedulerUpdateWeightsMixin:
+@@ -122,6 +127,13 @@ class SchedulerUpdateWeightsMixin:
+             self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_KV_CACHE)
+             self.flush_cache()
+ 
++            if self.disaggregation_mode == DisaggregationMode.DECODE:
++                if hasattr(self, "disagg_decode_prealloc_queue"):
++                    self.disagg_decode_prealloc_queue.release_memory_occupation()
++            elif self.disaggregation_mode == DisaggregationMode.PREFILL:
++                if hasattr(self, "disagg_prefill_bootstrap_queue"):
++                    self.disagg_prefill_bootstrap_queue.release_memory_occupation()
++
+         if GPU_MEMORY_TYPE_WEIGHTS in tags:
+             self.stashed_model_static_state = _export_static_state(
+                 self.tp_worker.model_runner.model
+@@ -132,6 +144,20 @@ class SchedulerUpdateWeightsMixin:
          if GPU_MEMORY_TYPE_CUDA_GRAPH in tags:
              self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_CUDA_GRAPH)
  
@@ -785,7 +862,7 @@ index 9bed7030d..a12deed3a 100644
          torch.cuda.synchronize()
  
          return ReleaseMemoryOccupationReqOutput()
-@@ -150,6 +168,20 @@ class SchedulerUpdateWeightsMixin:
+@@ -150,6 +176,20 @@ class SchedulerUpdateWeightsMixin:
          if GPU_MEMORY_TYPE_CUDA_GRAPH in tags:
              self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_CUDA_GRAPH)
  
@@ -806,6 +883,20 @@ index 9bed7030d..a12deed3a 100644
          if GPU_MEMORY_TYPE_WEIGHTS in tags:
              self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_WEIGHTS)
              torch.distributed.barrier(self.tp_cpu_group)
+@@ -162,6 +202,13 @@ class SchedulerUpdateWeightsMixin:
+         if GPU_MEMORY_TYPE_KV_CACHE in tags:
+             self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_KV_CACHE)
+ 
++            if self.disaggregation_mode == DisaggregationMode.DECODE:
++                if hasattr(self, "disagg_decode_prealloc_queue"):
++                    self.disagg_decode_prealloc_queue.resume_memory_occupation()
++            elif self.disaggregation_mode == DisaggregationMode.PREFILL:
++                if hasattr(self, "disagg_prefill_bootstrap_queue"):
++                    self.disagg_prefill_bootstrap_queue.resume_memory_occupation()
++
+         return ResumeMemoryOccupationReqOutput()
+ 
+     def save_remote_model(self: Scheduler, params):
 diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
 index c5a2e35ed..403cfcd9b 100644
 --- a/python/sglang/srt/managers/tokenizer_manager.py

@@ -85,9 +85,10 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
 
 
 class SGLangEngine(RayActor):
-    def __init__(self, args, rank: int):
+    def __init__(self, args, rank: int, worker_type: str = "regular"):
         self.args = args
         self.rank = rank
+        self.worker_type = worker_type
 
     def init(self, dist_init_addr, port, nccl_port, host=None):
         self.router_ip = self.args.sglang_router_ip
@@ -106,7 +107,7 @@ class SGLangEngine(RayActor):
             dist_init_addr = f"[{ipv6_addr}]:{port_str}"
 
         server_args_dict, external_engine_need_check_fields = _compute_server_args(
-            self.args, self.rank, dist_init_addr, nccl_port, host, port
+            self.args, self.rank, dist_init_addr, nccl_port, host, port, self.worker_type
         )
 
         self.node_rank = server_args_dict["node_rank"]
@@ -145,15 +146,25 @@ class SGLangEngine(RayActor):
     def _init_normal(self, server_args_dict):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
         self.process = launch_server_process(ServerArgs(**server_args_dict))
+        # TODO: register prefill and decode workers to router here when router allows init with no workers.
+        if self.worker_type != "regular":
+            return
+
         if self.node_rank == 0 and self.router_ip and self.router_port:
             if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
+                assert (
+                    self.worker_type == "regular"
+                ), "pd disaggregation is not supported in old router or slime router."
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}"
                 )
             else:
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/workers",
-                    json={"url": f"http://{self.server_host}:{self.server_port}"},
+                    json={
+                        "url": f"http://{self.server_host}:{self.server_port}",
+                        "worker_type": self.worker_type,
+                    },
                 )
             response.raise_for_status()
 
@@ -372,7 +383,7 @@ class SGLangEngine(RayActor):
         return response
 
 
-def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
+def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port, worker_type: str = "regular"):
     nnodes = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
     node_rank = rank % nnodes
     kwargs = {
@@ -398,6 +409,14 @@ def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
         # always skip warmup to prevent warmup timeout.
         "skip_server_warmup": True,
     }
+
+    if worker_type == "prefill":
+        kwargs["disaggregation_mode"] = "prefill"
+        kwargs["load_balance_method"] = "round_robin"
+    elif worker_type == "decode":
+        kwargs["disaggregation_mode"] = "decode"
+        kwargs["prefill_round_robin_balance"] = True
+
     if args.use_rollout_routing_replay:
         kwargs["enable_return_routed_experts"] = True
     if args.fp16:

@@ -44,7 +44,8 @@ class RolloutManager:
 
         self.args = args
         self.pg = pg
-        _start_router(args)
+        if args.prefill_num_servers is None:
+            _start_router(args)
         # TODO make args immutable
         init_tracking(args, primary=False, router_addr=f"http://{args.sglang_router_ip}:{args.sglang_router_port}")
         init_http_client(args)
@@ -66,7 +67,11 @@ class RolloutManager:
             num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
             num_engines = args.rollout_num_gpus // num_gpu_per_engine
             self.all_rollout_engines = [None] * num_engines
-        self.num_new_engines = init_rollout_engines(args, pg, self.all_rollout_engines)
+        self.num_new_engines, prefill_and_decode = init_rollout_engines(args, pg, self.all_rollout_engines)
+        # When pd disaggregation is used, we need the prefill and decode urls to init router.
+        if args.prefill_num_servers is not None:
+            assert prefill_and_decode is not None
+            _start_router(args, prefill_and_decode)
         self.nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
 
@@ -103,7 +108,7 @@ class RolloutManager:
         finally:
             if monitor_started:
                 self._health_monitor.stop()
-                self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
+                self.num_new_engines, _ = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
             else:
                 self.num_new_engines = 0
 
@@ -278,11 +283,16 @@ class RolloutManager:
 
 def init_rollout_engines(args, pg, all_rollout_engines):
     if args.debug_train_only:
-        return 0
+        return 0, None
 
     num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
     num_engines = args.rollout_num_gpus // num_gpu_per_engine
     assert len(all_rollout_engines) == num_engines
+    if args.prefill_num_servers is not None:
+        prefill_num_servers = args.prefill_num_servers * args.rollout_num_gpus_per_engine // num_gpu_per_engine
+        assert (
+            num_engines > prefill_num_servers
+        ), f"num_engines {num_engines} should be larger than prefill_num_servers {prefill_num_servers}"
 
     pg, reordered_bundle_indices = pg
 
@@ -331,6 +341,13 @@ def init_rollout_engines(args, pg, all_rollout_engines):
                 "GMM_LOG": "2",
             }
 
+        worker_type = "regular"
+        if args.prefill_num_servers is not None:
+            if i < prefill_num_servers:
+                worker_type = "prefill"
+            else:
+                worker_type = "decode"
+
         rollout_engine = RolloutRayActor.options(
             num_cpus=num_cpus,
             num_gpus=num_gpus,
@@ -338,7 +355,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
             runtime_env={
                 "env_vars": env_vars,
             },
-        ).remote(args, rank=i)
+        ).remote(args, rank=i, worker_type=worker_type)
 
         rollout_engines.append((i, rollout_engine))
         all_rollout_engines[i] = rollout_engine
@@ -346,7 +363,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
     num_new_engines = len(rollout_engines)
 
     if num_new_engines == 0:
-        return num_new_engines
+        return num_new_engines, None
 
     if args.rollout_external:
         addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(args=args, rollout_engines=rollout_engines)
@@ -359,7 +376,25 @@ def init_rollout_engines(args, pg, all_rollout_engines):
     # somehow if we don't sync here, the --debug-rollout-only mode will crash.
     init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in rollout_engines]
     ray.get(init_handles)
-    return num_new_engines
+
+    if args.prefill_num_servers is not None:
+        prefill_and_decode_urls = (
+            [
+                f"http://{addr_and_ports[i]['host']}:{addr_and_ports[i]['port']}"
+                for i in range(0, prefill_num_servers, args.rollout_num_gpus_per_engine // num_gpu_per_engine)
+                if "port" in addr_and_ports[i]
+            ],
+            [
+                f"http://{addr_and_ports[i]['host']}:{addr_and_ports[i]['port']}"
+                for i in range(
+                    prefill_num_servers, num_engines, args.rollout_num_gpus_per_engine // num_gpu_per_engine
+                )
+                if "port" in addr_and_ports[i]
+            ],
+        )
+    else:
+        prefill_and_decode_urls = None
+    return num_new_engines, prefill_and_decode_urls
 
 
 def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
@@ -423,6 +458,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
         get_addr, get_port = get_addr_and_ports(engine)
 
         for i in range(num_engines_on_this_node):
+            addr_and_ports[rank + i]["host"] = get_addr()
             addr_and_ports[rank + i]["port"] = get_port()
             addr_and_ports[rank + i]["nccl_port"] = get_port()
 
@@ -445,7 +481,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
     return addr_and_ports
 
 
-def _start_router(args):
+def _start_router(args, prefill_and_decode_urls=None):
     """start sgl router and slime router"""
     if args.sglang_router_ip is not None:
         return
@@ -455,6 +491,7 @@ def _start_router(args):
         args.sglang_router_port = find_available_port(random.randint(3000, 4000))
 
     if args.use_slime_router:
+        assert prefill_and_decode_urls is None
         from slime.router.router import run_router
 
         router_args = args
@@ -468,9 +505,17 @@ def _start_router(args):
         router_args.host = args.sglang_router_ip
         router_args.port = args.sglang_router_port
         router_args.prometheus_port = find_available_port(random.randint(4000, 5000))
+        router_args.log_level = "warn"
 
-        if hasattr(router_args, "log_level"):
-            router_args.log_level = "warn"
+        if prefill_and_decode_urls is not None:
+            prefill_urls, decode_urls = prefill_and_decode_urls
+            prefill_urls = [(url, None) for url in prefill_urls]
+            print(f"prefill urls: {prefill_urls}")
+            print(f"decode urls: {decode_urls}")
+
+            router_args.pd_disaggregation = True
+            router_args.prefill_urls = prefill_urls
+            router_args.decode_urls = decode_urls
 
         if hasattr(router_args, "request_timeout_secs"):
             router_args.request_timeout_secs = args.sglang_router_request_timeout_secs
