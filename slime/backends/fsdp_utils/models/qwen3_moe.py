@@ -1,14 +1,28 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeMLP
 
-from slime.backends.fsdp_utils.kernels.fused_experts import (
-    DownProjFunction,
-    GateUpProjFunction,
-    MoeSumReduceFunction,
-    SiluAndMulFunction,
-)
+# Read environment variable to determine which implementation to use
+ENABLE_SELF_TRITON = os.environ.get('ENABLE_SELF_TRITON', 'false').lower() == 'true'
+
+if ENABLE_SELF_TRITON:
+    # Use Triton-optimized implementation
+    from slime.backends.fsdp_utils.kernels.fused_experts_cuda import (
+        DownProjFunction,
+        GateUpProjFunction,
+        MoeSumReduceFunction,
+        SiluAndMulFunction,
+    )
+else:
+    # Use default Python implementation
+    from slime.backends.fsdp_utils.kernels.fused_experts import (
+        DownProjFunction,
+        GateUpProjFunction,
+        MoeSumReduceFunction,
+        SiluAndMulFunction,
+    )
 
 
 def fused_experts_impl(
