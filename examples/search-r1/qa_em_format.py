@@ -130,11 +130,11 @@ def extract_solution(solution_str):
     match = re.finditer(answer_pattern, solution_str, re.DOTALL)
     matches = list(match)
 
-    # If there are 0 or exactly 1 matches, return None
-    if len(matches) <= 1:
+    # If there are no matches, return None
+    if len(matches) == 0:
         return None
 
-    # If there are 2 or more matches, return the last one
+    # Return the last answer (handles both single and multiple answers)
     return matches[-1].group(1).strip()
 
 
@@ -162,6 +162,8 @@ def compute_score_em(
     retrieval_score=0,
     format_score=0,
     score=1.0,
+    multi_answer_penalty_per_extra=0.05,
+    multi_answer_penalty_cap=0.2,
 ):
     """The scoring function for exact match (EM).
 
@@ -171,18 +173,29 @@ def compute_score_em(
         method: the method to extract the solution, choices are 'strict' and 'flexible'
         format_score: the score for the format
         score: the score for the correct answer
+        multi_answer_penalty_per_extra: penalty per extra <answer> tag beyond the first
+        multi_answer_penalty_cap: maximum penalty for multiple <answer> tags
     """
     is_valid_format, _ = is_valid_sequence(solution_str)
     retrieval_correct = False
     if is_valid_format:
         retrieval_correct = is_retrieval_correct(solution_str, ground_truth["target"])
     answer = extract_solution(solution_str=solution_str)
+
+    # Count number of <answer> tags for progressive penalty
+    num_answers = len(re.findall(r"<answer>", solution_str))
+    multi_answer_penalty = min(
+        multi_answer_penalty_cap,
+        multi_answer_penalty_per_extra * max(0, num_answers - 1)
+    )
+
     do_print = random.randint(1, 64) == 1
 
     if do_print:
         print(f"--------------------------------")
         print(f"Golden answers: {ground_truth['target']}")
         print(f"Extracted answer: {answer}")
+        print(f"Num answers: {num_answers}, penalty: {multi_answer_penalty}")
         print(f"Solution string: {solution_str}")
 
     if answer is None:
@@ -196,13 +209,90 @@ def compute_score_em(
     else:
         if em_check(answer, ground_truth["target"]):
             if is_valid_format:
-                return score  # 1
+                # Apply progressive penalty for multiple <answer> tags
+                return score - multi_answer_penalty
             else:
-                return score - structure_format_score  # 0.8
+                return score - structure_format_score - multi_answer_penalty
         elif is_valid_format:
             if retrieval_correct:
-                return structure_format_score + retrieval_score  # 0.3
+                return structure_format_score + retrieval_score - multi_answer_penalty
             else:
-                return structure_format_score  # 0.2
+                return structure_format_score - multi_answer_penalty
         else:
-            return final_format_score  # 0.1
+            return max(0, final_format_score - multi_answer_penalty)
+
+
+def log_turn_by_turn(sample, show_full_content: bool = False):
+    """Print turn-by-turn rollout log based on OpenAI messages format.
+
+    Args:
+        sample: Sample object with metadata["messages"] containing OpenAI format messages
+        show_full_content: If True, show full content; otherwise truncate for readability
+    """
+    messages = sample.metadata.get("messages", [])
+
+    if not messages:
+        print("⚠️  No messages found in sample.metadata")
+        return
+
+    print("\n" + "="*70)
+    print("Turn-by-Turn Rollout Analysis")
+    print("="*70)
+
+    turn = 0
+    for i, msg in enumerate(messages):
+        role = msg.get("role", "unknown")
+
+        if role == "user":
+            print(f"\n[User Prompt]")
+            content = msg.get("content", "")
+            if show_full_content:
+                print(f"  {content}")
+            else:
+                print(f"  {content[:150]}..." if len(content) > 150 else f"  {content}")
+
+        elif role == "assistant":
+            turn += 1
+            print(f"\n--- Turn {turn}: Assistant ---")
+
+            content = msg.get("content")
+            if content:
+                if show_full_content:
+                    print(f"Content: {content}")
+                else:
+                    preview = content[:200] + "..." if len(content) > 200 else content
+                    print(f"Content: {preview}")
+
+            tool_calls = msg.get("tool_calls")
+            if tool_calls:
+                print(f"Tool Calls: {len(tool_calls)} call(s)")
+                for idx, tc in enumerate(tool_calls):
+                    func_name = tc.get("function", {}).get("name", "unknown")
+                    args = tc.get("function", {}).get("arguments", "")
+                    print(f"  [{idx+1}] Function: {func_name}")
+                    if show_full_content:
+                        print(f"      Arguments: {args}")
+                    else:
+                        args_preview = args[:100] + "..." if len(args) > 100 else args
+                        print(f"      Arguments: {args_preview}")
+
+        elif role == "tool":
+            tool_call_id = msg.get("tool_call_id", "N/A")
+            content = msg.get("content", "")
+            print(f"\n  → Tool Result (id={tool_call_id}):")
+            if show_full_content:
+                print(f"    {content}")
+            else:
+                preview = content[:300] + "..." if len(content) > 300 else content
+                print(f"    {preview}")
+
+    # Summary
+    print("\n" + "-"*70)
+    print("Summary")
+    print("-"*70)
+    print(f"Total turns: {turn}")
+    print(f"Total tool calls: {sample.metadata.get('total_tool_calls', 0)}")
+    print(f"Has final <answer>: {sample.metadata.get('has_final_answer', False)}")
+    print(f"Final turn has tool_calls (ERROR): {sample.metadata.get('final_turn_has_tool_calls', False)}")
+    print(f"Response status: {sample.status.value if hasattr(sample.status, 'value') else sample.status}")
+    print("="*70 + "\n")

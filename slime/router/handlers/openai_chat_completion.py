@@ -497,10 +497,25 @@ class ChatCompletionHandler:
             try:
                 # Combine input and output tokens for cache insertion
                 full_text = input_text + generated_text
+                full_token_ids = token_ids + output_ids
+
                 # Combine input logprobs + output logprobs
                 full_logprobs = (input_logprobs or []) + output_logprobs
+
+                # Compute full loss_mask: input (from cache) + output (generated)
+                # Note: loss_mask is retrieved at Line 361: token_ids, logprobs, loss_mask = radix_tree.retrieve_from_text(...)
+                input_loss_mask = loss_mask or []
+                full_loss_mask = input_loss_mask + [1] * len(output_ids)
+
+                # Validate length consistency before insert
+                if len(full_token_ids) != len(full_loss_mask):
+                    raise ValueError(
+                        f"Loss mask length mismatch: tokens={len(full_token_ids)}, loss_mask={len(full_loss_mask)}. "
+                        f"This indicates a token/loss_mask tracking bug."
+                    )
+
                 await radix_tree.insert(
-                    full_text, token_ids + output_ids, full_logprobs
+                    full_text, full_token_ids, full_logprobs, full_loss_mask
                 )  # TODO implement insert async
             except Exception as e:
                 if getattr(self.args, "verbose", False):
