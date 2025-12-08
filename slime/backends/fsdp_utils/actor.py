@@ -705,7 +705,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 importance_ratio=importance_ratio,
             )
             if self.args.calculate_per_token_loss:
-                kl_loss = token_mean(kl, loss_masks)
+                kl_loss = token_mean(kl, loss_mask)
             else:
                 kl_loss = sum_of_sample_mean(kl, response_lengths, loss_masks)
 
@@ -730,9 +730,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if self.args.use_tis and tis is not None:
             if self.args.calculate_per_token_loss:
-                reported["tis"] = token_mean(tis, loss_masks).detach()
-                reported["ois"] = token_mean(ois, loss_masks).detach()
-                reported["tis_clipfrac"] = token_mean(tis_clipfrac.float(), loss_masks).detach()
+                reported["tis"] = token_mean(tis, loss_mask).detach()
+                reported["ois"] = token_mean(ois, loss_mask).detach()
+                reported["tis_clipfrac"] = token_mean(tis_clipfrac.float(), loss_mask).detach()
             else:
                 reported["tis"] = sum_of_sample_mean(tis, response_lengths, loss_masks).detach()
                 reported["ois"] = sum_of_sample_mean(ois, response_lengths, loss_masks).detach()
