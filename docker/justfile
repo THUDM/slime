@@ -24,3 +24,6 @@ _release-raw:
         docker tag slimerl/slime:$IMAGE_TAG slimerl/slime:latest
         docker push slimerl/slime:latest
     fi
+
+docker tag slimerl/slime:nightly-dev-20251207a slimerl/slime:latest
+docker build -f docker/Dockerfile . --build-arg HTTP_PROXY="$http_proxy" --build-arg HTTPS_PROXY="$https_proxy" --build-arg NO_PROXY="localhost,127.0.0.1"  -t slimerl/slime:nightly-dev-20251208b
