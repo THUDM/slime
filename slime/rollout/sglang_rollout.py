@@ -101,6 +101,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         state.tokenizer,
         state.processor,
         sample.metadata,
+        args.apply_chat_template,
         args.apply_chat_template_kwargs,
     )
 
