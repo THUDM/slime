@@ -245,10 +245,13 @@ class MegatronTrainRayActor(TrainRayActor):
             for a, b in zip(rollout_routed_experts, tokens, strict=False):
                 assert a.shape[0] == b.shape[0] - 1, f"{a.shape}, {b.shape}"
 
+            # We need to pad the experts to the last token. We won't calculate loss on this token so this should be fine.
+            # TODO: fuse this padding with the following slice_with_cp to reduce memory copy.
+            rollout_routed_experts = [pad_func(r, 1) for r in rollout_routed_experts]
             # TODO: maybe extract a common process function for here and get_batch?
             rollout_routed_experts = [slice_with_cp(r, pad_func) for r in rollout_routed_experts]
             rollout_routed_experts = torch.cat(rollout_routed_experts, dim=0)
-            pad_size = mpu.get_tensor_model_parallel_world_size() * 128
+            pad_size = mpu.get_tensor_model_parallel_world_size() * self.args.data_pad_size_multiplier
             pad = (pad_size - rollout_routed_experts.size(0) % pad_size) % pad_size
             if pad != 0:
                 rollout_routed_experts = pad_func(rollout_routed_experts, pad)
