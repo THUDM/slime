@@ -1,6 +1,7 @@
 import os
 
 import slime.utils.misc as U
+from slime.utils.external_utils import execute_train, get_default_wandb_args
 
 MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")
 assert MODEL_NAME in {"Qwen2.5-VL-3B-Instruct", "Qwen3-VL-2B-Instruct", "Qwen3-VL-4B-Instruct", "Qwen3-VL-8B-Instruct"}
@@ -121,7 +122,7 @@ def execute():
         f"{ci_args} "
         f"{eval_args} "
         f"{misc_args} "
-        f"{U.get_default_wandb_args(__file__)} "
+        f"{get_default_wandb_args(__file__)} "
         f"{true_on_policy_args} "
     )
 
@@ -148,7 +149,7 @@ def execute():
         )
 
     # Submit Ray job
-    U.exec_train(
+    execute_train(
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=None,
