@@ -119,7 +119,7 @@ _client_concurrency: int = 0
 
 # Optional Ray-based distributed POST dispatch
 _distributed_post_enabled: bool = False
-_post_actors = []  # type: List[object]
+_post_actors: list[object] = []
 _post_actor_idx: int = 0
 
 
