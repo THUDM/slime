@@ -665,20 +665,32 @@ class FSDPTrainRayActor(TrainRayActor):
             pg_loss = pg_loss * tis_clip
 
         assert not self.args.calculate_per_token_loss, "calculate_per_token_loss not yet implemented"
-        pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
-        pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
-        ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
+        if self.args.calculate_per_token_loss:
+            loss_mask = torch.cat(loss_masks, dim=0)
+            pg_loss = token_mean(pg_loss, loss_mask)
+            pg_clipfrac = token_mean(pg_clipfrac, loss_mask)
+            ppo_kl = token_mean(ppo_kl.abs(), loss_mask)
+        else:
+            pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
+            pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
+            ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
 
         # Only compare rollout vs. train log probs when they originate from different stages.
         train_rollout_logprob_abs_diff = None
         if not self.args.use_rollout_logprobs and rollout_log_probs is not None:
             train_rollout_logprob_abs_diff = (old_log_probs - rollout_log_probs).abs()
-            train_rollout_logprob_abs_diff = sum_of_sample_mean(
-                train_rollout_logprob_abs_diff, response_lengths, loss_masks
-            ).detach()
+            if self.args.calculate_per_token_loss:
+                train_rollout_logprob_abs_diff = token_mean(train_rollout_logprob_abs_diff, loss_mask).detach()
+            else:
+                train_rollout_logprob_abs_diff = sum_of_sample_mean(
+                    train_rollout_logprob_abs_diff, response_lengths, loss_masks
+                ).detach()
 
         entropy = torch.cat([batch["entropy"] for batch in unpacked_batches], dim=0)
-        entropy_loss = sum_of_sample_mean(entropy, response_lengths, loss_masks)
+        if self.args.calculate_per_token_loss:
+            entropy_loss = token_mean(entropy, loss_mask)
+        else:
+            entropy_loss = sum_of_sample_mean(entropy, response_lengths, loss_masks)
 
         loss = pg_loss - self.args.entropy_coef * entropy_loss
 
@@ -693,7 +705,10 @@ class FSDPTrainRayActor(TrainRayActor):
                 kl_loss_type=self.args.kl_loss_type,
                 importance_ratio=importance_ratio,
             )
-            kl_loss = sum_of_sample_mean(kl, response_lengths, loss_masks)
+            if self.args.calculate_per_token_loss:
+                kl_loss = token_mean(kl, loss_masks)
+            else:
+                kl_loss = sum_of_sample_mean(kl, response_lengths, loss_masks)
 
             loss = loss + self.args.kl_loss_coef * kl_loss
 
@@ -715,9 +730,16 @@ class FSDPTrainRayActor(TrainRayActor):
             reported["opsm_clipfrac"] = opsm_clipfrac
 
         if self.args.use_tis and tis is not None:
-            reported["tis"] = sum_of_sample_mean(tis, response_lengths, loss_masks).detach()
-            reported["ois"] = sum_of_sample_mean(ois, response_lengths, loss_masks).detach()
-            reported["tis_clipfrac"] = sum_of_sample_mean(tis_clipfrac.float(), response_lengths, loss_masks).detach()
+            if self.args.calculate_per_token_loss:
+                reported["tis"] = token_mean(tis, loss_masks).detach()
+                reported["ois"] = token_mean(ois, loss_masks).detach()
+                reported["tis_clipfrac"] = token_mean(tis_clipfrac.float(), loss_masks).detach()
+            else:
+                reported["tis"] = sum_of_sample_mean(tis, response_lengths, loss_masks).detach()
+                reported["ois"] = sum_of_sample_mean(ois, response_lengths, loss_masks).detach()
+                reported["tis_clipfrac"] = sum_of_sample_mean(
+                    tis_clipfrac.float(), response_lengths, loss_masks
+                ).detach()
 
         # Scale loss for gradient accumulation
         loss = loss * self.dp_size / self.args.global_batch_size
@@ -1017,6 +1039,20 @@ def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks:
             for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
         ]
     )
+
+
+def token_mean(x: torch.Tensor, loss_mask: torch.Tensor) -> torch.Tensor:
+    """Compute per-token mean across variable-length responses.
+
+    Parameters:
+        x: Flat tensor containing concatenated per-token values across samples.
+        loss_mask: Per-token mask aligned with `x`.
+
+    Returns:
+        A scalar tensor equal to the sum over samples of the mean value within
+        each sample's response segment.
+    """
+    return (x * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
 
 
 @torch.no_grad()
