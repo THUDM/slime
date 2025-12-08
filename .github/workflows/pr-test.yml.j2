@@ -86,7 +86,7 @@ jobs:
 
       - name: Install
         shell: bash
-        run: cd $GITHUB_WORKSPACE && pip install -e .
+        run: cd $GITHUB_WORKSPACE && pip install -e . --break-system-packages
 
       - name: Execute
         shell: bash
