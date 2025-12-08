@@ -229,10 +229,10 @@ index e7d5a67..639e471 100644
                          out_hidden_states[begin_chunk_idx:end_chunk_idx],
 diff --git a/python/sglang/srt/layers/moe/routed_experts_capturer.py b/python/sglang/srt/layers/moe/routed_experts_capturer.py
 new file mode 100644
-index 0000000..1aca8f3
+index 0000000..e16817f
 --- /dev/null
 +++ b/python/sglang/srt/layers/moe/routed_experts_capturer.py
-@@ -0,0 +1,236 @@
+@@ -0,0 +1,279 @@
 +import logging
 +from abc import ABC
 +from contextlib import contextmanager
@@ -242,7 +242,11 @@ index 0000000..1aca8f3
 +import torch
 +
 +from sglang.srt.configs.model_config import ModelConfig
-+from sglang.srt.layers.dp_attention import get_dp_local_info, is_dp_attention_enabled
++from sglang.srt.layers.dp_attention import (
++    get_attention_dp_rank,
++    get_dp_local_info,
++    is_dp_attention_enabled,
++)
 +from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
 +from sglang.srt.server_args import get_global_server_args
 +
@@ -258,7 +262,12 @@ index 0000000..1aca8f3
 +
 +class _RoutedExpertsDeviceCache:
 +    def __init__(
-+        self, model_config: ModelConfig, max_running_requests: int, device: str
++        self,
++        max_running_requests: int,
++        num_hidden_layers: int,
++        num_experts_per_tok: int,
++        num_fused_shared_experts: int,
++        device: str,
 +    ) -> None:
 +        self.buffer = torch.zeros(
 +            (
@@ -267,8 +276,8 @@ index 0000000..1aca8f3
 +                    * get_global_server_args().dp_size,
 +                    max_running_requests,
 +                ),
-+                model_config.hf_text_config.num_hidden_layers,
-+                model_config.hf_text_config.num_experts_per_tok,
++                num_hidden_layers,
++                num_experts_per_tok + num_fused_shared_experts,
 +            ),
 +            dtype=torch.int32,
 +            device=device,
@@ -295,15 +304,16 @@ index 0000000..1aca8f3
 +class _RoutedExpertsHostCache:
 +    def __init__(
 +        self,
-+        model_config: ModelConfig,
 +        num_tokens: int,
++        num_hidden_layers: int,
++        num_experts_per_tok: int,
 +    ) -> None:
 +        self.num_tokens = num_tokens
 +        self.buffer = torch.zeros(
 +            (
 +                num_tokens,
-+                model_config.hf_text_config.num_hidden_layers,
-+                model_config.hf_text_config.num_experts_per_tok,
++                num_hidden_layers,
++                num_experts_per_tok,
 +            ),
 +            dtype=torch.int32,
 +            device="cpu",
@@ -331,6 +341,7 @@ index 0000000..1aca8f3
 +    def create(
 +        enable: bool,
 +        model_config: ModelConfig,
++        num_fused_shared_experts: int,
 +        num_tokens: int,
 +        max_running_requests: int,
 +        device: str,
@@ -340,6 +351,7 @@ index 0000000..1aca8f3
 +                model_config,
 +                num_tokens=num_tokens,
 +                max_running_requests=max_running_requests,
++                num_fused_shared_experts=num_fused_shared_experts,
 +                device=device,
 +            )
 +        else:
@@ -356,7 +368,13 @@ index 0000000..1aca8f3
 +    ):
 +        raise NotImplementedError
 +
-+    def sync_fwd_experts_buffer_DtoH(self, batch: int, loc: torch.Tensor):
++    def sync_fwd_experts_buffer_DtoH(
++        self,
++        device_loc: torch.Tensor,
++        cpu_loc: torch.Tensor,
++        can_run_graph: bool,
++        cuda_graph_batch: int,
++    ):
 +        raise NotImplementedError
 +
 +    @contextmanager
@@ -378,30 +396,52 @@ index 0000000..1aca8f3
 +        model_config: ModelConfig,
 +        num_tokens: int,
 +        max_running_requests: int,
++        num_fused_shared_experts: int,
 +        device: str,
 +    ):
 +        self.forward_batch = None
-+        self.host_cache = _RoutedExpertsHostCache(model_config, num_tokens)
++        self.num_fused_shared_experts = num_fused_shared_experts
++        self.num_hidden_layers = model_config.hf_text_config.num_hidden_layers
++        self.num_experts_per_tok = model_config.hf_text_config.num_experts_per_tok
++
++        self.host_cache = _RoutedExpertsHostCache(
++            num_tokens=num_tokens,
++            num_hidden_layers=self.num_hidden_layers,
++            num_experts_per_tok=self.num_experts_per_tok,
++        )
 +
 +        self.device_cache = _RoutedExpertsDeviceCache(
-+            model_config, max_running_requests, device
++            max_running_requests=max_running_requests,
++            num_hidden_layers=self.num_hidden_layers,
++            num_experts_per_tok=self.num_experts_per_tok,
++            num_fused_shared_experts=self.num_fused_shared_experts,
++            device=device,
 +        )
 +
 +    def capture(self, layer_id: int, topk_ids: torch.Tensor):
 +        self.device_cache.capture_fwd_routed_experts(layer_id, topk_ids)
 +
 +    def sync_fwd_experts_buffer_DtoH(
-+        self, device_loc: torch.Tensor, cpu_loc: torch.Tensor
++        self,
++        device_loc: torch.Tensor,
++        cpu_loc: torch.Tensor,
++        can_run_graph: bool,
++        cuda_graph_batch: int,
 +    ):
 +        if is_dp_attention_enabled():
 +            local_start_pos, local_num_tokens = get_dp_local_info(self.forward_batch)
-+            local_end_pos = local_start_pos + local_num_tokens
++            # handle with cuda graph padding
++            if can_run_graph:
++                local_start_pos = get_attention_dp_rank() * cuda_graph_batch
++                local_end_pos = local_start_pos + local_num_tokens
++            else:
++                local_end_pos = local_start_pos + local_num_tokens
 +        else:
 +            local_start_pos = 0
 +            local_end_pos = device_loc.shape[0]
 +
 +        self.host_cache.buffer[cpu_loc] = self.device_cache.buffer[
-+            local_start_pos:local_end_pos
++            local_start_pos:local_end_pos, :, : self.num_experts_per_tok
 +        ].cpu()
 +
 +    def get_routed_experts(
@@ -417,7 +457,6 @@ index 0000000..1aca8f3
 +
 +    @contextmanager
 +    def with_forward(self, forward_batch):
-+        self.forward_batch = None
 +        self.forward_batch = forward_batch
 +        yield
 +
@@ -444,7 +483,11 @@ index 0000000..1aca8f3
 +        pass
 +
 +    def sync_fwd_experts_buffer_DtoH(
-+        self, device_loc: torch.Tensor, cpu_loc: torch.Tensor
++        self,
++        device_loc: torch.Tensor,
++        cpu_loc: torch.Tensor,
++        can_run_graph: bool,
++        cuda_graph_batch: int,
 +    ):
 +        pass
 +
@@ -684,7 +727,7 @@ index e34736c..5e5997a 100644
      # idx is the index of the token in the prompt after expansion.
      # val is the length of padded tokens after expansion.
 diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
-index c4c5a9e..6db0f56 100644
+index c4c5a9e..1450c5f 100644
 --- a/python/sglang/srt/managers/schedule_batch.py
 +++ b/python/sglang/srt/managers/schedule_batch.py
 @@ -450,6 +450,7 @@ class Req:
@@ -738,7 +781,7 @@ index c4c5a9e..6db0f56 100644
          self.req_pool_indices = req_pool_indices_tensor
          self.orig_seq_lens = orig_seq_lens_tensor
          self.out_cache_loc = out_cache_loc
-+        self.out_cache_loc_cpu = out_cache_loc.to("cpu", non_blocking=True)
++        self.out_cache_loc_cpu = out_cache_loc.cpu()
          self.input_embeds = (
              torch.tensor(input_embeds).to(self.device, non_blocking=True)
              if input_embeds
@@ -1064,7 +1107,7 @@ index 3a85e6a..623a3c0 100644
              self.encoder_lens = self._pad_tensor_to_size(self.encoder_lens, bs)
          self.positions = self._pad_tensor_to_size(self.positions, num_tokens)
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index 4d58278..c9c4e57 100644
+index 4d58278..8f50dc4 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
 @@ -94,6 +94,11 @@ from sglang.srt.layers.dp_attention import (
@@ -1090,7 +1133,7 @@ index 4d58278..c9c4e57 100644
          if self.device == "cuda":
              self.init_cublas()
              self.init_attention_backend()
-@@ -545,6 +554,31 @@ class ModelRunner:
+@@ -545,6 +554,40 @@ class ModelRunner:
          # Initialize piecewise CUDA graph
          self.init_piecewise_cuda_graphs()
  
@@ -1109,10 +1152,19 @@ index 4d58278..c9c4e57 100644
 +            ),
 +            self.req_to_token_pool.size,
 +        )
++
++        if not self.server_args.disable_shared_experts_fusion and hasattr(
++            self.model, "num_fused_shared_experts"
++        ):
++            num_fused_shared_experts = self.model.num_fused_shared_experts
++        else:
++            num_fused_shared_experts = 0
++
 +        set_global_experts_capturer(
 +            RoutedExpertsCapturer.create(
 +                enable=get_global_server_args().enable_return_routed_experts,
 +                model_config=self.model_config,
++                num_fused_shared_experts=num_fused_shared_experts,
 +                num_tokens=self.max_total_num_tokens + self.page_size,
 +                max_running_requests=max_running_requests,
 +                device=self.device,
@@ -1122,7 +1174,7 @@ index 4d58278..c9c4e57 100644
      def model_specific_adjustment(self):
          server_args = self.server_args
  
-@@ -792,7 +826,11 @@ class ModelRunner:
+@@ -792,7 +835,11 @@ class ModelRunner:
          )
          with self.memory_saver_adapter.region(
              GPU_MEMORY_TYPE_WEIGHTS,
@@ -1135,7 +1187,7 @@ index 4d58278..c9c4e57 100644
          ):
              self.model = get_model(
                  model_config=self.model_config,
-@@ -2645,9 +2683,12 @@ class ModelRunner:
+@@ -2645,9 +2692,12 @@ class ModelRunner:
      ) -> Tuple[Union[LogitsProcessorOutput, PPProxyTensors], bool]:
          self.forward_pass_id += 1
  
@@ -1151,13 +1203,16 @@ index 4d58278..c9c4e57 100644
          ):
              output = self._forward_raw(
                  forward_batch,
-@@ -2656,6 +2697,10 @@ class ModelRunner:
+@@ -2656,6 +2706,13 @@ class ModelRunner:
                  reinit_attn_backend,
                  split_forward_count,
              )
 +            # Copy cached routing experts' buffers back to CPU cache
 +            get_global_experts_capturer().sync_fwd_experts_buffer_DtoH(
-+                forward_batch.out_cache_loc, forward_batch.out_cache_loc_cpu
++                device_loc=forward_batch.out_cache_loc,
++                cpu_loc=forward_batch.out_cache_loc_cpu,
++                can_run_graph=output[1],
++                cuda_graph_batch=getattr(self.graph_runner, "bs", None),
 +            )
  
          if self.eplb_manager is not None:
