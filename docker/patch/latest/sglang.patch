@@ -1,5 +1,5 @@
 diff --git a/python/sglang/srt/disaggregation/decode.py b/python/sglang/srt/disaggregation/decode.py
-index ef52bda7f..537d892dc 100644
+index ef52bda..537d892 100644
 --- a/python/sglang/srt/disaggregation/decode.py
 +++ b/python/sglang/srt/disaggregation/decode.py
 @@ -296,6 +296,13 @@ class DecodePreallocQueue:
@@ -17,7 +17,7 @@ index ef52bda7f..537d892dc 100644
          """Add a request to the pending queue."""
          if self._check_if_req_exceed_kv_capacity(req):
 diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
-index 3fe895ed1..4ebe66987 100644
+index 3fe895e..4ebe669 100644
 --- a/python/sglang/srt/disaggregation/mooncake/conn.py
 +++ b/python/sglang/srt/disaggregation/mooncake/conn.py
 @@ -1074,6 +1074,19 @@ class MooncakeKVManager(CommonKVManager):
@@ -41,7 +41,7 @@ index 3fe895ed1..4ebe66987 100644
  class MooncakeKVSender(CommonKVSender):
  
 diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
-index 952374ed5..239ac2571 100644
+index 952374e..239ac25 100644
 --- a/python/sglang/srt/disaggregation/prefill.py
 +++ b/python/sglang/srt/disaggregation/prefill.py
 @@ -305,6 +305,13 @@ class PrefillBootstrapQueue:
@@ -59,7 +59,7 @@ index 952374ed5..239ac2571 100644
  class SchedulerDisaggregationPrefillMixin:
      """
 diff --git a/python/sglang/srt/distributed/device_communicators/pynccl.py b/python/sglang/srt/distributed/device_communicators/pynccl.py
-index 86c53f26b..52acf95b9 100644
+index 86c53f2..52acf95 100644
 --- a/python/sglang/srt/distributed/device_communicators/pynccl.py
 +++ b/python/sglang/srt/distributed/device_communicators/pynccl.py
 @@ -380,3 +380,9 @@ class PyNcclCommunicator:
@@ -73,7 +73,7 @@ index 86c53f26b..52acf95b9 100644
 +    def nccl_resume(self):
 +        self.nccl.ncclResume(self.comm)
 diff --git a/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py b/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
-index 6b12f2922..7028a4e46 100644
+index 6b12f29..7028a4e 100644
 --- a/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
 +++ b/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
 @@ -304,6 +304,17 @@ class NCCLLibrary:
@@ -108,7 +108,7 @@ index 6b12f2922..7028a4e46 100644
  __all__ = [
      "NCCLLibrary",
 diff --git a/python/sglang/srt/distributed/parallel_state.py b/python/sglang/srt/distributed/parallel_state.py
-index cf90f6fe0..11d26df81 100644
+index cf90f6f..11d26df 100644
 --- a/python/sglang/srt/distributed/parallel_state.py
 +++ b/python/sglang/srt/distributed/parallel_state.py
 @@ -1780,7 +1780,10 @@ def get_tensor_model_parallel_world_size():
@@ -124,7 +124,7 @@ index cf90f6fe0..11d26df81 100644
  
  def get_pipeline_model_parallel_world_size():
 diff --git a/python/sglang/srt/entrypoints/engine.py b/python/sglang/srt/entrypoints/engine.py
-index b35fe5135..9c5bb99f4 100644
+index b35fe51..9c5bb99 100644
 --- a/python/sglang/srt/entrypoints/engine.py
 +++ b/python/sglang/srt/entrypoints/engine.py
 @@ -183,6 +183,7 @@ class Engine(EngineBase):
@@ -144,7 +144,7 @@ index b35fe5135..9c5bb99f4 100644
              bootstrap_host=bootstrap_host,
              bootstrap_port=bootstrap_port,
 diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
-index 3293a8a59..234e8ba09 100644
+index 3293a8a..234e8ba 100644
 --- a/python/sglang/srt/layers/layernorm.py
 +++ b/python/sglang/srt/layers/layernorm.py
 @@ -84,15 +84,12 @@ class RMSNorm(CustomOp):
@@ -188,7 +188,7 @@ index 3293a8a59..234e8ba09 100644
          hidden_size = x.shape[-1]
          if hidden_size != self.hidden_size:
 diff --git a/python/sglang/srt/layers/logits_processor.py b/python/sglang/srt/layers/logits_processor.py
-index 522865765..733bad5f2 100644
+index 5228657..733bad5 100644
 --- a/python/sglang/srt/layers/logits_processor.py
 +++ b/python/sglang/srt/layers/logits_processor.py
 @@ -841,11 +841,6 @@ class LogitsProcessor(nn.Module):
@@ -204,7 +204,7 @@ index 522865765..733bad5f2 100644
                  logits = torch.matmul(
                      hidden_states.to(lm_head.weight.dtype), lm_head.weight.T
 diff --git a/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py b/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py
-index e7d5a67cc..639e47163 100644
+index e7d5a67..639e471 100644
 --- a/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py
 +++ b/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py
 @@ -14,6 +14,7 @@ import torch.nn.functional as F
@@ -229,7 +229,7 @@ index e7d5a67cc..639e47163 100644
                          out_hidden_states[begin_chunk_idx:end_chunk_idx],
 diff --git a/python/sglang/srt/layers/moe/routed_experts_capturer.py b/python/sglang/srt/layers/moe/routed_experts_capturer.py
 new file mode 100644
-index 000000000..1aca8f3e9
+index 0000000..1aca8f3
 --- /dev/null
 +++ b/python/sglang/srt/layers/moe/routed_experts_capturer.py
 @@ -0,0 +1,236 @@
@@ -471,7 +471,7 @@ index 000000000..1aca8f3e9
 +    _global_expert_capturer = capturer
 \ No newline at end of file
 diff --git a/python/sglang/srt/layers/moe/topk.py b/python/sglang/srt/layers/moe/topk.py
-index 7546dfe1a..a177e3fdd 100644
+index 7546dfe..a177e3f 100644
 --- a/python/sglang/srt/layers/moe/topk.py
 +++ b/python/sglang/srt/layers/moe/topk.py
 @@ -48,6 +48,7 @@ from sglang.srt.eplb.expert_location_dispatch import (
@@ -550,8 +550,23 @@ index 7546dfe1a..a177e3fdd 100644
      return StandardTopKOutput(topk_weights, topk_ids, router_logits)
  
  
+diff --git a/python/sglang/srt/layers/rotary_embedding.py b/python/sglang/srt/layers/rotary_embedding.py
+index 0cdb7e1..38e9da7 100644
+--- a/python/sglang/srt/layers/rotary_embedding.py
++++ b/python/sglang/srt/layers/rotary_embedding.py
+@@ -132,9 +132,7 @@ class RotaryEmbedding(CustomOp):
+ 
+         if get_global_server_args().rl_on_policy_target is not None:
+             self._forward_method = self.forward_native
+-            self._apply_rotary_emb_wrapped = torch.compile(dynamic=True)(
+-                self._apply_rotary_emb_wrapped
+-            )
++
+         self.position_cos, self.position_sin = None, None
+ 
+     def _compute_inv_freq(self, base: Union[int, float]) -> torch.Tensor:
 diff --git a/python/sglang/srt/layers/sampler.py b/python/sglang/srt/layers/sampler.py
-index 7f6f6a010..c4a673145 100644
+index 7f6f6a0..c4a6731 100644
 --- a/python/sglang/srt/layers/sampler.py
 +++ b/python/sglang/srt/layers/sampler.py
 @@ -105,16 +105,11 @@ class Sampler(nn.Module):
@@ -575,7 +590,7 @@ index 7f6f6a010..c4a673145 100644
              if not get_global_server_args().sampling_backend == "ascend" or (
                  return_logprob and not SGLANG_RETURN_ORIGINAL_LOGPROB
 diff --git a/python/sglang/srt/managers/detokenizer_manager.py b/python/sglang/srt/managers/detokenizer_manager.py
-index 87922077e..8cb6bad8d 100644
+index 8792207..8cb6bad 100644
 --- a/python/sglang/srt/managers/detokenizer_manager.py
 +++ b/python/sglang/srt/managers/detokenizer_manager.py
 @@ -247,6 +247,16 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
@@ -604,7 +619,7 @@ index 87922077e..8cb6bad8d 100644
              placeholder_tokens_val=None,
              retraction_counts=recv_obj.retraction_counts,
 diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
-index e34736cc4..5e5997a1a 100644
+index e34736c..5e5997a 100644
 --- a/python/sglang/srt/managers/io_struct.py
 +++ b/python/sglang/srt/managers/io_struct.py
 @@ -23,6 +23,8 @@ from dataclasses import dataclass, field
@@ -664,7 +679,7 @@ index e34736cc4..5e5997a1a 100644
      # idx is the index of the token in the prompt after expansion.
      # val is the length of padded tokens after expansion.
 diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
-index a80c82fa7..c252a782d 100644
+index a80c82f..c252a78 100644
 --- a/python/sglang/srt/managers/schedule_batch.py
 +++ b/python/sglang/srt/managers/schedule_batch.py
 @@ -453,6 +453,7 @@ class Req:
@@ -798,7 +813,7 @@ index a80c82fa7..c252a782d 100644
      orig_seq_lens: Optional[torch.Tensor] = None
  
 diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
-index 59ac30e5b..23dd7bd29 100644
+index 59ac30e..23dd7bd 100644
 --- a/python/sglang/srt/managers/scheduler.py
 +++ b/python/sglang/srt/managers/scheduler.py
 @@ -1302,6 +1302,7 @@ class Scheduler(
@@ -810,7 +825,7 @@ index 59ac30e5b..23dd7bd29 100644
                  bootstrap_host=recv_req.bootstrap_host,
                  bootstrap_port=recv_req.bootstrap_port,
 diff --git a/python/sglang/srt/managers/scheduler_output_processor_mixin.py b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
-index c48f5f893..a9796c25f 100644
+index c48f5f8..a9796c2 100644
 --- a/python/sglang/srt/managers/scheduler_output_processor_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
 @@ -9,6 +9,7 @@ import torch
@@ -877,7 +892,7 @@ index c48f5f893..a9796c25f 100644
                      placeholder_tokens_val=None,
                      retraction_counts=retraction_counts,
 diff --git a/python/sglang/srt/managers/scheduler_runtime_checker_mixin.py b/python/sglang/srt/managers/scheduler_runtime_checker_mixin.py
-index 70ffc90bf..7d56b79ab 100644
+index 70ffc90..7d56b79 100644
 --- a/python/sglang/srt/managers/scheduler_runtime_checker_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_runtime_checker_mixin.py
 @@ -194,12 +194,12 @@ class SchedulerRuntimeCheckerMixin:
@@ -919,7 +934,7 @@ index 70ffc90bf..7d56b79ab 100644
          self._check_req_pool()
  
 diff --git a/python/sglang/srt/managers/scheduler_update_weights_mixin.py b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
-index f8ebfc1f4..a05449fac 100644
+index f8ebfc1..a05449f 100644
 --- a/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 @@ -1,6 +1,7 @@
@@ -1011,7 +1026,7 @@ index f8ebfc1f4..a05449fac 100644
  
      def check_weights(self: Scheduler, recv_req: CheckWeightsReqInput):
 diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
-index b90cf0616..98d71d896 100644
+index b90cf06..98d71d8 100644
 --- a/python/sglang/srt/managers/tokenizer_manager.py
 +++ b/python/sglang/srt/managers/tokenizer_manager.py
 @@ -888,6 +888,7 @@ class TokenizerManager(TokenizerCommunicatorMixin):
@@ -1053,7 +1068,7 @@ index b90cf0616..98d71d896 100644
              recv_obj.output_token_logprobs_val[recv_obj_index]
          )
 diff --git a/python/sglang/srt/model_executor/forward_batch_info.py b/python/sglang/srt/model_executor/forward_batch_info.py
-index 8baddc56f..ef74df25c 100644
+index 8baddc5..ef74df2 100644
 --- a/python/sglang/srt/model_executor/forward_batch_info.py
 +++ b/python/sglang/srt/model_executor/forward_batch_info.py
 @@ -213,6 +213,9 @@ class ForwardBatch:
@@ -1085,7 +1100,7 @@ index 8baddc56f..ef74df25c 100644
              self.encoder_lens = self._pad_tensor_to_size(self.encoder_lens, bs)
          self.positions = self._pad_tensor_to_size(self.positions, num_tokens)
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index de74275d6..815ca2a8b 100644
+index de74275..815ca2a 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
 @@ -93,6 +93,11 @@ from sglang.srt.layers.dp_attention import (
@@ -1184,7 +1199,7 @@ index de74275d6..815ca2a8b 100644
          if self.eplb_manager is not None:
              self.eplb_manager.on_forward_pass_end()
 diff --git a/python/sglang/srt/models/deepseek_v2.py b/python/sglang/srt/models/deepseek_v2.py
-index f849b7f48..e8e549e0e 100644
+index f849b7f..e8e549e 100644
 --- a/python/sglang/srt/models/deepseek_v2.py
 +++ b/python/sglang/srt/models/deepseek_v2.py
 @@ -655,6 +655,7 @@ class DeepseekV2MoE(nn.Module):
@@ -1196,7 +1211,7 @@ index f849b7f48..e8e549e0e 100644
              use_grouped_topk=True,
              num_expert_group=config.n_group,
 diff --git a/python/sglang/srt/models/ernie4.py b/python/sglang/srt/models/ernie4.py
-index ab1b6576b..dffd8f09a 100644
+index ab1b657..dffd8f0 100644
 --- a/python/sglang/srt/models/ernie4.py
 +++ b/python/sglang/srt/models/ernie4.py
 @@ -87,6 +87,7 @@ class Ernie4Moe(nn.Module):
@@ -1208,7 +1223,7 @@ index ab1b6576b..dffd8f09a 100644
              use_grouped_topk=False,
              correction_bias=self.gate.e_score_correction_bias,
 diff --git a/python/sglang/srt/models/glm4_moe.py b/python/sglang/srt/models/glm4_moe.py
-index d160c8876..c00f155dd 100644
+index d160c88..c00f155 100644
 --- a/python/sglang/srt/models/glm4_moe.py
 +++ b/python/sglang/srt/models/glm4_moe.py
 @@ -379,6 +379,17 @@ class Glm4MoeSparseMoeBlock(nn.Module):
@@ -1230,7 +1245,7 @@ index d160c8876..c00f155dd 100644
              num_experts=config.n_routed_experts + self.num_fused_shared_experts,
              num_fused_shared_experts=self.num_fused_shared_experts,
 diff --git a/python/sglang/srt/models/gpt_oss.py b/python/sglang/srt/models/gpt_oss.py
-index 9474700c4..398d622ff 100644
+index 9474700..398d622 100644
 --- a/python/sglang/srt/models/gpt_oss.py
 +++ b/python/sglang/srt/models/gpt_oss.py
 @@ -113,6 +113,7 @@ class GptOssSparseMoeBlock(nn.Module):
@@ -1242,7 +1257,7 @@ index 9474700c4..398d622ff 100644
  
          self.top_k = config.num_experts_per_tok
 diff --git a/python/sglang/srt/models/grok.py b/python/sglang/srt/models/grok.py
-index fd513060a..a089475b7 100644
+index fd51306..a089475 100644
 --- a/python/sglang/srt/models/grok.py
 +++ b/python/sglang/srt/models/grok.py
 @@ -142,6 +142,7 @@ class Grok1MoE(nn.Module):
@@ -1254,7 +1269,7 @@ index fd513060a..a089475b7 100644
          )
  
 diff --git a/python/sglang/srt/models/hunyuan.py b/python/sglang/srt/models/hunyuan.py
-index 7c6fd9e48..b20d28544 100644
+index 7c6fd9e..b20d285 100644
 --- a/python/sglang/srt/models/hunyuan.py
 +++ b/python/sglang/srt/models/hunyuan.py
 @@ -150,6 +150,7 @@ class HunYuanSparseMoeBlock(nn.Module):
@@ -1266,7 +1281,7 @@ index 7c6fd9e48..b20d28544 100644
          )
  
 diff --git a/python/sglang/srt/models/longcat_flash.py b/python/sglang/srt/models/longcat_flash.py
-index 3530609ba..01c89e893 100644
+index 3530609..01c89e8 100644
 --- a/python/sglang/srt/models/longcat_flash.py
 +++ b/python/sglang/srt/models/longcat_flash.py
 @@ -245,6 +245,7 @@ class LongcatFlashMoE(nn.Module):
@@ -1278,7 +1293,7 @@ index 3530609ba..01c89e893 100644
          self.topk.forward = self.topk.forward_native
  
 diff --git a/python/sglang/srt/models/qwen2.py b/python/sglang/srt/models/qwen2.py
-index a7dbadec6..c83a41338 100644
+index a7dbade..c83a413 100644
 --- a/python/sglang/srt/models/qwen2.py
 +++ b/python/sglang/srt/models/qwen2.py
 @@ -90,9 +90,6 @@ class Qwen2MLP(nn.Module):
@@ -1316,7 +1331,7 @@ index a7dbadec6..c83a41338 100644
                  if get_global_server_args().rl_on_policy_target is not None
                  else {}
 diff --git a/python/sglang/srt/models/qwen2_moe.py b/python/sglang/srt/models/qwen2_moe.py
-index 656968192..5688aa2a9 100644
+index 6569681..5688aa2 100644
 --- a/python/sglang/srt/models/qwen2_moe.py
 +++ b/python/sglang/srt/models/qwen2_moe.py
 @@ -152,6 +152,7 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
@@ -1347,7 +1362,7 @@ index 656968192..5688aa2a9 100644
              self.norm = PPMissingLayer(return_tuple=True)
  
 diff --git a/python/sglang/srt/models/qwen3.py b/python/sglang/srt/models/qwen3.py
-index 7d8603a0e..8d8784237 100644
+index 7d8603a..8d87842 100644
 --- a/python/sglang/srt/models/qwen3.py
 +++ b/python/sglang/srt/models/qwen3.py
 @@ -94,8 +94,8 @@ class Qwen3Attention(nn.Module):
@@ -1373,7 +1388,7 @@ index 7d8603a0e..8d8784237 100644
              if get_global_server_args().rl_on_policy_target is not None
              else {}
 diff --git a/python/sglang/srt/models/qwen3_moe.py b/python/sglang/srt/models/qwen3_moe.py
-index 3fbe81257..bb4148f29 100644
+index 3fbe812..bb4148f 100644
 --- a/python/sglang/srt/models/qwen3_moe.py
 +++ b/python/sglang/srt/models/qwen3_moe.py
 @@ -21,6 +21,7 @@ import logging
@@ -1478,7 +1493,7 @@ index 3fbe81257..bb4148f29 100644
  
          self.layer_communicator = LayerCommunicator(
 diff --git a/python/sglang/srt/models/step3_vl.py b/python/sglang/srt/models/step3_vl.py
-index 4474f62d5..0e537c398 100644
+index 4474f62..0e537c3 100644
 --- a/python/sglang/srt/models/step3_vl.py
 +++ b/python/sglang/srt/models/step3_vl.py
 @@ -129,6 +129,7 @@ class Step3TextMoEMLP(nn.Module):
@@ -1490,7 +1505,7 @@ index 4474f62d5..0e537c398 100644
  
          self.experts = get_moe_impl_class(quant_config)(
 diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
-index 526465ee5..16c28abc8 100644
+index 526465e..16c28ab 100644
 --- a/python/sglang/srt/server_args.py
 +++ b/python/sglang/srt/server_args.py
 @@ -530,6 +530,7 @@ class ServerArgs:
@@ -1514,7 +1529,7 @@ index 526465ee5..16c28abc8 100644
              "--scheduler-recv-interval",
              type=int,
 diff --git a/python/sglang/srt/speculative/eagle_info.py b/python/sglang/srt/speculative/eagle_info.py
-index 35f30a016..2c2b1cbf7 100644
+index 35f30a0..2c2b1cb 100644
 --- a/python/sglang/srt/speculative/eagle_info.py
 +++ b/python/sglang/srt/speculative/eagle_info.py
 @@ -749,6 +749,10 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
