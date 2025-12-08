@@ -1580,4 +1580,55 @@ index 44273713f..c1d592ddb 100644
 -
              reconstructed[i] = (meta.name, tensor)
  
-         return reconstructed
+         return reconstructeddiff --git a/python/sglang/srt/speculative/eagle_worker_v2.py b/python/sglang/srt/speculative/eagle_worker_v2.py
+index 6e7bc55..cea6a0b 100644
+--- a/python/sglang/srt/speculative/eagle_worker_v2.py
++++ b/python/sglang/srt/speculative/eagle_worker_v2.py
+@@ -7,6 +7,7 @@ import torch
+ 
+ from sglang.srt.environ import envs
+ from sglang.srt.layers.moe.utils import speculative_moe_backend_context
++from sglang.srt.managers.io_struct import UpdateWeightsFromTensorReqInput
+ from sglang.srt.managers.schedule_batch import ModelWorkerBatch
+ from sglang.srt.managers.scheduler import GenerationBatchResult
+ from sglang.srt.managers.tp_worker import TpModelWorker
+@@ -34,6 +35,7 @@ from sglang.srt.speculative.spec_utils import (
+     draft_tp_context,
+     load_token_map,
+ )
++from sglang.srt.utils import MultiprocessingSerializer
+ from sglang.srt.utils.common import (
+     empty_context,
+     fast_topk,
+@@ -41,6 +43,7 @@ from sglang.srt.utils.common import (
+     is_npu,
+     next_power_of_2,
+ )
++from sglang.srt.utils.patch_torch import monkey_patch_torch_reductions
+ 
+ _is_npu = is_npu()
+ 
+@@ -709,3 +712,23 @@ class EAGLEWorkerV2(BaseSpecWorker):
+         self.token_to_kv_pool_allocator.get_kvcache().move_kv_cache(
+             tgt_cache_loc, accepted_out_cache_loc
+         )
++
++    def update_weights_from_tensor(self, recv_req: UpdateWeightsFromTensorReqInput):
++        monkey_patch_torch_reductions()
++        named_tensors = MultiprocessingSerializer.deserialize(
++            recv_req.serialized_named_tensors[self._draft_worker.tp_rank]
++        )
++        success, message = (
++            self._draft_worker.draft_worker.model_runner.update_weights_from_tensor(
++                named_tensors=named_tensors,
++                load_format=recv_req.load_format,
++            )
++        )
++        if not success:
++            return success, message
++
++        success, message = self._target_worker.model_runner.update_weights_from_tensor(
++            named_tensors=named_tensors,
++            load_format=recv_req.load_format,
++        )
++        return success, message
