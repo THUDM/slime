@@ -19,7 +19,6 @@ def prepare():
 
 
 def execute():
-
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} "
 
     rollout_args = (
@@ -83,6 +82,13 @@ def execute():
         "--attn-implementation flash_attention_3 "
     )
 
+    ci_args = (
+        "--ci-test "
+        "--ci-disable-kl-checker "
+        "--ci-metric-checker-key eval/geo3k "
+        "--ci-metric-checker-threshold 0.5 "  # loose threshold at 60 step
+    )
+
     misc_args = "--actor-num-nodes 1 " f"--actor-num-gpus-per-node {NUM_GPUS} " "--colocate "
 
     # misc_args += (
@@ -91,19 +97,19 @@ def execute():
     #     "--max-tokens-per-gpu 2048 "
     # )
 
-    # true_on_policy_args = (
-    #     "--sglang-enable-deterministic-inference "
-    #     "--sglang-rl-on-policy-target fsdp "
-    #     "--deterministic-mode "
-    #     "--true-on-policy-mode "
-    # )
-    # true_on_policy_envs = {
-    #     # TODO note: "Ring" in original RL PR, "allreduce:tree" in SGLang
-    #     # "NCCL_ALGO": "Ring",
-    #     "NCCL_ALGO": "allreduce:tree",
-    #     "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
-    #     "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
-    # }
+    true_on_policy_args = (
+        "--sglang-enable-deterministic-inference "
+        "--sglang-rl-on-policy-target fsdp "
+        "--deterministic-mode "
+        "--true-on-policy-mode "
+    )
+    true_on_policy_envs = {
+        # TODO note: "Ring" in original RL PR, "allreduce:tree" in SGLang
+        # "NCCL_ALGO": "Ring",
+        "NCCL_ALGO": "allreduce:tree",
+        "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
+        "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+    }
 
     train_args = (
         f"{ckpt_args} "
@@ -112,10 +118,11 @@ def execute():
         f"{grpo_args} "
         f"{sglang_args} "
         f"{fsdp_args} "
+        f"{ci_args} "
         f"{eval_args} "
         f"{misc_args} "
         f"{U.get_default_wandb_args(__file__)} "
-        # f"{true_on_policy_args} "
+        f"{true_on_policy_args} "
     )
 
     # Kill existing processes
@@ -139,12 +146,15 @@ def execute():
             f"ray start --head --node-ip-address {MASTER_ADDR} --num-gpus {NUM_GPUS} "
             f"--disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265"
         )
+
     # Submit Ray job
-    U.execute_train(
+    U.exec_train(
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=None,
-        extra_env_vars={},
+        extra_env_vars={
+            **true_on_policy_envs,
+        },
     )
 
 

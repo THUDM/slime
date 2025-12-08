@@ -72,5 +72,5 @@ def encode_image_for_rollout_engine(image) -> str:
     buffer = io.BytesIO()
     if image.mode != "RGB":
         image = image.convert("RGB")
-    image.save(buffer, format="JPEG")
+    image.save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
