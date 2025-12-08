@@ -542,6 +542,19 @@ index a802647..0fd550c 100644
      return StandardTopKOutput(topk_weights, topk_ids, router_logits)
  
  
+diff --git a/python/sglang/srt/layers/moe/utils.py b/python/sglang/srt/layers/moe/utils.py
+index 70466bb..cd85fc2 100644
+--- a/python/sglang/srt/layers/moe/utils.py
++++ b/python/sglang/srt/layers/moe/utils.py
+@@ -284,7 +284,7 @@ def speculative_moe_a2a_backend_context():
+     global MOE_A2A_BACKEND
+     original_backend = MOE_A2A_BACKEND
+     try:
+-        MOE_A2A_BACKEND = MoeA2ABackend.NONE
++        MOE_A2A_BACKEND = get_speculative_moe_a2a_backend()
+         yield
+     finally:
+         MOE_A2A_BACKEND = original_backend
 diff --git a/python/sglang/srt/layers/rotary_embedding.py b/python/sglang/srt/layers/rotary_embedding.py
 index 0cdb7e1..38e9da7 100644
 --- a/python/sglang/srt/layers/rotary_embedding.py
@@ -1018,7 +1031,7 @@ index b90cf06..98d71d8 100644
              recv_obj.output_token_logprobs_val[recv_obj_index]
          )
 diff --git a/python/sglang/srt/model_executor/forward_batch_info.py b/python/sglang/srt/model_executor/forward_batch_info.py
-index 3a85e6a..4e8c024 100644
+index 3a85e6a..623a3c0 100644
 --- a/python/sglang/srt/model_executor/forward_batch_info.py
 +++ b/python/sglang/srt/model_executor/forward_batch_info.py
 @@ -214,6 +214,9 @@ class ForwardBatch:
@@ -1039,13 +1052,14 @@ index 3a85e6a..4e8c024 100644
              mm_inputs=batch.multimodal_inputs,
              encoder_cached=batch.encoder_cached,
              encoder_lens=batch.encoder_lens,
-@@ -823,6 +827,9 @@ class ForwardBatch:
+@@ -823,6 +827,10 @@ class ForwardBatch:
              )
  
          self.out_cache_loc = self._pad_tensor_to_size(self.out_cache_loc, num_tokens)
-+        self.out_cache_loc_cpu = self._pad_tensor_to_size(
-+            self.out_cache_loc_cpu, num_tokens
-+        )
++        if self.out_cache_loc_cpu is not None:
++            self.out_cache_loc_cpu = self._pad_tensor_to_size(
++                self.out_cache_loc_cpu, num_tokens
++            )
          if self.encoder_lens is not None:
              self.encoder_lens = self._pad_tensor_to_size(self.encoder_lens, bs)
          self.positions = self._pad_tensor_to_size(self.positions, num_tokens)
