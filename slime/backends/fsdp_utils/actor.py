@@ -664,7 +664,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
             pg_loss = pg_loss * tis_clip
 
-        assert not self.args.calculate_per_token_loss, "calculate_per_token_loss not yet implemented"
         if self.args.calculate_per_token_loss:
             loss_mask = torch.cat(loss_masks, dim=0)
             pg_loss = token_mean(pg_loss, loss_mask)
