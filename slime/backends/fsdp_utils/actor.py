@@ -741,7 +741,10 @@ class FSDPTrainRayActor(TrainRayActor):
                 ).detach()
 
         # Scale loss for gradient accumulation
-        loss = loss * self.dp_size / self.args.global_batch_size
+        if self.args.calculate_per_token_loss:
+            loss = loss * self.dp_size
+        else:
+            loss = loss * self.dp_size / self.args.global_batch_size
         loss.backward()
 
         # Accumulate reported metrics (store tensors for later mean)
@@ -765,7 +768,10 @@ class FSDPTrainRayActor(TrainRayActor):
             dist.all_gather_object(reduced_aggregated, aggregated, group=self.dp_group)
             aggregated = {}
             for k in reported_accum.keys():
-                aggregated[k] = sum([r[k] for r in reduced_aggregated]) / (self.args.global_batch_size)
+                if self.args.calculate_per_token_loss:
+                    aggregated[k] = sum([r[k] for r in reduced_aggregated]) / (self.dp_size)
+                else:
+                    aggregated[k] = sum([r[k] for r in reduced_aggregated]) / (self.args.global_batch_size)
             reported_accum.clear()
             if dist.get_rank() == 0:
                 log_dict = {
