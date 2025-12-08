@@ -44,9 +44,9 @@ async def reward_func(args: Any, sample: Sample, **kwargs: Any) -> dict[str, Any
         n_samples_per_prompt,
     )
 
-    # Apply format_coef bonus (matches RLVE's tinker integration)
     format_coef = provider.config.get("format_coef", 0.0)
-    base_reward = result.get("reward", 0.0)
+    reward_key = getattr(args, "reward_key", "reward") if args else "reward"
+    base_reward = result.get(reward_key, 0.0)
     format_score = result.get("format_score", 0)
     total_reward = base_reward + format_coef * format_score
 
@@ -60,6 +60,7 @@ async def reward_func(args: Any, sample: Sample, **kwargs: Any) -> dict[str, Any
         "reward": total_reward,
         "accuracy": result.get("accuracy", 0.0),
         "format_score": format_score,
+        "raw_reward": result.get("reward", 0.0),
         "env_id": env_id,
     }
 
