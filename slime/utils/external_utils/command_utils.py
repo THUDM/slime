@@ -224,7 +224,7 @@ def get_default_wandb_args(test_file: str, run_name_prefix: str | None = None, r
 
 
 def create_run_id() -> str:
-    return datetime.datetime.utcnow().strftime("%y%m%d-%H%M%S") + f"-{random.Random().randint(0, 999):03d}"
+    return datetime.datetime.utcnow().strftime("%y%m%d-%H%M%S") + f"-{random.randint(0, 999):03d}"
 
 
 _warned_bool_env_var_keys = set()

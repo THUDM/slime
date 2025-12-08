@@ -6,6 +6,7 @@ import multiprocessing
 import os
 import random
 import socket
+import subprocess
 
 import httpx
 
@@ -69,7 +70,14 @@ def get_host_info():
 
     # hostname -I
     try:
-        local_ip = os.popen("hostname -I | awk '{print $1}'").read().strip()
+        result = subprocess.run(
+            ["hostname", "-I"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=5,
+        )
+        local_ip = result.stdout.split()[0] if result.stdout.strip() else ""
         return hostname, local_ip or "::1"
     except Exception:
         return hostname, "::1"
@@ -119,7 +127,7 @@ _client_concurrency: int = 0
 
 # Optional Ray-based distributed POST dispatch
 _distributed_post_enabled: bool = False
-_post_actors = []  # type: List[object]
+_post_actors: list[object] = []
 _post_actor_idx: int = 0
 
 
