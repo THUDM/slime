@@ -236,7 +236,7 @@ class MegatronTrainRayActor(TrainRayActor):
             tokens = batch["tokens"]
             assert len(rollout_routed_experts) == len(tokens)
             for a, b in zip(rollout_routed_experts, tokens, strict=False):
-                assert a.shape[0] == b.shape[0], f"{a.shape}, {b.shape}"
+                assert a.shape[0] == b.shape[0] - 1, f"{a.shape}, {b.shape}"
 
             # TODO: maybe extract a common process function for here and get_batch?
             rollout_routed_experts = [slice_with_cp(r, pad_func) for r in rollout_routed_experts]

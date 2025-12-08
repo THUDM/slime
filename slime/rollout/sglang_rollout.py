@@ -185,7 +185,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.weight_versions.append(output["meta_info"]["weight_version"])
 
     if "routed_experts" in output["meta_info"]:
-        assert len(output["meta_info"]["routed_experts"]) == len(sample.tokens)
+        assert len(output["meta_info"]["routed_experts"]) == len(sample.tokens) - 1
         sample.rollout_routed_experts = np.array(output["meta_info"]["routed_experts"])
 
     match output["meta_info"]["finish_reason"]["type"]:
