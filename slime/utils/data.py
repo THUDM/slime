@@ -27,7 +27,7 @@ def read_file(path):
         raise FileNotFoundError(f"Prompt dataset path '{path}' does not exist.")
 
     if path.endswith(".jsonl"):
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             iterator = (json.loads(line) for line in f)
             if row_slice is not None:
                 iterator = itertools.islice(iterator, row_slice.start, row_slice.stop, row_slice.step)
