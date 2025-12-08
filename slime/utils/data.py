@@ -73,7 +73,7 @@ def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
         for type_name, data_key in multimodal_keys.items():
             mt = MultimodalTypes.get(type_name)
             if mt:
-                multimodals[mt.placeholder] = (mt, data.get(data_key).tolist())
+                multimodals[mt.placeholder] = (mt, list(data.get(data_key)))
 
         pattern = "(" + "|".join(re.escape(p) for p in multimodals.keys()) + ")"
 
