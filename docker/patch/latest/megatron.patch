@@ -1,8 +1,57 @@
+diff --git a/LICENSE b/LICENSE
+index 8ebf50049..efd4969c9 100644
+--- a/LICENSE
++++ b/LICENSE
+@@ -27,6 +27,12 @@ The following applies to all files unless otherwise noted:
+ 
+ --
+ 
++This repository also contains Apache 2.0 Licensed code from Zhipu AI, Alibaba
++and Anlatan Inc. Files from these organizations have notices at the top of each file.
++An Apache 2.0 License is disclosed below.
++
++--
++
+ This repository also contains code from Hugging Face Inc., Google Research,
+ Facebook (from their Fairseq, Dino, and ParlAI projects), Microsoft (from their
+ Swin-Transformer project), Philip Popien, the Mamba project (Tri Dao and
+diff --git a/NOTICE-Alibaba-Pai-Megatron-Patch b/NOTICE-Alibaba-Pai-Megatron-Patch
+new file mode 100644
+index 000000000..a0a3a84cd
+--- /dev/null
++++ b/NOTICE-Alibaba-Pai-Megatron-Patch
+@@ -0,0 +1,19 @@
++=============================================================
++pai-megatron-patch is an open source tool developed by Alibaba PAI Team
++Copyright (c) 2022-2023, Alibaba Group Holding Limited.
++Licensed under the Apache License, Version 2.0
++
++=============================================================
++This toolkit implements some modules referring to some repositories under
++the same/different open source licenses
++
++-----------------------------
++model, data, tokenization
++Apache License, Version 2.0
++Copyright (c)  The HuggingFace Inc. team
++
++------------------
++model, toolkits, generation, tokenization
++Apache License, Version 2.0
++The Megatron-LM Team Authors
++The Transformer Engine Team Authors
+\ No newline at end of file
 diff --git a/megatron/core/dist_checkpointing/strategies/common.py b/megatron/core/dist_checkpointing/strategies/common.py
-index 41c21d93d..ef80f72d6 100644
+index 41c21d93d..5e805a1f7 100644
 --- a/megatron/core/dist_checkpointing/strategies/common.py
 +++ b/megatron/core/dist_checkpointing/strategies/common.py
-@@ -86,7 +86,7 @@ class TorchCommonLoadStrategy(LoadCommonStrategy):
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2024, NVIDIA CORPORATION.  All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
+ 
+ """ Common strategies. """
+ 
+@@ -86,7 +87,7 @@ class TorchCommonLoadStrategy(LoadCommonStrategy):
                  msc = MultiStorageClientFeature.import_package()
                  return msc.torch.load(load_path, map_location='cpu')
              else:
@@ -12,38 +61,16 @@ index 41c21d93d..ef80f72d6 100644
              err_msg = f'Common file {load_path} does not exist'
              if MultiStorageClientFeature.is_enabled():
 diff --git a/megatron/core/dist_checkpointing/strategies/torch.py b/megatron/core/dist_checkpointing/strategies/torch.py
-index ccf5242a2..9b6d3e31f 100644
+index 5a1ea308d..87826e4df 100644
 --- a/megatron/core/dist_checkpointing/strategies/torch.py
 +++ b/megatron/core/dist_checkpointing/strategies/torch.py
-@@ -427,6 +427,15 @@ def _restore_dict_types(x: Union[dict, list, Any], keys_template: Union[dict, li
-             _restore_dict_types(x_val, templ_val)
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
  
- 
-+@dataclass
-+class MCoreMetadata(Metadata):
-+    """Metadata with mcore specific data."""
-+
-+    # holds data related to flattened_range
-+    # TODO: remove when flattened_range is properly removed
-+    mcore_data: Optional[Dict[str, Dict[str, Any]]] = None  # Mcore related data about each tensor
-+
-+
- @dataclass(frozen=True)
- class MCoreSavePlan(SavePlan):
-     """SavePlan with MCore specific data."""
-@@ -499,9 +508,10 @@ class MCoreSavePlanner(DefaultSavePlanner):
-     def create_global_plan(self, all_plans: List[MCoreSavePlan]) -> Tuple[List[SavePlan], Metadata]:
-         """Merges MCore data for all plans."""
-         global_plan, metadata = super().create_global_plan(all_plans)
--        metadata.mcore_data = dict(
-+        mcore_data = dict(
-             ChainMap(*(plan.mcore_data for plan in all_plans))  # type: ignore[arg-type]
-         )
-+        metadata = MCoreMetadata(mcore_data=mcore_data, **vars(metadata))
-         return global_plan, metadata
- 
-     def create_decentralized_global_plan(self, local_plan: SavePlan) -> SavePlan:
-@@ -556,10 +566,12 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
+ """ Strategies using PyTorch distributed.checkpoint as an underlying format. """
+ import io
+@@ -597,10 +598,12 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
      def _validate_global_shapes(self, metadata, sharded_tensors):
          for sh_ten in sharded_tensors:
              if sh_ten.key not in metadata.state_dict_metadata:
@@ -60,7 +87,7 @@ index ccf5242a2..9b6d3e31f 100644
              loaded_shape = metadata.state_dict_metadata[sh_ten.key].size
              expected_shape = self._expected_shape(sh_ten)
              if loaded_shape != expected_shape:
-@@ -589,7 +601,7 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
+@@ -630,7 +633,7 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
          tensor_metadata = self.metadata.state_dict_metadata
          metadata_with_sizes = [
              (tensor_metadata[key], tensor_metadata[key].size, sharded_tensor)
@@ -69,7 +96,7 @@ index ccf5242a2..9b6d3e31f 100644
          ]
          try:
              # Temporarily set sizes to expected shapes
-@@ -918,6 +930,7 @@ class TorchDistLoadShardedStrategy(LoadShardedStrategy):
+@@ -959,6 +962,7 @@ class TorchDistLoadShardedStrategy(LoadShardedStrategy):
              planner=MCoreLoadPlanner(
                  shapes_validation_sharded_tensors=flexible_shape_sharded_tensors,
                  allow_shape_mismatch_sharded_tensors=allow_shape_mismatch_sharded_tensors,
@@ -78,10 +105,16 @@ index ccf5242a2..9b6d3e31f 100644
          )
  
 diff --git a/megatron/core/distributed/__init__.py b/megatron/core/distributed/__init__.py
-index fe26e8b43..4451f2776 100644
+index fe26e8b43..9f82bda9d 100644
 --- a/megatron/core/distributed/__init__.py
 +++ b/megatron/core/distributed/__init__.py
-@@ -11,3 +11,15 @@ from .finalize_model_grads import finalize_model_grads
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
+ 
+ try:
+     from packaging.version import Version
+@@ -11,3 +12,15 @@ from .finalize_model_grads import finalize_model_grads
  from .fsdp.mcore_fsdp_adapter import FullyShardedDataParallel
  from .torch_fully_sharded_data_parallel import TorchFullyShardedDataParallel
  from .torch_fully_sharded_data_parallel_config import TorchFullyShardedDataParallelConfig
@@ -98,10 +131,16 @@ index fe26e8b43..4451f2776 100644
 +    if hasattr(custom_fsdp, 'MegatronFSDP'):
 +        custom_fsdp.FullyShardedDataParallel = custom_fsdp.MegatronFSDP
 diff --git a/megatron/core/extensions/transformer_engine.py b/megatron/core/extensions/transformer_engine.py
-index 7727efe1e..966fe652a 100644
+index e95409e08..845bd633e 100644
 --- a/megatron/core/extensions/transformer_engine.py
 +++ b/megatron/core/extensions/transformer_engine.py
-@@ -366,6 +366,7 @@ class TELinear(te.pytorch.Linear):
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2024, NVIDIA CORPORATION. All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
+ 
+ import dataclasses
+ import inspect
+@@ -408,6 +409,7 @@ class TELinear(te.pytorch.Linear):
          )
  
          for param in self.parameters():
@@ -110,19 +149,25 @@ index 7727efe1e..966fe652a 100644
                  # Reduce the gradient on the expert_data_parallel group for expert linear layers
                  setattr(param, "allreduce", not self.expert_parallel)
 diff --git a/megatron/core/models/gpt/gpt_layer_specs.py b/megatron/core/models/gpt/gpt_layer_specs.py
-index 860ee64a9..80944b702 100755
+index cffeb9234..5cddb4f33 100755
 --- a/megatron/core/models/gpt/gpt_layer_specs.py
 +++ b/megatron/core/models/gpt/gpt_layer_specs.py
-@@ -79,6 +79,8 @@ def get_gpt_layer_with_transformer_engine_spec(
-     qk_l2_norm: Optional[bool] = False,
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
+ 
+ import warnings
+ from typing import Optional, Union
+@@ -180,6 +181,8 @@ def get_gpt_layer_with_transformer_engine_spec(
      use_te_op_fuser: Optional[bool] = False,
      use_kitchen: bool = False,
+     use_te_activation_func: bool = False,
 +    post_self_attn_layernorm: bool = False,
 +    post_mlp_layernorm: bool = False,
  ) -> ModuleSpec:
      """Use this spec to use lower-level Transformer Engine modules (required for fp8 training).
  
-@@ -178,9 +180,11 @@ def get_gpt_layer_with_transformer_engine_spec(
+@@ -282,9 +285,11 @@ def get_gpt_layer_with_transformer_engine_spec(
                      ),
                  ),
                  self_attn_bda=get_bias_dropout_add,
@@ -135,18 +180,24 @@ index 860ee64a9..80944b702 100755
                      "mlp.0.weight": "mlp.linear_fc1.layer_norm_weight",
                      "mlp.0.bias": "mlp.linear_fc1.layer_norm_bias",
 diff --git a/megatron/core/models/gpt/gpt_model.py b/megatron/core/models/gpt/gpt_model.py
-index 6aec66e6d..6ca48b55f 100644
+index 25546d366..881639cf6 100644
 --- a/megatron/core/models/gpt/gpt_model.py
 +++ b/megatron/core/models/gpt/gpt_model.py
-@@ -355,6 +355,7 @@ class GPTModel(LanguageModule):
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
+ 
+ from collections import OrderedDict
+ from typing import Dict, Literal, Optional
+@@ -423,6 +424,7 @@ class GPTModel(LanguageModule):
          *,
          inference_params: Optional[BaseInferenceContext] = None,
          loss_mask: Optional[Tensor] = None,
 +        mtp_kwargs: Optional[dict] = {},
      ) -> Tensor:
          """Forward function of the GPT Model This function passes the input tensors
-         through the embedding layer, and then the decoeder and finally into the post
-@@ -410,6 +411,7 @@ class GPTModel(LanguageModule):
+         through the embedding layer, and then the decoder and finally into the post
+@@ -483,6 +485,7 @@ class GPTModel(LanguageModule):
              runtime_gather_output=runtime_gather_output,
              extra_block_kwargs=extra_block_kwargs,
              inference_context=inference_context,
@@ -154,7 +205,7 @@ index 6aec66e6d..6ca48b55f 100644
          )
  
      def _postprocess(
-@@ -431,6 +433,7 @@ class GPTModel(LanguageModule):
+@@ -504,6 +507,7 @@ class GPTModel(LanguageModule):
          runtime_gather_output=None,
          extra_block_kwargs=None,
          inference_context=None,
@@ -162,7 +213,7 @@ index 6aec66e6d..6ca48b55f 100644
      ):
          """Postprocesses decoder hidden states to generate logits or compute loss.
  
-@@ -446,7 +449,7 @@ class GPTModel(LanguageModule):
+@@ -519,7 +523,7 @@ class GPTModel(LanguageModule):
          if self.share_embeddings_and_output_weights:
              output_weight = self.shared_embedding_or_output_weight()
  
@@ -171,7 +222,7 @@ index 6aec66e6d..6ca48b55f 100644
              hidden_states = self.mtp(
                  input_ids=input_ids,
                  position_ids=position_ids,
-@@ -465,25 +468,37 @@ class GPTModel(LanguageModule):
+@@ -538,25 +542,37 @@ class GPTModel(LanguageModule):
          if not self.post_process:
              return hidden_states
  
@@ -219,10 +270,16 @@ index 6aec66e6d..6ca48b55f 100644
                  mtp_loss = loss_mask * mtp_loss
                  if self.training:
 diff --git a/megatron/core/parallel_state.py b/megatron/core/parallel_state.py
-index a40c85a88..86688c331 100644
+index 1916bfff0..c6da59861 100644
 --- a/megatron/core/parallel_state.py
 +++ b/megatron/core/parallel_state.py
-@@ -9,6 +9,7 @@ from typing import Callable, List, Optional
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
+ 
+ """Model and data parallel groups."""
+ 
+@@ -10,6 +11,7 @@ from typing import Callable, List, Optional
  
  import numpy as np
  import torch
@@ -231,10 +288,16 @@ index a40c85a88..86688c331 100644
  from .utils import GlobalMemoryBuffer, is_torch_min_version
  
 diff --git a/megatron/core/pipeline_parallel/p2p_communication.py b/megatron/core/pipeline_parallel/p2p_communication.py
-index 63ee9d1f5..b90b744c1 100644
+index 63ee9d1f5..026a826be 100644
 --- a/megatron/core/pipeline_parallel/p2p_communication.py
 +++ b/megatron/core/pipeline_parallel/p2p_communication.py
-@@ -26,22 +26,22 @@ def _batched_p2p_ops(
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
+ 
+ 
+ from typing import List, Optional, Tuple, Union
+@@ -26,22 +27,22 @@ def _batched_p2p_ops(
      ops = []
      if tensor_send_prev is not None:
          send_prev_op = torch.distributed.P2POp(
@@ -262,22 +325,54 @@ index 63ee9d1f5..b90b744c1 100644
          ops.append(recv_next_op)
      if len(ops) > 0:
 diff --git a/megatron/core/transformer/attention.py b/megatron/core/transformer/attention.py
-index c749bac43..dde8d50e7 100644
+index 1051799db..0af7cd021 100644
 --- a/megatron/core/transformer/attention.py
 +++ b/megatron/core/transformer/attention.py
-@@ -670,7 +670,10 @@ class Attention(MegatronModule, ABC):
-         # Get the query, key and value tensors based on the type of attention -
-         # self or cross attn.
-         nvtx_range_push(suffix="qkv")
--        query, key, value = self.get_query_key_value_tensors(hidden_states, key_value_states)
+@@ -1,4 +1,7 @@
+ # Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime), implementing gated attention.
++# Includes Apache 2.0-licensed contributions adapted from Alibaba's Pai-Megatron-Patch (https://github.com/alibaba/Pai-Megatron-Patch), namely get_query_gate_key_value_tensors, implementing gated attention.
++# Includes Apache 2.0-licensed contributions from Anlatan Inc, reconciling gated attention to work with newer v0.15.0 Megatron code.
+ 
+ from abc import ABC, abstractmethod
+ from dataclasses import dataclass
+@@ -485,6 +488,10 @@ class Attention(MegatronModule, ABC):
+         is "self-attn" or "cross-attn".
+         """
+ 
++    @abstractmethod
++    def get_query_gate_key_value_tensors(self, hidden_states, key_value_states=None):
++        ...
++
+     def flash_decode(
+         self,
+         sequence_len_offset: Tensor,
+@@ -770,15 +777,18 @@ class Attention(MegatronModule, ABC):
+                 self.config.fused_single_qkv_rope and split_qkv
+             ), "fused_single_qkv_rope requested but not available/supported for the config."
+ 
+-        qkv_output = self.get_query_key_value_tensors(
+-            hidden_states, key_value_states, split_qkv=split_qkv
+-        )
+         attn_mask_type = self.attn_mask_type
+         block_table = None
+-        if split_qkv:
+-            query, key, value = qkv_output
 +        if self.config.use_gated_attention:
 +            query, gate, key, value = self.get_query_gate_key_value_tensors(hidden_states, key_value_states)
-+        else:
-+            query, key, value = self.get_query_key_value_tensors(hidden_states, key_value_states)
+         else:
+-            mixed_qkv, qkv_split_arg_list = qkv_output
++            qkv_output = self.get_query_key_value_tensors(
++                hidden_states, key_value_states, split_qkv=split_qkv
++            )
++            if split_qkv:
++                query, key, value = qkv_output
++            else:
++                mixed_qkv, qkv_split_arg_list = qkv_output
          nvtx_range_pop(suffix="qkv")
  
          # ===================================================
-@@ -842,6 +845,11 @@ class Attention(MegatronModule, ABC):
+@@ -961,6 +971,11 @@ class Attention(MegatronModule, ABC):
          # Output. [sq, b, h]
          # =================
  
@@ -289,59 +384,35 @@ index c749bac43..dde8d50e7 100644
          nvtx_range_push(suffix="linear_proj")
          output, bias = self.linear_proj(core_attn_out)
          nvtx_range_pop(suffix="linear_proj")
-@@ -879,19 +887,34 @@ class SelfAttention(Attention):
-             model_comm_pgs=model_comm_pgs,
+@@ -998,10 +1013,11 @@ class SelfAttention(Attention):
+             pg_collection=pg_collection,
          )
  
 -        self.linear_qkv = build_module(
--            submodules.linear_qkv,
--            self.config.hidden_size,
++        proj_out_size = self.query_projection_size * (2 if self.config.use_gated_attention else 1) + 2 * self.kv_projection_size
++        proj = build_module(
+             submodules.linear_qkv,
+             self.config.hidden_size,
 -            self.query_projection_size + 2 * self.kv_projection_size,
--            config=self.config,
--            init_method=self.config.init_method,
--            gather_output=False,
--            bias=self.config.add_bias_linear or self.config.add_qkv_bias,
--            skip_bias_add=False,
--            is_expert=False,
--            tp_comm_buffer_name='qkv',
--            tp_group=self.model_comm_pgs.tp,
--        )
-+        if self.config.use_gated_attention:
-+            self.linear_qgkv = build_module(
-+                submodules.linear_qkv,
-+                self.config.hidden_size,
-+                2 * (self.query_projection_size + self.kv_projection_size),
-+                config=self.config,
-+                init_method=self.config.init_method,
-+                gather_output=False,
-+                bias=self.config.add_bias_linear or self.config.add_qkv_bias,
-+                skip_bias_add=False,
-+                is_expert=False,
-+                tp_comm_buffer_name='qkv',
-+                tp_group=self.model_comm_pgs.tp,
-+            )
-+        else:
-+            self.linear_qkv = build_module(
-+                submodules.linear_qkv,
-+                self.config.hidden_size,
-+                self.query_projection_size + 2 * self.kv_projection_size,
-+                config=self.config,
-+                init_method=self.config.init_method,
-+                gather_output=False,
-+                bias=self.config.add_bias_linear or self.config.add_qkv_bias,
-+                skip_bias_add=False,
-+                is_expert=False,
-+                tp_comm_buffer_name='qkv',
-+                tp_group=self.model_comm_pgs.tp,
-+            )
++            proj_out_size,
+             config=self.config,
+             init_method=self.config.init_method,
+             gather_output=False,
+@@ -1011,6 +1027,7 @@ class SelfAttention(Attention):
+             tp_comm_buffer_name='qkv',
+             tp_group=self.pg_collection.tp,
+         )
++        setattr(self, "linear_qgkv" if self.config.use_gated_attention else "linear_qkv", proj)
  
          if submodules.q_layernorm is not None:
              self.q_layernorm = build_module(
-@@ -1036,6 +1059,65 @@ class SelfAttention(Attention):
+@@ -1160,6 +1177,67 @@ class SelfAttention(Attention):
  
          return query, key, value
  
-+    # adapt from https://github.com/alibaba/Pai-Megatron-Patch/blob/8e6cbb0556ba09933ab4a4edb23c0af1d19d9960/megatron_patch/model/qwen3_next/gated_attention.py#L192
++    # adapted from https://github.com/alibaba/Pai-Megatron-Patch/blob/8e6cbb0556ba09933ab4a4edb23c0af1d19d9960/megatron_patch/model/qwen3_next/gated_attention.py#L192
++    # under Apache 2.0 License from Alibaba:
++    # https://github.com/alibaba/Pai-Megatron-Patch/blob/8e6cbb0556ba09933ab4a4edb23c0af1d19d9960/LICENSE
 +    def get_query_gate_key_value_tensors(self, hidden_states, key_value_states=None):
 +        """
 +        Derives `query`, `key` and `value` tensors from `hidden_states`.
@@ -403,11 +474,24 @@ index c749bac43..dde8d50e7 100644
      def backward_dw(self) -> NoReturn:
          """Execute weight update operations"""
          self._backward_qkv_proj()
+@@ -1264,3 +1342,6 @@ class CrossAttention(Attention):
+         query = query.view(*new_tensor_shape)
+ 
+         return query, key, value
++    
++    def get_query_gate_key_value_tensors(self, hidden_states, key_value_states=None):
++        raise NotImplementedError("gated cross-attention not implemented")
 diff --git a/megatron/core/transformer/moe/moe_utils.py b/megatron/core/transformer/moe/moe_utils.py
-index 235b6f6af..0f4862e43 100644
+index 846753511..d61acbacb 100644
 --- a/megatron/core/transformer/moe/moe_utils.py
 +++ b/megatron/core/transformer/moe/moe_utils.py
-@@ -566,6 +566,9 @@ def topk_routing_with_score_function(
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
+ 
+ import math
+ from typing import List, Optional, Union
+@@ -583,6 +584,9 @@ def topk_routing_with_score_function(
          else:
              return torch.topk(scores, k=topk, dim=1)
  
@@ -418,12 +502,18 @@ index 235b6f6af..0f4862e43 100644
          if use_pre_softmax:
              scores = torch.softmax(logits, dim=-1, dtype=torch.float32).type_as(logits)
 diff --git a/megatron/core/transformer/moe/router.py b/megatron/core/transformer/moe/router.py
-index 6b20b8622..f91b01f90 100644
+index 34d81a21f..e0f512121 100644
 --- a/megatron/core/transformer/moe/router.py
 +++ b/megatron/core/transformer/moe/router.py
-@@ -156,6 +156,9 @@ class TopKRouter(Router):
-             self.local_tokens_per_expert = None
-             self.expert_bias = None
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
+ 
+ from abc import ABC, abstractmethod
+ from typing import Optional
+@@ -201,6 +202,9 @@ class TopKRouter(Router):
+             self.global_tokens_per_expert = None
+             self.ga_steps = None
  
 +        from slime.utils.routing_replay import register_routing_replay
 +        register_routing_replay(self)
@@ -432,18 +522,24 @@ index 6b20b8622..f91b01f90 100644
          """
          Maintain the expert bias in float32.
 diff --git a/megatron/core/transformer/multi_token_prediction.py b/megatron/core/transformer/multi_token_prediction.py
-index b7884e18e..f0104f861 100755
+index ca4494657..9b1aa239a 100755
 --- a/megatron/core/transformer/multi_token_prediction.py
 +++ b/megatron/core/transformer/multi_token_prediction.py
-@@ -6,6 +6,7 @@ from typing import Callable, List, Optional, Union
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
+ 
+ from contextlib import nullcontext
+ from dataclasses import dataclass
+@@ -6,6 +7,7 @@ from typing import Callable, List, Optional, Union
  
  import torch
  from torch import Tensor
 +import warnings
  
- from megatron.core import InferenceParams, mpu, parallel_state, tensor_parallel
+ from megatron.core import InferenceParams, parallel_state, tensor_parallel
  from megatron.core.dist_checkpointing.mapping import ShardedStateDict
-@@ -105,17 +106,21 @@ def tie_output_layer_state_dict(
+@@ -106,17 +108,21 @@ def tie_output_layer_state_dict(
      )
  
  
@@ -471,7 +567,7 @@ index b7884e18e..f0104f861 100755
  
      Args:
          tensor (Tensor): The input tensor to roll.
-@@ -123,9 +128,15 @@ def roll_tensor(tensor, shifts=-1, dims=-1, cp_group=None):
+@@ -124,9 +130,15 @@ def roll_tensor(tensor, shifts=-1, dims=-1, cp_group=None):
          dims (int): The dimension to roll (typically -1 for sequence dimension).
          cp_group (ProcessGroup): The context parallelism process group. If None or size=1,
                                 falls back to standard rolling behavior.
@@ -487,7 +583,7 @@ index b7884e18e..f0104f861 100755
      # Standard rolling behavior when CP is not enabled (cp_group is None or size=1)
      if cp_group is None or cp_group.size() == 1:
          rolled_tensor = torch.roll(tensor, shifts=shifts, dims=dims)
-@@ -193,6 +204,103 @@ def roll_tensor(tensor, shifts=-1, dims=-1, cp_group=None):
+@@ -194,6 +206,103 @@ def roll_tensor(tensor, shifts=-1, dims=-1, cp_group=None):
  
      return rolled_tensor, rolled_tensor.sum()
  
@@ -591,7 +687,7 @@ index b7884e18e..f0104f861 100755
  
  class MTPLossLoggingHelper:
      """Helper class for logging MTP losses."""
-@@ -480,9 +588,10 @@ class MultiTokenPredictionLayer(MegatronModule):
+@@ -487,9 +596,10 @@ class MultiTokenPredictionLayer(MegatronModule):
      def _get_embeddings(
          self,
          input_ids: torch.Tensor,
@@ -603,7 +699,7 @@ index b7884e18e..f0104f861 100755
      ):
          """
          Preprocesses input data for the Multi-Token Prediction (MTP) layers.
-@@ -499,12 +608,23 @@ class MultiTokenPredictionLayer(MegatronModule):
+@@ -506,12 +616,23 @@ class MultiTokenPredictionLayer(MegatronModule):
                  sequence length, b is the batch size, and h is the hidden size.
          """
          # Calc logits for the current Multi-Token Prediction (MTP) layers.
@@ -630,7 +726,7 @@ index b7884e18e..f0104f861 100755
  
          return input_ids, position_ids, decoder_input, hidden_states
  
-@@ -604,22 +724,66 @@ class MultiTokenPredictionLayer(MegatronModule):
+@@ -613,22 +734,66 @@ class MultiTokenPredictionLayer(MegatronModule):
          return hidden_states
  
      def _checkpointed_forward(self, forward_func, *args, **kwargs):
@@ -702,7 +798,7 @@ index b7884e18e..f0104f861 100755
                  )
  
          if self.config.recompute_method == 'uniform':
-@@ -681,15 +845,13 @@ class MultiTokenPredictionLayer(MegatronModule):
+@@ -690,15 +855,13 @@ class MultiTokenPredictionLayer(MegatronModule):
              [s, b, h], and optionally the updated context tensor if cross-attention is used.
          """
          assert context is None, f"multi token prediction + cross attention is not yet supported."
@@ -720,10 +816,16 @@ index b7884e18e..f0104f861 100755
  
          if self.config.recompute_granularity == 'full' and self.training:
 diff --git a/megatron/core/transformer/transformer_config.py b/megatron/core/transformer/transformer_config.py
-index d55bebe7e..1eecbbd38 100644
+index cf36c0fc6..7cb47e3f9 100644
 --- a/megatron/core/transformer/transformer_config.py
 +++ b/megatron/core/transformer/transformer_config.py
-@@ -173,6 +173,10 @@ class TransformerConfig(ModelParallelConfig):
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
+ 
+ import warnings
+ from dataclasses import dataclass
+@@ -192,6 +193,10 @@ class TransformerConfig(ModelParallelConfig):
      qk_layernorm: bool = False
      """Whether to apply `normalization` type of normalization to the query and key embeddings."""
  
@@ -735,10 +837,16 @@ index d55bebe7e..1eecbbd38 100644
      """Whether to run real-time tests."""
  
 diff --git a/megatron/core/transformer/transformer_layer.py b/megatron/core/transformer/transformer_layer.py
-index 84f22bdea..f0f3f8e86 100644
+index edddc82d7..bf0d987a0 100644
 --- a/megatron/core/transformer/transformer_layer.py
 +++ b/megatron/core/transformer/transformer_layer.py
-@@ -224,6 +224,7 @@ class TransformerLayerSubmodules:
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2025, NVIDIA CORPORATION. All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
+ 
+ import logging
+ import warnings
+@@ -222,6 +223,7 @@ class TransformerLayerSubmodules:
      input_layernorm: Union[ModuleSpec, type] = IdentityOp
      self_attention: Union[ModuleSpec, type] = IdentityOp
      self_attn_bda: Union[ModuleSpec, type] = IdentityFuncOp
@@ -746,7 +854,7 @@ index 84f22bdea..f0f3f8e86 100644
  
      pre_cross_attn_layernorm: Union[ModuleSpec, type] = IdentityOp
      cross_attention: Union[ModuleSpec, type] = IdentityOp
-@@ -232,6 +233,7 @@ class TransformerLayerSubmodules:
+@@ -230,6 +232,7 @@ class TransformerLayerSubmodules:
      pre_mlp_layernorm: Union[ModuleSpec, type] = IdentityOp
      mlp: Union[ModuleSpec, type] = IdentityOp
      mlp_bda: Union[ModuleSpec, type] = IdentityFuncOp
@@ -754,7 +862,7 @@ index 84f22bdea..f0f3f8e86 100644
  
      # Mapping for sharded tensor keys to be applied in `sharded_state_dict` method
      sharded_state_dict_keys_map: Dict[str, str] = field(default_factory=dict)
-@@ -336,6 +338,13 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+@@ -308,6 +311,13 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
          # [Module 3: BiasDropoutFusion]
          self.self_attn_bda = build_module(submodules.self_attn_bda)
  
@@ -768,7 +876,7 @@ index 84f22bdea..f0f3f8e86 100644
          # [Module 4: Post SelfAttention] Optional Layernorm after self-attn
          self.pre_cross_attn_layernorm = build_module(
              submodules.pre_cross_attn_layernorm,
-@@ -399,6 +408,13 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+@@ -371,6 +381,13 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
          # [Module 9: BiasDropoutFusion]
          self.mlp_bda = build_module(submodules.mlp_bda)
  
@@ -782,7 +890,7 @@ index 84f22bdea..f0f3f8e86 100644
          self.recompute_input_layernorm = False
          self.recompute_pre_mlp_layernorm = False
          self.recompute_mlp = False
-@@ -535,6 +551,10 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+@@ -517,6 +534,10 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
                  attention_output_with_bias[0]
              )
  
@@ -793,7 +901,7 @@ index 84f22bdea..f0f3f8e86 100644
          # TODO: could we move `bias_dropout_add_exec_handler` itself
          # inside the module provided in the `bias_dropout_add_spec` module?
          nvtx_range_push(suffix="self_attn_bda")
-@@ -635,6 +655,10 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
+@@ -617,6 +638,10 @@ class TransformerLayer(GraphableMegatronModule, BaseTransformerLayer):
          else:
              mlp_output_with_bias = self.mlp(pre_mlp_layernorm_output)
  
@@ -805,30 +913,26 @@ index 84f22bdea..f0f3f8e86 100644
              # discard the output of the pre-mlp layernorm and register the recompute
              # as a gradient hook of mlp_output_with_bias[0]
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
-index e3459c5ee..7346bf35b 100644
+index 52b41791c..c6e186088 100644
 --- a/megatron/training/arguments.py
 +++ b/megatron/training/arguments.py
-@@ -937,8 +937,6 @@ def validate_args(args, defaults={}):
-     # MoE Spec check
-     if args.num_experts == 0:
-         args.num_experts = None
--    if args.num_experts is not None:
--        assert args.spec is None, "Model Spec must be None when using MoEs"
-     if args.num_experts is not None and args.moe_ffn_hidden_size is None:
-         args.moe_ffn_hidden_size = args.ffn_hidden_size
-         print("Warning: moe_ffn_hidden_size is not set, using ffn_hidden_size for MoE instead.")
-@@ -1198,6 +1196,10 @@ def core_transformer_config_from_args(args, config_class=None):
-     if args.is_hybrid_model:
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2025 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
+ 
+ """Megatron arguments."""
+ 
+@@ -1313,6 +1314,9 @@ def core_transformer_config_from_args(args, config_class=None):
          kw_args['is_hybrid_model'] = args.is_hybrid_model
  
+     kw_args['inference_sampling_seed'] = args.seed
 +    kw_args['post_self_attn_layernorm'] = args.post_self_attn_layernorm
 +    kw_args['post_mlp_layernorm'] = args.post_mlp_layernorm
 +    kw_args['use_gated_attention'] = args.use_gated_attention
-+
+ 
      # handle quantization config
      # NOTE: Kitchen arguments are only added to the namespace when
-     # Kitchen library is available.
-@@ -1488,6 +1490,12 @@ def _add_network_size_args(parser):
+@@ -1669,6 +1673,12 @@ def _add_network_size_args(parser):
                         action='store_true',
                         help='If set, use original BERT residula connection '
                         'ordering.')
@@ -842,10 +946,16 @@ index e3459c5ee..7346bf35b 100644
                         help='Use OpenAIs GeLU implementation. This option'
                         'should not be used unless for backward compatibility'
 diff --git a/megatron/training/tokenizer/tokenizer.py b/megatron/training/tokenizer/tokenizer.py
-index 5cf222ccc..d1554ca4c 100644
+index b1aad6819..ca4827737 100644
 --- a/megatron/training/tokenizer/tokenizer.py
 +++ b/megatron/training/tokenizer/tokenizer.py
-@@ -138,6 +138,8 @@ class _HuggingFaceTokenizer(MegatronTokenizer):
+@@ -1,4 +1,5 @@
+ # Copyright (c) 2023, NVIDIA CORPORATION. All rights reserved.
++# Includes Apache 2.0-licensed contributions from Zhipu AI (at https://github.com/THUDM/slime)
+ 
+ """Megatron tokenizers."""
+ 
+@@ -140,6 +141,8 @@ class _HuggingFaceTokenizer(MegatronLegacyTokenizer):
                  f"The transformers library must be installed to use huggingface_tokenizer_provider"
              )
  
@@ -853,4 +963,4 @@ index 5cf222ccc..d1554ca4c 100644
 +            kwargs["trust_remote_code"] = True
          # TODO(bnorick): download tokenizer once to lustre and use force offline to make sure all tasks read it from there
          self._tokenizer = transformers.AutoTokenizer.from_pretrained(
-             pretrained_model_name_or_path=pretrained_model_name_or_path, **kwargs
+             pretrained_model_name_or_path=pretrained_model_name_or_path,
