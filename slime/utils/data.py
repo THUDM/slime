@@ -229,7 +229,7 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
         group_partitions = get_seqlen_balanced_partitions(group_lengths, dp_size, equal_size=True)
 
         # Expand group partitions to trajectory level
-        parititions = []
+        partitions = []
         for dp_rank_groups in group_partitions:
             trajectory_indices = []
             for group_idx in dp_rank_groups:
@@ -237,11 +237,11 @@ def process_rollout_data(args, rollout_data_ref, dp_rank, dp_size):
                 start_idx = group_idx * n_samples_per_prompt
                 end_idx = start_idx + n_samples_per_prompt
                 trajectory_indices.extend(range(start_idx, end_idx))
-            parititions.append(trajectory_indices)
+            partitions.append(trajectory_indices)
 
     def get_partition(val):
         if args.balance_data:
-            return [val[i] for i in parititions[dp_rank]]
+            return [val[i] for i in partitions[dp_rank]]
         else:
             return val[dp_rank::dp_size]
 

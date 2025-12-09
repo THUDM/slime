@@ -167,7 +167,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
     def _get_rollout_data(self, rollout_data_ref: Box) -> RolloutBatch:
         # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
-        # Both first pp stage and the last pp stage will recieve the data.
+        # Both first pp stage and the last pp stage will receive the data.
         rollout_data = process_rollout_data(
             self.args,
             rollout_data_ref,

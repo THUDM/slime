@@ -188,7 +188,7 @@ class UpdateWeightFromDistributed(UpdateWeight):
         self.rollout_engine_lock = rollout_engine_lock
 
         # For TP:
-        #   1. AllGather paramters to rank 0
+        #   1. AllGather parameters to rank 0
         #   2. Broadcast parameters from rank 0 to all sglang engines
         self._is_src_rank = dist.get_rank() == 0
         if self._is_src_rank:
