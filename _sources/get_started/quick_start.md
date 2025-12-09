@@ -92,12 +92,12 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     --save /root/GLM-Z1-9B-0414_torch_dist
 ```
 
-For larger models, you can use `torchrun` to start the covnersion script to convert with multi-gpus or even multi-nodes.
+For larger models, you can use `torchrun` to start the conversion script to convert with multi-gpus or even multi-nodes.
 Note: When converting the kimi-k2 model weights, you need to open config.json in the model path and change "model_type": "kimi_k2" to "model_type": "deepseek_v3".
 
 ### Convert from Megatron Format to Hugging Face Format
 
-You can use the following script to convert the saved Megatron chekcpoints back to Hugging Face format:
+You can use the following script to convert the saved Megatron checkpoints back to Hugging Face format:
 
 ```bash
 PYTHONPATH=/root/Megatron-LM python tools/convert_torch_dist_to_hf.py \

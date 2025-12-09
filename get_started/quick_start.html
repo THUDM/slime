@@ -54,7 +54,7 @@
     <link rel="prev" title="slime Documentation" href="../index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Dec 04, 2025"/>
+    <meta name="docbuild:last-update" content="Dec 09, 2025"/>
   </head>
   
   
@@ -574,12 +574,12 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 <span class="w">    </span>--save<span class="w"> </span>/root/GLM-Z1-9B-0414_torch_dist
 </pre></div>
 </div>
-<p>For larger models, you can use <code class="docutils literal notranslate"><span class="pre">torchrun</span></code> to start the covnersion script to convert with multi-gpus or even multi-nodes.
+<p>For larger models, you can use <code class="docutils literal notranslate"><span class="pre">torchrun</span></code> to start the conversion script to convert with multi-gpus or even multi-nodes.
 Note: When converting the kimi-k2 model weights, you need to open config.json in the model path and change “model_type”: “kimi_k2” to “model_type”: “deepseek_v3”.</p>
 </section>
 <section id="convert-from-megatron-format-to-hugging-face-format">
 <h3>Convert from Megatron Format to Hugging Face Format<a class="headerlink" href="#convert-from-megatron-format-to-hugging-face-format" title="Link to this heading">#</a></h3>
-<p>You can use the following script to convert the saved Megatron chekcpoints back to Hugging Face format:</p>
+<p>You can use the following script to convert the saved Megatron checkpoints back to Hugging Face format:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM<span class="w"> </span>python<span class="w"> </span>tools/convert_torch_dist_to_hf.py<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--input-dir<span class="w"> </span>/path/to/torch_dist_ckpt/iter_xxx/<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--output-dir<span class="w"> </span>/root/GLM-Z1-9B-0414-iter_xxx<span class="w"> </span><span class="se">\</span>
@@ -1180,7 +1180,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Dec 04, 2025.
+  Last updated on Dec 09, 2025.
   <br/>
 </p>
   </div>
