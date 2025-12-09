@@ -116,17 +116,51 @@ class RolloutManager:
         monitor_started = self.args.use_fault_tolerance and self._health_monitor.start()
         start_time = time.time()
         try:
+            # === Step 1: Generate new rollout data ===
             data, metrics = self._get_rollout_data(rollout_id=rollout_id)
             self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
             _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
-            data = self._convert_samples_to_train_data(data)
 
-            # === Record generated batch in staleness controller ===
+            # === Step 2: Add to buffer (automatic based on buffer_enabled) ===
+            # data is list[Sample] (flattened), add_samples will auto-group it
+            self.data_source.add_samples(data)
+
+            # === Step 3: Log buffer stats ===
+            buffer_stats = self.data_source.get_buffer_stats()
+            if buffer_stats["enabled"]:
+                print(f"[Buffer] Added {len(data)} samples. Stats: {buffer_stats}")
+                # Optional: log to wandb
+                if wandb.run is not None:
+                    wandb.log({
+                        "buffer/size": buffer_stats["buffer_size"],
+                        "buffer/utilization": buffer_stats["buffer_utilization"],
+                        "rollout_id": rollout_id,
+                    })
+
+            # === Step 4: Sample data for training (mixes buffer + new data automatically) ===
+            # get_samples returns list[list[Sample]] (grouped)
+            train_data_samples = self.data_source.get_samples(
+                num_samples=self.args.rollout_batch_size
+            )
+
+            # === Step 5: Flatten grouped samples for _convert_samples_to_train_data ===
+            # _convert_samples_to_train_data expects list[Sample], not list[list[Sample]]
+            if len(train_data_samples) > 0 and isinstance(train_data_samples[0], list):
+                # Flatten: list[list[Sample]] -> list[Sample]
+                flattened_samples = []
+                for group in train_data_samples:
+                    flattened_samples.extend(group)
+                train_data_samples = flattened_samples
+
+            # === Step 6: Convert to training format ===
+            train_data = self._convert_samples_to_train_data(train_data_samples)
+
+            # === Step 7: Record generated batch in staleness controller ===
             if self.staleness_controller is not None:
-                num_samples = len(data["tokens"])
+                num_samples = len(train_data["tokens"])
                 self.staleness_controller.on_generation_completed(num_samples)
 
-            return Box(ray.put(data))
+            return Box(ray.put(train_data))
         finally:
             if monitor_started:
                 self._health_monitor.stop()
@@ -199,6 +233,10 @@ class RolloutManager:
         """Called after training completes to increment policy version."""
         self.current_policy_version += 1
         print(f"[Off-Policy Tracking] Policy version updated to {self.current_policy_version}")
+
+        # === Update data source policy version (for staleness-aware sampling) ===
+        if hasattr(self.data_source, 'update_policy_version'):
+            self.data_source.update_policy_version(self.current_policy_version)
 
         # === Update staleness controller ===
         if self.staleness_controller is not None:
