@@ -182,15 +182,17 @@ class RolloutManager:
             while isinstance(data[0], list):
                 data = sum(data, [])
 
-            # === Tag samples with current policy version ===
-            for sample in data:
-                sample.policy_version = self.current_policy_version
-
             if len(data) % self.args.global_batch_size != 0:
                 trim_len = (len(data) // self.args.global_batch_size) * self.args.global_batch_size
                 origin_data_length = len(data)
                 data = data[:trim_len]
                 print(f"trim number of samples from {origin_data_length} to {trim_len}")
+
+        # === Tag samples with current policy version ===
+        # Always set policy_version for all samples (both normal and debug data)
+        for sample in data:
+            sample.policy_version = self.current_policy_version
+
         return data, metrics
 
     def on_policy_update(self):
@@ -309,6 +311,11 @@ class RolloutManager:
         # === Add policy versions for off-policy tracking ===
         if samples[0].policy_version is not None:
             train_data["policy_versions"] = [sample.policy_version for sample in samples]
+        elif hasattr(self.args, "loss_type") and self.args.loss_type == "decoupled_policy_loss":
+            # For off-policy GRPO, policy_version should always be set
+            # If it's None, use 0 as default (should not happen in normal flow)
+            print(f"[WARNING] policy_version is None for off-policy GRPO, using default value 0")
+            train_data["policy_versions"] = [0] * len(samples)
 
         return train_data
 

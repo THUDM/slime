@@ -347,22 +347,29 @@ def train_one_step(
         """
 
         # Get the batch.
-        batch = get_batch(
-            data_iterator,
-            [
-                "tokens",
-                "packed_seq_params",
-                "total_lengths",
-                "response_lengths",
-                "loss_masks",
-                "log_probs",
-                "ref_log_probs",
-                "values",
-                "advantages",
-                "returns",
-                "rollout_log_probs",
-            ],
-        )
+        # Build keys list dynamically based on loss type
+        batch_keys = [
+            "tokens",
+            "packed_seq_params",
+            "total_lengths",
+            "response_lengths",
+            "loss_masks",
+            "log_probs",
+            "ref_log_probs",
+            "values",
+            "advantages",
+            "returns",
+            "rollout_log_probs",
+        ]
+
+        # Add off-policy specific fields for decoupled_policy_loss
+        if args.loss_type == "decoupled_policy_loss":
+            batch_keys.append("proximal_log_probs")
+            # Optionally include policy version tracking for staleness monitoring
+            if hasattr(args, "max_staleness") and args.max_staleness >= 0:
+                batch_keys.extend(["policy_versions", "current_policy_version"])
+
+        batch = get_batch(data_iterator, batch_keys)
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             old_stage = os.environ["ROUTING_REPLAY_STAGE"]

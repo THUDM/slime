@@ -373,6 +373,12 @@ class MegatronTrainRayActor(TrainRayActor):
                 # because we may need normalize the whole rollout.
                 compute_advantages_and_returns(self.args, rollout_data)
 
+                # === Add current policy version for staleness tracking ===
+                if self.args.loss_type == "decoupled_policy_loss":
+                    # Add as a list with the same value for all samples
+                    num_samples = len(rollout_data["tokens"])
+                    rollout_data["current_policy_version"] = [rollout_id] * num_samples
+
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args)
 

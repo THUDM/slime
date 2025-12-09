@@ -808,12 +808,18 @@ def decoupled_policy_loss_function(
         reported_loss["kl_loss"] = kl_loss.clone().detach()
 
     # Optionally log staleness statistics
-    if "policy_versions" in batch and "current_policy_version" in batch:
+    # Check both key existence AND non-None values
+    if (batch.get("policy_versions") is not None and
+        batch.get("current_policy_version") is not None):
         from slime.utils.offpolicy_utils import compute_policy_version_staleness
+
+        # current_policy_version is a list with the same value for all samples
+        # Extract the scalar value (all elements are the same)
+        current_version = batch["current_policy_version"][0] if isinstance(batch["current_policy_version"], list) else batch["current_policy_version"]
 
         staleness = compute_policy_version_staleness(
             batch["policy_versions"],
-            batch["current_policy_version"]
+            current_version
         )
         reported_loss["mean_staleness"] = staleness.float().mean().clone().detach()
         reported_loss["max_staleness"] = staleness.max().clone().detach()
