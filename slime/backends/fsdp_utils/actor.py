@@ -147,7 +147,8 @@ class FSDPTrainRayActor(TrainRayActor):
         return int(getattr(self.args, "start_rollout_id", 0))
 
     def get_model_cls(self):
-        if self.args.multimodal_keys:
+        # Vision models have `vision_config` in the config
+        if hasattr(self.hf_config, "vision_config"):
             from transformers import AutoModelForVision2Seq
 
             return AutoModelForVision2Seq
