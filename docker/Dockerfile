@@ -1,4 +1,4 @@
-ARG SGLANG_IMAGE_TAG=v0.5.5.post1
+ARG SGLANG_IMAGE_TAG=nightly-dev-20251208-5e2cda61
 FROM lmsysorg/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
@@ -38,10 +38,10 @@ RUN pip install flash-linear-attention==0.4.0
 
 # TE does not have wheel on cuda 13 yet, thus need to install from source
 RUN if [ "${ENABLE_CUDA_13}" = "1" ]; then \
-      pip install nvidia-mathdx==25.6.0 && \
-      pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.8; \
+      pip install nvidia-mathdx==26.6.0 && \
+      pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.10; \
     else \
-      pip -v install --no-build-isolation "transformer_engine[pytorch]==2.8.0"; \
+      pip -v install --no-build-isolation "transformer_engine[pytorch]==2.10.0"; \
     fi
 
 RUN NVCC_APPEND_FLAGS="--threads 4" \
@@ -69,11 +69,6 @@ RUN pip install -r /tmp/requirements.txt
 RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
     SGL_KERNEL_VERSION=0.3.17.post2 && \
     python3 -m pip install https://github.com/sgl-project/whl/releases/download/v${SGL_KERNEL_VERSION}/sgl_kernel-${SGL_KERNEL_VERSION}+cu130-cp310-abi3-manylinux2014_$(uname -m).whl --force-reinstall --no-deps; \
-  fi
-
-# This patch is merged into main, but we are using stable version, thus still need it
-RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
-    curl -L https://github.com/NVIDIA/TransformerEngine/pull/2286.patch -o /root/te2286.patch && (cd /usr/local/lib/python3.12/dist-packages/transformer_engine && (patch -p2 < /root/te2286.patch)); \
   fi
 
 # AMEM
@@ -110,7 +105,7 @@ COPY docker/patch/${PATCH_VERSION}/sglang.patch /sgl-workspace/sglang/
 RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
   cd /sgl-workspace/sglang && \
   git update-index --refresh && \
-  git apply sglang.patch && \
+  git apply sglang.patch --3way && \
   if grep -R -n '^<<<<<<< ' .; then \
     echo "Patch failed to apply cleanly. Please resolve conflicts." && \
     exit 1; \
