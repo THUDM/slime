@@ -55,6 +55,21 @@ class RolloutManager:
         print(f"import {self.args.rollout_function_path} as generate_rollout function.")
         print(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
+        # === Off-Policy tracking ===
+        self.current_policy_version = 0
+
+        # === Staleness Control ===
+        if args.max_staleness >= 0:
+            from slime.utils.offpolicy_utils import StalenessController
+            self.staleness_controller = StalenessController(
+                max_staleness=args.max_staleness,
+                batch_size=args.rollout_batch_size * args.n_samples_per_prompt,
+            )
+            print(f"[Staleness Control] Initialized with max_staleness={args.max_staleness}, batch_size={args.rollout_batch_size * args.n_samples_per_prompt}")
+        else:
+            self.staleness_controller = None
+            print("[Staleness Control] Disabled (max_staleness < 0)")
+
         if self.args.debug_train_only:
             self.all_rollout_engines = []
         else:
@@ -87,6 +102,17 @@ class RolloutManager:
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
     def generate(self, rollout_id):
+        # === Check staleness budget before generation ===
+        if self.staleness_controller is not None:
+            if not self.staleness_controller.can_submit_request():
+                print(
+                    f"[Staleness Control] WARNING: Rollout {rollout_id} would exceed staleness budget "
+                    f"(num_generated={self.staleness_controller.num_generated}, "
+                    f"policy_version={self.staleness_controller.current_policy_version}, "
+                    f"max_staleness={self.staleness_controller.max_staleness}). "
+                    f"Proceeding anyway, but this may degrade off-policy performance."
+                )
+
         monitor_started = self.args.use_fault_tolerance and self._health_monitor.start()
         start_time = time.time()
         try:
@@ -94,6 +120,12 @@ class RolloutManager:
             self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
             _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
             data = self._convert_samples_to_train_data(data)
+
+            # === Record generated batch in staleness controller ===
+            if self.staleness_controller is not None:
+                num_samples = len(data["tokens"])
+                self.staleness_controller.on_generation_completed(num_samples)
+
             return Box(ray.put(data))
         finally:
             if monitor_started:
@@ -150,12 +182,29 @@ class RolloutManager:
             while isinstance(data[0], list):
                 data = sum(data, [])
 
+            # === Tag samples with current policy version ===
+            for sample in data:
+                sample.policy_version = self.current_policy_version
+
             if len(data) % self.args.global_batch_size != 0:
                 trim_len = (len(data) // self.args.global_batch_size) * self.args.global_batch_size
                 origin_data_length = len(data)
                 data = data[:trim_len]
                 print(f"trim number of samples from {origin_data_length} to {trim_len}")
         return data, metrics
+
+    def on_policy_update(self):
+        """Called after training completes to increment policy version."""
+        self.current_policy_version += 1
+        print(f"[Off-Policy Tracking] Policy version updated to {self.current_policy_version}")
+
+        # === Update staleness controller ===
+        if self.staleness_controller is not None:
+            self.staleness_controller.on_training_step()
+            print(
+                f"[Staleness Control] Updated - num_generated={self.staleness_controller.num_generated}, "
+                f"policy_version={self.staleness_controller.current_policy_version}"
+            )
 
     def _save_debug_rollout_data(self, data, rollout_id, evaluation: bool):
         # TODO to be refactored (originally Buffer._set_data)
@@ -256,6 +305,10 @@ class RolloutManager:
 
         if "teacher_log_probs" in samples[0].__dict__:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
+
+        # === Add policy versions for off-policy tracking ===
+        if samples[0].policy_version is not None:
+            train_data["policy_versions"] = [sample.policy_version for sample in samples]
 
         return train_data
 

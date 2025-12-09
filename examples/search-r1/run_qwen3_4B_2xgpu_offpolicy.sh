@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Off-policy GRPO training script for Qwen3-4B with 2xGPU
+# Based on run_qwen3_4B_2xgpu.sh with off-policy enhancements
+
 # for rerun the task
 pkill -9 sglang
 sleep 3
@@ -16,7 +19,6 @@ set -ex
 export PYTHONBUFFERED=16
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-# source "${SCRIPT_DIR}/../../scripts/models/qwen3-4B.sh"
 source "/mnt/shared-storage-user/puyuan/code/slime/scripts/models/qwen3-4B.sh"
 
 
@@ -24,7 +26,7 @@ CKPT_ARGS=(
    --hf-checkpoint /mnt/shared-storage-user/puyuan/code/slime/Qwen3-4B/
    --ref-load /mnt/shared-storage-user/puyuan/code/slime/Qwen3-4B_torch_dist/
    # --load /root/qwen3-4B_slime/
-   # --save /root/qwen3-4B_slime/
+   # --save /root/qwen3-4B_slime_offpolicy/
    # --save-interval 20
 )
 
@@ -69,19 +71,52 @@ PERF_ARGS=(
    --max-tokens-per-gpu 9216
 )
 
-GRPO_ARGS=(
+# ==================== OFF-POLICY GRPO CONFIGURATION ====================
+# This section contains parameters specific to off-policy GRPO with decoupled PPO
+
+OFFPOLICY_GRPO_ARGS=(
+   # Advantage estimator (kept as grpo for compatibility)
    --advantage-estimator grpo
-   --loss-type policy_loss
-   --use-kl-loss
-   --kl-loss-coef 0.001
-   --kl-loss-type low_var_kl
-   --entropy-coef 0.00
+
+   # Use decoupled policy loss instead of standard policy loss
+   --loss-type decoupled_policy_loss
+
+   # === Staleness Control ===
+   # Maximum allowed staleness (η in the paper)
+   # - η=0: synchronous (on-policy), equivalent to standard GRPO
+   # - η=1: allows data from 1 version ago
+   # - η=5: allows data from up to 5 versions ago (more aggressive off-policy)
+   # Recommended: start with 2-3 for moderate off-policy
+   --max-staleness 3
+
+   # === PPO Clipping Parameters ===
+   # Asymmetric clipping: allows more aggressive positive updates
    --eps-clip 0.2
    --eps-clip-high 0.28
 
-   # whether enabling TIS
-   # --use-tis
+   # === KL Divergence Control ===
+   # Use KL loss to prevent policy from deviating too far from reference
+   --use-kl-loss
+   --kl-loss-coef 0.001
+   --kl-loss-type low_var_kl
+
+   # === Entropy Regularization ===
+   # Set to 0.0 for less exploration (suitable for Search-R1)
+   --entropy-coef 0.00
+
+   # === Importance Weight Clipping (optional) ===
+   # Clip importance weights π_prox/π_behav to prevent extreme values
+   # Uncomment to enable:
+   # --importance-weight-clip-min 0.1
+   # --importance-weight-clip-max 10.0
+
+   # === Proximal Policy Update ===
+   # The proximal policy is automatically set to the model parameters
+   # from the previous training step (before gradient update)
+   # No additional configuration needed
 )
+
+# ==================== STANDARD CONFIGURATION ====================
 
 OPTIMIZER_ARGS=(
    --optimizer adam
@@ -92,27 +127,15 @@ OPTIMIZER_ARGS=(
    --adam-beta2 0.98
 )
 
-# WANDB_ARGS=(
-#    --use-wandb
-#    --wandb-project slime-dev
-#    --wandb-group search-r1_qwen3-4B-test
-#    --wandb-key ${WANDB_KEY}
-# )
-
 export WANDB_MODE="offline"  # Set to "online" if you want real-time logging
 export WANDB_KEY="968275bc822c87ac741ecce2f06cdfb54dbc1608"  # Replace with your key
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-project slime-search-r1
-   --wandb-group qwen3-4B-2xgpu
+   --wandb-project slime-search-r1-offpolicy
+   --wandb-group qwen3-4B-2xgpu-offpolicy-eta3
    --wandb-key ${WANDB_KEY}
 )
-
-# SGLANG_ARGS=(
-#    --rollout-num-gpus-per-engine 2
-#    --sglang-mem-fraction-static 0.7
-# )
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
@@ -161,7 +184,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
-   ${GRPO_ARGS[@]} \
+   ${OFFPOLICY_GRPO_ARGS[@]} \
    ${WANDB_ARGS[@]} \
    ${PERF_ARGS[@]} \
    ${SGLANG_ARGS[@]} \

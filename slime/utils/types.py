@@ -23,6 +23,7 @@ class Sample:
     weight_versions: list[str] = field(default_factory=list)
     rollout_log_probs: Optional[list[float]] = None  # Log probabilities from rollout engine
     rollout_routed_experts: Optional[list[list[int]]] = None  # Routed experts from rollout engine
+    policy_version: Optional[int] = None  # Policy version that generated this sample (for off-policy tracking)
 
     class Status(Enum):
         PENDING = "pending"

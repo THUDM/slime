@@ -648,6 +648,179 @@ def sft_loss_function(
     )
 
 
+def decoupled_policy_loss_function(
+    args: Namespace,
+    batch: RolloutBatch,
+    logits: torch.Tensor,
+    sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Compute decoupled PPO loss with off-policy corrections.
+
+    Implements the decoupled PPO objective from AREAL paper:
+        J(θ) = E[π_prox/π_behav * min(u_t^prox(θ) A_t, clip(u_t^prox(θ), 1-ε, 1+ε) A_t)]
+
+    where:
+        - π_behav: behavior policy (used for sampling)
+        - π_prox: proximal policy (previous training step)
+        - π_θ: current policy being updated
+        - u_t^prox(θ) = π_θ / π_prox
+
+    Args:
+        args: Configuration containing clip thresholds, KL coefficients, etc.
+        batch: Mini-batch containing "advantages", "log_probs" (from training),
+            "proximal_log_probs" (pre-computed), "behavior_log_probs" (optional),
+            "unconcat_tokens", "response_lengths", "total_lengths", "loss_masks",
+            and optionally "ref_log_probs".
+        logits: Current policy logits with shape `[1, T, V]`.
+        sum_of_sample_mean: Reduction function that averages per-sample values.
+
+    Returns:
+        Tuple of `(loss, metrics)` where `loss` is a scalar tensor and `metrics`
+        is a dict containing detached scalars: "loss", "pg_loss",
+        "entropy_loss", "pg_clipfrac", "ppo_kl_prox", "importance_weight_mean",
+        "importance_weight_max", "effective_sample_size". Additional keys
+        "kl_loss" is included when KL loss is enabled.
+    """
+    from slime.utils.offpolicy_utils import (
+        compute_decoupled_policy_loss,
+        compute_offpolicy_importance_weights,
+        aggregate_importance_weights,
+    )
+
+    # === 0. Check required fields ===
+    if "proximal_log_probs" not in batch:
+        raise ValueError(
+            "batch must contain 'proximal_log_probs' for decoupled_policy_loss. "
+            "Make sure to compute proximal policy log probs in train_actor() before training."
+        )
+
+    advantages = torch.cat(batch["advantages"], dim=0)
+    response_lengths = batch["response_lengths"]
+    total_lengths = batch["total_lengths"]
+
+    # === 1. Compute current policy log probs and entropy ===
+    log_probs_and_entropy = get_log_probs_and_entropy(
+        logits,
+        args=args,
+        unconcat_tokens=batch["unconcat_tokens"],
+        total_lengths=total_lengths,
+        response_lengths=response_lengths,
+        with_entropy=True,
+    )
+    log_probs = log_probs_and_entropy["log_probs"]
+    entropy = log_probs_and_entropy["entropy"]
+
+    # === 2. Get proximal policy log probs (pre-computed) ===
+    proximal_log_probs = batch["proximal_log_probs"]
+
+    # === 3. Get behavior log probs ===
+    # Try to use pre-computed behavior_log_probs if available
+    if "behavior_log_probs" in batch and batch["behavior_log_probs"] is not None:
+        behavior_log_probs = batch["behavior_log_probs"]
+    else:
+        # Fallback: use old_actor log_probs or rollout_log_probs
+        if "log_probs" in batch and batch["log_probs"] is not None:
+            # Use old_actor log probs (computed in train_actor) as behavior policy
+            behavior_log_probs = batch["log_probs"]
+        elif "rollout_log_probs" in batch and batch["rollout_log_probs"] is not None:
+            behavior_log_probs = batch["rollout_log_probs"]
+        else:
+            raise ValueError(
+                "batch must contain either 'behavior_log_probs', 'log_probs', or 'rollout_log_probs' "
+                "for off-policy importance sampling"
+            )
+
+    # === 4. Concatenate all log probs ===
+    log_probs = torch.cat(log_probs, dim=0)
+    proximal_log_probs = torch.cat(proximal_log_probs, dim=0)
+    behavior_log_probs = torch.cat(behavior_log_probs, dim=0)
+
+    # === 5. Compute importance weights: π_prox / π_behav ===
+    importance_weights = compute_offpolicy_importance_weights(
+        proximal_log_probs,
+        behavior_log_probs,
+        clip_min=getattr(args, 'importance_weight_clip_min', None),
+        clip_max=getattr(args, 'importance_weight_clip_max', None),
+    )
+
+    # === 6. Compute PPO KL (for ratio): log π_prox - log π_θ ===
+    ppo_kl_prox = proximal_log_probs - log_probs
+
+    # === 7. Compute decoupled policy loss ===
+    pg_loss, pg_clipfrac = compute_decoupled_policy_loss(
+        ppo_kl_prox,
+        importance_weights,
+        advantages,
+        args.eps_clip,
+        args.eps_clip_high,
+    )
+    pg_loss = sum_of_sample_mean(pg_loss)
+    pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
+
+    # === 8. Compute entropy loss ===
+    entropy = torch.cat(entropy, dim=0)
+    entropy_loss = sum_of_sample_mean(entropy)
+
+    # === 9. Combine losses ===
+    loss = pg_loss - args.entropy_coef * entropy_loss
+
+    # === 10. Add KL loss (relative to reference model) ===
+    if args.use_kl_loss:
+        ref_log_probs = batch["ref_log_probs"]
+        ref_log_probs = torch.cat(ref_log_probs, dim=0)
+        kl = compute_approx_kl(
+            log_probs,
+            ref_log_probs,
+            kl_loss_type=args.kl_loss_type,
+        )
+        kl_loss = sum_of_sample_mean(kl)
+        loss = loss + args.kl_loss_coef * kl_loss
+
+    # === 11. Handle empty tensors ===
+    if log_probs.numel() == 0:
+        loss += 0 * logits.sum()
+
+    # === 12. Compute importance weight statistics ===
+    all_masks = torch.cat(batch["loss_masks"], dim=0)
+    importance_weight_mean = aggregate_importance_weights(
+        importance_weights, all_masks, method="mean"
+    )
+    importance_weight_max = aggregate_importance_weights(
+        importance_weights, all_masks, method="max"
+    )
+    effective_sample_size = aggregate_importance_weights(
+        importance_weights, all_masks, method="effective_sample_size"
+    )
+
+    # === 13. Build metrics dictionary ===
+    reported_loss = {
+        "loss": loss.clone().detach(),
+        "pg_loss": pg_loss.clone().detach(),
+        "entropy_loss": entropy_loss.clone().detach(),
+        "pg_clipfrac": pg_clipfrac.clone().detach(),
+        "ppo_kl_prox": sum_of_sample_mean(ppo_kl_prox).clone().detach(),
+        "importance_weight_mean": importance_weight_mean.clone().detach(),
+        "importance_weight_max": importance_weight_max.clone().detach(),
+        "effective_sample_size": effective_sample_size.clone().detach(),
+    }
+
+    if args.use_kl_loss:
+        reported_loss["kl_loss"] = kl_loss.clone().detach()
+
+    # Optionally log staleness statistics
+    if "policy_versions" in batch and "current_policy_version" in batch:
+        from slime.utils.offpolicy_utils import compute_policy_version_staleness
+
+        staleness = compute_policy_version_staleness(
+            batch["policy_versions"],
+            batch["current_policy_version"]
+        )
+        reported_loss["mean_staleness"] = staleness.float().mean().clone().detach()
+        reported_loss["max_staleness"] = staleness.max().clone().detach()
+
+    return loss, reported_loss
+
+
 def loss_function(
     args: Namespace,
     batch: RolloutBatch,
@@ -697,6 +870,10 @@ def loss_function(
     match args.loss_type:
         case "policy_loss":
             loss, log = policy_loss_function(**loss_function_kwargs)
+        case "decoupled_policy_loss":
+            # For off-policy GRPO with decoupled PPO objective
+            # Note: proximal_log_probs should be computed in train_actor() before training
+            loss, log = decoupled_policy_loss_function(**loss_function_kwargs)
         case "value_loss":
             loss, log = value_loss_function(**loss_function_kwargs)
         case "sft_loss":

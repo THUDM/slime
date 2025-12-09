@@ -77,6 +77,9 @@ def train(args):
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
+        # === Notify rollout manager that policy has been updated ===
+        ray.get(rollout_manager.on_policy_update.remote())
+
         if args.save_interval is not None and (
             (rollout_id + 1) % args.save_interval == 0
             or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)

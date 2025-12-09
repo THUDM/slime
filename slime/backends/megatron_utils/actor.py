@@ -322,6 +322,26 @@ class MegatronTrainRayActor(TrainRayActor):
                         )
                     )
 
+                # === Compute proximal policy log probs for off-policy GRPO ===
+                if self.args.loss_type == "decoupled_policy_loss":
+                    # First time: initialize proximal policy as current actor
+                    if "proximal" not in self.weights_backuper.backup_tags:
+                        if is_megatron_main_rank():
+                            print(f"[Off-Policy GRPO] Initializing proximal policy from current actor at rollout {rollout_id}")
+                        self.weights_backuper.backup("proximal")
+
+                    # Compute proximal policy log probs
+                    if is_megatron_main_rank():
+                        print(f"[Off-Policy GRPO] Computing proximal policy log probs at rollout {rollout_id}")
+                    rollout_data.update(
+                        self.compute_log_prob(
+                            "proximal",
+                            data_iterator,
+                            num_microbatches,
+                            store_prefix="proximal_",
+                        )
+                    )
+
                 if self.args.use_routing_replay:
                     if self.args.use_rollout_routing_replay:
                         os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
@@ -380,6 +400,12 @@ class MegatronTrainRayActor(TrainRayActor):
 
         # update the cpu actor weight to the latest model
         self.weights_backuper.backup("actor")
+
+        # === Update proximal policy after training for off-policy GRPO ===
+        if self.args.loss_type == "decoupled_policy_loss":
+            if is_megatron_main_rank():
+                print(f"[Off-Policy GRPO] Updating proximal policy after rollout {rollout_id}")
+            self.weights_backuper.backup("proximal")
 
         # Update ref model if needed
         if (

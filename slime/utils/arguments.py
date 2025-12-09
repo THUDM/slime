@@ -658,11 +658,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--loss-type",
                 type=str,
-                choices=["policy_loss", "sft_loss", "custom_loss"],
+                choices=["policy_loss", "decoupled_policy_loss", "value_loss", "sft_loss", "custom_loss"],
                 default="policy_loss",
                 help=(
-                    "Choose loss type, currently support ppo policy_loss or sft_loss, "
-                    "if custom_loss is set, we will use the function path from `--custom-loss-function-path`."
+                    "Choose loss type: "
+                    "'policy_loss': standard PPO/GRPO policy loss (default), "
+                    "'decoupled_policy_loss': off-policy GRPO with decoupled PPO objective (AREAL-style), "
+                    "'value_loss': critic network value loss, "
+                    "'sft_loss': supervised fine-tuning loss, "
+                    "'custom_loss': user-defined custom loss (set path via --custom-loss-function-path)."
                 ),
             )
             parser.add_argument(
@@ -777,6 +781,52 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 help="Path to the custom TIS function.",
+            )
+
+            # === Off-Policy GRPO Parameters ===
+            parser.add_argument(
+                "--max-staleness",
+                type=int,
+                default=-1,
+                help=(
+                    "Maximum allowed staleness (η) for off-policy training. "
+                    "Enforces: ⌊(N_r - 1) / B⌋ ≤ i + η where N_r is number of generated trajectories, "
+                    "B is batch size, i is current policy version. "
+                    "Set to -1 to disable staleness control (unlimited staleness). "
+                    "Set to 0 for synchronous on-policy training. "
+                    "Recommended: 2-5 for moderate off-policy training."
+                ),
+            )
+            parser.add_argument(
+                "--importance-weight-clip-min",
+                type=float,
+                default=None,
+                help=(
+                    "Minimum clipping value for importance weights π_prox/π_behav. "
+                    "Helps prevent extreme importance weights from destabilizing training. "
+                    "Recommended: 0.1 to 0.5 if used."
+                ),
+            )
+            parser.add_argument(
+                "--importance-weight-clip-max",
+                type=float,
+                default=None,
+                help=(
+                    "Maximum clipping value for importance weights π_prox/π_behav. "
+                    "Helps prevent extreme importance weights from destabilizing training. "
+                    "Recommended: 2.0 to 10.0 if used."
+                ),
+            )
+            parser.add_argument(
+                "--enable-proximal-policy-storage",
+                action="store_true",
+                default=False,
+                help=(
+                    "Enable storing proximal policy parameters for decoupled PPO. "
+                    "When enabled, saves model parameters before each gradient update "
+                    "to use as proximal policy in the next training step. "
+                    "Automatically enabled when using decoupled_policy_loss."
+                ),
             )
 
             parser.add_argument(
