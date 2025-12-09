@@ -1,7 +1,7 @@
 import os
 
 import slime.utils.misc as U
-from slime.utils.external_utils import execute_train, get_default_wandb_args
+from slime.utils.external_utils.command_utils import execute_train, get_default_wandb_args
 
 MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")
 assert MODEL_NAME in {"Qwen2.5-VL-3B-Instruct", "Qwen3-VL-2B-Instruct", "Qwen3-VL-4B-Instruct", "Qwen3-VL-8B-Instruct"}
