@@ -85,6 +85,9 @@ RUN git clone https://github.com/inclusionAI/asystem-amem.git && \
     mv /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libnccl.so.2 /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libnccl.so.2.bak && \
     cp -r third_party/nccl/build/lib/* /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/
 
+# https://github.com/pytorch/pytorch/issues/168167
+RUN pip install nvidia-cudnn-cu12==9.16.0.29
+
 RUN rm /root/.tmux.conf
 
 # ====================================== Patches ============================================
