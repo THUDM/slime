@@ -817,6 +817,73 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Recommended: 2.0 to 10.0 if used."
                 ),
             )
+            # === Buffer Configuration ===
+            parser.add_argument(
+                "--buffer-mode",
+                type=str,
+                choices=["in_process", "http", "none"],
+                default="in_process",
+                help=(
+                    "Buffer implementation mode: "
+                    "'in_process': Fast embedded buffer (default, ~0.1ms latency), suitable for standard GRPO/PPO; "
+                    "'http': HTTP-based buffer server (~10ms latency), for agent tasks and async generation; "
+                    "'none': No buffer (read-only), for on-policy training without replay."
+                ),
+            )
+            parser.add_argument(
+                "--use-buffer",
+                type=lambda x: x.lower() in ["true", "1", "yes"],
+                default=None,
+                help=(
+                    "Explicitly enable or disable buffer. "
+                    "If not set, automatically enabled for off-policy (loss_type=decoupled_policy_loss) "
+                    "and disabled for on-policy (loss_type=policy_loss)."
+                ),
+            )
+            parser.add_argument(
+                "--buffer-max-size",
+                type=int,
+                default=1000,
+                help=(
+                    "Maximum buffer capacity (number of sample groups). "
+                    "When buffer is full, oldest samples are evicted (FIFO). "
+                    "Larger buffer provides more diverse data but uses more memory."
+                ),
+            )
+
+            # === HTTP Buffer Configuration (only for --buffer-mode http) ===
+            parser.add_argument(
+                "--buffer-server-url",
+                type=str,
+                default="http://localhost:8889",
+                help=(
+                    "URL of the HTTP buffer server (only used when buffer_mode=http). "
+                    "Start the server first: cd slime_plugins/rollout_buffer && python buffer.py"
+                ),
+            )
+            parser.add_argument(
+                "--buffer-task-type",
+                type=str,
+                default="grpo",
+                help=(
+                    "Task type for HTTP buffer generator (only used when buffer_mode=http). "
+                    "Options: 'grpo' (standard GRPO), 'math', 'tool', or custom task types. "
+                    "Custom generators should be placed in slime_plugins/rollout_buffer/generator/"
+                ),
+            )
+            parser.add_argument(
+                "--buffer-timeout",
+                type=int,
+                default=30,
+                help="HTTP buffer request timeout in seconds (only used when buffer_mode=http).",
+            )
+            parser.add_argument(
+                "--buffer-max-retries",
+                type=int,
+                default=3,
+                help="Maximum HTTP buffer request retries (only used when buffer_mode=http).",
+            )
+
             parser.add_argument(
                 "--enable-proximal-policy-storage",
                 action="store_true",

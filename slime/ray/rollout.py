@@ -12,7 +12,7 @@ import wandb
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
-from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer
+from slime.ray.rollout_data_source_factory import create_rollout_data_source
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import find_available_port, get_host_info, init_http_client
@@ -45,7 +45,8 @@ class RolloutManager:
         )
         init_http_client(args)
 
-        self.data_source = RolloutDataSourceWithBuffer(args)
+        # === Create data source using factory (supports in_process/http/none) ===
+        self.data_source = create_rollout_data_source(args)
 
         self.generate_rollout = load_function(self.args.rollout_function_path)
         self.eval_generate_rollout = load_function(self.args.eval_function_path)
