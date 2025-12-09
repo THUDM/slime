@@ -89,6 +89,7 @@ RUN git clone https://github.com/inclusionAI/asystem-amem.git && \
 RUN pip install nvidia-cudnn-cu12==9.16.0.29
 
 RUN rm /root/.tmux.conf
+RUN rm -rf /root/.cache/pip /root/asystem-amem /root/flash-attention
 
 # ====================================== Patches ============================================
 
