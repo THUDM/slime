@@ -65,8 +65,9 @@ def train(args):
     # train loop.
     # note that for async training, one can change the position of the sync operation(ray.get).
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
-        # TODO extract the duplicated eval logic
-        if args.eval_interval is not None and rollout_id == 0:
+        if args.eval_interval is not None and (
+            rollout_id % args.eval_interval == 0
+            or (num_rollout_per_epoch is not None and rollout_id % num_rollout_per_epoch == 0)):
             ray.get(rollout_manager.eval.remote(rollout_id))
 
         rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
@@ -107,12 +108,6 @@ def train(args):
             if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
                 ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
             ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
-
-        if args.eval_interval is not None and (
-            (rollout_id + 1) % args.eval_interval == 0
-            or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
-        ):
-            ray.get(rollout_manager.eval.remote(rollout_id))
 
     ray.get(rollout_manager.dispose.remote())
 
