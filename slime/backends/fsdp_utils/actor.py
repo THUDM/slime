@@ -149,9 +149,9 @@ class FSDPTrainRayActor(TrainRayActor):
     def get_model_cls(self):
         # Vision models have `vision_config` in the config
         if hasattr(self.hf_config, "vision_config"):
-            from transformers import AutoModelForVision2Seq
+            from transformers import AutoModelForImageTextToText
 
-            return AutoModelForVision2Seq
+            return AutoModelForImageTextToText
         else:
             from transformers import AutoModelForCausalLM
 
