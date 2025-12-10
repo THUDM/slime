@@ -130,5 +130,11 @@ class TrainRayActor(RayActor):
     def connect_actor_critic(self, critic_group):
         raise NotImplementedError
 
+    @abc.abstractmethod
+    def _get_parallel_config(self):
+        raise NotImplementedError
+
     def set_rollout_manager(self, rollout_manager):
         self.rollout_manager = rollout_manager
+        if self.args.rank == 0:
+            ray.get(self.rollout_manager.set_train_parallel_config.remote(self.train_parallel_config))

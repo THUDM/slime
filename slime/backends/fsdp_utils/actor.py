@@ -55,6 +55,10 @@ class FSDPTrainRayActor(TrainRayActor):
         self._setup_device_mesh()
         torch.manual_seed(args.seed)
 
+        self.train_parallel_config = {
+            "dp_size": self.dp_size,
+        }
+
         if self.args.debug_rollout_only:
             return 0
 

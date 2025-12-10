@@ -23,6 +23,7 @@ from slime.utils.metric_checker import MetricChecker
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from slime.utils.misc import load_function
 from slime.utils.ray_utils import Box
+from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.tracking_utils import init_tracking
 from slime.utils.types import Sample
 
@@ -104,7 +105,7 @@ class RolloutManager:
             self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
             _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
             data = self._convert_samples_to_train_data(data)
-            return Box(ray.put(data))
+            return self._split_train_data_by_dp(data, self.train_parallel_config["dp_size"])
         finally:
             if monitor_started:
                 self._health_monitor.stop()
@@ -279,6 +280,59 @@ class RolloutManager:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
 
         return train_data
+
+    def set_train_parallel_config(self, config: dict):
+        self.train_parallel_config = config
+
+    def _split_train_data_by_dp(self, data, dp_size):
+        """Split the train data by data parallel size."""
+        rollout_data = {}
+
+        if "prompt" in data:
+            rollout_data["prompt"] = data["prompt"]
+
+        total_lengths = [len(t) for t in data["tokens"]]
+        data["total_lengths"] = total_lengths
+
+        if self.args.balance_data:
+            partitions = get_seqlen_balanced_partitions(total_lengths, dp_size, equal_size=True)
+        else:
+            partitions = [range(i, len(total_lengths), dp_size) for i in range(dp_size)]
+
+        rollout_data_refs = []
+
+        for i in range(dp_size):
+            rollout_data = {}
+            partition = partitions[i]
+            rollout_data["partition"] = partition
+            for key in [
+                "tokens",
+                "multimodal_inputs",
+                "response_lengths",
+                "rewards",
+                "raw_reward",
+                "truncated",
+                "loss_masks",
+                "round_number",
+                "sample_indices",
+                "rollout_log_probs",
+                "rollout_routed_experts",
+                "prompt",
+                "teacher_log_probs",
+            ]:
+                if key not in data:
+                    continue
+                val = [data[key][j] for j in partition]
+                rollout_data[key] = val
+            # keys that need to be splited at train side
+            for key in [
+                "total_lengths",
+            ]:
+                if key not in data:
+                    continue
+                rollout_data[key] = data[key]
+            rollout_data_refs.append(Box(ray.put(rollout_data)))
+        return rollout_data_refs
 
 
 def init_rollout_engines(args, pg, all_rollout_engines):
