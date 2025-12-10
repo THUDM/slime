@@ -430,7 +430,8 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#usage">Usage</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-is-implemented">How it is Implemented</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#notes">Notes</a></li>
 </ul>
             </nav>
         </div>
@@ -445,11 +446,21 @@ document.write(`
   <section class="tex2jax_ignore mathjax_ignore" id="true-on-policy-between-training-and-inference-for-vlm">
 <h1>True On-Policy between Training and Inference for VLM<a class="headerlink" href="#true-on-policy-between-training-and-inference-for-vlm" title="Link to this heading">#</a></h1>
 <p>This example demonstrates true on-policy training with Qwen3-VL dense model on FSDP. The core concepts and expected observations are the same as <a class="reference internal" href="../true_on_policy/README.html"><span class="std std-doc">true_on_policy</span></a>.</p>
-<section id="usage">
-<h2>Usage<a class="headerlink" href="#usage" title="Link to this heading">#</a></h2>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>examples/true_on_policy_vlm/run_simple.py
+<p align="center">
+  <img src="diff.png" alt="Training Inference Log Prob Diff" width="800">
+</p>
+## Usage
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SLIME_SCRIPT_NUM_GPUS</span><span class="o">=</span><span class="m">8</span><span class="w"> </span>python<span class="w"> </span>examples/true_on_policy_vlm/run_simple.py
 </pre></div>
 </div>
+<section id="how-it-is-implemented">
+<h2>How it is Implemented<a class="headerlink" href="#how-it-is-implemented" title="Link to this heading">#</a></h2>
+<p>For the text backbone, please refer to <a class="reference internal" href="../true_on_policy/README.html"><span class="std std-doc">true_on_policy for the text-only model</span></a>.</p>
+<p>For the VLM, we only need to ensure that the image encoder behaves as expected. Please refer to <a class="reference external" href="https://github.com/sgl-project/sglang/pull/14636">SGLang#14636</a>. We need to align numeric operation details between the two systems, so that the ViT forward pass matches the behavior in both SGLang and transformers.</p>
+</section>
+<section id="notes">
+<h2>Notes<a class="headerlink" href="#notes" title="Link to this heading">#</a></h2>
+<p>It is expected that the true-on-policy version is slower.</p>
 </section>
 </section>
 
@@ -480,7 +491,8 @@ document.write(`
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#usage">Usage</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-is-implemented">How it is Implemented</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#notes">Notes</a></li>
 </ul>
   </nav></div>
 
