@@ -192,7 +192,7 @@ index 9f556a885..992843285 100644
          bsz, s, _ = x_shape
          head = self.num_attention_heads_per_partition
 diff --git a/python/sglang/srt/layers/communicator.py b/python/sglang/srt/layers/communicator.py
-index 932f52aeb..3cd6753e4 100644
+index 932f52aeb..79c6b664f 100644
 --- a/python/sglang/srt/layers/communicator.py
 +++ b/python/sglang/srt/layers/communicator.py
 @@ -372,6 +372,7 @@ class LayerCommunicator:
@@ -203,30 +203,19 @@ index 932f52aeb..3cd6753e4 100644
      ):
          if get_attn_tp_context().input_scattered:
              hidden_states, residual = self._tp_reduce_scatter(
-@@ -421,7 +422,9 @@ class LayerCommunicator:
-                         )
- 
-                     else:
--                        hidden_states = self.input_layernorm(hidden_states)
-+                        hidden_states = self.input_layernorm(
-+                            hidden_states, post_residual_addition=post_residual_addition
-+                        )
-                 else:
- 
-                     if _use_aiter and _is_gfx95_supported and ("mxfp4" in quant_format):
-@@ -453,7 +456,9 @@ class LayerCommunicator:
+@@ -453,7 +454,9 @@ class LayerCommunicator:
                          )
                      else:
                          hidden_states, residual = self.input_layernorm(
 -                            hidden_states, residual
-+                            hidden_states, 
-+                            residual, 
-+                            post_residual_addition=post_residual_addition
++                            hidden_states,
++                            residual,
++                            post_residual_addition,
                          )
  
          hidden_states = self._communicate_simple_fn(
 diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
-index 3293a8a59..009385f95 100644
+index 3293a8a59..02999afd0 100644
 --- a/python/sglang/srt/layers/layernorm.py
 +++ b/python/sglang/srt/layers/layernorm.py
 @@ -84,15 +84,12 @@ class RMSNorm(CustomOp):
@@ -309,27 +298,6 @@ index 3293a8a59..009385f95 100644
  
          hidden_size = x.shape[-1]
          if hidden_size != self.hidden_size:
-@@ -309,13 +325,18 @@ class LayerNorm(CustomOp):
-         x: torch.Tensor,
-     ) -> torch.Tensor:
-         if (
-+            is_batch_invariant_mode_enabled()
-+            and get_global_server_args().rl_on_policy_target == "fsdp"
-+        ):
-+            return self.forward_native(x)
-+        elif (
-             _flashinfer_layernorm_available
-             and x.dtype == torch.bfloat16
-             and self.dtype == torch.float32
-         ):
-             return layernorm(x, self.weight, self.bias, self.variance_epsilon)
--        else:
--            return self.forward_native(x)
-+        
-+        return self.forward_native(x)
- 
-     def forward_native(
-         self,
 diff --git a/python/sglang/srt/layers/logits_processor.py b/python/sglang/srt/layers/logits_processor.py
 index 522865765..733bad5f2 100644
 --- a/python/sglang/srt/layers/logits_processor.py
@@ -742,7 +710,7 @@ index 70466bb20..cd85fc2f2 100644
      finally:
          MOE_A2A_BACKEND = original_backend
 diff --git a/python/sglang/srt/layers/rotary_embedding.py b/python/sglang/srt/layers/rotary_embedding.py
-index 0cdb7e1ae..fbd9d5793 100644
+index 0cdb7e1ae..df8860409 100644
 --- a/python/sglang/srt/layers/rotary_embedding.py
 +++ b/python/sglang/srt/layers/rotary_embedding.py
 @@ -15,7 +15,6 @@ from sglang.srt.server_args import get_global_server_args
@@ -764,16 +732,17 @@ index 0cdb7e1ae..fbd9d5793 100644
          self.position_cos, self.position_sin = None, None
  
      def _compute_inv_freq(self, base: Union[int, float]) -> torch.Tensor:
-@@ -1422,6 +1419,8 @@ class MRotaryEmbedding(RotaryEmbedding):
-                 print(
+@@ -1423,6 +1420,9 @@ class MRotaryEmbedding(RotaryEmbedding):
                      f"Corrected mrope_section: {self.mrope_section} (sum={sum(self.mrope_section)})"
                  )
+ 
 +        if get_global_server_args().rl_on_policy_target is not None:
 +            self._forward_method = self.forward_native
- 
++
      def _match_cos_sin_cache_dtype(self, query: torch.Tensor) -> None:
          # __setattr__ in nn.Module (called by `self.cos_sin_cache = ...`)
-@@ -1432,8 +1431,7 @@ class MRotaryEmbedding(RotaryEmbedding):
+         # is expensive, so avoid calling it if possible
+@@ -1432,8 +1432,7 @@ class MRotaryEmbedding(RotaryEmbedding):
          ):
              self.cos_sin_cache = self.cos_sin_cache.to(query.device, dtype=query.dtype)
  
@@ -783,7 +752,7 @@ index 0cdb7e1ae..fbd9d5793 100644
          self,
          positions: torch.Tensor,
          query: torch.Tensor,
-@@ -1490,7 +1488,7 @@ class MRotaryEmbedding(RotaryEmbedding):
+@@ -1490,7 +1489,7 @@ class MRotaryEmbedding(RotaryEmbedding):
          key = torch.cat((key_rot, key_pass), dim=-1).reshape(key_shape)
          return query, key
  
@@ -792,7 +761,7 @@ index 0cdb7e1ae..fbd9d5793 100644
          self,
          positions: torch.Tensor,
          query: torch.Tensor,
-@@ -1507,14 +1505,12 @@ class MRotaryEmbedding(RotaryEmbedding):
+@@ -1507,14 +1506,12 @@ class MRotaryEmbedding(RotaryEmbedding):
          """
          assert positions.ndim == 1 or positions.ndim == 2
  
@@ -812,7 +781,7 @@ index 0cdb7e1ae..fbd9d5793 100644
          self,
          positions: torch.Tensor,
          query: torch.Tensor,
-@@ -1563,15 +1559,19 @@ class MRotaryEmbedding(RotaryEmbedding):
+@@ -1563,15 +1560,19 @@ class MRotaryEmbedding(RotaryEmbedding):
          key = torch.cat((key_rot, key_pass), dim=-1).reshape(key_shape)
          return query, key
  
@@ -1295,10 +1264,18 @@ index b90cf0616..98d71d896 100644
              recv_obj.output_token_logprobs_val[recv_obj_index]
          )
 diff --git a/python/sglang/srt/model_executor/forward_batch_info.py b/python/sglang/srt/model_executor/forward_batch_info.py
-index 3a85e6a7e..623a3c0ba 100644
+index 3a85e6a7e..2859dafa1 100644
 --- a/python/sglang/srt/model_executor/forward_batch_info.py
 +++ b/python/sglang/srt/model_executor/forward_batch_info.py
-@@ -214,6 +214,9 @@ class ForwardBatch:
+@@ -51,6 +51,7 @@ from sglang.srt.layers.dp_attention import (
+     set_dp_buffer_len,
+     set_is_extend_in_batch,
+ )
++from sglang.srt.server_args import get_global_server_args
+ from sglang.srt.utils import get_compiler_backend, is_npu, support_triton
+ from sglang.srt.utils.common import ceil_align
+ 
+@@ -214,6 +215,9 @@ class ForwardBatch:
      # The sum of all sequence lengths
      seq_lens_sum: int
  
@@ -1308,7 +1285,7 @@ index 3a85e6a7e..623a3c0ba 100644
      # The original sequence length without being chunked. Qwen-1M related.
      orig_seq_lens: Optional[torch.Tensor] = None
  
-@@ -368,6 +371,7 @@ class ForwardBatch:
+@@ -368,6 +372,7 @@ class ForwardBatch:
              req_pool_indices=batch.req_pool_indices,
              seq_lens=batch.seq_lens,
              out_cache_loc=batch.out_cache_loc,
@@ -1316,7 +1293,31 @@ index 3a85e6a7e..623a3c0ba 100644
              mm_inputs=batch.multimodal_inputs,
              encoder_cached=batch.encoder_cached,
              encoder_lens=batch.encoder_lens,
-@@ -823,6 +827,10 @@ class ForwardBatch:
+@@ -623,7 +628,10 @@ class ForwardBatch:
+             mm_input = batch.multimodal_inputs[batch_idx]
+             if self.forward_mode.is_decode():
+                 # 3 * N
+-                if mm_input is None:
++                if (
++                    mm_input is None
++                    or get_global_server_args().rl_on_policy_target is not None
++                ):
+                     mrope_positions_list[batch_idx] = torch.full(
+                         (3, 1),
+                         self.seq_lens[batch_idx] - 1,
+@@ -640,7 +648,10 @@ class ForwardBatch:
+                     batch.extend_seq_lens[batch_idx],
+                     batch.extend_prefix_lens[batch_idx],
+                 )
+-                if mm_input is None:
++                if (
++                    mm_input is None
++                    or get_global_server_args().rl_on_policy_target is not None
++                ):
+                     # text only
+                     mrope_positions = torch.tensor(
+                         [
+@@ -823,6 +834,10 @@ class ForwardBatch:
              )
  
          self.out_cache_loc = self._pad_tensor_to_size(self.out_cache_loc, num_tokens)
@@ -1602,7 +1603,7 @@ index ea33e81ef..561934dce 100644
              self.norm = PPMissingLayer(return_tuple=True)
  
 diff --git a/python/sglang/srt/models/qwen3.py b/python/sglang/srt/models/qwen3.py
-index 30b92acbd..00111e2ab 100644
+index 30b92acbd..a0d14895f 100644
 --- a/python/sglang/srt/models/qwen3.py
 +++ b/python/sglang/srt/models/qwen3.py
 @@ -90,8 +90,8 @@ class Qwen3Attention(nn.Module):
@@ -1636,8 +1637,8 @@ index 30b92acbd..00111e2ab 100644
          # Self Attention
          hidden_states, residual = self.layer_communicator.prepare_attn(
 -            hidden_states, residual, forward_batch
-+            hidden_states, 
-+            residual, 
++            hidden_states,
++            residual,
 +            forward_batch,
 +            post_residual_addition=post_residual_addition,
          )
@@ -1756,7 +1757,7 @@ index 9737ac719..09c756918 100644
  
          self.layer_communicator = LayerCommunicator(
 diff --git a/python/sglang/srt/models/qwen3_vl.py b/python/sglang/srt/models/qwen3_vl.py
-index ed52f7ff4..4b94594d6 100644
+index ed52f7ff4..8ce9fab9d 100644
 --- a/python/sglang/srt/models/qwen3_vl.py
 +++ b/python/sglang/srt/models/qwen3_vl.py
 @@ -18,7 +18,6 @@ import re
@@ -1767,28 +1768,7 @@ index ed52f7ff4..4b94594d6 100644
  import torch
  import torch.nn as nn
  from einops import rearrange
-@@ -33,6 +32,7 @@ from sglang.srt.distributed import (
-     get_tensor_model_parallel_world_size,
- )
- from sglang.srt.layers.attention.vision import VisionAttention
-+from sglang.srt.layers.layernorm import LayerNorm
- from sglang.srt.layers.linear import ColumnParallelLinear, RowParallelLinear
- from sglang.srt.layers.logits_processor import LogitsProcessor
- from sglang.srt.layers.pooler import Pooler, PoolingType
-@@ -283,7 +283,11 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
-         )
-         self.patch_embed = Qwen3VLVisionPatchEmbed(config=vision_config)
-         self.pos_embed = nn.Embedding(self.num_position_embeddings, self.hidden_size)
--        norm_layer = partial(nn.LayerNorm, eps=norm_eps)
-+        if get_global_server_args().rl_on_policy_target is not None:
-+            norm_kwargs = dict(dtype=torch.float32)
-+            norm_layer = partial(LayerNorm, eps=norm_eps, **norm_kwargs)
-+        else:
-+            norm_layer = partial(nn.LayerNorm, eps=norm_eps)
-         head_dim = self.hidden_size // self.num_heads
-         self.rotary_pos_emb = Qwen2_5_VisionRotaryEmbedding(head_dim // 2)
- 
-@@ -349,83 +353,65 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
+@@ -349,83 +348,65 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
          return rotary_pos_emb
  
      def fast_pos_embed_interpolate(self, grid_thw):
@@ -1913,11 +1893,10 @@ index ed52f7ff4..4b94594d6 100644
                  .permute(0, 1, 3, 2, 4, 5)
                  .flatten(0, 4)
              )
-@@ -555,21 +541,28 @@ class Qwen3LLMModel(Qwen3Model):
+@@ -555,21 +536,27 @@ class Qwen3LLMModel(Qwen3Model):
                      hidden_states + residual if residual is not None else hidden_states
                  )
  
-+            # process deepstack
 +            deepstack_embeds = None
 +            if input_deepstack_embeds is not None:
 +                prev_layer_idx = layer_idx - 1
