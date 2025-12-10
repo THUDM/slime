@@ -110,6 +110,7 @@ def execute():
         "NCCL_ALGO": "allreduce:tree",
         "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
         "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+        "SGLANG_VLM_CACHE_SIZE_MB": "0",
     }
 
     train_args = (
