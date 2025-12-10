@@ -218,6 +218,19 @@ index 6aec66e6d..6ca48b55f 100644
                  mtp_loss = self.compute_language_model_loss(mtp_labels, mtp_logits)
                  mtp_loss = loss_mask * mtp_loss
                  if self.training:
+diff --git a/megatron/core/optimizer/distrib_optimizer.py b/megatron/core/optimizer/distrib_optimizer.py
+index a36b67364..8739270f2 100644
+--- a/megatron/core/optimizer/distrib_optimizer.py
++++ b/megatron/core/optimizer/distrib_optimizer.py
+@@ -657,6 +657,8 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+                 # TE FusedAdam will not accumulate step for empty param groups, so we need to
+                 # align the step across param groups.
+                 param_group["step"] = int(step)
++            if param_group["step"] is None:
++                del param_group["step"]
+ 
+         # Grad scaler state.
+         if self.grad_scaler:
 diff --git a/megatron/core/parallel_state.py b/megatron/core/parallel_state.py
 index a40c85a88..86688c331 100644
 --- a/megatron/core/parallel_state.py
@@ -404,7 +417,7 @@ index c749bac43..dde8d50e7 100644
          """Execute weight update operations"""
          self._backward_qkv_proj()
 diff --git a/megatron/core/transformer/moe/moe_utils.py b/megatron/core/transformer/moe/moe_utils.py
-index 235b6f6af..0f4862e43 100644
+index 235b6f6af..fbcffe278 100644
 --- a/megatron/core/transformer/moe/moe_utils.py
 +++ b/megatron/core/transformer/moe/moe_utils.py
 @@ -566,6 +566,9 @@ def topk_routing_with_score_function(
@@ -418,7 +431,7 @@ index 235b6f6af..0f4862e43 100644
          if use_pre_softmax:
              scores = torch.softmax(logits, dim=-1, dtype=torch.float32).type_as(logits)
 diff --git a/megatron/core/transformer/moe/router.py b/megatron/core/transformer/moe/router.py
-index 6b20b8622..f91b01f90 100644
+index 6b20b8622..459e65921 100644
 --- a/megatron/core/transformer/moe/router.py
 +++ b/megatron/core/transformer/moe/router.py
 @@ -156,6 +156,9 @@ class TopKRouter(Router):
