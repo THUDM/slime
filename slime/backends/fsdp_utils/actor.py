@@ -80,7 +80,8 @@ class FSDPTrainRayActor(TrainRayActor):
             if i == dist.get_rank():
                 self.hf_config = AutoConfig.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
                 self.tokenizer = load_tokenizer(self.args.hf_checkpoint, trust_remote_code=True)
-                if self.args.multimodal_keys:
+                # Vision models have `vision_config` in the config
+                if hasattr(self.hf_config, "vision_config"):
                     self.processor = load_processor(self.args.hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
 
