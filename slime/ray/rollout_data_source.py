@@ -8,6 +8,7 @@ from transformers import AutoTokenizer
 from slime.utils.data import Dataset
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
+from slime.utils.buffer_sampling_strategies import get_sampling_strategy
 
 
 # TODO may further refactor data-loading part later
@@ -154,8 +155,20 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
         # === Policy Version Tracking ===
         self.current_policy_version = 0
 
-        # === Buffer Sampling Strategy ===
+        # === Sampling Strategy (NEW: Extensible strategy framework) ===
+        if self.buffer_enabled:
+            # Use new sampling strategy framework
+            self.sampling_strategy = get_sampling_strategy(args, self.current_policy_version)
+            print(f"[Buffer] Sampling strategy: {self.sampling_strategy.get_name()}")
+            print(f"[Buffer] Remove on sample: {self.sampling_strategy.remove_on_sample}")
+            print(f"[Buffer] Max reuse count: {self.sampling_strategy.max_reuse_count}")
+        else:
+            self.sampling_strategy = None
+
+        # === Backward compatibility: Keep buffer_filter for legacy code ===
         if self.args.buffer_filter_path is None:
+            # Legacy behavior
+            from slime.utils.buffer_sampling_strategies import pop_first
             self.buffer_filter = pop_first
         else:
             self.buffer_filter = load_function(self.args.buffer_filter_path)
@@ -165,8 +178,7 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
         self.total_sampled = 0
 
         print(f"[Buffer] Initialized: enabled={self.buffer_enabled}, "
-              f"max_size={self.buffer_max_size}, "
-              f"filter={self.buffer_filter.__name__}")
+              f"max_size={self.buffer_max_size}")
 
     def get_samples(self, num_samples: int) -> list[list[Sample]]:
         """
@@ -198,14 +210,40 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
         return samples
 
     def _get_samples_from_buffer(self, num_samples: int) -> list[list[Sample]]:
-        """Sample from buffer using configured filter"""
+        """Sample from buffer using configured sampling strategy"""
         if len(self.buffer) == 0 or num_samples == 0:
             return []
 
-        # Pass current policy version to filter for staleness-aware sampling
-        samples = self.buffer_filter(self.args, self.current_policy_version, self.buffer, num_samples)
-        self.total_sampled += len(samples)
-        return samples
+        # NEW: Use sampling strategy instead of direct buffer_filter call
+        if self.sampling_strategy is not None:
+            # Update strategy's current_policy_version
+            self.sampling_strategy.current_policy_version = self.current_policy_version
+
+            # Sample using strategy
+            samples = self.sampling_strategy.sample(self.buffer, num_samples)
+
+            # Update statistics
+            self.total_sampled += len(samples)
+
+            # Log sampling info
+            if len(samples) > 0:
+                versions = [s[0].policy_version for s in samples if s[0].policy_version is not None]
+                if versions:
+                    print(f"[Buffer Sampling] Sampled {len(samples)} groups. "
+                          f"Version range: [{min(versions)}, {max(versions)}], "
+                          f"Current version: {self.current_policy_version}")
+
+            return samples
+        else:
+            # Fallback to legacy buffer_filter (backward compatibility)
+            samples = self.buffer_filter(
+                self.args,
+                self.current_policy_version,
+                self.buffer,
+                num_samples
+            )
+            self.total_sampled += len(samples)
+            return samples
 
     def add_samples(self, samples: list[list[Sample]]):
         """
@@ -292,14 +330,25 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
             "total_sampled": self.total_sampled,
         }
 
+        # Add sampling strategy stats (NEW)
+        if self.sampling_strategy is not None:
+            strategy_stats = self.sampling_strategy.get_statistics()
+            stats.update({f"strategy_{k}": v for k, v in strategy_stats.items()})
+
         # Calculate policy version distribution
         policy_versions = []
+        reuse_counts = []
         for group in self.buffer:
             for sample in group:
                 if hasattr(sample, 'policy_version') and sample.policy_version is not None:
                     policy_versions.append(sample.policy_version)
 
+                # Check reuse count (NEW)
+                if sample.metadata and 'buffer_reuse_count' in sample.metadata:
+                    reuse_counts.append(sample.metadata['buffer_reuse_count'])
+
         if policy_versions:
+            # Version statistics
             stats.update({
                 "min_policy_version": min(policy_versions),
                 "max_policy_version": max(policy_versions),
@@ -307,11 +356,37 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
                 "current_policy_version": self.current_policy_version,
             })
 
+            # Staleness statistics (NEW)
+            staleness_values = [
+                self.current_policy_version - v
+                for v in policy_versions
+            ]
+            stats.update({
+                "min_staleness": min(staleness_values),
+                "max_staleness": max(staleness_values),
+                "avg_staleness": sum(staleness_values) / len(staleness_values),
+            })
+
+        if reuse_counts:
+            stats.update({
+                "avg_reuse_count": sum(reuse_counts) / len(reuse_counts),
+                "max_reuse_count_observed": max(reuse_counts),
+            })
+
         return stats
 
     def update_policy_version(self, version: int):
-        """Update current policy version for staleness-aware sampling"""
+        """
+        Update current policy version for staleness-aware sampling.
+
+        Args:
+            version: New policy version
+        """
         self.current_policy_version = version
+
+        # Update strategy's version (NEW)
+        if self.sampling_strategy is not None:
+            self.sampling_strategy.current_policy_version = version
 
     def clear_buffer(self):
         """Clear all buffered samples"""
