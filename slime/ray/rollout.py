@@ -305,7 +305,6 @@ class RolloutManager:
                 "multimodal_inputs",
                 "response_lengths",
                 "rewards",
-                "raw_reward",
                 "truncated",
                 "loss_masks",
                 "round_number",
@@ -321,6 +320,7 @@ class RolloutManager:
                 rollout_data[key] = val
             # keys that need to be splited at train side
             for key in [
+                "raw_reward",
                 "total_lengths",
             ]:
                 if key not in data:
