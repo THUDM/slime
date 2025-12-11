@@ -38,7 +38,7 @@ def execute():
     )
 
     eval_args = (
-        # "--eval-interval 20 "
+        "--eval-interval 20 "
         "--eval-prompt-data geo3k /root/datasets/geo3k_imgurl/test.parquet "
         "--n-samples-per-eval-prompt 1 "
         "--eval-max-response-len 4096 "
