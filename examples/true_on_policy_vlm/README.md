@@ -5,6 +5,7 @@ This example demonstrates true on-policy training with Qwen3-VL dense model on F
 <p align="center">
   <img src="diff.png" alt="Training Inference Log Prob Diff" width="800">
 </p>
+
 ## Usage
 
 ```bash

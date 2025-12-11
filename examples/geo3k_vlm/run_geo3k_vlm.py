@@ -8,7 +8,6 @@ assert MODEL_NAME in {"Qwen2.5-VL-3B-Instruct", "Qwen3-VL-2B-Instruct", "Qwen3-V
 
 NUM_GPUS = int(os.environ.get("SLIME_SCRIPT_NUM_GPUS", "1"))
 EXTERNAL_RAY = int(os.environ.get("SLIME_SCRIPT_EXTERNAL_RAY", "0"))
-MASTER_ADDR = os.environ.get("MASTER_ADDR", "127.0.0.1")
 
 
 def prepare():
@@ -119,27 +118,6 @@ def execute():
         # f"{true_on_policy_args} "
     )
 
-    # Kill existing processes
-    U.exec_command(
-        "pkill -9 sglang; "
-        "sleep 3; "
-        f"{'' if EXTERNAL_RAY else 'ray stop --force; '}"
-        f"{'' if EXTERNAL_RAY else 'pkill -9 ray; '}"
-        "pkill -9 slime; "
-        "sleep 3; "
-        f"{'' if EXTERNAL_RAY else 'pkill -9 ray; '}"
-        "pkill -9 slime; "
-        "pkill -9 redis; "
-        "true; "
-    )
-
-    if not EXTERNAL_RAY:
-        # Start Ray
-        U.exec_command(
-            f"export PYTHONBUFFERED=16 && "
-            f"ray start --head --node-ip-address {MASTER_ADDR} --num-gpus {NUM_GPUS} "
-            f"--disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265"
-        )
     # Submit Ray job
     execute_train(
         train_args=train_args,

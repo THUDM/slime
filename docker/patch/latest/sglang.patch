@@ -215,7 +215,7 @@ index 932f52aeb..79c6b664f 100644
  
          hidden_states = self._communicate_simple_fn(
 diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
-index 3293a8a59..02999afd0 100644
+index 3293a8a59..a075b71ce 100644
 --- a/python/sglang/srt/layers/layernorm.py
 +++ b/python/sglang/srt/layers/layernorm.py
 @@ -84,15 +84,12 @@ class RMSNorm(CustomOp):
@@ -236,7 +236,7 @@ index 3293a8a59..02999afd0 100644
          self.variance_epsilon = eps
          self.hidden_size = hidden_size
          self.variance_size_override = (
-@@ -105,15 +102,16 @@ class RMSNorm(CustomOp):
+@@ -105,21 +102,26 @@ class RMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -255,7 +255,17 @@ index 3293a8a59..02999afd0 100644
              return rms_norm_batch_invariant(
                  x,
                  self.weight.data,
-@@ -179,17 +177,35 @@ class RMSNorm(CustomOp):
+                 self.variance_epsilon,
+             )
+         if residual is not None:
++            # TODO: Ideally we want to have (a+b)+c. but right now we can only have a+(b+c).
++            # (a+b)+c != a+(b+c), we probably need to add another parameter to fused_add_rmsnorm
++            if post_residual_addition is not None:
++                residual = residual + post_residual_addition
+             fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
+             return x, residual
+         out = rmsnorm(x, self.weight.data, self.variance_epsilon)
+@@ -179,17 +181,35 @@ class RMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
