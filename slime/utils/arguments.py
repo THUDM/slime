@@ -133,8 +133,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--train-memory-margin-bytes",
                 type=int,
-                default=0,
-                help="Add margin for train memory allocation.",
+                default=1024**3,
+                help="Add margin for train memory allocation. By default we will reserve 1GB as margin.",
             )
             parser.add_argument(
                 "--disable-weights-backuper",
