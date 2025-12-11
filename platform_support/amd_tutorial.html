@@ -54,7 +54,7 @@
     <link rel="prev" title="Debugging" href="../developer_guide/debug.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Dec 10, 2025"/>
+    <meta name="docbuild:last-update" content="Dec 11, 2025"/>
   </head>
   
   
@@ -520,11 +520,12 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <span class="nv">MEGATRON_LM_PATH</span><span class="o">=</span><span class="k">$(</span>pip<span class="w"> </span>list<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>megatron-core<span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">&#39;{print $NF}&#39;</span><span class="k">)</span>
 <span class="nv">PYTHONPATH</span><span class="o">=</span><span class="si">${</span><span class="nv">MEGATRON_LM_PATH</span><span class="si">}</span><span class="w"> </span>python<span class="w"> </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--no-gradient-accumulation-fusion<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--hf-checkpoint<span class="w"> </span>model/Qwen3-4B<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span>--save<span class="w"> </span>model/Qwen3-4B_torch_dist
 </pre></div>
 </div>
-<p>Note: You might encounter some issue in the current model convert script on AMD GPUs. You can go <a class="reference external" href="https://huggingface.co/zyzshishui0627/models">here</a> to dowload the converted models.</p>
+<p>Note: We implemented a dedicated AMD conversion script that forces a CPU-only conversion workflow using the Gloo backend to bypass hardware-specific issues. A GPU-based script for ROCm is currently in development.</p>
 <p>⚠️ If you encounter an issue where slime cannot be found, please run <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span></code> in the slime directory.</p>
 </section>
 </section>
@@ -532,17 +533,16 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <h3>Example: Qwen3-4B<a class="headerlink" href="#example-qwen3-4b" title="Link to this heading">#</a></h3>
 <p>We provide examples to use <a class="reference external" href="https://huggingface.co/Qwen/Qwen3-4B">Qwen3-4B</a>, please refer to:</p>
 <ul class="simple">
-<li><p><a class="reference internal" href="#scripts/run-qwen3-4B-amd.sh"><span class="xref myst">Example: Qwen3-4B Model</span></a>: Just run <code class="docutils literal notranslate"><span class="pre">scripts/run-qwen3-4B-amd.sh</span></code></p></li>
+<li><p><a class="reference download internal" download="" href="../_downloads/1b86e49a634e716e8335c7c0ac205c20/run-qwen3-4B-amd.sh"><span class="xref download myst">Example: Qwen3-4B Model</span></a>: Just run <code class="docutils literal notranslate"><span class="pre">scripts/run-qwen3-4B-amd.sh</span></code></p></li>
 </ul>
-<p>⚠️ TODO: The <a class="reference external" href="https://github.com/yushengsu-thu/torch_memory_saver.git">ROCm-version torch_memory_saver</a> does not seem to clear memory properly; thus, we set <code class="docutils literal notranslate"><span class="pre">--sglang-mem-fraction-static</span></code> as <code class="docutils literal notranslate"><span class="pre">0.4</span></code> currently. We will continue investigating and focus on ROCm’s virtual memory management for further modifications.</p>
-<p>⚠️ TODO: ROCM seems to not support <code class="docutils literal notranslate"><span class="pre">apex</span></code> yet. Thus, we need to disable <code class="docutils literal notranslate"><span class="pre">--no-gradient-accumulation-fusion</span></code> currently. We will continue investigating how to enable this.</p>
+<p>⚠️ TODO: ROCM seems to not support <code class="docutils literal notranslate"><span class="pre">apex</span></code> yet. Thus, we need to disable gradient accumulation fusionby adding the <code class="docutils literal notranslate"><span class="pre">--no-gradient-accumulation-fusion</span></code> flag in the training script currently. We will continue investigating how to enable this.</p>
 <p>⚠️ Note: The main difference between ROCm’s training script and NVIDIA’s script is that you need to set <code class="docutils literal notranslate"><span class="pre">RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES</span></code> and <code class="docutils literal notranslate"><span class="pre">HIP_VISIBLE_DEVICES</span></code> for ray to function properly on AMD GPUs.</p>
 <ul class="simple">
 <li><p>We show the training script below:</p></li>
 </ul>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="ch">#!/bin/bash</span>
 
-<span class="c1">####clear before training</span>
+<span class="c1"># for rerun the task</span>
 pkill<span class="w"> </span>-9<span class="w"> </span>sglang
 sleep<span class="w"> </span><span class="m">3</span>
 ray<span class="w"> </span>stop<span class="w"> </span>--force
@@ -552,34 +552,35 @@ sleep<span class="w"> </span><span class="m">3</span>
 pkill<span class="w"> </span>-9<span class="w"> </span>ray
 pkill<span class="w"> </span>-9<span class="w"> </span>python
 
+
 <span class="nb">set</span><span class="w"> </span>-euxo<span class="w"> </span>pipefail
 
-<span class="c1">### ROCm Support ###</span>
-<span class="nv">SLIME_DIR</span><span class="o">=</span><span class="s2">&quot;/home/yushensu/projects/slime&quot;</span><span class="w"> </span><span class="c1"># Need to change to your own path</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">SLIME_DIR</span><span class="o">=</span><span class="nv">$SLIME_DIR</span>
 
-<span class="nv">MODEL_DIR</span><span class="o">=</span><span class="s2">&quot;/home/yushensu/projects/model&quot;</span><span class="w"> </span><span class="c1"># Need to change to your own path</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">MODEL_DIR</span><span class="o">=</span><span class="nv">$MODEL_DIR</span>
+<span class="c1">### AMD Support ###</span>
+<span class="nv">SLIME_DIR</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SLIME_DIR</span><span class="k">:-</span><span class="p">/home/yushensu/projects/slime</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="c1"># Default path if not set in environment</span>
+<span class="nb">export</span><span class="w"> </span>SLIME_DIR
 
-<span class="nv">DATA_DIR</span><span class="o">=</span><span class="s2">&quot;/home/yushensu/projects/data&quot;</span><span class="w">  </span><span class="c1"># Need to change to your own path</span>
-<span class="nb">export</span><span class="w"> </span><span class="nv">DATA_DIR</span><span class="o">=</span><span class="nv">$DATA_DIR</span>
+<span class="nv">MODEL_DIR</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">MODEL_DIR</span><span class="k">:-</span><span class="p">/home/yushensu/projects/model</span><span class="si">}</span><span class="s2">&quot;</span><span class="w"> </span><span class="c1"># Default path if not set in environment</span>
+<span class="nb">export</span><span class="w"> </span>MODEL_DIR
+
+<span class="nv">DATA_DIR</span><span class="o">=</span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">DATA_DIR</span><span class="k">:-</span><span class="p">/home/yushensu/projects/data</span><span class="si">}</span><span class="s2">&quot;</span><span class="w">  </span><span class="c1"># Default path if not set in environment</span>
+<span class="nb">export</span><span class="w"> </span>DATA_DIR
 
 <span class="c1"># For AMD GPU</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES</span><span class="o">=</span><span class="si">${</span><span class="nv">RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES</span><span class="k">:-</span><span class="s2">&quot;1&quot;</span><span class="si">}</span><span class="w"> </span><span class="c1"># Must set to 1</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">HIP_VISIBLE_DEVICES</span><span class="o">=</span><span class="si">${</span><span class="nv">HIP_VISIBLE_DEVICES</span><span class="k">:-</span><span class="s2">&quot;0,1,2,3,4,5,6,7&quot;</span><span class="si">}</span><span class="w"> </span><span class="c1">#You can choose which gpus to use</span>
 <span class="c1">####################</span>
 
+
 <span class="c1"># will prevent ray from buffering stdout/stderr</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">PYTHONBUFFERED</span><span class="o">=</span><span class="m">16</span>
-
 
 <span class="nv">SCRIPT_DIR</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>dirname<span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">&amp;</span>&gt;/dev/null<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">&quot;</span>
 <span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/qwen3-4B.sh&quot;</span>
 
 <span class="nv">CKPT_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--hf-checkpoint<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_DIR</span><span class="si">}</span>/Qwen3-4B
-<span class="w">   </span><span class="c1">#--hf-checkpoint /root/Qwen3-4B-FP8</span>
-<span class="w">   </span>--ref-load<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_DIR</span><span class="si">}</span>/Qwen3-4B_torch
+<span class="w">   </span>--ref-load<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_DIR</span><span class="si">}</span>/Qwen3-4B_torch_dist
 <span class="w">   </span>--load<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_DIR</span><span class="si">}</span>/Qwen3-4B_slime/
 <span class="w">   </span>--save<span class="w"> </span><span class="si">${</span><span class="nv">MODEL_DIR</span><span class="si">}</span>/Qwen3-4B_slime/
 <span class="w">   </span>--save-interval<span class="w"> </span><span class="m">20</span>
@@ -591,9 +592,7 @@ pkill<span class="w"> </span>-9<span class="w"> </span>python
 <span class="w">   </span>--label-key<span class="w"> </span>label
 <span class="w">   </span>--apply-chat-template
 <span class="w">   </span>--rollout-shuffle
-
 <span class="w">   </span>--rm-type<span class="w"> </span>deepscaler
-
 <span class="w">   </span>--num-rollout<span class="w"> </span><span class="m">3000</span>
 <span class="w">   </span>--rollout-batch-size<span class="w"> </span><span class="m">32</span>
 <span class="w">   </span>--n-samples-per-prompt<span class="w"> </span><span class="m">8</span>
@@ -649,24 +648,16 @@ pkill<span class="w"> </span>-9<span class="w"> </span>python
 <span class="o">)</span>
 
 <span class="nv">WANDB_ARGS</span><span class="o">=(</span>
-<span class="w">   </span><span class="c1">#--use-wandb</span>
+<span class="w">   </span><span class="c1"># --use-wandb</span>
 <span class="w">   </span><span class="c1"># --wandb-project slime-dev</span>
 <span class="w">   </span><span class="c1"># --wandb-group qwen3-4B-test</span>
 <span class="w">   </span><span class="c1"># --wandb-key ${WANDB_KEY}</span>
 <span class="o">)</span>
 
-<span class="c1">### AMD Support ###</span>
-<span class="c1"># Need to fix some issue with torch_memory_saver in rocm to support larger  --sglang-mem-fraction-static </span>
-<span class="c1"># SGLANG_ARGS=(</span>
-<span class="c1">#    --rollout-num-gpus-per-engine 2</span>
-<span class="c1">#    --sglang-mem-fraction-static 0.7</span>
-<span class="c1"># )</span>
 <span class="nv">SGLANG_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--rollout-num-gpus-per-engine<span class="w"> </span><span class="m">2</span>
-<span class="w">   </span>--sglang-mem-fraction-static<span class="w"> </span><span class="m">0</span>.4
+<span class="w">   </span>--sglang-mem-fraction-static<span class="w"> </span><span class="m">0</span>.7
 <span class="o">)</span>
-<span class="c1">####################</span>
-
 
 <span class="nv">MISC_ARGS</span><span class="o">=(</span>
 <span class="w">   </span><span class="c1"># default dropout in megatron is 0.1</span>
@@ -687,14 +678,16 @@ pkill<span class="w"> </span>-9<span class="w"> </span>python
 <span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_ADDR</span><span class="o">=</span><span class="si">${</span><span class="nv">MASTER_ADDR</span><span class="k">:-</span><span class="s2">&quot;127.0.0.1&quot;</span><span class="si">}</span>
 
 <span class="nv">NUM_GPUS</span><span class="o">=</span><span class="k">$(</span><span class="nb">echo</span><span class="w"> </span><span class="si">${</span><span class="nv">HIP_VISIBLE_DEVICES</span><span class="si">}</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>tr<span class="w"> </span><span class="s1">&#39;,&#39;</span><span class="w"> </span><span class="s1">&#39;\n&#39;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>wc<span class="w"> </span>-l<span class="k">)</span>
-ray<span class="w"> </span>start<span class="w"> </span>--head<span class="w"> </span>--node-ip-address<span class="w"> </span><span class="si">${</span><span class="nv">MASTER_ADDR</span><span class="si">}</span><span class="w"> </span>--num-gpus<span class="w"> </span><span class="si">${</span><span class="nv">NUM_GPUS</span><span class="si">}</span><span class="w"> </span>--disable-usage-stats
+ray<span class="w"> </span>start<span class="w"> </span>--head<span class="w"> </span>--node-ip-address<span class="w"> </span><span class="si">${</span><span class="nv">MASTER_ADDR</span><span class="si">}</span><span class="w"> </span>--num-gpus<span class="w"> </span><span class="si">${</span><span class="nv">NUM_GPUS</span><span class="si">}</span><span class="w"> </span>--disable-usage-stats<span class="w"> </span>--dashboard-host<span class="o">=</span><span class="m">0</span>.0.0.0<span class="w"> </span>--dashboard-port<span class="o">=</span><span class="m">8265</span>
 
 
-<span class="c1"># &quot;PYTHONPATH&quot;: &quot;$(dirname $(python3 -c &#39;import megatron.core; print(megatron.core.__file__)&#39;))&quot;</span>
+<span class="c1"># &quot;PYTHONPATH&quot;: &quot;/workspace/Megatron-LM/&quot;,</span>
+<span class="nv">MEGATRON_LM_PATH</span><span class="o">=</span><span class="k">$(</span>pip<span class="w"> </span>list<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>megatron-core<span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">&#39;{print $NF}&#39;</span><span class="k">)</span>
+
 ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>--address<span class="o">=</span><span class="s2">&quot;http://127.0.0.1:8265&quot;</span><span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--runtime-env-json<span class="o">=</span><span class="s1">&#39;{</span>
 <span class="s1">     &quot;env_vars&quot;: {</span>
-<span class="s1">        &quot;PYTHONPATH&quot;: &quot;&#39;</span><span class="si">${</span><span class="nv">SLIME_DIR</span><span class="si">}</span><span class="s1">&#39;/Megatron-LM/&quot;,</span>
+<span class="s1">        &quot;PYTHONPATH&quot;: &quot;/workspace/Megatron-LM/&quot;,</span>
 <span class="s1">        &quot;CUDA_DEVICE_MAX_CONNECTIONS&quot;: &quot;1&quot;</span>
 <span class="s1">     }</span>
 <span class="s1">   }&#39;</span><span class="w"> </span><span class="se">\</span>
@@ -818,7 +811,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Dec 10, 2025.
+  Last updated on Dec 11, 2025.
   <br/>
 </p>
   </div>
