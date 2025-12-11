@@ -4,6 +4,7 @@ from typing import Any
 
 import torch
 from megatron.core import mpu
+from torch.utils.checkpoint import checkpoint
 
 from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
@@ -740,25 +741,22 @@ def loss_function(
         args.calculate_per_token_loss,
     )
 
-    loss_function_kwargs = {
-        "args": args,
-        "batch": batch,
-        "logits": logits,
-        "sum_of_sample_mean": sum_of_sample_mean,
-    }
-
     match args.loss_type:
         case "policy_loss":
-            loss, log = policy_loss_function(**loss_function_kwargs)
+            func = policy_loss_function
         case "value_loss":
-            loss, log = value_loss_function(**loss_function_kwargs)
+            func = value_loss_function
         case "sft_loss":
-            loss, log = sft_loss_function(**loss_function_kwargs)
+            func = sft_loss_function
         case "custom_loss":
-            custom_loss_function = load_function(args.custom_loss_function_path)
-            loss, log = custom_loss_function(**loss_function_kwargs)
+            func = load_function(args.custom_loss_function_path)
         case _:
             raise ValueError(f"Unknown loss type: {args.loss_type}")
+
+    if args.recompute_loss_function:
+        loss, log = checkpoint(func, args, batch, logits, sum_of_sample_mean)
+    else:
+        loss, log = func(args, batch, logits, sum_of_sample_mean)
 
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
     if not args.calculate_per_token_loss:
