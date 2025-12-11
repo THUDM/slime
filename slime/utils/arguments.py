@@ -149,9 +149,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="The method to convert megatron weights to hugging face weights for SGLang.",
             )
             parser.add_argument(
-                "--disable-recompute-loss-function",
-                action="store_false",
-                dest="recompute_loss_function",
+                "--recompute-loss-function",
+                action="store_true",
                 help="Whether to disable recompute loss function to save memory during training.",
             )
 
