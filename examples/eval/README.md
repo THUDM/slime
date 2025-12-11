@@ -43,25 +43,27 @@ docker run \
 ```
 
 ## 4) Inside the Skills container
+
+Set openai api key:
+```bash
+export OPENAI_API_KEY=none
+```
+
 Clone repos and install the Skills package:
 ```bash
-git clone -b slime_skills https://github.com/guapisolo/slime.git /opt/slime
+git clone -b main https://github.com/THUDM/slime /opt/slime
 git clone -b slime https://github.com/guapisolo/Skills.git /opt/Skills
 
 cd /opt/Skills
 pip install -e .
-```
 
-Download/prepare datasets:
-```bash
+# Download/prepare datasets:
 cd /opt/Skills/nemo_skills/dataset
 python3 aime25/prepare.py
 python3 hle/prepare.py
 python3 arena-hard/prepare.py
-```
 
-Start the skills server:
-```bash
+# Start the skills server:
 cd /opt/slime
 python examples/eval/nemo_skills/skills_server.py \
   --host 0.0.0.0 \
