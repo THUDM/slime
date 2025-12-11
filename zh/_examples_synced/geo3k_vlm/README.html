@@ -436,6 +436,7 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#numerical-precision-with-non-binary-rewards">Numerical Precision with Non-Binary Rewards</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#b200">B200</a></li>
 </ul>
             </nav>
         </div>
@@ -479,6 +480,10 @@ document.write(`
 <p>We fixed this by switching to the default math RM with clean <strong>binary 0/1 rewards</strong>. If you encounter similar precision issues with non-binary rewards, you can change the reward tensor dtype from <code class="docutils literal notranslate"><span class="pre">torch.float</span></code> to <code class="docutils literal notranslate"><span class="pre">torch.float16</span></code> in <code class="docutils literal notranslate"><span class="pre">slime/ray/rollout.py</span></code> (<code class="docutils literal notranslate"><span class="pre">_post_process_rewards</span></code> method) to truncate precision artifacts.</p>
 </section>
 </section>
+<section id="b200">
+<h2>B200<a class="headerlink" href="#b200" title="Link to this heading">#</a></h2>
+<p>Blackwell currently does not support fa3, we need to use  <code class="docutils literal notranslate"><span class="pre">--sglang-mm-attention-backend</span> <span class="pre">sdpa</span></code> and <code class="docutils literal notranslate"><span class="pre">--attn-implementation</span> <span class="pre">flash_attention_2</span></code></p>
+</section>
 </section>
 
 
@@ -514,6 +519,7 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#numerical-precision-with-non-binary-rewards">Numerical Precision with Non-Binary Rewards</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#b200">B200</a></li>
 </ul>
   </nav></div>
 
