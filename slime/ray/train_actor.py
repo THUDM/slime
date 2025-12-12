@@ -7,7 +7,6 @@ from datetime import timedelta
 import ray
 import torch
 import torch.distributed as dist
-from torch_memory_saver import torch_memory_saver
 
 import slime.utils.eval_config
 from slime.ray.ray_actor import RayActor
@@ -52,11 +51,6 @@ class TrainRayActor(RayActor):
         self.args = args
         self.role = role
         self.with_ref = with_ref
-
-        if (x := args.train_memory_margin_bytes) > 0:
-            logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
-            assert args.offload_train
-            torch_memory_saver.memory_margin_bytes = x
 
         torch.serialization.add_safe_globals([slime.utils.eval_config.EvalDatasetConfig])
 
