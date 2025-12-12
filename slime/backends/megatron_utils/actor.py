@@ -71,6 +71,12 @@ class MegatronTrainRayActor(TrainRayActor):
         self.train_parallel_config = {
             "dp_size": mpu.get_data_parallel_world_size(with_context_parallel=False),
         }
+        dist.barrier(group=get_gloo_group())
+
+        if args.offload_train:
+            if (x := args.train_memory_margin_bytes) > 0:
+                logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
+                torch_memory_saver.memory_margin_bytes = x
 
         if self.args.debug_rollout_only:
             return 0

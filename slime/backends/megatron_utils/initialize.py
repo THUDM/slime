@@ -6,7 +6,6 @@ import torch
 from megatron.core import mpu, tensor_parallel
 from megatron.core.num_microbatches_calculator import init_num_microbatches_calculator
 from megatron.training.global_vars import _build_tokenizer, set_args
-from torch_memory_saver import torch_memory_saver
 
 logger = logging.getLogger(__name__)
 
@@ -98,11 +97,6 @@ def init(args):
 
         custom_init = load_function(args.custom_megatron_init_path)
         custom_init(args)
-
-    if args.offload_train:
-        if (x := args.train_memory_margin_bytes) > 0:
-            logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
-            torch_memory_saver.memory_margin_bytes = x
 
 
 # TODO shall we use a simpler method to determine which rank to init wandb?
