@@ -22,12 +22,7 @@ from slime.utils.ppo_utils import (
 )
 from slime.utils.types import RolloutBatch
 
-from .cp_utils import (
-    all_gather_with_cp,
-    get_chunked_loss_masks,
-    get_logits_and_tokens_offset_with_cp,
-    get_sum_of_sample_mean,
-)
+from .cp_utils import get_chunked_loss_masks, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
 
 
 def get_responses(
@@ -221,7 +216,7 @@ def _compute_seq_kls_with_cp(
     chunked_loss_masks, _ = get_chunked_loss_masks(total_lengths, response_lengths, loss_masks)
 
     local_pairs: list[torch.Tensor] = []
-    for log_prob, old_log_prob, chunked_loss_mask, full_loss_mask in zip(
+    for log_prob, old_log_prob, chunked_loss_mask, _full_loss_mask in zip(
         log_probs, old_log_probs, chunked_loss_masks, loss_masks, strict=False
     ):
         local_num = ((old_log_prob - log_prob) * chunked_loss_mask).sum()
