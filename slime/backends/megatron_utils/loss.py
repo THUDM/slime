@@ -220,29 +220,25 @@ def _compute_seq_kls_with_cp(
 
     chunked_loss_masks, _ = get_chunked_loss_masks(total_lengths, response_lengths, loss_masks)
 
-    local_nums: list[torch.Tensor] = []
-    local_dens: list[torch.Tensor] = []
+    local_pairs: list[torch.Tensor] = []
     for log_prob, old_log_prob, chunked_loss_mask, full_loss_mask in zip(
         log_probs, old_log_probs, chunked_loss_masks, loss_masks, strict=False
     ):
         local_num = ((old_log_prob - log_prob) * chunked_loss_mask).sum()
         local_den = torch.clamp_min(chunked_loss_mask.sum(), 1)
 
-        local_nums.append(local_num)
-        local_dens.append(local_den)
+        local_pairs.append(torch.stack((local_num, local_den)))
 
-    if cp_size > 1 and local_nums:
-        stacked_nums = torch.stack(local_nums)
-        stacked_dens = torch.stack(local_dens)
-        dist.all_reduce(stacked_nums, group=cp_group)
-        dist.all_reduce(stacked_dens, group=cp_group)
-        local_nums = list(stacked_nums.unbind())
-        local_dens = list(stacked_dens.unbind())
-    elif not local_nums:
+    if cp_size > 1 and local_pairs:
+        stacked_pairs = torch.stack(local_pairs)
+        dist.all_reduce(stacked_pairs, group=cp_group)
+        local_pairs = list(stacked_pairs.unbind())
+    elif not local_pairs:
         return [], chunked_loss_masks
 
     seq_kls: list[torch.Tensor] = []
-    for reduced_num, reduced_den, full_loss_mask in zip(local_nums, local_dens, loss_masks, strict=False):
+    for reduced_pair, full_loss_mask in zip(local_pairs, loss_masks, strict=False):
+        reduced_num, reduced_den = reduced_pair.unbind()
         seq_kls.append(reduced_num / torch.clamp_min(reduced_den if cp_size > 1 else full_loss_mask.sum(), 1))
 
     return seq_kls, chunked_loss_masks
@@ -536,7 +532,7 @@ def policy_loss_function(
             device = batch["advantages"][0].device
             opsm_mask_parts = []
             opsm_clipfrac = torch.tensor(0.0, device=device)
-            masked_tokens_list: list[torch.Tensor] = []
+            token_counts: list[torch.Tensor] = []
 
             for advantage, chunked_loss_mask, loss_mask, seq_kl in zip(
                 batch["advantages"], chunked_loss_masks, batch["loss_masks"], seq_kls, strict=False
@@ -544,13 +540,15 @@ def policy_loss_function(
                 local_mask = ((advantage < 0) & (seq_kl > args.opsm_delta)).float() * chunked_loss_mask
                 opsm_mask_parts.append(1 - local_mask)
 
-                masked_tokens_list.append(local_mask.sum())
+                token_counts.append(
+                    torch.stack((local_mask.sum(), torch.clamp_min(loss_mask.sum().to(local_mask), 1)))
+                )
 
-            if masked_tokens_list:
-                stacked_masked_tokens = torch.stack(masked_tokens_list)
-                dist.all_reduce(stacked_masked_tokens, group=cp_group)
-                for masked_tokens, loss_mask in zip(stacked_masked_tokens.unbind(), batch["loss_masks"], strict=False):
-                    opsm_clipfrac += masked_tokens / torch.clamp_min(loss_mask.sum().to(masked_tokens), 1)
+            if token_counts:
+                stacked_counts = torch.stack(token_counts)
+                dist.all_reduce(stacked_counts, group=cp_group)
+                masked_tokens, total_tokens = stacked_counts.unbind(dim=1)
+                opsm_clipfrac = (masked_tokens / torch.clamp_min(total_tokens, 1)).sum()
 
             opsm_mask = torch.cat(opsm_mask_parts, dim=0)
         else:
