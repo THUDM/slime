@@ -3,6 +3,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import torch
+import torch.distributed as dist
 from megatron.core import mpu
 from torch.utils.checkpoint import checkpoint
 
@@ -21,7 +22,12 @@ from slime.utils.ppo_utils import (
 )
 from slime.utils.types import RolloutBatch
 
-from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
+from .cp_utils import (
+    all_gather_with_cp,
+    get_chunked_loss_masks,
+    get_logits_and_tokens_offset_with_cp,
+    get_sum_of_sample_mean,
+)
 
 
 def get_responses(
@@ -191,6 +197,43 @@ def get_values(
     return {
         "values": value_list,
     }
+
+
+def _compute_seq_kls_with_cp(
+    log_probs: list[torch.Tensor],
+    old_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    total_lengths: list[int],
+    response_lengths: list[int],
+) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    """Compute sequence-level KL scalars with minimal CP communication.
+
+    Instead of gathering full log-prob sequences across the context-parallel
+    group, this helper uses local log-prob chunks and all-reduces the numerator
+    and denominator needed for the sequence-level KL. The resulting KL values
+    are scalars broadcast identically across ranks, while the returned
+    ``chunked_loss_masks`` align with the local log-prob slices.
+    """
+
+    cp_group = mpu.get_context_parallel_group()
+    cp_size = mpu.get_context_parallel_world_size()
+
+    chunked_loss_masks, _ = get_chunked_loss_masks(total_lengths, response_lengths, loss_masks)
+
+    seq_kls: list[torch.Tensor] = []
+    for log_prob, old_log_prob, chunked_loss_mask, full_loss_mask in zip(
+        log_probs, old_log_probs, chunked_loss_masks, loss_masks, strict=False
+    ):
+        local_num = ((old_log_prob - log_prob) * chunked_loss_mask).sum()
+        local_den = torch.clamp_min(chunked_loss_mask.sum(), 1)
+
+        if cp_size > 1:
+            dist.all_reduce(local_num, group=cp_group)
+            dist.all_reduce(local_den, group=cp_group)
+
+        seq_kls.append(local_num / torch.clamp_min(full_loss_mask.sum(), 1))
+
+    return seq_kls, chunked_loss_masks
 
 
 def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) -> None:
@@ -461,40 +504,66 @@ def policy_loss_function(
 
     full_log_probs = None
     full_old_log_probs = None
+    seq_kls = None
+    chunked_loss_masks: list[torch.Tensor] | None = None
+    cp_size = mpu.get_context_parallel_world_size()
+    cp_group = mpu.get_context_parallel_group()
     if need_full_log_probs:
-        full_log_probs = [
-            all_gather_with_cp(log_prob, total_length, response_length)
-            for log_prob, total_length, response_length in zip(
-                log_probs, total_lengths, response_lengths, strict=False
+        if cp_size > 1:
+            seq_kls, chunked_loss_masks = _compute_seq_kls_with_cp(
+                log_probs, old_log_probs, batch["loss_masks"], total_lengths, response_lengths
             )
-        ]
-        full_old_log_probs = [
-            all_gather_with_cp(old_log_prob, total_length, response_length)
-            for old_log_prob, total_length, response_length in zip(
-                old_log_probs, total_lengths, response_lengths, strict=False
-            )
-        ]
+        else:
+            full_log_probs = log_probs
+            full_old_log_probs = old_log_probs
 
     # Compute OPSM mask if enabled
     if args.use_opsm:
-        opsm_mask, opsm_clipfrac = compute_opsm_mask(
-            args=args,
-            full_log_probs=full_log_probs,
-            full_old_log_probs=full_old_log_probs,
-            advantages=batch["advantages"],
-            loss_masks=batch["loss_masks"],
-        )
+        if cp_size > 1:
+            assert seq_kls is not None and chunked_loss_masks is not None
+            device = batch["advantages"][0].device
+            opsm_mask_parts = []
+            opsm_clipfrac = torch.tensor(0.0, device=device)
+
+            for advantage, chunked_loss_mask, loss_mask, seq_kl in zip(
+                batch["advantages"], chunked_loss_masks, batch["loss_masks"], seq_kls, strict=False
+            ):
+                local_mask = ((advantage < 0) & (seq_kl > args.opsm_delta)).float() * chunked_loss_mask
+                opsm_mask_parts.append(1 - local_mask)
+
+                masked_tokens = local_mask.sum()
+                dist.all_reduce(masked_tokens, group=cp_group)
+                opsm_clipfrac += masked_tokens / torch.clamp_min(loss_mask.sum().to(masked_tokens), 1)
+
+            opsm_mask = torch.cat(opsm_mask_parts, dim=0)
+        else:
+            opsm_mask, opsm_clipfrac = compute_opsm_mask(
+                args=args,
+                full_log_probs=full_log_probs,
+                full_old_log_probs=full_old_log_probs,
+                advantages=batch["advantages"],
+                loss_masks=batch["loss_masks"],
+            )
 
     # Compute KL divergence (GSPO uses sequence-level KL, others use per-token KL)
     if args.advantage_estimator == "gspo":
-        ppo_kl = compute_gspo_kl(
-            full_log_probs=full_log_probs,
-            full_old_log_probs=full_old_log_probs,
-            local_log_probs=log_probs,
-            loss_masks=batch["loss_masks"],
-        )
-        old_log_probs = torch.cat(old_log_probs, dim=0)
-        log_probs = torch.cat(log_probs, dim=0)
+        if cp_size > 1:
+            assert seq_kls is not None
+            ppo_kl = torch.cat(
+                [seq_kl.expand_as(local_log_prob) for seq_kl, local_log_prob in zip(seq_kls, log_probs, strict=False)],
+                dim=0,
+            )
+            old_log_probs = torch.cat(old_log_probs, dim=0)
+            log_probs = torch.cat(log_probs, dim=0)
+        else:
+            ppo_kl = compute_gspo_kl(
+                full_log_probs=full_log_probs,
+                full_old_log_probs=full_old_log_probs,
+                local_log_probs=log_probs,
+                loss_masks=batch["loss_masks"],
+            )
+            old_log_probs = torch.cat(old_log_probs, dim=0)
+            log_probs = torch.cat(log_probs, dim=0)
     else:
         old_log_probs = torch.cat(old_log_probs, dim=0)
         log_probs = torch.cat(log_probs, dim=0)
