@@ -1,3 +1,4 @@
+import itertools
 import json
 import logging
 import os
@@ -17,7 +18,6 @@ __all__ = ["Dataset"]
 logger = logging.getLogger(__name__)
 
 
-# TODO: don't read the whole file into memory.
 def read_file(path):
     path, row_slice = _parse_generalized_path(path)
 
@@ -25,18 +25,27 @@ def read_file(path):
         raise FileNotFoundError(f"Prompt dataset path '{path}' does not exist.")
 
     if path.endswith(".jsonl"):
-        df = pd.read_json(path, lines=True, dtype={"label": str})
+        with open(path, encoding="utf-8") as f:
+            iterator = (json.loads(line) for line in f)
+            if row_slice is not None:
+                iterator = itertools.islice(iterator, row_slice.start, row_slice.stop, row_slice.step)
+
+            for data in iterator:
+                if "label" in data and data["label"] is not None:
+                    data["label"] = str(data["label"])
+                yield data
+
     elif path.endswith(".parquet"):
         df = pd.read_parquet(path, dtype_backend="pyarrow")
+        if row_slice is not None:
+            logger.info(f"read_file path={path} slice {len(df)=} rows into {row_slice=}")
+            df = df.iloc[row_slice]
+
+        for _, row in df.iterrows():
+            yield row.to_dict()
+
     else:
         raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
-
-    if row_slice is not None:
-        logger.info(f"read_file path={path} slice {len(df)=} rows into {row_slice=}")
-        df = df.iloc[row_slice]
-
-    for _, row in df.iterrows():
-        yield row.to_dict()
 
 
 def _parse_generalized_path(s: str):
