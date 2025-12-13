@@ -349,6 +349,7 @@ async def generate_rollout_async(
     target_data_size = args.rollout_batch_size
 
     data = []
+    all_data = []
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
     while len(data) < target_data_size:
@@ -370,6 +371,7 @@ async def generate_rollout_async(
                 do_print = False
 
             assert len(group) == args.n_samples_per_prompt
+            all_data.append(group)
             dynamic_filter_output = _call_dynamic_filter(dynamic_filter, args, group)
             if not dynamic_filter_output.keep:
                 metric_gatherer.on_dynamic_filter_drop(reason=dynamic_filter_output.reason)
@@ -393,12 +395,18 @@ async def generate_rollout_async(
 
     assert len(data) == args.rollout_batch_size, f"Got {len(data)} samples, expected {args.rollout_batch_size}"
     data = sorted(data, key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)
+    all_samples = sorted(data, key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)
 
     # reset the global state to prevent effects on the next rollout or eval.
     state.reset()
     if args.rollout_sample_filter_path is not None:
         filter_func = load_function(args.rollout_sample_filter_path)
         filter_func(args, data)
+
+    # There can be circumstances where users want to process all samples including filtered ones.
+    if args.rollout_all_samples_process_path is not None:
+        process_func = load_function(args.rollout_all_samples_process_path)
+        process_func(args, all_samples, data_source)
 
     return RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect()), aborted_samples
 

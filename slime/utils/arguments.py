@@ -1138,6 +1138,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--rollout-all-samples-process-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to the rollout all samples process function that "
+                    "can process all samples including filtered ones."
+                ),
+            )
+            parser.add_argument(
                 "--disable-rollout-trim-samples",
                 action="store_true",
                 default=False,
