@@ -26,11 +26,20 @@ PYTHONPATH=/root/Megatron-LM/ torchrun --nproc-per-node 8 \
 
 执行训练：
 
+单机8卡
 ```bash
 cd /root/slime
 export BASE_FOLDER=/root
 export MASTER_ADDR=127.0.0.1
-bash scripts/run-qwen3-Next-80B-A3B.sh 
+bash scripts/run-qwen3-next-80B-A3B-8gpus.sh 
+```
+
+多机（4x8）
+```bash
+cd /root/slime
+export BASE_FOLDER=/root
+export MASTER_ADDR=your_master_addr
+bash scripts/run-qwen3-next-80B-A3B.sh 
 ```
 
 ## 执行训练 (FSDP)
