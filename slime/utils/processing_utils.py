@@ -45,8 +45,11 @@ def prepare_model_inputs(
             add_generation_prompt=True,
             **(apply_chat_template_kwargs or {}),
         )
-    else:
+    elif isinstance(prompt, str):
+        assert not apply_chat_template, "apply_chat_template must be False when prompt is a string"
         text_prompt = prompt
+    else:
+        raise ValueError(f"Invalid prompt type: {type(prompt)}")
 
     if not processor:
         input_ids = tokenizer.encode(text_prompt, add_special_tokens=False)
