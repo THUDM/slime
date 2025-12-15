@@ -63,18 +63,18 @@ def _should_skip_prompt(
     return len(input_ids) > max_length
 
 
-def _build_messages(data: dict, prompt_key: str, apply_chat_template: bool, multimodal_keys: dict = None):
+def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimodal_keys: dict = None):
     prompt = data.get(prompt_key)
 
     if isinstance(prompt, str):
         # If prompt is a string and we don't apply chat template, return the prompt as is.
-        if not apply_chat_template:
+        if not as_conversation:
             return prompt
         else:
             prompt_messages = [{"role": "user", "content": prompt}]
 
     if multimodal_keys:
-        assert apply_chat_template, "apply_chat_template must be True when multimodal_keys is not None"
+        assert as_conversation, "as_conversation must be True when multimodal_keys is not None"
         # Build mapping: placeholder -> (MultimodalType, content_list)
         multimodals = {}
         for type_name, data_key in multimodal_keys.items():
@@ -136,7 +136,8 @@ class Dataset:
     ):
         self.origin_samples = []
         for data in read_file(path):
-            prompt = _build_messages(data, prompt_key, apply_chat_template, multimodal_keys)
+            as_conversation = apply_chat_template
+            prompt = _build_messages(data, prompt_key, as_conversation, multimodal_keys)
 
             metadata = data.get(metadata_key) or {}
             if tool_key is not None and tool_key in data:
