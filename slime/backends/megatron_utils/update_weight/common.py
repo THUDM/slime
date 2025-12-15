@@ -130,15 +130,47 @@ def named_params_and_buffers(
     return ans
 
 
-def split_expert_and_non_expert_param_names(params: Iterator[str]):
-    expert_param_names = []
-    non_expert_param_names = []
-    for param in params:
-        if ".experts." in param:
-            expert_param_names.append(param)
+def split_expert_and_non_expert_param_names(param_names: Sequence[str]) -> tuple[list[str], list[str]]:
+    expert_params = []
+    non_expert_params = []
+    for name in param_names:
+        if ".experts." in name:
+            expert_params.append(name)
         else:
-            non_expert_param_names.append(param)
-    return expert_param_names, non_expert_param_names
+            non_expert_params.append(name)
+    return expert_params, non_expert_params
+
+
+def non_expert_named_params_and_buffers(
+    args: Namespace,
+    model: Sequence[torch.nn.Module],
+    convert_to_global_name: bool = True,
+    translate_gpu_to_cpu: bool = False,
+) -> Iterator[tuple[str, torch.Tensor]]:
+    for name, tensor in named_params_and_buffers(
+        args,
+        model,
+        convert_to_global_name,
+        translate_gpu_to_cpu,
+    ):
+        if ".experts." not in name:
+            yield name, tensor
+
+
+def expert_named_params_and_buffers(
+    args: Namespace,
+    model: Sequence[torch.nn.Module],
+    convert_to_global_name: bool = True,
+    translate_gpu_to_cpu: bool = False,
+) -> Iterator[tuple[str, torch.Tensor]]:
+    for name, tensor in named_params_and_buffers(
+        args,
+        model,
+        convert_to_global_name,
+        translate_gpu_to_cpu,
+    ):
+        if ".experts." in name:
+            yield name, tensor
 
 
 def _maybe_get_cpu_backup(x: torch.Tensor):
@@ -244,3 +276,57 @@ def _named_params_and_buffers_global(
                 layer_idx, rest = match.groups()
                 layer_idx = int(layer_idx) + layer_offset
                 yield f"module.module.decoder.layers.{layer_idx}.{rest}", buffer
+
+
+def register_memory_transfer_engine(named_param_with_buffers: Sequence[tuple[str, torch.Tensor]], engine) -> None:
+    """
+    Efficient memory registration for transfer engine that reduce total registration count by batching continuous memory regions.
+    """
+
+    weight_mr_dict = {}
+    weight_addr_set = set()
+    for name, weight in named_param_with_buffers:
+        weight_mr_dict[name] = (
+            weight.data_ptr(),
+            weight.numel(),
+            weight.element_size(),
+        )
+        weight_addr_set.add(weight.data_ptr())
+    memory_snapshot = torch.cuda.memory.memory_snapshot()
+    weight_blocks_for_reg_mr = []
+    # Blocks in each segment have continuous physical addresses,
+    # so they can be merged for memory registration.
+    for segment in memory_snapshot:
+        current_weight_block = None
+        blocks = segment.get("blocks", [])
+        for block in blocks:
+            address = block.get("address", -1)
+            size = block.get("size", -1)
+            state = block.get("state", "")
+            if address < 0 or size < 0 or state == "":
+                continue
+            # Only register active allocated memory blocks that hold weights.
+            if state == "active_allocated":
+                if address in weight_addr_set:
+                    if current_weight_block is None:
+                        current_weight_block = (address, size)
+                    elif current_weight_block[0] + current_weight_block[1] == address:
+                        current_weight_block = (
+                            current_weight_block[0],
+                            current_weight_block[1] + size,
+                        )
+                    else:
+                        weight_blocks_for_reg_mr.append(current_weight_block)
+                        current_weight_block = (address, size)
+        if current_weight_block is not None:
+            weight_blocks_for_reg_mr.append(current_weight_block)
+
+    # Register merged memory blocks that hold weights.
+    for weight_block in weight_blocks_for_reg_mr:
+        address, size = weight_block
+        ret = engine.register_memory(address, size)
+        if ret != 0:
+            raise RuntimeError(
+                f"register memory failed for weight block at address {address} with size {size}, error: {ret}"
+            )
+    return weight_mr_dict

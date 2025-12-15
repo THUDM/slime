@@ -350,6 +350,14 @@ class SGLangEngine(RayActor):
         response.raise_for_status()
         return response
 
+    def update_weight_version(self, weight_version: str):
+        response = requests.post(
+            f"http://{self.server_host}:{self.server_port}/update_weight_version",
+            json={"new_version": weight_version},
+        )
+        response.raise_for_status()
+        return response
+
     def start_profile(
         self,
         # The output directory

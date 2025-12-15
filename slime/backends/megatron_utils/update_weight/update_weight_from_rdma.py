@@ -1,5 +1,4 @@
 import logging
-import socket
 import time
 from argparse import Namespace
 from collections.abc import Callable, Mapping, Sequence
@@ -7,9 +6,10 @@ from collections.abc import Callable, Mapping, Sequence
 import ray
 import torch
 from ray.actor import ActorHandle
+from srt.disaggregation.mooncake.transfer_engine import MooncakeTransferEngine
 from tqdm import tqdm
 
-from .common import split_expert_and_non_expert_param_names
+from .common import register_memory_transfer_engine, split_expert_and_non_expert_param_names
 from .update_weight_from_remote import UpdateWeightFromRemote
 
 logger = logging.getLogger(__name__)
@@ -38,8 +38,7 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
         vocab_size: int,
     ) -> None:
         """
-        Initialize. P2PTrainingTransferEngine created in connect_rollout_engines.
-        Calls parent constructor and adds P2P RDMA specific attributes.
+        Initialize transfer engine.
         """
         # Call parent constructor to initialize all base attributes
         super().__init__(
@@ -49,11 +48,10 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
             model_name=model_name,
             quantization_config=quantization_config,
             vocab_size=vocab_size,
+            weight_update_mode="rdma",
         )
 
-        # P2P RDMA specific initialization
-        self.training_p2p_transfer_engine = None
-        self.session_id = None
+        self.transfer_engine = None
 
     def connect_rollout_engines(
         self, rollout_engines: Sequence[ActorHandle], rollout_engine_lock: ActorHandle
@@ -68,60 +66,57 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
 
         # Initialize P2PTrainingTransferEngine on source rank
         if self._is_source:
-            if self.training_p2p_transfer_engine is not None:
-                self.training_p2p_transfer_engine.stop()
-                self.session_id = None
-                self.transfer_plan.clear_transfer_tasks()
-
             # Get master address and port for P2P communication
             local_ip = ray._private.services.get_node_ip_address()
-            with socket.socket() as sock:
-                sock.bind(("", 0))
-                port = sock.getsockname()[1]
-
-            # Initialize P2PTrainingTransferEngine
-            # self.training_p2p_transfer_engine = P2PTrainingTransferEngine(
-            #     master_ip=local_ip,
-            #     master_port=port,
-            #     gpu_id=None,
-            #     ib_device=None,
-            # )
-            self.training_p2p_transfer_engine.start()
-            self.session_id = f"{local_ip}:{port}"
-            logger.info(f"P2PTrainingTransferEngine started on {local_ip}:{port}")
+            self.transfer_engine = MooncakeTransferEngine(hostname=local_ip)
+            logger.info(f"Transfer Engine initialized at {self.transfer_engine.session_id}")
 
             # Query Engine session and weight info from rollout instances according to the transfer plan
-            self.remote_weight_infos_by_engine_and_rank = {}
+            self.remote_weight_infos_by_session_id = {}
+            targets_to_query = set((target.engine_ind, target.engine_rank) for target in self.transfer_plan.targets)
+            targets_to_session_id = {}
+            for engine_ind, engine_rank in targets_to_query:
+                session_id, weights_info = ray.get(
+                    self.rollout_engines[engine_ind].get_remote_instance_transfer_engine_info.remote(rank=engine_rank)[
+                        "remote_instance_transfer_engine_info"
+                    ]
+                )
+                logger.info(f"Obtained remote session info from rollout engine {engine_ind} rank {engine_rank}")
+                self.remote_weight_infos_by_session_id[session_id] = weights_info
+                targets_to_session_id[(engine_ind, engine_rank)] = session_id
+
+            # Associate transfer tasks based on obtained session and weight info
             for target in self.transfer_plan.targets:
-                if (target.engine_ind, target.engine_rank) not in self.remote_weight_infos_by_engine_and_rank:
-                    self.remote_weight_infos_by_engine_and_rank[(target.engine_ind, target.engine_rank)] = ray.get(
-                        self.rollout_engines[target.engine_ind].get_remote_instance_transfer_engine_info.remote(
-                            rank=target.engine_rank
-                        )["remote_instance_transfer_engine_info"]
-                    )
-                    logger.info(
-                        f"Obtained remote session info from rollout engine {target.engine_ind} rank {target.engine_rank}"
-                    )
-                remote_session_id, remote_weight_info = self.remote_weight_infos_by_engine_and_rank[
-                    (target.engine_ind, target.engine_rank)
-                ]
-                expert_params, non_expert_params = split_expert_and_non_expert_param_names(remote_weight_info.keys())
+                session_id = targets_to_session_id[(target.engine_ind, target.engine_rank)]
+                expert_params, non_expert_params = split_expert_and_non_expert_param_names(
+                    self.remote_weight_infos_by_session_id[session_id].keys()
+                )
+                params = expert_params if target.group == "expert" else non_expert_params
                 self.transfer_plan.add_transfer_task(
-                    session=remote_session_id,
-                    remote_tensor_names=expert_params if target.group == "expert" else non_expert_params,
+                    session=session_id,
                     param_group=target.group,
                 )
+                logger.info(
+                    f"Added transfer task for session {session_id} with {len(params)} tensors in group {target.group}."
+                )
+
+    def leader_post_update(self) -> None:
+        ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
+        ray.get(
+            [
+                engine.update_weight_version.remote(weight_version=self.weight_version)
+                for engine in self.rollout_engines
+            ]
+        )
+        return
 
     def _update_bucket_weights_from_remote(
-        self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
+        self, converted_named_tensors: list[tuple[str, torch.Tensor]], session_id: str, pbar: tqdm | None = None
     ) -> None:
         """
-        Register weights with P2PTrainingTransferEngine and wait for transfers to complete.
-        Based on lines 518-545 in SGLang test: register_weights pattern.
-        Overrides parent method to use P2P RDMA instead of NCCL broadcast.
+        The RDMA P2P weight update is implemented as a single side write, meaning the trainer writes its weights directly to the rollout engines' memory.
         """
 
-        # TODO(jd): pin the memory for GPUs after resharding to avoid expensive registration.
         if not self._is_source or not converted_named_tensors:
             return
 
@@ -130,26 +125,44 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
             time.sleep(0.1)
 
         try:
-            # Register all weights with the P2P training transfer engine
-            # This follows the pattern from SGLang test lines 518-537
+            # Features still missing for MVP:
+            # TODO(jd): Implement resharding logic, right now it's not handled.
+            # TODO: Some model may need target size handling like post_load_weights, currently not handled.
+            # TODO(jd): Need a correctness test of the model weights similar to the test:https://github.com/sgl-project/sglang/pull/14997/changes#diff-6efab5fd819ef0efa7a1f43989320bb28231702f8840897eb7acacf174f6e71f
+
+            # Potential optimization not implemented:
+            # TODO: currently implementation does not guarantee single traversal of model dict and submits to mutliple targets in order.
+            # If there are more targets than source, we are registering/all-gather/resharding/deregistering multiple times for same weights.
+            # TODO: maybe pin the memory for GPUs instead of register + deregester each time after resharding.
+            # TODO: increase concurrency with non-blocking transfers somehow. Note the reshaped tensors are temporary.
+            # TODO: skip the forced all-gather for same shard tensors and instead convert directly.
+            # TODO: finer granularity weight transfer where a multiple source instance can update a singular target instance.
+
+            _ = register_memory_transfer_engine(converted_named_tensors, self.engine)
+
+            # Verify the 1-to-1 mapping between registered weights and remote weights expected.
+            source_ptrs, target_ptrs, source_lens = [], [], []
             for name, tensor in converted_named_tensors:
-                self.training_p2p_transfer_engine.register_buffer(name, tensor)
+                if name not in self.remote_weight_infos_by_session_id[session_id]:
+                    raise RuntimeError(
+                        f"Registered weight {name} not found in remote weight info for session {session_id}."
+                    )
+                remote_ptr, remote_numel, remote_element_size = self.remote_weight_infos_by_session_id[session_id][
+                    name
+                ]
+                if tensor.numel() != remote_numel or tensor.element_size() != remote_element_size:
+                    raise RuntimeError(
+                        f"Registered weight {name} numel {tensor.numel()} size {tensor.element_size()} does not match remote numel {remote_numel} size {remote_element_size}."
+                    )
+                source_ptrs.append(tensor.data_ptr())
+                target_ptrs.append(remote_ptr)
+                source_lens.append(tensor.numel() * tensor.element_size())
 
-            # Initiate weight transfer to all rollout engines as per the transfer plan
-            refs = [
-                engine.update_weights_from_distributed.remote(
-                    names=[name for name, _ in converted_named_tensors],
-                    dtypes=[param.dtype for _, param in converted_named_tensors],
-                    shapes=[param.shape for _, param in converted_named_tensors],
-                    group_name=self._group_name,
-                    weight_version=str(self.weight_version),
-                    session_id=f"{self.master_addr}:{self.master_port}",  # Pass P2P session info
-                )
-                for engine in self.rollout_engines
-            ]
-
-            # Wait for all P2P transfers to complete
-            ray.get(refs)
+            # Batch transfer weights through RDMA
+            ret = self.transfer_engine.batch_transfer_sync_write(session_id, source_ptrs, target_ptrs, source_lens)
+            if ret < 0:
+                raise RuntimeError(f"Batch transfer weights via RDMA failed with error code {ret}.")
+            self.transfer_engine.deregister_memory_batch(source_ptrs)
             converted_named_tensors.clear()
 
         finally:

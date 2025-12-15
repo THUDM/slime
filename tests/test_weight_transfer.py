@@ -1,24 +1,29 @@
-import os
+from dataclasses import dataclass
+from typing import Literal
+
+import typer
 
 import slime.utils.external_utils.command_utils as U
-
-
-TIGHT_HOST_MEMORY = bool(int(os.environ.get("SLIME_TEST_TIGHT_HOST_MEMORY", "1")))
 
 MODEL_NAME = "Qwen3-4B"
 MODEL_TYPE = "qwen3-4B"
 NUM_GPUS = 3
 
 
+@dataclass
+class ScriptArgs(U.ExecuteTrainConfig):
+    mode: Literal["nccl", "rdma"] = "nccl"
+    # TODO: Add diverse parallelism settings; imbalance training/inference instances, etc for benchmark.
+
+
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command("hf download Qwen/Qwen3-4B --local-dir /root/models/Qwen3-4B")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
-
     U.convert_checkpoint(model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS)
 
 
-def execute():
+def execute(args: ScriptArgs):
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/{MODEL_NAME}_torch_dist "
 
     rollout_args = (
@@ -69,6 +74,8 @@ def execute():
     )
 
     sglang_args = "--rollout-num-gpus-per-engine 1 " "--rollout-num-gpus 2 " "--sglang-mem-fraction-static 0.8 "
+    if args.mode == "rdma":
+        sglang_args += "--remote-instance-weight-loader-support-transfer-engine "
 
     # ci_args = "--ci-test "
 
@@ -87,6 +94,8 @@ def execute():
         f"--update-weight-buffer-size {1 * 1024 ** 3} "
         # "--check-weight-update-equal "
     )
+    if args.mode == "rdma":
+        misc_args += "--update-weight-transfer-mode rdma "
 
     train_args = (
         f"{ckpt_args} "
@@ -109,6 +118,11 @@ def execute():
     )
 
 
+@U.dataclass_cli
+def main(args: ScriptArgs):
+    prepare(args)
+    execute(args)
+
+
 if __name__ == "__main__":
-    prepare()
-    execute()
+    typer.run(main)

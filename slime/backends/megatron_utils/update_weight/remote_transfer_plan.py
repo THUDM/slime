@@ -14,7 +14,7 @@ from typing import Literal
 import torch
 from megatron.core import mpu
 
-from .common import named_params_and_buffers, split_expert_and_non_expert_param_names
+from .common import expert_named_params_and_buffers, non_expert_named_params_and_buffers
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +24,13 @@ class TransferTask:
     """
     Attributes:
         session: Session identifier (e.g., NCCL group name or Transfer Engine Session Id)
-        tensor_names: Full list of tensor names to be transferred in this task as they appear in the engine API interface.
+        named_params_and_buffers: tensors to be transferred from this rank.
+        tensor_type: "expert" or "non-expert" are two diverse types of tasks.
     """
 
-    tensor_names: list[str]
+    named_params_and_buffers: list[tuple[str, torch.Tensor]]
     session: str  # NCCL group name or target entity id.
+    tensor_type: Literal["expert", "non-expert"]
 
 
 @dataclass
@@ -72,15 +74,10 @@ class RemoteTransferPlan:
         """
         self.mode = mode
         self._get_parallel_info(args)
-        # Cache the parameter names for transfer planning
-        self.expert_param_names, self.param_names = split_expert_and_non_expert_param_names(
-            name for name, _ in named_params_and_buffers(args, model)
-        )
         self.targets: list[TransferTaskP2PMeta] = self._plan_p2p() if mode == "rdma" else []
         self.transfer_tasks: list[TransferTask] = []
-
-        # Whether duplicated transfer tasks have been merged
-        self._merge_checked = False
+        self.non_expert_params_buffers = list(non_expert_named_params_and_buffers(args, model))
+        self.expert_params_buffers = list(expert_named_params_and_buffers(args, model))
 
     def _get_parallel_info(self, args: Namespace) -> None:
         # Gather the source (current trainer) information.
@@ -186,49 +183,32 @@ class RemoteTransferPlan:
             )
         return len(self.targets) > 0
 
-    def add_transfer_task(
-        self, session: str, remote_tensor_names: list[str], param_group: Literal["expert", "non-expert"]
-    ) -> None:
+    def add_transfer_task(self, session: str, param_group: Literal["expert", "non-expert"]) -> None:
         """
-        Add a transfer task to the plan using remote instance session and tensor names; Only transfer parameters that are
-        available to this rank using the pre-cached parameter names.
+        Add a transfer task to the plan using remote instance session and tensor names.
         """
-        if param_group == "expert":
-            expected_names = set(self.expert_param_names)
-            self.transfer_tasks.append(
-                TransferTask(session=session, tensor_names=set(remote_tensor_names).intersection(expected_names))
-            )
-            logger.info(
-                f"Added expert parameter transfer task: session={session}, num_tensors={len(remote_tensor_names)}"
-            )
-        else:
-            expected_names = set(self.param_names)
-            self.transfer_tasks.append(
-                TransferTask(session=session, tensor_names=set(remote_tensor_names).intersection(expected_names))
-            )
-            logger.info(f"Added parameter transfer task: session={session}, num_tensors={len(remote_tensor_names)}")
+        params = self.non_expert_params_buffers if param_group == "non-expert" else self.expert_params_buffers
+        self.transfer_tasks.append(
+            TransferTask(session=session, named_params_and_buffers=params, tensor_type=param_group)
+        )
+        logger.info(f"Added {param_group} parameter transfer task: session={session}, num_tensors={len(params)}")
 
     def clear_transfer_tasks(self) -> None:
         self.transfer_tasks = []
-
-    def _merge_transfer_tasks(self) -> None:
-        # In case transfer tasks share the same sesssion, merge them.
-        if not self._merge_checked:
-            tasks_by_session: dict[str, TransferTask] = {}
-            for task in self.transfer_tasks:
-                if task.session not in tasks_by_session:
-                    tasks_by_session[task.session] = TransferTask(session=task.session, tensor_names=[])
-                tasks_by_session[task.session].tensor_names.extend(task.tensor_names)
-            self.transfer_tasks = list(tasks_by_session.values())
-            self._merge_checked = True
 
     def get_transfer_tasks(self) -> list[TransferTask]:
         # Generate session identifier based on mode
         if self.mode == "nccl":
             session = f"slime-pp_{self._pp_rank}"
             # In NCCL mode, the transfer is simply a broadcast from DP=TP=0 to all rollout engines.
-            return [TransferTask(session=session, tensor_names=self.param_names + self.expert_param_names)]
+            return [
+                TransferTask(
+                    session=session, named_params_and_buffers=self.non_expert_params_buffers, tensor_type="non-expert"
+                ),
+                TransferTask(
+                    session=session, named_params_and_buffers=self.expert_params_buffers, tensor_type="expert"
+                ),
+            ]
         if self.targets and not self.transfer_tasks:
             raise RuntimeError("RDMA need to query target engine information for transfer task generations.")
-        self._merge_transfer_tasks()
         return self.transfer_tasks
