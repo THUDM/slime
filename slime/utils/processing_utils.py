@@ -2,6 +2,7 @@ import base64
 import io
 import logging
 
+import numpy as np
 from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 
 logger = logging.getLogger(__name__)
@@ -36,8 +37,8 @@ def prepare_model_inputs(
             - extra_info: Dict with 'images', 'videos', 'multimodal_inputs' (or empty dict)
     """
     tools = metadata.get("tools") if metadata else None
-    if isinstance(prompt, list):
-        assert apply_chat_template, "apply_chat_template must be True when prompt is a list"
+    if isinstance(prompt, (list, np.ndarray)):
+        assert apply_chat_template, "apply_chat_template must be True when prompt is a list or numpy array"
         text_prompt = tokenizer.apply_chat_template(
             prompt,
             tools=tools,
