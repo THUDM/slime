@@ -157,6 +157,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             prompt,
             tokenize=False,
             add_generation_prompt=True,  # Add generation prompt for the assistant
+            **(args.apply_chat_template_kwargs or {}),
         )
     else:
         assert isinstance(prompt, str), "prompt should be a string when apply_chat_template is False"
