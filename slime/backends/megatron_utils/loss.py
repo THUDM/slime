@@ -420,7 +420,7 @@ def policy_loss_function(
     Computes current log-probabilities and entropy from model logits, then
     calculates PPO-style clipped policy gradient loss. For GSPO, gathers
     full sequences via context-parallel all-gather before computing per-sample
-    KL. Optionally applies TIS (Temporal Importance Sampling) correction and
+    KL. Optionally applies TIS (Truncated Importance Sampling) correction and
     adds KL loss term if configured.
 
     Args:
