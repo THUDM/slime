@@ -25,7 +25,9 @@ def load_processor(name_or_path: str, **kwargs):
     return proc
 
 
-def prepare_model_inputs(prompt, tokenizer, processor=None, metadata=None, apply_chat_template_kwargs=None):
+def prepare_model_inputs(
+    prompt, tokenizer, processor=None, metadata=None, apply_chat_template=False, apply_chat_template_kwargs=None
+):
     """Prepare all inputs for model inference.
 
     Returns:
@@ -34,13 +36,17 @@ def prepare_model_inputs(prompt, tokenizer, processor=None, metadata=None, apply
             - extra_info: Dict with 'images', 'videos', 'multimodal_inputs' (or empty dict)
     """
     tools = metadata.get("tools") if metadata else None
-    text_prompt = tokenizer.apply_chat_template(
-        prompt,
-        tools=tools,
-        tokenize=False,
-        add_generation_prompt=True,
-        **(apply_chat_template_kwargs or {}),
-    )
+    if isinstance(prompt, list):
+        assert apply_chat_template, "apply_chat_template must be True when prompt is a list"
+        text_prompt = tokenizer.apply_chat_template(
+            prompt,
+            tools=tools,
+            tokenize=False,
+            add_generation_prompt=True,
+            **(apply_chat_template_kwargs or {}),
+        )
+    else:
+        text_prompt = prompt
 
     if not processor:
         input_ids = tokenizer.encode(text_prompt, add_special_tokens=False)

@@ -151,7 +151,17 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
 
     # Handle partial rollout samples: continue generation from existing response
     prompt = sample.prompt
-    prompt_tokens_ids = state.tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
+    if args.apply_chat_template:
+        assert isinstance(prompt, list), "prompt should be a list when apply_chat_template is True"
+        prompt_text = state.tokenizer.apply_chat_template(
+            prompt,
+            tokenize=False,
+            add_generation_prompt=True,  # Add generation prompt for the assistant
+        )
+    else:
+        assert isinstance(prompt, str), "prompt should be a string when apply_chat_template is False"
+        prompt_text = prompt
+    prompt_tokens_ids = state.tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
     response = ""
     response_token_ids = []
     loss_mask = []
