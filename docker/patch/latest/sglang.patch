@@ -1695,7 +1695,7 @@ index ea33e81ef..561934dce 100644
              self.norm = PPMissingLayer(return_tuple=True)
  
 diff --git a/python/sglang/srt/models/qwen3.py b/python/sglang/srt/models/qwen3.py
-index 30b92acbd..a0d14895f 100644
+index 30b92acbd..0d28e0f2b 100644
 --- a/python/sglang/srt/models/qwen3.py
 +++ b/python/sglang/srt/models/qwen3.py
 @@ -90,8 +90,8 @@ class Qwen3Attention(nn.Module):
@@ -1724,7 +1724,7 @@ index 30b92acbd..a0d14895f 100644
          hidden_states: torch.Tensor,
          forward_batch: ForwardBatch,
          residual: Optional[torch.Tensor],
-+        post_residual_addition: Optional[torch.Tensor] = None,
++        **kwargs,
      ) -> Tuple[torch.Tensor, torch.Tensor]:
          # Self Attention
          hidden_states, residual = self.layer_communicator.prepare_attn(
@@ -1732,7 +1732,7 @@ index 30b92acbd..a0d14895f 100644
 +            hidden_states,
 +            residual,
 +            forward_batch,
-+            post_residual_addition=post_residual_addition,
++            **kwargs,
          )
          if hidden_states.shape[0] != 0:
              hidden_states = self.self_attn(
