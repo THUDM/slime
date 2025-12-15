@@ -71,7 +71,7 @@ def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimod
         if not as_conversation:
             return prompt
         else:
-            prompt_messages = [{"role": "user", "content": prompt}]
+            prompt = [{"role": "user", "content": prompt}]
 
     if multimodal_keys:
         assert as_conversation, "as_conversation must be True when multimodal_keys is not None"
@@ -84,7 +84,7 @@ def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimod
 
         pattern = "(" + "|".join(re.escape(p) for p in multimodals.keys()) + ")"
 
-        for message in prompt_messages:
+        for message in prompt:
             if isinstance(message["content"], str):
                 content_list = []
                 for segment in re.split(pattern, message["content"]):
@@ -114,7 +114,7 @@ def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimod
                     f"Unsupported content type: {type(message['content'])}, expected str or list of dicts"
                 )
 
-    return prompt_messages
+    return prompt
 
 
 class Dataset:
