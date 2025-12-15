@@ -74,6 +74,7 @@ def _build_messages(data: dict, prompt_key: str, apply_chat_template: bool, mult
             prompt_messages = [{"role": "user", "content": prompt}]
 
     if multimodal_keys:
+        assert apply_chat_template, "apply_chat_template must be True when multimodal_keys is not None"
         # Build mapping: placeholder -> (MultimodalType, content_list)
         multimodals = {}
         for type_name, data_key in multimodal_keys.items():
