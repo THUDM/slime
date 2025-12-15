@@ -1,9 +1,7 @@
 import logging
 import multiprocessing
-import os
 import random
 import time
-from glob import glob
 from pathlib import Path
 from typing import Any
 
@@ -370,25 +368,6 @@ def init_rollout_engines(args, pg, all_rollout_engines):
             "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
             "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
         }
-
-        # TODO: currently the amem position is hardcoded, change to a better way later.
-        # note that amem does not work with update weights from distributed.
-        if (
-            args.offload_rollout
-            and args.actor_num_nodes * args.actor_num_gpus_per_node >= args.rollout_num_gpus
-            and len(glob("/usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libamem_nccl.so*")) > 0
-        ):
-            logger.info("Enable AMEM for rollout engine.")
-            ld_library_path = (
-                os.environ.get("LD_LIBRARY_PATH", "") + ":/usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib"
-            )
-            env_vars |= {
-                "LD_LIBRARY_PATH": ld_library_path,
-                "NCCL_CUMEM_ENABLE": "1",
-                "AMEM_ENABLE": "1",
-                "AMEM_GROUPID": "0",
-                "GMM_LOG": "2",
-            }
 
         worker_type = "regular"
         if args.prefill_num_servers is not None:
