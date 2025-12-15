@@ -38,7 +38,9 @@ def prepare_model_inputs(
     """
     tools = metadata.get("tools") if metadata else None
     if isinstance(prompt, (list, np.ndarray)):
-        assert apply_chat_template, "apply_chat_template must be True when prompt is a list or numpy array"
+        assert (
+            apply_chat_template
+        ), f"apply_chat_template must be True when prompt is a list or numpy array, current prompt is {prompt}"
         text_prompt = tokenizer.apply_chat_template(
             prompt,
             tools=tools,
@@ -47,10 +49,12 @@ def prepare_model_inputs(
             **(apply_chat_template_kwargs or {}),
         )
     elif isinstance(prompt, str):
-        assert not apply_chat_template, "apply_chat_template must be False when prompt is a string"
+        assert (
+            not apply_chat_template
+        ), f"apply_chat_template must be False when prompt is a string, current prompt is {prompt}"
         text_prompt = prompt
     else:
-        raise ValueError(f"Invalid prompt type: {type(prompt)}")
+        raise ValueError(f"Invalid prompt type: {type(prompt)}, current prompt is {prompt}")
 
     if not processor:
         input_ids = tokenizer.encode(text_prompt, add_special_tokens=False)
