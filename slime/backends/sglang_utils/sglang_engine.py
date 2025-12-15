@@ -182,7 +182,9 @@ class SGLangEngine(RayActor):
             return
 
         url = f"http://{self.server_host}:{self.server_port}/{endpoint}"
+
         response = requests.post(url, json=payload or {})
+
         try:
             response.raise_for_status()
         except requests.exceptions.HTTPError as e:

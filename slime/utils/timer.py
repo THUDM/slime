@@ -11,6 +11,8 @@ __all__ = ["Timer", "timer"]
 
 logger = logging.getLogger(__name__)
 
+LOGFILE = "slime_timer"
+
 
 class Timer(metaclass=SingletonMeta):
     def __init__(self):
@@ -28,8 +30,11 @@ class Timer(metaclass=SingletonMeta):
         elapsed_time = time() - self.start_time[name]
         self.add(name, elapsed_time)
         del self.start_time[name]
-        if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
+        rank = torch.distributed.get_rank() if torch.distributed.is_initialized() else 0
+        if rank == 0:
             logger.info(f"Timer {name} end (elapsed: {elapsed_time:.1f}s)")
+        with open(f"{LOGFILE}_{rank}.log", "a") as f:
+            f.write(f"Timer {name} end (elapsed: {elapsed_time*1000:.1f}ms)\n")
 
     def reset(self, name=None):
         if name is None:

@@ -130,6 +130,17 @@ def named_params_and_buffers(
     return ans
 
 
+def split_expert_and_non_expert_param_names(params: Iterator[str]):
+    expert_param_names = []
+    non_expert_param_names = []
+    for param in params:
+        if ".experts." in param:
+            expert_param_names.append(param)
+        else:
+            non_expert_param_names.append(param)
+    return expert_param_names, non_expert_param_names
+
+
 def _maybe_get_cpu_backup(x: torch.Tensor):
     from torch_memory_saver import torch_memory_saver
 
