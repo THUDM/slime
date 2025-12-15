@@ -233,7 +233,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-max-response-len",
                 type=int,
-                default=1024,
+                default=None,
                 help=(
                     "The maximum length of the response for the inference engine during rollout. "
                     "It is basically `max_tokens` in sglang."
@@ -1569,27 +1569,22 @@ def slime_validate_args(args):
                 logger.info(f"Warning: Argument {k} is already set to {getattr(args, k)}, will override with {v}.")
             setattr(args, k, v)
 
-    if args.rollout_max_context_len is None:
-        logger.info(
-            f"args.rollout_max_context_len is not set. Use args.rollout_max_response_len {args.rollout_max_response_len} as default value."
-        )
-        args.rollout_max_context_len = args.rollout_max_response_len
-
     if args.eval_max_context_len is None:
         logger.info(
             f"args.eval_max_context_len is not set. Use args.rollout_max_context_len {args.rollout_max_context_len} as default value."
         )
         args.eval_max_context_len = args.rollout_max_context_len
 
-    if args.rollout_max_prompt_len is None:
+    if args.rollout_max_prompt_len is None and args.rollout_max_context_len is not None:
         logger.info(
             f"args.rollout_max_prompt_len is not set. Use args.rollout_max_context_len - 1 ({args.rollout_max_context_len} - 1) as default value so that there is at least one generated token to compute loss."
         )
         args.rollout_max_prompt_len = args.rollout_max_context_len - 1
 
-    assert (
-        args.rollout_max_prompt_len <= args.rollout_max_context_len - 1
-    ), f"args.rollout_max_prompt_len ({args.rollout_max_prompt_len}) must be smaller than args.rollout_max_context_len ({args.rollout_max_context_len}) so that there is at least one generated token to compute loss."
+    if args.rollout_max_prompt_len is not None and args.rollout_max_context_len is not None:
+        assert (
+            args.rollout_max_prompt_len <= args.rollout_max_context_len - 1
+        ), f"args.rollout_max_prompt_len ({args.rollout_max_prompt_len}) must be smaller than args.rollout_max_context_len ({args.rollout_max_context_len}) so that there is at least one generated token to compute loss."
 
     if args.prefill_num_servers is not None:
         assert not args.use_fault_tolerance, "fault tolerance is not supported when prefill_num_servers is set."
