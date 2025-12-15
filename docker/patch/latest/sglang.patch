@@ -175,7 +175,7 @@ index 932f52aeb..ee52f4c94 100644
  
          hidden_states = self._communicate_simple_fn(
 diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
-index 3293a8a59..89c0f54b9 100644
+index 3293a8a59..ea6b30d73 100644
 --- a/python/sglang/srt/layers/layernorm.py
 +++ b/python/sglang/srt/layers/layernorm.py
 @@ -84,15 +84,12 @@ class RMSNorm(CustomOp):
@@ -323,7 +323,56 @@ index 3293a8a59..89c0f54b9 100644
          if residual is not None:
              fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
              return x, residual
-@@ -382,6 +411,7 @@ class GemmaRMSNorm(CustomOp):
+@@ -307,6 +336,7 @@ class LayerNorm(CustomOp):
+     def forward_cuda(
+         self,
+         x: torch.Tensor,
++        **kwargs,
+     ) -> torch.Tensor:
+         if (
+             _flashinfer_layernorm_available
+@@ -315,11 +345,12 @@ class LayerNorm(CustomOp):
+         ):
+             return layernorm(x, self.weight, self.bias, self.variance_epsilon)
+         else:
+-            return self.forward_native(x)
++            return self.forward_native(x, **kwargs)
+ 
+     def forward_native(
+         self,
+         x: torch.Tensor,
++        **kwargs,
+     ) -> torch.Tensor:
+         weight = self.weight if self.elementwise_affine else None
+         bias = self.bias if self.use_bias else None
+@@ -336,12 +367,14 @@ class LayerNorm(CustomOp):
+     def forward_hip(
+         self,
+         x: torch.Tensor,
++        **kwargs,
+     ) -> torch.Tensor:
+-        return self.forward_native(x)
++        return self.forward_native(x, **kwargs)
+ 
+     def forward_npu(
+         self,
+         x: torch.Tensor,
++        **kwargs,
+     ) -> torch.Tensor:
+         orig_dtype = x.dtype
+         x = x.to(self.dtype)
+@@ -360,8 +393,9 @@ class LayerNorm(CustomOp):
+     def forward_cpu(
+         self,
+         x: torch.Tensor,
++        **kwargs,
+     ) -> torch.Tensor:
+-        return self.forward_native(x)
++        return self.forward_native(x, **kwargs)
+ 
+ 
+ class GemmaRMSNorm(CustomOp):
+@@ -382,6 +416,7 @@ class GemmaRMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -331,7 +380,7 @@ index 3293a8a59..89c0f54b9 100644
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          if residual is not None:
              gemma_fused_add_rmsnorm(
-@@ -395,6 +425,7 @@ class GemmaRMSNorm(CustomOp):
+@@ -395,6 +430,7 @@ class GemmaRMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -339,7 +388,7 @@ index 3293a8a59..89c0f54b9 100644
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          orig_dtype = x.dtype
          if residual is not None:
-@@ -412,13 +443,15 @@ class GemmaRMSNorm(CustomOp):
+@@ -412,13 +448,15 @@ class GemmaRMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -356,7 +405,7 @@ index 3293a8a59..89c0f54b9 100644
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          if residual is not None:
              x = x + residual
-@@ -431,8 +464,9 @@ class GemmaRMSNorm(CustomOp):
+@@ -431,8 +469,9 @@ class GemmaRMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -367,7 +416,7 @@ index 3293a8a59..89c0f54b9 100644
  
  
  class Gemma3RMSNorm(CustomOp):
-@@ -445,17 +479,17 @@ class Gemma3RMSNorm(CustomOp):
+@@ -445,17 +484,17 @@ class Gemma3RMSNorm(CustomOp):
      def _norm(self, x):
          return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
  
