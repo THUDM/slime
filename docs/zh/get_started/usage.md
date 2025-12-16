@@ -173,6 +173,8 @@ sglang 的加载非常简单，只需要：
 请注意，这里的 `step_loss_mask`（默认值为 1）字段为 SFT 阶段提供，若设置为 0，则会将该轮 `loss_mask` 设置为 0；若设置为 1，则使用正常 `loss_mask`。
 另外我们还提供了一个 metadata_key，默认为 `"metadata"`，读取后我们会把数据中的 metadata 加载进 slime，可能会对自定义数据生成或者自定义 reward model 有帮助。
 
+如果数据集中包含 tool calling 所需的工具定义，也可以提供 `--tool-key <key>`。slime 会将其加载到 `sample.metadata["tools"]`（一个 tool schema 的 list）中。在内置的 SFT rollout 中，这会自动启用 tool-aware 的 chat template tokenization 与 loss masking（工具/环境返回的 tokens 会被 mask 掉）。
+
 ### RL 训练需要的超参
 
 - `--advantage-estimator`: 当前训练需要的 RL 算法，目前支持：
