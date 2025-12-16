@@ -2,6 +2,7 @@ import base64
 import io
 import logging
 
+import numpy as np
 from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,9 @@ def load_processor(name_or_path: str, **kwargs):
     return proc
 
 
-def prepare_model_inputs(prompt, tokenizer, processor=None, metadata=None, apply_chat_template_kwargs=None):
+def prepare_model_inputs(
+    prompt, tokenizer, processor=None, metadata=None, apply_chat_template=False, apply_chat_template_kwargs=None
+):
     """Prepare all inputs for model inference.
 
     Returns:
@@ -34,13 +37,24 @@ def prepare_model_inputs(prompt, tokenizer, processor=None, metadata=None, apply
             - extra_info: Dict with 'images', 'videos', 'multimodal_inputs' (or empty dict)
     """
     tools = metadata.get("tools") if metadata else None
-    text_prompt = tokenizer.apply_chat_template(
-        prompt,
-        tools=tools,
-        tokenize=False,
-        add_generation_prompt=True,
-        **(apply_chat_template_kwargs or {}),
-    )
+    if isinstance(prompt, (list, np.ndarray)):
+        assert (
+            apply_chat_template
+        ), f"apply_chat_template must be True when prompt is a list or numpy array, current prompt is {prompt}"
+        text_prompt = tokenizer.apply_chat_template(
+            prompt,
+            tools=tools,
+            tokenize=False,
+            add_generation_prompt=True,
+            **(apply_chat_template_kwargs or {}),
+        )
+    elif isinstance(prompt, str):
+        assert (
+            not apply_chat_template
+        ), f"apply_chat_template must be False when prompt is a string, current prompt is {prompt}"
+        text_prompt = prompt
+    else:
+        raise ValueError(f"Invalid prompt type: {type(prompt)}, current prompt is {prompt}")
 
     if not processor:
         input_ids = tokenizer.encode(text_prompt, add_special_tokens=False)

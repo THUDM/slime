@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 import socket
 from argparse import Namespace
 from contextlib import nullcontext
@@ -473,6 +474,14 @@ class MegatronTrainRayActor(TrainRayActor):
             print_memory("before update_weights")
             self.weight_updater.update_weights()
             print_memory("after update_weights")
+
+            if self.args.ci_test and len(rollout_engines) > 0:
+                engine = random.choice(rollout_engines)
+                engine_version = ray.get(engine.get_weight_version.remote())
+                if str(engine_version) != str(self.weight_updater.weight_version):
+                    raise RuntimeError(
+                        f"Weight version mismatch! Engine: {engine_version}, Updater: {self.weight_updater.weight_version}"
+                    )
 
             if getattr(self.args, "keep_old_actor", False):
                 if self.args.update_weights_interval == 1:
