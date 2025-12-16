@@ -86,8 +86,8 @@ OFFPOLICY_GRPO_ARGS=(
    --advantage-estimator grpo
 
    # Use decoupled policy loss instead of standard policy loss
-   # --loss-type decoupled_policy_loss
-   --loss-type policy_loss
+   --loss-type decoupled_policy_loss
+   # --loss-type policy_loss
 
    # === Staleness Control ===
    # Maximum allowed staleness (η in the paper)
@@ -95,7 +95,7 @@ OFFPOLICY_GRPO_ARGS=(
    # - η=1: allows data from 1 version ago
    # - η=5: allows data from up to 5 versions ago (more aggressive off-policy)
    # Recommended: start with 2-3 for moderate off-policy
-   --max-staleness 3
+   --max-staleness 2
 
    # === PPO Clipping Parameters ===
    # Asymmetric clipping: allows more aggressive positive updates
@@ -124,62 +124,16 @@ OFFPOLICY_GRPO_ARGS=(
    # No additional configuration needed
 )
 
-# ==================== NEW: BUFFER SAMPLING STRATEGY CONFIGURATION ====================
-# This section contains the NEW extensible buffer sampling strategy parameters
-
-BUFFER_SAMPLING_ARGS=(
-   # === Buffer Configuration ===
-   --buffer-max-size 500  # Increased from default 1000 for better data reuse
-
-   # === Sampling Strategy ===
-   # Choose one of: fifo_staleness (default), priority, random, reservoir, custom
-   --buffer-sampling-strategy fifo_staleness
-
-   # === Sample Reuse Control ===
-   # Set to 'true' to remove samples after use (default)
-   # Set to 'false' to allow sample reuse (controlled by --buffer-reuse-samples)
-   --buffer-remove-on-sample true
-
-   # Maximum times a sample can be reused (only effective when remove-on-sample=false)
-   # 0 = unlimited, 1 = no reuse (default), 2+ = limited reuse
-   --buffer-reuse-samples 1
-
-   # === Priority Sampling (only used when --buffer-sampling-strategy=priority) ===
-   # Uncomment to enable priority-based sampling:
-   # --buffer-sampling-strategy priority
-   # --buffer-priority-metric reward  # Options: reward, advantage, custom
-   # --buffer-priority-weight 1.0
-   # --buffer-staleness-penalty 0.1
-
-   # === Random Sampling (only used when --buffer-sampling-strategy=random) ===
-   # Uncomment to enable random sampling:
-   # --buffer-sampling-strategy random
-   # --buffer-random-seed 42  # Optional: for reproducibility
-)
 
 # ==================== ALTERNATIVE CONFIGURATIONS ====================
 # Uncomment one of the following to try different sampling strategies
 
-# === CONFIGURATION 1: Priority-based sampling (high-reward samples first) ===
-# BUFFER_SAMPLING_ARGS=(
-#    --buffer-max-size 1024
-#    --buffer-sampling-strategy priority
-#    --buffer-priority-metric reward
-#    --buffer-priority-weight 1.0
-#    --buffer-staleness-penalty 0.1
-#    --buffer-normalize-priority-scores true
-#    --buffer-priority-norm-method minmax
-#    --buffer-remove-on-sample false
-#    --buffer-reuse-samples 4  # Each sample can be used up to 4 times
-# )
-
 # === CONFIGURATION 2: Sample reuse for higher data efficiency (CURRENT) ===
 BUFFER_SAMPLING_ARGS=(
-   # --buffer-max-size 1024
-   --buffer-max-size 128
+   --buffer-max-size 1024
    --buffer-sampling-strategy fifo_staleness
    --buffer-remove-on-sample false
-   --buffer-reuse-samples 4  # Each sample can be used up to 4 times
+   --buffer-reuse-samples 1000  # Each sample can be used up to x times
 )
 
 # === CONFIGURATION 3: Random sampling for maximum diversity ===
@@ -207,7 +161,7 @@ BUFFER_SAMPLING_ARGS=(
 #    --buffer-normalize-priority-scores true  # Enable normalization
 #    --buffer-priority-norm-method minmax  # Min-max normalization
 #    --buffer-remove-on-sample false
-#    --buffer-reuse-samples 4
+#    --buffer-reuse-samples 1000
 # )
 
 # ==================== STANDARD CONFIGURATION ====================

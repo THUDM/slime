@@ -210,10 +210,48 @@ class RolloutManager:
                     wandb.log(wandb_metrics)
 
             # === Step 4: Sample data for training (mixes buffer + new data automatically) ===
-            # get_samples returns list[list[Sample]] (grouped)
-            train_data_samples = self.data_source.get_samples(
-                num_samples=self.args.rollout_batch_size
-            )
+            # 🔧 IMPORTANT: Use get_training_samples() for training to avoid getting incomplete prompts
+            # get_training_samples() ONLY returns complete samples from buffer, no fallback to dataset
+            # get_samples() is used for rollout generation and may return PENDING prompts
+
+            if hasattr(self.data_source, 'get_training_samples') and self.data_source.buffer_enabled:
+                # Use dedicated method for training that only samples from buffer
+                train_data_samples = self.data_source.get_training_samples(
+                    num_samples=self.args.rollout_batch_size
+                )
+
+                # If buffer is empty/exhausted, skip this training step
+                if len(train_data_samples) == 0:
+                    print(f"[Training] Buffer exhausted, no samples available for training. Skipping this step.")
+                    print(f"[Training] Next rollout will generate new data to refill buffer.")
+                    return None  # Signal to skip training
+            else:
+                # Fallback to regular get_samples for backward compatibility
+                train_data_samples = self.data_source.get_samples(
+                    num_samples=self.args.rollout_batch_size
+                )
+
+            # 🔧 DEFENSIVE CHECK: Verify buffer samples are complete
+            if self.data_source.buffer_enabled and len(train_data_samples) > 0:
+                incomplete_groups = []
+                for i, group in enumerate(train_data_samples):
+                    for j, sample in enumerate(group):
+                        if sample.status == Sample.Status.PENDING and (not hasattr(sample, 'response') or not sample.response):
+                            incomplete_groups.append((i, j, sample))
+
+                if len(incomplete_groups) > 0:
+                    print(f"[CRITICAL WARNING] Found {len(incomplete_groups)} incomplete samples from buffer!")
+                    for i, j, sample in incomplete_groups[:5]:  # Show first 5
+                        print(f"  Group {i}, Sample {j}: "
+                              f"group_index={getattr(sample, 'group_index', '?')}, "
+                              f"index={getattr(sample, 'index', '?')}, "
+                              f"status={sample.status}, "
+                              f"has_response={hasattr(sample, 'response') and bool(sample.response)}")
+
+                    raise RuntimeError(
+                        f"Buffer integrity error: {len(incomplete_groups)} incomplete samples detected! "
+                        f"This indicates buffer contamination. Check buffer filtering logic."
+                    )
 
             # === Step 5: Flatten grouped samples for _convert_samples_to_train_data ===
             # _convert_samples_to_train_data expects list[Sample], not list[list[Sample]]
@@ -232,7 +270,7 @@ class RolloutManager:
                 print(f"[CRITICAL ERROR] Indices: {none_reward_indices[:10]}{'...' if len(none_reward_indices) > 10 else ''}")
                 # Force set to 0 to prevent crash
                 for idx in none_reward_indices:
-                    print(f"[CRITICAL ERROR] Forcing reward=1e-8 for sample {idx} train_data_samples[idx]")
+                    print(f"[CRITICAL ERROR] Forcing reward=1e-8 for sample {idx} {train_data_samples[idx]}")
                     train_data_samples[idx].reward = 1e-8
 
             train_data = self._convert_samples_to_train_data(train_data_samples)
@@ -305,9 +343,13 @@ class RolloutManager:
                 print(f"trim number of samples from {origin_data_length} to {trim_len}")
 
         # === Tag samples with current policy version ===
-        # Always set policy_version for all samples (both normal and debug data)
+        # IMPORTANT: Only set policy_version for NEW samples (from dataset)
+        # For samples from buffer (re-generation), they already have policy_version
+        # and we should NOT overwrite it, otherwise we lose track of when they were generated
         for sample in data:
-            sample.policy_version = self.current_policy_version
+            # Only set if not already set (i.e., new samples from dataset)
+            if not hasattr(sample, 'policy_version') or sample.policy_version is None:
+                sample.policy_version = self.current_policy_version
 
         return data, metrics
 

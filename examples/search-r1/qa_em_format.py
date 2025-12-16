@@ -131,11 +131,11 @@ def extract_solution(solution_str):
     matches = list(match)
 
     # # If there are 0 or exactly 1 matches, return None
-    # if len(matches) <= 1:
-    #     return None
-    # 修复：只要有匹配（>=1个），就提取最后一个
-    if len(matches) == 0:
+    if len(matches) <= 1:
         return None
+    # 修复：只要有匹配（>=1个），就提取最后一个
+    # if len(matches) == 0:
+    #     return None
 
     # If there are 2 or more matches, return the last one
     return matches[-1].group(1).strip()

@@ -210,7 +210,7 @@ class FIFOWithStalenessStrategy(BaseSamplingStrategy):
         1. Filter by staleness
         2. Filter by reuse count
         3. Take first num_samples groups (FIFO)
-        4. Remove from buffer if remove_on_sample=True
+        4. Remove from buffer if remove_on_sample=True or if exhausted
         """
         if len(buffer) == 0 or num_samples == 0:
             return []
@@ -219,18 +219,27 @@ class FIFOWithStalenessStrategy(BaseSamplingStrategy):
         valid_groups, stale_groups = self.filter_by_staleness(buffer)
 
         # Step 2: Filter by reuse count
-        valid_groups = self.filter_by_reuse_count(valid_groups)
+        reusable_groups = self.filter_by_reuse_count(valid_groups)
+
+        # 🔧 FIX: Auto-evict exhausted groups when all are filtered
+        exhausted_groups = []
+        if len(reusable_groups) == 0 and len(valid_groups) > 0:
+            # All valid groups have exhausted their reuse limit
+            # These groups should be removed to make room for new data
+            exhausted_groups = valid_groups
+            print(f"[Buffer Sampling] All {len(exhausted_groups)} groups exhausted reuse limit (>={self.max_reuse_count}). "
+                  f"Auto-evicting to make room for new rollout data.")
 
         # Step 3: FIFO sampling
-        num_to_sample = min(len(valid_groups), num_samples)
-        sampled = valid_groups[:num_to_sample]
+        num_to_sample = min(len(reusable_groups), num_samples)
+        sampled = reusable_groups[:num_to_sample]
 
         # Step 4: Update reuse count (if not removing)
-        if not self.remove_on_sample:
+        if not self.remove_on_sample and len(sampled) > 0:
             self.increment_reuse_count(sampled)
 
         # Step 5: Remove from buffer
-        if self.remove_on_sample:
+        if self.remove_on_sample and len(sampled) > 0:
             # Remove sampled groups
             self.remove_from_buffer(buffer, sampled)
 
@@ -239,6 +248,10 @@ class FIFOWithStalenessStrategy(BaseSamplingStrategy):
             print(f"[Buffer Sampling] Removing {len(stale_groups)} stale groups "
                   f"(staleness > {self.max_staleness})")
             self.remove_from_buffer(buffer, stale_groups)
+
+        # 🔧 FIX: Remove exhausted groups
+        if exhausted_groups:
+            self.remove_from_buffer(buffer, exhausted_groups)
 
         self.total_sampled += len(sampled)
         return sampled
