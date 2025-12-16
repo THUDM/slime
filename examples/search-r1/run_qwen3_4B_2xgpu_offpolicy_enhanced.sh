@@ -46,6 +46,7 @@ ROLLOUT_ARGS=(
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 512
+   # --rollout-max-response-len 4096
    --rollout-temperature 1
 
    # eval args
@@ -85,7 +86,8 @@ OFFPOLICY_GRPO_ARGS=(
    --advantage-estimator grpo
 
    # Use decoupled policy loss instead of standard policy loss
-   --loss-type decoupled_policy_loss
+   # --loss-type decoupled_policy_loss
+   --loss-type policy_loss
 
    # === Staleness Control ===
    # Maximum allowed staleness (η in the paper)
@@ -160,21 +162,25 @@ BUFFER_SAMPLING_ARGS=(
 
 # === CONFIGURATION 1: Priority-based sampling (high-reward samples first) ===
 # BUFFER_SAMPLING_ARGS=(
-#    --buffer-max-size 500
+#    --buffer-max-size 1024
 #    --buffer-sampling-strategy priority
 #    --buffer-priority-metric reward
 #    --buffer-priority-weight 1.0
 #    --buffer-staleness-penalty 0.1
-#    --buffer-remove-on-sample true
+#    --buffer-normalize-priority-scores true
+#    --buffer-priority-norm-method minmax
+#    --buffer-remove-on-sample false
+#    --buffer-reuse-samples 4  # Each sample can be used up to 4 times
 # )
 
-# === CONFIGURATION 2: Sample reuse for higher data efficiency ===
-# BUFFER_SAMPLING_ARGS=(
-#    --buffer-max-size 300
-#    --buffer-sampling-strategy fifo_staleness
-#    --buffer-remove-on-sample false
-#    --buffer-reuse-samples 3  # Each sample can be used up to 3 times
-# )
+# === CONFIGURATION 2: Sample reuse for higher data efficiency (CURRENT) ===
+BUFFER_SAMPLING_ARGS=(
+   # --buffer-max-size 1024
+   --buffer-max-size 128
+   --buffer-sampling-strategy fifo_staleness
+   --buffer-remove-on-sample false
+   --buffer-reuse-samples 4  # Each sample can be used up to 4 times
+)
 
 # === CONFIGURATION 3: Random sampling for maximum diversity ===
 # BUFFER_SAMPLING_ARGS=(
@@ -182,6 +188,26 @@ BUFFER_SAMPLING_ARGS=(
 #    --buffer-sampling-strategy random
 #    --buffer-random-seed 42
 #    --buffer-remove-on-sample true
+# )
+
+# === CONFIGURATION 4: Priority-based with normalized scoring (RECOMMENDED FOR TUNING) ===
+# This configuration uses normalized priority scores for easier parameter tuning:
+# - Base scores (reward/advantage) normalized to [0, 1]
+# - Staleness normalized to [0, 1]
+# - priority_weight and staleness_penalty now have interpretable ranges
+# - Higher priority_weight → favor high-reward samples
+# - Higher staleness_penalty → favor fresh samples
+#
+# BUFFER_SAMPLING_ARGS=(
+#    --buffer-max-size 1024
+#    --buffer-sampling-strategy priority
+#    --buffer-priority-metric reward
+#    --buffer-priority-weight 1.0  # 2x weight on reward
+#    --buffer-staleness-penalty 0.1  # 0.5x weight on staleness
+#    --buffer-normalize-priority-scores true  # Enable normalization
+#    --buffer-priority-norm-method minmax  # Min-max normalization
+#    --buffer-remove-on-sample false
+#    --buffer-reuse-samples 4
 # )
 
 # ==================== STANDARD CONFIGURATION ====================
@@ -259,3 +285,6 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${SGLANG_ARGS[@]} \
    ${MISC_ARGS[@]} \
    ${CUSTOM_ARGS[@]}
+
+
+#  bash examples/search-r1/run_qwen3_4B_2xgpu_offpolicy_enhanced.sh 2>&1 | tee debug_output.log

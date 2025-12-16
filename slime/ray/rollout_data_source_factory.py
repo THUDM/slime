@@ -10,8 +10,6 @@ Usage:
 
     data_source = create_rollout_data_source(args)
 
-Author: Claude Code
-Date: 2025-12-10
 """
 
 from slime.ray.rollout_data_source import RolloutDataSourceWithBuffer

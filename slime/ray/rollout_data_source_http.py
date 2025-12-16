@@ -23,8 +23,6 @@ Comparison with In-Process Buffer:
     - In-Process: Fast, embedded, for standard GRPO/PPO
     - HTTP: Flexible, scalable, for agent tasks and async generation
 
-Author: Claude Code
-Date: 2025-12-10
 """
 
 import time
@@ -309,17 +307,31 @@ class RolloutDataSourceWithHTTPBuffer(RolloutDataSource):
             List of dicts in HTTP format
         """
         http_data = []
+        none_reward_count = 0
+        none_policy_version_count = 0
 
         for idx, sample in enumerate(samples):
             # Create instance_id from group_index
             instance_id = f"grpo_group_{sample.group_index if hasattr(sample, 'group_index') else idx}"
 
+            # === Robust reward handling ===
+            reward = sample.reward
+            if reward is None:
+                none_reward_count += 1
+                reward = 0.0
+
+            # === Robust policy_version handling ===
+            policy_version = getattr(sample, 'policy_version', None)
+            if policy_version is None:
+                none_policy_version_count += 1
+                policy_version = self.current_policy_version
+
             item = {
                 "instance_id": instance_id,
                 "prompt": sample.prompt,
                 "response": sample.response,
-                "reward": sample.reward if sample.reward is not None else 0.0,
-                "policy_version": sample.policy_version if hasattr(sample, 'policy_version') else self.current_policy_version,
+                "reward": reward,
+                "policy_version": policy_version,
                 "response_length": sample.response_length,
                 "timestamp": time.time(),
                 # Additional fields for reconstruction
@@ -329,6 +341,13 @@ class RolloutDataSourceWithHTTPBuffer(RolloutDataSource):
             }
 
             http_data.append(item)
+
+        # Log warnings for data quality issues
+        if none_reward_count > 0:
+            print(f"[HTTP Buffer] WARNING: {none_reward_count}/{len(samples)} samples had None reward, converted to 0.0")
+        if none_policy_version_count > 0:
+            print(f"[HTTP Buffer] WARNING: {none_policy_version_count}/{len(samples)} samples had None policy_version, "
+                  f"using current_policy_version={self.current_policy_version}")
 
         return http_data
 
@@ -344,18 +363,35 @@ class RolloutDataSourceWithHTTPBuffer(RolloutDataSource):
         """
         samples = []
 
-        for item in http_data:
+        for idx, item in enumerate(http_data):
+            # === Robust reward handling ===
+            # Check if reward exists and is valid
+            reward = item.get("reward", None)
+            if reward is None:
+                print(f"[HTTP Buffer] WARNING: Sample {idx} has None reward, using 0.0")
+                reward = 0.0
+
             sample = Sample(
                 prompt=item.get("prompt", ""),
                 response=item.get("response", ""),
-                reward=item.get("reward", 0.0),
+                reward=reward,
                 response_length=item.get("response_length", 0),
                 tokens=item.get("tokens", []),
             )
 
-            # Restore additional fields
-            if "policy_version" in item:
+            # === Robust policy_version handling ===
+            # For off-policy GRPO, policy_version is critical
+            # Always set it to a valid value (never None)
+            if "policy_version" in item and item["policy_version"] is not None:
                 sample.policy_version = item["policy_version"]
+            else:
+                # Use current policy version as fallback
+                sample.policy_version = self.current_policy_version
+                if idx == 0:  # Only log once per batch
+                    print(f"[HTTP Buffer] WARNING: policy_version missing in HTTP data, "
+                          f"using current_policy_version={self.current_policy_version}")
+
+            # Restore other optional fields
             if "loss_mask" in item and item["loss_mask"] is not None:
                 sample.loss_mask = item["loss_mask"]
             if "index" in item:

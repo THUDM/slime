@@ -68,7 +68,38 @@ class Sample:
         return Sample(**data)
 
     def get_reward_value(self, args) -> float:
-        return self.reward if not args.reward_key else self.reward[args.reward_key]
+        """
+        Get reward value, handling both scalar and dict rewards.
+
+        Args:
+            args: Configuration with optional reward_key
+
+        Returns:
+            Float reward value (never None, fallback to 0)
+        """
+        # Handle None reward (should not happen after fixes, but be defensive)
+        if self.reward is None:
+            print(f"[WARNING] get_reward_value: reward is None, returning 0")
+            return 0
+
+        # If no reward_key specified, return scalar reward
+        if not args.reward_key:
+            return self.reward
+
+        # reward_key is specified - reward should be a dict
+        if isinstance(self.reward, dict):
+            # Return the specified key, or 0 if key doesn't exist
+            value = self.reward.get(args.reward_key, 0)
+            if value is None:
+                print(f"[WARNING] get_reward_value: reward[{args.reward_key}] is None, returning 0")
+                return 0
+            return value
+        else:
+            # Configuration mismatch: reward_key set but reward is scalar
+            # This happens when reward function returns scalar but args expects dict
+            print(f"[WARNING] get_reward_value: reward_key='{args.reward_key}' is set but "
+                  f"reward is scalar ({self.reward}). Returning scalar value.")
+            return self.reward
 
     @property
     def effective_response_length(self):

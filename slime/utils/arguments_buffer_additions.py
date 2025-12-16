@@ -92,6 +92,32 @@ parser.add_argument(
     ),
 )
 
+# === NEW: Priority Score Normalization Configuration ===
+parser.add_argument(
+    "--buffer-normalize-priority-scores",
+    type=lambda x: x.lower() in ["true", "1", "yes"],
+    default=True,
+    help=(
+        "Whether to normalize priority scores to [0, 1] range. "
+        "Normalization makes priority_weight and staleness_penalty more interpretable. "
+        "Default: True (recommended)"
+    ),
+)
+
+parser.add_argument(
+    "--buffer-priority-norm-method",
+    type=str,
+    choices=["minmax", "zscore", "sigmoid"],
+    default="minmax",
+    help=(
+        "Normalization method for priority scores (only used when --buffer-normalize-priority-scores=True): "
+        "'minmax': Min-max normalization to [0, 1]; "
+        "'zscore': Z-score normalization then sigmoid to [0, 1]; "
+        "'sigmoid': Direct sigmoid (for unbounded scores). "
+        "Default: minmax"
+    ),
+)
+
 # === Random Sampling Configuration ===
 parser.add_argument(
     "--buffer-random-seed",

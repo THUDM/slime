@@ -212,6 +212,7 @@ def forward_only(
 
         # Get the batch.
         batch = get_batch(data_iterator, ["tokens", "total_lengths", "response_lengths"])
+
         unconcat_tokens = batch["unconcat_tokens"]
         tokens = batch["tokens"]
         packed_seq_params = batch["packed_seq_params"]
@@ -370,6 +371,27 @@ def train_one_step(
                 batch_keys.extend(["policy_versions", "current_policy_version"])
 
         batch = get_batch(data_iterator, batch_keys)
+
+
+        # === Validate critical fields for off-policy GRPO ===
+        # if args.loss_type == "decoupled_policy_loss":
+        #     if hasattr(args, "max_staleness") and args.max_staleness >= 0:
+        #         # Validate policy_versions is not None
+        #         if batch.get("policy_versions") is None:
+        #             raise RuntimeError(
+        #                 "CRITICAL ERROR: 'policy_versions' is None in batch for off-policy GRPO. "
+        #                 "This indicates a data pipeline issue. Please check:\n"
+        #                 "1. RolloutDataSource._convert_samples_to_train_data() sets policy_versions\n"
+        #                 "2. All samples have valid policy_version attribute\n"
+        #                 "3. HTTP buffer (if used) correctly transfers policy_version field"
+        #             )
+        #         # Validate current_policy_version is not None
+        #         if batch.get("current_policy_version") is None:
+        #             raise RuntimeError(
+        #                 "CRITICAL ERROR: 'current_policy_version' is None in batch for off-policy GRPO. "
+        #                 "This indicates a tracking issue in the RolloutManager."
+        #             )
+
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             old_stage = os.environ["ROUTING_REPLAY_STAGE"]

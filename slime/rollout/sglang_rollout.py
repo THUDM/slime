@@ -246,15 +246,43 @@ async def generate_and_rm(
 
         # for multi agent system, the reward of some sample is calculated during generation.
         samples_need_reward = [sample for sample in samples if sample.reward is None]
+        print(f"[DEBUG] sglang_rollout: {len(samples_need_reward)}/{len(samples)} samples need reward computation")
+
         rewards = await batched_async_rm(args, samples_need_reward)
-        for sample, reward in zip(samples_need_reward, rewards):
-            sample.reward = reward
+        print(f"[DEBUG] sglang_rollout: batched_async_rm returned {len(rewards)} rewards")
+
+        # Verify rewards before setting
+        none_count = sum(1 for r in rewards if r is None)
+        if none_count > 0:
+            print(f"[ERROR] sglang_rollout: {none_count}/{len(rewards)} rewards are None after batched_async_rm!")
+
+        for i, (sample, reward) in enumerate(zip(samples_need_reward, rewards)):
+            if reward is None:
+                print(f"[ERROR] sglang_rollout: Setting None reward for sample {i}, using 0 instead")
+                sample.reward = 0
+            else:
+                sample.reward = reward
+
+        # Final verification
+        final_none_count = sum(1 for s in samples if s.reward is None)
+        if final_none_count > 0:
+            print(f"[ERROR] sglang_rollout: After setting rewards, {final_none_count}/{len(samples)} samples still have None reward!")
+        else:
+            print(f"[DEBUG] sglang_rollout: All {len(samples)} samples have valid rewards")
+
         return samples
     else:
         if sample.status == Sample.Status.ABORTED:
             return sample
 
-        sample.reward = await async_rm(args, sample)
+        reward = await async_rm(args, sample)
+        if reward is None:
+            print(f"[WARNING] sglang_rollout: async_rm returned None for single sample, using 0 instead")
+            sample.reward = 0
+        else:
+            sample.reward = reward
+
+        print(f"[DEBUG] sglang_rollout: Single sample reward set to {sample.reward}")
 
     return sample
 
@@ -280,8 +308,15 @@ async def generate_and_rm_group(
     # for the rm that need the whole group, we will not do the rm here
     if not state.aborted and args.group_rm:
         rewards = await batched_async_rm(args, group)
-        for sample, reward in zip(group, rewards):
-            sample.reward = reward
+        print(f"[DEBUG] generate_and_rm_group: batched_async_rm returned {len(rewards)} rewards for group")
+
+        # Verify and set rewards
+        for i, (sample, reward) in enumerate(zip(group, rewards)):
+            if reward is None:
+                print(f"[WARNING] generate_and_rm_group: Reward {i} is None, using 0 instead")
+                sample.reward = 0
+            else:
+                sample.reward = reward
 
     return group
 

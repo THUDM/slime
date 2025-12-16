@@ -255,6 +255,10 @@ class PrioritySamplingStrategy(BaseSamplingStrategy):
 
     Priority is adjusted by staleness penalty to balance data freshness.
 
+    NEW: Normalized scoring with configurable weight balance:
+    - Score = normalized_base_score × priority_weight + normalized_staleness × staleness_weight
+    - All components normalized to [0, 1] for stable parameter tuning
+
     Recommended for:
     - When you want to focus on high-quality samples
     - Curriculum learning scenarios
@@ -269,6 +273,14 @@ class PrioritySamplingStrategy(BaseSamplingStrategy):
         self.priority_weight = getattr(args, 'buffer_priority_weight', 1.0)
         self.staleness_penalty = getattr(args, 'buffer_staleness_penalty', 0.1)
 
+        # NEW: Normalization configuration
+        self.normalize_scores = getattr(args, 'buffer_normalize_priority_scores', True)
+        self.normalization_method = getattr(args, 'buffer_priority_norm_method', 'minmax')  # minmax, zscore, sigmoid
+
+        # NEW: Running statistics for normalization
+        self.base_score_stats = {'min': float('inf'), 'max': float('-inf'), 'sum': 0.0, 'count': 0}
+        self.staleness_stats = {'min': float('inf'), 'max': float('-inf'), 'sum': 0.0, 'count': 0}
+
         # Custom metric function
         if self.priority_metric == 'custom':
             from slime.utils.misc import load_function
@@ -280,20 +292,79 @@ class PrioritySamplingStrategy(BaseSamplingStrategy):
         else:
             self.priority_func = None
 
+        # Statistics for monitoring
+        self.priority_scores_history = []
+
     def get_name(self) -> str:
         return f"priority_{self.priority_metric}"
 
-    def compute_priority(self, group: List[Sample]) -> float:
+    def _normalize_value(self, value: float, stats: dict, method: str = 'minmax') -> float:
         """
-        Compute priority score for a group.
+        Normalize a value using running statistics.
 
-        Score = base_metric × priority_weight - staleness × staleness_penalty
+        Args:
+            value: Value to normalize
+            stats: Dictionary with min, max, sum, count
+            method: Normalization method (minmax, zscore, sigmoid)
+
+        Returns:
+            Normalized value in [0, 1] range (for minmax and sigmoid)
         """
-        # Compute base metric
+        if method == 'minmax':
+            # Min-max normalization to [0, 1]
+            if stats['max'] - stats['min'] > 1e-8:
+                return (value - stats['min']) / (stats['max'] - stats['min'])
+            else:
+                return 0.5  # Default if no variation
+
+        elif method == 'zscore':
+            # Z-score normalization, then sigmoid to [0, 1]
+            if stats['count'] > 0:
+                mean = stats['sum'] / stats['count']
+                # Estimate std using simple heuristic
+                std = (stats['max'] - stats['min']) / 4.0 if stats['max'] - stats['min'] > 1e-8 else 1.0
+                z_score = (value - mean) / std
+                # Apply sigmoid to map to [0, 1]
+                return 1.0 / (1.0 + np.exp(-z_score))
+            else:
+                return 0.5
+
+        elif method == 'sigmoid':
+            # Direct sigmoid (useful for unbounded scores)
+            return 1.0 / (1.0 + np.exp(-value))
+
+        else:
+            raise ValueError(f"Unknown normalization method: {method}")
+
+    def _update_stats(self, value: float, stats: dict):
+        """Update running statistics with new value."""
+        stats['min'] = min(stats['min'], value)
+        stats['max'] = max(stats['max'], value)
+        stats['sum'] += value
+        stats['count'] += 1
+
+    def compute_priority(self, group: List[Sample]) -> tuple[float, dict]:
+        """
+        Compute priority score for a group with optional normalization.
+
+        NEW: Returns both the final score and detailed breakdown for monitoring.
+
+        Args:
+            group: List of samples in the group
+
+        Returns:
+            (score, breakdown_dict) where breakdown_dict contains:
+                - base_score_raw: Raw base metric value
+                - base_score_normalized: Normalized base score (if enabled)
+                - staleness_raw: Raw staleness value
+                - staleness_normalized: Normalized staleness (if enabled)
+                - final_score: Final combined score
+        """
+        # === Compute base metric ===
         if self.priority_metric == 'reward':
             # Average reward across samples in group
             rewards = [s.reward for s in group if s.reward is not None]
-            base_score = np.mean(rewards) if rewards else 0.0
+            base_score_raw = np.mean(rewards) if rewards else 0.0
 
         elif self.priority_metric == 'advantage':
             # Average advantage (if available in metadata)
@@ -301,26 +372,62 @@ class PrioritySamplingStrategy(BaseSamplingStrategy):
             for s in group:
                 if s.metadata and 'advantage' in s.metadata:
                     advantages.append(s.metadata['advantage'])
-            base_score = np.mean(advantages) if advantages else 0.0
+            base_score_raw = np.mean(advantages) if advantages else 0.0
 
         elif self.priority_metric == 'custom':
             # User-defined function
-            base_score = self.priority_func(group)
+            base_score_raw = self.priority_func(group)
 
         else:
             raise ValueError(f"Unknown priority metric: {self.priority_metric}")
 
-        # Compute staleness penalty
+        # === Compute staleness ===
         sample = group[0]
         if sample.policy_version is not None:
-            staleness = self.current_policy_version - sample.policy_version
-            staleness_term = staleness * self.staleness_penalty
+            staleness_raw = self.current_policy_version - sample.policy_version
         else:
-            staleness_term = 0.0
+            staleness_raw = 0.0
 
-        # Final score
-        score = base_score * self.priority_weight - staleness_term
-        return score
+        # === Update running statistics ===
+        self._update_stats(base_score_raw, self.base_score_stats)
+        self._update_stats(staleness_raw, self.staleness_stats)
+
+        # === Apply normalization (if enabled) ===
+        if self.normalize_scores:
+            base_score_norm = self._normalize_value(
+                base_score_raw,
+                self.base_score_stats,
+                self.normalization_method
+            )
+            staleness_norm = self._normalize_value(
+                staleness_raw,
+                self.staleness_stats,
+                self.normalization_method
+            )
+
+            # Compute final score with normalized values
+            # Score = base_score_norm × priority_weight - staleness_norm × staleness_penalty
+            final_score = (base_score_norm * self.priority_weight -
+                          staleness_norm * self.staleness_penalty)
+        else:
+            # Use raw scores (backward compatible)
+            base_score_norm = base_score_raw
+            staleness_norm = staleness_raw
+            final_score = (base_score_raw * self.priority_weight -
+                          staleness_raw * self.staleness_penalty)
+
+        # === Prepare breakdown for monitoring ===
+        breakdown = {
+            'base_score_raw': base_score_raw,
+            'base_score_normalized': base_score_norm,
+            'staleness_raw': staleness_raw,
+            'staleness_normalized': staleness_norm,
+            'final_score': final_score,
+            'priority_weight': self.priority_weight,
+            'staleness_penalty': self.staleness_penalty,
+        }
+
+        return final_score, breakdown
 
     def sample(
         self,
@@ -349,14 +456,18 @@ class PrioritySamplingStrategy(BaseSamplingStrategy):
 
         # Step 3: Compute priorities
         scored_groups = []
+        breakdowns = []  # Collect breakdowns for statistics
+
         for group in valid_groups:
             try:
-                score = self.compute_priority(group)
+                score, breakdown = self.compute_priority(group)
                 scored_groups.append((group, score))
+                breakdowns.append(breakdown)
             except Exception as e:
                 print(f"[Warning] Failed to compute priority for group: {e}")
                 # Assign default score
                 scored_groups.append((group, 0.0))
+                breakdowns.append({'final_score': 0.0, 'base_score_raw': 0.0})
 
         # Step 4: Sort by priority (high → low)
         scored_groups.sort(key=lambda x: x[1], reverse=True)
@@ -364,12 +475,35 @@ class PrioritySamplingStrategy(BaseSamplingStrategy):
         # Step 5: Sample top num_samples
         num_to_sample = min(len(scored_groups), num_samples)
         sampled = [group for group, score in scored_groups[:num_to_sample]]
+        sampled_scores = [score for group, score in scored_groups[:num_to_sample]]
+        sampled_breakdowns = breakdowns[:num_to_sample]
 
-        # Step 6: Update reuse count (if not removing)
+        # Step 6: Store statistics for wandb logging
+        if len(sampled_breakdowns) > 0:
+            # Aggregate statistics across sampled groups
+            stats = {
+                'base_score_raw_mean': np.mean([b['base_score_raw'] for b in sampled_breakdowns]),
+                'base_score_raw_std': np.std([b['base_score_raw'] for b in sampled_breakdowns]),
+                'base_score_normalized_mean': np.mean([b.get('base_score_normalized', 0) for b in sampled_breakdowns]),
+                'staleness_raw_mean': np.mean([b['staleness_raw'] for b in sampled_breakdowns]),
+                'staleness_raw_std': np.std([b['staleness_raw'] for b in sampled_breakdowns]),
+                'staleness_normalized_mean': np.mean([b.get('staleness_normalized', 0) for b in sampled_breakdowns]),
+                'final_score_mean': np.mean(sampled_scores),
+                'final_score_std': np.std(sampled_scores),
+                'final_score_min': np.min(sampled_scores),
+                'final_score_max': np.max(sampled_scores),
+            }
+            self.priority_scores_history.append(stats)
+
+            # Keep only recent history (last 100 samples)
+            if len(self.priority_scores_history) > 100:
+                self.priority_scores_history = self.priority_scores_history[-100:]
+
+        # Step 7: Update reuse count (if not removing)
         if not self.remove_on_sample:
             self.increment_reuse_count(sampled)
 
-        # Step 7: Remove from buffer
+        # Step 8: Remove from buffer
         if self.remove_on_sample:
             self.remove_from_buffer(buffer, sampled)
 
@@ -380,6 +514,43 @@ class PrioritySamplingStrategy(BaseSamplingStrategy):
 
         self.total_sampled += len(sampled)
         return sampled
+    def get_statistics(self) -> dict:
+        """Return sampling statistics including priority-specific metrics."""
+        base_stats = super().get_statistics()
+
+        # Add priority-specific stats
+        priority_stats = {
+            "priority_metric": self.priority_metric,
+            "priority_weight": self.priority_weight,
+            "staleness_penalty": self.staleness_penalty,
+            "normalize_scores": self.normalize_scores,
+            "normalization_method": self.normalization_method if self.normalize_scores else None,
+        }
+
+        # Add running statistics
+        if self.base_score_stats['count'] > 0:
+            priority_stats.update({
+                "base_score_min": self.base_score_stats['min'],
+                "base_score_max": self.base_score_stats['max'],
+                "base_score_mean": self.base_score_stats['sum'] / self.base_score_stats['count'],
+            })
+
+        if self.staleness_stats['count'] > 0:
+            priority_stats.update({
+                "staleness_min": self.staleness_stats['min'],
+                "staleness_max": self.staleness_stats['max'],
+                "staleness_mean": self.staleness_stats['sum'] / self.staleness_stats['count'],
+            })
+
+        # Add recent sampling statistics
+        if len(self.priority_scores_history) > 0:
+            latest = self.priority_scores_history[-1]
+            priority_stats.update({
+                "latest_" + k: v for k, v in latest.items()
+            })
+
+        base_stats.update(priority_stats)
+        return base_stats
 
 
 class RandomSamplingStrategy(BaseSamplingStrategy):

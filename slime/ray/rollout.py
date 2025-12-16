@@ -130,13 +130,84 @@ class RolloutManager:
             buffer_stats = self.data_source.get_buffer_stats()
             if buffer_stats["enabled"]:
                 print(f"[Buffer] Added {len(data)} samples. Stats: {buffer_stats}")
-                # Optional: log to wandb
+                # Optional: log to wandb with comprehensive off-policy metrics
                 if wandb.run is not None:
-                    wandb.log({
+                    # Basic buffer metrics
+                    wandb_metrics = {
                         "buffer/size": buffer_stats["buffer_size"],
                         "buffer/utilization": buffer_stats["buffer_utilization"],
                         "rollout_id": rollout_id,
-                    })
+                    }
+
+                    # === NEW: Off-policy metrics ===
+                    # Policy version tracking
+                    if "current_policy_version" in buffer_stats:
+                        wandb_metrics["buffer/current_policy_version"] = buffer_stats["current_policy_version"]
+
+                    if "min_policy_version" in buffer_stats:
+                        wandb_metrics["buffer/min_policy_version"] = buffer_stats["min_policy_version"]
+                        wandb_metrics["buffer/max_policy_version"] = buffer_stats["max_policy_version"]
+                        wandb_metrics["buffer/avg_policy_version"] = buffer_stats["avg_policy_version"]
+
+                    # Staleness metrics
+                    if "min_staleness" in buffer_stats:
+                        wandb_metrics["buffer/min_staleness"] = buffer_stats["min_staleness"]
+                        wandb_metrics["buffer/max_staleness"] = buffer_stats["max_staleness"]
+                        wandb_metrics["buffer/avg_staleness"] = buffer_stats["avg_staleness"]
+
+                    # Sample reuse metrics
+                    if "avg_reuse_count" in buffer_stats:
+                        wandb_metrics["buffer/avg_reuse_count"] = buffer_stats["avg_reuse_count"]
+                        wandb_metrics["buffer/max_reuse_count_observed"] = buffer_stats["max_reuse_count_observed"]
+
+                    # Sampling strategy metrics
+                    if "strategy_strategy" in buffer_stats:
+                        wandb_metrics["buffer/strategy"] = buffer_stats["strategy_strategy"]
+
+                    # === NEW: Priority sampling specific metrics ===
+                    # Priority configuration
+                    if "strategy_priority_metric" in buffer_stats:
+                        wandb_metrics["buffer/priority_metric"] = buffer_stats["strategy_priority_metric"]
+                        wandb_metrics["buffer/priority_weight"] = buffer_stats["strategy_priority_weight"]
+                        wandb_metrics["buffer/staleness_penalty"] = buffer_stats["strategy_staleness_penalty"]
+
+                    # Base score statistics (raw)
+                    if "strategy_base_score_mean" in buffer_stats:
+                        wandb_metrics["buffer/base_score_mean"] = buffer_stats["strategy_base_score_mean"]
+                        wandb_metrics["buffer/base_score_min"] = buffer_stats["strategy_base_score_min"]
+                        wandb_metrics["buffer/base_score_max"] = buffer_stats["strategy_base_score_max"]
+
+                    # Staleness statistics (raw)
+                    if "strategy_staleness_mean" in buffer_stats:
+                        wandb_metrics["buffer/staleness_stat_mean"] = buffer_stats["strategy_staleness_mean"]
+                        wandb_metrics["buffer/staleness_stat_min"] = buffer_stats["strategy_staleness_min"]
+                        wandb_metrics["buffer/staleness_stat_max"] = buffer_stats["strategy_staleness_max"]
+
+                    # Latest sampling round statistics
+                    if "strategy_latest_base_score_raw_mean" in buffer_stats:
+                        wandb_metrics["buffer/latest_base_score_raw_mean"] = buffer_stats["strategy_latest_base_score_raw_mean"]
+                        wandb_metrics["buffer/latest_base_score_raw_std"] = buffer_stats["strategy_latest_base_score_raw_std"]
+                        wandb_metrics["buffer/latest_base_score_normalized_mean"] = buffer_stats["strategy_latest_base_score_normalized_mean"]
+
+                    if "strategy_latest_staleness_raw_mean" in buffer_stats:
+                        wandb_metrics["buffer/latest_staleness_raw_mean"] = buffer_stats["strategy_latest_staleness_raw_mean"]
+                        wandb_metrics["buffer/latest_staleness_raw_std"] = buffer_stats["strategy_latest_staleness_raw_std"]
+                        wandb_metrics["buffer/latest_staleness_normalized_mean"] = buffer_stats["strategy_latest_staleness_normalized_mean"]
+
+                    if "strategy_latest_final_score_mean" in buffer_stats:
+                        wandb_metrics["buffer/latest_final_score_mean"] = buffer_stats["strategy_latest_final_score_mean"]
+                        wandb_metrics["buffer/latest_final_score_std"] = buffer_stats["strategy_latest_final_score_std"]
+                        wandb_metrics["buffer/latest_final_score_min"] = buffer_stats["strategy_latest_final_score_min"]
+                        wandb_metrics["buffer/latest_final_score_max"] = buffer_stats["strategy_latest_final_score_max"]
+
+                    # Normalization configuration
+                    if "strategy_normalize_scores" in buffer_stats:
+                        wandb_metrics["buffer/normalize_scores"] = 1 if buffer_stats["strategy_normalize_scores"] else 0
+                        if buffer_stats.get("strategy_normalization_method"):
+                            # Log as config string (wandb will handle it)
+                            wandb_metrics["buffer/normalization_method"] = buffer_stats["strategy_normalization_method"]
+
+                    wandb.log(wandb_metrics)
 
             # === Step 4: Sample data for training (mixes buffer + new data automatically) ===
             # get_samples returns list[list[Sample]] (grouped)
@@ -154,6 +225,16 @@ class RolloutManager:
                 train_data_samples = flattened_samples
 
             # === Step 6: Convert to training format ===
+            # IMPORTANT: Verify all samples have valid rewards before conversion
+            none_reward_indices = [i for i, s in enumerate(train_data_samples) if s.reward is None]
+            if len(none_reward_indices) > 0:
+                print(f"[CRITICAL ERROR] Found {len(none_reward_indices)}/{len(train_data_samples)} samples with None rewards before training!")
+                print(f"[CRITICAL ERROR] Indices: {none_reward_indices[:10]}{'...' if len(none_reward_indices) > 10 else ''}")
+                # Force set to 0 to prevent crash
+                for idx in none_reward_indices:
+                    print(f"[CRITICAL ERROR] Forcing reward=1e-8 for sample {idx} train_data_samples[idx]")
+                    train_data_samples[idx].reward = 1e-8
+
             train_data = self._convert_samples_to_train_data(train_data_samples)
 
             # === Step 7: Record generated batch in staleness controller ===
@@ -271,12 +352,56 @@ class RolloutManager:
             return self.custom_reward_post_process_func(self.args, samples)
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
+
+        # === NEW: Handle None rewards robustly ===
+        # Check for None values and provide meaningful default
+        none_count = sum(1 for r in raw_rewards if r is None)
+
+        if none_count > 0:
+            # Get valid rewards for statistics
+            valid_rewards = [r for r in raw_rewards if r is not None]
+
+            # Determine fallback value based on valid rewards
+            if len(valid_rewards) > 0:
+                # Use mean of valid rewards as fallback (more reasonable than 0)
+                fallback_value = sum(valid_rewards) / len(valid_rewards)
+                print(f"[WARNING] Found {none_count}/{len(raw_rewards)} samples with None rewards. "
+                      f"Using mean of valid rewards ({fallback_value:.4f}) as fallback.")
+            else:
+                # All rewards are None - use 0.0 and warn loudly
+                # fallback_value = 0.0
+                fallback_value = 1e-8
+                print(f"[ERROR] ALL {len(raw_rewards)} samples have None rewards! "
+                      f"This indicates a serious issue with the reward function. "
+                      f"Using fallback value 1e-8, but you should investigate immediately.")
+
+                # Optionally log to wandb if available
+                if wandb.run is not None:
+                    wandb.log({
+                        "error/all_rewards_none": 1,
+                        "error/none_reward_count": none_count,
+                    })
+
+            # Replace None with fallback value
+            raw_rewards_clean = [r if r is not None else fallback_value for r in raw_rewards]
+
+            # Log statistics to wandb
+            if wandb.run is not None:
+                wandb.log({
+                    "reward/none_count": none_count,
+                    "reward/none_ratio": none_count / len(raw_rewards),
+                    "reward/fallback_value": fallback_value,
+                })
+        else:
+            raw_rewards_clean = raw_rewards
+
+        # Use cleaned rewards for further processing
         if (
             self.args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
             and self.args.rewards_normalization
         ):
             # group norm
-            rewards = torch.tensor(raw_rewards, dtype=torch.float)
+            rewards = torch.tensor(raw_rewards_clean, dtype=torch.float)
             if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
                 rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
             else:
@@ -289,9 +414,10 @@ class RolloutManager:
                 std = rewards.std(dim=-1, keepdim=True)
                 rewards = rewards / (std + 1e-6)
 
+            # Return original raw_rewards (with None) for logging, but use clean rewards for training
             return raw_rewards, rewards.flatten().tolist()
 
-        return raw_rewards, raw_rewards
+        return raw_rewards, raw_rewards_clean
 
     def _convert_samples_to_train_data(self, samples: Union[list[Sample], list[list[Sample]]]):
         """
@@ -348,13 +474,27 @@ class RolloutManager:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
 
         # === Add policy versions for off-policy tracking ===
-        if samples[0].policy_version is not None:
-            train_data["policy_versions"] = [sample.policy_version for sample in samples]
-        elif hasattr(self.args, "loss_type") and self.args.loss_type == "decoupled_policy_loss":
-            # For off-policy GRPO, policy_version should always be set
-            # If it's None, use 0 as default (should not happen in normal flow)
-            print(f"[WARNING] policy_version is None for off-policy GRPO, using default value 0")
-            train_data["policy_versions"] = [0] * len(samples)
+        # For off-policy GRPO, policy_version is CRITICAL and must always be present
+        is_offpolicy_mode = hasattr(self.args, "loss_type") and self.args.loss_type == "decoupled_policy_loss"
+
+        # Collect all policy versions, handling None values robustly
+        policy_versions = []
+        none_count = 0
+        for sample in samples:
+            pv = getattr(sample, 'policy_version', None)
+            if pv is None:
+                none_count += 1
+                pv = 0  # Fallback to version 0
+            policy_versions.append(pv)
+
+        # Always add policy_versions for off-policy mode
+        if is_offpolicy_mode:
+            train_data["policy_versions"] = policy_versions
+            if none_count > 0:
+                print(f"[WARNING] {none_count}/{len(samples)} samples had None policy_version, using 0 as default")
+        elif samples[0].policy_version is not None:
+            # For on-policy mode, only add if explicitly set
+            train_data["policy_versions"] = policy_versions
 
         return train_data
 
