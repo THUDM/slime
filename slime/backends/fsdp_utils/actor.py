@@ -19,6 +19,7 @@ from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_d
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.metric_utils import compute_rollout_step
+from slime.utils.misc import load_function
 from slime.utils.ppo_utils import compute_approx_kl, compute_gspo_kl, compute_opsm_mask, compute_policy_loss
 from slime.utils.processing_utils import load_processor, load_tokenizer
 from slime.utils.ray_utils import Box
@@ -655,26 +656,41 @@ class FSDPTrainRayActor(TrainRayActor):
             else None
         )
 
-        # Apply TIS before sample mean calculation
+        tis_metrics = {}
         if self.args.use_tis:
-            # Apply TIS off-policy correction using importance sampling
             assert (
                 has_rollout_log_probs and rollout_log_probs is not None
-            ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS"
+            ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS/MIS"
 
-            tis = torch.exp(old_log_probs - rollout_log_probs)
-            ois = (-ppo_kl).exp()
-            tis_clip = torch.clamp(
-                tis, min=getattr(self.args, "tis_clip_low", 0.1), max=getattr(self.args, "tis_clip", 2.0)
-            )
-            tis_clipfrac = tis_clip != tis
+            train_log_probs_list = list(log_probs.split(response_lengths, dim=0))
+            rollout_log_probs_list = list(rollout_log_probs.split(response_lengths, dim=0))
 
-            pg_loss = pg_loss * tis_clip
+            tis_kwargs = {
+                "args": self.args,
+                "pg_loss": pg_loss,
+                "train_log_probs": train_log_probs_list,
+                "rollout_log_probs": rollout_log_probs_list,
+                "loss_masks": loss_masks,
+                "response_lengths": response_lengths,
+                "cp_rank": self.cp_rank,
+                "cp_size": self.cp_size,
+                "cp_group": self.cp_group,
+            }
 
-        assert not self.args.calculate_per_token_loss, "calculate_per_token_loss not yet implemented"
-        pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
-        pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
-        ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
+            if self.args.custom_tis_function_path is not None:
+                tis_func = load_function(self.args.custom_tis_function_path)
+            else:
+                tis_func = vanilla_tis_function_fsdp
+            pg_loss, loss_masks, tis_metrics = tis_func(**tis_kwargs)
+
+        if getattr(self.args, "calculate_per_token_loss", False):
+            pg_loss = sum_of_token(pg_loss, response_lengths, loss_masks)
+            pg_clipfrac = sum_of_token(pg_clipfrac, response_lengths, loss_masks)
+            ppo_kl = sum_of_token(ppo_kl.abs(), response_lengths, loss_masks)
+        else:
+            pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
+            pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
+            ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
 
         # Only compare rollout vs. train log probs when they originate from different stages.
         train_rollout_logprob_abs_diff = None
@@ -721,10 +737,12 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.use_opsm:
             reported["opsm_clipfrac"] = opsm_clipfrac
 
-        if self.args.use_tis and tis is not None:
-            reported["tis"] = sum_of_sample_mean(tis, response_lengths, loss_masks).detach()
-            reported["ois"] = sum_of_sample_mean(ois, response_lengths, loss_masks).detach()
-            reported["tis_clipfrac"] = sum_of_sample_mean(tis_clipfrac.float(), response_lengths, loss_masks).detach()
+        if self.args.use_tis and tis_metrics:
+            for k, v in tis_metrics.items():
+                if getattr(self.args, "calculate_per_token_loss", False):
+                    reported[k] = sum_of_token(v, response_lengths, loss_masks).detach()
+                else:
+                    reported[k] = sum_of_sample_mean(v, response_lengths, loss_masks).detach()
 
         # Scale loss for gradient accumulation
         loss = loss * self.dp_size / self.args.global_batch_size
@@ -1103,3 +1121,51 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False, args=None):
     fully_shard(model, **fsdp_kwargs)
 
     return model
+
+
+def sum_of_token(x: torch.Tensor, response_lengths: list[int], loss_masks: list[torch.Tensor]) -> torch.Tensor:
+    return sum(
+        [
+            (x_i * loss_mask_i).sum()
+            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
+        ]
+    )
+
+
+def vanilla_tis_function_fsdp(
+    args,
+    *,
+    pg_loss: torch.Tensor,
+    train_log_probs: list[torch.Tensor],
+    rollout_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    **kwargs,
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
+    """Apply TIS off-policy correction using importance sampling.
+
+    Parameters:
+        args: Arguments containing TIS settings.
+        pg_loss: Policy gradient loss tensor of shape [total_seq_len - 1].
+        train_log_probs: List of tensors containing training log-probabilities
+            for each sequence.
+        rollout_log_probs: List of tensors containing rollout log-probabilities
+            for each sequence.
+        loss_masks: List of tensors containing loss masks for each sequence.
+    """
+    rollout_log_probs_flat = torch.cat(rollout_log_probs, dim=0)
+    train_log_probs_flat = torch.cat(train_log_probs, dim=0)
+
+    tis = torch.exp(train_log_probs_flat - rollout_log_probs_flat)
+    tis_abs = (tis - 1).abs()
+
+    tis_clip = torch.clamp(tis, min=getattr(args, "tis_clip_low", 0.1), max=getattr(args, "tis_clip", 2.0))
+    tis_clipfrac = (tis_clip != tis).float()
+
+    metrics = {
+        "tis": tis.clone().detach(),
+        "tis_clipfrac": tis_clipfrac.clone().detach(),
+        "tis_abs": tis_abs.clone().detach(),
+    }
+    pg_loss = pg_loss * tis_clip
+
+    return pg_loss, loss_masks, metrics
