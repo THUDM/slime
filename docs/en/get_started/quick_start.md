@@ -464,6 +464,11 @@ ROLLOUT_ARGS=(
    # 4. Load the pre-constructed "metadata" column into Sample.metadata
    #    slime will automatically parse it as a Python dictionary
    --metadata-key metadata
+
+   # (Optional) If your dataset provides tool definitions for tool-calling chat templates,
+   # pass the tool column key so slime can load tool schemas into `sample.metadata["tools"]`
+   # (used for tool-aware chat templating in message-based generation).
+   # --tool-key tools
 )
 ```
 
@@ -485,6 +490,10 @@ First, specify a custom asynchronous Python function through the `--custom-gener
    - Note: `loss_mask` should be the same length as `response`, where tokens that need to calculate loss are 1, and masked ones are 0
    - **Model-generated** tokens (such as thinking, action instructions) → set `loss_mask` to `1`, participate in loss calculation.
    - **Tool or environment returned** tokens (such as API results) → set `loss_mask` to `0`, do not participate in loss calculation.
+   - Tip: if your custom `generate()` is **message-based** (you have OpenAI `messages` + optional `tools`), you can let slime build aligned `token_ids` + tool-aware `loss_mask` via `MultiTurnLossMaskGenerator`:
+     - `token_ids, full_loss_mask = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type=args.loss_mask_type).get_loss_mask(messages, tools=tools)`
+     - `response_length = get_response_lengths([full_loss_mask])[0]`, then set `sample.tokens = token_ids`, `sample.response_length = response_length`, and `sample.loss_mask = full_loss_mask[-response_length:]`
+     - If you already use **SGLang-returned token IDs** in RL rollout, don’t re-tokenize; build `loss_mask` by segment lengths to keep alignment.
 6. **Termination Conditions**: End the loop when the model generates termination tags (such as `<answer>...`) or reaches maximum rounds.
 7. **Encapsulate Return**: Fill the complete interaction history, token IDs, and `loss_masks` into the `Sample` object and return.
 
