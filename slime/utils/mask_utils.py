@@ -121,7 +121,8 @@ class MultiTurnLossMaskGenerator:
 
             if i == 0:
                 token_ids = self.tokenizer.encode(curr, add_special_tokens=False)
-                loss_mask = [1] * len(token_ids) if messages[i]["role"] == "assistant" else [0] * len(token_ids)
+                assert messages[i]["role"] != "assistant", "First message role must not be 'assistant'."
+                loss_mask = [0] * len(token_ids)
             else:
                 prev_messages = messages[:i]
                 add_gen = messages[i]["role"] == "assistant"
