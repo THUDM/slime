@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
+import pybase64
 import sglang_router
 from packaging.version import parse
 from tqdm import tqdm
@@ -186,8 +187,14 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.weight_versions.append(output["meta_info"]["weight_version"])
 
     if "routed_experts" in output["meta_info"]:
-        assert len(output["meta_info"]["routed_experts"]) == len(sample.tokens) - 1
-        sample.rollout_routed_experts = np.array(output["meta_info"]["routed_experts"])
+        sample.rollout_routed_experts = np.frombuffer(
+            pybase64.b64decode(output["meta_info"]["routed_experts"].encode("ascii")),
+            dtype=np.int32,
+        ).reshape(
+            len(sample.tokens) - 1,
+            args.num_layers,
+            args.moe_router_topk,
+        )
 
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":
