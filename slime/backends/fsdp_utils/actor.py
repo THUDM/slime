@@ -821,6 +821,51 @@ class FSDPTrainRayActor(TrainRayActor):
 
         clear_memory()
 
+    def _compute_tis_weights(
+        self,
+        old_log_probs: torch.Tensor,
+        rollout_log_probs: torch.Tensor,
+        loss_masks: list[torch.Tensor],
+        response_lengths: list[int],
+    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+        """Compute Importance Sampling weights for TIS/MIS.
+
+        Supports both token-level and sequence-level aggregation, and truncate/mask modes.
+        """
+        tis_mode = getattr(self.args, "tis_mode", "truncate")
+        tis_level = getattr(self.args, "tis_level", "token")
+        tis_clip_low = getattr(self.args, "tis_clip_low", 0.1)
+        tis_clip_high = getattr(self.args, "tis_clip", 2.0)
+
+        log_ratio = old_log_probs - rollout_log_probs
+
+        # Calculate raw TIS weights based on level
+        if tis_level == "token":
+            tis = torch.exp(log_ratio)
+        elif tis_level == "sequence":
+            tis_list = []
+            for seq_log_ratio, mask in zip(log_ratio.split(response_lengths, dim=0), loss_masks, strict=False):
+                seq_mask = mask.to(seq_log_ratio.device)
+                sum_log_ratio = masked_sum(seq_log_ratio, seq_mask, expand=True)
+                seq_tis = torch.exp(sum_log_ratio)
+                tis_list.append(seq_tis)
+            tis = torch.cat(tis_list, dim=0)
+        else:
+            raise ValueError(f"Unsupported tis_level: {tis_level}")
+
+        # Apply mode (truncate or mask)
+        if tis_mode == "truncate":
+            tis_clip = torch.clamp(tis, min=tis_clip_low, max=tis_clip_high)
+        elif tis_mode == "mask":
+            mask = (tis >= tis_clip_low) & (tis <= tis_clip_high)
+            tis_clip = tis * mask.float()
+        else:
+            raise ValueError(f"Unsupported tis_mode: {tis_mode}")
+
+        tis_clipfrac = tis_clip != tis
+
+        return tis_clip, tis, tis_clipfrac
+
     def _create_ref_model(self, ref_load_path: str | None):
         """Create and initialize a separate reference model with FSDP2 CPUOffloadPolicy.
 
@@ -1051,6 +1096,11 @@ def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks:
             for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
         ]
     )
+
+
+def masked_sum(x: torch.Tensor, loss_mask: torch.Tensor, expand: bool = False) -> torch.Tensor:
+    result = torch.where(loss_mask.bool(), x, 0.0).sum()
+    return result.expand_as(x) if expand else result
 
 
 @torch.no_grad()
