@@ -301,10 +301,10 @@ index e7d5a67cc..639e47163 100644
                          out_hidden_states[begin_chunk_idx:end_chunk_idx],
 diff --git a/python/sglang/srt/layers/moe/routed_experts_capturer.py b/python/sglang/srt/layers/moe/routed_experts_capturer.py
 new file mode 100644
-index 000000000..732f7859d
+index 000000000..7369f9dc9
 --- /dev/null
 +++ b/python/sglang/srt/layers/moe/routed_experts_capturer.py
-@@ -0,0 +1,304 @@
+@@ -0,0 +1,308 @@
 +import logging
 +from abc import ABC
 +from contextlib import contextmanager
@@ -496,8 +496,12 @@ index 000000000..732f7859d
 +        )
 +
 +        if get_moe_a2a_backend().is_deepep():
++            attn_tp_size = get_attention_tp_size() if is_dp_attention_enabled() else 1
 +            self.gather_buffer = torch.empty(
-+                (self.device_cache.buffer.shape[0], self.device_cache.buffer.shape[2]),
++                (
++                    self.device_cache.buffer.shape[0] * attn_tp_size,
++                    self.device_cache.buffer.shape[2],
++                ),
 +                dtype=torch.int32,
 +                device=device,
 +            )
