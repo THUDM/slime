@@ -29,6 +29,7 @@ until curl -sf http://$TEACHER_IP:$TEACHER_PORT/health_generate > /dev/null; do
     sleep 5
 done
 
+curl http://$TEACHER_IP:$TEACHER_PORT/get_model_info
 echo "Teacher model server is up and running at $TEACHER_IP:$TEACHER_PORT."
 sleep 10
 
