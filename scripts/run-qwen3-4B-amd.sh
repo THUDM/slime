@@ -33,16 +33,12 @@ export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"} #You can ch
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
 
-# Current Model convert script on AMD GPU has some issue, please download the converted model from here: https://huggingface.co/zyzshishui0627/models 
-
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/qwen3-4B.sh"
 
 CKPT_ARGS=(
    --hf-checkpoint ${MODEL_DIR}/Qwen3-4B
-   #--hf-checkpoint /root/Qwen3-4B-FP8
    --ref-load ${MODEL_DIR}/Qwen3-4B_torch_dist
-   # --ref-load ${MODEL_DIR}/Qwen3-4B_torch_dist_amd_new
    --load ${MODEL_DIR}/Qwen3-4B_slime/
    --save ${MODEL_DIR}/Qwen3-4B_slime/
    --save-interval 20
@@ -116,12 +112,6 @@ WANDB_ARGS=(
    # --wandb-key ${WANDB_KEY}
 )
 
-### AMD Support ###
-# Need to fix some issue with torch_memory_saver in rocm to support larger  --sglang-mem-fraction-static 
-# SGLANG_ARGS=(
-#    --rollout-num-gpus-per-engine 2
-#    --sglang-mem-fraction-static 0.7
-# )
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
    --sglang-mem-fraction-static 0.7

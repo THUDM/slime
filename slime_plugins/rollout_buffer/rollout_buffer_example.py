@@ -1,6 +1,6 @@
 import asyncio
 import time
-from typing import Any, Dict, List
+from typing import Any
 
 import aiohttp
 import requests
@@ -71,7 +71,7 @@ def select_rollout_data(args, results, need_length):
 
     # Flatten selected groups back to sample list
     selected_results = []
-    for group_id, timestamp, group_items in selected_groups:
+    for _group_id, _timestamp, group_items in selected_groups:
         selected_results.append(group_items)
 
     # Statistics for monitoring
@@ -109,8 +109,8 @@ def log_raw_info(args, all_meta_info, rollout_id):
             )
             if hasattr(args, "use_wandb") and args.use_wandb:
                 log_dict = {
-                    f"rollout/no_filter/total_samples": final_meta_info["total_samples"],
-                    f"rollout/no_filter/avg_reward": final_meta_info["avg_reward"],
+                    "rollout/no_filter/total_samples": final_meta_info["total_samples"],
+                    "rollout/no_filter/avg_reward": final_meta_info["avg_reward"],
                 }
                 try:
                     step = (
@@ -135,7 +135,7 @@ def log_raw_info(args, all_meta_info, rollout_id):
                 print(f"no filter rollout log {rollout_id}: {final_meta_info}")
 
 
-async def get_rollout_data(api_base_url: str) -> tuple[List[Dict[str, Any]], Dict[str, Any]]:
+async def get_rollout_data(api_base_url: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     start_time = time.time()
     async with aiohttp.ClientSession() as session:
         while True:
@@ -204,7 +204,7 @@ def start_rollout(api_base_url: str, args, metadata):
             print(f"[start_rollout] Failed to send rollout config: {e}")
 
 
-async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation: bool = False) -> Dict[str, Any]:
+async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation: bool = False) -> dict[str, Any]:
 
     global START_ROLLOUT
     if evaluation:
@@ -235,7 +235,7 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
 
     if args.fetch_trajectory_retry_times == -1:
         print(
-            f"⚠️  [get_rollout_data] Fetch trajectory retry times set to -1, will retry indefinitely until sufficient data is collected"
+            "⚠️  [get_rollout_data] Fetch trajectory retry times set to -1, will retry indefinitely until sufficient data is collected"
         )
     while args.fetch_trajectory_retry_times == -1 or retry_times < args.fetch_trajectory_retry_times:
         try:
@@ -266,7 +266,7 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer, evaluation:
     print("finally get rollout data with length: ", len(results))
     sample_results = []
 
-    for i, group_record in enumerate(results):
+    for _i, group_record in enumerate(results):
         group_results = []
         for record in group_record:
             oai_messages = record["messages"]

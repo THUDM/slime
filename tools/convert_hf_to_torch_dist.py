@@ -1,3 +1,4 @@
+import gc
 import os
 import shutil
 
@@ -13,6 +14,8 @@ from mbridge import AutoBridge
 from slime.backends.megatron_utils import set_default_megatron_args
 from slime.backends.megatron_utils.initialize import init
 from slime.backends.megatron_utils.model_provider import get_model_provider_func
+from slime.utils.logging_utils import configure_logger
+from slime.utils.memory_utils import print_memory
 
 
 def add_convertion_args(parser):
@@ -20,7 +23,7 @@ def add_convertion_args(parser):
     parser.add_argument("--hf-checkpoint", type=str, required=True, help="HuggingFace model path")
     try:
         parser.add_argument("--padded-vocab-size", type=int, default=None)
-    except:
+    except Exception:
         pass
     return parser
 
@@ -40,7 +43,8 @@ def get_args():
         "You are using too many GPUs for this conversion."
     )
 
-    ceildiv = lambda a, b: -(a // -b)  # Ceiling division
+    def ceildiv(a, b):
+        return -(a // -b)
 
     if args.pipeline_model_parallel_size == 1 and world_size > 1:
         pp_size = world_size
@@ -68,7 +72,16 @@ def get_args():
 
 
 def main():
-    """Initialize distributed environment"""
+    if torch.version.hip:
+        import megatron.core.dist_checkpointing.strategies.filesystem_async as filesystem_async_module
+        from slime.utils.rocm_checkpoint_writer import ROCmFileSystemWriterAsync
+
+        filesystem_async_module.FileSystemWriterAsync = ROCmFileSystemWriterAsync
+        print("[ROCm] Applied FileSystemWriterAsync patch for HIP compatibility")
+
+    configure_logger()
+
+    # Initialize distributed environment
     world_size = int(os.getenv("WORLD_SIZE") or os.getenv("SLURM_NTASKS") or 1)
     local_rank = int(os.getenv("LOCAL_RANK") or os.getenv("SLURM_LOCALID") or 0)
     global_rank = int(os.getenv("RANK") or os.getenv("SLURM_PROCID") or 0)
@@ -94,6 +107,11 @@ def main():
     bridge = AutoBridge.from_pretrained(hf_model_path, trust_remote_code=True)
     bridge.load_weights(model, hf_model_path, memory_efficient=True)
     print(f"Model loaded: {hf_model_path}")
+
+    print_memory("after loading model")
+    torch.cuda.synchronize()
+    gc.collect()
+    torch.cuda.empty_cache()
 
     save_checkpoint(1, model, None, None, 0)
 

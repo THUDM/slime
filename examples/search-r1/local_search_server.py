@@ -19,8 +19,6 @@ Usage:
         }
 """
 
-from typing import Dict, List, Optional
-
 import aiohttp
 
 
@@ -29,8 +27,8 @@ async def local_search(
     query: str,
     top_k: int = 5,
     timeout: int = 60,
-    proxy: Optional[str] = None,
-) -> List[Dict]:
+    proxy: str | None = None,
+) -> list[dict]:
     """
     Call local search engine server and format results to match google_search_server.py output.
 

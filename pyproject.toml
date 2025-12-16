@@ -23,7 +23,17 @@ src_paths = ["slime", "slime_plugins"]
 line_length = 119
 
 [tool.ruff]
-line-length = 119
+line-length = 320  # TODO
+select = [
+    "E",      # Pycodestyle Errors (Structural/Fundamental Errors like bad indentation)
+    "F",      # Pyflakes (Core Errors: Unused imports, undefined names)
+    "B",      # Flake8-Bugbear (Logic Bugs: Variable shadowing, dangerous default arguments)
+    "UP",     # pyupgrade (Modernization and compatibility issues)
+]
+ignore = [
+    "E402", # module-import-not-at-top-of-file
+    "E501", # Line too long # TODO handle it later
+]
 
 [tool.pytest.ini_options]
 # durations=0 will display all tests execution time, sorted in ascending order starting from from the slowest one.

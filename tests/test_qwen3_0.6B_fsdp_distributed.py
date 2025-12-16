@@ -1,4 +1,5 @@
-import command_utils as U
+import os
+import slime.utils.external_utils.command_utils as U
 
 MODEL_NAME = "Qwen3-0.6B"
 
@@ -91,12 +92,16 @@ def execute():
 
     U.execute_train(
         train_args=train_args,
-        num_gpus=2 if FEW_GPU else 4,
-        model_type=None,
+        num_gpus_per_node=2 if FEW_GPU else 4,
+        megatron_model_type=None,
         train_script="train_async.py",
     )
 
 
 if __name__ == "__main__":
     prepare()
+    os.environ.pop("http_proxy")
+    os.environ.pop("https_proxy")
+    os.environ.pop("HTTP_PROXY")
+    os.environ.pop("HTTPS_PROXY")
     execute()

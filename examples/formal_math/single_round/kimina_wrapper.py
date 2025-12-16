@@ -2,7 +2,6 @@ import datetime
 import os
 import random
 import time
-from typing import List
 
 import ray
 import requests
@@ -25,7 +24,7 @@ class KiminaServerAndClientCluster:
 
 
 class _KiminaClientCluster:
-    def __init__(self, servers: List["_KiminaServerActor"]):
+    def __init__(self, servers: list["_KiminaServerActor"]):
         self._clients = [AsyncKiminaClient(api_url=ray.get(server.get_api_url.remote())) for server in servers]
         self._next_client_index = 0
 
@@ -35,7 +34,7 @@ class _KiminaClientCluster:
         return await client.check(*args, **kwargs)
 
 
-def _create_actor_per_node(actor_cls) -> List:
+def _create_actor_per_node(actor_cls) -> list:
     # for simplicity, we use all available nodes
     nodes = [n for n in ray.nodes() if n.get("Alive")]
     assert len(nodes) > 0

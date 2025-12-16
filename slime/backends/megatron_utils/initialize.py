@@ -7,7 +7,6 @@ from megatron.core import mpu, tensor_parallel
 from megatron.core.num_microbatches_calculator import init_num_microbatches_calculator
 from megatron.training.global_vars import _build_tokenizer, set_args
 
-
 logger = logging.getLogger(__name__)
 
 
@@ -63,7 +62,7 @@ def init(args):
 
     # Random seeds for reproducibility.
     if args.rank == 0:
-        logger.info("> setting random seeds to {} ...".format(args.seed))
+        logger.info(f"> setting random seeds to {args.seed} ...")
     _set_random_seed(
         args.seed,
         args.data_parallel_random_init,

@@ -461,7 +461,7 @@ ROLLOUT_ARGS=(
    --prompt-data /root/nq_search/train_processed.json
 
    # 2. 将 "question" 列映射为输入 prompt
-   --prompt-key question
+   --input-key question
 
    # 3. 将 "final_answer" 列映射为评估标签
    --label-key final_answer

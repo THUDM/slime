@@ -5,8 +5,9 @@ import logging
 import os
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence, Union
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ def _ensure_ifbench_repo() -> Path:
     if not repo_path.exists():
         clone_cmd = ["git", "clone", "https://github.com/allenai/IFBench.git", str(repo_path)]
         try:
-            subprocess.run(clone_cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(clone_cmd, check=True, capture_output=True)
         except Exception as exc:
             raise ImportError(
                 "Unable to automatically clone IFBench. Please clone "
@@ -78,14 +79,14 @@ evaluation_lib = _load_evaluation_lib()
 InputExample = evaluation_lib.InputExample
 
 
-JsonDict = Dict[str, Any]
-KwargsDict = Dict[str, Optional[Union[str, int, float]]]
+JsonDict = dict[str, Any]
+KwargsDict = dict[str, str | int | float | None]
 
 
-def _normalize_instruction_ids(raw_ids: Sequence[Any]) -> List[str]:
+def _normalize_instruction_ids(raw_ids: Sequence[Any]) -> list[str]:
     """Ensure instruction identifiers are clean strings."""
 
-    normalized: List[str] = []
+    normalized: list[str] = []
     for entry in raw_ids or []:
         if entry is None:
             continue
@@ -99,11 +100,11 @@ def _normalize_instruction_ids(raw_ids: Sequence[Any]) -> List[str]:
 def _coerce_kwargs_list(
     raw_kwargs: Any,
     num_instructions: int,
-) -> List[KwargsDict]:
+) -> list[KwargsDict]:
     """Convert stored kwargs into the list structure expected by IFBench."""
 
     if isinstance(raw_kwargs, list):
-        processed: List[KwargsDict] = []
+        processed: list[KwargsDict] = []
         for entry in raw_kwargs:
             if isinstance(entry, dict):
                 processed.append(dict(entry))
@@ -121,13 +122,13 @@ def _coerce_kwargs_list(
         processed = processed[:num_instructions]
 
     # Remove explicit None values to match official preprocessing.
-    sanitized: List[KwargsDict] = []
+    sanitized: list[KwargsDict] = []
     for entry in processed:
         sanitized.append({k: v for k, v in entry.items() if v is not None})
     return sanitized
 
 
-def _build_input_example(metadata: JsonDict) -> Optional[InputExample]:
+def _build_input_example(metadata: JsonDict) -> InputExample | None:
     instruction_ids = _normalize_instruction_ids(metadata.get("instruction_id_list") or [])
     if not instruction_ids:
         logger.debug("Missing instruction identifiers in metadata: %s", metadata)
@@ -150,7 +151,7 @@ def _build_input_example(metadata: JsonDict) -> Optional[InputExample]:
     )
 
 
-def compute_ifbench_reward(response: str, label: Any, metadata: Optional[JsonDict] = None) -> float:
+def compute_ifbench_reward(response: str, label: Any, metadata: JsonDict | None = None) -> float:
     """Score a model response using the official IFBench rules."""
 
     if metadata is None:

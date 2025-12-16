@@ -14,7 +14,7 @@ import re
 import subprocess
 import tempfile
 from contextlib import contextmanager
-from typing import Any, Dict, List
+from typing import Any
 
 import psutil
 
@@ -47,8 +47,6 @@ def get_memory_usage() -> float:
 def cleanup_memory():
     """Force garbage collection to free memory"""
     gc.collect()
-    if hasattr(gc, "collect"):
-        gc.collect()
 
 
 def aggressive_cleanup_memory():
@@ -218,7 +216,7 @@ import resource
 # Set memory limit (4GB)
 try:
     resource.setrlimit(resource.RLIMIT_AS, (4 * 1024 * 1024 * 1024, -1))
-except:
+except Exception:
     pass
 
 # Redirect stdout and stderr
@@ -282,11 +280,11 @@ except Exception as e:
                     if process.returncode == 0:
                         result = stdout.strip()
                     else:
-                        result = f"Error: Process exited with code " f"{process.returncode}\n{stderr}"
+                        result = f"Error: Process exited with code {process.returncode}\n{stderr}"
 
                 except subprocess.TimeoutExpired:
                     process.kill()
-                    result = f"Error: Code execution timed out after " f"{self.timeout} seconds"
+                    result = f"Error: Code execution timed out after {self.timeout} seconds"
 
             except Exception as e:
                 result = f"Error: Failed to execute code: {str(e)}"
@@ -328,15 +326,15 @@ class ToolRegistry:
             },
         )
 
-    def register_tool(self, name: str, tool_spec: Dict[str, Any]):
+    def register_tool(self, name: str, tool_spec: dict[str, Any]):
         """Register a new tool in the registry"""
         self.tools[name] = tool_spec
 
-    def get_tool_specs(self) -> List[Dict[str, Any]]:
+    def get_tool_specs(self) -> list[dict[str, Any]]:
         """Get all tool specifications as a list"""
         return list(self.tools.values())
 
-    async def execute_tool(self, tool_name: str, arguments: Dict[str, Any]) -> str:
+    async def execute_tool(self, tool_name: str, arguments: dict[str, Any]) -> str:
         """Execute a tool call with the given arguments"""
         if tool_name not in self.tools:
             return f"Error: Tool '{tool_name}' not found"
@@ -347,7 +345,7 @@ class ToolRegistry:
             else:
                 return f"Error: Tool '{tool_name}' not implemented"
 
-    async def _execute_python(self, arguments: Dict[str, Any]) -> str:
+    async def _execute_python(self, arguments: dict[str, Any]) -> str:
         """Execute Python code using the sandbox"""
         code = arguments.get("code", "")
         if not code.strip():

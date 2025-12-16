@@ -13,6 +13,7 @@ class RolloutFnTrainOutput:
 @dataclass
 class RolloutFnEvalOutput:
     data: dict[str, dict[str, Any]]
+    metrics: dict[str, Any] = None
 
 
 def call_rollout_fn(fn, *args, evaluation: bool, **kwargs):

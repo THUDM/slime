@@ -94,11 +94,11 @@ Advantages:
 
 You may choose from above algorithms by specifying arguments below:
 
-`--use-rollout-log-probs`: True if only use `rollout_log_probs` to compute the loss, bypassing old_log_probs calculated by training engine;
+`--use-rollout-logprobs`: True if only use `rollout_log_probs` to compute the loss, bypassing old_log_probs calculated by training engine;
 
 `--use-rollout-correction`: True if apply importance sampling/rejection sampling to loss.
 
-| `use_rollout_log_probs` | `use_rollout_correction` | Algorithm | Policies |Compute old_log_probs | Batch Invariant | Recommended TIS Mode |
+| `use_rollout_logprobs` | `use_rollout_correction` | Algorithm | Policies |Compute old_log_probs | Batch Invariant | Recommended TIS Mode |
 |-----------------|-------------|-----------|--------------|---------------|-----------------|----------------------|
 | False | False | Standard PPO (Algorithm 0) | 2 ($\pi_\theta$, $\pi_{\textcolor{blue}{\text{old}}}$)|Yes | No | N/A |
 | True | False | Bypassing PPO (Algorithm 3) | 2 ($\pi_\theta$, $\pi_{\textcolor{red}{\text{SGLang}}}$) |🚀 Skipped | No | N/A |

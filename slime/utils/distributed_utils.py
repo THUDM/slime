@@ -1,5 +1,5 @@
 from datetime import timedelta
-from typing import Any, Optional, Union
+from typing import Any
 
 import torch
 import torch.distributed as dist
@@ -36,14 +36,14 @@ def get_gloo_group():
 # Copy from pytorch to allow creating multiple main groups.
 # https://github.com/pytorch/pytorch/blob/main/torch/distributed/distributed_c10d.py
 def init_process_group(
-    backend: Union[str, Backend] = None,
-    init_method: Optional[str] = None,
-    timeout: Optional[timedelta] = None,
+    backend: str | Backend = None,
+    init_method: str | None = None,
+    timeout: timedelta | None = None,
     world_size: int = -1,
     rank: int = -1,
-    store: Optional[Store] = None,
+    store: Store | None = None,
     group_name: str = None,
-    pg_options: Optional[Any] = None,
+    pg_options: Any | None = None,
 ):
     assert (store is None) or (init_method is None), "Cannot specify both init_method and store."
 
@@ -94,7 +94,7 @@ def init_process_group(
 def distributed_masked_whiten(
     values: torch.Tensor,
     mask: torch.Tensor,
-    process_group: Optional[dist.ProcessGroup] = None,
+    process_group: dist.ProcessGroup | None = None,
     shift_mean: bool = True,
     epsilon: float = 1e-8,
 ):
