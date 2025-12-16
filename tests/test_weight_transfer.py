@@ -7,23 +7,27 @@ import slime.utils.external_utils.command_utils as U
 
 MODEL_NAME = "Qwen3-4B"
 MODEL_TYPE = "qwen3-4B"
-NUM_GPUS = 3
 
 
 @dataclass
 class ScriptArgs(U.ExecuteTrainConfig):
     mode: Literal["nccl", "rdma"] = "nccl"
+    # Right now tp=ep=pp=1
+    num_train_gpus: int = 1
+    num_rollout_gpus: int = 1
     # TODO: Add diverse parallelism settings; imbalance training/inference instances, etc for benchmark.
 
 
-def prepare():
+def prepare(args: ScriptArgs):
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command("hf download Qwen/Qwen3-4B --local-dir /root/models/Qwen3-4B")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
-    U.convert_checkpoint(model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS)
+    num_gpus = args.num_train_gpus + args.num_rollout_gpus
+    U.convert_checkpoint(model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=num_gpus)
 
 
 def execute(args: ScriptArgs):
+    num_gpus = args.num_train_gpus + args.num_rollout_gpus
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/{MODEL_NAME}_torch_dist "
 
     rollout_args = (
@@ -73,9 +77,13 @@ def execute(args: ScriptArgs):
         "--adam-beta2 0.98 "
     )
 
-    sglang_args = "--rollout-num-gpus-per-engine 1 " "--rollout-num-gpus 2 " "--sglang-mem-fraction-static 0.8 "
+    sglang_args = (
+        f"--rollout-num-gpus-per-engine 1 "
+        f"--rollout-num-gpus {args.num_rollout_gpus} "
+        "--sglang-mem-fraction-static 0.8 "
+    )
     if args.mode == "rdma":
-        sglang_args += "--remote-instance-weight-loader-support-transfer-engine "
+        sglang_args += "--sglang-remote-instance-weight-loader-support-transfer-engine "
 
     # ci_args = "--ci-test "
 
@@ -111,10 +119,10 @@ def execute(args: ScriptArgs):
 
     U.execute_train(
         train_args=train_args,
-        num_gpus_per_node=NUM_GPUS,
+        num_gpus_per_node=num_gpus,
         megatron_model_type=MODEL_TYPE,
         train_script="train_async.py",
-        # extra_env_vars={"RAY_DEBUG": "1"},
+        extra_env_vars={"RAY_DEBUG": "1"},
     )
 
 

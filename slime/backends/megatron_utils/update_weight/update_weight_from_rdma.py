@@ -6,7 +6,9 @@ from collections.abc import Callable, Mapping, Sequence
 import ray
 import torch
 from ray.actor import ActorHandle
-from srt.disaggregation.mooncake.transfer_engine import MooncakeTransferEngine
+
+# from mooncake.engine import TransferEngine
+from sglang.srt.disaggregation.mooncake.transfer_engine import MooncakeTransferEngine
 from tqdm import tqdm
 
 from .common import register_memory_transfer_engine, split_expert_and_non_expert_param_names
@@ -35,7 +37,6 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
         *,
         model_name: str,
         quantization_config: dict[str, int | str | list[str]] | None,
-        vocab_size: int,
     ) -> None:
         """
         Initialize transfer engine.
@@ -47,7 +48,6 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
             weights_getter,
             model_name=model_name,
             quantization_config=quantization_config,
-            vocab_size=vocab_size,
             weight_update_mode="rdma",
         )
 
@@ -68,8 +68,11 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
         if self._is_source:
             # Get master address and port for P2P communication
             local_ip = ray._private.services.get_node_ip_address()
-            self.transfer_engine = MooncakeTransferEngine(hostname=local_ip)
-            logger.info(f"Transfer Engine initialized at {self.transfer_engine.session_id}")
+            self.transfer_engine = MooncakeTransferEngine(local_ip, None, None)
+            logger.info(f"[RDMA] Transfer Engine initialized at port {self.transfer_engine.session_id}")
+            # breakpoint()
+            # self.transfer_engine = TransferEngine()
+            # logger.info(f"[RDMA] Transfer Engine initialized at port {self.transfer_engine.get_rpc_port()}")
 
             # Query Engine session and weight info from rollout instances according to the transfer plan
             self.remote_weight_infos_by_session_id = {}
@@ -77,11 +80,16 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
             targets_to_session_id = {}
             for engine_ind, engine_rank in targets_to_query:
                 session_id, weights_info = ray.get(
-                    self.rollout_engines[engine_ind].get_remote_instance_transfer_engine_info.remote(rank=engine_rank)[
-                        "remote_instance_transfer_engine_info"
-                    ]
+                    self.rollout_engines[engine_ind].get_remote_instance_transfer_engine_info.remote(rank=engine_rank)
                 )
-                logger.info(f"Obtained remote session info from rollout engine {engine_ind} rank {engine_rank}")
+                assert (
+                    session_id is not None
+                ), f"Failed to get session id from rollout engine {engine_ind} rank {engine_rank}"
+                logger.info(
+                    f"[RDMA] Obtained remote {session_id} info from rollout engine {engine_ind} rank {engine_rank}"
+                )
+                logger.info(f"[RDMA] Remote weight info has {len(weights_info)} tensors.")
+                logger.info(list(weights_info.keys()))
                 self.remote_weight_infos_by_session_id[session_id] = weights_info
                 targets_to_session_id[(engine_ind, engine_rank)] = session_id
 
@@ -138,8 +146,11 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
             # TODO: skip the forced all-gather for same shard tensors and instead convert directly.
             # TODO: finer granularity weight transfer where a multiple source instance can update a singular target instance.
 
-            _ = register_memory_transfer_engine(converted_named_tensors, self.engine)
-
+            _ = register_memory_transfer_engine(converted_named_tensors, self.transfer_engine)
+            logger.info(
+                f"[RDMA] Registered {len(converted_named_tensors)} tensors with transfer engine for session {session_id}."
+            )
+            logger.info(f"[RDMA] Transfering {list(name for name, _ in converted_named_tensors)}")
             # Verify the 1-to-1 mapping between registered weights and remote weights expected.
             source_ptrs, target_ptrs, source_lens = [], [], []
             for name, tensor in converted_named_tensors:
@@ -159,10 +170,12 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
                 source_lens.append(tensor.numel() * tensor.element_size())
 
             # Batch transfer weights through RDMA
-            ret = self.transfer_engine.batch_transfer_sync_write(session_id, source_ptrs, target_ptrs, source_lens)
+            ret = self.transfer_engine.batch_transfer_sync(session_id, source_ptrs, target_ptrs, source_lens)
+            logger.info(f"[RDMA] Batch transferred {len(converted_named_tensors)} tensors to session {session_id}.")
             if ret < 0:
                 raise RuntimeError(f"Batch transfer weights via RDMA failed with error code {ret}.")
-            self.transfer_engine.deregister_memory_batch(source_ptrs)
+            self.transfer_engine.batch_deregister(source_ptrs)
+            logger.info(f"[RDMA] Batch deregistered {len(converted_named_tensors)} tensors.")
             converted_named_tensors.clear()
 
         finally:
