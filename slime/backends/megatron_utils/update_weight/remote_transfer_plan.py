@@ -101,8 +101,8 @@ class RemoteTransferPlan:
         self._rollout_ep_size = args.sglang_ep_size
         # PP sizes are not supported currently.
         self._rollout_pp_size = args.sglang_pp_size
-        if self._rollout_ep_size != 1:
-            raise NotImplementedError("Rollout expert parallelism is not supported yet.")
+        if self._rollout_ep_size != 1 or self._rollout_pp_size != 1:
+            raise NotImplementedError("Rollout expert and pipeline parallelisms are not supported yet.")
         num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
         self._rollout_engine_count = args.rollout_num_gpus // num_gpu_per_engine
         logger.info(
@@ -141,6 +141,8 @@ class RemoteTransferPlan:
             for target_ind in range(num_targets):
                 for target_rank in range(num_rank_in_target):
                     if cur_active_rank % source_size == source_rank:
+                        # TODO(jd): instead of doing round robin, we should prioritize reusing source ranks with same target_rank to
+                        # avoid duplicating local copies.
                         transfer_tasks.append(
                             TransferTaskP2PMeta(engine_ind=target_ind, engine_rank=target_rank, group=params)
                         )
@@ -150,6 +152,8 @@ class RemoteTransferPlan:
                     cur_active_rank += 1
             return transfer_tasks
 
+        # TODO(JD): Due to the local replica design, the plan should proritize reusing existing copies and merge sources.
+
         non_expert_plan = plan(
             source_size=self._gathered_dp_size,
             source_rank=self._gathered_dp_rank,
@@ -157,15 +161,12 @@ class RemoteTransferPlan:
             num_targets=self._rollout_engine_count,
             params="non-expert",
         )
-        offset = len(non_expert_plan)
-        # Offset the current active rank by the number of non-expert transfer tasks to avoid overloading first few ranks.
         return non_expert_plan + plan(
             source_size=self._gathered_expert_dp_size,
             source_rank=self._gathered_expert_dp_rank,
             num_rank_in_target=self._rollout_dp_size * self._rollout_ep_size,
             num_targets=self._rollout_engine_count,
             params="expert",
-            cur_active_rank=offset,
         )
 
     def is_source(self) -> bool:

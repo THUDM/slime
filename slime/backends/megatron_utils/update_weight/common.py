@@ -278,7 +278,7 @@ def _named_params_and_buffers_global(
                 yield f"module.module.decoder.layers.{layer_idx}.{rest}", buffer
 
 
-def register_memory_transfer_engine(named_param_with_buffers: Sequence[tuple[str, torch.Tensor]], engine) -> None:
+def register_memory_transfer_engine(named_param_with_buffers: Sequence[tuple[str, torch.Tensor]], engine) -> dict:
     """
     Efficient memory registration for transfer engine that reduce total registration count by batching continuous memory regions.
     """

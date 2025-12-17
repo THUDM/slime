@@ -14,7 +14,7 @@ from slime.utils.timer import timer
 
 from ..megatron_to_hf import convert_to_hf
 from .common import all_gather_param
-from .remote_transfer_plan import RemoteTransferPlan
+from .remote_transfer_plan import RemoteTransferPlan, TransferTask
 
 
 class UpdateWeightFromRemote:
@@ -84,6 +84,7 @@ class UpdateWeightFromRemote:
                 else:
                     raise ValueError(f"Unknown tensor type {transfer_task.tensor_type} in transfer task.")
                 dist.barrier(group=get_gloo_group())
+                self.finish_transfer_task(transfer_task.session)
 
         dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
@@ -92,6 +93,9 @@ class UpdateWeightFromRemote:
 
     def leader_post_update(self) -> None:
         ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
+        return
+
+    def finish_transfer_task(self, task: TransferTask) -> None:
         return
 
     def _update_expert_weights(
