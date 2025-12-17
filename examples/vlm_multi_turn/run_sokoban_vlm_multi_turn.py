@@ -47,6 +47,7 @@ def execute():
         "--input-key prompt "
         "--metadata-key extra_info "
         '--multimodal-keys \'{"image": "images"}\' '
+        "--apply-chat-template "
         "--custom-generate-function-path examples.vlm_multi_turn.rollout.generate "
         "--custom-rm-path examples.vlm_multi_turn.reward_sokoban.async_compute_reward "
         "--rollout-interaction-env-path examples.vlm_multi_turn.env_sokoban "

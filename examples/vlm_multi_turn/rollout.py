@@ -117,7 +117,14 @@ def _finalize_episode(
     return {}
 
 
-def _encode_for_generation(tokenizer, processor, messages: list[dict], metadata: dict | None, apply_chat_template_kwargs: dict | None):
+def _encode_for_generation(
+    tokenizer,
+    processor,
+    messages: list[dict],
+    metadata: dict | None,
+    apply_chat_template: bool,
+    apply_chat_template_kwargs: dict | None,
+):
     """
     Encode the conversation for SGLang generation (with generation prompt) and return payload pieces.
     """
@@ -128,6 +135,7 @@ def _encode_for_generation(tokenizer, processor, messages: list[dict], metadata:
         tokenizer,
         processor,
         metadata,
+        apply_chat_template,
         apply_chat_template_kwargs,
     )
 
@@ -168,6 +176,7 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
             processor,
             messages,
             sample.metadata,
+            getattr(args, "apply_chat_template", False),
             args.apply_chat_template_kwargs,
         )
         is_resume = bool(sample.tokens)
@@ -275,6 +284,7 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                 processor,
                 messages,
                 sample.metadata,
+                getattr(args, "apply_chat_template", False),
                 args.apply_chat_template_kwargs,
             )
 
