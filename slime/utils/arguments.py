@@ -200,6 +200,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--max-turns",
+                dest="max_turns",
+                type=int,
+                default=None,
+                help="Maximum turns for multi-turn custom rollout (e.g., Sokoban). Defaults to rollout implementation config.",
+            )
+            parser.add_argument(
                 "--rollout-temperature",
                 type=float,
                 default=1.0,
@@ -329,6 +336,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=(
                     "Only substitue the `def generate(args, sample, sampling_params)` function within the example rollout function. "
                     "This should be useful if you need to implement some special rollout logic, e.g. multi-turn, function calling."
+                ),
+            )
+            parser.add_argument(
+                "--rollout-interaction-env-path",
+                type=str,
+                default="examples.vlm_multi_turn.env_sokoban",
+                help=(
+                    "Python module path or file path that provides the rollout interaction environment API "
+                    "(build_env/format_observation/finalize_episode)."
                 ),
             )
 

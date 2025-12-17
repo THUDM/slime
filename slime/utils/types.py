@@ -18,8 +18,11 @@ class Sample:
     # response
     response: str = ""
     response_length: int = 0
+    # Tracks only tokens produced by the model (excludes env feedback).
+    rollout_response_length: int = 0
     label: str | None = None
     reward: float | dict[str, Any] | None = None
+    partial_reward: float | dict[str, Any] | None = None
     loss_mask: list[int] | None = None
     weight_versions: list[str] = field(default_factory=list)
     rollout_log_probs: list[float] | None = None  # Log probabilities from rollout engine
@@ -87,6 +90,7 @@ class Sample:
     def from_dict(data: dict):
         data["status"] = Sample.Status(data["status"])
         data["spec_info"] = Sample.SpecInfo.from_dict(data.get("spec_info", {}))
+        data["rollout_response_length"] = data.get("rollout_response_length", 0)
         return Sample(**data)
 
     def get_reward_value(self, args) -> float:
