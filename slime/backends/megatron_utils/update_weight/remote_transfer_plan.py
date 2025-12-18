@@ -189,10 +189,11 @@ class RemoteTransferPlan:
         Add a transfer task to the plan using remote instance session and tensor names.
         """
         params = self.non_expert_params_buffers if param_group == "non-expert" else self.expert_params_buffers
-        self.transfer_tasks.append(
-            TransferTask(session=session, named_params_and_buffers=params, tensor_type=param_group)
-        )
-        logger.info(f"Added {param_group} parameter transfer task: session={session}, num_tensors={len(params)}")
+        if params:
+            self.transfer_tasks.append(
+                TransferTask(session=session, named_params_and_buffers=params, tensor_type=param_group)
+            )
+            logger.info(f"Added {param_group} parameter transfer task: session={session}, num_tensors={len(params)}")
 
     def clear_transfer_tasks(self) -> None:
         self.transfer_tasks = []

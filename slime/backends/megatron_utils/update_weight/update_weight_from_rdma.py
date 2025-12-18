@@ -1,5 +1,6 @@
 import dataclasses
 import logging
+import os
 from argparse import Namespace
 from collections.abc import Callable, Mapping, Sequence
 
@@ -7,21 +8,20 @@ import ray
 import sglang.srt.layers.dp_attention as sglang_dp_attention
 import sglang.srt.server_args as sglang_server_args
 import torch
+from mooncake.engine import TransferEngine
 from ray.actor import ActorHandle
 from sglang.srt.configs.device_config import DeviceConfig
 from sglang.srt.configs.load_config import LoadConfig
 from sglang.srt.configs.model_config import ModelConfig
-from sglang.srt.disaggregation.mooncake.transfer_engine import MooncakeTransferEngine
-from sglang.srt.model_loader import get_model
 
-# from mooncake.engine import TransferEngine
+# from sglang.srt.disaggregation.mooncake.transfer_engine import MooncakeTransferEngine
+from sglang.srt.model_loader import get_model
 from sglang.srt.server_args import ServerArgs
 from tqdm import tqdm
 
-from slime.backends.megatron_utils.update_weight.remote_transfer_plan import TransferTask
 from slime.utils.memory_utils import print_memory
 
-from .common import register_memory_transfer_engine, split_expert_and_non_expert_param_names
+from .common import register_memory_transfer_engine
 from .update_weight_from_remote import UpdateWeightFromRemote
 
 logger = logging.getLogger(__name__)
@@ -108,20 +108,13 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
 
             # Local model with identical shape to remote. Create at most one copy per target rank, and link
             # them by session id.
-            self.engines, self.session_id_to_local_replicas = {}, {}
+            self.engines = {}
             # Associate transfer tasks based on obtained session and weight info
             for target in self.transfer_plan.targets:
                 session_id = targets_to_session_id[(target.engine_ind, target.engine_rank)]
-                expert_params, non_expert_params = split_expert_and_non_expert_param_names(
-                    self.remote_weight_infos_by_session_id[session_id].keys()
-                )
-                params = expert_params if target.group == "expert" else non_expert_params
                 self.transfer_plan.add_transfer_task(
                     session=session_id,
                     param_group=target.group,
-                )
-                logger.info(
-                    f"Added transfer task for session {session_id} with {len(params)} tensors in group {target.group}."
                 )
                 # Instantiate the local model replicas and a corresponding transfer engine with memory registry for each type of rollout shard.
                 if target.engine_rank not in self.engines:
@@ -141,6 +134,9 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
             print_memory("[RDMA] After Local Engine Replicas and engine Creation")
 
     def _register_replica_memory(self, model_replica, remote_weight_info, transfer_engine) -> dict:
+
+        old_cuda_alloc_value = os.environ.get("PYTORCH_ALLOC_CONF", "")
+        os.environ["PYTORCH_ALLOC_CONF"] = ""
         to_register_named_tensors = []
         named_tensors = dict(model_replica.named_parameters())
         # Verify the 1-to-1 mapping between registered weights and remote weights expected.
@@ -157,15 +153,21 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
                 raise RuntimeError(f"Local replica parameter {name} is not on CUDA device.")
             to_register_named_tensors.append((name, tensor))
         weight_memory_registry = register_memory_transfer_engine(to_register_named_tensors, transfer_engine)
+
+        os.environ["PYTORCH_ALLOC_CONF"] = old_cuda_alloc_value
         logger.info(
             f"[RDMA] Registered {len(to_register_named_tensors)} tensors of total {len(named_tensors)} from replica with transfer engine."
         )
         return weight_memory_registry
 
-    def _create_transfer_engine(self) -> MooncakeTransferEngine:
+    def _create_transfer_engine(self) -> TransferEngine:
+        # local_ip = ray._private.services.get_node_ip_address()
+        # transfer_engine = MooncakeTransferEngine(local_ip, None, None)
+        transfer_engine = TransferEngine()
         local_ip = ray._private.services.get_node_ip_address()
-        transfer_engine = MooncakeTransferEngine(local_ip, None, None)
-        logger.info(f"[RDMA] Local replica Transfer Engine initialized at port {transfer_engine.session_id}")
+        transfer_engine.initialize(local_ip, "P2PHANDSHAKE", "rdma", "")
+
+        logger.info(f"[RDMA] Local replica Transfer Engine initialized at port {transfer_engine.get_rpc_port()}")
         return transfer_engine
 
     def _create_inference_replica(self, model_path: str, target_rank: int, target_tp: int, server_args: ServerArgs):
@@ -176,10 +178,17 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
         while ensuring the model weights have the correct shape for the target rank.
         """
         model_config = ModelConfig(model_path)
-        load_config = LoadConfig(load_format="auto")
+        load_config = LoadConfig(
+            load_format="auto",
+            tp_rank=target_rank,
+            model_loader_extra_config=server_args.model_loader_extra_config,
+            rl_quant_profile=server_args.rl_quant_profile,
+        )
         device_config = DeviceConfig()
 
         # Mock the distributed environment to get correct weight shapes
+        # TODO: Reuse https://github.com/sgl-project/sglang/blob/main/python/sglang/srt/model_executor/model_runner.py#L845
+        # For memory pinning and CPU offloading?
         with MockSglangDistributedContext(tp_size=target_tp, tp_rank=target_rank, server_args=server_args):
             model = get_model(
                 model_config=model_config,
@@ -197,14 +206,15 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
         _, engine, weight_memory_registry = self.engines[self.session_id_to_engine_rank[session_id]]
         remote_weight_info = self.remote_weight_infos_by_session_id[session_id]
         source_ptrs, target_ptrs, source_lens = [], [], []
-        for name, tensor in weight_memory_registry.items():
-            source_ptrs.append(tensor.data_ptr())
+        for name, tensor_register in weight_memory_registry.items():
+            data_ptr, numel, ele_size = tensor_register
+            source_ptrs.append(data_ptr)
             target_ptrs.append(remote_weight_info[name][0])  # remote address
-            source_lens.append(tensor.numel() * tensor.element_size())
+            source_lens.append(numel * ele_size)
 
         # Batch transfer weights through RDMA
-        ret = engine.batch_transfer_sync(session_id, source_ptrs, target_ptrs, source_lens)
-        logger.info(f"[RDMA] Batch transferred {len(weight_memory_registry)} tensors to session {session_id}.")
+        ret = engine.batch_transfer_sync_write(session_id, source_ptrs, target_ptrs, source_lens)
+        # logger.info(f"[RDMA] Batch transferred {len(weight_memory_registry)} tensors to session {session_id}.")
         if ret < 0:
             raise RuntimeError(f"Batch transfer weights via RDMA failed with error code {ret}.")
 
@@ -212,7 +222,7 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
         ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         ray.get(
             [
-                engine.update_weight_version.remote(weight_version=self.weight_version)
+                engine.update_weight_version.remote(weight_version=str(self.weight_version))
                 for engine in self.rollout_engines
             ]
         )
@@ -247,11 +257,11 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
         # 1. Do we really want to support sglang pipeline paralell?
 
         # Load weights into local replica matching the target session, this handles sharding and reshaping.
-        self.session_id_to_local_replicas[session_id].load_weights(converted_named_tensors)
+        self.engines[self.session_id_to_engine_rank[session_id]][0].load_weights(converted_named_tensors)
         converted_named_tensors.clear()
 
-    def finish_transfer_task(self, task: TransferTask) -> None:
-        self._execute_transfer(task.session)
+    def finish_transfer_task(self, session: str) -> None:
+        self._execute_transfer(session)
         return
 
 
@@ -318,5 +328,4 @@ class MockSglangDistributedContext:
         sglang_server_args._global_server_args = None
         self._patches.clear()
         logger.info("[MockDist] Deactivated")
-
         return False  # Don't suppress exceptions

@@ -14,7 +14,7 @@ from slime.utils.timer import timer
 
 from ..megatron_to_hf import convert_to_hf
 from .common import all_gather_param
-from .remote_transfer_plan import RemoteTransferPlan, TransferTask
+from .remote_transfer_plan import RemoteTransferPlan
 
 
 class UpdateWeightFromRemote:
@@ -95,7 +95,7 @@ class UpdateWeightFromRemote:
         ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         return
 
-    def finish_transfer_task(self, task: TransferTask) -> None:
+    def finish_transfer_task(self, session: str) -> None:
         return
 
     def _update_expert_weights(

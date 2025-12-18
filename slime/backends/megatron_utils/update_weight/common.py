@@ -324,7 +324,7 @@ def register_memory_transfer_engine(named_param_with_buffers: Sequence[tuple[str
     # Register merged memory blocks that hold weights.
     for weight_block in weight_blocks_for_reg_mr:
         address, size = weight_block
-        ret = engine.register(address, size)
+        ret = engine.register_memory(address, size)
         if ret != 0:
             raise RuntimeError(
                 f"register memory failed for weight block at address {address} with size {size}, error: {ret}"
