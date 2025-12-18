@@ -34,10 +34,11 @@ else
 fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 
 CKPT_ARGS=(
    --hf-checkpoint ${BASE_FOLDER}/Qwen3-Next-80B-A3B-Thinking
-   --ref-load ${BASE_FOLDER}/Qwen3-Next-80B-A3B-Thinking
+#   --ref-load ${BASE_FOLDER}/Qwen3-Next-80B-A3B-Thinking
    --load ${BASE_FOLDER}/Qwen3-Next-80B-A3B-Thinking_slime/
    --save ${BASE_FOLDER}/Qwen3-Next-80B-A3B-Thinking_slime/
    --save-interval 20
@@ -52,13 +53,13 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 300
-   --rollout-batch-size 8
-   --n-samples-per-prompt 4
+   --rollout-batch-size 4
+   --n-samples-per-prompt 3
    --rollout-max-response-len 8192
    --rollout-temperature 0.8
 
-   --global-batch-size 32
-   --balance-data
+   --global-batch-size 12
+#   --balance-data
 )
 
 EVAL_ARGS=(
@@ -70,9 +71,9 @@ EVAL_ARGS=(
 )
 
 PERF_ARGS=(
-   # --micro-batch-size 1
-   --use-dynamic-batch-size
-   --max-tokens-per-gpu 4192
+    --micro-batch-size 1
+#   --use-dynamic-batch-size
+   --max-tokens-per-gpu 1
 )
 
 GRPO_ARGS=(
@@ -123,6 +124,7 @@ TRAIN_BACKEND_ARGS=(
    --train-backend fsdp
 #   --update-weight-buffer-size 536870912
    --gradient-checkpointing
+#   --fp16
 #   --attn-implementation flash_attention_3
    --train-env-vars '{"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}'
 )
@@ -139,7 +141,7 @@ MISC_ARGS=(
 
 # launch the master node of ray in container
 export no_proxy="127.0.0.1,${MASTER_ADDR}"
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 6 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 for WORKER_IP in $(awk '{print $1}' /root/mpi_rack_hostfile); do
   if [[ "$WORKER_IP" == "$MLP_WORKER_0_HOST" ]]; then
     continue
@@ -153,7 +155,7 @@ wait
 # Build the runtime environment JSON with proper variable substitution
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
-    \"PYTHONPATH\": \"/root/Megatron-LM/\",
+    \"PYTHONPATH\": \"/root/Megatron-LM/:${SCRIPT_DIR}\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
     \"no_proxy\": \"${no_proxy}\",
@@ -165,7 +167,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 4 \
+   --actor-num-gpus-per-node 6 \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \

@@ -52,10 +52,10 @@ ROLLOUT_ARGS=(
    --apply-chat-template
    --rollout-shuffle
    --rm-type deepscaler
-   --num-rollout 3000
+   --num-rollout 300
    --rollout-batch-size 16
    --n-samples-per-prompt 4
-   --rollout-max-response-len 2048
+   --rollout-max-response-len 8192
    --rollout-temperature 0.8
 
    --global-batch-size 64
@@ -65,7 +65,7 @@ ROLLOUT_ARGS=(
 EVAL_ARGS=(
    --eval-interval 20
    --eval-prompt-data aime ${BASE_FOLDER}/aime-2024/aime-2024.jsonl
-   --n-samples-per-eval-prompt 16
+   --n-samples-per-eval-prompt 2
    --eval-max-response-len 16384
    --eval-top-p 0.7
 )
@@ -73,7 +73,7 @@ EVAL_ARGS=(
 PERF_ARGS=(
    --tensor-model-parallel-size 1
    --sequence-parallel
-   --pipeline-model-parallel-size 4
+   --pipeline-model-parallel-size 6
    --context-parallel-size 1
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
@@ -84,7 +84,7 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 128
+   --max-tokens-per-gpu 2048
 )
 
 GRPO_ARGS=(
@@ -111,15 +111,15 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   #--use-wandb
-   # --wandb-project slime-dev
-   # --wandb-group qwen3-next-80B-A3B-test
-   # --wandb-key ${WANDB_KEY}
+#   --use-wandb
+#    --wandb-project slime-dev
+#    --wandb-group qwen3-next-80B-A3B-test
+#    --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
-   --rollout-num-gpus 4
+   --rollout-num-gpus 2
    --sglang-mem-fraction-static 0.8
    --sglang-ep-size 1
    
@@ -140,8 +140,8 @@ MISC_ARGS=(
    --attention-dropout 0.0
    --hidden-dropout 0.0
    # should be good for model performance
-#   --accumulate-allreduce-grads-in-fp32
-   --grad-reduce-in-bf16
+   --accumulate-allreduce-grads-in-fp32
+#   --grad-reduce-in-bf16
    --attention-softmax-in-fp32
    # need to comment this when using model with MLA
    --attention-backend flash
@@ -179,7 +179,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
    --actor-num-nodes 1 \
-   --actor-num-gpus-per-node 4 \
+   --actor-num-gpus-per-node 6 \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
