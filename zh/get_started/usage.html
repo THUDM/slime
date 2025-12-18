@@ -54,7 +54,7 @@
     <link rel="prev" title="快速使用" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2025 年 12 月 16 日"/>
+    <meta name="docbuild:last-update" content="2025 年 12 月 18 日"/>
   </head>
   
   
@@ -454,6 +454,11 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">自定义参数</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fsdp">FSDP 使用方法</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">参数</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">FSDP 一键启动</a></li>
+</ul>
+</li>
 </ul>
             </nav>
         </div>
@@ -472,7 +477,7 @@ document.write(`
 <p>在使用 slime 时，传参主要是为了如下几件事：</p>
 <ol class="arabic simple">
 <li><p>把集群中一部分 GPU 分配做训练，一部分分配做推理；</p></li>
-<li><p>训练的部分加载 megatron；</p></li>
+<li><p>训练的部分加载 megatron或者FSDP；</p></li>
 <li><p>推理部分加载 sglang；</p></li>
 <li><p>配置 RL 训练需要的超参。</p></li>
 </ol>
@@ -772,6 +777,146 @@ document.write(`
 </ul>
 </section>
 </section>
+<section id="fsdp">
+<h2>FSDP 使用方法<a class="headerlink" href="#fsdp" title="Link to this heading">#</a></h2>
+<p>slime 同样也支持FSDP2作为训练后端，可以参考<a class="reference external" href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/slime/fsdp/readme.md">文档</a>。</p>
+<blockquote>
+<div><p>FSDP 通过 <code class="docutils literal notranslate"><span class="pre">AutoModelForCausalLM.from_pretrained()</span></code> 自动读取所有架构信息，无需手动指定。Megatron 需要手动配置参数读取 model 架构信息，或者通过 <code class="docutils literal notranslate"><span class="pre">--use-hf-config-for-megatron</span></code> 实现自动推断， FSDP可以全部从 <code class="docutils literal notranslate"><span class="pre">config.json</span></code> 自动读取，可以直接避免权重格式转换步骤。</p>
+</div></blockquote>
+<p>可以通过在命令行传递 <code class="docutils literal notranslate"><span class="pre">--train-backend</span> <span class="pre">fsdp</span></code> 来启动 FSDP 作为训练后端。</p>
+<section id="id11">
+<h3>参数<a class="headerlink" href="#id11" title="Link to this heading">#</a></h3>
+<p>FSDP和Megatron后端支持的参数的对比如下表所示，接下来FSDP会有更多的支持。</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>配置类别</p></th>
+<th class="head"><p>Megatron 参数</p></th>
+<th class="head"><p>FSDP 参数</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><strong>模型加载</strong></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--load</span></code> (Megatron checkpoint) + 架构参数 (<code class="docutils literal notranslate"><span class="pre">--num-layers</span></code>, <code class="docutils literal notranslate"><span class="pre">--hidden-size</span></code> 等) 或 <code class="docutils literal notranslate"><span class="pre">--use-hf-config-for-megatron</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> (必需)</p></td>
+<td><p><strong>FSDP</strong>: 直接使用 HuggingFace 格式，无需转换权重，通过 <code class="docutils literal notranslate"><span class="pre">AutoConfig</span></code> 自动推断架构</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>张量并行</strong></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--tensor-model-parallel-size</span></code></p></td>
+<td><p>Coming Soon</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><strong>流水线并行</strong></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--pipeline-model-parallel-size</span></code></p></td>
+<td><p>Coming Soon</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>专家并行</strong></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--expert-model-parallel-size</span></code></p></td>
+<td><p>Coming Soon</p></td>
+<td><p></p></td>
+</tr>
+<tr class="row-even"><td><p><strong>上下文并行</strong></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--context-parallel-size</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--context-parallel-size</span></code></p></td>
+<td><p>两者都支持 CP</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>初始学习率</strong></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--lr</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--lr</span></code></p></td>
+<td><p>参数相同</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>学习率衰减</strong></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--lr-decay-style</span></code> (linear/cosine 等)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--lr-decay-style</span></code></p></td>
+<td><p>参数相同</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>Warmup</strong></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--lr-warmup-iters</span></code> (步数)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--lr-warmup-iters</span></code></p></td>
+<td><p>参数相同</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>最小学习率</strong></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--min-lr</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--min-lr</span></code></p></td>
+<td><p>参数相同</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>优化器类型</strong></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--optimizer</span></code> (adam/sgd 等)</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--optimizer</span></code> (默认 adam)</p></td>
+<td><p>基本相同</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>分布式优化器</strong></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--use-distributed-optimizer</span></code></p></td>
+<td><p>内置于 FSDP</p></td>
+<td><p>FSDP 默认使用分布式优化器</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>梯度检查点</strong></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--recompute-granularity</span></code>, <code class="docutils literal notranslate"><span class="pre">--recompute-method</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--gradient-checkpointing</span></code></p></td>
+<td><p><strong>FSDP</strong>: 简化为布尔开关</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>CPU Offload</strong></p></td>
+<td><p>通过分布式优化器实现</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--fsdp-cpu-offload</span></code></p></td>
+<td><p><strong>FSDP</strong>: 将参数/梯度/优化器状态卸载到 CPU</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>CPU 后端</strong></p></td>
+<td><p>通过分布式优化器实现</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--fsdp-cpu-backend</span></code></p></td>
+<td><p><strong>FSDP</strong>: 指定CPU的后端并且当CPU offload时使用混合后端</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>Attention 后端</strong></p></td>
+<td><p>由 Megatron Core 决定</p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--attn-implementation</span></code> (flash_attention_2/sdpa/eager)</p></td>
+<td><p><strong>FSDP</strong>: 直接透传给 HuggingFace</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>混合精度</strong></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--fp16</span></code> 或 <code class="docutils literal notranslate"><span class="pre">--bf16</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--fp16</span></code> (bf16 自动推断)</p></td>
+<td><p>基本相同</p></td>
+</tr>
+<tr class="row-even"><td><p><strong>训练后端</strong></p></td>
+<td><p>默认或 <code class="docutils literal notranslate"><span class="pre">--train-backend</span> <span class="pre">megatron</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--train-backend</span> <span class="pre">fsdp</span></code> (必需)</p></td>
+<td><p>用于切换后端</p></td>
+</tr>
+<tr class="row-odd"><td><p><strong>参数配置</strong></p></td>
+<td><p></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--config</span></code></p></td>
+<td><p><strong>FSDP</strong>: 为FSDP设置额外的参数</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id12">
+<h3>FSDP 一键启动<a class="headerlink" href="#id12" title="Link to this heading">#</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 如果需要使用 WANDB，需要提前设置好环境变量 WANDB_API_KEY</span>
+<span class="c1"># 下载模型权重 (Qwen3-4B)</span>
+hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-4B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-4B
+
+<span class="c1"># 下载训练数据集 (dapo-math-17k)</span>
+hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/dapo-math-17k<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--local-dir<span class="w"> </span>/root/dapo-math-17k
+
+<span class="c1"># 下载评估数据集 (aime-2024)</span>
+hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/aime-2024<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--local-dir<span class="w"> </span>/root/aime-2024
+<span class="w">  </span>
+<span class="c1"># 克隆代码并安装依赖</span>
+git<span class="w"> </span>clone<span class="w"> </span>https://github.com/THUDM/slime.git
+<span class="nb">cd</span><span class="w"> </span>slime
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
+
+
+<span class="c1"># FSDP不用进行权重转换，native 支持 huggingface 格式</span>
+<span class="c1"># 开启 reference model，在 colocated 模式下训练 Qwen3-4B</span>
+<span class="nb">source</span><span class="w"> </span>/root/slime/scripts/run-qwen3-4B-fsdp.sh
+</pre></div>
+</div>
+</section>
+</section>
 </section>
 
 
@@ -843,6 +988,11 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">自定义参数</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fsdp">FSDP 使用方法</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">参数</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">FSDP 一键启动</a></li>
+</ul>
+</li>
 </ul>
   </nav></div>
 
@@ -876,7 +1026,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2025 年 12 月 16 日.
+  最后更新于 2025 年 12 月 18 日.
   <br/>
 </p>
   </div>
