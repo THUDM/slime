@@ -33,14 +33,13 @@ def execute(mode: str = ""):
     if mode == "save":
         ckpt_args += f"--save /root/models/{MODEL_NAME}_slime "
         ckpt_args += "--save-interval 2 "
-        ckpt_args += "--ckpt-step 1 "
     elif mode == "async_save":
         ckpt_args += f"--save /root/models/{MODEL_NAME}_slime "
         ckpt_args += "--save-interval 2 "
-        ckpt_args += "--ckpt-step 1 "
         ckpt_args += "--async-save "
     elif mode == "load":
         ckpt_args += f"--load /root/models/{MODEL_NAME}_slime "
+        ckpt_args += "--ckpt-step 1 "
 
     rollout_args = (
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
@@ -121,11 +120,6 @@ def execute(mode: str = ""):
         f"{misc_args} "
     )
 
-    U.execute_train(
-        train_args=train_args,
-        num_gpus_per_node=NUM_GPUS,
-        megatron_model_type=MODEL_TYPE,
-    )
     U.execute_train(
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
