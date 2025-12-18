@@ -683,7 +683,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 tis_func = vanilla_tis_function_fsdp
             pg_loss, loss_masks, tis_metrics = tis_func(**tis_kwargs)
 
-        if getattr(self.args, "calculate_per_token_loss", False):
+        if self.args.calculate_per_token_loss:
             pg_loss = sum_of_token(pg_loss, response_lengths, loss_masks)
             pg_clipfrac = sum_of_token(pg_clipfrac, response_lengths, loss_masks)
             ppo_kl = sum_of_token(ppo_kl.abs(), response_lengths, loss_masks)
@@ -739,7 +739,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if self.args.use_tis and tis_metrics:
             for k, v in tis_metrics.items():
-                if getattr(self.args, "calculate_per_token_loss", False):
+                if self.args.calculate_per_token_loss:
                     reported[k] = sum_of_token(v, response_lengths, loss_masks).detach()
                 else:
                     reported[k] = sum_of_sample_mean(v, response_lengths, loss_masks).detach()
