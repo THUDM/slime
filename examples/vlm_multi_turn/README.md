@@ -24,8 +24,7 @@ What it does:
 - Launches FSDP training with custom rollout/reward hooks:
   - `--custom-generate-function-path examples.vlm_multi_turn.rollout.generate`
   - `--custom-rm-path examples.vlm_multi_turn.reward_sokoban.async_compute_reward`
-  - `--rollout-interaction-env-path examples.vlm_multi_turn.env_sokoban`
-  - Multi-turn caps: `--max-turns`, token budget stop-on-max enabled.
+  - `--custom-config-path examples/vlm_multi_turn/sokoban_vlm_multi_turn_config.yaml` to pass in max_turn and rollout_interaction_env_path
 
 
 ## What each file does
