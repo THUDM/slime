@@ -453,6 +453,10 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_rollout_only:
             return
 
+        # torch dist may trigger nccl communication during saving.
+        if self.args.offload_train:
+            reload_process_groups()
+
         if self.args.async_save:
             from megatron.training.async_utils import maybe_finalize_async_save
 
@@ -462,6 +466,9 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if force_sync and self.args.async_save:
             maybe_finalize_async_save(blocking=True)
+
+        if self.args.offload_train:
+            destroy_process_groups()
 
     @timer
     def update_weights(self) -> None:
