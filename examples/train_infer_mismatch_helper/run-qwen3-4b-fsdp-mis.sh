@@ -115,7 +115,7 @@ MISC_ARGS=(
 
 CUSTOM_ARGS=(
    --custom-config-path examples/train_infer_mismatch_helper/mis.yaml
-   --custom-tis-function-path examples.train_infer_mismatch_helper.mis_fsdp.compute_mis_weights_fsdp
+   --custom-tis-function-path examples.train_infer_mismatch_helper.mis.compute_mis_weights_fsdp
 )
 
 # launch the master node of ray in container - 8 GPUs for training
