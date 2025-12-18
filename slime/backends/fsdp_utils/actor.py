@@ -20,7 +20,13 @@ from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.metric_utils import compute_rollout_step
 from slime.utils.misc import load_function
-from slime.utils.ppo_utils import compute_approx_kl, compute_gspo_kl, compute_opsm_mask, compute_policy_loss
+from slime.utils.ppo_utils import (
+    compute_approx_kl,
+    compute_gspo_kl,
+    compute_opsm_mask,
+    compute_policy_loss,
+    vanilla_tis_function,
+)
 from slime.utils.processing_utils import load_processor, load_tokenizer
 from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, inverse_timer, timer
@@ -656,7 +662,7 @@ class FSDPTrainRayActor(TrainRayActor):
             else None
         )
 
-        tis_metrics = {}
+        # Apply off-policy correction using importance sampling if enabled
         if self.args.use_tis:
             assert (
                 has_rollout_log_probs and rollout_log_probs is not None
@@ -664,7 +670,7 @@ class FSDPTrainRayActor(TrainRayActor):
 
             train_log_probs_list = list(log_probs.split(response_lengths, dim=0))
             rollout_log_probs_list = list(rollout_log_probs.split(response_lengths, dim=0))
-
+            ois = (-ppo_kl).exp()
             tis_kwargs = {
                 "args": self.args,
                 "pg_loss": pg_loss,
@@ -680,7 +686,7 @@ class FSDPTrainRayActor(TrainRayActor):
             if self.args.custom_tis_function_path is not None:
                 tis_func = load_function(self.args.custom_tis_function_path)
             else:
-                tis_func = vanilla_tis_function_fsdp
+                tis_func = vanilla_tis_function
             pg_loss, loss_masks, tis_metrics = tis_func(**tis_kwargs)
 
         if self.args.calculate_per_token_loss:
@@ -738,6 +744,7 @@ class FSDPTrainRayActor(TrainRayActor):
             reported["opsm_clipfrac"] = opsm_clipfrac
 
         if self.args.use_tis and tis_metrics:
+            reported["ois"] = sum_of_sample_mean(ois, response_lengths, loss_masks).detach()
             for k, v in tis_metrics.items():
                 if self.args.calculate_per_token_loss:
                     reported[k] = sum_of_token(v, response_lengths, loss_masks).detach()
@@ -820,51 +827,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 )
 
         clear_memory()
-
-    def _compute_tis_weights(
-        self,
-        old_log_probs: torch.Tensor,
-        rollout_log_probs: torch.Tensor,
-        loss_masks: list[torch.Tensor],
-        response_lengths: list[int],
-    ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
-        """Compute Importance Sampling weights for TIS/MIS.
-
-        Supports both token-level and sequence-level aggregation, and truncate/mask modes.
-        """
-        tis_mode = self.args.tis_mode if self.args.tis_mode is not None else "truncate"
-        tis_level = self.args.tis_level if self.args.tis_level is not None else "token"
-        tis_clip_low = self.args.tis_clip_low if self.args.tis_clip_low is not None else 0.1
-        tis_clip_high = self.args.tis_clip if self.args.tis_clip is not None else 2.0
-
-        log_ratio = old_log_probs - rollout_log_probs
-
-        # Calculate raw TIS weights based on level
-        if tis_level == "token":
-            tis = torch.exp(log_ratio)
-        elif tis_level == "sequence":
-            tis_list = []
-            for seq_log_ratio, mask in zip(log_ratio.split(response_lengths, dim=0), loss_masks, strict=False):
-                seq_mask = mask.to(seq_log_ratio.device)
-                sum_log_ratio = masked_sum(seq_log_ratio, seq_mask, expand=True)
-                seq_tis = torch.exp(sum_log_ratio)
-                tis_list.append(seq_tis)
-            tis = torch.cat(tis_list, dim=0)
-        else:
-            raise ValueError(f"Unsupported tis_level: {tis_level}")
-
-        # Apply mode (truncate or mask)
-        if tis_mode == "truncate":
-            tis_clip = torch.clamp(tis, min=tis_clip_low, max=tis_clip_high)
-        elif tis_mode == "mask":
-            mask = (tis >= tis_clip_low) & (tis <= tis_clip_high)
-            tis_clip = tis * mask.float()
-        else:
-            raise ValueError(f"Unsupported tis_mode: {tis_mode}")
-
-        tis_clipfrac = tis_clip != tis
-
-        return tis_clip, tis, tis_clipfrac
 
     def _create_ref_model(self, ref_load_path: str | None):
         """Create and initialize a separate reference model with FSDP2 CPUOffloadPolicy.
@@ -1098,11 +1060,6 @@ def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks:
     )
 
 
-def masked_sum(x: torch.Tensor, loss_mask: torch.Tensor, expand: bool = False) -> torch.Tensor:
-    result = torch.where(loss_mask.bool(), x, 0.0).sum()
-    return result.expand_as(x) if expand else result
-
-
 @torch.no_grad()
 def move_torch_optimizer(optimizer, device):
     """ref: https://github.com/volcengine/verl/blob/main/verl/utils/fsdp_utils.py"""
@@ -1180,44 +1137,3 @@ def sum_of_token(x: torch.Tensor, response_lengths: list[int], loss_masks: list[
             for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
         ]
     )
-
-
-def vanilla_tis_function_fsdp(
-    args,
-    *,
-    pg_loss: torch.Tensor,
-    train_log_probs: list[torch.Tensor],
-    rollout_log_probs: list[torch.Tensor],
-    loss_masks: list[torch.Tensor],
-    **kwargs,
-) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
-    """Apply TIS off-policy correction using importance sampling.
-
-    Parameters:
-        args: Arguments containing TIS settings.
-        pg_loss: Policy gradient loss tensor of shape [total_seq_len - 1].
-        train_log_probs: List of tensors containing training log-probabilities
-            for each sequence.
-        rollout_log_probs: List of tensors containing rollout log-probabilities
-            for each sequence.
-        loss_masks: List of tensors containing loss masks for each sequence.
-    """
-    rollout_log_probs_flat = torch.cat(rollout_log_probs, dim=0)
-    train_log_probs_flat = torch.cat(train_log_probs, dim=0)
-
-    tis = torch.exp(train_log_probs_flat - rollout_log_probs_flat)
-    tis_abs = (tis - 1).abs()
-
-    tis_clip_low = args.tis_clip_low if args.tis_clip_low is not None else 0.1
-    tis_clip_high = args.tis_clip if args.tis_clip is not None else 2.0
-    tis_clip = torch.clamp(tis, min=tis_clip_low, max=tis_clip_high)
-    tis_clipfrac = (tis_clip != tis).float()
-
-    metrics = {
-        "tis": tis.clone().detach(),
-        "tis_clipfrac": tis_clipfrac.clone().detach(),
-        "tis_abs": tis_abs.clone().detach(),
-    }
-    pg_loss = pg_loss * tis_clip
-
-    return pg_loss, loss_masks, metrics
