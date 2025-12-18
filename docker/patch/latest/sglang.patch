@@ -259,7 +259,6 @@ index 3293a8a59..a075b71ce 100644
  
          hidden_size = x.shape[-1]
          if hidden_size != self.hidden_size:
-
 diff --git a/python/sglang/srt/layers/logits_processor.py b/python/sglang/srt/layers/logits_processor.py
 index 522865765..733bad5f2 100644
 --- a/python/sglang/srt/layers/logits_processor.py
