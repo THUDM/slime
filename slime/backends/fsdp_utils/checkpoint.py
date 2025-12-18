@@ -145,6 +145,8 @@ def load(actor: Any) -> dict[str, Any] | None:
     elif hasattr(actor, "lr_scheduler"):
         logger.info(f"[FSDP] LR scheduler checkpoint not found at {lr_scheduler_dir}, skipping LR scheduler load.")
 
+    # TODO: Load LoRA adapter (optional)
+
     rng_state = None
     rng_path = checkpoint_dir / "rng.pt"
     if rng_path.exists():
@@ -225,6 +227,8 @@ def save(actor: Any, iteration: int) -> None:
         lr_scheduler_state = LRSchedulerState(actor.lr_scheduler)
         lr_scheduler_state_dict = {"lr_scheduler_state": lr_scheduler_state}
         dcp.save(lr_scheduler_state_dict, checkpoint_id=str(lr_scheduler_dir))
+
+    # TODO: Save LoRA adapter
 
     if dist.get_rank() == 0:
         rng_state = {"torch": torch.get_rng_state()}
