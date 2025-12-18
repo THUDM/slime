@@ -832,10 +832,10 @@ class FSDPTrainRayActor(TrainRayActor):
 
         Supports both token-level and sequence-level aggregation, and truncate/mask modes.
         """
-        tis_mode = getattr(self.args, "tis_mode", "truncate")
-        tis_level = getattr(self.args, "tis_level", "token")
-        tis_clip_low = getattr(self.args, "tis_clip_low", 0.1)
-        tis_clip_high = getattr(self.args, "tis_clip", 2.0)
+        tis_mode = self.args.tis_mode if self.args.tis_mode is not None else "truncate"
+        tis_level = self.args.tis_level if self.args.tis_level is not None else "token"
+        tis_clip_low = self.args.tis_clip_low if self.args.tis_clip_low is not None else 0.1
+        tis_clip_high = self.args.tis_clip if self.args.tis_clip is not None else 2.0
 
         log_ratio = old_log_probs - rollout_log_probs
 
@@ -1208,7 +1208,9 @@ def vanilla_tis_function_fsdp(
     tis = torch.exp(train_log_probs_flat - rollout_log_probs_flat)
     tis_abs = (tis - 1).abs()
 
-    tis_clip = torch.clamp(tis, min=getattr(args, "tis_clip_low", 0.1), max=getattr(args, "tis_clip", 2.0))
+    tis_clip_low = args.tis_clip_low if args.tis_clip_low is not None else 0.1
+    tis_clip_high = args.tis_clip if args.tis_clip is not None else 2.0
+    tis_clip = torch.clamp(tis, min=tis_clip_low, max=tis_clip_high)
     tis_clipfrac = (tis_clip != tis).float()
 
     metrics = {
