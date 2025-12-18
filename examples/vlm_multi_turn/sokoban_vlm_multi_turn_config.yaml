@@ -1,0 +1,2 @@
+max_turns: 8
+rollout_interaction_env_path: examples.vlm_multi_turn.env_sokoban

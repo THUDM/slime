@@ -50,7 +50,6 @@ def execute():
         "--apply-chat-template "
         "--custom-generate-function-path examples.vlm_multi_turn.rollout.generate "
         "--custom-rm-path examples.vlm_multi_turn.reward_sokoban.async_compute_reward "
-        "--rollout-interaction-env-path examples.vlm_multi_turn.env_sokoban "
         "--rollout-shuffle "
         "--num-rollout 800 "
         "--rollout-batch-size 4 "
@@ -59,8 +58,11 @@ def execute():
         "--rollout-max-context-len 8192 "
         "--rollout-temperature 0.8 "
         "--rollout-top-p 0.9 "
-        "--max-turns 8 "
         "--global-batch-size 16 "
+    )
+
+    custom_args = (
+        "--custom-config-path examples/vlm_multi_turn/sokoban_vlm_multi_turn_config.yaml "
     )
 
     eval_args = (
