@@ -15,7 +15,7 @@
 准备 DeepSeek R1 的 ckpt 首先需要在多机均可访问到的地址（下记为 `$BASE_DIR`）上下载 DeepSeek-R1：
 
 ```bash
-huggingface-cli download deepseek-ai/DeepSeek-R1 --local-dir $BASE_DIR/DeepSeek-R1
+hf download deepseek-ai/DeepSeek-R1 --local-dir $BASE_DIR/DeepSeek-R1
 ```
 
 DeepSeek-R1 的 huggingface ckpt 为 block-quant 的 fp8 格式，为了转换一个 Megatron 可以加载的 torch dist 格式，需要先转化一个 bf16 的 huggingface ckpt：

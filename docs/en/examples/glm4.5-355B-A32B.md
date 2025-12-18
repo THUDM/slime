@@ -10,7 +10,7 @@ For instructions on setting up the environment and downloading data, please refe
 First, you will need to download GLM-4.5 to a directory accessible by all machines (hereinafter referred to as `$BASE_DIR`):
 
 ```bash
-huggingface-cli download zai-org/GLM-4.5 --local-dir $BASE_DIR/GLM-4.5-355B-A32B
+hf download zai-org/GLM-4.5 --local-dir $BASE_DIR/GLM-4.5-355B-A32B
 ```
 
 Next, we need to convert the huggingface checkpoint into the torch_dist format with 2 nodes, each with 8 GPUs:
