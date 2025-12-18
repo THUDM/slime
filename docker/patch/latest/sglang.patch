@@ -259,46 +259,7 @@ index 3293a8a59..a075b71ce 100644
  
          hidden_size = x.shape[-1]
          if hidden_size != self.hidden_size:
-@@ -382,6 +398,7 @@ class GemmaRMSNorm(CustomOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
-+        post_residual_addition: Optional[torch.Tensor] = None
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         if residual is not None:
-             gemma_fused_add_rmsnorm(
-@@ -395,6 +412,7 @@ class GemmaRMSNorm(CustomOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
-+        post_residual_addition: Optional[torch.Tensor] = None
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         orig_dtype = x.dtype
-         if residual is not None:
-@@ -412,6 +430,7 @@ class GemmaRMSNorm(CustomOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
-+        post_residual_addition: Optional[torch.Tensor] = None
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         return self._forward_impl(x, residual)
- 
-@@ -419,6 +438,7 @@ class GemmaRMSNorm(CustomOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
-+        post_residual_addition: Optional[torch.Tensor] = None
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         if residual is not None:
-             x = x + residual
-@@ -431,6 +451,7 @@ class GemmaRMSNorm(CustomOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
-+        post_residual_addition: Optional[torch.Tensor] = None
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         return self._forward_impl(x, residual)
- 
+
 diff --git a/python/sglang/srt/layers/logits_processor.py b/python/sglang/srt/layers/logits_processor.py
 index 522865765..733bad5f2 100644
 --- a/python/sglang/srt/layers/logits_processor.py
