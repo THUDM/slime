@@ -50,9 +50,9 @@ def execute(mode: str = ""):
         "--rollout-shuffle "
         "--rm-type deepscaler "
         "--num-rollout 3 "
-        "--rollout-batch-size 8 "
+        "--rollout-batch-size 4 "
         "--n-samples-per-prompt 8 "
-        "--rollout-max-response-len 8192 "
+        "--rollout-max-response-len 1024 "
         "--rollout-temperature 0.8 "
         "--global-batch-size 32 "
         "--balance-data "
@@ -91,7 +91,7 @@ def execute(mode: str = ""):
         "--use-precision-aware-optimizer "
     )
 
-    sglang_args = "--rollout-num-gpus-per-engine 2 " "--sglang-mem-fraction-static 0.8 "
+    sglang_args = "--rollout-num-gpus-per-engine 2 --sglang-mem-fraction-static 0.8 --sglang-cuda-graph-bs 1 2 4 8 16 "
 
     ci_args = "--ci-test "
 
