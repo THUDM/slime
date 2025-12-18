@@ -477,12 +477,12 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
             num_node_per_engine = args.rollout_num_gpus_per_engine // args.num_gpus_per_node
             if rank % num_node_per_engine == 0:
                 # this is the first node in the engine, we need to allocate the dist_init_addr port
-                dist_init_addr = f"{get_addr()}:{get_port(6 + args.sglang_dp_size)}"
+                dist_init_addr = f"{get_addr()}:{get_port(30 + args.sglang_dp_size)}"
                 for i in range(num_node_per_engine):
                     addr_and_ports[rank + i]["dist_init_addr"] = dist_init_addr
         else:
             for i in range(num_engines_on_this_node):
-                addr_and_ports[rank + i]["dist_init_addr"] = f"{get_addr()}:{get_port(6 + args.sglang_dp_size)}"
+                addr_and_ports[rank + i]["dist_init_addr"] = f"{get_addr()}:{get_port(30 + args.sglang_dp_size)}"
 
     for i, _ in rollout_engines:
         for key in ["port", "nccl_port", "dist_init_addr"]:
@@ -492,7 +492,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
     return addr_and_ports
 
 
-def _start_router(args, prefill_and_decode_urls=None):
+def _start_router(args):
     """start sgl router and slime router"""
     if args.sglang_router_ip is not None:
         return
