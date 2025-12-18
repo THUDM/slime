@@ -283,6 +283,14 @@ class SGLangEngine(RayActor):
         response.raise_for_status()
         return response.json()["remote_instance_transfer_engine_info"]
 
+    def get_server_info(self):
+        response = requests.get(
+            f"http://{self.server_host}:{self.server_port}/server_info",
+            timeout=5.0,
+        )
+        response.raise_for_status()
+        return response.json()
+
     def get_weight_version(self):
         if self.node_rank != 0:
             return

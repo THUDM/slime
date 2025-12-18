@@ -330,3 +330,17 @@ def register_memory_transfer_engine(named_param_with_buffers: Sequence[tuple[str
                 f"register memory failed for weight block at address {address} with size {size}, error: {ret}"
             )
     return weight_mr_dict
+
+
+def register_memory_region_v1(named_param_with_buffers: Sequence[tuple[str, torch.Tensor]], transfer_engine):
+    weight_mr_dict = {}
+    for name, weight in named_param_with_buffers:
+        ret = transfer_engine.register(weight.data_ptr(), weight.numel() * weight.element_size())
+        if ret != 0:
+            raise RuntimeError(f"register memory failed for weight {name}, error: {ret}")
+        weight_mr_dict[name] = (
+            weight.data_ptr(),
+            weight.numel(),
+            weight.element_size(),
+        )
+    return weight_mr_dict
