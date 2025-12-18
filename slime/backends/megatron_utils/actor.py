@@ -449,11 +449,26 @@ class MegatronTrainRayActor(TrainRayActor):
         log_perf_data(rollout_id, self.args)
 
     @timer
-    def save_model(self, iteration: int) -> None:
+    def save_model(self, rollout_id: int, force_sync: bool = False) -> None:
         if self.args.debug_rollout_only:
             return
 
-        save(iteration, self.model, self.optimizer, self.opt_param_scheduler)
+        # torch dist may trigger nccl communication during saving.
+        if self.args.offload_train:
+            reload_process_groups()
+
+        if self.args.async_save:
+            from megatron.training.async_utils import maybe_finalize_async_save
+
+            maybe_finalize_async_save(blocking=True)
+
+        save(rollout_id, self.model, self.optimizer, self.opt_param_scheduler)
+
+        if force_sync and self.args.async_save:
+            maybe_finalize_async_save(blocking=True)
+
+        if self.args.offload_train:
+            destroy_process_groups()
 
     @timer
     def update_weights(self) -> None:
