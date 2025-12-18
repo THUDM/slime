@@ -47,10 +47,10 @@ def train(args):
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_curr_ref))
 
-        if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch):
-            actor_model.save_model(rollout_id)
+        if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
+            actor_model.save_model(rollout_id, force_sync=rollout_id == args.num_rollout - 1)
             if args.use_critic:
-                critic_model.save_model(rollout_id)
+                critic_model.save_model(rollout_id, force_sync=rollout_id == args.num_rollout - 1)
             if args.rollout_global_dataset:
                 ray.get(rollout_manager.save.remote(rollout_id))
 
@@ -63,11 +63,6 @@ def train(args):
         if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             ray.get(rollout_manager.eval.remote(rollout_id))
 
-    # save the final model
-    if args.save_interval is not None:
-        actor_model.save_model(args.num_rollout - 1, force_sync=True)
-        if args.use_critic:
-            critic_model.save_model(args.num_rollout - 1, force_sync=True)
     ray.get(rollout_manager.dispose.remote())
 
 
