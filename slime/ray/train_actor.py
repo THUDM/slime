@@ -113,7 +113,7 @@ class TrainRayActor(RayActor):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def save_model(self, iteration):
+    def save_model(self, rollout_id, force_sync=False):
         raise NotImplementedError
 
     @abc.abstractmethod

@@ -318,12 +318,13 @@ class FSDPTrainRayActor(TrainRayActor):
         dist.barrier(group=get_gloo_group())
         print_memory("after wake_up model")
 
-    def save_model(self, iteration: int) -> None:
+    def save_model(self, rollout_id: int, force_sync: bool = False) -> None:
         """Delegate checkpoint saving to the shared checkpoint utilities."""
         if self.args.debug_rollout_only or self.args.save is None:
             return
 
-        checkpoint.save(self, iteration)
+        assert not self.args.async_save, "FSDPTrainRayActor does not support async_save yet."
+        checkpoint.save(self, rollout_id)
 
     def _compute_log_prob(
         self,

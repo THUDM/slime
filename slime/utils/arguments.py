@@ -643,6 +643,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             reset_arg(parser, "--load", type=str, default=None)
             reset_arg(parser, "--save", type=str, default=None)
             reset_arg(parser, "--save-interval", type=int, default=None)
+            reset_arg(parser, "--async-save", action="store_true")
             reset_arg(parser, "--seed", type=int, default=1234)
             reset_arg(parser, "--clip-grad", type=float, default=1.0)
             reset_arg(parser, "--calculate-per-token-loss", action="store_true")

@@ -1,4 +1,5 @@
 import os
+from argparse import ArgumentParser
 
 import slime.utils.external_utils.command_utils as U
 
@@ -9,6 +10,10 @@ TIGHT_HOST_MEMORY = bool(int(os.environ.get("SLIME_TEST_TIGHT_HOST_MEMORY", "1")
 MODEL_NAME = "Qwen3-4B"
 MODEL_TYPE = "qwen3-4B"
 NUM_GPUS = 8
+
+
+parser = ArgumentParser()
+parser.add_argument("--async-save", action="store_true", help="Whether to test async save/load.")
 
 
 def prepare():
@@ -28,6 +33,12 @@ def execute(mode: str = ""):
     if mode == "save":
         ckpt_args += f"--save /root/models/{MODEL_NAME}_slime "
         ckpt_args += "--save-interval 2 "
+        ckpt_args += "--ckpt-step 1 "
+    elif mode == "async_save":
+        ckpt_args += f"--save /root/models/{MODEL_NAME}_slime "
+        ckpt_args += "--save-interval 2 "
+        ckpt_args += "--ckpt-step 1 "
+        ckpt_args += "--async-save "
     elif mode == "load":
         ckpt_args += f"--load /root/models/{MODEL_NAME}_slime "
 
@@ -123,11 +134,12 @@ def execute(mode: str = ""):
 
 
 if __name__ == "__main__":
+    args = parser.parse_args()
     # TODO also use typer
     prepare()
     os.environ.pop("http_proxy")
     os.environ.pop("https_proxy")
     os.environ.pop("HTTP_PROXY")
     os.environ.pop("HTTPS_PROXY")
-    execute("save")
+    execute("save" if not args.async_save else "async_save")
     execute("load")
