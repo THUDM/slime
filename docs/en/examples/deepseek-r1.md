@@ -11,7 +11,7 @@ Regarding parallelism, for sglang we will enable EP64, activate dp attention, an
 
 ## Environment Setup
 
-For instructions on setting up the environment and downloading data, please refer to [Example: Qwen3-4B](./qwen3-4B.md).
+For instructions on setting up the environment and downloading data, please refer to [Example: Qwen3-4B](qwen3-4B.md).
 
 To prepare the DeepSeek R1 checkpoint, first you will need to download DeepSeek-R1 to a directory accessible by all machines (hereinafter referred to as `$BASE_DIR`):
 

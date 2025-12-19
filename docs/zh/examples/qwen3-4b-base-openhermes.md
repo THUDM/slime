@@ -2,7 +2,7 @@
 
 ## 环境准备
 
-首先需要我们仿照 [示例：Qwen3-4B 模型](./qwen3-4B.md) 创建镜像环境与转换 `Qwen3-4B-Base` 模型。
+首先需要我们仿照 [示例：Qwen3-4B 模型](qwen3-4B.md) 创建镜像环境与转换 `Qwen3-4B-Base` 模型。
 
 之后，我们处理 sft 数据。这里我们以经典的 [OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5) 为例，首先把数据处理成适合 slime 加载的格式，可以用如下的脚本进行处理，增加一个符合 openai message 格式的列，并保存在 `/root/openhermes2_5.parquet`。
 

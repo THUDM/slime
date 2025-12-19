@@ -10,7 +10,7 @@
 
 ## 环境准备
 
-搭建环境与下载数据的方法可以参考 [示例：Qwen3-4B](./qwen3-4B.md)。
+搭建环境与下载数据的方法可以参考 [示例：Qwen3-4B](qwen3-4B.md)。
 
 准备 DeepSeek R1 的 ckpt 首先需要在多机均可访问到的地址（下记为 `$BASE_DIR`）上下载 DeepSeek-R1：
 
