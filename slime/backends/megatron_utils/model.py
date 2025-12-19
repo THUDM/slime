@@ -84,9 +84,6 @@ def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer)
 def setup_model_and_optimizer(
     args: Namespace,
     role: str = "actor",
-    no_wd_decay_cond: Callable[..., bool] | None = None,
-    scale_lr_cond: Callable[..., bool] | None = None,
-    lr_mult: float = 1.0,
 ) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler]:
     """Build model(s), wrap with DDP, and construct optimizer and scheduler.
 
@@ -119,11 +116,8 @@ def setup_model_and_optimizer(
     config.timers = None
 
     optimizer = get_megatron_optimizer(
-        config,
-        model,
-        no_wd_decay_cond,
-        scale_lr_cond,
-        lr_mult,
+        config=config,
+        model_chunks=model,
         use_gloo_process_groups=args.enable_gloo_process_groups,
     )
     opt_param_scheduler = get_optimizer_param_scheduler(args, optimizer)
