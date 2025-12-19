@@ -183,6 +183,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/reproducibility/README.html">Reproducibility</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">投机采样</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/fault-torlance.html">容灾</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
@@ -534,7 +535,7 @@ document.write(`
 <span class="o">)</span>
 </pre></div>
 </div>
-<p>我们在 <a class="reference internal" href="#../../scripts/models"><span class="xref myst">scripts/models</span></a> 提供了常用模型的配置，可以直接复用。如果你也在使用 megatron 进行 pretrain/sft 的话，可以直接复用 pretrain/sft 中的模型配置。</p>
+<p>我们在 <a class="reference internal" href="#../../../scripts/models"><span class="xref myst">scripts/models</span></a> 提供了常用模型的配置，可以直接复用。如果你也在使用 megatron 进行 pretrain/sft 的话，可以直接复用 pretrain/sft 中的模型配置。</p>
 <p>注意：</p>
 <ul class="simple">
 <li><p>slime 会加载 <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code> 中的 megatron 的所有参数，所以可以在环境中的 megatron 里找参数以及参数的说明；</p></li>
@@ -572,7 +573,7 @@ document.write(`
 <li><p>现在推荐使用的 torch_dist 格式（对应  <code class="docutils literal notranslate"><span class="pre">--ckpt-format</span> <span class="pre">torch_dist</span></code>）</p></li>
 </ul>
 <p>torch 格式是 megatron 的老存储格式，里面的结构大约是一些 <code class="docutils literal notranslate"><span class="pre">mp_rank_xxx</span></code> 的文件夹，每个文件夹对应了在对应的并行划分下，每个 rank 存储的 ckpt。也是因为如此，在加载 torch 格式的 ckpt 的时候，需要保证 ckpt 的并行策略和训练任务的并行策略是相同的。</p>
-<p>我们推荐使用 torch_dist 格式 ckpt，因为 torch_dist 格式可以支持自动并行切分，也就是不同并行的训练任务都可以共用同一个 ckpt，会方便很多。torch_dist 这也是开源 megatron 目前的默认格式。torch_dist 格式的 ckpt 中一般是一堆 <code class="docutils literal notranslate"><span class="pre">.distcp</span></code> 文件。在使用 torch_dist 时，可以使用 <a class="reference internal" href="#../../README_zh.md"><span class="xref myst">README</span></a> 中介绍的 ckpt 转化方法从 huggingface 转化为 torch_dist，反之亦然。</p>
+<p>我们推荐使用 torch_dist 格式 ckpt，因为 torch_dist 格式可以支持自动并行切分，也就是不同并行的训练任务都可以共用同一个 ckpt，会方便很多。torch_dist 这也是开源 megatron 目前的默认格式。torch_dist 格式的 ckpt 中一般是一堆 <code class="docutils literal notranslate"><span class="pre">.distcp</span></code> 文件。在使用 torch_dist 时，可以使用 <span class="xref myst">README</span> 中介绍的 ckpt 转化方法从 huggingface 转化为 torch_dist，反之亦然。</p>
 <p>在存储结构上，megatron 的 ckpt 一般是这样的结构，这里假设存储的路径为 <code class="docutils literal notranslate"><span class="pre">/ckpt/</span></code>：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--/ckpt/
 <span class="w">    </span><span class="p">|</span>--<span class="w"> </span>latest_checkpointed_iteration.txt
@@ -656,7 +657,7 @@ document.write(`
 <h2>自定义 rollout 函数<a class="headerlink" href="#rollout" title="Link to this heading">#</a></h2>
 <p>slime 支持不同程度的自定义数据生成（rollout）。</p>
 <ul>
-<li><p>默认会使用 <a class="reference internal" href="#../../slime/rollout/sglang_rollout.py"><span class="xref myst">slime/rollout/sglang_rollout.py</span></a> 中的 <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> 函数进行数据生成。这个文件中实现了基于 sglang 的异步（asyncio）数据生成流程，并支持了例如 dynamic sampling，partial rollout 等功能；</p></li>
+<li><p>默认会使用 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py">slime/rollout/sglang_rollout.py</a> 中的 <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> 函数进行数据生成。这个文件中实现了基于 sglang 的异步（asyncio）数据生成流程，并支持了例如 dynamic sampling，partial rollout 等功能；</p></li>
 <li><p>可以通过 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> 参数，完全替换 sglang_rollout.py 中的 <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code>，只需要保证 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> 传入的函数签名满足：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">generate_rollout</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">data_buffer</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
@@ -679,7 +680,7 @@ document.write(`
 <li><p><code class="docutils literal notranslate"><span class="pre">rollout_id</span></code> 对应的是当前是第几次数据生成，用作保证续训时的数据顺序；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">data_buffer</span></code> 是 slime 中全局唯一的数据 buffer，可以用来获取初始 prompt，数据 id，将生成至一半的 sample 存储下来下次留作下次使用等；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">evaluation</span></code> 是否是当做 evaluation 使用。可以通过 <code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code> 单独配置 eval 的函数；</p></li>
-<li><p>返回的 <code class="docutils literal notranslate"><span class="pre">Sample</span></code> 类型见 <a class="reference internal" href="#../../slime/utils/types.py"><span class="xref myst">slime/utils/types.py</span></a>，在实现时，需要保证</p>
+<li><p>返回的 <code class="docutils literal notranslate"><span class="pre">Sample</span></code> 类型见 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/utils/types.py">slime/utils/types.py</a>，在实现时，需要保证</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">tokens</span></code>：prompt + response 的 token；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">response_length</span></code>：response 的总长。对于多轮任务，则是除去第一轮 prompt，剩余的 token 长度；</p></li>
@@ -721,7 +722,7 @@ document.write(`
     <span class="k">return</span> <span class="n">sample</span>
 </pre></div>
 </div>
-<p>更完备的版本请查看 <a class="reference internal" href="#../../slime/rollout/sglang_rollout.py"><span class="xref myst">slime/rollout/sglang_rollout.py</span></a>。</p>
+<p>更完备的版本请查看 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py">slime/rollout/sglang_rollout.py</a>。</p>
 </li>
 <li><p>有的时候，我们还需要支持自定义的 reward model，可以通过配置 <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code> 来进行配置。</p></li>
 </ul>
@@ -742,7 +743,7 @@ document.write(`
 <li><p><code class="docutils literal notranslate"><span class="pre">--tp-size</span></code> 在 slime 中会使用 <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus-per-engine</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--model-path</span></code> 在 slime 中会使用 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code></p></li>
 </ul>
-<p>sglang 参数引入 slime 的方式可以参考 <a class="reference internal" href="#../../slime/backends/sglang_utils/arguments.py"><span class="xref myst">slime/backends/sglang_utils/arguments.py</span></a>。</p>
+<p>sglang 参数引入 slime 的方式可以参考 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/sglang_utils/arguments.py">slime/backends/sglang_utils/arguments.py</a>。</p>
 </section>
 <section id="router">
 <h3>router 使用方法<a class="headerlink" href="#router" title="Link to this heading">#</a></h3>
@@ -756,7 +757,7 @@ document.write(`
 <p>slime 通过复用 <code class="docutils literal notranslate"><span class="pre">megatron.training</span></code> 目录下的常规函数，如 <code class="docutils literal notranslate"><span class="pre">parse_args</span></code>， <code class="docutils literal notranslate"><span class="pre">save_checkpoint</span></code>，<code class="docutils literal notranslate"><span class="pre">load_checkpoint</span></code>，从而实现对不同版本以及轻度魔改的 megatron 的支持。所以在使用时，需要保证 <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code> 中能访问到 megatron，例如在运行时加入 <code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">PYTHONPATH=/root/Megatron-LM</span></code>。</p>
 <section id="id9">
 <h3>参数配置<a class="headerlink" href="#id9" title="Link to this heading">#</a></h3>
-<p>slime 通过直接引入 <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">megatron.training.arguments</span> <span class="pre">import</span> <span class="pre">parse_args</span></code> 引入了当前环境中 megatron 的所有参数。如果当前使用的 megatron 有在 <code class="docutils literal notranslate"><span class="pre">parse_args</span></code> 之外的参数，可以通过像 <a class="reference internal" href="#../../train.py"><span class="xref myst">train.py</span></a> 中传入参数来进行配置，例如：</p>
+<p>slime 通过直接引入 <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">megatron.training.arguments</span> <span class="pre">import</span> <span class="pre">parse_args</span></code> 引入了当前环境中 megatron 的所有参数。如果当前使用的 megatron 有在 <code class="docutils literal notranslate"><span class="pre">parse_args</span></code> 之外的参数，可以通过像 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/train.py">train.py</a> 中传入参数来进行配置，例如：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
     <span class="k">try</span><span class="p">:</span>
         <span class="kn">from</span><span class="w"> </span><span class="nn">pretrain_gpt</span><span class="w"> </span><span class="kn">import</span> <span class="n">extra_args_provider</span>

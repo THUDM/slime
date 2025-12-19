@@ -466,7 +466,7 @@ document.write(`
 <h2>Environment Setup<a class="headerlink" href="#environment-setup" title="Link to this heading">#</a></h2>
 <p>For instructions on setting up the environment and downloading data, please refer to <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">Example: Qwen3-4B</span></a>.</p>
 <p>First, you will need to download GLM-4.5 to a directory accessible by all machines (hereinafter referred to as <code class="docutils literal notranslate"><span class="pre">$BASE_DIR</span></code>):</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>huggingface-cli<span class="w"> </span>download<span class="w"> </span>zai-org/GLM-4.5<span class="w"> </span>--local-dir<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-4.5-355B-A32B
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>zai-org/GLM-4.5<span class="w"> </span>--local-dir<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-4.5-355B-A32B
 </pre></div>
 </div>
 <p>Next, we need to convert the huggingface checkpoint into the torch_dist format with 2 nodes, each with 8 GPUs:</p>
@@ -513,7 +513,7 @@ bash<span class="w"> </span>scripts/run-glm4.5-355B-A32B.sh
 <span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4.5-355B-A32B.sh&quot;</span>
 </pre></div>
 </div>
-<p>This reads the model’s config from <a class="reference download internal" download="" href="../_downloads/ed4073202c599ef76c7cb933d6aa14c3/glm4.5-355B-A32B.sh"><span class="xref download myst">scripts/models/glm4.5-355B-A32B.sh</span></a>. These configs are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in <a class="reference internal" href="#../../../scripts/models/"><span class="xref myst">scripts/models</span></a>.</p>
+<p>This reads the model’s config from <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/models/glm4.5-355B-A32B.sh">scripts/models/glm4.5-355B-A32B.sh</a>. These configs are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in <a class="reference external" href="https://github.com/THUDM/slime/tree/main/scripts/models/">scripts/models</a>.</p>
 <section id="perf-args">
 <h4>PERF_ARGS<a class="headerlink" href="#perf-args" title="Link to this heading">#</a></h4>
 <p>A set of Megatron parallelism parameters. Only <code class="docutils literal notranslate"><span class="pre">--use-dynamic-batch-size</span></code> and <code class="docutils literal notranslate"><span class="pre">--max-tokens-per-gpu</span></code> are added by slime.</p>

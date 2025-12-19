@@ -538,7 +538,7 @@ The reason for not using a parameter like <code class="docutils literal notransl
 <span class="o">)</span>
 </pre></div>
 </div>
-<p>We provide configurations for common models in <a class="reference internal" href="#../../scripts/models"><span class="xref myst">scripts/models</span></a>, which you can reuse directly. If you are also using Megatron for pre-training/SFT, you can directly reuse the model configurations from your pre-training/SFT setup.</p>
+<p>We provide configurations for common models in <a class="reference internal" href="#../../../scripts/models"><span class="xref myst">scripts/models</span></a>, which you can reuse directly. If you are also using Megatron for pre-training/SFT, you can directly reuse the model configurations from your pre-training/SFT setup.</p>
 <p>Note:</p>
 <ul class="simple">
 <li><p>slime will load all parameters of Megatron found in the <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code>, so you can find parameters and their descriptions within the Megatron in your environment.</p></li>
@@ -660,7 +660,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <h2>Custom Rollout Function<a class="headerlink" href="#custom-rollout-function" title="Link to this heading">#</a></h2>
 <p>slime supports customizing data generation (rollout) to various degrees.</p>
 <ul>
-<li><p>By default, it uses the <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> function from <a class="reference internal" href="#../../slime/rollout/sglang_rollout.py"><span class="xref myst">slime/rollout/sglang_example.py</span></a> for data generation. This file implements an asynchronous (asyncio) data generation flow based on SGLang and supports features like dynamic sampling and partial rollout.</p></li>
+<li><p>By default, it uses the <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> function from <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py">slime/rollout/sglang_rollout.py</a> for data generation. This file implements an asynchronous (asyncio) data generation flow based on SGLang and supports features like dynamic sampling and partial rollout.</p></li>
 <li><p>You can completely replace the <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> in sglang_example.py by using the <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> parameter. You just need to ensure that the function signature passed via <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> is as follows:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">generate_rollout</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">data_buffer</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
@@ -683,7 +683,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <li><p><code class="docutils literal notranslate"><span class="pre">rollout_id</span></code>: The ID of the current data generation round, used to ensure data order when resuming training.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">data_buffer</span></code>: A globally unique data buffer in slime, which can be used to get initial prompts, data IDs, and store partially generated samples for later use.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">evaluation</span></code>: A boolean indicating if the rollout is for evaluation. You can configure a separate evaluation function using <code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>.</p></li>
-<li><p>The returned <code class="docutils literal notranslate"><span class="pre">Sample</span></code> type is defined in <a class="reference internal" href="#../../slime/utils/types.py"><span class="xref myst">slime/utils/types.py</span></a>. When implementing, you need to ensure the following fields are correctly set:</p>
+<li><p>The returned <code class="docutils literal notranslate"><span class="pre">Sample</span></code> type is defined in <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/utils/types.py">slime/utils/types.py</a>. When implementing, you need to ensure the following fields are correctly set:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">tokens</span></code>: The tokens for the prompt + response.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">response_length</span></code>: The total length of the response. For multi-turn tasks, this is the length of the tokens remaining after the first-turn prompt.</p></li>
@@ -725,7 +725,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
     <span class="k">return</span> <span class="n">sample</span>
 </pre></div>
 </div>
-<p>For a more complete version, please refer to <a class="reference internal" href="#../../slime/rollout/sglang_rollout.py"><span class="xref myst">slime/rollout/sglang_example.py</span></a>.</p>
+<p>For a more complete version, please refer to <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py">slime/rollout/sglang_rollout.py</a>.</p>
 </li>
 <li><p>Sometimes, you may also need to support a custom reward model. This can be configured by setting <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>.</p></li>
 </ul>
@@ -746,7 +746,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <li><p><code class="docutils literal notranslate"><span class="pre">--tp-size</span></code> in slime is set using <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus-per-engine</span></code>.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--model-path</span></code> in slime is set using <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code>.</p></li>
 </ul>
-<p>The way SGLang parameters are integrated into slime can be found in <a class="reference internal" href="#../../slime/backends/sglang_utils/arguments.py"><span class="xref myst">slime/backends/sglang_utils/arguments.py</span></a>.</p>
+<p>The way SGLang parameters are integrated into slime can be found in <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/sglang_utils/arguments.py">slime/backends/sglang_utils/arguments.py</a>.</p>
 </section>
 <section id="how-to-use-the-router">
 <h3>How to Use the Router<a class="headerlink" href="#how-to-use-the-router" title="Link to this heading">#</a></h3>
@@ -760,7 +760,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <p>slime supports different and lightly modified versions of Megatron by reusing common functions from the <code class="docutils literal notranslate"><span class="pre">megatron.training</span></code> directory, such as <code class="docutils literal notranslate"><span class="pre">parse_args</span></code>, <code class="docutils literal notranslate"><span class="pre">save_checkpoint</span></code>, and <code class="docutils literal notranslate"><span class="pre">load_checkpoint</span></code>. Therefore, when using it, you must ensure that Megatron is accessible in the <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code>, for example, by adding <code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">PYTHONPATH=/root/Megatron-LM</span></code> at runtime.</p>
 <section id="id1">
 <h3>Parameter Configuration<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
-<p>slime directly imports all parameters of the Megatron in the current environment by using <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">megatron.training.arguments</span> <span class="pre">import</span> <span class="pre">parse_args</span></code>. If the version of Megatron you are using has parameters defined outside of <code class="docutils literal notranslate"><span class="pre">parse_args</span></code>, you can configure them by passing them in, similar to how it’s done in <a class="reference internal" href="#../../train.py"><span class="xref myst">train.py</span></a>, for example:</p>
+<p>slime directly imports all parameters of the Megatron in the current environment by using <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">megatron.training.arguments</span> <span class="pre">import</span> <span class="pre">parse_args</span></code>. If the version of Megatron you are using has parameters defined outside of <code class="docutils literal notranslate"><span class="pre">parse_args</span></code>, you can configure them by passing them in, similar to how it’s done in <a class="reference external" href="https://github.com/THUDM/slime/blob/main/train.py">train.py</a>, for example:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
     <span class="k">try</span><span class="p">:</span>
         <span class="kn">from</span><span class="w"> </span><span class="nn">pretrain_gpt</span><span class="w"> </span><span class="kn">import</span> <span class="n">extra_args_provider</span>

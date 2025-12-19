@@ -533,7 +533,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <h3>Example: Qwen3-4B<a class="headerlink" href="#example-qwen3-4b" title="Link to this heading">#</a></h3>
 <p>We provide examples to use <a class="reference external" href="https://huggingface.co/Qwen/Qwen3-4B">Qwen3-4B</a>, please refer to:</p>
 <ul class="simple">
-<li><p><a class="reference download internal" download="" href="../_downloads/1b86e49a634e716e8335c7c0ac205c20/run-qwen3-4B-amd.sh"><span class="xref download myst">Example: Qwen3-4B Model</span></a>: Just run <code class="docutils literal notranslate"><span class="pre">scripts/run-qwen3-4B-amd.sh</span></code></p></li>
+<li><p><a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B-amd.sh">Example: Qwen3-4B Model</a>: Just run <code class="docutils literal notranslate"><span class="pre">scripts/run-qwen3-4B-amd.sh</span></code></p></li>
 </ul>
 <p>⚠️ TODO: ROCM seems to not support <code class="docutils literal notranslate"><span class="pre">apex</span></code> yet. Thus, we need to disable gradient accumulation fusionby adding the <code class="docutils literal notranslate"><span class="pre">--no-gradient-accumulation-fusion</span></code> flag in the training script currently. We will continue investigating how to enable this.</p>
 <p>⚠️ Note: The main difference between ROCm’s training script and NVIDIA’s script is that you need to set <code class="docutils literal notranslate"><span class="pre">RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES</span></code> and <code class="docutils literal notranslate"><span class="pre">HIP_VISIBLE_DEVICES</span></code> for ray to function properly on AMD GPUs.</p>

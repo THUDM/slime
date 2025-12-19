@@ -455,7 +455,7 @@ document.write(`
 <h1>SFT Qwen3-4B-Base<a class="headerlink" href="#sft-qwen3-4b-base" title="Link to this heading">#</a></h1>
 <section id="environment-preparation">
 <h2>Environment Preparation<a class="headerlink" href="#environment-preparation" title="Link to this heading">#</a></h2>
-<p>First, we need to create a mirror environment and convert the <code class="docutils literal notranslate"><span class="pre">Qwen3-4B-Base</span></code> model by following the <a class="reference internal" href="#./models/qwen3-4B.md"><span class="xref myst">Example: Qwen3-4B Model</span></a>.</p>
+<p>First, we need to create a mirror environment and convert the <code class="docutils literal notranslate"><span class="pre">Qwen3-4B-Base</span></code> model by following the <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">Example: Qwen3-4B Model</span></a>.</p>
 <p>After that, we will process the SFT data. Here, we use the classic <a class="reference external" href="https://huggingface.co/datasets/teknium/OpenHermes-2.5">OpenHermes-2.5</a> as an example. First, we process the data into a format suitable for <code class="docutils literal notranslate"><span class="pre">slime</span></code> to load. You can use the following script to add a column that conforms to the OpenAI message format and save it to <code class="docutils literal notranslate"><span class="pre">/root/openhermes2_5.parquet</span></code>.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">datasets</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_dataset</span>
 
@@ -498,7 +498,7 @@ bash<span class="w"> </span>script/run-qwen3-4B-base-sft.sh
 </div>
 <section id="parameter-introduction">
 <h3>Parameter Introduction<a class="headerlink" href="#parameter-introduction" title="Link to this heading">#</a></h3>
-<p>You can compare <a class="reference internal" href="#../../scripts/run-qwen3-4B.sh"><span class="xref myst">run-qwen3-4B-base-sft.sh</span></a> with <a class="reference internal" href="#../../scripts/run-qwen3-4B.sh"><span class="xref myst">run-qwen3-4B.sh</span></a>. You will find that besides changing the model from the instruct version to the base model, the main adjustments are as follows:</p>
+<p>You can compare <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B-base-sft.sh">run-qwen3-4B-base-sft.sh</a> with <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B.sh">run-qwen3-4B.sh</a>. You will find that besides changing the model from the instruct version to the base model, the main adjustments are as follows:</p>
 <ol class="arabic">
 <li><p>Removed <code class="docutils literal notranslate"><span class="pre">SGLANG_ARGS</span></code> and <code class="docutils literal notranslate"><span class="pre">GRPO_ARGS</span></code>. This is because it is not necessary to start SGLang or configure GRPO-related settings during the SFT process.</p></li>
 <li><p>Renamed <code class="docutils literal notranslate"><span class="pre">ROLLOUT_ARGS</span></code> to <code class="docutils literal notranslate"><span class="pre">SFT_ARGS</span></code> and configured it as follows:</p>

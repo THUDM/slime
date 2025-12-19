@@ -183,6 +183,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/reproducibility/README.html">Reproducibility</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">投机采样</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/fault-torlance.html">容灾</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
@@ -472,14 +473,14 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </div>
 <p>下载模型与数据：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># hf checkpoint</span>
-huggingface-cli<span class="w"> </span>download<span class="w"> </span>zai-org/GLM-Z1-9B-0414<span class="w"> </span>--local-dir<span class="w"> </span>/root/GLM-Z1-9B-0414
+hf<span class="w"> </span>download<span class="w"> </span>zai-org/GLM-Z1-9B-0414<span class="w"> </span>--local-dir<span class="w"> </span>/root/GLM-Z1-9B-0414
 
 <span class="c1"># train data</span>
-huggingface-cli<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/dapo-math-17k<span class="w"> </span><span class="se">\</span>
+hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/dapo-math-17k<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--local-dir<span class="w"> </span>/root/dapo-math-17k
 
 <span class="c1"># eval data</span>
-huggingface-cli<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/aime-2024<span class="w"> </span><span class="se">\</span>
+hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/aime-2024<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--local-dir<span class="w"> </span>/root/aime-2024
 </pre></div>
 </div>
@@ -503,14 +504,14 @@ bash<span class="w"> </span>script/run-glm4-9B.sh
 </div>
 <section id="id3">
 <h3>参数简介<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
-<p>这里我们简单介绍一下脚本 <a class="reference download internal" download="" href="../_downloads/dcfe427d7549252babc4f8202d236bc2/run-glm4-9B.sh"><span class="xref download myst">run-glm4-9B.sh</span></a> 中的各个组成部分：</p>
+<p>这里我们简单介绍一下脚本 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4-9B.sh">run-glm4-9B.sh</a> 中的各个组成部分：</p>
 <section id="model-args">
 <h4>MODEL_ARGS<a class="headerlink" href="#model-args" title="Link to this heading">#</a></h4>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SCRIPT_DIR</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>dirname<span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">&amp;</span>&gt;/dev/null<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">&quot;</span>
 <span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4-9B.sh&quot;</span>
 </pre></div>
 </div>
-<p>从 <a class="reference download internal" download="" href="../_downloads/16193a661d60a92803fdd66721c09032/glm4-9B.sh"><span class="xref download myst">scripts/models/glm4-9B.sh</span></a> 读取模型的 config。这些 config 都是 megatron 的参数。在使用 megatron 进行训练的时候，megatron 无法从 ckpt 中读取模型 config，需要我们自行配置。我们在 <a class="reference internal" href="#../../../scripts/models/"><span class="xref myst">scripts/models</span></a> 中提供了一些样例。</p>
+<p>从 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/models/glm4-9B.sh">scripts/models/glm4-9B.sh</a> 读取模型的 config。这些 config 都是 megatron 的参数。在使用 megatron 进行训练的时候，megatron 无法从 ckpt 中读取模型 config，需要我们自行配置。我们在 <a class="reference external" href="https://github.com/THUDM/slime/tree/main/scripts/models/">scripts/models</a> 中提供了一些样例。</p>
 <p>⚠️  注意检查模型文件中的 <code class="docutils literal notranslate"><span class="pre">--rotary-base</span></code> 等配置是否对应你当前训练模型的配置，因为同一个模型结构的不同模型可能有不同的取值。在这种情况下，你可以在导入模型参数后在脚本里进行覆盖，例如：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4-9B.sh&quot;</span>
 

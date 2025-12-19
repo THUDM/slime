@@ -469,7 +469,7 @@ document.write(`
 <h2>Environment Setup<a class="headerlink" href="#environment-setup" title="Link to this heading">#</a></h2>
 <p>For instructions on setting up the environment and downloading data, please refer to <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">Example: Qwen3-4B</span></a>.</p>
 <p>To prepare the DeepSeek R1 checkpoint, first you will need to download DeepSeek-R1 to a directory accessible by all machines (hereinafter referred to as <code class="docutils literal notranslate"><span class="pre">$BASE_DIR</span></code>):</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>huggingface-cli<span class="w"> </span>download<span class="w"> </span>deepseek-ai/DeepSeek-R1<span class="w"> </span>--local-dir<span class="w"> </span><span class="nv">$BASE_DIR</span>/DeepSeek-R1
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>deepseek-ai/DeepSeek-R1<span class="w"> </span>--local-dir<span class="w"> </span><span class="nv">$BASE_DIR</span>/DeepSeek-R1
 </pre></div>
 </div>
 <p>The Hugging Face checkpoint for DeepSeek-R1 is in a block-quantized fp8 format. To convert it into a torch_dist format that Megatron can load, you first need to convert it to a bf16 Hugging Face checkpoint:</p>
@@ -527,7 +527,7 @@ bash<span class="w"> </span>scripts/run-deepseek-r1.sh
 <span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/deepseek-v3.sh&quot;</span>
 </pre></div>
 </div>
-<p>This reads the model’s config from <a class="reference download internal" download="" href="../_downloads/8cec77fffdc7e04384198c07d89b792c/deepseek-v3.sh"><span class="xref download myst">scripts/models/deepseek-v3.sh</span></a>. These configs are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in <a class="reference internal" href="#../../../scripts/models/"><span class="xref myst">scripts/models</span></a>.</p>
+<p>This reads the model’s config from <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/models/deepseek-v3.sh">scripts/models/deepseek-v3.sh</a>. These configs are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in <a class="reference external" href="https://github.com/THUDM/slime/tree/main/scripts/models/">scripts/models</a>.</p>
 <section id="ckpt-args">
 <h4>CKPT_ARGS<a class="headerlink" href="#ckpt-args" title="Link to this heading">#</a></h4>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CKPT_ARGS</span><span class="o">=(</span>

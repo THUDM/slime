@@ -41,7 +41,7 @@ slime 是 GLM-4.5 与 GLM-4.6 背后的 RL 训练框架。除此之外，slime �
 
    _examples_synced/reproducibility/README.md
    advanced/speculative-decoding.md
-   advanced/fault-tolerance.md
+   advanced/fault-torlance.md
    advanced/arch-support-beyond-megatron.md
 
 .. toctree::
