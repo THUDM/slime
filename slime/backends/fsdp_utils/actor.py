@@ -1071,12 +1071,7 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False, args=None):
     layer_cls_to_wrap = model._no_split_modules
     assert len(layer_cls_to_wrap) > 0 and layer_cls_to_wrap[0] is not None
 
-    modules = [
-        module
-        for name, module in model.named_modules()
-        if module.__class__.__name__ in layer_cls_to_wrap
-        or (isinstance(module, torch.nn.Embedding) and not model.config.tie_word_embeddings)
-    ]
+    modules = [module for name, module in model.named_modules() if module.__class__.__name__ in layer_cls_to_wrap]
 
     # Determine precision policy based on args
     param_dtype = torch.bfloat16  # Default to bf16 as before
