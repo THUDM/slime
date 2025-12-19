@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>FSDP + VLM Single-Turn RL &#8212; slime</title>
+    <title>VLM Single-Turn RL (FSDP &amp; Megatron) &#8212; slime</title>
   
   
   
@@ -52,7 +52,7 @@
     <link rel="search" title="搜索" href="../../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2025 年 12 月 18 日"/>
+    <meta name="docbuild:last-update" content="2025 年 12 月 19 日"/>
   </head>
   
   
@@ -420,7 +420,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>FSDP + VLM Single-Turn RL</h1>
+    <h1>VLM Single-Turn RL (FSDP & Megatron)</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -430,7 +430,11 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reproduce">Reproduce</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reproduce">Reproduce</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#supported-models">Supported Models</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#notes">Notes</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reward-model-configuration">Reward Model Configuration</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#numerical-precision-with-non-binary-rewards">Numerical Precision with Non-Binary Rewards</a></li>
@@ -448,19 +452,72 @@ document.write(`
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="fsdp-vlm-single-turn-rl">
-<h1>FSDP + VLM Single-Turn RL<a class="headerlink" href="#fsdp-vlm-single-turn-rl" title="Link to this heading">#</a></h1>
-<p>Training VLMs with FSDP on single-turn reasoning task using GRPO on the <a class="reference external" href="https://huggingface.co/datasets/hiyouga/geometry3k">GEO3K dataset</a>. We used processed version <a class="reference external" href="https://huggingface.co/datasets/chenhegu/geo3k_imgurl">here</a>.</p>
+  <section class="tex2jax_ignore mathjax_ignore" id="vlm-single-turn-rl-fsdp-megatron">
+<h1>VLM Single-Turn RL (FSDP &amp; Megatron)<a class="headerlink" href="#vlm-single-turn-rl-fsdp-megatron" title="Link to this heading">#</a></h1>
+<p>Training VLMs with FSDP or Megatron on single-turn reasoning task using GRPO on the <a class="reference external" href="https://huggingface.co/datasets/hiyouga/geometry3k">GEO3K dataset</a>. We used processed version <a class="reference external" href="https://huggingface.co/datasets/chenhegu/geo3k_imgurl">here</a>.</p>
 <p align="center">
-  <img src="rewards.png" alt="Reward Plot" width="800">
+  <img src="fsdp_vs_megatron.png" alt="FSDP vs Megatron Reward Plot" width="800">
 </p>
 <section id="reproduce">
 <h2>Reproduce<a class="headerlink" href="#reproduce" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">WANDB_API_KEY</span><span class="o">=</span>your_wandb_api_key
 
-<span class="nv">SLIME_SCRIPT_MODEL_NAME</span><span class="o">=</span>Qwen3-VL-2B-Instruct<span class="w"> </span><span class="nv">SLIME_SCRIPT_NUM_GPUS</span><span class="o">=</span><span class="m">8</span><span class="w"> </span>python<span class="w"> </span>examples/geo3k_vlm/run_geo3k_vlm.py<span class="w"> </span><span class="m">2</span>&gt;<span class="p">&amp;</span><span class="m">1</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>tee<span class="w"> </span>run_simple.log
+<span class="c1"># Megatron backend (default -&gt; Qwen3-VL-2B-Instruct + Megatron)</span>
+./examples/geo3k_vlm/run_geo3k_vlm.sh
+
+<span class="c1"># FSDP backend</span>
+<span class="nv">SLIME_SCRIPT_TRAIN_BACKEND</span><span class="o">=</span>fsdp<span class="w"> </span>./examples/geo3k_vlm/run_geo3k_vlm.sh
+
+<span class="c1"># With different model</span>
+<span class="nv">SLIME_SCRIPT_MODEL_NAME</span><span class="o">=</span>Qwen3-VL-4B-Instruct<span class="w"> </span>./examples/geo3k_vlm/run_geo3k_vlm.sh
 </pre></div>
 </div>
+<section id="configuration">
+<h3>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Environment Variable</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_SCRIPT_TRAIN_BACKEND</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">megatron</span></code></p></td>
+<td><p>Training backend (<code class="docutils literal notranslate"><span class="pre">megatron</span></code> or <code class="docutils literal notranslate"><span class="pre">fsdp</span></code>)</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_SCRIPT_MODEL_NAME</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">Qwen3-VL-8B-Instruct</span></code></p></td>
+<td><p>Model name</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_SCRIPT_DATASET_NAME</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">chenhegu/geo3k_imgurl</span></code></p></td>
+<td><p>HuggingFace dataset name</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_SCRIPT_NUM_GPUS</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
+<td><p>Number of GPUs</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_SCRIPT_EXTERNAL_RAY</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
+<td><p>Use external Ray cluster (<code class="docutils literal notranslate"><span class="pre">1</span></code> to enable)</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="supported-models">
+<h3>Supported Models<a class="headerlink" href="#supported-models" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">Qwen3-VL-2B-Instruct</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Qwen3-VL-4B-Instruct</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Qwen3-VL-8B-Instruct</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Qwen3-VL-2B-Thinking</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Qwen3-VL-4B-Thinking</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Qwen3-VL-8B-Thinking</span></code></p></li>
+<li></li>
+</ul>
+</section>
 </section>
 <section id="notes">
 <h2>Notes<a class="headerlink" href="#notes" title="Link to this heading">#</a></h2>
@@ -513,7 +570,11 @@ document.write(`
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reproduce">Reproduce</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reproduce">Reproduce</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#supported-models">Supported Models</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#notes">Notes</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reward-model-configuration">Reward Model Configuration</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#numerical-precision-with-non-binary-rewards">Numerical Precision with Non-Binary Rewards</a></li>
@@ -553,7 +614,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2025 年 12 月 18 日.
+  最后更新于 2025 年 12 月 19 日.
   <br/>
 </p>
   </div>

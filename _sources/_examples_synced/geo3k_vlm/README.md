@@ -1,9 +1,9 @@
-# FSDP + VLM Single-Turn RL
+# VLM Single-Turn RL (FSDP & Megatron)
 
-Training VLMs with FSDP on single-turn reasoning task using GRPO on the [GEO3K dataset](https://huggingface.co/datasets/hiyouga/geometry3k). We used processed version [here](https://huggingface.co/datasets/chenhegu/geo3k_imgurl).
+Training VLMs with FSDP or Megatron on single-turn reasoning task using GRPO on the [GEO3K dataset](https://huggingface.co/datasets/hiyouga/geometry3k). We used processed version [here](https://huggingface.co/datasets/chenhegu/geo3k_imgurl).
 
 <p align="center">
-  <img src="rewards.png" alt="Reward Plot" width="800">
+  <img src="fsdp_vs_megatron.png" alt="FSDP vs Megatron Reward Plot" width="800">
 </p>
 
 ## Reproduce
@@ -11,9 +11,35 @@ Training VLMs with FSDP on single-turn reasoning task using GRPO on the [GEO3K d
 ```bash
 export WANDB_API_KEY=your_wandb_api_key
 
-SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-2B-Instruct SLIME_SCRIPT_NUM_GPUS=8 python examples/geo3k_vlm/run_geo3k_vlm.py 2>&1 | tee run_simple.log
+# Megatron backend (default -> Qwen3-VL-2B-Instruct + Megatron)
+./examples/geo3k_vlm/run_geo3k_vlm.sh
+
+# FSDP backend
+SLIME_SCRIPT_TRAIN_BACKEND=fsdp ./examples/geo3k_vlm/run_geo3k_vlm.sh
+
+# With different model
+SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-4B-Instruct ./examples/geo3k_vlm/run_geo3k_vlm.sh
 ```
 
+### Configuration
+
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `SLIME_SCRIPT_TRAIN_BACKEND` | `megatron` | Training backend (`megatron` or `fsdp`) |
+| `SLIME_SCRIPT_MODEL_NAME` | `Qwen3-VL-8B-Instruct` | Model name |
+| `SLIME_SCRIPT_DATASET_NAME` | `chenhegu/geo3k_imgurl` | HuggingFace dataset name |
+| `SLIME_SCRIPT_NUM_GPUS` | `8` | Number of GPUs |
+| `SLIME_SCRIPT_EXTERNAL_RAY` | `0` | Use external Ray cluster (`1` to enable) |
+
+### Supported Models
+
+- `Qwen3-VL-2B-Instruct`
+- `Qwen3-VL-4B-Instruct`
+- `Qwen3-VL-8B-Instruct`
+- `Qwen3-VL-2B-Thinking`
+- `Qwen3-VL-4B-Thinking`
+- `Qwen3-VL-8B-Thinking`
+- 
 ## Notes
 
 ### Reward Model Configuration
