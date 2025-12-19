@@ -78,7 +78,7 @@ bash scripts/run-qwen3-30B-A3B.sh
 slime 还支持 bf16 训练，fp8 推理。对于 Qwen3-30B-A3B 模型，只需要下载如下模型：
 
 ```bash
-huggingface-cli download Qwen/Qwen3-30B-A3B-FP8 --local-dir /root/Qwen3-30B-A3B-FP8
+hf download Qwen/Qwen3-30B-A3B-FP8 --local-dir /root/Qwen3-30B-A3B-FP8
 ```
 
 并将 `--hf-checkpoint` 替换为：

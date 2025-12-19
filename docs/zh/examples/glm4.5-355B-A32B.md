@@ -9,7 +9,7 @@
 首先需要在多机均可访问到的地址（下记为 `$BASE_DIR`）上下载 GLM-4.5：
 
 ```bash
-huggingface-cli download zai-org/GLM-4.5 --local-dir $BASE_DIR/GLM-4.5-355B-A32B
+hf download zai-org/GLM-4.5 --local-dir $BASE_DIR/GLM-4.5-355B-A32B
 ```
 
 通过如下方式通过 2 机 16 卡将 huggingface checkpoint 转换为 torch dist 格式：
