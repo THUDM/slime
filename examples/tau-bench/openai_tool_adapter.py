@@ -11,6 +11,21 @@ from tau_bench.types import Action
 logger = logging.getLogger(__name__)
 
 
+def _parse_tools_compat(parse_tools_fn, response: str, tools_info, parser_type: str | None):
+    """
+    Compatible wrapper for parse_tools() across versions.
+
+    Some versions: parse_tools(response, tools_info)
+    Some versions: parse_tools(response, tools_info, parser_type)
+    """
+    try:
+        # try 3-arg signature first
+        return parse_tools_fn(response, tools_info, parser_type)
+    except TypeError:
+        # fallback to 2-arg signature
+        return parse_tools_fn(response, tools_info)
+
+
 @dataclass
 class OpenAIToolCall:
     """OpenAI format tool call structure"""
@@ -62,20 +77,67 @@ class OpenAICompatibleToolCallAdapter:
             Exception: Thrown when parsing fails
         """
         try:
-            # Use existing parser to parse tool calls
-            parsed = parse_tools(response, self.tools_info, self.parser_type)
+            parsed = _parse_tools_compat(parse_tools, response, self.tools_info, self.parser_type)
 
-            # Extract parsing results
-            normal_text = parsed["normal_text"]
-            calls = parsed["calls"]
+            # --- normalize parsed output ---
+            normal_text = None
+            calls = []
+
+            # Case A: dict output
+            if isinstance(parsed, dict):
+                # common keys
+                if "normal_text" in parsed:
+                    normal_text = parsed.get("normal_text")
+                elif "text" in parsed:
+                    normal_text = parsed.get("text")
+                elif "content" in parsed:
+                    normal_text = parsed.get("content")
+                elif "assistant" in parsed:
+                    normal_text = parsed.get("assistant")
+                else:
+                    # fallback: if no known key, just use raw response
+                    normal_text = response
+
+                # tool calls keys variants
+                if "calls" in parsed and isinstance(parsed.get("calls"), list):
+                    calls = parsed.get("calls", [])
+                elif "tool_calls" in parsed and isinstance(parsed.get("tool_calls"), list):
+                    calls = parsed.get("tool_calls", [])
+                elif "function_calls" in parsed and isinstance(parsed.get("function_calls"), list):
+                    calls = parsed.get("function_calls", [])
+                else:
+                    calls = []
+
+            # Case B: tuple/list output (e.g., (normal_text, calls))
+            elif isinstance(parsed, (list, tuple)):
+                if len(parsed) >= 1:
+                    normal_text = parsed[0]
+                if len(parsed) >= 2 and isinstance(parsed[1], list):
+                    calls = parsed[1]
+                if normal_text is None:
+                    normal_text = response
+
+            # Case C: unknown type
+            else:
+                normal_text = response
+                calls = []
+
+            # Ensure types
+            if normal_text is None:
+                normal_text = response
+            if not isinstance(calls, list):
+                calls = []
 
             # Convert to OpenAI format
             openai_message = self._convert_to_openai_message(normal_text, calls)
 
-            return {"openai_message": openai_message, "parsed_result": parsed, "success": True}
+            # For downstream code, we still provide parsed_result in the "tau expected" schema
+            parsed_result = {"normal_text": normal_text, "calls": calls}
+
+            return {"openai_message": openai_message, "parsed_result": parsed_result, "success": True}
 
         except Exception as e:
-            logger.warning(f"Parsing failed with error: {str(e)}")
+            logger.warning(f"Parsing failed with error: {type(e).__name__}: {str(e)}")
             return {"openai_message": None, "parsed_result": None, "success": False, "error": str(e)}
 
     def _convert_to_openai_message(self, normal_text: str, calls: list[dict[str, Any]]) -> OpenAIAssistantMessage:
