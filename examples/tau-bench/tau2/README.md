@@ -4,9 +4,8 @@ This folder contains the tau2-bench integration used by the canonical cookbook i
 
 Start here: `examples/tau-bench/training_cookbook.md`.
 
-## What’s in this folder
+## What's in this folder
 
-- `training_cookbook.md`: moved to `examples/tau-bench/training_cookbook.md`
 - `run_sft.sh`, `run_grpo.sh`: convenience scripts for SFT and GRPO (write under `TAU_BENCH_OUT_DIR`)
 - `start_user_sim_server.sh`: starts a local user simulator server for GRPO/eval (port 30001)
 - `rollout.py`: GRPO rollout entrypoint (`--custom-generate-function-path rollout.generate`)

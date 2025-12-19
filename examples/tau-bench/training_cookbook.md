@@ -100,7 +100,7 @@ set -a && source examples/tau-bench/tau2/.env && set +a
 - [Qwen3-4B-tau2-sft1](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-sft1) - After SFT+RFT
 - [Qwen3-4B-tau2-grpo-v1](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-grpo-v1) - Final GRPO checkpoint
 
-**Dataset**: [tau2-sft-seed-v3](https://huggingface.co/datasets/Jarrodbarnes/tau2-sft-seed-v3) - ~3K filtered trajectories for SFT
+**Dataset**: [tau2-sft-seed-v3](https://huggingface.co/datasets/Jarrodbarnes/tau2-sft-seed-v3) - Filtered trajectories from rejection sampling
 
 **Training logs**: [WandB project](https://wandb.ai/jbarnes850-near-protocol/tau2-cookbook) - Full metrics, training curves, sample outputs
 
@@ -153,7 +153,7 @@ This serves two purposes:
 - **Exploration**: High temperature discovers diverse solution paths
 - **Quality gates**: Hard filters prevent training on broken strategies
 
-The published [tau2-sft-seed-v3](https://huggingface.co/datasets/Jarrodbarnes/tau2-sft-seed-v3) dataset is the result of this filtering: ~3K trajectories from ~12K sampled attempts (25% success rate during RFT).
+The published [tau2-sft-seed-v3](https://huggingface.co/datasets/Jarrodbarnes/tau2-sft-seed-v3) dataset is the result of this filtering with a 25% success rate during RFT.
 
 ⚠️ **Limitation**: Rejection sampling requires an SFT policy that can occasionally succeed. On new domains where SFT achieves <5%, you may need teacher demonstrations or curriculum learning first.
 
@@ -266,7 +266,7 @@ We publish the [SFT checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau
 bash examples/tau-bench/tau2/run_sft.sh
 ```
 
-The script uses [tau2-sft-seed-v3](https://huggingface.co/datasets/Jarrodbarnes/tau2-sft-seed-v3), which contains ~3K filtered trajectories from rejection sampling.
+The script uses [tau2-sft-seed-v3](https://huggingface.co/datasets/Jarrodbarnes/tau2-sft-seed-v3), which contains filtered trajectories from rejection sampling.
 
 **GRPO**: Start from the SFT checkpoint, generate task indices, start the user simulator, then run:
 ```bash
