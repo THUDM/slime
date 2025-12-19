@@ -84,7 +84,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/deepseek-v3.sh"
 ```
 
-从 [scripts/models/deepseek-v3.sh](../../../scripts/models/deepseek-v3.sh) 读取模型的 config。这些 config 都是 megatron 的参数。在使用 megatron 进行训练的时候，megatron 无法从 ckpt 中读取模型 config，需要我们自行配置。我们在 [scripts/models](../../../scripts/models/) 中提供了一些样例。
+从 [scripts/models/deepseek-v3.sh](https://github.com/THUDM/slime/blob/main/scripts/models/deepseek-v3.sh) 读取模型的 config。这些 config 都是 megatron 的参数。在使用 megatron 进行训练的时候，megatron 无法从 ckpt 中读取模型 config，需要我们自行配置。我们在 [scripts/models](https://github.com/THUDM/slime/tree/main/scripts/models/) 中提供了一些样例。
 
 
 #### CKPT_ARGS

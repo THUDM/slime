@@ -50,7 +50,7 @@ bash script/run-qwen3-4B-base-sft.sh
 
 ### Parameter Introduction
 
-You can compare [run-qwen3-4B-base-sft.sh](../../../scripts/run-qwen3-4B-base-sft.sh) with [run-qwen3-4B.sh](../../../scripts/run-qwen3-4B.sh). You will find that besides changing the model from the instruct version to the base model, the main adjustments are as follows:
+You can compare [run-qwen3-4B-base-sft.sh](https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B-base-sft.sh) with [run-qwen3-4B.sh](https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B.sh). You will find that besides changing the model from the instruct version to the base model, the main adjustments are as follows:
 
 1.  Removed `SGLANG_ARGS` and `GRPO_ARGS`. This is because it is not necessary to start SGLang or configure GRPO-related settings during the SFT process.
 

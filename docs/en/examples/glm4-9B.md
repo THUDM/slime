@@ -49,7 +49,7 @@ bash scripts/run-glm4-9B.sh
 
 ### Parameter Introduction
 
-Here, we will briefly introduce the various components of the [run-glm4-9B.sh](../../../scripts/run-glm4-9B.sh) script:
+Here, we will briefly introduce the various components of the [run-glm4-9B.sh](https://github.com/THUDM/slime/blob/main/scripts/run-glm4-9B.sh) script:
 
 #### MODEL\_ARGS
 
@@ -58,7 +58,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/glm4-9B.sh"
 ```
 
-Reads the model's config from [scripts/models/glm4-9B.sh](../../../scripts/models/glm4-9B.sh). These configs are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in [scripts/models](../../../scripts/models/).
+Reads the model's config from [scripts/models/glm4-9B.sh](https://github.com/THUDM/slime/blob/main/scripts/models/glm4-9B.sh). These configs are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in [scripts/models](https://github.com/THUDM/slime/tree/main/scripts/models/).
 
 ⚠️  Ensure that settings such as `--rotary-base` in the model configuration file match the settings of the model you are currently training. This is because different models, even with the same architecture, might use different values. If needed, you can override these parameters in your script after loading the model weights. For instance:
 
