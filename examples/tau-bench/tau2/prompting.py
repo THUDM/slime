@@ -1,27 +1,4 @@
-"""Prompt utilities for tau2-bench (dual-control) training with slime.
-
-This module provides compressed system prompts for RL rollouts to reduce KV
-pressure, while keeping the behavioral constraints from tau2-bench policies.
-
-Design principles (learned from trajectory analysis):
-- In dual-control mode, diagnostic tools are USER-ONLY (requestor='user')
-- Agent must INSTRUCT users to perform device actions, not call tools directly
-- Agent CAN call account management tools (billing, roaming, line status)
-- Policies focus on PROCEDURES, not specific tool names
-- The agent discovers its available tools from the schema
-
-Action ownership in tau2-bench dual-control:
-- AGENT tools: get_customer_*, get_details_by_id, enable_roaming, resume_line,
-               refuel_data, make_payment, cancel/modify operations
-- USER tools: toggle_airplane_mode, reset_apn_settings, reboot_device,
-              reseat_sim_card, check_network_status, run_speed_test, etc.
-
-Supports two action formats:
-- Native FC: <tool_call>{"name": "...", "arguments": {...}}</tool_call> (Qwen3 native)
-- Legacy: [ACTION]function_name(arg="value")[/ACTION]
-
-Default is Native FC for compatibility with Qwen3 models.
-"""
+"""Prompt utilities for tau2-bench (dual-control)."""
 
 from __future__ import annotations
 
@@ -31,14 +8,8 @@ from typing import Any
 
 
 USE_COMPRESSED = os.environ.get("TAU2_USE_COMPRESSED_PROMPTS", "1") != "0"
-USE_NATIVE_FC = os.environ.get("TAU2_USE_NATIVE_FC", "1") != "0"
 
 
-# Telecom policy optimized for dual-control mode based on trajectory analysis:
-# - Diagnostic/device tools are USER-ONLY - agent must INSTRUCT users to perform them
-# - Account management tools (roaming, billing, line status) are AGENT tools
-# - Model was failing because prompt said "execute diagnostics yourself" - wrong!
-# - Successful trajectories show: agent identifies issue -> instructs user -> user acts
 COMPRESSED_POLICY_TELECOM = """# Telecom Agent Policy
 
 ## Capabilities
@@ -95,8 +66,6 @@ After instructing the user, wait for them to confirm they've done it, then proce
 - Only transfer to human after troubleshooting steps are exhausted.
 """
 
-# Retail policy - optimized based on trajectory analysis
-# Main failure modes: DB mismatch (wrong final state), missing communicate info
 COMPRESSED_POLICY_RETAIL = """# Retail Agent Policy
 
 ## Capabilities
@@ -139,8 +108,6 @@ Help users: cancel/modify pending orders, return/exchange delivered orders, look
 - Communicate the price difference clearly.
 """
 
-# Airline policy - optimized based on trajectory analysis
-# Main success pattern: thorough lookup of all reservations before taking action
 COMPRESSED_POLICY_AIRLINE = """# Airline Agent Policy
 
 ## Capabilities
@@ -196,43 +163,14 @@ def get_compressed_policy(domain: str) -> str:
     return policies.get(domain, "")
 
 
-def format_tools_for_prompt(tools_openai: list[dict[str, Any]]) -> str:
-    """Compact tool list from OpenAI tool schema objects."""
-    lines: list[str] = []
-    for tool in tools_openai:
-        fn = tool.get("function", tool)
-        name = fn.get("name", "unknown")
-        desc = (fn.get("description") or "").split("\n")[0].strip()
-        params = fn.get("parameters") or {}
-        props = params.get("properties") if isinstance(params, dict) else None
-        required = set(params.get("required", [])) if isinstance(params, dict) else set()
-        if isinstance(props, dict) and props:
-            sig_parts = []
-            for key, spec in props.items():
-                typ = spec.get("type", "any") if isinstance(spec, dict) else "any"
-                suffix = "" if key in required else "?"
-                sig_parts.append(f"{key}{suffix}:{typ}")
-            sig = f"{name}({', '.join(sig_parts)})"
-        else:
-            sig = f"{name}()"
-        if len(desc) > 100:
-            desc = desc[:97] + "..."
-        lines.append(f"- {sig}: {desc}" if desc else f"- {sig}")
-    return "\n".join(lines)
-
-
 def format_tools_json_schema(tools_openai: list[dict[str, Any]]) -> str:
-    """Format tools as JSON schema for native function calling.
-
-    Returns a compact JSON representation suitable for Qwen3's native FC format.
-    """
     tool_schemas = []
     for tool in tools_openai:
         fn = tool.get("function", tool)
         schema = {
             "name": fn.get("name", "unknown"),
             "description": fn.get("description", ""),
-            "parameters": fn.get("parameters", {"type": "object", "properties": {}})
+            "parameters": fn.get("parameters", {"type": "object", "properties": {}}),
         }
         tool_schemas.append(schema)
     return json.dumps(tool_schemas, indent=2)
@@ -243,35 +181,14 @@ def build_tau2_agent_system_prompt(
     domain: str,
     policy: str,
     tools_openai: list[dict[str, Any]],
-    use_native_fc: bool | None = None,
 ) -> str:
-    """System prompt for tau2 agent - uses compressed policy for RL efficiency.
-
-    The SFT checkpoint has internalized verbose policy details. For GRPO, we use
-    compressed prompts that fit in KV cache while providing enough scaffolding
-    to trigger learned behaviors. The tau2 environment provides the reward signal.
-
-    Args:
-        domain: tau2-bench domain (airline, retail, telecom)
-        policy: Full policy text (or will use compressed if enabled)
-        tools_openai: List of tools in OpenAI format
-        use_native_fc: If True, use native <tool_call> format; if False, use legacy
-                      [ACTION] format. Default: USE_NATIVE_FC env var.
-    """
-    if use_native_fc is None:
-        use_native_fc = USE_NATIVE_FC
-
-    # Use compressed policy if available and enabled
     if USE_COMPRESSED:
         compressed = get_compressed_policy(domain)
         if compressed:
             policy = compressed
 
-    if use_native_fc:
-        # Native function calling format (Qwen3 compatible)
-        tools_text = format_tools_json_schema(tools_openai)
-        # Streamlined prompt: format first, then role, then policy, then tools
-        return f"""## Output Format
+    tools_text = format_tools_json_schema(tools_openai)
+    return f"""## Output Format
 Every turn: exactly ONE tool call in this format:
 <tool_call>
 {{"name": "tool_name", "arguments": {{"param": "value"}}}}
@@ -296,29 +213,4 @@ You are a {domain} customer support agent. Complete the user's task following th
 - Confirm before modifications
 - Communicate all relevant details to the user
 - Call done immediately when task is complete
-"""
-    else:
-        # Legacy format for backward compatibility
-        tools_text = format_tools_for_prompt(tools_openai)
-        return f"""You are a {domain} customer support agent. Complete the user's task following the policy.
-
-{policy}
-
-## Tools
-{tools_text}
-
-## Actions
-- respond(content="..."): message the user
-- done(): end conversation when complete
-- [tool_name](...): call any tool above
-
-## Output Format
-<think>
-[reasoning]
-</think>
-[ACTION]
-function_name(arg="value")
-[/ACTION]
-
-Rules: One action per turn. Call done when complete.
 """

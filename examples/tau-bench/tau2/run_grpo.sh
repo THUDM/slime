@@ -1,9 +1,6 @@
 #!/bin/bash
 
-# Tau2 GRPO Training Script
-#
-# Multi-turn RL training for Qwen3-4B on tau2-bench (airline, retail, telecom).
-# Starts from an SFT checkpoint and uses GRPO with dense reward shaping.
+# Tau2 GRPO training (tau2-bench).
 
 set -euo pipefail
 
@@ -30,20 +27,13 @@ SAVE_DIR="${SAVE_DIR:-${TAU_BENCH_OUT_DIR}/tau2/checkpoints/Qwen3-4B-tau2-grpo-v
 
 TAU2_TRAIN_TASKS_JSONL="${TAU2_TRAIN_TASKS_JSONL:-${TAU_BENCH_OUT_DIR}/tau2/tasks/tau2_train_all_tasks.jsonl}"
 
-# GPU configuration (4x recommended, 2x minimum)
 NUM_GPUS="${NUM_GPUS:-4}"
 
-# User simulator config (recommended: instruct model to avoid <think> overhead)
-# Requires separate SGLang server on port 30001 (see start_user_sim_server.sh)
 export TAU2_USER_MODEL="${TAU2_USER_MODEL:-openai/Qwen/Qwen3-4B-Instruct-2507}"
 export TAU2_USER_API_BASE="${TAU2_USER_API_BASE:-http://127.0.0.1:30001/v1}"
 export TAU2_USER_TEMPERATURE="${TAU2_USER_TEMPERATURE:-0.7}"
 export TAU2_MAX_STEPS="${TAU2_MAX_STEPS:-100}"
 
-# ---- Reward Shaping Configuration (v2) ----
-# shaped_reward = task_reward + alpha(domain) * partial_score
-# alpha < 1 ensures binary success always dominates
-# Domain-adaptive: telecom 1.6x, airline 1.0x, retail 0.8x (addresses cold-start)
 export TAU2_REWARD_ALPHA="${TAU2_REWARD_ALPHA:-0.25}"
 export TAU2_DOMAIN_ADAPTIVE_ALPHA="${TAU2_DOMAIN_ADAPTIVE_ALPHA:-1}"
 export TAU2_PARTIAL_ACTION_WEIGHT="${TAU2_PARTIAL_ACTION_WEIGHT:-0.5}"
@@ -51,17 +41,10 @@ export TAU2_PARTIAL_COMMUNICATE_WEIGHT="${TAU2_PARTIAL_COMMUNICATE_WEIGHT:-0.15}
 export TAU2_PARTIAL_ENV_ASSERTION_WEIGHT="${TAU2_PARTIAL_ENV_ASSERTION_WEIGHT:-0.35}"
 export TAU2_PARTIAL_DB_WEIGHT="${TAU2_PARTIAL_DB_WEIGHT:-0.0}"
 
-# Telecom communication boost: In benchmark-compliant mode, diagnostic tools are
-# user-only, so the model must INSTRUCT users to run diagnostics. This increases
-# the communicate weight for telecom from 0.15 -> 0.35 (matching action weight).
 export TAU2_TELECOM_COMMUNICATION_BOOST="${TAU2_TELECOM_COMMUNICATION_BOOST:-1}"
 
-# Compressed prompts reduce KV cache pressure
 export TAU2_USE_COMPRESSED_PROMPTS="${TAU2_USE_COMPRESSED_PROMPTS:-1}"
 
-# ---- Task Curriculum Configuration ----
-# Enable difficulty-based task sampling (implemented in reward.py).
-# Downsamples tasks outside the learning zone.
 export TAU2_USE_CURRICULUM="${TAU2_USE_CURRICULUM:-1}"
 export TAU2_CURRICULUM_MIN_ATTEMPTS="${TAU2_CURRICULUM_MIN_ATTEMPTS:-5}"
 export TAU2_CURRICULUM_SOLVED_WEIGHT="${TAU2_CURRICULUM_SOLVED_WEIGHT:-0.1}"

@@ -1,21 +1,6 @@
 """Tau2 (dual-control) rollout generation for slime.
 
-This module is designed to be used via slime's `--custom-generate-function-path`.
-
-It runs the real tau2-bench environment (`tau2.gym.gym_agent.AgentGymEnv`) and
-drives it with the current policy served by SGLang (via slime's router), using
-Qwen3's native function calling format:
-
-  <tool_call>
-  {"name": "function_name", "arguments": {"arg": "..."}}
-  </tool_call>
-
-The parser also accepts legacy [ACTION]...[/ACTION] format for backwards compatibility.
-
-The final `Sample` contains:
-  - `tokens` / `response_length` / `loss_mask` suitable for multi-turn RL training
-  - `reward` from tau2-bench (binary success)
-  - `metadata["reward_info"]` parsed into a dict for downstream shaping / analysis
+Used via `--custom-generate-function-path rollout.generate`.
 """
 
 from __future__ import annotations
@@ -47,11 +32,6 @@ def _get_tokenizer_and_mask_generator(args) -> tuple[Any, MultiTurnLossMaskGener
 
 
 def _get_tau2_user_sim_config() -> tuple[str, dict[str, Any]]:
-    """Get user simulator model config from environment.
-
-    Supports local models via TAU2_USER_API_BASE for OpenAI-compatible servers.
-    Default: Qwen3 instruct model on local SGLang server (port 30001).
-    """
     user_model = os.environ.get("TAU2_USER_MODEL", "openai/Qwen/Qwen3-4B-Instruct-2507")
     user_temperature = float(os.environ.get("TAU2_USER_TEMPERATURE", "0.7"))
     user_api_base = os.environ.get("TAU2_USER_API_BASE", "http://127.0.0.1:30001/v1")
@@ -77,15 +57,10 @@ async def _generate_one_action(
     sampling_params: dict[str, Any],
     max_repair_attempts: int = 1,
 ) -> tuple[str, Any | None, str | None]:
-    """Generate a single action-formatted assistant message, with optional repair.
-
-    Returns:
-      (assistant_text, parsed_action_or_none, error_or_none)
-    """
     stops = list(sampling_params.get("stop") or [])
     if "</tool_call>" not in stops:
         stops.append("</tool_call>")
-    sampling_params = {**sampling_params, "stop": stops}
+    sampling_params = {**sampling_params, "stop": stops, "no_stop_trim": True}
 
     working_messages = list(messages)
     last_text = ""
@@ -103,7 +78,7 @@ async def _generate_one_action(
             parsed = parse_action(text)
             return text, parsed, None
         except Exception as exc:
-            last_error = f"{type(exc).__name__}: {exc}"
+            last_error = str(exc)
             if attempt >= max_repair_attempts:
                 break
             working_messages = working_messages + [
@@ -120,31 +95,18 @@ async def _generate_one_action(
 
 
 async def generate(args, sample: Sample, sampling_params: dict) -> Sample:
-    """Custom rollout function (multi-turn tau2 dual-control)."""
+    """Multi-turn rollout for tau2-bench (dual-control)."""
     from tau2.gym.gym_agent import AgentGymEnv
 
-    # Inputs come from `{domain}_{split}_tasks.jsonl` created by `tasks.py`.
-    # The prompt is a minimal message list for slime preprocessing; actual task
-    # data is in metadata.
     metadata = sample.metadata or {}
     task_index = metadata.get("task_index", 0)
-    domain = metadata.get("domain") or os.environ.get("TAU2_DOMAIN")
-    task_split = metadata.get("split") or os.environ.get("TAU2_SPLIT", "train")
-    task_id = metadata.get("task_id") or metadata.get("tau2_task_id")
-
-    if not domain or not task_id:
-        raise RuntimeError(
-            "Tau2 rollout requires `metadata.domain` and `metadata.task_id` on each prompt row. "
-            "Generate tasks via `python3 examples/tau-bench/tau2/tasks.py ...`."
-        )
+    domain = metadata["domain"]
+    task_split = metadata.get("split", "train")
+    task_id = metadata["task_id"]
 
     user_llm, user_llm_args = _get_tau2_user_sim_config()
     max_steps = _get_tau2_max_steps(args)
 
-    # Use official tau2-bench API (no custom patches) for benchmark compliance.
-    # In dual-control mode, telecom diagnostic tools are user-only.
-    # The model must learn to INSTRUCT users to run diagnostics, not call them directly.
-    # See: https://github.com/sierra-research/tau2-bench
     env = AgentGymEnv(
         domain=domain,
         task_id=task_id,
@@ -175,10 +137,8 @@ async def generate(args, sample: Sample, sampling_params: dict) -> Sample:
 
     assistant_turn_texts: list[str] = []
     tool_sequence: list[str] = []
-    terminated = False
     reward = 0.0
     reward_info: dict[str, Any] = {}
-    parse_error: str | None = None
     info: dict[str, Any] = {}
 
     for _ in range(max_steps):
@@ -188,26 +148,12 @@ async def generate(args, sample: Sample, sampling_params: dict) -> Sample:
             sampling_params=sampling_params,
             max_repair_attempts=1,
         )
-        if err is not None and parsed is None:
-            parse_error = err
-            sample.remove_sample = True
-            if not assistant_turn_texts:
-                fallback = '<tool_call>\n{"name": "respond", "arguments": {"content": "Error."}}\n</tool_call>'
-                messages.append({"role": "assistant", "content": fallback})
-                assistant_turn_texts.append(fallback)
-            break
-
         if assistant_text:
             messages.append({"role": "assistant", "content": assistant_text})
             assistant_turn_texts.append(assistant_text)
 
         if parsed is None:
-            parse_error = parse_error or "parse_error"
             sample.remove_sample = True
-            if not assistant_turn_texts:
-                fallback = '<tool_call>\n{"name": "respond", "arguments": {"content": "Error."}}\n</tool_call>'
-                messages.append({"role": "assistant", "content": fallback})
-                assistant_turn_texts.append(fallback)
             break
 
         if parsed.name not in ("respond", "done"):
@@ -225,7 +171,6 @@ async def generate(args, sample: Sample, sampling_params: dict) -> Sample:
                 observation=observation,
                 last_action_call=parsed.raw_action_call,
                 last_action_was_tool=(parsed.name != "respond"),
-                native_fc=True,
             )
         )
 
@@ -243,7 +188,7 @@ async def generate(args, sample: Sample, sampling_params: dict) -> Sample:
         {
             "domain": domain,
             "split": task_split,
-            "tau2_task_id": task_id,
+            "task_id": task_id,
             "task_index": task_index,
             "user_model": user_llm,
             "reward_info": reward_info,
@@ -253,8 +198,6 @@ async def generate(args, sample: Sample, sampling_params: dict) -> Sample:
             "terminated": terminated,
         }
     )
-    if parse_error:
-        sample.metadata["generation_error"] = parse_error
 
     # Build tokens/loss-mask from the final multi-turn message list.
     _, mask_gen = _get_tokenizer_and_mask_generator(args)

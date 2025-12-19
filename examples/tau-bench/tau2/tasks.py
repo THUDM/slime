@@ -1,26 +1,5 @@
 #!/usr/bin/env python3
-"""Preprocess tau2-bench tasks into JSONL index files for slime.
-
-This mirrors `examples/tau-bench/tau1/tau1_mock.py`, but uses tau2-bench (dual-control)
-task definitions and splits.
-
-Output format (one JSON object per line):
-  {
-    "text": [{"role": "user", "content": "task"}],
-    "metadata": {
-      "domain": "telecom",
-      "split": "train",
-      "task_id": "...",
-      "task_index": 0,
-      "task": { ... tau2 Task model_dump() ... }
-    }
-  }
-
-These files are intended to be used as `--prompt-data ... --input-key text` for
-slime RL rollouts. The `text` field contains a minimal valid message list that
-passes slime's prompt preprocessing. The custom rollout function uses
-`metadata.task_index` and `metadata.task_id` to load the actual task.
-"""
+"""Preprocess tau2-bench tasks into JSONL index files for slime."""
 
 from __future__ import annotations
 
@@ -64,10 +43,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    try:
-        from tau2.registry import registry
-    except ImportError as exc:
-        raise RuntimeError("tau2-bench required: pip install -e /path/to/tau2-bench") from exc
+    from tau2.registry import registry
 
     local_dir = args.local_dir
     os.makedirs(local_dir, exist_ok=True)

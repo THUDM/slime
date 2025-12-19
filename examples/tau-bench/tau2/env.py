@@ -1,10 +1,4 @@
-"""Tau2 gym wrapper utilities for slime.
-
-This wraps tau2-bench's `AgentGymEnv` and exposes a stable interface for:
-- task indexing (task_index -> task_id)
-- tool + policy schemas for prompting
-- reward_info for training/eval metadata
-"""
+"""Small utilities around tau2-bench `AgentGymEnv`."""
 
 from __future__ import annotations
 
@@ -24,8 +18,6 @@ class Tau2EpisodeConfig:
 
 
 class Tau2TaskIndex:
-    """Index -> task_id mapping for a (domain, split)."""
-
     def __init__(self, domain: str, task_split: str):
         from tau2.registry import registry
 
@@ -45,8 +37,6 @@ class Tau2TaskIndex:
 
 
 class Tau2AgentGymWrapper:
-    """A small wrapper around tau2's `AgentGymEnv` for controlled stepping."""
-
     def __init__(self, cfg: Tau2EpisodeConfig):
         self.cfg = cfg
         self._task_index = Tau2TaskIndex(cfg.domain, cfg.task_split)
@@ -84,7 +74,6 @@ class Tau2AgentGymWrapper:
         from tau2.gym.gym_agent import AgentGymEnv
 
         self._task_id = self._task_index.task_id(task_index)
-        # Benchmark-compliant mode: keep solo_mode disabled so the assistant cannot call user-only tools.
         self._env = AgentGymEnv(
             domain=self.cfg.domain,
             task_id=self._task_id,
@@ -96,7 +85,6 @@ class Tau2AgentGymWrapper:
         )
         observation, info = self._env.reset()
 
-        # Tools are returned as tau2 Tool objects. Convert to OpenAI schemas for prompting.
         tools = info.get("tools", [])
         self._tools_openai = [t if isinstance(t, dict) else t.openai_schema for t in tools]
 
@@ -111,12 +99,10 @@ class Tau2AgentGymWrapper:
 
 
 def parse_reward_info(info: dict[str, Any]) -> dict[str, Any]:
-    """Extract `reward_info` from a tau2 gym env info dict."""
     return parse_reward_info_value(info.get("reward_info"))
 
 
 def parse_reward_info_value(reward_info: Any) -> dict[str, Any]:
-    """Parse a `reward_info` payload which may be a dict or a JSON string."""
     if reward_info is None:
         return {}
     if isinstance(reward_info, dict):
@@ -144,18 +130,6 @@ def compute_partial_score_from_reward_info(
     weights: PartialScoreWeights = PartialScoreWeights(),
     normalize_over_present: bool = True,
 ) -> tuple[float, dict[str, float]]:
-    """Compute a partial score from tau2 `reward_info`.
-
-    This is intentionally *not* the task reward. It provides a dense signal derived
-    from intermediate evaluation artifacts:
-      - action_checks: expected tool calls matched
-      - communicate_checks: required info mentioned
-      - env_assertions: env assertion checks
-      - db_check: end-state DB match (binary)
-
-    Returns:
-      (partial_score, components)
-    """
     components: dict[str, float] = {}
 
     action_checks = reward_info.get("action_checks") or []

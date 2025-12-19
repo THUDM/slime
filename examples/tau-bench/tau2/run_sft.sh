@@ -1,7 +1,6 @@
 #!/bin/bash
 
-# Tau2 SFT training (Qwen3-4B). See training_cookbook.md for full walkthrough.
-# Uses --debug-train-only: SFT rollouts only tokenize (no SGLang inference).
+# Tau2 SFT training (tau2-bench).
 
 set -euo pipefail
 
@@ -20,7 +19,6 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." &>/dev/null && pwd)"
 TAU_BENCH_OUT_DIR="${TAU_BENCH_OUT_DIR:-${SCRIPT_DIR}/../outputs}"
 MEGATRON_LM_DIR="${MEGATRON_LM_DIR:-/root/Megatron-LM}"
 
-# ---- User-configurable paths ----
 HF_DIR="${HF_DIR:-${TAU_BENCH_OUT_DIR}/models/Qwen3-4B-Instruct-2507}"
 TORCH_DIST_DIR="${TORCH_DIST_DIR:-${TAU_BENCH_OUT_DIR}/models/Qwen3-4B-Instruct-2507_torch_dist}"
 TAU2_SFT_DATA_DIR="${TAU2_SFT_DATA_DIR:-${TAU_BENCH_OUT_DIR}/tau2/data/sft1}"
@@ -33,7 +31,6 @@ source "${SCRIPT_DIR}/../../../scripts/models/qwen3-4B-Instruct-2507.sh"
 
 CKPT_ARGS=(
   --hf-checkpoint "${HF_DIR}"
-  # Load initial weights from Megatron `torch_dist` conversion output.
   --load "${TORCH_DIST_DIR}"
   --save "${SAVE_DIR}"
   --save-interval 50
@@ -48,7 +45,6 @@ SFT_ARGS=(
   --disable-compute-advantages-and-returns
   --rollout-function-path slime.rollout.sft_rollout.generate_rollout
 
-  # Optimized for 438 trajectories on 4xH100
   --num-epoch 2
   --rollout-batch-size 16
   --n-samples-per-prompt 1
@@ -64,7 +60,6 @@ PERF_ARGS=(
   --use-dynamic-batch-size
   --max-tokens-per-gpu 12288
 
-  # Gradient checkpointing for H100 memory efficiency
   --recompute-granularity full
   --recompute-method uniform
   --recompute-num-layers 1
@@ -88,7 +83,6 @@ MISC_ARGS=(
   --attention-backend flash
 )
 
-# ---- WandB Logging (optional - only if WANDB_API_KEY is set) ----
 if [ -n "${WANDB_API_KEY:-}" ]; then
   WANDB_ARGS=(
     --use-wandb
