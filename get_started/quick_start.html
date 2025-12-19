@@ -587,6 +587,13 @@ Note: When converting the kimi-k2 model weights, you need to open config.json in
 </pre></div>
 </div>
 <p>Note that as Megatron will do padding to embedding for better performance, it may happen that the converted embedding is not correct. In that case, please manually set <code class="docutils literal notranslate"><span class="pre">--vocab-size</span></code> during convertion.</p>
+<p>For FSDP checkpoints (without <code class="docutils literal notranslate"><span class="pre">common.pt</span></code>), use the dedicated conversion script. Point <code class="docutils literal notranslate"><span class="pre">--input-dir</span></code> to the checkpoint directory (e.g. <code class="docutils literal notranslate"><span class="pre">iter_xxx</span></code> or <code class="docutils literal notranslate"><span class="pre">iter_xxx/model</span></code>) and provide the original Hugging Face directory:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/convert_fsdp_to_hf.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--input-dir<span class="w"> </span>/path/to/fsdp_ckpt/iter_xxx<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output-dir<span class="w"> </span>/root/fsdp-converted<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--origin-hf-dir<span class="w"> </span>/root/GLM-Z1-9B-0414
+</pre></div>
+</div>
 </section>
 </section>
 <section id="training-script-and-parameter-overview">

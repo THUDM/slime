@@ -583,6 +583,13 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 </pre></div>
 </div>
 <p>由于 Megatron 会对 embedding 做 padding，可能会出现转换出来的权重的 embedding 形状不匹配的问题。这时需要在转换时设置 <code class="docutils literal notranslate"><span class="pre">--vocab-size</span></code>。</p>
+<p>对于使用 FSDP 后端训练并保存的检查点（目录中没有 <code class="docutils literal notranslate"><span class="pre">common.pt</span></code> 的情况），请使用专门的转换脚本。将 <code class="docutils literal notranslate"><span class="pre">--input-dir</span></code> 指向检查点目录（例如 <code class="docutils literal notranslate"><span class="pre">iter_xxx</span></code> 或 <code class="docutils literal notranslate"><span class="pre">iter_xxx/model</span></code>），并提供原始 Hugging Face 模型路径：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/convert_fsdp_to_hf.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--input-dir<span class="w"> </span>/path/to/fsdp_ckpt/iter_xxx<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--output-dir<span class="w"> </span>/root/fsdp-converted<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--origin-hf-dir<span class="w"> </span>/root/GLM-Z1-9B-0414
+</pre></div>
+</div>
 </section>
 </section>
 <section id="id6">
