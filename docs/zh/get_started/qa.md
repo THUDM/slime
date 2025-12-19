@@ -49,7 +49,7 @@
 
 1. **grad norm 好高，训练训崩了怎么办？**
 
-   首先请确保数据和模型是匹配的，例如说，如果数据是实现已经做好 chat template 的了，这个 chat template 是否和原模型一致。如果数据正确的话，可以参考 [debug 指南](./debug.md) 进行更深入的分析。
+   首先请确保数据和模型是匹配的，例如说，如果数据是实现已经做好 chat template 的了，这个 chat template 是否和原模型一致。如果数据正确的话，可以参考 [debug 指南](../developer_guide/debug.md) 进行更深入的分析。
 
 1. **我的 sglang 生成时间特别特别久，gpu 功率都打满了，跑了好久好没有输出是为什么？**
 

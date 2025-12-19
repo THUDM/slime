@@ -49,7 +49,7 @@ bash script/run-qwen3-4B-base-sft.sh
 
 ### 参数简介
 
-可以将 [run-qwen3-4B-base-sft.sh](../../scripts/run-qwen3-4B-base-sft.sh) 与 [run-qwen3-4B.sh](../../scripts/run-qwen3-4B.sh) 进行对比。会发现除了我们将模型由 instruct 模型换为了 base 模型之外，主要进行了如下的几个调整：
+可以将 [run-qwen3-4B-base-sft.sh](../../../scripts/run-qwen3-4B-base-sft.sh) 与 [run-qwen3-4B.sh](../../../scripts/run-qwen3-4B.sh) 进行对比。会发现除了我们将模型由 instruct 模型换为了 base 模型之外，主要进行了如下的几个调整：
 
 1. 移除了 `SGLANG_ARGS` 和 `GRPO_ARGS`。这是因为 sft 的过程中不需要启动 sglang 或者做 grpo 相关的配置；
 

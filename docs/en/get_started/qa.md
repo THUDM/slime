@@ -49,7 +49,7 @@
 
 9.  **My gradient norm is very high and the training crashes. What should I do?**
 
-    First, ensure that your data and model are compatible. For example, if your data already uses a chat template, check if this template matches the one used by the original model. If the data is correct, please refer to our [Debug Guide](./debug.md) for a more in-depth analysis.
+    First, ensure that your data and model are compatible. For example, if your data already uses a chat template, check if this template matches the one used by the original model. If the data is correct, please refer to our [Debug Guide](../developer_guide/debug.md) for a more in-depth analysis.
 
 10. **My sglang generation takes an extremely long time, GPU power is maxed out, and there's no output for a long while. Why?**
 
