@@ -43,7 +43,7 @@ export TAU2_PARTIAL_DB_WEIGHT="${TAU2_PARTIAL_DB_WEIGHT:-0.0}"
 
 export TAU2_TELECOM_COMMUNICATION_BOOST="${TAU2_TELECOM_COMMUNICATION_BOOST:-1}"
 
-export TAU2_USE_COMPRESSED_PROMPTS="${TAU2_USE_COMPRESSED_PROMPTS:-1}"
+export TAU2_USE_COMPRESSED_PROMPTS="${TAU2_USE_COMPRESSED_PROMPTS:-0}"
 
 export TAU2_USE_CURRICULUM="${TAU2_USE_CURRICULUM:-1}"
 export TAU2_CURRICULUM_MIN_ATTEMPTS="${TAU2_CURRICULUM_MIN_ATTEMPTS:-5}"
@@ -65,6 +65,7 @@ ROLLOUT_ARGS=(
   --prompt-data "${TAU2_TRAIN_TASKS_JSONL}"
   --input-key text
   --metadata-key metadata
+  --apply-chat-template
   --rollout-shuffle
 
   # Optimized for 4xH100: better task coverage per iteration

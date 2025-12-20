@@ -54,7 +54,13 @@ Complete performance comparison (test split; Pass@4 is the headline metric):
 
 ## Before You Start
 
-All scripts use `slimerl/slime:latest` and assume you're in the repo root. Everything outputs to `TAU_BENCH_OUT_DIR` (defaults to `examples/tau-bench/outputs`):
+All scripts use `slimerl/slime:latest` and assume you're in the repo root. If you're not already inside the container, start it first:
+
+```bash
+docker run --gpus all --rm -it -v "$(pwd)":/workspace/slime -w /workspace/slime slimerl/slime:latest
+```
+
+Everything outputs to `TAU_BENCH_OUT_DIR` (defaults to `examples/tau-bench/outputs`):
 
 ```bash
 export SLIME_ROOT="$(pwd)"
@@ -72,15 +78,24 @@ This assumes you are running inside `slimerl/slime:latest` and are in the slime 
 ```bash
 mkdir -p "${TAU_BENCH_OUT_DIR}/_external"
 git clone https://github.com/sierra-research/tau2-bench.git "${TAU_BENCH_OUT_DIR}/_external/tau2-bench"
-pip install -e "${TAU_BENCH_OUT_DIR}/_external/tau2-bench"
+cd "${TAU_BENCH_OUT_DIR}/_external/tau2-bench"
+git checkout 337326e62d8e0ca74c353b004a9c5d748e0ba914
+# Avoid dependency conflicts with sglang inside slimerl/slime:latest.
+pip install -e . --no-deps
 export TAU2_DATA_DIR="${TAU_BENCH_OUT_DIR}/_external/tau2-bench/data"
+cd "${SLIME_ROOT}"
 ```
 
 ### 1) Python deps (minimal)
 
+Install the tau2-bench runtime deps explicitly (pin `litellm` to avoid upgrading `openai`/`grpcio`):
+
 ```bash
-pip install -U litellm httpx python-dotenv transformers
+pip install gymnasium addict deepdiff fs langfuse plotly pydantic-argparse redis ruff \
+  scikit-learn seaborn tenacity watchdog "litellm==1.65.0"
 ```
+
+Do not run `pip install -e .` without `--no-deps`; it will downgrade `grpcio` and upgrade `openai`, breaking `sglang` in the base image.
 
 Optional (recommended for experiment logging): `wandb`, `weave`.
 
@@ -250,7 +265,7 @@ python3 examples/tau-bench/tau2/eval.py \
   --hf-checkpoint Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
   --sglang-url http://127.0.0.1:30000/generate \
   --domains airline,retail,telecom --task-split test --num-samples 4 \
-  --output eval_pass4.json
+  --output "${TAU_BENCH_OUT_DIR}/tau2/eval/eval_pass4.json"
 ```
 
 This takes ~2 hours on 2×H100. Results: Pass@1 and Pass@4 metrics across all domains.
@@ -268,7 +283,14 @@ bash examples/tau-bench/tau2/run_sft.sh
 
 The script uses [tau2-sft-seed-v3](https://huggingface.co/datasets/Jarrodbarnes/tau2-sft-seed-v3), which contains filtered trajectories from rejection sampling.
 
-**GRPO**: Start from the SFT checkpoint, generate task indices, start the user simulator, then run:
+**Generate task indices (required for GRPO)**:
+```bash
+python3 examples/tau-bench/tau2/tasks.py \
+  --local_dir "${TAU_BENCH_OUT_DIR}/tau2/tasks" \
+  --domains airline,retail,telecom --splits train
+```
+
+**GRPO**: Start from the SFT checkpoint, start the user simulator, then run:
 ```bash
 bash examples/tau-bench/tau2/run_grpo.sh
 ```

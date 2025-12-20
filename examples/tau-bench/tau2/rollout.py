@@ -131,7 +131,6 @@ async def generate(args, sample: Sample, sampling_params: dict) -> Sample:
             observation=observation,
             last_action_call="(reset)",
             last_action_was_tool=False,
-            native_fc=True,
         )
     )
 
@@ -141,6 +140,7 @@ async def generate(args, sample: Sample, sampling_params: dict) -> Sample:
     reward_info: dict[str, Any] = {}
     info: dict[str, Any] = {}
 
+    terminated = False
     for _ in range(max_steps):
         assistant_text, parsed, err = await _generate_one_action(
             args,

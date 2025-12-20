@@ -39,6 +39,7 @@ CKPT_ARGS=(
 SFT_ARGS=(
   --prompt-data "${SFT_DATA_JSONL}"
   --input-key prompt
+  --apply-chat-template
   --loss-mask-type qwen3
   --loss-type sft_loss
   --calculate-per-token-loss

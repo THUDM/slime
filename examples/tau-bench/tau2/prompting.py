@@ -7,7 +7,7 @@ import os
 from typing import Any
 
 
-USE_COMPRESSED = os.environ.get("TAU2_USE_COMPRESSED_PROMPTS", "1") != "0"
+USE_COMPRESSED = os.environ.get("TAU2_USE_COMPRESSED_PROMPTS", "0") != "0"
 
 
 COMPRESSED_POLICY_TELECOM = """# Telecom Agent Policy
