@@ -2,6 +2,7 @@ from abc import abstractmethod
 from argparse import Namespace
 from collections.abc import Callable, Mapping, Sequence
 from typing import Literal
+
 import ray
 import torch
 import torch.distributed as dist
@@ -13,7 +14,7 @@ from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.timer import timer
 
 from ..megatron_to_hf import convert_to_hf
-from .common import all_gather_param
+from .common import all_gather_param, expert_named_params_and_buffers, non_expert_named_params_and_buffers
 from .remote_transfer_plan import RemoteTransferPlan
 
 
@@ -54,18 +55,17 @@ class UpdateWeightFromRemote:
 
     @abstractmethod
     def _update_bucket_weights_from_remote(
-        self, converted_named_tensors: list[tuple[str, torch.Tensor]], session_id: str, pbar: tqdm | None = None
+        self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
     ) -> None:
         """
-        Implementation of the bucketed parameter update from remote. session_id is used as the identifier
-        for the operation, either NCCL group name or Transfer Engine session id.
-        TODO(jd): to avoid traversing the model dict multiple times we need session_id to be a list.
+        Implementation of the bucketed parameter update from remote.
         """
 
     @torch.no_grad()
     def update_weights(self) -> None:
         """
-        Pause → flush → non-expert (TP) → expert (EP) → continue. Progress on PP source.
+        For each named parameter in the model, do bucketed weight update by all-gather EP/TP, convert and quantize,
+        and relies on underlying implementation to do the transfer.
         """
         self.weight_version += 1
 
@@ -75,16 +75,15 @@ class UpdateWeightFromRemote:
         dist.barrier(group=get_gloo_group())
 
         with timer("update_weights_implementation"):
-            for transfer_task in self.transfer_plan.get_transfer_tasks():
-                # Update non-expert or expert weights
-                if transfer_task.tensor_type == "non-expert":
-                    self._update_weights(transfer_task.named_params_and_buffers, transfer_task.session)
-                elif transfer_task.tensor_type == "expert":
-                    self._update_expert_weights(transfer_task.named_params_and_buffers, transfer_task.session)
-                else:
-                    raise ValueError(f"Unknown tensor type {transfer_task.tensor_type} in transfer task.")
-                dist.barrier(group=get_gloo_group())
-                self.finish_transfer_task(transfer_task.session)
+            # A single traversal through all parameters to update weights. Update happens first to the
+            # non-expert weights, then to expert weights.
+            non_expert_params_and_buffers = non_expert_named_params_and_buffers(self.args, self.model)
+            expert_params_and_buffers = expert_named_params_and_buffers(self.args, self.model)
+            self._update_weights(non_expert_params_and_buffers)
+            dist.barrier(group=get_gloo_group())
+            self._update_expert_weights(expert_params_and_buffers)
+            dist.barrier(group=get_gloo_group())
+            self.finish_transfer_task()
 
         dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
@@ -95,39 +94,33 @@ class UpdateWeightFromRemote:
         ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         return
 
-    def finish_transfer_task(self, session: str) -> None:
+    def finish_transfer_task(self) -> None:
         return
 
-    def _update_expert_weights(
-        self, named_params_and_buffers: Sequence[tuple[str, torch.Tensor]], session_id: str
-    ) -> None:
-        pbar = tqdm(desc=f"[{session_id}] Update Expert Weights", total=0) if self._is_source else None
+    def _update_expert_weights(self, named_params_and_buffers: Sequence[tuple[str, torch.Tensor]]) -> None:
+        pbar = tqdm(desc="[Update Expert Weights]", total=0) if self._is_source else None
         buffer_size = 0
         named_tensors = []
         for name, param in named_params_and_buffers:
             # transfer expert tensors
             assert ".experts." in name, "Function intended for expert params only."
-            buffer_size = self._update_expert_weight_from_remote(
-                name, param, named_tensors, buffer_size, session_id, pbar=pbar
-            )
+            buffer_size = self._update_expert_weight_from_remote(name, param, named_tensors, buffer_size, pbar=pbar)
 
         if named_tensors:
-            self._update_expert_bucket_weights_from_remote(named_tensors, session_id, pbar=pbar)
+            self._update_expert_bucket_weights_from_remote(named_tensors, pbar=pbar)
 
-    def _update_weights(self, named_params_and_buffers: Sequence[tuple[str, torch.Tensor]], session_id: str) -> None:
-        pbar = tqdm(desc=f"[{session_id}] Update Weights", total=0) if self._is_source else None
+    def _update_weights(self, named_params_and_buffers: Sequence[tuple[str, torch.Tensor]]) -> None:
+        pbar = tqdm(desc="[Update Weights]", total=0) if self._is_source else None
         buffer_size = 0
         converted_named_tensors = []
         # non expert params
         for name, param in named_params_and_buffers:
             # transfer tp tensors
             assert ".experts." not in name, "Function intended for non-expert params only."
-            buffer_size = self._update_weight_from_remote(
-                name, param, converted_named_tensors, buffer_size, session_id, pbar=pbar
-            )
+            buffer_size = self._update_weight_from_remote(name, param, converted_named_tensors, buffer_size, pbar=pbar)
 
         if converted_named_tensors:
-            self._update_bucket_weights_from_remote(converted_named_tensors, session_id, pbar=pbar)
+            self._update_bucket_weights_from_remote(converted_named_tensors, pbar=pbar)
 
     def _update_weight_from_remote(
         self,
@@ -135,7 +128,6 @@ class UpdateWeightFromRemote:
         param: torch.nn.Parameter,
         converted_named_tensors: list[tuple[str, torch.Tensor]],
         buffer_size: int,
-        session_id: str,
         pbar: tqdm | None = None,
     ) -> int | None:
         """
@@ -148,7 +140,7 @@ class UpdateWeightFromRemote:
 
         param_size = param.numel() * param.element_size()
         if buffer_size + param_size > self.args.update_weight_buffer_size:
-            self._update_bucket_weights_from_remote(converted_named_tensors, session_id, pbar=pbar)
+            self._update_bucket_weights_from_remote(converted_named_tensors, pbar=pbar)
             buffer_size = 0
         converted_named_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
         buffer_size += param_size
@@ -160,7 +152,6 @@ class UpdateWeightFromRemote:
         param: torch.nn.Parameter,
         named_tensors: list[tuple[str, torch.Tensor]],
         buffer_size: int,
-        session_id: str,
         pbar: tqdm | None = None,
     ) -> int:
         """
@@ -172,7 +163,7 @@ class UpdateWeightFromRemote:
         if (
             buffer_size + param_size
         ) * mpu.get_expert_model_parallel_world_size() > self.args.update_weight_buffer_size and named_tensors:
-            self._update_expert_bucket_weights_from_remote(named_tensors, session_id, pbar=pbar)
+            self._update_expert_bucket_weights_from_remote(named_tensors, pbar=pbar)
             buffer_size = 0
 
         named_tensors.append((name, param))
@@ -180,7 +171,7 @@ class UpdateWeightFromRemote:
         return buffer_size
 
     def _update_expert_bucket_weights_from_remote(
-        self, named_tensors: list[tuple[str, torch.Tensor]], session_id: str, pbar: tqdm | None = None
+        self, named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
     ) -> None:
         """
         Gather EP → HF → broadcast. Clears buffer.
@@ -215,4 +206,4 @@ class UpdateWeightFromRemote:
         for name, param in all_gathered_params:
             converted_hf_tensors += convert_to_hf(self.args, self.model_name, name, param, self.quantization_config)
 
-        self._update_bucket_weights_from_remote(converted_hf_tensors, session_id, pbar)
+        self._update_bucket_weights_from_remote(converted_hf_tensors, pbar)

@@ -43,9 +43,8 @@ class UpdateWeightFromDistributed(UpdateWeightFromRemote):
         )
 
         if self._is_source:
-            transfer_tasks = self.transfer_plan.get_transfer_tasks()
             assert self.transfer_plan.mode == "nccl", "Only NCCL supported currently."
-            assert len(transfer_tasks) == 2, "Only two transfer tasks supported currently."
+            self._group_name = self.transfer_plan.get_nccl_group()
         # Indicates if the nccl group has been established.
         self._model_update_groups = None
 
@@ -62,8 +61,6 @@ class UpdateWeightFromDistributed(UpdateWeightFromRemote):
         #   1. AllGather paramters to rank 0
         #   2. Broadcast parameters from rank 0 to all sglang engines
         if self._is_source:
-            transfer_tasks = self.transfer_plan.get_transfer_tasks()
-            self._group_name = transfer_tasks[0].session
             if self._model_update_groups is not None:
                 # Reestablish group if already connected, e.g. new instance has joined.
                 disconnect_rollout_engines_from_distributed(
@@ -74,7 +71,7 @@ class UpdateWeightFromDistributed(UpdateWeightFromRemote):
             )
 
     def _update_bucket_weights_from_remote(
-        self, converted_named_tensors: list[tuple[str, torch.Tensor]], session_id: str, pbar: tqdm | None = None
+        self, converted_named_tensors: list[tuple[str, torch.Tensor]], pbar: tqdm | None = None
     ) -> None:
         """
         Lock → broadcast → clear → unlock → pbar++. Lock prevents NCCL deadlock.
@@ -83,7 +80,7 @@ class UpdateWeightFromDistributed(UpdateWeightFromRemote):
         while not ray.get(self.rollout_engine_lock.acquire.remote()):
             time.sleep(0.1)
         refs = update_weights_from_distributed(
-            session_id,
+            self._group_name,
             self._model_update_groups,
             self.weight_version,
             self.rollout_engines,
