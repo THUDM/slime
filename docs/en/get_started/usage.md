@@ -67,7 +67,7 @@ MODEL_ARGS=(
 )
 ```
 
-We provide configurations for common models in [scripts/models](../../scripts/models), which you can reuse directly. If you are also using Megatron for pre-training/SFT, you can directly reuse the model configurations from your pre-training/SFT setup.
+We provide configurations for common models in [scripts/models](../../../scripts/models), which you can reuse directly. If you are also using Megatron for pre-training/SFT, you can directly reuse the model configurations from your pre-training/SFT setup.
 
 Note:
 
@@ -99,7 +99,7 @@ Megatron supports several of its custom checkpoint formats. Here are two of the 
 
 The `torch` format is Megatron's older storage format. Its structure consists of directories like `mp_rank_xxx`, where each directory corresponds to the checkpoint stored by each rank under a specific parallel partitioning. Because of this, when loading a `torch` format checkpoint, you must ensure that the checkpoint's parallelism strategy matches that of the training task.
 
-We recommend using the `torch_dist` format because it supports automatic parallel sharding, meaning that training tasks with different parallelism settings can share the same checkpoint, which is much more convenient. `torch_dist` is also the default format in the open-source Megatron. A `torch_dist` format checkpoint typically contains a set of `.distcp` files. When using `torch_dist`, you can convert from Hugging Face to `torch_dist` and vice versa using the checkpoint conversion method described in the [README](../../README.md).
+We recommend using the `torch_dist` format because it supports automatic parallel sharding, meaning that training tasks with different parallelism settings can share the same checkpoint, which is much more convenient. `torch_dist` is also the default format in the open-source Megatron. A `torch_dist` format checkpoint typically contains a set of `.distcp` files. When using `torch_dist`, you can convert from Hugging Face to `torch_dist` and vice versa using the checkpoint conversion method described in the [README](../../../README.md).
 
 In terms of storage structure, a Megatron checkpoint typically looks like this, assuming the storage path is `/ckpt/`:
 
@@ -183,7 +183,7 @@ Additionally, we provide a `metadata_key`, which defaults to `"metadata"`. When 
 
 slime supports customizing data generation (rollout) to various degrees.
 
-  - By default, it uses the `generate_rollout` function from [slime/rollout/sglang\_example.py](../../slime/rollout/sglang_rollout.py) for data generation. This file implements an asynchronous (asyncio) data generation flow based on SGLang and supports features like dynamic sampling and partial rollout.
+  - By default, it uses the `generate_rollout` function from [slime/rollout/sglang_rollout.py](https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py) for data generation. This file implements an asynchronous (asyncio) data generation flow based on SGLang and supports features like dynamic sampling and partial rollout.
 
   - You can completely replace the `generate_rollout` in sglang\_example.py by using the `--rollout-function-path` parameter. You just need to ensure that the function signature passed via `--rollout-function-path` is as follows:
 
@@ -213,7 +213,7 @@ slime supports customizing data generation (rollout) to various degrees.
 
       - `evaluation`: A boolean indicating if the rollout is for evaluation. You can configure a separate evaluation function using `--eval-function-path`.
 
-      - The returned `Sample` type is defined in [slime/utils/types.py](../../slime/utils/types.py). When implementing, you need to ensure the following fields are correctly set:
+      - The returned `Sample` type is defined in [slime/utils/types.py](https://github.com/THUDM/slime/blob/main/slime/utils/types.py). When implementing, you need to ensure the following fields are correctly set:
 
           - `tokens`: The tokens for the prompt + response.
           - `response_length`: The total length of the response. For multi-turn tasks, this is the length of the tokens remaining after the first-turn prompt.
@@ -254,7 +254,7 @@ slime supports customizing data generation (rollout) to various degrees.
         return sample
     ```
 
-    For a more complete version, please refer to [slime/rollout/sglang\_example.py](../../slime/rollout/sglang_rollout.py).
+    For a more complete version, please refer to [slime/rollout/sglang_rollout.py](https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py).
 
   - Sometimes, you may also need to support a custom reward model. This can be configured by setting `--custom-rm-path`.
 
@@ -275,7 +275,7 @@ Some parameters related to slime's resource scheduling are configured by slime i
   - `--tp-size` in slime is set using `--rollout-num-gpus-per-engine`.
   - `--model-path` in slime is set using `--hf-checkpoint`.
 
-The way SGLang parameters are integrated into slime can be found in [slime/backends/sglang\_utils/arguments.py](../../slime/backends/sglang_utils/arguments.py).
+The way SGLang parameters are integrated into slime can be found in [slime/backends/sglang_utils/arguments.py](https://github.com/THUDM/slime/blob/main/slime/backends/sglang_utils/arguments.py).
 
 ### How to Use the Router
 
@@ -291,7 +291,7 @@ slime supports different and lightly modified versions of Megatron by reusing co
 
 ### Parameter Configuration
 
-slime directly imports all parameters of the Megatron in the current environment by using `from megatron.training.arguments import parse_args`. If the version of Megatron you are using has parameters defined outside of `parse_args`, you can configure them by passing them in, similar to how it's done in [train.py](../../train.py), for example:
+slime directly imports all parameters of the Megatron in the current environment by using `from megatron.training.arguments import parse_args`. If the version of Megatron you are using has parameters defined outside of `parse_args`, you can configure them by passing them in, similar to how it's done in [train.py](https://github.com/THUDM/slime/blob/main/train.py), for example:
 
 ```python
 if __name__ == "__main__":

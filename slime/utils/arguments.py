@@ -1399,7 +1399,7 @@ def slime_validate_args(args):
             )
 
     # TODO: During loading, we need to set the start_rollout_id here.
-    if (
+    if args.megatron_to_hf_mode != "bridge" and (
         args.load is None
         or not os.path.exists(args.load)
         or not os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))

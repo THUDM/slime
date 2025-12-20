@@ -84,9 +84,6 @@ def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer)
 def setup_model_and_optimizer(
     args: Namespace,
     role: str = "actor",
-    no_wd_decay_cond: Callable[..., bool] | None = None,
-    scale_lr_cond: Callable[..., bool] | None = None,
-    lr_mult: float = 1.0,
 ) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler]:
     """Build model(s), wrap with DDP, and construct optimizer and scheduler.
 
@@ -119,11 +116,8 @@ def setup_model_and_optimizer(
     config.timers = None
 
     optimizer = get_megatron_optimizer(
-        config,
-        model,
-        no_wd_decay_cond,
-        scale_lr_cond,
-        lr_mult,
+        config=config,
+        model_chunks=model,
         use_gloo_process_groups=args.enable_gloo_process_groups,
     )
     opt_param_scheduler = get_optimizer_param_scheduler(args, optimizer)
@@ -210,7 +204,14 @@ def forward_only(
 
         # Get the batch.
         batch = get_batch(
-            data_iterator, ["tokens", "total_lengths", "response_lengths"], args.data_pad_size_multiplier
+            data_iterator,
+            [
+                "tokens",
+                "multimodal_inputs",
+                "total_lengths",
+                "response_lengths",
+            ],
+            args.data_pad_size_multiplier,
         )
         unconcat_tokens = batch["unconcat_tokens"]
         tokens = batch["tokens"]
@@ -223,6 +224,7 @@ def forward_only(
             attention_mask=None,
             labels=None,
             packed_seq_params=packed_seq_params,
+            **(batch["multimodal_inputs"] if batch["multimodal_inputs"] is not None else {}),
         )
 
         return output_tensor, partial(
@@ -351,6 +353,7 @@ def train_one_step(
             data_iterator,
             [
                 "tokens",
+                "multimodal_inputs",
                 "packed_seq_params",
                 "total_lengths",
                 "response_lengths",
@@ -428,6 +431,7 @@ def train_one_step(
                 labels=None,
                 packed_seq_params=batch["packed_seq_params"],
                 loss_mask=loss_mask,
+                **(batch["multimodal_inputs"] if batch["multimodal_inputs"] is not None else {}),
                 **(dict(mtp_kwargs=mtp_kwargs) if mtp_kwargs is not None else {}),
             )
 

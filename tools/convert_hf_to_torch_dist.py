@@ -21,6 +21,12 @@ from slime.utils.memory_utils import print_memory
 def add_convertion_args(parser):
     """Add conversion arguments to the parser"""
     parser.add_argument("--hf-checkpoint", type=str, required=True, help="HuggingFace model path")
+    parser.add_argument(
+        "--megatron-to-hf-mode",
+        choices=["raw", "bridge"],
+        default="raw",
+        help="The method to convert megatron weights to hugging face weights for SGLang.",
+    )
     try:
         parser.add_argument("--padded-vocab-size", type=int, default=None)
     except Exception:

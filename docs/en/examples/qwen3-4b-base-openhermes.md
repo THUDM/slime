@@ -3,7 +3,7 @@
 
 ## Environment Preparation
 
-First, we need to create a mirror environment and convert the `Qwen3-4B-Base` model by following the [Example: Qwen3-4B Model](./models/qwen3-4B.md).
+First, we need to create a mirror environment and convert the `Qwen3-4B-Base` model by following the [Example: Qwen3-4B Model](qwen3-4B.md).
 
 After that, we will process the SFT data. Here, we use the classic [OpenHermes-2.5](https://huggingface.co/datasets/teknium/OpenHermes-2.5) as an example. First, we process the data into a format suitable for `slime` to load. You can use the following script to add a column that conforms to the OpenAI message format and save it to `/root/openhermes2_5.parquet`.
 
@@ -50,7 +50,7 @@ bash script/run-qwen3-4B-base-sft.sh
 
 ### Parameter Introduction
 
-You can compare [run-qwen3-4B-base-sft.sh](../../scripts/run-qwen3-4B.sh) with [run-qwen3-4B.sh](../../scripts/run-qwen3-4B.sh). You will find that besides changing the model from the instruct version to the base model, the main adjustments are as follows:
+You can compare [run-qwen3-4B-base-sft.sh](https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B-base-sft.sh) with [run-qwen3-4B.sh](https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B.sh). You will find that besides changing the model from the instruct version to the base model, the main adjustments are as follows:
 
 1.  Removed `SGLANG_ARGS` and `GRPO_ARGS`. This is because it is not necessary to start SGLang or configure GRPO-related settings during the SFT process.
 

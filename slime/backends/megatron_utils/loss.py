@@ -771,7 +771,7 @@ def loss_function(
 
     return (
         loss,
-        num_tokens if args.calculate_per_token_loss else 1,
+        torch.tensor(num_tokens if args.calculate_per_token_loss else 1, device=logits.device),
         {
             "keys": list(log.keys()),
             "values": torch.tensor(
