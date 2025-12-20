@@ -149,7 +149,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     # Extract new response tokens
 
     if args.use_slime_router and "RadixTreeMiddleware" in args.slime_router_middleware_paths:
-        assert not args.partial_rollout, "Currently parital rollout is not suppurted when using slime router"
+        assert not args.partial_rollout, "Currently partial rollout is not supported when using slime router"
         retrieve_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/retrieve_from_text"
         retrieve_payload = {"text": sample.prompt + output["text"], "return_logp": True}
         retrieve_output = await post(retrieve_url, retrieve_payload)
