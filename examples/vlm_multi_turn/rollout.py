@@ -242,11 +242,6 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                 new_response_log_probs = [0.0] * len(new_response_tokens)
 
             # Append assistant response tokens/logprobs/masks
-            def _fmt_tokens(seq: list[int], head: int = 10, tail: int = 30):
-                if len(seq) <= head + tail:
-                    return seq
-                return seq[:head] + ["..."] + seq[-tail:]
-
             sample.tokens.extend(new_response_tokens)
 
             response_tokens.extend(new_response_tokens)
