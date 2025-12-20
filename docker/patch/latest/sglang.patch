@@ -1917,7 +1917,7 @@ index 9737ac719..09c756918 100644
  
          self.layer_communicator = LayerCommunicator(
 diff --git a/python/sglang/srt/models/qwen3_vl.py b/python/sglang/srt/models/qwen3_vl.py
-index ed52f7ff4..7353685dd 100644
+index ed52f7ff4..40c001c25 100644
 --- a/python/sglang/srt/models/qwen3_vl.py
 +++ b/python/sglang/srt/models/qwen3_vl.py
 @@ -18,7 +18,6 @@ import re
@@ -1958,15 +1958,7 @@ index ed52f7ff4..7353685dd 100644
  from sglang.srt.managers.mm_utils import (
      MultiModalityDataPaddingPatternMultimodalTokens,
      general_mm_embed_routine,
-@@ -50,6 +59,7 @@ from sglang.srt.managers.schedule_batch import (
- from sglang.srt.model_executor.forward_batch_info import ForwardBatch, PPProxyTensors
- from sglang.srt.model_loader.weight_utils import default_weight_loader
- from sglang.srt.models.qwen3 import Qwen3Model
-+from sglang.srt.models.qwen3_vl_moe import Qwen3MoeLLMModel
- from sglang.srt.models.utils import RotaryPosMixin, compute_cu_seqlens_from_grid_numpy
- from sglang.srt.multimodal.mm_utils import run_dp_sharded_mrope_vision_model
- from sglang.srt.server_args import get_global_server_args
-@@ -268,6 +278,7 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
+@@ -268,6 +277,7 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
          use_data_parallel: bool = False,
      ) -> None:
          super().__init__()
@@ -1974,7 +1966,7 @@ index ed52f7ff4..7353685dd 100644
          self.hidden_size = vision_config.hidden_size
          self.num_heads = vision_config.num_heads
          self.num_position_embeddings = vision_config.num_position_embeddings
-@@ -282,7 +293,17 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
+@@ -282,7 +292,17 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
              1 + len(self.deepstack_visual_indexes)
          )
          self.patch_embed = Qwen3VLVisionPatchEmbed(config=vision_config)
@@ -1993,7 +1985,7 @@ index ed52f7ff4..7353685dd 100644
          norm_layer = partial(nn.LayerNorm, eps=norm_eps)
          head_dim = self.hidden_size // self.num_heads
          self.rotary_pos_emb = Qwen2_5_VisionRotaryEmbedding(head_dim // 2)
-@@ -349,83 +370,65 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
+@@ -349,83 +369,65 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
          return rotary_pos_emb
  
      def fast_pos_embed_interpolate(self, grid_thw):
@@ -2118,7 +2110,7 @@ index ed52f7ff4..7353685dd 100644
                  .permute(0, 1, 3, 2, 4, 5)
                  .flatten(0, 4)
              )
-@@ -524,6 +527,18 @@ class Qwen3LLMModel(Qwen3Model):
+@@ -524,6 +526,18 @@ class Qwen3LLMModel(Qwen3Model):
              len(config.vision_config.deepstack_visual_indexes)
          )
  
@@ -2137,7 +2129,7 @@ index ed52f7ff4..7353685dd 100644
      def forward(
          self,
          input_ids: torch.Tensor,
-@@ -555,20 +570,26 @@ class Qwen3LLMModel(Qwen3Model):
+@@ -555,20 +569,26 @@ class Qwen3LLMModel(Qwen3Model):
                      hidden_states + residual if residual is not None else hidden_states
                  )
  
@@ -2172,7 +2164,7 @@ index ed52f7ff4..7353685dd 100644
  
          if not self.pp_group.is_last_rank:
              return PPProxyTensors(
-@@ -582,7 +603,9 @@ class Qwen3LLMModel(Qwen3Model):
+@@ -582,7 +602,9 @@ class Qwen3LLMModel(Qwen3Model):
                  if residual is None:
                      hidden_states = self.norm(hidden_states)
                  else:
@@ -2183,12 +2175,14 @@ index ed52f7ff4..7353685dd 100644
  
          if len(aux_hidden_states) == 0:
              return hidden_states
-@@ -614,6 +637,8 @@ class Qwen3VLForConditionalGeneration(nn.Module):
+@@ -612,8 +634,8 @@ class Qwen3VLForConditionalGeneration(nn.Module):
+         )
+ 
          # TODO: make it more elegant
-         if language_model_cls is Qwen3LLMModel:
-             self.config: Qwen3VLConfig = config  # for qwen3-vl
-+        elif language_model_cls is Qwen3MoeLLMModel:
-+            self.config: Qwen3VLMoeConfig = config  # for qwen3-vl-moe
+-        if language_model_cls is Qwen3LLMModel:
+-            self.config: Qwen3VLConfig = config  # for qwen3-vl
++        if language_model_cls.__name__ in ["Qwen3LLMModel", "Qwen3MoeLLMModel"]:
++            self.config = config  # for qwen3-vl-dense or qwen3-vl-moe
          else:
              self.config = config.text_config  # for qwen3-omni
  
