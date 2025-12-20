@@ -141,10 +141,11 @@ class FSDPTrainRayActor(TrainRayActor):
         if with_ref:
             self.ref_model = self._create_ref_model(args.ref_load)
 
-        if self.args.colocate:
-            self.weight_updater = UpdateWeightFromTensor(self.args, self.model)
-        else:
-            self.weight_updater = UpdateWeightFromDistributed(self.args, self.model)
+        self.weight_updater = (
+            UpdateWeightFromTensor(self.args, self.model)
+            if self.args.colocate
+            else UpdateWeightFromDistributed(self.args, self.model)
+        )
 
         checkpoint.finalize_load(self, checkpoint_payload)
 
