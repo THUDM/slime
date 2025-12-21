@@ -118,13 +118,9 @@ index 7727efe1e..966fe652a 100644
 +
 +
 +    def fake_int4_quantization_ste(x, block_size):
-+        """
-+        带 STE (Straight-Through Estimator) 的伪量化函数，支持训练。
-+        """
 +        m, n = x.shape
 +        block_size_m, block_size_n = block_size[0], block_size[1]
 +
-+        # 1. Padding
 +        m_padded = ceil_div(m, block_size_m) * block_size_m
 +        n_padded = ceil_div(n, block_size_n) * block_size_n
 +
@@ -134,9 +130,6 @@ index 7727efe1e..966fe652a 100644
 +        )
 +        x_padded[:m, :n] = x
 +
-+        # 2. Reshape to blocks
-+        # view shape: [num_blocks_m, block_size_m, num_blocks_n, block_size_n]
-+        # 注意：这里 view 的维度逻辑需要根据实际物理布局调整，假设你是想做 block-wise quantization
 +        x_view = x_padded.view(
 +            m_padded // block_size_m,
 +            block_size_m,
@@ -144,34 +137,21 @@ index 7727efe1e..966fe652a 100644
 +            block_size_n
 +        )
 +
-+        # 3. Calculate Scale
-+        # 在 block 维度 (1, 3) 上求 max
 +        x_max = x_view.abs().float().amax(dim=(1, 3), keepdim=True)
 +        q_max = 7
 +        x_scale = x_max / q_max
 +
-+        # [Fix 2] 必须赋值回去，防止除以 0
 +        x_scale = x_scale.clamp(min=1e-5)
 +
-+        # 4. Quantize (Int4 range: -7 to 7)
-+        # 这一步是纯计算，得到量化后的浮点表示
 +        x_div = x_view / x_scale
 +        x_round = torch.round(x_div)
 +
-+        # [Fix 3] 安全截断，防止溢出 Int4 范围
 +        x_q_clamped = x_round.clamp(-q_max, q_max)
 +
-+        # 5. Dequantize
 +        x_dequant_view = x_q_clamped * x_scale
 +
-+        # 还原形状
 +        x_dequant_full = x_dequant_view.view_as(x_padded)
 +        x_out = x_dequant_full[:m, :n].contiguous().to(x.dtype)
-+
-+        # [Fix 1] STE (Straight-Through Estimator) 魔法
-+        # 前向传播：使用 x_out (量化后的值)
-+        # 反向传播：(x_out - x).detach() 梯度为 0，所以梯度直接流过 x
-+        # 等价于：y = x + (quant(x) - x).detach()
 +        return x + (x_out - x).detach()
 
      class TEGroupedLinear(te.pytorch.GroupedLinear):
