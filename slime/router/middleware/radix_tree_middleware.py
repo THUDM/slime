@@ -125,6 +125,16 @@ class RadixTreeMiddleware(BaseHTTPMiddleware):
             full_text = input_text + generated_text
             if full_text:
                 try:
+                    # Normalize weight_version to int (sglang may return it as str).
+                    weight_version = None
+                    try:
+                        weight_version = response_data.get("meta_info", {}).get("weight_version", None)
+                        if isinstance(weight_version, str):
+                            # Best-effort parse (e.g., "12" -> 12). If not parseable, disable weight_version-based GC.
+                            weight_version = int(weight_version)
+                    except Exception:
+                        weight_version = None
+
                     if "output_token_logprobs" in response_data.get("meta_info", {}):
                         generated_token_logprobs = [
                             item[0] for item in response_data["meta_info"]["output_token_logprobs"]
@@ -138,7 +148,7 @@ class RadixTreeMiddleware(BaseHTTPMiddleware):
                             full_token_ids,
                             full_logprobs,
                             full_loss_mask,
-                            weight_version=response_data["meta_info"]["weight_version"],
+                            weight_version=weight_version,
                         )
                     else:
                         generated_token_ids = self.tokenizer(generated_text, add_special_tokens=False)["input_ids"]
@@ -149,7 +159,7 @@ class RadixTreeMiddleware(BaseHTTPMiddleware):
                             full_token_ids,
                             None,
                             full_loss_mask,
-                            weight_version=response_data["meta_info"]["weight_version"],
+                            weight_version=weight_version,
                         )
 
                     if getattr(self.router, "verbose", False):
