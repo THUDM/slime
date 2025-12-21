@@ -315,7 +315,7 @@ In some customized Megatron implementations, special operations need to be perfo
 
 slime also support FSDP2 as the training backend, docs [here](https://lmsys.org/blog/2025-12-03-miles-fsdp/). 
 
-> FSDP automatically reads all architecture information via `AutoModelForCausalLM.from_pretrained()`, without manual specification. Megatron requires manual configuration of parameters to read model architecture information, or automatic inference via `--use-hf-config-for-megatron`. FSDP can read entirely from `config.json`, directly avoiding the weight format conversion step.
+> FSDP automatically reads all architecture information via `AutoModelForCausalLM.from_pretrained()`, without manual specification. Megatron requires manual configuration of parameters to read model architecture information. FSDP can read entirely from `config.json`, directly avoiding the weight format conversion step.
 
 To run FSDP as the training backend, pass `--train-backend fsdp` to enable.
 
@@ -325,7 +325,7 @@ Parameters that FSDP used are shown as below in comparison to Megatron, more sup
 
 | Configuration Category | Megatron Parameter | FSDP Parameter | Description |
 | --- | --- | --- | --- |
-| **Model Loading**         | `--load` (Megatron checkpoint) + architecture args (`--num-layers`, `--hidden-size` etc.) or `--use-hf-config-for-megatron` | `--hf-checkpoint` (Required)                           | **FSDP**: Directly uses HuggingFace format, no weight conversion needed, architecture inferred via `AutoConfig` |
+| **Model Loading**         | `--load` (Megatron checkpoint) + architecture args (`--num-layers`, `--hidden-size` etc.) | `--hf-checkpoint` (Required)                           | **FSDP**: Directly uses HuggingFace format, no weight conversion needed, architecture inferred via `AutoConfig` |
 | **Tensor Parallel**       | `--tensor-model-parallel-size`                               | Coming Soon                                            |                                                              |
 | **Pipeline Parallel**     | `--pipeline-model-parallel-size`                             | Coming Soon                                            |                                                              |
 | **Expert Parallel**       | `--expert-model-parallel-size`                               | Coming Soon                                            |                                                              |

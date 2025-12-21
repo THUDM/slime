@@ -171,11 +171,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--use-hf-config-for-megatron",
-                action="store_true",
-                help="Whether to use HF config for Megatron core to define the model architecture.",
-            )
-            parser.add_argument(
                 "--model-name",
                 type=str,
                 default=None,
@@ -1295,12 +1290,6 @@ def parse_args(add_custom_arguments=None):
         args = megatron_parse_args(extra_args_provider=add_slime_arguments)
         if args.hf_checkpoint:
             hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
-            if args.use_hf_config_for_megatron:
-                from slime.backends.megatron_utils.config_mapping import get_mapper
-
-                megatron_config_from_hf = get_mapper(hf_config.model_type)(hf_config)
-                _validate_and_update_megatron_args_from_hf(args, megatron_config_from_hf.transformer_config)
-                _validate_and_update_megatron_args_from_hf(args, megatron_config_from_hf.gpt_model_args)
             hf_validate_args(args, hf_config)
 
         args.rank = 0
@@ -1614,12 +1603,3 @@ def hf_validate_args(args, hf_config):
 
     if len(errors) > 0:
         raise AssertionError("hf_validate_args failed: " + "; ".join(errors))
-
-
-def _validate_and_update_megatron_args_from_hf(args, args_from_hf_config: dict[str, Any]):
-    for key, value in args_from_hf_config.items():
-        if hasattr(args, key) and getattr(args, key) != value:
-            raise ValueError(
-                f"Argument {key} is not consistent. {key} in args is {getattr(args, key)}, but from HF config is {value}."
-            )
-        setattr(args, key, value)
