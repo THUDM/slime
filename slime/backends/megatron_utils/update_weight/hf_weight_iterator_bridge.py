@@ -57,7 +57,6 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
 
             # Stack tensors along first dimension
             tensors = [item[2] for item in expert_list]  # item[2] is the weight
-            breakpoint()
             merged_tensor = torch.stack(tensors, dim=0)
 
             # Use the common hf_param_name
