@@ -1,4 +1,6 @@
 import dataclasses
+import re
+import torch
 
 from slime.utils import megatron_bridge_utils
 from slime.utils.iter_utils import chunk_named_params_by_size
@@ -17,6 +19,53 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
 
         self._bridge = AutoBridge.from_hf_pretrained(self.args.hf_checkpoint)
 
+    def merge_expert_weights_from_named_tuples(self, named_weights):
+
+        # Pattern to match megatron param names ending with weight<NUMBER>
+        expert_pattern = re.compile(r"^(.+\.weight)(\d+)$")
+
+        # Group by megatron param base name
+        expert_groups = {}  # base_name -> [(expert_idx, hf_param_name, weight, megatron_param_name)]
+        non_expert_weights = []  # (hf_param_name, weight)
+
+        for hf_param_name, weight, megatron_param_name in named_weights:
+            match = expert_pattern.match(megatron_param_name)
+            if match:
+                base_name = match.group(1)  # e.g., "...weight"
+                expert_idx = int(match.group(2))  # e.g., 0, 1, 2
+
+                if base_name not in expert_groups:
+                    expert_groups[base_name] = []
+
+                expert_groups[base_name].append((expert_idx, hf_param_name, weight, megatron_param_name))
+            else:
+                # Not an expert weight, keep as is (only hf_param_name and weight)
+                non_expert_weights.append((hf_param_name, weight))
+
+        # Merge expert weights
+        merged_weights = []
+        for base_name, expert_list in expert_groups.items():
+            # Sort by expert index
+            expert_list.sort(key=lambda x: x[0])
+
+            # Assert all experts map to the same hf_param_name
+            hf_param_names = [item[1] for item in expert_list]
+            assert all(name == hf_param_names[0] for name in hf_param_names), (
+                f"Expert weights with base megatron name '{base_name}' map to different HF param names: "
+                f"{set(hf_param_names)}. Megatron names: {[item[3] for item in expert_list]}"
+            )
+
+            # Stack tensors along first dimension
+            tensors = [item[2] for item in expert_list]  # item[2] is the weight
+            breakpoint()
+            merged_tensor = torch.stack(tensors, dim=0)
+
+            # Use the common hf_param_name
+            merged_weights.append((hf_param_names[0], merged_tensor))
+
+        # Combine non-expert and merged expert weights
+        return non_expert_weights + merged_weights
+
     def get_hf_weight_chunks(self, megatron_local_weights):
         # TODO support quantization (e.g. modify megatron-bridge to provide megatron param name)
         renamed_megatron_local_weights = {strip_param_name_prefix(k): v for k, v in megatron_local_weights.items()}
@@ -26,7 +75,7 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
 
             named_weights = self._bridge.export_hf_weights(self.model, cpu=False, conversion_tasks=conversion_tasks)
 
-            named_weights = (
+            named_weights = [
                 (
                     hf_param_name,
                     postprocess_hf_param(
@@ -35,9 +84,12 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
                         hf_param_name=hf_param_name,
                         param=weight,
                     ),
+                    megatron_param_name,
                 )
                 for hf_param_name, weight, megatron_param_name in named_weights
-            )
+            ]
+
+            named_weights = self.merge_expert_weights_from_named_tuples(named_weights)
 
             yield from chunk_named_params_by_size(named_weights, chunk_size=self.args.update_weight_buffer_size)
 
