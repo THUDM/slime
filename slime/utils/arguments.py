@@ -11,7 +11,6 @@ from transformers import AutoConfig
 from slime.backends.sglang_utils.arguments import add_sglang_arguments
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
-
 from slime.utils.logging_utils import configure_logger
 
 logger = logging.getLogger(__name__)
@@ -1283,9 +1282,9 @@ def parse_args(add_custom_arguments=None):
 
     backend = parse_args_train_backend()
     if backend == "megatron":
-        from slime.backends.megatron_utils import parse_args as megatron_parse_args
-        from slime.backends.megatron_utils import set_default_megatron_args
-        from slime.backends.megatron_utils import validate_args as megatron_validate_args
+        from slime.backends.megatron_utils.arguments import parse_args as megatron_parse_args
+        from slime.backends.megatron_utils.arguments import set_default_megatron_args
+        from slime.backends.megatron_utils.arguments import validate_args as megatron_validate_args
 
         args = megatron_parse_args(extra_args_provider=add_slime_arguments)
         if args.hf_checkpoint:

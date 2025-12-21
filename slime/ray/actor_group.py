@@ -77,7 +77,7 @@ class RayTrainGroup:
 
         backend = self.args.train_backend
         if backend == "megatron":
-            from slime.backends.megatron_utils import MegatronTrainRayActor
+            from slime.backends.megatron_utils.actor import MegatronTrainRayActor
 
             actor_impl = MegatronTrainRayActor
 
