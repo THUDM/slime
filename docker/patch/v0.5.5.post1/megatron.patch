@@ -98,7 +98,7 @@ index fe26e8b43..4451f2776 100644
 +    if hasattr(custom_fsdp, 'MegatronFSDP'):
 +        custom_fsdp.FullyShardedDataParallel = custom_fsdp.MegatronFSDP
 diff --git a/megatron/core/extensions/transformer_engine.py b/megatron/core/extensions/transformer_engine.py
-index 7727efe1e..966fe652a 100644
+index 7727efe1e..342996530 100644
 --- a/megatron/core/extensions/transformer_engine.py
 +++ b/megatron/core/extensions/transformer_engine.py
 @@ -366,6 +366,7 @@ class TELinear(te.pytorch.Linear):
@@ -109,7 +109,7 @@ index 7727efe1e..966fe652a 100644
              if is_expert:
                  # Reduce the gradient on the expert_data_parallel group for expert linear layers
                  setattr(param, "allreduce", not self.expert_parallel)
-@@ -1012,6 +1013,66 @@ class TEDotProductAttention(te.pytorch.DotProductAttention):
+@@ -1012,6 +1013,47 @@ class TEDotProductAttention(te.pytorch.DotProductAttention):
 
 
  if HAVE_TE and is_te_min_version("1.9.0.dev0"):
@@ -152,11 +152,12 @@ index 7727efe1e..966fe652a 100644
 +
 +        x_dequant_full = x_dequant_view.view_as(x_padded)
 +        x_out = x_dequant_full[:m, :n].contiguous().to(x.dtype)
++
 +        return x + (x_out - x).detach()
 
      class TEGroupedLinear(te.pytorch.GroupedLinear):
          """
-@@ -1191,6 +1252,12 @@ if HAVE_TE and is_te_min_version("1.9.0.dev0"):
+@@ -1191,6 +1233,12 @@ if HAVE_TE and is_te_min_version("1.9.0.dev0"):
 
              self._register_load_state_dict_pre_hook(merge_extra_states, with_module=True)
 
@@ -169,7 +170,7 @@ index 7727efe1e..966fe652a 100644
          def forward(self, x, m_splits):
              """Forward."""
              _is_first_microbatch = (
-@@ -1369,6 +1436,7 @@ if HAVE_TE and is_te_min_version("1.9.0.dev0"):
+@@ -1369,6 +1417,7 @@ if HAVE_TE and is_te_min_version("1.9.0.dev0"):
                  tp_comm_buffer_name=tp_comm_buffer_name,
                  tp_group=tp_group,
              )
@@ -472,7 +473,7 @@ index c749bac43..dde8d50e7 100644
          """Execute weight update operations"""
          self._backward_qkv_proj()
 diff --git a/megatron/core/transformer/moe/moe_utils.py b/megatron/core/transformer/moe/moe_utils.py
-index 235b6f6af..0f4862e43 100644
+index 235b6f6af..fbcffe278 100644
 --- a/megatron/core/transformer/moe/moe_utils.py
 +++ b/megatron/core/transformer/moe/moe_utils.py
 @@ -566,6 +566,9 @@ def topk_routing_with_score_function(
@@ -486,7 +487,7 @@ index 235b6f6af..0f4862e43 100644
          if use_pre_softmax:
              scores = torch.softmax(logits, dim=-1, dtype=torch.float32).type_as(logits)
 diff --git a/megatron/core/transformer/moe/router.py b/megatron/core/transformer/moe/router.py
-index 6b20b8622..f91b01f90 100644
+index 6b20b8622..459e65921 100644
 --- a/megatron/core/transformer/moe/router.py
 +++ b/megatron/core/transformer/moe/router.py
 @@ -156,6 +156,9 @@ class TopKRouter(Router):
