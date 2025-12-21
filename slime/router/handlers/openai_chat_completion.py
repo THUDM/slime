@@ -408,6 +408,14 @@ class ChatCompletionHandler:
             "no_stop_trim": request_data.get("no_stop_trim"),
         }
 
+        # Determinism: map OpenAI-style seed to SGLang sampling_seed.
+        # Note: For proxy mode, we keep `seed` in request_data; for cached mode we use sampling_seed.
+        seed = request_data.get("sampling_seed", None)
+        if seed is None:
+            seed = request_data.get("seed", None)
+        if seed is not None:
+            sampling_params["sampling_seed"] = seed
+
         # Remove None values to keep request clean and avoid SGLang errors
         # Note: 'stream' parameter is NOT part of sampling_params
         # It's handled separately in the request JSON for /generate endpoint
