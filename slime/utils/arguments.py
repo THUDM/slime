@@ -11,7 +11,6 @@ from transformers import AutoConfig
 from slime.backends.sglang_utils.arguments import add_sglang_arguments
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
-
 from slime.utils.logging_utils import configure_logger
 
 logger = logging.getLogger(__name__)
@@ -171,11 +170,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--use-hf-config-for-megatron",
-                action="store_true",
-                help="Whether to use HF config for Megatron core to define the model architecture.",
-            )
-            parser.add_argument(
                 "--model-name",
                 type=str,
                 default=None,
@@ -233,7 +227,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-max-response-len",
                 type=int,
-                default=1024,
+                default=None,
                 help=(
                     "The maximum length of the response for the inference engine during rollout. "
                     "It is basically `max_tokens` in sglang."
@@ -643,6 +637,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             reset_arg(parser, "--load", type=str, default=None)
             reset_arg(parser, "--save", type=str, default=None)
             reset_arg(parser, "--save-interval", type=int, default=None)
+            reset_arg(parser, "--async-save", action="store_true")
             reset_arg(parser, "--seed", type=int, default=1234)
             reset_arg(parser, "--clip-grad", type=float, default=1.0)
             reset_arg(parser, "--calculate-per-token-loss", action="store_true")
@@ -1138,6 +1133,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--rollout-all-samples-process-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to the rollout all samples process function that "
+                    "can process all samples including filtered ones."
+                ),
+            )
+            parser.add_argument(
                 "--disable-rollout-trim-samples",
                 action="store_true",
                 default=False,
@@ -1278,19 +1282,13 @@ def parse_args(add_custom_arguments=None):
 
     backend = parse_args_train_backend()
     if backend == "megatron":
-        from slime.backends.megatron_utils import parse_args as megatron_parse_args
-        from slime.backends.megatron_utils import set_default_megatron_args
-        from slime.backends.megatron_utils import validate_args as megatron_validate_args
+        from slime.backends.megatron_utils.arguments import parse_args as megatron_parse_args
+        from slime.backends.megatron_utils.arguments import set_default_megatron_args
+        from slime.backends.megatron_utils.arguments import validate_args as megatron_validate_args
 
         args = megatron_parse_args(extra_args_provider=add_slime_arguments)
         if args.hf_checkpoint:
             hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
-            if args.use_hf_config_for_megatron:
-                from slime.backends.megatron_utils.config_mapping import get_mapper
-
-                megatron_config_from_hf = get_mapper(hf_config.model_type)(hf_config)
-                _validate_and_update_megatron_args_from_hf(args, megatron_config_from_hf.transformer_config)
-                _validate_and_update_megatron_args_from_hf(args, megatron_config_from_hf.gpt_model_args)
             hf_validate_args(args, hf_config)
 
         args.rank = 0
@@ -1389,7 +1387,7 @@ def slime_validate_args(args):
             )
 
     # TODO: During loading, we need to set the start_rollout_id here.
-    if (
+    if args.megatron_to_hf_mode != "bridge" and (
         args.load is None
         or not os.path.exists(args.load)
         or not os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
@@ -1560,27 +1558,21 @@ def slime_validate_args(args):
                 logger.info(f"Warning: Argument {k} is already set to {getattr(args, k)}, will override with {v}.")
             setattr(args, k, v)
 
-    if args.rollout_max_context_len is None:
-        logger.info(
-            f"args.rollout_max_context_len is not set. Use args.rollout_max_response_len {args.rollout_max_response_len} as default value."
-        )
-        args.rollout_max_context_len = args.rollout_max_response_len
-
     if args.eval_max_context_len is None:
         logger.info(
             f"args.eval_max_context_len is not set. Use args.rollout_max_context_len {args.rollout_max_context_len} as default value."
         )
         args.eval_max_context_len = args.rollout_max_context_len
 
-    if args.rollout_max_prompt_len is None:
-        logger.info(
-            f"args.rollout_max_prompt_len is not set. Use args.rollout_max_context_len - 1 ({args.rollout_max_context_len} - 1) as default value so that there is at least one generated token to compute loss."
-        )
-        args.rollout_max_prompt_len = args.rollout_max_context_len - 1
-
-    assert (
-        args.rollout_max_prompt_len <= args.rollout_max_context_len - 1
-    ), f"args.rollout_max_prompt_len ({args.rollout_max_prompt_len}) must be smaller than args.rollout_max_context_len ({args.rollout_max_context_len}) so that there is at least one generated token to compute loss."
+    if args.rollout_max_context_len is not None:
+        if args.rollout_max_prompt_len is None:
+            args.rollout_max_prompt_len = args.rollout_max_context_len - 1
+            logger.info(
+                f"args.rollout_max_prompt_len is not set. Use args.rollout_max_context_len - 1 ({args.rollout_max_context_len} - 1) as default value so that there is at least one generated token to compute loss."
+            )
+        assert (
+            args.rollout_max_prompt_len <= args.rollout_max_context_len - 1
+        ), f"args.rollout_max_prompt_len ({args.rollout_max_prompt_len}) must be smaller than args.rollout_max_context_len ({args.rollout_max_context_len}) so that there is at least one generated token to compute loss."
 
     if args.prefill_num_servers is not None:
         assert not args.use_fault_tolerance, "fault tolerance is not supported when prefill_num_servers is set."
@@ -1610,12 +1602,3 @@ def hf_validate_args(args, hf_config):
 
     if len(errors) > 0:
         raise AssertionError("hf_validate_args failed: " + "; ".join(errors))
-
-
-def _validate_and_update_megatron_args_from_hf(args, args_from_hf_config: dict[str, Any]):
-    for key, value in args_from_hf_config.items():
-        if hasattr(args, key) and getattr(args, key) != value:
-            raise ValueError(
-                f"Argument {key} is not consistent. {key} in args is {getattr(args, key)}, but from HF config is {value}."
-            )
-        setattr(args, key, value)

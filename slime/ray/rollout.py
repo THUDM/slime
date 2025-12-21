@@ -1,9 +1,7 @@
 import logging
 import multiprocessing
-import os
 import random
 import time
-from glob import glob
 from pathlib import Path
 from typing import Any
 
@@ -332,7 +330,7 @@ class RolloutManager:
 
 def init_rollout_engines(args, pg, all_rollout_engines):
     if args.debug_train_only:
-        return 0, None
+        return 0
 
     num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
     num_engines = args.rollout_num_gpus // num_gpu_per_engine
@@ -371,25 +369,6 @@ def init_rollout_engines(args, pg, all_rollout_engines):
             "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
         }
 
-        # TODO: currently the amem position is hardcoded, change to a better way later.
-        # note that amem does not work with update weights from distributed.
-        if (
-            args.offload_rollout
-            and args.actor_num_nodes * args.actor_num_gpus_per_node >= args.rollout_num_gpus
-            and len(glob("/usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libamem_nccl.so*")) > 0
-        ):
-            logger.info("Enable AMEM for rollout engine.")
-            ld_library_path = (
-                os.environ.get("LD_LIBRARY_PATH", "") + ":/usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib"
-            )
-            env_vars |= {
-                "LD_LIBRARY_PATH": ld_library_path,
-                "NCCL_CUMEM_ENABLE": "1",
-                "AMEM_ENABLE": "1",
-                "AMEM_GROUPID": "0",
-                "GMM_LOG": "2",
-            }
-
         worker_type = "regular"
         if args.prefill_num_servers is not None:
             if i < prefill_num_servers:
@@ -412,7 +391,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
     num_new_engines = len(rollout_engines)
 
     if num_new_engines == 0:
-        return num_new_engines, None
+        return num_new_engines
 
     if args.rollout_external:
         addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(args=args, rollout_engines=rollout_engines)
@@ -498,12 +477,12 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
             num_node_per_engine = args.rollout_num_gpus_per_engine // args.num_gpus_per_node
             if rank % num_node_per_engine == 0:
                 # this is the first node in the engine, we need to allocate the dist_init_addr port
-                dist_init_addr = f"{get_addr()}:{get_port(6 + args.sglang_dp_size)}"
+                dist_init_addr = f"{get_addr()}:{get_port(30 + args.sglang_dp_size)}"
                 for i in range(num_node_per_engine):
                     addr_and_ports[rank + i]["dist_init_addr"] = dist_init_addr
         else:
             for i in range(num_engines_on_this_node):
-                addr_and_ports[rank + i]["dist_init_addr"] = f"{get_addr()}:{get_port(6 + args.sglang_dp_size)}"
+                addr_and_ports[rank + i]["dist_init_addr"] = f"{get_addr()}:{get_port(30 + args.sglang_dp_size)}"
 
     for i, _ in rollout_engines:
         for key in ["port", "nccl_port", "dist_init_addr"]:
@@ -513,7 +492,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
     return addr_and_ports
 
 
-def _start_router(args, prefill_and_decode_urls=None):
+def _start_router(args):
     """start sgl router and slime router"""
     if args.sglang_router_ip is not None:
         return

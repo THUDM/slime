@@ -20,11 +20,21 @@ async def generate_response(args, prompt, key):
 
         url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
-        prompt_token_ids = tokenizer.encode(prompt, add_special_tokens=False)
+        if args.apply_chat_template:
+            assert isinstance(prompt, list), "prompt should be a list when apply_chat_template is True"
+            prompt_text = tokenizer.apply_chat_template(
+                prompt,
+                tokenize=False,
+                add_generation_prompt=True,  # Add generation prompt for the assistant
+                **(args.apply_chat_template_kwargs or {}),
+            )
+            sample.prompt = prompt_text
+        else:
+            assert isinstance(prompt, str), "prompt should be a string when apply_chat_template is False"
+            sample.prompt = prompt
+        prompt_token_ids = tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
         sample.tokens = prompt_token_ids
-        sample.prompt = prompt
-        input_token_ids = prompt_token_ids
-        prompt_length = len(input_token_ids)
+        prompt_length = len(prompt_token_ids)
         current_sampling_params = deepcopy(sampling_params)
         current_sampling_params["max_new_tokens"] = min(
             sampling_params["max_new_tokens"], max_context_length - prompt_length
@@ -33,7 +43,7 @@ async def generate_response(args, prompt, key):
         if current_sampling_params["max_new_tokens"] <= 0:
             return None
 
-        payload = {"input_ids": input_token_ids, "sampling_params": current_sampling_params, "return_logprob": True}
+        payload = {"input_ids": prompt_token_ids, "sampling_params": current_sampling_params, "return_logprob": True}
 
         output = await post(url, payload)
 

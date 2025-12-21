@@ -24,6 +24,13 @@
         {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
       ],
     },
+    'e2e-test-ckpt': {
+      'label': 'run-ci-ckpt',
+      'tests': [
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py --async-save', 'num_gpus': 8},
+      ],
+    },
 } %>
 name: PR Test
 

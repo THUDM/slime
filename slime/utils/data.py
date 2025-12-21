@@ -49,23 +49,32 @@ def _parse_generalized_path(s: str):
     return s, None
 
 
-def _should_skip_prompt(prompt, tokenizer, processor, max_length, apply_chat_template_kwargs):
+def _should_skip_prompt(
+    prompt, tokenizer, processor, metadata, max_length, apply_chat_template, apply_chat_template_kwargs
+):
     if max_length is None:
         return False
 
     from slime.utils.processing_utils import prepare_model_inputs
 
-    input_ids, _ = prepare_model_inputs(prompt, tokenizer, processor, None, apply_chat_template_kwargs)
+    input_ids, _ = prepare_model_inputs(
+        prompt, tokenizer, processor, metadata, apply_chat_template, apply_chat_template_kwargs
+    )
     return len(input_ids) > max_length
 
 
-def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
-    messages = data.get(prompt_key)
+def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimodal_keys: dict = None):
+    prompt = data.get(prompt_key)
 
-    if isinstance(messages, str):
-        messages = [{"role": "user", "content": messages}]
+    if isinstance(prompt, str):
+        # If prompt is a string and we don't apply chat template, return the prompt as is.
+        if not as_conversation:
+            return prompt
+        else:
+            prompt = [{"role": "user", "content": prompt}]
 
     if multimodal_keys:
+        assert as_conversation, "as_conversation must be True when multimodal_keys is not None"
         # Build mapping: placeholder -> (MultimodalType, content_list)
         multimodals = {}
         for type_name, data_key in multimodal_keys.items():
@@ -75,7 +84,7 @@ def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
 
         pattern = "(" + "|".join(re.escape(p) for p in multimodals.keys()) + ")"
 
-        for message in messages:
+        for message in prompt:
             if isinstance(message["content"], str):
                 content_list = []
                 for segment in re.split(pattern, message["content"]):
@@ -105,7 +114,7 @@ def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
                     f"Unsupported content type: {type(message['content'])}, expected str or list of dicts"
                 )
 
-    return messages
+    return prompt
 
 
 class Dataset:
@@ -127,7 +136,8 @@ class Dataset:
     ):
         self.origin_samples = []
         for data in read_file(path):
-            prompt = _build_messages(data, prompt_key, multimodal_keys)
+            as_conversation = apply_chat_template
+            prompt = _build_messages(data, prompt_key, as_conversation, multimodal_keys)
 
             metadata = data.get(metadata_key) or {}
             if tool_key is not None and tool_key in data:
@@ -140,7 +150,9 @@ class Dataset:
                 metadata["tools"] = tools
 
             # TODO: this is slow.
-            if _should_skip_prompt(prompt, tokenizer, processor, max_length, apply_chat_template_kwargs):
+            if _should_skip_prompt(
+                prompt, tokenizer, processor, metadata, max_length, apply_chat_template, apply_chat_template_kwargs
+            ):
                 continue
 
             self.origin_samples.append(

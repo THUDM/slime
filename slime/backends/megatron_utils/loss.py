@@ -293,12 +293,12 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         advantages = [r for r in returns]
 
     elif args.advantage_estimator == "ppo":
-        # TODO: optimize this
         old_rewards = rewards
         rewards = []
+        kl_coef = -args.kl_coef
+        cp_rank = mpu.get_context_parallel_rank()
         for reward, k in zip(old_rewards, kl, strict=False):
-            k *= -args.kl_coef
-            cp_rank = mpu.get_context_parallel_rank()
+            k *= kl_coef
             if cp_rank == 0:
                 k[-1] += reward
             rewards.append(k)
@@ -850,7 +850,7 @@ def loss_function(
 
     return (
         loss,
-        num_tokens if args.calculate_per_token_loss else 1,
+        torch.tensor(num_tokens if args.calculate_per_token_loss else 1, device=logits.device),
         {
             "keys": list(log.keys()),
             "values": torch.tensor(

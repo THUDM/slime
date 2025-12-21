@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 import socket
 from argparse import Namespace
 from contextlib import nullcontext
@@ -7,6 +8,7 @@ from contextlib import nullcontext
 import ray
 import torch
 import torch.distributed as dist
+from megatron.bridge import AutoBridge
 from megatron.core import mpu
 from ray.actor import ActorHandle
 from torch_memory_saver import torch_memory_saver
@@ -24,7 +26,6 @@ from slime.utils.routing_replay import RoutingReplay
 from slime.utils.timer import Timer, inverse_timer, timer
 from slime.utils.tracking_utils import init_tracking
 from slime.utils.types import RolloutBatch
-
 from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
 from .checkpoint import load_checkpoint
@@ -66,11 +67,20 @@ class MegatronTrainRayActor(TrainRayActor):
             if i == dist.get_rank():
                 self.hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
                 self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
+                if args.megatron_to_hf_mode == "bridge":
+                    args.bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
+
             dist.barrier(group=get_gloo_group())
 
         self.train_parallel_config = {
             "dp_size": mpu.get_data_parallel_world_size(with_context_parallel=False),
         }
+        dist.barrier(group=get_gloo_group())
+
+        if args.offload_train:
+            if (x := args.train_memory_margin_bytes) > 0:
+                logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
+                torch_memory_saver.memory_margin_bytes = x
 
         if self.args.debug_rollout_only:
             return 0
@@ -186,6 +196,16 @@ class MegatronTrainRayActor(TrainRayActor):
         rollout_data["loss_masks"] = [
             torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
         ]
+        if "multimodal_inputs" in rollout_data:
+            # Move multimodal inputs to GPU in advance
+            rollout_data["multimodal_inputs"] = [
+                (
+                    {key: tensor.to(device=torch.cuda.current_device()) for key, tensor in mm_dict.items()}
+                    if mm_dict is not None
+                    else None
+                )
+                for mm_dict in rollout_data["multimodal_inputs"]
+            ]
         if "rollout_log_probs" in rollout_data:
             rollout_data["rollout_log_probs"] = [
                 torch.tensor(
@@ -442,11 +462,26 @@ class MegatronTrainRayActor(TrainRayActor):
         log_perf_data(rollout_id, self.args)
 
     @timer
-    def save_model(self, iteration: int) -> None:
+    def save_model(self, rollout_id: int, force_sync: bool = False) -> None:
         if self.args.debug_rollout_only:
             return
 
-        save(iteration, self.model, self.optimizer, self.opt_param_scheduler)
+        # torch dist may trigger nccl communication during saving.
+        if self.args.offload_train:
+            reload_process_groups()
+
+        if self.args.async_save:
+            from megatron.training.async_utils import maybe_finalize_async_save
+
+            maybe_finalize_async_save(blocking=True)
+
+        save(rollout_id, self.model, self.optimizer, self.opt_param_scheduler)
+
+        if force_sync and self.args.async_save:
+            maybe_finalize_async_save(blocking=True)
+
+        if self.args.offload_train:
+            destroy_process_groups()
 
     @timer
     def update_weights(self) -> None:
@@ -467,6 +502,14 @@ class MegatronTrainRayActor(TrainRayActor):
             print_memory("before update_weights")
             self.weight_updater.update_weights()
             print_memory("after update_weights")
+
+            if self.args.ci_test and len(rollout_engines) > 0:
+                engine = random.choice(rollout_engines)
+                engine_version = ray.get(engine.get_weight_version.remote())
+                if str(engine_version) != str(self.weight_updater.weight_version):
+                    raise RuntimeError(
+                        f"Weight version mismatch! Engine: {engine_version}, Updater: {self.weight_updater.weight_version}"
+                    )
 
             if getattr(self.args, "keep_old_actor", False):
                 if self.args.update_weights_interval == 1:

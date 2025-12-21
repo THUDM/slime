@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 from argparse import Namespace
 from itertools import accumulate
 
@@ -317,12 +318,13 @@ class FSDPTrainRayActor(TrainRayActor):
         dist.barrier(group=get_gloo_group())
         print_memory("after wake_up model")
 
-    def save_model(self, iteration: int) -> None:
+    def save_model(self, rollout_id: int, force_sync: bool = False) -> None:
         """Delegate checkpoint saving to the shared checkpoint utilities."""
         if self.args.debug_rollout_only or self.args.save is None:
             return
 
-        checkpoint.save(self, iteration)
+        assert not self.args.async_save, "FSDPTrainRayActor does not support async_save yet."
+        checkpoint.save(self, rollout_id)
 
     def _compute_log_prob(
         self,
@@ -791,6 +793,15 @@ class FSDPTrainRayActor(TrainRayActor):
             dist.barrier(group=get_gloo_group())
 
         self.weight_updater.update_weights()
+
+        if self.args.ci_test and len(rollout_engines) > 0:
+            engine = random.choice(rollout_engines)
+            engine_version = ray.get(engine.get_weight_version.remote())
+            if str(engine_version) != str(self.weight_updater.weight_version):
+                raise RuntimeError(
+                    f"Weight version mismatch! Engine: {engine_version}, Updater: {self.weight_updater.weight_version}"
+                )
+
         clear_memory()
 
     def _create_ref_model(self, ref_load_path: str | None):

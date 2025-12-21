@@ -4,12 +4,12 @@
 
 ## 环境准备
 
-搭建环境与下载数据的方法可以参考 [示例：Qwen3-4B](./qwen3-4B.md)。
+搭建环境与下载数据的方法可以参考 [示例：Qwen3-4B](qwen3-4B.md)。
 
 首先需要在多机均可访问到的地址（下记为 `$BASE_DIR`）上下载 GLM-4.5：
 
 ```bash
-huggingface-cli download zai-org/GLM-4.5 --local-dir $BASE_DIR/GLM-4.5-355B-A32B
+hf download zai-org/GLM-4.5 --local-dir $BASE_DIR/GLM-4.5-355B-A32B
 ```
 
 通过如下方式通过 2 机 16 卡将 huggingface checkpoint 转换为 torch dist 格式：
@@ -65,7 +65,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/glm4.5-355B-A32B.sh"
 ```
 
-从 [scripts/models/glm4.5-355B-A32B.sh](../../../scripts/models/glm4.5-355B-A32B.sh) 读取模型的 config。这些 config 都是 megatron 的参数。在使用 megatron 进行训练的时候，megatron 无法从 ckpt 中读取模型 config，需要我们自行配置。我们在 [scripts/models](../../../scripts/models/) 中提供了一些样例。
+从 [scripts/models/glm4.5-355B-A32B.sh](https://github.com/THUDM/slime/blob/main/scripts/models/glm4.5-355B-A32B.sh) 读取模型的 config。这些 config 都是 megatron 的参数。在使用 megatron 进行训练的时候，megatron 无法从 ckpt 中读取模型 config，需要我们自行配置。我们在 [scripts/models](https://github.com/THUDM/slime/tree/main/scripts/models/) 中提供了一些样例。
 
 #### PERF_ARGS
 
