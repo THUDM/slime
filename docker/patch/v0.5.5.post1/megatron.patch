@@ -17,8 +17,8 @@ index ccf5242a2..9b6d3e31f 100644
 +++ b/megatron/core/dist_checkpointing/strategies/torch.py
 @@ -427,6 +427,15 @@ def _restore_dict_types(x: Union[dict, list, Any], keys_template: Union[dict, li
              _restore_dict_types(x_val, templ_val)
- 
- 
+
+
 +@dataclass
 +class MCoreMetadata(Metadata):
 +    """Metadata with mcore specific data."""
@@ -41,7 +41,7 @@ index ccf5242a2..9b6d3e31f 100644
          )
 +        metadata = MCoreMetadata(mcore_data=mcore_data, **vars(metadata))
          return global_plan, metadata
- 
+
      def create_decentralized_global_plan(self, local_plan: SavePlan) -> SavePlan:
 @@ -556,10 +566,12 @@ class MCoreLoadPlanner(DefaultLoadPlanner):
      def _validate_global_shapes(self, metadata, sharded_tensors):
@@ -76,7 +76,7 @@ index ccf5242a2..9b6d3e31f 100644
 +                allow_partial_load=True,
              ),
          )
- 
+
 diff --git a/megatron/core/distributed/__init__.py b/megatron/core/distributed/__init__.py
 index fe26e8b43..4451f2776 100644
 --- a/megatron/core/distributed/__init__.py
@@ -103,12 +103,100 @@ index 7727efe1e..966fe652a 100644
 +++ b/megatron/core/extensions/transformer_engine.py
 @@ -366,6 +366,7 @@ class TELinear(te.pytorch.Linear):
          )
- 
+
          for param in self.parameters():
 +            setattr(param, "parallel_mode", parallel_mode)
              if is_expert:
                  # Reduce the gradient on the expert_data_parallel group for expert linear layers
                  setattr(param, "allreduce", not self.expert_parallel)
+@@ -1012,6 +1013,66 @@ class TEDotProductAttention(te.pytorch.DotProductAttention):
+
+
+ if HAVE_TE and is_te_min_version("1.9.0.dev0"):
++    def ceil_div(x: int, y: int) -> int:
++        return (x + y - 1) // y
++
++
++    def fake_int4_quantization_ste(x, block_size):
++        """
++        带 STE (Straight-Through Estimator) 的伪量化函数，支持训练。
++        """
++        m, n = x.shape
++        block_size_m, block_size_n = block_size[0], block_size[1]
++
++        # 1. Padding
++        m_padded = ceil_div(m, block_size_m) * block_size_m
++        n_padded = ceil_div(n, block_size_n) * block_size_n
++
++        x_padded = torch.zeros(
++            (m_padded, n_padded),
++            dtype=x.dtype, device=x.device
++        )
++        x_padded[:m, :n] = x
++
++        # 2. Reshape to blocks
++        # view shape: [num_blocks_m, block_size_m, num_blocks_n, block_size_n]
++        # 注意：这里 view 的维度逻辑需要根据实际物理布局调整，假设你是想做 block-wise quantization
++        x_view = x_padded.view(
++            m_padded // block_size_m,
++            block_size_m,
++            n_padded // block_size_n,
++            block_size_n
++        )
++
++        # 3. Calculate Scale
++        # 在 block 维度 (1, 3) 上求 max
++        x_max = x_view.abs().float().amax(dim=(1, 3), keepdim=True)
++        q_max = 7
++        x_scale = x_max / q_max
++
++        # [Fix 2] 必须赋值回去，防止除以 0
++        x_scale = x_scale.clamp(min=1e-5)
++
++        # 4. Quantize (Int4 range: -7 to 7)
++        # 这一步是纯计算，得到量化后的浮点表示
++        x_div = x_view / x_scale
++        x_round = torch.round(x_div)
++
++        # [Fix 3] 安全截断，防止溢出 Int4 范围
++        x_q_clamped = x_round.clamp(-q_max, q_max)
++
++        # 5. Dequantize
++        x_dequant_view = x_q_clamped * x_scale
++
++        # 还原形状
++        x_dequant_full = x_dequant_view.view_as(x_padded)
++        x_out = x_dequant_full[:m, :n].contiguous().to(x.dtype)
++
++        # [Fix 1] STE (Straight-Through Estimator) 魔法
++        # 前向传播：使用 x_out (量化后的值)
++        # 反向传播：(x_out - x).detach() 梯度为 0，所以梯度直接流过 x
++        # 等价于：y = x + (quant(x) - x).detach()
++        return x + (x_out - x).detach()
+
+     class TEGroupedLinear(te.pytorch.GroupedLinear):
+         """
+@@ -1191,6 +1252,12 @@ if HAVE_TE and is_te_min_version("1.9.0.dev0"):
+
+             self._register_load_state_dict_pre_hook(merge_extra_states, with_module=True)
+
++            if os.getenv("OPEN_TRAINING_INT4_FAKE_QAT_FLAG", 0) == 1:
++                weights = self._get_weight_tensors()
++                weights_int4 = [fake_int4_quantization_ste(w, [1, 128]) for w in weights]
++                for i in range(self.num_gemms):
++                    setattr(self, f"weight{i}", weights_int4[i])
++
+         def forward(self, x, m_splits):
+             """Forward."""
+             _is_first_microbatch = (
+@@ -1369,6 +1436,7 @@ if HAVE_TE and is_te_min_version("1.9.0.dev0"):
+                 tp_comm_buffer_name=tp_comm_buffer_name,
+                 tp_group=tp_group,
+             )
++            layer_weight = self.weight
+
+         def sharded_state_dict(self, prefix="", sharded_offsets=(), metadata=None):
+             """
 diff --git a/megatron/core/models/gpt/gpt_layer_specs.py b/megatron/core/models/gpt/gpt_layer_specs.py
 index 860ee64a9..80944b702 100755
 --- a/megatron/core/models/gpt/gpt_layer_specs.py
@@ -121,7 +209,7 @@ index 860ee64a9..80944b702 100755
 +    post_mlp_layernorm: bool = False,
  ) -> ModuleSpec:
      """Use this spec to use lower-level Transformer Engine modules (required for fp8 training).
- 
+
 @@ -178,9 +180,11 @@ def get_gpt_layer_with_transformer_engine_spec(
                      ),
                  ),
@@ -152,7 +240,7 @@ index 6aec66e6d..6ca48b55f 100644
              inference_context=inference_context,
 +            mtp_kwargs=mtp_kwargs,
          )
- 
+
      def _postprocess(
 @@ -431,6 +433,7 @@ class GPTModel(LanguageModule):
          runtime_gather_output=None,
@@ -161,11 +249,11 @@ index 6aec66e6d..6ca48b55f 100644
 +        mtp_kwargs={},
      ):
          """Postprocesses decoder hidden states to generate logits or compute loss.
- 
+
 @@ -446,7 +449,7 @@ class GPTModel(LanguageModule):
          if self.share_embeddings_and_output_weights:
              output_weight = self.shared_embedding_or_output_weight()
- 
+
 -        if mtp_in_postprocess:
 +        if mtp_in_postprocess and mtp_kwargs.get('mtp_labels', None) is not None:
              hidden_states = self.mtp(
@@ -174,7 +262,7 @@ index 6aec66e6d..6ca48b55f 100644
 @@ -465,25 +468,37 @@ class GPTModel(LanguageModule):
          if not self.post_process:
              return hidden_states
- 
+
 -        if self.mtp_process:
 -            mtp_labels = labels.clone()
 +        if self.mtp_process and mtp_kwargs.get('mtp_labels', None) is not None:
@@ -223,13 +311,13 @@ index a40c85a88..86688c331 100644
 --- a/megatron/core/parallel_state.py
 +++ b/megatron/core/parallel_state.py
 @@ -9,6 +9,7 @@ from typing import Callable, List, Optional
- 
+
  import numpy as np
  import torch
 +import torch.distributed as dist
- 
+
  from .utils import GlobalMemoryBuffer, is_torch_min_version
- 
+
 diff --git a/megatron/core/pipeline_parallel/p2p_communication.py b/megatron/core/pipeline_parallel/p2p_communication.py
 index 63ee9d1f5..b90b744c1 100644
 --- a/megatron/core/pipeline_parallel/p2p_communication.py
@@ -275,12 +363,12 @@ index c749bac43..dde8d50e7 100644
 +        else:
 +            query, key, value = self.get_query_key_value_tensors(hidden_states, key_value_states)
          nvtx_range_pop(suffix="qkv")
- 
+
          # ===================================================
 @@ -842,6 +845,11 @@ class Attention(MegatronModule, ABC):
          # Output. [sq, b, h]
          # =================
- 
+
 +        if self.config.use_gated_attention:
 +            nvtx_range_push(suffix="sigmoid_gate")
 +            core_attn_out = core_attn_out * torch.sigmoid(gate)
@@ -292,7 +380,7 @@ index c749bac43..dde8d50e7 100644
 @@ -879,19 +887,34 @@ class SelfAttention(Attention):
              model_comm_pgs=model_comm_pgs,
          )
- 
+
 -        self.linear_qkv = build_module(
 -            submodules.linear_qkv,
 -            self.config.hidden_size,
@@ -334,13 +422,13 @@ index c749bac43..dde8d50e7 100644
 +                tp_comm_buffer_name='qkv',
 +                tp_group=self.model_comm_pgs.tp,
 +            )
- 
+
          if submodules.q_layernorm is not None:
              self.q_layernorm = build_module(
 @@ -1036,6 +1059,65 @@ class SelfAttention(Attention):
- 
+
          return query, key, value
- 
+
 +    # adapt from https://github.com/alibaba/Pai-Megatron-Patch/blob/8e6cbb0556ba09933ab4a4edb23c0af1d19d9960/megatron_patch/model/qwen3_next/gated_attention.py#L192
 +    def get_query_gate_key_value_tensors(self, hidden_states, key_value_states=None):
 +        """
@@ -410,7 +498,7 @@ index 235b6f6af..0f4862e43 100644
 @@ -566,6 +566,9 @@ def topk_routing_with_score_function(
          else:
              return torch.topk(scores, k=topk, dim=1)
- 
+
 +    from slime.utils.routing_replay import get_routing_replay_compute_topk
 +    compute_topk = get_routing_replay_compute_topk(compute_topk)
 +
@@ -424,7 +512,7 @@ index 6b20b8622..f91b01f90 100644
 @@ -156,6 +156,9 @@ class TopKRouter(Router):
              self.local_tokens_per_expert = None
              self.expert_bias = None
- 
+
 +        from slime.utils.routing_replay import register_routing_replay
 +        register_routing_replay(self)
 +
@@ -436,20 +524,20 @@ index b7884e18e..f0104f861 100755
 --- a/megatron/core/transformer/multi_token_prediction.py
 +++ b/megatron/core/transformer/multi_token_prediction.py
 @@ -6,6 +6,7 @@ from typing import Callable, List, Optional, Union
- 
+
  import torch
  from torch import Tensor
 +import warnings
- 
+
  from megatron.core import InferenceParams, mpu, parallel_state, tensor_parallel
  from megatron.core.dist_checkpointing.mapping import ShardedStateDict
 @@ -105,17 +106,21 @@ def tie_output_layer_state_dict(
      )
- 
- 
+
+
 -def roll_tensor(tensor, shifts=-1, dims=-1, cp_group=None):
 -    """Roll the tensor input along the sequence dimension with Context Parallelism (CP) support.
- 
+
 -    This function extends the original roll_tensor to support Context Parallelism, which allows
 -    MTP to work with CP > 1. When CP is enabled, the sequence dimension is split across CP ranks,
 -    and tensor rolling requires communication between adjacent CP ranks to properly handle the
@@ -458,17 +546,17 @@ index b7884e18e..f0104f861 100755
 +    """Roll the tensor input along the sequence dimension with Context Parallelism (CP) and Packed Sequence support.
 +
 +    This function extends the original roll_tensor to support Context Parallelism and Packed Sequences.
-+    When CP is enabled, the sequence dimension is split across CP ranks, and tensor rolling requires 
++    When CP is enabled, the sequence dimension is split across CP ranks, and tensor rolling requires
 +    communication between adjacent CP ranks to properly handle the boundary conditions.
-+    When packed sequences are used, rolling is performed within each individual sequence boundary 
++    When packed sequences are used, rolling is performed within each individual sequence boundary
 +    to prevent mixing tokens between different packed sequences.
- 
+
      For CP=1 (default behavior): Uses standard torch.roll with zero padding
      For CP>1: Splits tensor into chunks, performs rolling within each chunk, then exchanges
      boundary elements between adjacent CP ranks to maintain sequence continuity.
 +    For packed sequences: Rolls tensors within sequence boundaries defined by cu_seqlens.
 +
- 
+
      Args:
          tensor (Tensor): The input tensor to roll.
 @@ -123,9 +128,15 @@ def roll_tensor(tensor, shifts=-1, dims=-1, cp_group=None):
@@ -488,30 +576,30 @@ index b7884e18e..f0104f861 100755
      if cp_group is None or cp_group.size() == 1:
          rolled_tensor = torch.roll(tensor, shifts=shifts, dims=dims)
 @@ -193,6 +204,103 @@ def roll_tensor(tensor, shifts=-1, dims=-1, cp_group=None):
- 
+
      return rolled_tensor, rolled_tensor.sum()
- 
+
 +def _roll_tensor_packed_seq(tensor, shifts, dims, packed_seq_params, cp_group=None):
 +    """Roll tensor with packed sequence support.
-+    
++
 +    This function handles rolling for packed sequences by respecting sequence boundaries
 +    defined in packed_seq_params.cu_seqlens. Rolling is performed within each individual
 +    sequence to prevent mixing tokens between different packed sequences. When Context
 +    Parallelism (CP) is enabled, each CP rank still receives the full `cu_seqlens` metadata
 +    so we slice out the portion of every packed sequence that lives on the current rank and
 +    reuse the standard CP boundary exchange to populate the rolling window.
-+    
++
 +    Args:
 +        tensor (Tensor): The input tensor to roll.
 +        shifts (int): The shift of the tensor (typically -1 for MTP).
 +        dims (int): The dimension to roll (typically -1 for sequence dimension).
 +        packed_seq_params (PackedSeqParams): Parameters for packed sequence processing.
 +        cp_group (ProcessGroup): The context parallelism process group.
-+        
++
 +    Returns:
 +        tuple: (rolled_tensor, sum_of_rolled_tensor)
 +    """
-+    
++
 +    # Notice: This is a naive implementation to test the correctness, a better solution will only sync the boundary tokens once.
 +    assert dims == -1 or dims == tensor.dim() - 1, "Packed sequence roll only supports the last dimension."
 +    assert shifts == -1, "Packed sequence roll only supports a single-token left shift."
@@ -542,12 +630,12 @@ index b7884e18e..f0104f861 100755
 +    for i in range(len(cu_seqlens) - 1):
 +        start_idx = cu_seqlens[i]
 +        end_idx = cu_seqlens[i + 1]
-+        
++
 +        # the idx has been multiplied by cp_size, so we need to divide it by cp_size to get the local idx
 +        local_start_idx = start_idx // cp_size
 +        local_end_idx = end_idx // cp_size
 +        tensor_slice = rolled_tensor[..., local_start_idx:local_end_idx].clone()
-+        
++
 +        # The following code is very similar as the code in roll_tensor function
 +        local_chunks = tensor_slice.chunk(2, dim=dims)
 +        rolled_chunks = [
@@ -583,12 +671,12 @@ index b7884e18e..f0104f861 100755
 +            chunk[tuple(index)] = recv
 +
 +        seq_result = torch.cat(rolled_chunks, dim=dims)
-+        
++
 +        # update the rolled tensor
 +        rolled_tensor[..., local_start_idx:local_end_idx] = seq_result
 +
 +    return rolled_tensor, rolled_tensor.sum()
- 
+
  class MTPLossLoggingHelper:
      """Helper class for logging MTP losses."""
 @@ -480,9 +588,10 @@ class MultiTokenPredictionLayer(MegatronModule):
@@ -610,29 +698,29 @@ index b7884e18e..f0104f861 100755
 -        input_ids, _ = roll_tensor(input_ids, shifts=-1, dims=-1, cp_group=self.cp_group)
 -        position_ids, _ = roll_tensor(position_ids, shifts=-1, dims=-1, cp_group=self.cp_group)
 +        input_ids, _ = roll_tensor(input_ids, shifts=-1, dims=-1, cp_group=self.cp_group, packed_seq_params=packed_seq_params)
-+        
++
 +        # Prepare/roll position ids only when applicable.
 +        if position_ids is None:
 +            # Fallback position ids for learned absolute embedding.
 +            seq_len = input_ids.size(-1)
 +            position_ids = torch.arange(seq_len, dtype=torch.long, device=input_ids.device)
 +            position_ids = position_ids.unsqueeze(0).expand_as(input_ids)
-+        
++
 +        position_ids, _ = roll_tensor(
 +            position_ids, shifts=-1, dims=-1, cp_group=self.cp_group, packed_seq_params=packed_seq_params
 +        )
          # embedding
          decoder_input = embedding(input_ids=input_ids, position_ids=position_ids)
 +        decoder_input = decoder_input.detach()
- 
+
 -        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=True)
 +        hidden_states = make_viewless_tensor(inp=hidden_states, requires_grad=True, keep_graph=False)
- 
+
          return input_ids, position_ids, decoder_input, hidden_states
- 
+
 @@ -604,22 +724,66 @@ class MultiTokenPredictionLayer(MegatronModule):
          return hidden_states
- 
+
      def _checkpointed_forward(self, forward_func, *args, **kwargs):
 +        """Wrap `forward_func` with activation checkpointing while only passing tensors.
 +
@@ -684,7 +772,7 @@ index b7884e18e..f0104f861 100755
 +            """Determines whether to use the `te_checkpoint` or `tensor_parallel.checkpoint`."""
              if self.config.fp8:
                  from megatron.core.extensions.transformer_engine import te_checkpoint
- 
+
                  return te_checkpoint(
 -                    forward_func,
 +                    run,
@@ -700,7 +788,7 @@ index b7884e18e..f0104f861 100755
 -                    forward_func, self.config.distribute_saved_activations, *args, *kwargs.values()
 +                    run, self.config.distribute_saved_activations, *tensor_args_tuple
                  )
- 
+
          if self.config.recompute_method == 'uniform':
 @@ -681,15 +845,13 @@ class MultiTokenPredictionLayer(MegatronModule):
              [s, b, h], and optionally the updated context tensor if cross-attention is used.
@@ -709,7 +797,7 @@ index b7884e18e..f0104f861 100755
 -        assert (
 -            packed_seq_params is None
 -        ), f"multi token prediction + sequence packing is not yet supported."
- 
+
          input_ids, position_ids, decoder_input, hidden_states = self._get_embeddings(
              input_ids=input_ids,
              position_ids=position_ids,
@@ -717,7 +805,7 @@ index b7884e18e..f0104f861 100755
              hidden_states=hidden_states,
 +            packed_seq_params=packed_seq_params,
          )
- 
+
          if self.config.recompute_granularity == 'full' and self.training:
 diff --git a/megatron/core/transformer/transformer_config.py b/megatron/core/transformer/transformer_config.py
 index d55bebe7e..1eecbbd38 100644
@@ -726,14 +814,14 @@ index d55bebe7e..1eecbbd38 100644
 @@ -173,6 +173,10 @@ class TransformerConfig(ModelParallelConfig):
      qk_layernorm: bool = False
      """Whether to apply `normalization` type of normalization to the query and key embeddings."""
- 
+
 +    post_self_attn_layernorm: bool = False
 +    post_mlp_layernorm: bool = False
 +    use_gated_attention: bool = False
 +
      test_mode: bool = False
      """Whether to run real-time tests."""
- 
+
 diff --git a/megatron/core/transformer/transformer_layer.py b/megatron/core/transformer/transformer_layer.py
 index 84f22bdea..f0f3f8e86 100644
 --- a/megatron/core/transformer/transformer_layer.py
@@ -743,7 +831,7 @@ index 84f22bdea..f0f3f8e86 100644
      self_attention: Union[ModuleSpec, type] = IdentityOp
      self_attn_bda: Union[ModuleSpec, type] = IdentityFuncOp
 +    post_self_attn_layernorm: Union[ModuleSpec, type] = IdentityOp
- 
+
      pre_cross_attn_layernorm: Union[ModuleSpec, type] = IdentityOp
      cross_attention: Union[ModuleSpec, type] = IdentityOp
 @@ -232,6 +233,7 @@ class TransformerLayerSubmodules:
@@ -751,13 +839,13 @@ index 84f22bdea..f0f3f8e86 100644
      mlp: Union[ModuleSpec, type] = IdentityOp
      mlp_bda: Union[ModuleSpec, type] = IdentityFuncOp
 +    post_mlp_layernorm: Union[ModuleSpec, type] = IdentityOp
- 
+
      # Mapping for sharded tensor keys to be applied in `sharded_state_dict` method
      sharded_state_dict_keys_map: Dict[str, str] = field(default_factory=dict)
 @@ -336,6 +338,13 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
          # [Module 3: BiasDropoutFusion]
          self.self_attn_bda = build_module(submodules.self_attn_bda)
- 
+
 +        self.post_self_attn_layernorm = build_module(
 +            submodules.post_self_attn_layernorm,
 +            config=self.config,
@@ -771,7 +859,7 @@ index 84f22bdea..f0f3f8e86 100644
 @@ -399,6 +408,13 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
          # [Module 9: BiasDropoutFusion]
          self.mlp_bda = build_module(submodules.mlp_bda)
- 
+
 +        self.post_mlp_layernorm = build_module(
 +            submodules.post_mlp_layernorm,
 +            config=self.config,
@@ -785,7 +873,7 @@ index 84f22bdea..f0f3f8e86 100644
 @@ -535,6 +551,10 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
                  attention_output_with_bias[0]
              )
- 
+
 +        attention_output, attention_output_bias = attention_output_with_bias
 +        attention_output = self.post_self_attn_layernorm(attention_output)
 +        attention_output_with_bias = (attention_output, attention_output_bias)
@@ -796,7 +884,7 @@ index 84f22bdea..f0f3f8e86 100644
 @@ -635,6 +655,10 @@ class TransformerLayer(MegatronModule, BaseTransformerLayer):
          else:
              mlp_output_with_bias = self.mlp(pre_mlp_layernorm_output)
- 
+
 +        mlp_output, mlp_output_bias = mlp_output_with_bias
 +        mlp_output = self.post_mlp_layernorm(mlp_output)
 +        mlp_output_with_bias = (mlp_output, mlp_output_bias)
@@ -820,7 +908,7 @@ index e3459c5ee..7346bf35b 100644
 @@ -1198,6 +1196,10 @@ def core_transformer_config_from_args(args, config_class=None):
      if args.is_hybrid_model:
          kw_args['is_hybrid_model'] = args.is_hybrid_model
- 
+
 +    kw_args['post_self_attn_layernorm'] = args.post_self_attn_layernorm
 +    kw_args['post_mlp_layernorm'] = args.post_mlp_layernorm
 +    kw_args['use_gated_attention'] = args.use_gated_attention
@@ -848,7 +936,7 @@ index 5cf222ccc..d1554ca4c 100644
 @@ -138,6 +138,8 @@ class _HuggingFaceTokenizer(MegatronTokenizer):
                  f"The transformers library must be installed to use huggingface_tokenizer_provider"
              )
- 
+
 +        if "trust_remote_code" not in kwargs:
 +            kwargs["trust_remote_code"] = True
          # TODO(bnorick): download tokenizer once to lustre and use force offline to make sure all tasks read it from there
