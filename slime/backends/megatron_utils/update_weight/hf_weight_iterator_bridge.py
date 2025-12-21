@@ -20,7 +20,6 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
         self._bridge = AutoBridge.from_hf_pretrained(self.args.hf_checkpoint)
 
     def merge_expert_weights_from_named_tuples(self, named_weights):
-
         # Pattern to match megatron param names ending with weight<NUMBER>
         expert_pattern = re.compile(r"^(.+\.weight)(\d+)$")
 
@@ -57,7 +56,25 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
 
             # Stack tensors along first dimension
             tensors = [item[2] for item in expert_list]  # item[2] is the weight
-            merged_tensor = torch.stack(tensors, dim=0)
+
+            # Assert all tensors are on the same device and have the same dtype
+            devices = [tensor.device for tensor in tensors]
+            dtypes = [tensor.dtype for tensor in tensors]
+            assert all(device == devices[0] for device in devices), (
+                f"Expert weights with base megatron name '{base_name}' are on different devices: "
+                f"{set(str(d) for d in devices)}"
+            )
+            assert all(dtype == dtypes[0] for dtype in dtypes), (
+                f"Expert weights with base megatron name '{base_name}' have different dtypes: "
+                f"{set(str(d) for d in dtypes)}"
+            )
+
+            # Move to CPU to avoid OOM during stacking, then move back to original device
+            original_device = devices[0]
+            original_dtype = dtypes[0]
+            tensors_cpu = [tensor.cpu() for tensor in tensors]
+            merged_tensor = torch.stack(tensors_cpu, dim=0)
+            merged_tensor = merged_tensor.to(device=original_device, dtype=original_dtype)
 
             # Use the common hf_param_name
             merged_weights.append((hf_param_names[0], merged_tensor))
