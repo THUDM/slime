@@ -157,27 +157,20 @@ index 7727efe1e..342996530 100644
 
      class TEGroupedLinear(te.pytorch.GroupedLinear):
          """
-@@ -1191,6 +1233,12 @@ if HAVE_TE and is_te_min_version("1.9.0.dev0"):
-
-             self._register_load_state_dict_pre_hook(merge_extra_states, with_module=True)
-
+@@ -1196,6 +1238,13 @@ if HAVE_TE and is_te_min_version("1.9.0.dev0"):
+             _is_first_microbatch = (
+                 None if self.disable_parameter_transpose_cache else self.is_first_microbatch
+             )
++
 +            if os.getenv("OPEN_TRAINING_INT4_FAKE_QAT_FLAG", 0) == 1:
 +                weights = self._get_weight_tensors()
 +                weights_int4 = [fake_int4_quantization_ste(w, [1, 128]) for w in weights]
 +                for i in range(self.num_gemms):
 +                    setattr(self, f"weight{i}", weights_int4[i])
 +
-         def forward(self, x, m_splits):
-             """Forward."""
-             _is_first_microbatch = (
-@@ -1369,6 +1417,7 @@ if HAVE_TE and is_te_min_version("1.9.0.dev0"):
-                 tp_comm_buffer_name=tp_comm_buffer_name,
-                 tp_group=tp_group,
-             )
-+            layer_weight = self.weight
+             out = super().forward(x, m_splits, is_first_microbatch=_is_first_microbatch)
+             self.is_first_microbatch = False
 
-         def sharded_state_dict(self, prefix="", sharded_offsets=(), metadata=None):
-             """
 diff --git a/megatron/core/models/gpt/gpt_layer_specs.py b/megatron/core/models/gpt/gpt_layer_specs.py
 index 860ee64a9..80944b702 100755
 --- a/megatron/core/models/gpt/gpt_layer_specs.py

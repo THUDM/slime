@@ -4,19 +4,6 @@ from typing import Dict, Literal, Optional, Tuple, Union
 import torch.nn.functional as F
 import math  # 引入 math 模块
 
-try:
-    from sglang.srt.layers.quantization.fp8_utils import quant_weight_ue8m0, transform_scale_ue8m0
-    from sglang.srt.model_loader.utils import should_deepgemm_weight_requant_ue8m0
-except ImportError:
-    should_deepgemm_weight_requant_ue8m0 = None
-    quant_weight_ue8m0 = None
-    transform_scale_ue8m0 = None
-
-try:
-    from slime.utils.fp8_kernel import blockwise_cast_to_fp8_triton
-except ImportError:
-    blockwise_cast_to_fp8_triton = None
-
 
 def pack_to_int32(
         value: torch.Tensor,
