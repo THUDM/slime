@@ -54,7 +54,7 @@
     <link rel="prev" title="Quick Start" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Dec 19, 2025"/>
+    <meta name="docbuild:last-update" content="Dec 21, 2025"/>
   </head>
   
   
@@ -785,7 +785,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <h2>How to Use FSDP<a class="headerlink" href="#how-to-use-fsdp" title="Link to this heading">#</a></h2>
 <p>slime also support FSDP2 as the training backend, docs <a class="reference external" href="https://lmsys.org/blog/2025-12-03-miles-fsdp/">here</a>.</p>
 <blockquote>
-<div><p>FSDP automatically reads all architecture information via <code class="docutils literal notranslate"><span class="pre">AutoModelForCausalLM.from_pretrained()</span></code>, without manual specification. Megatron requires manual configuration of parameters to read model architecture information, or automatic inference via <code class="docutils literal notranslate"><span class="pre">--use-hf-config-for-megatron</span></code>. FSDP can read entirely from <code class="docutils literal notranslate"><span class="pre">config.json</span></code>, directly avoiding the weight format conversion step.</p>
+<div><p>FSDP automatically reads all architecture information via <code class="docutils literal notranslate"><span class="pre">AutoModelForCausalLM.from_pretrained()</span></code>, without manual specification. Megatron requires manual configuration of parameters to read model architecture information. FSDP can read entirely from <code class="docutils literal notranslate"><span class="pre">config.json</span></code>, directly avoiding the weight format conversion step.</p>
 </div></blockquote>
 <p>To run FSDP as the training backend, pass <code class="docutils literal notranslate"><span class="pre">--train-backend</span> <span class="pre">fsdp</span></code> to enable.</p>
 <section id="parameters">
@@ -801,7 +801,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 </thead>
 <tbody>
 <tr class="row-even"><td><p><strong>Model Loading</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--load</span></code> (Megatron checkpoint) + architecture args (<code class="docutils literal notranslate"><span class="pre">--num-layers</span></code>, <code class="docutils literal notranslate"><span class="pre">--hidden-size</span></code> etc.) or <code class="docutils literal notranslate"><span class="pre">--use-hf-config-for-megatron</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--load</span></code> (Megatron checkpoint) + architecture args (<code class="docutils literal notranslate"><span class="pre">--num-layers</span></code>, <code class="docutils literal notranslate"><span class="pre">--hidden-size</span></code> etc.)</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> (Required)</p></td>
 <td><p><strong>FSDP</strong>: Directly uses HuggingFace format, no weight conversion needed, architecture inferred via <code class="docutils literal notranslate"><span class="pre">AutoConfig</span></code></p></td>
 </tr>
@@ -1030,7 +1030,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Dec 19, 2025.
+  Last updated on Dec 21, 2025.
   <br/>
 </p>
   </div>

@@ -314,7 +314,7 @@ if __name__ == "__main__":
 
 slime 同样也支持FSDP2作为训练后端，可以参考[文档](https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/slime/fsdp/readme.md)。
 
-> FSDP 通过 `AutoModelForCausalLM.from_pretrained()` 自动读取所有架构信息，无需手动指定。Megatron 需要手动配置参数读取 model 架构信息，或者通过 `--use-hf-config-for-megatron` 实现自动推断， FSDP可以全部从 `config.json` 自动读取，可以直接避免权重格式转换步骤。
+> FSDP 通过 `AutoModelForCausalLM.from_pretrained()` 自动读取所有架构信息，无需手动指定。Megatron 需要手动配置参数读取 model 架构信息，FSDP可以全部从 `config.json` 自动读取，可以直接避免权重格式转换步骤。
 
 可以通过在命令行传递 `--train-backend fsdp` 来启动 FSDP 作为训练后端。
 
@@ -324,7 +324,7 @@ FSDP和Megatron后端支持的参数的对比如下表所示，接下来FSDP会�
 
 | 配置类别 | Megatron 参数 | FSDP 参数 | 说明 |
 | --- | --- | --- | --- |
-| **模型加载** | `--load` (Megatron checkpoint) + 架构参数 (`--num-layers`, `--hidden-size` 等) 或 `--use-hf-config-for-megatron` | `--hf-checkpoint` (必需) | **FSDP**: 直接使用 HuggingFace 格式，无需转换权重，通过 `AutoConfig` 自动推断架构 |
+| **模型加载** | `--load` (Megatron checkpoint) + 架构参数 (`--num-layers`, `--hidden-size` 等) | `--hf-checkpoint` (必需) | **FSDP**: 直接使用 HuggingFace 格式，无需转换权重，通过 `AutoConfig` 自动推断架构 |
 | **张量并行** | `--tensor-model-parallel-size` | Coming Soon |  |
 | **流水线并行** | `--pipeline-model-parallel-size` | Coming Soon |  |
 | **专家并行** | `--expert-model-parallel-size` | Coming Soon |  |

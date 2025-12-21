@@ -54,7 +54,7 @@
     <link rel="prev" title="快速使用" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2025 年 12 月 19 日"/>
+    <meta name="docbuild:last-update" content="2025 年 12 月 21 日"/>
   </head>
   
   
@@ -782,7 +782,7 @@ document.write(`
 <h2>FSDP 使用方法<a class="headerlink" href="#fsdp" title="Link to this heading">#</a></h2>
 <p>slime 同样也支持FSDP2作为训练后端，可以参考<a class="reference external" href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/slime/fsdp/readme.md">文档</a>。</p>
 <blockquote>
-<div><p>FSDP 通过 <code class="docutils literal notranslate"><span class="pre">AutoModelForCausalLM.from_pretrained()</span></code> 自动读取所有架构信息，无需手动指定。Megatron 需要手动配置参数读取 model 架构信息，或者通过 <code class="docutils literal notranslate"><span class="pre">--use-hf-config-for-megatron</span></code> 实现自动推断， FSDP可以全部从 <code class="docutils literal notranslate"><span class="pre">config.json</span></code> 自动读取，可以直接避免权重格式转换步骤。</p>
+<div><p>FSDP 通过 <code class="docutils literal notranslate"><span class="pre">AutoModelForCausalLM.from_pretrained()</span></code> 自动读取所有架构信息，无需手动指定。Megatron 需要手动配置参数读取 model 架构信息，FSDP可以全部从 <code class="docutils literal notranslate"><span class="pre">config.json</span></code> 自动读取，可以直接避免权重格式转换步骤。</p>
 </div></blockquote>
 <p>可以通过在命令行传递 <code class="docutils literal notranslate"><span class="pre">--train-backend</span> <span class="pre">fsdp</span></code> 来启动 FSDP 作为训练后端。</p>
 <section id="id11">
@@ -798,7 +798,7 @@ document.write(`
 </thead>
 <tbody>
 <tr class="row-even"><td><p><strong>模型加载</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--load</span></code> (Megatron checkpoint) + 架构参数 (<code class="docutils literal notranslate"><span class="pre">--num-layers</span></code>, <code class="docutils literal notranslate"><span class="pre">--hidden-size</span></code> 等) 或 <code class="docutils literal notranslate"><span class="pre">--use-hf-config-for-megatron</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">--load</span></code> (Megatron checkpoint) + 架构参数 (<code class="docutils literal notranslate"><span class="pre">--num-layers</span></code>, <code class="docutils literal notranslate"><span class="pre">--hidden-size</span></code> 等)</p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> (必需)</p></td>
 <td><p><strong>FSDP</strong>: 直接使用 HuggingFace 格式，无需转换权重，通过 <code class="docutils literal notranslate"><span class="pre">AutoConfig</span></code> 自动推断架构</p></td>
 </tr>
@@ -1027,7 +1027,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2025 年 12 月 19 日.
+  最后更新于 2025 年 12 月 21 日.
   <br/>
 </p>
   </div>
