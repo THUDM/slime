@@ -106,6 +106,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         args.apply_chat_template_kwargs,
     )
 
+    sample.prompt = extra_info.get("formatted_prompt")
     image_data = extra_info.get("images", [])
     video_data = extra_info.get("videos", [])
     multimodal_inputs = extra_info.get("multimodal_inputs", None)

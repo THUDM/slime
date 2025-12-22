@@ -41,7 +41,7 @@ def prepare_model_inputs(
         assert (
             apply_chat_template
         ), f"apply_chat_template must be True when prompt is a list or numpy array, current prompt is {prompt}"
-        text_prompt = tokenizer.apply_chat_template(
+        formatted_prompt = tokenizer.apply_chat_template(
             prompt,
             tools=tools,
             tokenize=False,
@@ -52,13 +52,13 @@ def prepare_model_inputs(
         assert (
             not apply_chat_template
         ), f"apply_chat_template must be False when prompt is a string, current prompt is {prompt}"
-        text_prompt = prompt
+        formatted_prompt = prompt
     else:
         raise ValueError(f"Invalid prompt type: {type(prompt)}, current prompt is {prompt}")
 
     if not processor:
-        input_ids = tokenizer.encode(text_prompt, add_special_tokens=False)
-        return input_ids, {}
+        input_ids = tokenizer.encode(formatted_prompt, add_special_tokens=False)
+        return input_ids, {"formatted_prompt": formatted_prompt}
     else:
         # temporary solution, will write image utils for slime later
         from qwen_vl_utils import process_vision_info
@@ -66,13 +66,14 @@ def prepare_model_inputs(
         images, videos = process_vision_info(prompt)
 
         # Get input IDs with full prompt (text + multimodal)
-        processor_output = processor(text=text_prompt, images=images, videos=videos)
+        processor_output = processor(text=formatted_prompt, images=images, videos=videos)
         input_ids = processor_output["input_ids"][0]
 
         # Extract multimodal tokens (exclude text-related tokens)
         multimodal_inputs = {k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]}
 
         extra_info = {
+            "formatted_prompt": formatted_prompt,
             "images": images,
             "videos": videos,
             "multimodal_inputs": multimodal_inputs,
