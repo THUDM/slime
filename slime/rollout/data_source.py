@@ -190,14 +190,7 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
         """
         if not samples:
             return
-        assert isinstance(samples, list), f"samples must be a list, got {type(samples)}"
-        assert isinstance(samples[0], list), f"the elements of samples must be list, got {type(samples[0])}"
-        for i in range(0, len(samples)):
-            assert (
-                len(samples[i]) == self.args.n_samples_per_prompt
-            ), f"the length of the elements of samples must be equal to n_samples_per_prompt, got {len(samples[i])} != {self.args.n_samples_per_prompt}"
-            group = samples[i]  # type: ignore
-            self.buffer.append(group)
+        self.buffer.extend(samples)
 
     # TODO remove
     def update_metadata(self, metadata: dict):
