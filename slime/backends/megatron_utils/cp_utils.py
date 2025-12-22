@@ -1,7 +1,6 @@
 from collections.abc import Callable
 
 import torch
-import torch.distributed as dist
 import torch.distributed.nn.functional as distnnf
 import torch.nn.functional as F
 from megatron.core import mpu
