@@ -153,7 +153,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     # Handle partial rollout samples: continue generation from existing response
     prompt = sample.prompt
     if args.apply_chat_template:
-        assert isinstance(prompt, np.ndarray), "prompt should be a list when apply_chat_template is True"
+        assert isinstance(prompt, np.ndarray), "prompt should be a np.ndarray when apply_chat_template is True"
         prompt_text = state.tokenizer.apply_chat_template(
             prompt,
             tokenize=False,
