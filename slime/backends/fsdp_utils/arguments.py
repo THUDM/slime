@@ -60,6 +60,9 @@ class FSDPArgs:
     # YAML bookkeeping
     config: str | None = None
 
+    # MOE implementation backend
+    fsdp_moe_impl: str = "torch"  # MOE implementation: "torch" (loop) or "sonicmoe" (optimized)
+
 
 def parse_fsdp_cli(extra_args_provider=None):
     parser = argparse.ArgumentParser("FSDP SFT Training (slime)")

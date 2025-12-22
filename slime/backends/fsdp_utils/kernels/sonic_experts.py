@@ -68,11 +68,15 @@ def sonic_experts_impl(
     # - sorted_selected_T: (T*K,) sorted ascendingly
     K = topk_ids.shape[1]
     selected_E = topk_ids.reshape(-1).to(torch.int32)
-    router_scores_selected = topk_weights.reshape(-1).to(torch.float32)
+    router_scores_selected = topk_weights.reshape(-1)  # Keep original dtype
     sorted_selected_T = torch.arange(T, device=hidden_states.device, dtype=torch.int32).repeat_interleave(K)
 
     sonicmoe_functional = _import_sonicmoe_functional()
     moe_general_routing_inputs = getattr(sonicmoe_functional, "moe_general_routing_inputs")
+    
+    # Import ActivationType enum
+    sonicmoe_enums = importlib.import_module("sonicmoe.enums")
+    ActivationType = getattr(sonicmoe_enums, "ActivationType")
 
     stream_id = int(torch.cuda.current_stream().cuda_stream)
     is_inference_mode_enabled = (not torch.is_grad_enabled()) or torch.is_inference_mode_enabled()
@@ -88,6 +92,7 @@ def sonic_experts_impl(
         None,
         _E,
         stream_id,
+        ActivationType.SWIGLU,
         is_inference_mode_enabled,
     )
     return out
