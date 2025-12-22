@@ -124,6 +124,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Whether to enable true-on-policy mode.",
             )
             parser.add_argument(
+                "--fsdp-moe-impl",
+                type=str,
+                choices=["torch", "sonicmoe"],
+                default="torch",
+                help=(
+                    "MoE implementation for HF+FSDP training when --true-on-policy-mode is disabled. "
+                    "`torch` uses a reference per-expert loop; `sonicmoe` uses SonicMoE kernels."
+                ),
+            )
+            parser.add_argument(
                 "--train-env-vars",
                 type=json.loads,
                 default="{}",
