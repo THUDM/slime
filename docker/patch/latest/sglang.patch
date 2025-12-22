@@ -175,7 +175,7 @@ index 932f52aeb..ee52f4c94 100644
  
          hidden_states = self._communicate_simple_fn(
 diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
-index 3293a8a59..ea6b30d73 100644
+index 3293a8a59..b739cbfcc 100644
 --- a/python/sglang/srt/layers/layernorm.py
 +++ b/python/sglang/srt/layers/layernorm.py
 @@ -84,15 +84,12 @@ class RMSNorm(CustomOp):
@@ -196,7 +196,7 @@ index 3293a8a59..ea6b30d73 100644
          self.variance_epsilon = eps
          self.hidden_size = hidden_size
          self.variance_size_override = (
-@@ -105,21 +102,29 @@ class RMSNorm(CustomOp):
+@@ -105,21 +102,28 @@ class RMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -222,13 +222,12 @@ index 3293a8a59..ea6b30d73 100644
 +            # but right now we can only have hidden_states+(residual+post_residual_addition).
 +            # (hidden_states+residual)+post_residual_addition != hidden_states+(residual+post_residual_addition), 
 +            # we probably need to add another parameter to fused_add_rmsnorm
-+            post_residual_addition = kwargs.get("post_residual_addition")
-+            if post_residual_addition is not None:
-+                residual = residual + post_residual_addition
++            post_residual_addition = kwargs.get("post_residual_addition", 0.0)
++            residual = residual + post_residual_addition
              fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
              return x, residual
          out = rmsnorm(x, self.weight.data, self.variance_epsilon)
-@@ -129,6 +134,7 @@ class RMSNorm(CustomOp):
+@@ -129,6 +133,7 @@ class RMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -236,7 +235,7 @@ index 3293a8a59..ea6b30d73 100644
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          if residual is not None:
              out, _, residual_out = torch_npu.npu_add_rms_norm(
-@@ -141,6 +147,7 @@ class RMSNorm(CustomOp):
+@@ -141,6 +146,7 @@ class RMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -244,7 +243,7 @@ index 3293a8a59..ea6b30d73 100644
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          if residual is not None:
              residual_out = torch.empty_like(x)
-@@ -160,6 +167,7 @@ class RMSNorm(CustomOp):
+@@ -160,6 +166,7 @@ class RMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -252,7 +251,7 @@ index 3293a8a59..ea6b30d73 100644
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          if not x.is_contiguous():
              # NOTE: Remove this if aiter kernel supports discontinuous input
-@@ -179,17 +187,36 @@ class RMSNorm(CustomOp):
+@@ -179,17 +186,28 @@ class RMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -262,17 +261,13 @@ index 3293a8a59..ea6b30d73 100644
              x = x.contiguous()
 -        orig_dtype = self.override_orig_dtype or x.dtype
 +        orig_dtype = x.dtype
-+        post_residual_addition = kwargs.get("post_residual_addition")
++        post_residual_addition = kwargs.get("post_residual_addition", 0.0)
 +
 +        if residual is not None and not self.fp32_residual:
 +            x = (
 +                x
 +                + residual
-+                + (
-+                    post_residual_addition
-+                    if post_residual_addition is not None
-+                    else 0.0
-+                )
++                + post_residual_addition
 +            )
 +            residual = x.clone()
          x = x.to(torch.float32)
@@ -286,17 +281,13 @@ index 3293a8a59..ea6b30d73 100644
 +            x = (
 +                x
 +                + residual.to(torch.float32)
-+                + (
-+                    post_residual_addition.to(torch.float32)
-+                    if post_residual_addition is not None
-+                    else 0.0
-+                )
++                + post_residual_addition.to(torch.float32)
 +            )
 +            residual = x.to(orig_dtype)
  
          hidden_size = x.shape[-1]
          if hidden_size != self.hidden_size:
-@@ -226,6 +253,7 @@ class RMSNorm(CustomOp):
+@@ -226,6 +244,7 @@ class RMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -304,7 +295,7 @@ index 3293a8a59..ea6b30d73 100644
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          if _is_cpu_amx_available:
              if residual is not None:
-@@ -237,15 +265,16 @@ class RMSNorm(CustomOp):
+@@ -237,15 +256,16 @@ class RMSNorm(CustomOp):
                  x, self.weight.data, self.variance_epsilon
              )
          else:
@@ -323,7 +314,7 @@ index 3293a8a59..ea6b30d73 100644
          if residual is not None:
              fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
              return x, residual
-@@ -307,6 +336,7 @@ class LayerNorm(CustomOp):
+@@ -307,6 +327,7 @@ class LayerNorm(CustomOp):
      def forward_cuda(
          self,
          x: torch.Tensor,
@@ -331,7 +322,7 @@ index 3293a8a59..ea6b30d73 100644
      ) -> torch.Tensor:
          if (
              _flashinfer_layernorm_available
-@@ -315,11 +345,12 @@ class LayerNorm(CustomOp):
+@@ -315,11 +336,12 @@ class LayerNorm(CustomOp):
          ):
              return layernorm(x, self.weight, self.bias, self.variance_epsilon)
          else:
@@ -345,7 +336,7 @@ index 3293a8a59..ea6b30d73 100644
      ) -> torch.Tensor:
          weight = self.weight if self.elementwise_affine else None
          bias = self.bias if self.use_bias else None
-@@ -336,12 +367,14 @@ class LayerNorm(CustomOp):
+@@ -336,12 +358,14 @@ class LayerNorm(CustomOp):
      def forward_hip(
          self,
          x: torch.Tensor,
@@ -361,7 +352,7 @@ index 3293a8a59..ea6b30d73 100644
      ) -> torch.Tensor:
          orig_dtype = x.dtype
          x = x.to(self.dtype)
-@@ -360,8 +393,9 @@ class LayerNorm(CustomOp):
+@@ -360,8 +384,9 @@ class LayerNorm(CustomOp):
      def forward_cpu(
          self,
          x: torch.Tensor,
@@ -372,7 +363,7 @@ index 3293a8a59..ea6b30d73 100644
  
  
  class GemmaRMSNorm(CustomOp):
-@@ -382,6 +416,7 @@ class GemmaRMSNorm(CustomOp):
+@@ -382,6 +407,7 @@ class GemmaRMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -380,7 +371,7 @@ index 3293a8a59..ea6b30d73 100644
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          if residual is not None:
              gemma_fused_add_rmsnorm(
-@@ -395,6 +430,7 @@ class GemmaRMSNorm(CustomOp):
+@@ -395,6 +421,7 @@ class GemmaRMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -388,7 +379,7 @@ index 3293a8a59..ea6b30d73 100644
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          orig_dtype = x.dtype
          if residual is not None:
-@@ -412,13 +448,15 @@ class GemmaRMSNorm(CustomOp):
+@@ -412,13 +439,15 @@ class GemmaRMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -405,7 +396,7 @@ index 3293a8a59..ea6b30d73 100644
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          if residual is not None:
              x = x + residual
-@@ -431,8 +469,9 @@ class GemmaRMSNorm(CustomOp):
+@@ -431,8 +460,9 @@ class GemmaRMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
@@ -416,7 +407,7 @@ index 3293a8a59..ea6b30d73 100644
  
  
  class Gemma3RMSNorm(CustomOp):
-@@ -445,17 +484,17 @@ class Gemma3RMSNorm(CustomOp):
+@@ -445,17 +475,17 @@ class Gemma3RMSNorm(CustomOp):
      def _norm(self, x):
          return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
  
@@ -1926,7 +1917,7 @@ index 9737ac719..09c756918 100644
  
          self.layer_communicator = LayerCommunicator(
 diff --git a/python/sglang/srt/models/qwen3_vl.py b/python/sglang/srt/models/qwen3_vl.py
-index ed52f7ff4..8ce9fab9d 100644
+index ed52f7ff4..05fe07714 100644
 --- a/python/sglang/srt/models/qwen3_vl.py
 +++ b/python/sglang/srt/models/qwen3_vl.py
 @@ -18,7 +18,6 @@ import re
@@ -1937,7 +1928,63 @@ index ed52f7ff4..8ce9fab9d 100644
  import torch
  import torch.nn as nn
  from einops import rearrange
-@@ -349,83 +348,65 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
+@@ -27,17 +26,26 @@ from transformers.models.qwen2_5_vl.modeling_qwen2_5_vl import (
+     Qwen2_5_VisionRotaryEmbedding,
+ )
+ 
+-from sglang.srt.configs.qwen3_vl import Qwen3VLConfig, Qwen3VLVisionConfig
++from sglang.srt.configs.qwen3_vl import (
++    Qwen3VLConfig,
++    Qwen3VLVisionConfig,
++)
+ from sglang.srt.distributed import (
++    get_pp_group,
+     get_tensor_model_parallel_rank,
+     get_tensor_model_parallel_world_size,
+ )
++from sglang.srt.layers.dp_attention import is_dp_attention_enabled
+ from sglang.srt.layers.attention.vision import VisionAttention
+ from sglang.srt.layers.linear import ColumnParallelLinear, RowParallelLinear
+ from sglang.srt.layers.logits_processor import LogitsProcessor
+ from sglang.srt.layers.pooler import Pooler, PoolingType
+ from sglang.srt.layers.quantization.base_config import QuantizationConfig
+-from sglang.srt.layers.vocab_parallel_embedding import ParallelLMHead
++from sglang.srt.layers.utils import PPMissingLayer
++from sglang.srt.layers.vocab_parallel_embedding import (
++    ParallelLMHead,
++    VocabParallelEmbedding,
++)
+ from sglang.srt.managers.mm_utils import (
+     MultiModalityDataPaddingPatternMultimodalTokens,
+     general_mm_embed_routine,
+@@ -268,6 +276,7 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
+         use_data_parallel: bool = False,
+     ) -> None:
+         super().__init__()
++        self.pp_group = get_pp_group()
+         self.hidden_size = vision_config.hidden_size
+         self.num_heads = vision_config.num_heads
+         self.num_position_embeddings = vision_config.num_position_embeddings
+@@ -282,7 +291,17 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
+             1 + len(self.deepstack_visual_indexes)
+         )
+         self.patch_embed = Qwen3VLVisionPatchEmbed(config=vision_config)
+-        self.pos_embed = nn.Embedding(self.num_position_embeddings, self.hidden_size)
++        if self.pp_group.is_first_rank:
++            self.pos_embed = VocabParallelEmbedding(
++                self.num_position_embeddings,
++                self.hidden_size,
++                quant_config=quant_config,
++                enable_tp=not is_dp_attention_enabled(),
++                prefix=add_prefix("pos_embed", prefix),
++            )
++        else:
++            self.pos_embed = PPMissingLayer()
++
+         norm_layer = partial(nn.LayerNorm, eps=norm_eps)
+         head_dim = self.hidden_size // self.num_heads
+         self.rotary_pos_emb = Qwen2_5_VisionRotaryEmbedding(head_dim // 2)
+@@ -349,83 +368,65 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
          return rotary_pos_emb
  
      def fast_pos_embed_interpolate(self, grid_thw):
@@ -2062,23 +2109,140 @@ index ed52f7ff4..8ce9fab9d 100644
                  .permute(0, 1, 3, 2, 4, 5)
                  .flatten(0, 4)
              )
-@@ -555,21 +536,27 @@ class Qwen3LLMModel(Qwen3Model):
+@@ -524,6 +525,18 @@ class Qwen3LLMModel(Qwen3Model):
+             len(config.vision_config.deepstack_visual_indexes)
+         )
+ 
++    def get_deepstack_embeds(
++        self, layer_idx: int, input_deepstack_embeds: Optional[torch.Tensor]
++    ) -> Optional[torch.Tensor]:
++        """Get deepstack embeddings for a given layer index, or None if not applicable."""
++        if (
++            input_deepstack_embeds is None
++            or layer_idx not in self.deepstack_embed_to_decoder_layer
++        ):
++            return None
++        sep = self.hidden_size * layer_idx
++        return input_deepstack_embeds[:, sep : sep + self.hidden_size]
++
+     def forward(
+         self,
+         input_ids: torch.Tensor,
+@@ -555,20 +568,26 @@ class Qwen3LLMModel(Qwen3Model):
                      hidden_states + residual if residual is not None else hidden_states
                  )
  
-+            deepstack_embeds = None
-+            if input_deepstack_embeds is not None:
-+                prev_layer_idx = layer_idx - 1
-+                if prev_layer_idx in self.deepstack_embed_to_decoder_layer:
-+                    sep = self.hidden_size * prev_layer_idx
-+                    deepstack_embeds = input_deepstack_embeds[
-+                        :, sep : sep + self.hidden_size
-+                    ]
-+
 +            # SGLang applies residual at the START of the next layer, not at the END like HuggingFace.
 +            # See: https://github.com/huggingface/transformers/blob/v5.0.0rc0/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L549
 +            # To match HF behavior, deepstack must be added AFTER residual: (hidden_states + residual) + deepstack
 +            # The order matters because addition with different tensors is not associative in practice.
++            # Deepstack for prev_layer is applied at the start of current layer via post_residual_addition.
++            deepstack_embeds = self.get_deepstack_embeds(
++                layer_idx - 1, input_deepstack_embeds
++            )
+             hidden_states, residual = layer(
+                 positions,
+                 hidden_states,
+                 forward_batch,
+                 residual,
++                post_residual_addition=deepstack_embeds,
+             )
+-
+-            # process deepstack
+-            if (
+-                input_deepstack_embeds is not None
+-                and layer_idx in self.deepstack_embed_to_decoder_layer
+-            ):
+-                sep = self.hidden_size * layer_idx
+-                hidden_states += input_deepstack_embeds[:, sep : sep + self.hidden_size]
++        
++        # Handle deepstack for the last processed layer if it exists.
++        last_deepstack = self.get_deepstack_embeds(
++            self.end_layer - 1, input_deepstack_embeds
++        )
+ 
+         if not self.pp_group.is_last_rank:
+             return PPProxyTensors(
+@@ -582,7 +601,9 @@ class Qwen3LLMModel(Qwen3Model):
+                 if residual is None:
+                     hidden_states = self.norm(hidden_states)
+                 else:
+-                    hidden_states, _ = self.norm(hidden_states, residual)
++                    hidden_states, _ = self.norm(
++                        hidden_states, residual, post_residual_addition=last_deepstack
++                    )
+ 
+         if len(aux_hidden_states) == 0:
+             return hidden_states
+@@ -612,8 +633,8 @@ class Qwen3VLForConditionalGeneration(nn.Module):
+         )
+ 
+         # TODO: make it more elegant
+-        if language_model_cls is Qwen3LLMModel:
+-            self.config: Qwen3VLConfig = config  # for qwen3-vl
++        if language_model_cls.__name__ in ["Qwen3LLMModel", "Qwen3MoeLLMModel"]:
++            self.config = config  # for qwen3-vl-dense or qwen3-vl-moe
+         else:
+             self.config = config.text_config  # for qwen3-omni
+ 
+diff --git a/python/sglang/srt/models/qwen3_vl_moe.py b/python/sglang/srt/models/qwen3_vl_moe.py
+index e3e9e07d1..eb4f00911 100644
+--- a/python/sglang/srt/models/qwen3_vl_moe.py
++++ b/python/sglang/srt/models/qwen3_vl_moe.py
+@@ -21,7 +21,7 @@ from typing import Iterable, Optional, Tuple, Union
+ import torch
+ import torch.nn as nn
+ 
+-from sglang.srt.configs.qwen3_vl import Qwen3VLMoeConfig, Qwen3VLMoeTextConfig
++from sglang.srt.configs.qwen3_vl import Qwen3VLMoeConfig
+ from sglang.srt.eplb.expert_location import ModelConfigForExpertLocation
+ from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
+ from sglang.srt.layers.quantization.base_config import QuantizationConfig
+@@ -40,16 +40,31 @@ class Qwen3MoeLLMModel(Qwen3MoeModel):
+     def __init__(
+         self,
+         *,
+-        config: Qwen3VLMoeTextConfig,
++        config: Qwen3VLMoeConfig,
+         quant_config: Optional[QuantizationConfig] = None,
+         prefix: str = "",
+     ):
+         super().__init__(config=config, quant_config=quant_config, prefix=prefix)
+         self.hidden_size = config.hidden_size
++        self.deepstack_embed_to_decoder_layer = range(
++            len(config.vision_config.deepstack_visual_indexes)
++        )
+ 
+     def get_input_embeddings(self) -> nn.Embedding:
+         return self.embed_tokens
+ 
++    def get_deepstack_embeds(
++        self, layer_idx: int, input_deepstack_embeds: Optional[torch.Tensor]
++    ) -> Optional[torch.Tensor]:
++        """Get deepstack embeddings for a given layer index, or None if not applicable."""
++        if (
++            input_deepstack_embeds is None
++            or layer_idx not in self.deepstack_embed_to_decoder_layer
++        ):
++            return None
++        sep = self.hidden_size * layer_idx
++        return input_deepstack_embeds[:, sep : sep + self.hidden_size]
++
+     def forward(
+         self,
+         input_ids: torch.Tensor,
+@@ -80,19 +95,26 @@ class Qwen3MoeLLMModel(Qwen3MoeModel):
+                     hidden_states + residual if residual is not None else hidden_states
+                 )
+ 
++            # SGLang applies residual at the START of the next layer, not at the END like HuggingFace.
++            # See: https://github.com/huggingface/transformers/blob/v5.0.0rc0/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L549
++            # To match HF behavior, deepstack must be added AFTER residual: (hidden_states + residual) + deepstack
++            # The order matters because addition with different tensors is not associative in practice.
++            # Deepstack for prev_layer is applied at the start of current layer via post_residual_addition.
++            deepstack_embeds = self.get_deepstack_embeds(
++                layer_idx - 1, input_deepstack_embeds
++            )
              hidden_states, residual = layer(
                  positions,
                  hidden_states,
@@ -2088,16 +2252,29 @@ index ed52f7ff4..8ce9fab9d 100644
              )
  
 -            # process deepstack
--            if (
--                input_deepstack_embeds is not None
--                and layer_idx in self.deepstack_embed_to_decoder_layer
--            ):
+-            if input_deepstack_embeds is not None and layer_idx < 3:
 -                sep = self.hidden_size * layer_idx
--                hidden_states += input_deepstack_embeds[:, sep : sep + self.hidden_size]
--
+-                hidden_states.add_(
+-                    input_deepstack_embeds[:, sep : sep + self.hidden_size]
+-                )
++        # Handle deepstack for the last processed layer if it exists.
++        last_deepstack = self.get_deepstack_embeds(
++            self.end_layer - 1, input_deepstack_embeds
++        )
+ 
          if not self.pp_group.is_last_rank:
              return PPProxyTensors(
-                 {
+@@ -106,7 +128,9 @@ class Qwen3MoeLLMModel(Qwen3MoeModel):
+                 if residual is None:
+                     hidden_states = self.norm(hidden_states)
+                 else:
+-                    hidden_states, _ = self.norm(hidden_states, residual)
++                    hidden_states, _ = self.norm(
++                        hidden_states, residual, post_residual_addition=last_deepstack
++                    )
+ 
+         if len(aux_hidden_states) == 0:
+             return hidden_states
 diff --git a/python/sglang/srt/models/step3_vl.py b/python/sglang/srt/models/step3_vl.py
 index 4474f62d5..0e537c398 100644
 --- a/python/sglang/srt/models/step3_vl.py
