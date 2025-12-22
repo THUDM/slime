@@ -175,7 +175,7 @@ index 932f52aeb..ee52f4c94 100644
  
          hidden_states = self._communicate_simple_fn(
 diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
-index 3293a8a59..ea6b30d73 100644
+index 3293a8a59..1dac03e4c 100644
 --- a/python/sglang/srt/layers/layernorm.py
 +++ b/python/sglang/srt/layers/layernorm.py
 @@ -84,15 +84,12 @@ class RMSNorm(CustomOp):
@@ -218,9 +218,9 @@ index 3293a8a59..ea6b30d73 100644
                  self.variance_epsilon,
              )
          if residual is not None:
-+            # TODO: Ideally we want to have (hidden_states+residual)+post_residual_addition. 
++            # TODO: Ideally we want to have (hidden_states+residual)+post_residual_addition.
 +            # but right now we can only have hidden_states+(residual+post_residual_addition).
-+            # (hidden_states+residual)+post_residual_addition != hidden_states+(residual+post_residual_addition), 
++            # (hidden_states+residual)+post_residual_addition != hidden_states+(residual+post_residual_addition),
 +            # we probably need to add another parameter to fused_add_rmsnorm
 +            post_residual_addition = kwargs.get("post_residual_addition")
 +            if post_residual_addition is not None:
@@ -1619,7 +1619,7 @@ index 4d58278b7..5965c481e 100644
          if self.eplb_manager is not None:
              self.eplb_manager.on_forward_pass_end()
 diff --git a/python/sglang/srt/models/deepseek_v2.py b/python/sglang/srt/models/deepseek_v2.py
-index dc30b4f0a..f29dc4b71 100644
+index dc30b4f0a..57625cdeb 100644
 --- a/python/sglang/srt/models/deepseek_v2.py
 +++ b/python/sglang/srt/models/deepseek_v2.py
 @@ -667,6 +667,7 @@ class DeepseekV2MoE(nn.Module):
@@ -1630,6 +1630,19 @@ index dc30b4f0a..f29dc4b71 100644
              renormalize=config.norm_topk_prob,
              use_grouped_topk=True,
              num_expert_group=config.n_group,
+@@ -2641,7 +2642,11 @@ class DeepseekV2AttentionMLA(nn.Module):
+         ):
+             k = k_nope.new_empty(*k_shape)
+             concat_mla_k(k=k, k_nope=k_nope, k_rope=k_pe)
+-        elif _is_cuda:
++        elif _is_cuda and all(
++            # (i.bit_count() == 1) == (is_power_of_two(i))
++            i.bit_count() == 1
++            for i in (k_shape[1], k_nope.shape[-1], k_pe.shape[-1])
++        ):
+             # fa3 mha support fp8 inputs
+             if (
+                 self.current_attention_backend == "fa3"
 diff --git a/python/sglang/srt/models/ernie4.py b/python/sglang/srt/models/ernie4.py
 index ab1b6576b..dffd8f09a 100644
 --- a/python/sglang/srt/models/ernie4.py

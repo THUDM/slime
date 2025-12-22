@@ -20,4 +20,16 @@ try:
 except ImportError:
     logging.warning("deep_ep is not installed, some functionalities may be limited.")
 
+try:
+    from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.text_model import Qwen3VLTextRotaryEmbedding
+
+    _original_forward = Qwen3VLTextRotaryEmbedding.forward
+
+    def _patched_forward(self, *args, packed_seq_params=None, **kwargs):
+        return _original_forward(self, *args, **kwargs)
+
+    Qwen3VLTextRotaryEmbedding.forward = _patched_forward
+except ImportError:
+    pass
+
 logging.getLogger().setLevel(logging.WARNING)

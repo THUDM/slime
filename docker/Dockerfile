@@ -4,7 +4,7 @@ FROM lmsysorg/sglang:${SGLANG_IMAGE_TAG} AS sglang
 # ======================================== Arguments =============================================
 
 ARG PATCH_VERSION=latest
-ARG MEGATRON_COMMIT=core_v0.14.0
+ARG MEGATRON_COMMIT=3714d81d418c9f1bca4594fc35f9e8289f652862
 
 ARG ENABLE_CUDA_13=0
 
@@ -73,6 +73,9 @@ RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
 
 # https://github.com/pytorch/pytorch/issues/168167
 RUN pip install nvidia-cudnn-cu12==9.16.0.29
+
+# reinstall numpy 1.x for megatron
+RUN pip install "numpy<2"
 
 RUN rm /root/.tmux.conf
 RUN rm -rf /root/.cache/pip /root/flash-attention
