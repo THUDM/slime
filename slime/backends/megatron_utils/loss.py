@@ -522,38 +522,17 @@ def policy_loss_function(
 
     # Compute OPSM mask if enabled
     if args.use_opsm:
-        if cp_size > 1:
-            assert seq_kls is not None and chunked_loss_masks is not None
-            device = batch["advantages"][0].device
-            opsm_mask_parts = []
-            opsm_clipfrac = torch.tensor(0.0, device=device)
-            token_counts: list[torch.Tensor] = []
-
-            for advantage, chunked_loss_mask, loss_mask, seq_kl in zip(
-                batch["advantages"], chunked_loss_masks, batch["loss_masks"], seq_kls, strict=False
-            ):
-                local_mask = ((advantage < 0) & (seq_kl > args.opsm_delta)).float() * chunked_loss_mask
-                opsm_mask_parts.append(1 - local_mask)
-
-                token_counts.append(
-                    torch.stack((local_mask.sum(), torch.clamp_min(loss_mask.sum().to(local_mask), 1)))
-                )
-
-            if token_counts:
-                stacked_counts = torch.stack(token_counts)
-                dist.all_reduce(stacked_counts, group=cp_group)
-                masked_tokens, total_tokens = stacked_counts.unbind(dim=1)
-                opsm_clipfrac = (masked_tokens / torch.clamp_min(total_tokens, 1)).sum()
-
-            opsm_mask = torch.cat(opsm_mask_parts, dim=0)
-        else:
-            opsm_mask, opsm_clipfrac = compute_opsm_mask(
-                args=args,
-                full_log_probs=full_log_probs,
-                full_old_log_probs=full_old_log_probs,
-                advantages=batch["advantages"],
-                loss_masks=batch["loss_masks"],
-            )
+        opsm_mask, opsm_clipfrac = compute_opsm_mask(
+            args=args,
+            full_log_probs=full_log_probs,
+            full_old_log_probs=full_old_log_probs,
+            advantages=batch["advantages"],
+            loss_masks=batch["loss_masks"],
+            seq_kls=seq_kls,
+            chunked_loss_masks=chunked_loss_masks,
+            cp_group=cp_group,
+            cp_size=cp_size,
+        )
 
     # Compute KL divergence (GSPO uses sequence-level KL, others use per-token KL)
     if args.advantage_estimator == "gspo":
@@ -666,6 +645,10 @@ def policy_loss_function(
 
     if args.use_opsm:
         reported_loss["opsm_clipfrac"] = opsm_clipfrac
+
+    # Ensure gradients propagate even when local sequences are empty
+    if log_probs.numel() == 0:
+        loss = loss + 0 * logits.sum()
 
     return loss, reported_loss
 
