@@ -8,7 +8,6 @@ from contextlib import nullcontext
 import ray
 import torch
 import torch.distributed as dist
-from megatron.bridge import AutoBridge
 from megatron.core import mpu
 from ray.actor import ActorHandle
 from torch_memory_saver import torch_memory_saver
@@ -67,8 +66,6 @@ class MegatronTrainRayActor(TrainRayActor):
             if i == dist.get_rank():
                 self.hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
                 self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
-                if args.megatron_to_hf_mode == "bridge":
-                    args.bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
 
             dist.barrier(group=get_gloo_group())
 

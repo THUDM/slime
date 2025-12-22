@@ -51,7 +51,6 @@ def get_batch(
     assert "tokens" in keys
     batch = data_iterator.get_next(keys)
 
-    packed_seq_params = None
     tokens = batch["tokens"]
     # use 0 as the pad token id should be fine?
     pad_token_id = 0
