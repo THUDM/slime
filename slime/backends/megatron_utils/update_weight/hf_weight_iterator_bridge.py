@@ -80,9 +80,6 @@ def _merge_expert_tasks(tasks, new_weight_dict):
             new_weight_dict[f"vp_stages.{task.vp_stage}.{task.param_name}"].transpose(0, 1) for _, task in expert_list
         ]
         merged_tensor = torch.stack(cpu_tensors, dim=1).cuda()
-        # merged_tensor = merged_tensor.transpose(-1, -3)
-        print(f"base_param_name: {base_param_name}, merged_tensor shape: {merged_tensor.shape}")
-
         # Use first expert's task as template for merged task
         template_task = expert_list[0][1]  # expert_list = [(expert_idx, task), ...]
         merged_task = dataclasses.replace(template_task, param_name=base_param_name, param_weight=merged_tensor)
