@@ -277,7 +277,7 @@ index 16fc9d9af..517944f25 100644
          """
          Maintain the expert bias in float32.
 diff --git a/megatron/core/transformer/multi_token_prediction.py b/megatron/core/transformer/multi_token_prediction.py
-index a8f4abfcd..3cbd18dac 100755
+index a8f4abfcd..f33f6f05e 100755
 --- a/megatron/core/transformer/multi_token_prediction.py
 +++ b/megatron/core/transformer/multi_token_prediction.py
 @@ -6,6 +6,7 @@ from typing import Callable, List, Optional, Union
@@ -288,8 +288,25 @@ index a8f4abfcd..3cbd18dac 100755
  
  from megatron.core import InferenceParams, parallel_state, tensor_parallel
  from megatron.core.dist_checkpointing.mapping import ShardedStateDict
-@@ -723,8 +724,9 @@ class MultiTokenPredictionLayer(MegatronModule):
+@@ -714,17 +715,19 @@ class MultiTokenPredictionLayer(MegatronModule):
+             cp_group=self.cp_group,
+             packed_seq_params=packed_seq_params,
          )
+-        position_ids, _ = roll_tensor(
+-            position_ids,
+-            shifts=-1,
+-            dims=-1,
+-            cp_group=self.cp_group,
+-            packed_seq_params=packed_seq_params,
+-        )
++        if position_ids is not None:
++            position_ids, _ = roll_tensor(
++                position_ids,
++                shifts=-1,
++                dims=-1,
++                cp_group=self.cp_group,
++                packed_seq_params=packed_seq_params,
++            )
          # embedding
          decoder_input = embedding(input_ids=input_ids, position_ids=position_ids)
 +        decoder_input = decoder_input.detach()
@@ -299,7 +316,7 @@ index a8f4abfcd..3cbd18dac 100755
  
          return input_ids, position_ids, decoder_input, hidden_states
  
-@@ -826,6 +828,51 @@ class MultiTokenPredictionLayer(MegatronModule):
+@@ -826,6 +829,51 @@ class MultiTokenPredictionLayer(MegatronModule):
          return hidden_states
  
      def _checkpointed_forward(self, forward_func, *args, **kwargs):
@@ -351,7 +368,7 @@ index a8f4abfcd..3cbd18dac 100755
          def checkpoint_handler():
              """Determines whether to use the `te_checkpoint` or `tensor_parallel.checkpoint`"""
              if self.config.fp8:
-@@ -836,12 +883,11 @@ class MultiTokenPredictionLayer(MegatronModule):
+@@ -836,12 +884,11 @@ class MultiTokenPredictionLayer(MegatronModule):
                      self.config.distribute_saved_activations,
                      tensor_parallel.random.get_cuda_rng_tracker,
                      parallel_state.get_tensor_model_parallel_group(),

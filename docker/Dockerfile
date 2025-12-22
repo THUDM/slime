@@ -74,6 +74,9 @@ RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
 # https://github.com/pytorch/pytorch/issues/168167
 RUN pip install nvidia-cudnn-cu12==9.16.0.29
 
+# reinstall numpy 1.x for megatron
+RUN pip install "numpy<2"
+
 RUN rm /root/.tmux.conf
 RUN rm -rf /root/.cache/pip /root/flash-attention
 
