@@ -3,6 +3,7 @@
 
 import asyncio
 import re
+import numpy as np
 
 from qa_em_format import compute_score_em
 
@@ -152,7 +153,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     # Handle partial rollout samples: continue generation from existing response
     prompt = sample.prompt
     if args.apply_chat_template:
-        assert isinstance(prompt, list), "prompt should be a list when apply_chat_template is True"
+        assert isinstance(prompt, np.ndarray), "prompt should be a np.ndarray when apply_chat_template is True"
         prompt_text = state.tokenizer.apply_chat_template(
             prompt,
             tokenize=False,
@@ -241,6 +242,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     sample.response_length = len(response_token_ids)
     sample.response = response
     sample.loss_mask = loss_mask
+    sample.prompt = prompt_text
 
     # Store log probs if enabled
     if SEARCH_R1_CONFIGS["return_logprob"]:

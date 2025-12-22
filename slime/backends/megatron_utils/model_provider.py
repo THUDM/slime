@@ -54,7 +54,16 @@ def get_model_provider_func(
     role: Literal["actor", "critic"] = "actor",
 ):
     if args.megatron_to_hf_mode == "bridge":
-        provider = args.bridge.to_megatron_provider(load_weights=False)
+        from megatron.bridge import AutoBridge
+
+        bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        provider = bridge.to_megatron_provider(load_weights=False)
+        # TODO: we should not manually set this...
+        provider.tensor_model_parallel_size = args.tensor_model_parallel_size
+        provider.pipeline_model_parallel_size = args.pipeline_model_parallel_size
+        provider.expert_model_parallel_size = args.expert_model_parallel_size
+        provider.expert_tensor_parallel_size = args.expert_tensor_parallel_size
+        provider.sequence_parallel = args.sequence_parallel
         provider.finalize()
         return provider.provide
 

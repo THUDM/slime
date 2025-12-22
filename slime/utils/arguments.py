@@ -1387,17 +1387,22 @@ def slime_validate_args(args):
             )
 
     # TODO: During loading, we need to set the start_rollout_id here.
-    if args.megatron_to_hf_mode != "bridge" and (
-        args.load is None
-        or not os.path.exists(args.load)
-        or not os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
-    ):
-        args.no_load_optim = True
-        args.no_load_rng = True
-        args.finetune = True
-        args.load = args.ref_load
-        if args.ref_ckpt_step is not None:
-            args.ckpt_step = args.ref_ckpt_step
+    if args.megatron_to_hf_mode == "bridge":
+        if args.load is None:
+            args.load = args.ref_load or args.hf_checkpoint
+        args.start_rollout_id = 0
+    else:
+        if (
+            args.load is None
+            or not os.path.exists(args.load)
+            or not os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
+        ):
+            args.no_load_optim = True
+            args.no_load_rng = True
+            args.finetune = True
+            args.load = args.ref_load
+            if args.ref_ckpt_step is not None:
+                args.ckpt_step = args.ref_ckpt_step
         args.start_rollout_id = 0
 
     if args.eval_interval is not None:
@@ -1574,8 +1579,9 @@ def slime_validate_args(args):
             args.rollout_max_prompt_len <= args.rollout_max_context_len - 1
         ), f"args.rollout_max_prompt_len ({args.rollout_max_prompt_len}) must be smaller than args.rollout_max_context_len ({args.rollout_max_context_len}) so that there is at least one generated token to compute loss."
 
-    if args.prefill_num_servers is not None:
-        assert not args.use_fault_tolerance, "fault tolerance is not supported when prefill_num_servers is set."
+    assert not (
+        args.prefill_num_servers is not None and args.rollout_external
+    ), "prefill_num_servers cannot be set when rollout_external is set."
 
 
 def hf_validate_args(args, hf_config):
@@ -1583,6 +1589,10 @@ def hf_validate_args(args, hf_config):
         return x == y
 
     errors = []
+
+    # multimodal models have different config structure
+    if hasattr(hf_config, "text_config"):
+        hf_config = hf_config.text_config
 
     for hf_config_name, megatron_config_name, compare_fn in [
         ("hidden_size", "hidden_size", equal),

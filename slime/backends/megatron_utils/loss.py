@@ -474,9 +474,9 @@ def policy_loss_function(
 
     Computes current log-probabilities and entropy from model logits, then
     calculates PPO-style clipped policy gradient loss. For GSPO, computes
-    per-sample KL either locally or with context-parallel all-reduces instead
-    of all-gathering full sequences. Optionally applies TIS (Temporal
-    Importance Sampling) correction and adds KL loss term if configured.
+    per-sample KL scalars and (when CP is enabled) avoids all-gathering full
+    sequences by reducing only scalar numerator/denominator. Optionally applies
+    TIS (importance sampling) correction and adds KL loss term if configured.
 
     Args:
         args: Configuration controlling advantage estimator, clipping thresholds,
@@ -602,6 +602,16 @@ def policy_loss_function(
 
     # Apply off-policy correction using importance sampling if enabled
     if args.get_mismatch_metrics or args.use_tis:
+        # NOTE:
+        # `tis_func` may apply rejection-sampling style masking (RS) and return `modified_response_masks`.
+        # We rebuild `sum_of_sample_mean` with those masks to correct denominators for loss/backprop.
+        #
+        # However, mismatch/TIS/RS metrics (e.g., "truncate_fraction") are often defined over the
+        # *pre-RS* valid tokens. If we aggregate metrics with `modified_response_masks`, the rejected
+        # tokens are excluded from the denominator and the metric can be artificially driven to 0.
+        # Keep a copy of the original reducer (based on `batch["loss_masks"]`) for metric aggregation.
+        sum_of_sample_mean_for_mismatch_metrics = sum_of_sample_mean
+
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
 
         ois = (-ppo_kl).exp()
@@ -674,11 +684,13 @@ def policy_loss_function(
         reported_loss["kl_loss"] = kl_loss.clone().detach()
 
     if args.get_mismatch_metrics or args.use_tis:
-        reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
+        # Aggregate mismatch/TIS/RS related metrics with the *pre-RS* masks.
+        # See comment above where `sum_of_sample_mean_for_mismatch_metrics` is defined.
+        reported_loss["ois"] = sum_of_sample_mean_for_mismatch_metrics(ois).clone().detach()
         # Assume all metrics are already cloned and detached
         for metric_key, metric_value in tis_metrics.items():
             key_name = f"{metric_key}"
-            reported_loss[key_name] = sum_of_sample_mean(metric_value)
+            reported_loss[key_name] = sum_of_sample_mean_for_mismatch_metrics(metric_value)
 
     if args.use_opsm:
         reported_loss["opsm_clipfrac"] = opsm_clipfrac
