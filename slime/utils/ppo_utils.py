@@ -106,18 +106,20 @@ def compute_opsm_mask(
     device = advantages[0].device
     token_counts: list[torch.Tensor] = []
 
-    for advantage, loss_mask, effective_loss_mask, seq_kl in zip(
+    for advantage, _loss_mask, effective_loss_mask, seq_kl in zip(
         advantages, loss_masks, effective_loss_masks, seq_kls, strict=False
     ):
         mask = ((advantage < 0) & (seq_kl > args.opsm_delta)).float() * effective_loss_mask
         opsm_mask_list.append(1 - mask)
 
-        token_counts.append(torch.stack((mask.sum(), torch.clamp_min(loss_mask.sum().to(mask), 1))))
+        token_counts.append(
+            torch.stack((mask.sum(), torch.clamp_min(effective_loss_mask.sum().to(mask), 1)))
+        )
 
     opsm_clipfrac = torch.tensor(0.0, device=device)
     if token_counts:
         stacked_counts = torch.stack(token_counts)
-        if cp_size > 1:
+        if cp_size > 1 and chunked_loss_masks is not None:
             dist.all_reduce(stacked_counts, group=cp_group)
         masked_tokens, total_tokens = stacked_counts.unbind(dim=1)
         opsm_clipfrac = (masked_tokens / torch.clamp_min(total_tokens, 1)).sum()

@@ -200,6 +200,8 @@ def _compute_seq_kls_with_cp(
     loss_masks: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
+    *,
+    cp_group: dist.ProcessGroup,
 ) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
     """Compute sequence-level KL scalars with minimal CP communication.
 
@@ -210,9 +212,6 @@ def _compute_seq_kls_with_cp(
     ``chunked_loss_masks`` align with the local log-prob slices.
     """
 
-    cp_group = mpu.get_context_parallel_group()
-    cp_size = mpu.get_context_parallel_world_size()
-
     chunked_loss_masks, _ = get_chunked_loss_masks(total_lengths, response_lengths, loss_masks)
 
     local_pairs: list[torch.Tensor] = []
@@ -220,21 +219,23 @@ def _compute_seq_kls_with_cp(
         log_probs, old_log_probs, chunked_loss_masks, loss_masks, strict=False
     ):
         local_num = ((old_log_prob - log_prob) * chunked_loss_mask).sum()
-        local_den = torch.clamp_min(chunked_loss_mask.sum(), 1)
+        local_den = chunked_loss_mask.sum()
 
         local_pairs.append(torch.stack((local_num, local_den)))
 
-    if cp_size > 1 and local_pairs:
-        stacked_pairs = torch.stack(local_pairs)
-        dist.all_reduce(stacked_pairs, group=cp_group)
-        local_pairs = list(stacked_pairs.unbind())
-    elif not local_pairs:
-        return [], chunked_loss_masks
+    stacked_pairs = dist.nn.functional.all_reduce(torch.stack(local_pairs), group=cp_group)
+    local_pairs = list(stacked_pairs.unbind())
 
     seq_kls: list[torch.Tensor] = []
-    for reduced_pair, full_loss_mask in zip(local_pairs, loss_masks, strict=False):
+    for reduced_pair, _full_loss_mask in zip(local_pairs, loss_masks, strict=False):
         reduced_num, reduced_den = reduced_pair.unbind()
-        seq_kls.append(reduced_num / torch.clamp_min(reduced_den if cp_size > 1 else full_loss_mask.sum(), 1))
+        seq_kls.append(
+            reduced_num
+            / torch.clamp_min(
+                reduced_den,
+                1,
+            )
+        )
 
     return seq_kls, chunked_loss_masks
 
@@ -355,35 +356,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         if cp_size == 1:
             all_masks = torch.cat(loss_masks)
         else:
-            mask_chunks = []
-            for i in range(len(advantages)):
-                total_len = total_lengths[i]
-                response_len = response_lengths[i]
-                prompt_len = total_len - response_len
-
-                _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(total_len, response_len)
-
-                # Convert global offsets to response-space offsets
-                s0, e0 = token_offsets[0]
-                s1, e1 = token_offsets[1]
-                res_s0, res_e0 = max(0, s0 - prompt_len), max(0, e0 - prompt_len)
-                res_s1, res_e1 = max(0, s1 - prompt_len), max(0, e1 - prompt_len)
-
-                local_mask_parts = []
-                full_mask = loss_masks[i]
-                if res_e0 > res_s0:
-                    local_mask_parts.append(full_mask[res_s0:res_e0])
-                if res_e1 > res_s1:
-                    local_mask_parts.append(full_mask[res_s1:res_e1])
-
-                # Concatenate the parts to form the final mask chunk for this rank and this sequence
-                local_mask_chunk = (
-                    torch.cat(local_mask_parts)
-                    if local_mask_parts
-                    else torch.tensor([], device=all_advs.device, dtype=full_mask.dtype)
-                )
-                mask_chunks.append(local_mask_chunk)
-
+            mask_chunks, _ = get_chunked_loss_masks(total_lengths, response_lengths, loss_masks)
             all_masks = torch.cat(mask_chunks)
 
         if all_masks.numel() > 0:
@@ -464,10 +437,10 @@ def policy_loss_function(
     """Compute policy loss (PPO/GSPO) and metrics.
 
     Computes current log-probabilities and entropy from model logits, then
-    calculates PPO-style clipped policy gradient loss. For GSPO, gathers
-    full sequences via context-parallel all-gather before computing per-sample
-    KL. Optionally applies TIS (Temporal Importance Sampling) correction and
-    adds KL loss term if configured.
+    calculates PPO-style clipped policy gradient loss. For GSPO, computes
+    per-sample KL either locally or with context-parallel all-reduces instead
+    of all-gathering full sequences. Optionally applies TIS (Temporal
+    Importance Sampling) correction and adds KL loss term if configured.
 
     Args:
         args: Configuration controlling advantage estimator, clipping thresholds,
@@ -514,7 +487,12 @@ def policy_loss_function(
     if need_full_log_probs:
         if cp_size > 1:
             seq_kls, chunked_loss_masks = _compute_seq_kls_with_cp(
-                log_probs, old_log_probs, batch["loss_masks"], total_lengths, response_lengths
+                log_probs,
+                old_log_probs,
+                batch["loss_masks"],
+                total_lengths,
+                response_lengths,
+                cp_group=cp_group,
             )
         else:
             full_log_probs = log_probs
@@ -702,6 +680,10 @@ def value_loss_function(
         "value_loss": loss.clone().detach(),
         "value_clipfrac": values_clipfrac.clone().detach(),
     }
+
+    # Ensure gradients propagate even when local sequences are empty
+    if values.numel() == 0:
+        loss = loss + 0 * logits.sum()
 
     return loss, reported_loss
 
