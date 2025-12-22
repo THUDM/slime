@@ -638,10 +638,6 @@ def policy_loss_function(
 
         loss = loss + args.kl_loss_coef * kl_loss
 
-    # make sure the gradient could backprop correctly.
-    if log_probs.numel() == 0:
-        loss += 0 * logits.sum()
-
     train_rollout_logprob_abs_diff = None
     if "rollout_log_probs" in batch and batch["rollout_log_probs"]:
         rollout_log_probs = torch.cat(batch["rollout_log_probs"], dim=0)
@@ -718,10 +714,6 @@ def value_loss_function(
 
     loss = sum_of_sample_mean(loss)
     values_clipfrac = sum_of_sample_mean(values_clipfrac.float())
-
-    # make sure the gradient could backprop correctly.
-    if values.numel() == 0:
-        loss += 0 * values.sum()
 
     reported_loss = {
         "value_loss": loss.clone().detach(),
