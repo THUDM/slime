@@ -138,15 +138,15 @@ SGLANG_ARGS=(
 
 # Wandb args (only if WANDB_API_KEY is set)
 if [ -n "$WANDB_API_KEY" ]; then
-    WANDB_ARGS=(
-        --use-wandb
-        --wandb-project slime-geo3k-vlm
-        --wandb-group ${MODEL_NAME_LOWER}-${TRAIN_BACKEND}
-        --wandb-key ${WANDB_API_KEY}
-        --disable-wandb-random-suffix
-    )
+   WANDB_ARGS=(
+      --use-wandb
+      --wandb-project slime-geo3k-vlm
+      --wandb-group ${MODEL_NAME_LOWER}-${TRAIN_BACKEND}
+      --wandb-key ${WANDB_API_KEY}
+      --disable-wandb-random-suffix
+   )
 else
-    WANDB_ARGS=()
+   WANDB_ARGS=()
 fi
 
 MISC_ARGS=(
@@ -155,36 +155,37 @@ MISC_ARGS=(
 
 # Backend-specific args
 if [ "$TRAIN_BACKEND" = "fsdp" ]; then
-    BACKEND_ARGS=(
-      --train-backend fsdp
-      --gradient-checkpointing
-      --sglang-attention-backend fa3
-      --attn-implementation flash_attention_3
-      --update-weight-buffer-size 536870912
-    )
+   BACKEND_ARGS=(
+   --train-backend fsdp
+   --gradient-checkpointing
+   --sglang-attention-backend fa3
+   --attn-implementation flash_attention_3
+   --update-weight-buffer-size 536870912
+   )
+   MODEL_ARGS=()
 else
-    # megatron backend (default)
-    BACKEND_ARGS=(
-      --train-backend megatron
-      --load /root/models/${MODEL_NAME}
-      --tensor-model-parallel-size 4
-      --sequence-parallel
-      --pipeline-model-parallel-size 1
-      --context-parallel-size 1
-      --expert-model-parallel-size 1
-      --expert-tensor-parallel-size 1
-      --recompute-granularity full
-      --recompute-method uniform
-      --recompute-num-layers 1
-      --use-dynamic-batch-size
-      --max-tokens-per-gpu 4096
-      --attention-dropout 0.0
-      --hidden-dropout 0.0
-      --accumulate-allreduce-grads-in-fp32
-      --attention-softmax-in-fp32
-      --attention-backend flash
-      --megatron-to-hf-mode bridge
-    )
+   # megatron backend (default)
+   BACKEND_ARGS=(
+   --train-backend megatron
+   --load /root/models/${MODEL_NAME}
+   --tensor-model-parallel-size 4
+   --sequence-parallel
+   --pipeline-model-parallel-size 1
+   --context-parallel-size 1
+   --expert-model-parallel-size 1
+   --expert-tensor-parallel-size 1
+   --recompute-granularity full
+   --recompute-method uniform
+   --recompute-num-layers 1
+   --use-dynamic-batch-size
+   --max-tokens-per-gpu 4096
+   --attention-dropout 0.0
+   --hidden-dropout 0.0
+   --accumulate-allreduce-grads-in-fp32
+   --attention-softmax-in-fp32
+   --attention-backend flash
+   --megatron-to-hf-mode bridge
+   )
 fi
 
 # Start Ray if not using external Ray
