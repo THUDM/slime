@@ -36,15 +36,19 @@ pip install cmake ninja
 
 # flash attn
 # the newest version megatron supports is v2.7.4.post1
-MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
+if ! pip install --prefer-binary --no-build-isolation "flash-attn==2.7.4.post1"; then
+  MAX_JOBS=64 pip -v install flash-attn==2.7.4.post1 --no-build-isolation
+fi
 
 pip install git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c --no-deps
-pip install --no-build-isolation "transformer_engine[pytorch]==2.10.0"
+pip install --prefer-binary --no-build-isolation "transformer_engine[pytorch]==2.10.0"
 pip install flash-linear-attention==0.4.0
-NVCC_APPEND_FLAGS="--threads 4" \
-  pip -v install --disable-pip-version-check --no-cache-dir \
-  --no-build-isolation \
-  --config-settings "--build-option=--cpp_ext --cuda_ext --parallel 8" git+https://github.com/NVIDIA/apex.git@10417aceddd7d5d05d7cbf7b0fc2daad1105f8b4
+if ! pip install --prefer-binary --no-build-isolation nvidia-apex; then
+  NVCC_APPEND_FLAGS="--threads 4" \
+    pip -v install --disable-pip-version-check --no-cache-dir \
+    --no-build-isolation \
+    --config-settings "--build-option=--cpp_ext --cuda_ext --parallel 8" git+https://github.com/NVIDIA/apex.git@10417aceddd7d5d05d7cbf7b0fc2daad1105f8b4
+fi
 
 git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
     cd Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
