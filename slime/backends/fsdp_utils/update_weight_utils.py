@@ -1,5 +1,6 @@
 import abc
 import logging
+import os
 import socket
 from argparse import Namespace
 from collections.abc import Sequence
@@ -19,12 +20,12 @@ from sglang.srt.utils import MultiprocessingSerializer
 
 from slime.utils.distributed_utils import init_process_group
 
-
 try:
     from sglang.srt.weight_sync.tensor_bucket import FlattenedTensorBucket  # type: ignore[import]
 except ImportError:
     from sglang.srt.model_executor.model_runner import FlattenedTensorBucket  # type: ignore[import]
 
+from .lora_utils import LORA_ADAPTER_NAME, LORA_SUBDIR, delete_lora_from_disk, is_lora_model, save_lora_to_disk
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,8 @@ class UpdateWeight(abc.ABC):
         self.args = args
         self.model = model
         self.weight_version = 0
+        self._lora_loaded = False
+        self._base_sync_done = False
 
     @abc.abstractmethod
     def connect_rollout_engines(
@@ -45,31 +48,77 @@ class UpdateWeight(abc.ABC):
 
     def update_weights(self) -> None:
         self.weight_version += 1
-        bucket = []
-        bucket_size = 0
-        for name, param in self.model.state_dict().items():
-            param_size = param.numel() * param.element_size()
-            if bucket and bucket_size + param_size >= self.args.update_weight_buffer_size:
-                self.wait_and_update_bucket_weights(bucket)
-                del bucket
-                bucket = []
-                bucket_size = 0
 
-            param = param.cuda()
-            if isinstance(param, DTensor):
-                # async version of param.full_tensor
-                param = param.redistribute(
-                    placements=[Replicate()] * param.device_mesh.ndim,
-                    async_op=True,
-                ).to_local()
-            bucket.append((name, param))
-            bucket_size += param_size
-
-        if bucket:
-            self.wait_and_update_bucket_weights(bucket)
-            del bucket
+        # Update base model if needed
+        # Level 1: only sync base once for LoRA models, then just LoRA
+        # Level 2: always sync base + LoRA
+        if not (is_lora_model(self.model) and self._base_sync_done and self.args.offload_rollout_level == 1):
             bucket = []
             bucket_size = 0
+            for name, param in self.model.state_dict().items():
+                if any(x in name for x in ["_flat_param", "lora_"]):
+                    continue
+                name = name.replace("base_model.model.", "").replace(".base_layer", "")
+                param_size = param.numel() * param.element_size()
+                if bucket and bucket_size + param_size >= self.args.update_weight_buffer_size:
+                    self.wait_and_update_bucket_weights(bucket)
+                    del bucket
+                    bucket = []
+                    bucket_size = 0
+
+                param = param.cuda()
+                if isinstance(param, DTensor):
+                    # async version of param.full_tensor
+                    param = param.redistribute(
+                        placements=[Replicate()] * param.device_mesh.ndim,
+                        async_op=True,
+                    ).to_local()
+                bucket.append((name, param))
+                bucket_size += param_size
+
+            if bucket:
+                self.wait_and_update_bucket_weights(bucket)
+                del bucket
+
+            self._base_sync_done = True
+
+        # Update lora weights if needed
+        if is_lora_model(self.model):
+            self._update_lora_via_file()
+
+    def _update_lora_via_file(self) -> None:
+        """Push LoRA weights to rollout engines using disk files."""
+        self._lora_save_dir = os.path.join(self.args.save, LORA_SUBDIR)
+        if dist.get_rank() == 0:
+            if os.path.exists(self._lora_save_dir):
+                delete_lora_from_disk(self._lora_save_dir)
+
+        dist.barrier()
+
+        save_lora_to_disk(self.model, self._lora_save_dir)
+
+        dist.barrier()
+
+        if dist.get_rank() == 0:
+            if self._lora_loaded:
+                refs = [engine.unload_lora_adapter.remote(LORA_ADAPTER_NAME) for engine in self.rollout_engines]
+                ray.get(refs)
+
+            refs = [engine.flush_cache.remote() for engine in self.rollout_engines]
+            ray.get(refs)
+
+            refs = [
+                engine.load_lora_adapter.remote(LORA_ADAPTER_NAME, self._lora_save_dir)
+                for engine in self.rollout_engines
+            ]
+            ray.get(refs)
+
+            refs = [engine.flush_cache.remote() for engine in self.rollout_engines]
+            ray.get(refs)
+
+            self._lora_loaded = True
+
+        dist.barrier()
 
     def wait_and_update_bucket_weights(self, bucket):
         bucket = [(name, param.wait()) if hasattr(param, "wait") else (name, param) for name, param in bucket]
