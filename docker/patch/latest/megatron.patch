@@ -384,16 +384,15 @@ index a8f4abfcd..f33f6f05e 100755
  
          if self.config.recompute_method == 'uniform':
 diff --git a/megatron/core/transformer/transformer_config.py b/megatron/core/transformer/transformer_config.py
-index e2705bd9f..83a947c00 100644
+index e2705bd9f..a0aa109b5 100644
 --- a/megatron/core/transformer/transformer_config.py
 +++ b/megatron/core/transformer/transformer_config.py
-@@ -210,6 +210,10 @@ class TransformerConfig(ModelParallelConfig):
+@@ -210,6 +210,9 @@ class TransformerConfig(ModelParallelConfig):
      attention_output_gate: bool = False
      """Whether to apply output gate to the attention layers."""
  
 +    post_self_attn_layernorm: bool = False
 +    post_mlp_layernorm: bool = False
-+    use_gated_attention: bool = False
 +
      test_mode: bool = False
      """Whether to run real-time tests."""
@@ -469,21 +468,20 @@ index 3ea405770..5a42001b9 100644
              # discard the output of the pre-mlp layernorm and register the recompute
              # as a gradient hook of mlp_output_with_bias[0]
 diff --git a/megatron/training/arguments.py b/megatron/training/arguments.py
-index b267c8a81..def4ce809 100644
+index b267c8a81..83736acdc 100644
 --- a/megatron/training/arguments.py
 +++ b/megatron/training/arguments.py
-@@ -1398,6 +1398,10 @@ def core_transformer_config_from_args(args, config_class=None):
+@@ -1398,6 +1398,9 @@ def core_transformer_config_from_args(args, config_class=None):
  
      kw_args['inference_sampling_seed'] = args.seed
  
 +    kw_args['post_self_attn_layernorm'] = args.post_self_attn_layernorm
 +    kw_args['post_mlp_layernorm'] = args.post_mlp_layernorm
-+    kw_args['use_gated_attention'] = args.use_gated_attention
 +
      # handle quantization config
      # NOTE: Kitchen arguments are only added to the namespace when
      # Kitchen library is available.
-@@ -1764,6 +1768,12 @@ def _add_network_size_args(parser):
+@@ -1764,6 +1767,12 @@ def _add_network_size_args(parser):
                         action='store_true',
                         help='If set, use original BERT residula connection '
                         'ordering.')

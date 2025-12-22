@@ -80,6 +80,8 @@ fi
 # Common args
 CKPT_ARGS=(
    --hf-checkpoint /root/models/${MODEL_NAME}
+   # vl model has rotary base 5000000
+   --rotary-base 5000000
 )
 
 ROLLOUT_ARGS=(
