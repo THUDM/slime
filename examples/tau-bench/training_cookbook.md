@@ -8,8 +8,40 @@ This cookbook shows you how we did it. Everything is open source: [training data
 
 *Figure 1: Three-stage training pipeline (SFT → rejection sampling/RFT → GRPO) for multi-turn tool-use agents.*
 
+## TLDR
+
+**Setup** (inside `slimerl/slime:latest` container):
+```bash
+export SLIME_ROOT="$(pwd)" TAU_BENCH_OUT_DIR="${SLIME_ROOT}/examples/tau-bench/outputs"
+git clone https://github.com/sierra-research/tau2-bench.git "${TAU_BENCH_OUT_DIR}/_external/tau2-bench"
+cd "${TAU_BENCH_OUT_DIR}/_external/tau2-bench" && git checkout 337326e && pip install -e . --no-deps && cd "${SLIME_ROOT}"
+pip install gymnasium addict deepdiff fs langfuse plotly pydantic-argparse redis ruff scikit-learn seaborn tenacity watchdog "litellm==1.65.0"
+cp examples/tau-bench/tau2/.env.template examples/tau-bench/tau2/.env  # ADD OPENAI_API_KEY
+set -a && source examples/tau-bench/tau2/.env && set +a
+```
+
+**Evaluate** (uses published checkpoint, ~2h on 2xH100):
+```bash
+# Terminal 1: Policy server
+CUDA_VISIBLE_DEVICES=0,1 python3 -m sglang.launch_server \
+  --model-path Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
+  --host 0.0.0.0 --port 30000 --tp 2 --mem-fraction-static 0.70
+
+# Terminal 2: Run evaluation (uses GPT-4.1-mini as user simulator)
+python3 examples/tau-bench/tau2/eval.py \
+  --hf-checkpoint Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
+  --sglang-url http://127.0.0.1:30000/generate \
+  --domains airline,retail,telecom --task-split test --num-samples 4 \
+  --output "${TAU_BENCH_OUT_DIR}/tau2/eval/eval_pass4.json"
+```
+
+To train from scratch, see [Train from Scratch](#train-from-scratch-optional).
+
+---
+
 ## Contents
 
+- [TLDR](#tldr)
 - [Why Tau2-Bench?](#why-tau2-bench)
 - [Performance snapshot](#performance-snapshot)
 - [Before You Start](#before-you-start)
@@ -241,25 +273,20 @@ User: "Done. Still no data."
 
 **Chat templates**: Training on multi-turn conversations requires `--apply-chat-template` flag.
 
-**User simulator**: Use an instruct model on port 30001 to avoid extended thinking latency. Scripts default to `TAU2_USER_API_BASE=http://127.0.0.1:30001/v1`.
+**User simulator**: Training uses a local instruct model on port 30001 (`TAU2_USER_API_BASE=http://127.0.0.1:30001/v1`). Evaluation defaults to GPT-4.1-mini for cleaner signal (fewer function calling errors).
 
 ## Quickstart: Reproduce Pass@4
 
-Download the [GRPO checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-grpo-v1), start two inference servers, and run evaluation:
+Download the [GRPO checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-grpo-v1), start the policy server, and run evaluation:
 
-**1. User simulator (port 30001)**:
-```bash
-bash examples/tau-bench/tau2/start_user_sim_server.sh
-```
-
-**2. Policy model (port 30000)**:
+**1. Policy model (port 30000)**:
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 python3 -m sglang.launch_server \
   --model-path Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
   --host 0.0.0.0 --port 30000 --tp 2 --mem-fraction-static 0.70
 ```
 
-**3. Run evaluation**:
+**2. Run evaluation** (uses GPT-4.1-mini as user simulator):
 ```bash
 python3 examples/tau-bench/tau2/eval.py \
   --hf-checkpoint Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
@@ -274,28 +301,53 @@ The script outputs both Pass@1 and Pass@4. Results are stochastic but should mat
 
 ## Train from Scratch (Optional)
 
-We publish the [SFT checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-sft1) and [GRPO checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-grpo-v1), so you don't need to train from scratch. But if you want to:
+We publish the [SFT checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-sft1) and [GRPO checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-grpo-v1). To train from scratch:
 
-**SFT**: Download [Qwen3-4B-Instruct](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507), convert to Megatron format, then run:
+### Prerequisites
+
+**1. Download base model and SFT training data**:
+```bash
+huggingface-cli download Qwen/Qwen3-4B-Instruct-2507 --local-dir "${TAU_BENCH_OUT_DIR}/models/Qwen3-4B-Instruct-2507"
+mkdir -p "${TAU_BENCH_OUT_DIR}/tau2/data/sft1"
+huggingface-cli download Jarrodbarnes/tau2-sft-seed-v3 --local-dir "${TAU_BENCH_OUT_DIR}/tau2/data/sft1" --repo-type dataset
+```
+
+**2. Convert to Megatron format**:
+```bash
+source scripts/models/qwen3-4B-Instruct-2507.sh
+python3 tools/convert_hf_to_torch_dist.py \
+  --hf-checkpoint "${TAU_BENCH_OUT_DIR}/models/Qwen3-4B-Instruct-2507" \
+  --save "${TAU_BENCH_OUT_DIR}/models/Qwen3-4B-Instruct-2507_torch_dist" \
+  ${MODEL_ARGS[@]}
+```
+
+### Stage 1: SFT
+
+Run supervised fine-tuning on the filtered RFT trajectories:
 ```bash
 bash examples/tau-bench/tau2/run_sft.sh
 ```
 
-The script uses [tau2-sft-seed-v3](https://huggingface.co/datasets/Jarrodbarnes/tau2-sft-seed-v3), which contains filtered trajectories from rejection sampling.
+### Stage 2: GRPO
 
-**Generate task indices (required for GRPO)**:
+**Generate task indices**:
 ```bash
 python3 examples/tau-bench/tau2/tasks.py \
   --local_dir "${TAU_BENCH_OUT_DIR}/tau2/tasks" \
   --domains airline,retail,telecom --splits train
 ```
 
-**GRPO**: Start from the SFT checkpoint, start the user simulator, then run:
+**Start user simulator** (separate terminal, uses GPUs 2-3):
+```bash
+bash examples/tau-bench/tau2/start_user_sim_server.sh
+```
+
+**Run GRPO training**:
 ```bash
 bash examples/tau-bench/tau2/run_grpo.sh
 ```
 
-The script runs GRPO with shaped rewards (task reward + 0.3 × partial score). Training takes ~12 hours on 8×H100s. Monitor progress on [WandB](https://wandb.ai/jbarnes850-near-protocol/tau2-cookbook).
+Training takes ~2 hours on 8×H100s. [Reference logs](https://wandb.ai/jbarnes850-near-protocol/tau2-cookbook).
 
 ## Smoke tests (documented)
 
