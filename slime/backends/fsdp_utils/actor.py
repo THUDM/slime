@@ -7,6 +7,7 @@ from itertools import accumulate
 import ray
 import torch
 import torch.distributed as dist
+import torch.distributed.nn.functional as distnnf
 import torch.nn.functional as F
 from ring_flash_attn import substitute_hf_flash_attn, update_ring_flash_attn_params
 from tqdm import tqdm
@@ -1025,7 +1026,7 @@ def get_logprob_and_entropy_with_cp(
 
     # Merge with a single all_gather: stack as [2, chunk_size]
     stacked_local = torch.stack([local_log_probs, entropy], dim=0)
-    gathered_stacked = torch.distributed.nn.functional.all_gather(stacked_local, group=cp_group)
+    gathered_stacked = distnnf.all_gather(stacked_local, group=cp_group)
 
     # Concatenate by effective length (non-last rank=chunk_size, last rank=chunk_size-1)
     lp_parts, ent_parts = [], []
@@ -1060,7 +1061,7 @@ def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks:
     return sum(
         [
             (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)
-            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
+            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=True)
         ]
     )
 
@@ -1139,6 +1140,6 @@ def sum_of_token(x: torch.Tensor, response_lengths: list[int], loss_masks: list[
     return sum(
         [
             (x_i * loss_mask_i).sum()
-            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
+            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=True)
         ]
     )

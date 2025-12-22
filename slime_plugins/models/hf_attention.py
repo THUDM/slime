@@ -2,6 +2,7 @@ from abc import ABC, abstractmethod
 
 import torch
 import torch.distributed as dist
+import torch.distributed.nn.functional as distnnf
 from megatron.core import mpu, tensor_parallel
 from megatron.core.inference.contexts import BaseInferenceContext
 from megatron.core.packed_seq_params import PackedSeqParams
@@ -59,7 +60,7 @@ class HuggingfaceAttention(MegatronModule, ABC):
 
         if mpu.get_context_parallel_world_size() > 1:
             cp_size = mpu.get_context_parallel_world_size()
-            hidden_states_list = dist.nn.all_gather(
+            hidden_states_list = distnnf.all_gather(
                 hidden_states,
                 group=mpu.get_context_parallel_group(),
             )
