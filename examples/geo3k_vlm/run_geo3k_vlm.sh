@@ -33,10 +33,6 @@ fi
 
 MODEL_NAME_LOWER=$(echo "$MODEL_NAME" | tr '[:upper:]' '[:lower:]')
 
-SLIME_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &>/dev/null && pwd)"
-MODEL_ARGS_FILE=$(echo "$MODEL_NAME_LOWER" | sed 's/-instruct//g; s/-thinking//g')
-source "${SLIME_DIR}/scripts/models/${MODEL_ARGS_FILE}.sh"
-
 # External Ray flag
 if [ -z "$SLIME_SCRIPT_EXTERNAL_RAY" ] || [ "$SLIME_SCRIPT_EXTERNAL_RAY" = "0" ]; then
    USE_EXTERNAL_RAY=0
@@ -186,6 +182,11 @@ else
    --attention-backend flash
    --megatron-to-hf-mode bridge
    )
+   
+   # get model args from scripts/models for megatron backend
+   SLIME_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &>/dev/null && pwd)"
+   MODEL_ARGS_FILE=$(echo "$MODEL_NAME_LOWER" | sed 's/-instruct//g; s/-thinking//g')
+   source "${SLIME_DIR}/scripts/models/${MODEL_ARGS_FILE}.sh"
 fi
 
 # Start Ray if not using external Ray
