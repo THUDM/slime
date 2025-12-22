@@ -188,17 +188,18 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
         """
         Add a sample group to buffer.
         """
+        samples = [list(sample_group) for sample_group in samples]
+
         if not samples:
             return
 
-        invalid_groups = [
-            i for i, sample_group in enumerate(samples) if len(sample_group) != self.args.n_samples_per_prompt
-        ]
-        if invalid_groups:
-            raise ValueError(
-                "Received sample groups with unexpected size: "
-                f"{invalid_groups}. Expected {self.args.n_samples_per_prompt} samples per prompt."
-            )
+        for i, sample_group in enumerate(samples):
+            if len(sample_group) != self.args.n_samples_per_prompt:
+                raise ValueError(
+                    f"Sample group {i} has size {len(sample_group)}; expected {self.args.n_samples_per_prompt}."
+                )
+            if not all(isinstance(sample, Sample) for sample in sample_group):
+                raise TypeError(f"Sample group {i} contains non-Sample entries: {sample_group}.")
         self.buffer.extend(samples)
 
     # TODO remove
