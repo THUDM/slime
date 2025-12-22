@@ -1,5 +1,6 @@
 import dataclasses
 import re
+
 import torch
 
 from slime.utils import megatron_bridge_utils
@@ -19,69 +20,6 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
 
         self._bridge = AutoBridge.from_hf_pretrained(self.args.hf_checkpoint)
 
-    def merge_expert_weights_from_named_tuples(self, named_weights):
-        # Pattern to match megatron param names ending with weight<NUMBER>
-        expert_pattern = re.compile(r"^(.+\.weight)(\d+)$")
-
-        # Group by megatron param base name
-        expert_groups = {}  # base_name -> [(expert_idx, hf_param_name, weight, megatron_param_name)]
-        non_expert_weights = []  # (hf_param_name, weight)
-
-        for hf_param_name, weight, megatron_param_name in named_weights:
-            match = expert_pattern.match(megatron_param_name)
-            if match:
-                base_name = match.group(1)  # e.g., "...weight"
-                expert_idx = int(match.group(2))  # e.g., 0, 1, 2
-
-                if base_name not in expert_groups:
-                    expert_groups[base_name] = []
-
-                expert_groups[base_name].append((expert_idx, hf_param_name, weight, megatron_param_name))
-            else:
-                # Not an expert weight, keep as is (only hf_param_name and weight)
-                non_expert_weights.append((hf_param_name, weight))
-
-        # Merge expert weights
-        merged_weights = []
-        for base_name, expert_list in expert_groups.items():
-            # Sort by expert index
-            expert_list.sort(key=lambda x: x[0])
-
-            # Assert all experts map to the same hf_param_name
-            hf_param_names = [item[1] for item in expert_list]
-            assert all(name == hf_param_names[0] for name in hf_param_names), (
-                f"Expert weights with base megatron name '{base_name}' map to different HF param names: "
-                f"{set(hf_param_names)}. Megatron names: {[item[3] for item in expert_list]}"
-            )
-
-            # Stack tensors along first dimension
-            tensors = [item[2] for item in expert_list]  # item[2] is the weight
-
-            # Assert all tensors are on the same device and have the same dtype
-            devices = [tensor.device for tensor in tensors]
-            dtypes = [tensor.dtype for tensor in tensors]
-            assert all(device == devices[0] for device in devices), (
-                f"Expert weights with base megatron name '{base_name}' are on different devices: "
-                f"{set(str(d) for d in devices)}"
-            )
-            assert all(dtype == dtypes[0] for dtype in dtypes), (
-                f"Expert weights with base megatron name '{base_name}' have different dtypes: "
-                f"{set(str(d) for d in dtypes)}"
-            )
-
-            # Move to CPU to avoid OOM during stacking, then move back to original device
-            original_device = devices[0]
-            original_dtype = dtypes[0]
-            tensors_cpu = [tensor.cpu() for tensor in tensors]
-            merged_tensor = torch.stack(tensors_cpu, dim=0)
-            merged_tensor = merged_tensor.to(device=original_device, dtype=original_dtype)
-
-            # Use the common hf_param_name
-            merged_weights.append((hf_param_names[0], merged_tensor))
-
-        # Combine non-expert and merged expert weights
-        return non_expert_weights + merged_weights
-
     def get_hf_weight_chunks(self, megatron_local_weights):
         # TODO support quantization (e.g. modify megatron-bridge to provide megatron param name)
         renamed_megatron_local_weights = {strip_param_name_prefix(k): v for k, v in megatron_local_weights.items()}
@@ -91,7 +29,7 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
 
             named_weights = self._bridge.export_hf_weights(self.model, cpu=False, conversion_tasks=conversion_tasks)
 
-            named_weights = [
+            named_weights = (
                 (
                     hf_param_name,
                     postprocess_hf_param(
@@ -100,17 +38,71 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
                         hf_param_name=hf_param_name,
                         param=weight,
                     ),
-                    megatron_param_name,
                 )
                 for hf_param_name, weight, megatron_param_name in named_weights
-            ]
-
-            named_weights = self.merge_expert_weights_from_named_tuples(named_weights)
+            )
 
             yield from chunk_named_params_by_size(named_weights, chunk_size=self.args.update_weight_buffer_size)
 
 
+def _has_expert_weights(tasks):
+    """Check if any task has param_name ending with weight<NUMBER>."""
+    expert_pattern = re.compile(r"^.+\.weight\d+$")
+    return any(task.param_weight is not None and expert_pattern.match(task.param_name) for task in tasks)
+
+
+def _merge_expert_tasks(tasks, new_weight_dict):
+    """Merge expert tasks (weight0, weight1, ...) into single tasks with stacked tensors."""
+    expert_pattern = re.compile(r"^(.+\.weight)(\d+)$")
+    expert_groups = {}  # (vp_stage, base_param_name) -> [(expert_idx, task)]
+    non_expert_tasks = []
+
+    for task in tasks:
+        if task.param_weight is None:
+            non_expert_tasks.append(task)
+            continue
+
+        match = expert_pattern.match(task.param_name)
+        if match:
+            base_param_name = match.group(1)
+            expert_idx = int(match.group(2))
+            group_key = (task.vp_stage, base_param_name)
+            expert_groups.setdefault(group_key, []).append((expert_idx, task))
+        else:
+            non_expert_tasks.append(task)
+
+    # Create merged tasks
+    merged_tasks = []
+    for (_, base_param_name), expert_list in expert_groups.items():
+        expert_list.sort(key=lambda x: x[0])  # Sort by expert_idx numerically
+
+        cpu_tensors = [
+            new_weight_dict[f"vp_stages.{task.vp_stage}.{task.param_name}"].transpose(0, 1) for _, task in expert_list
+        ]
+        merged_tensor = torch.stack(cpu_tensors, dim=1).cuda()
+        # merged_tensor = merged_tensor.transpose(-1, -3)
+        print(f"base_param_name: {base_param_name}, merged_tensor shape: {merged_tensor.shape}")
+
+        # Use first expert's task as template for merged task
+        template_task = expert_list[0][1]  # expert_list = [(expert_idx, task), ...]
+        merged_task = dataclasses.replace(template_task, param_name=base_param_name, param_weight=merged_tensor)
+        merged_tasks.append(merged_task)
+
+    return non_expert_tasks, merged_tasks
+
+
 def _process_conversion_tasks(vanilla_conversion_tasks, new_weight_dict):
+    """Process conversion tasks, merging expert weights if present to avoid OOM."""
+    all_tasks = list(vanilla_conversion_tasks)
+
+    # Check if expert merging is needed
+    if _has_expert_weights(all_tasks):
+        non_expert_tasks, merged_tasks = _merge_expert_tasks(all_tasks, new_weight_dict)
+    else:
+        non_expert_tasks = all_tasks
+        merged_tasks = []
+
+    # Move weights to CUDA for non-expert tasks
     def _handle_one(task):
         if task.param_weight is None:
             return task
@@ -124,7 +116,8 @@ def _process_conversion_tasks(vanilla_conversion_tasks, new_weight_dict):
         new_param_weight = new_param_weight.cuda()
         return dataclasses.replace(task, param_weight=new_param_weight)
 
-    return _MapWithLen(_handle_one, vanilla_conversion_tasks)
+    processed_non_expert = [_handle_one(task) for task in non_expert_tasks]
+    return _MapWithLen(lambda x: x, processed_non_expert + merged_tasks)
 
 
 class _MapWithLen:
