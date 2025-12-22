@@ -82,7 +82,20 @@ def parse_fsdp_cli(extra_args_provider=None):
         if arg_type is bool:
             parser.add_argument(f"--{f.name.replace('_', '-')}", action="store_true")
         else:
-            parser.add_argument(f"--{f.name.replace('_', '-')}", type=arg_type, default=f.default)
+            # Special handling for fsdp_moe_impl to add choices
+            if f.name == "fsdp_moe_impl":
+                parser.add_argument(
+                    f"--{f.name.replace('_', '-')}",
+                    type=arg_type,
+                    choices=["torch", "sonicmoe"],
+                    default=f.default,
+                    help=(
+                        "MoE implementation for HF+FSDP training when --true-on-policy-mode is disabled. "
+                        "`torch` uses a reference per-expert loop; `sonicmoe` uses SonicMoE kernels."
+                    ),
+                )
+            else:
+                parser.add_argument(f"--{f.name.replace('_', '-')}", type=arg_type, default=f.default)
 
     if extra_args_provider is not None:
         parser = extra_args_provider(parser)
