@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 
 import torch
-import torch.distributed as dist
 import torch.distributed.nn.functional as distnnf
 from megatron.core import mpu, tensor_parallel
 from megatron.core.inference.contexts import BaseInferenceContext
