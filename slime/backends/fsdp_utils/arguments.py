@@ -61,7 +61,7 @@ class FSDPArgs:
     config: str | None = None
 
     # MOE implementation backend
-    fsdp_moe_impl: str = "torch"  # MOE implementation: "torch" (loop) or "sonicmoe" (optimized)
+    fsdp_moe_impl: str = "torch"
 
 
 def parse_fsdp_cli(extra_args_provider=None):

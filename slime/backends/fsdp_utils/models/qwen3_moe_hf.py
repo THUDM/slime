@@ -1,5 +1,12 @@
 import torch
-import torch.nn.functional as F
+
+from .qwen3_moe_utils import (
+    qwen3_moe_routing,
+    get_sonicmoe_kernel,
+    get_sonicmoe_activation_type,
+    stack_expert_weights_for_sonicmoe,
+    prepare_sonicmoe_routing_inputs,
+)
 
 
 def apply_fsdp_moe_patch(args=None):
@@ -11,32 +18,44 @@ def apply_fsdp_moe_patch(args=None):
         hidden_states = hidden_states.view(-1, hidden_dim)
         router_logits = self.gate(hidden_states)
 
-        routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
-        routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-        if self.norm_topk_prob:
-            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        routing_weights = routing_weights.to(hidden_states.dtype)
+        # Qwen3-style routing: softmax → topk → renormalize
+        routing_weights, selected_experts = qwen3_moe_routing(
+            router_logits, self.top_k, self.norm_topk_prob, hidden_states.dtype
+        )
 
         moe_impl = getattr(args, "fsdp_moe_impl", "torch") if args is not None else "torch"
 
         if moe_impl == "sonicmoe":
             # SonicMoE path: keep HF routing semantics, only swap the experts implementation.
-            from ..kernels.sonic_experts import sonic_experts_impl  # pyright: ignore[reportMissingImports]
+            
+            # Prepare expert weights in SonicMoE format
+            w13_weight, w2_weight = stack_expert_weights_for_sonicmoe(self.experts)
+            
+            # Prepare routing inputs
+            selected_E, router_scores_selected, sorted_selected_T = prepare_sonicmoe_routing_inputs(
+                routing_weights, selected_experts, hidden_states.device
+            )
 
-            # Build expert weights in HF layout:
-            # - w1: (E, 2I, H) where 2I = [gate; up]
-            # - w2: (E, H, I)
-            w13_weight = torch.stack(
-                [torch.cat([layer.gate_proj.weight, layer.up_proj.weight], dim=0) for layer in self.experts]
-            ).contiguous()
-            w2_weight = torch.stack([layer.down_proj.weight for layer in self.experts], dim=0).contiguous()
+            # Call SonicMoE kernel
+            moe_general_routing_inputs = get_sonicmoe_kernel()
+            ActivationType = get_sonicmoe_activation_type()
+            
+            stream_id = int(torch.cuda.current_stream().cuda_stream)
+            is_inference_mode_enabled = (not torch.is_grad_enabled()) or torch.is_inference_mode_enabled()
 
-            final_hidden_states = sonic_experts_impl(
+            final_hidden_states, _ = moe_general_routing_inputs(
                 hidden_states,
+                router_scores_selected,
+                sorted_selected_T,
+                selected_E,
                 w13_weight,
+                None,  # b1
                 w2_weight,
-                routing_weights,
-                selected_experts,
+                None,  # b2
+                self.num_experts,
+                stream_id,
+                ActivationType.SWIGLU,
+                is_inference_mode_enabled,
             )
         else:
             # Reference path: per-expert loop (correct but slower).
