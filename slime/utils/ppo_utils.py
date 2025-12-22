@@ -53,42 +53,76 @@ def compute_approx_kl(
 
 def compute_opsm_mask(
     args: Namespace,
-    full_log_probs: list[torch.Tensor],
-    full_old_log_probs: list[torch.Tensor],
     advantages: list[torch.Tensor],
     loss_masks: list[torch.Tensor],
+    *,
+    full_log_probs: list[torch.Tensor] | None = None,
+    full_old_log_probs: list[torch.Tensor] | None = None,
+    seq_kls: list[torch.Tensor] | None = None,
+    chunked_loss_masks: list[torch.Tensor] | None = None,
+    cp_group: dist.ProcessGroup | None = None,
+    cp_size: int = 1,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute Off-Policy Sequence Masking (OPSM) mask.
 
     Args:
         args: Configuration containing `opsm_delta` threshold.
-        full_log_probs: Current policy log-probs per sample.
-        full_old_log_probs: Old policy log-probs per sample.
         advantages: Advantage values per sample.
         loss_masks: Loss masks per sample.
+        full_log_probs: Current policy log-probs per sample. Required when
+            ``seq_kls`` is not provided.
+        full_old_log_probs: Old policy log-probs per sample. Required when
+            ``seq_kls`` is not provided.
+        seq_kls: Optional list of precomputed sequence-level KL scalars. When
+            provided, ``chunked_loss_masks`` must also be provided and
+            ``full_log_probs``/``full_old_log_probs`` are ignored.
+        chunked_loss_masks: Loss masks aligned to the local (context-parallel)
+            chunks used in ``advantages`` when ``seq_kls`` is provided.
+        cp_group: Optional context-parallel process group for distributed
+            reductions when ``cp_size > 1``.
+        cp_size: Context-parallel world size.
 
     Returns:
         Tuple of `(opsm_mask, opsm_clipfrac)` where `opsm_mask` is a
         concatenated tensor of per-token masks and
         `opsm_clipfrac` is the count of masked sequences.
     """
+    if seq_kls is None:
+        assert full_log_probs is not None and full_old_log_probs is not None, (
+            "full_log_probs and full_old_log_probs are required when seq_kls is not provided"
+        )
+        seq_kls = [
+            ((full_old_log_prob - full_log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+            for full_log_prob, full_old_log_prob, loss_mask in zip(
+                full_log_probs, full_old_log_probs, loss_masks, strict=False
+            )
+        ]
+        effective_loss_masks = loss_masks
+    else:
+        assert chunked_loss_masks is not None, "chunked_loss_masks must be provided when seq_kls is provided"
+        effective_loss_masks = chunked_loss_masks
+
     opsm_mask_list = []
     device = advantages[0].device
-    opsm_clipfrac = torch.tensor(0.0, device=device)
+    token_counts: list[torch.Tensor] = []
 
-    for full_log_prob, full_old_log_prob, advantage, loss_mask in zip(
-        full_log_probs, full_old_log_probs, advantages, loss_masks, strict=False
+    for advantage, loss_mask, effective_loss_mask, seq_kl in zip(
+        advantages, loss_masks, effective_loss_masks, seq_kls, strict=False
     ):
-        # Calculate sequence-level KL
-        seq_kl = ((full_old_log_prob - full_log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
-
-        # Create mask: 0 if (advantage < 0 and seq_kl > delta), else 1
-        mask = ((advantage < 0) & (seq_kl > args.opsm_delta)).float()
-        opsm_clipfrac += mask.sum() / torch.clamp_min(loss_mask.sum(), 1)
-
+        mask = ((advantage < 0) & (seq_kl > args.opsm_delta)).float() * effective_loss_mask
         opsm_mask_list.append(1 - mask)
 
-    opsm_mask = torch.cat(opsm_mask_list, dim=0)
+        token_counts.append(torch.stack((mask.sum(), torch.clamp_min(loss_mask.sum().to(mask), 1))))
+
+    opsm_clipfrac = torch.tensor(0.0, device=device)
+    if token_counts:
+        stacked_counts = torch.stack(token_counts)
+        if cp_size > 1:
+            dist.all_reduce(stacked_counts, group=cp_group)
+        masked_tokens, total_tokens = stacked_counts.unbind(dim=1)
+        opsm_clipfrac = (masked_tokens / torch.clamp_min(total_tokens, 1)).sum()
+
+    opsm_mask = torch.cat(opsm_mask_list, dim=0) if opsm_mask_list else torch.tensor([], device=device)
     return opsm_mask, opsm_clipfrac
 
 
