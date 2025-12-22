@@ -1,5 +1,6 @@
 from argparse import Namespace
 from collections.abc import Callable, Iterator
+from contextlib import nullcontext
 from typing import Any
 
 import torch
@@ -9,9 +10,10 @@ from torch.utils.checkpoint import checkpoint
 from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
 from slime.utils.ppo_utils import (
-    calculate_log_probs_and_entropy,
     compute_approx_kl,
+    compute_entropy_from_logits,
     compute_gspo_kl,
+    compute_log_probs,
     compute_opsm_mask,
     compute_policy_loss,
     get_advantages_and_returns_batch,
@@ -126,6 +128,7 @@ def get_log_probs_and_entropy(
     assert non_loss_data
     log_probs_list = []
     entropy_list = []
+    tp_group = mpu.get_tensor_model_parallel_group()
     for logits_chunk, tokens_chunk in get_responses(
         logits,
         args=args,
@@ -133,12 +136,26 @@ def get_log_probs_and_entropy(
         total_lengths=total_lengths,
         response_lengths=response_lengths,
     ):
-        log_prob, entropy = calculate_log_probs_and_entropy(
-            logits_chunk, tokens_chunk, mpu.get_tensor_model_parallel_group(), with_entropy=with_entropy
-        )
-
+        logits = logits_chunk.contiguous()
+        # TODO: not sure why we need to clone the logits here.
+        # Without the clone, the backward will trigger inplace edit error.
+        # It seems that the function with tp will modify the logits inplace.
+        if logits.size(0) != 0:
+            log_prob = compute_log_probs(logits.clone(), tokens_chunk, tp_group)
+        else:
+            log_prob = logits.new_zeros((0,))
         log_probs_list.append(log_prob.squeeze(-1))
-        entropy_list.append(entropy)
+
+        if with_entropy:
+            with torch.no_grad() if args.entropy_coef else nullcontext():
+                if logits.size(0) != 0:
+                    entropy = compute_entropy_from_logits(
+                        logits.clone() if args.entropy_coef else logits,
+                        tp_group,
+                    )
+                else:
+                    entropy = logits.new_zeros((0,))
+            entropy_list.append(entropy)
 
     res = {
         "log_probs": log_probs_list,

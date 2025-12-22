@@ -644,26 +644,6 @@ def chunked_gae(
     return advantages, returns
 
 
-def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool = False):
-    logits = logits.contiguous()
-    # TODO: not sure why we need to clone the logits here.
-    # Without the clone, the backward will trigger inplace edit error.
-    # It seems that the function with tp will modify the logits inplace.
-    if logits.size(0) != 0:
-        log_prob = compute_log_probs(logits.clone(), tokens, tp_group)
-    else:
-        log_prob = logits.new_zeros((0,))
-
-    if with_entropy:
-        if logits.size(0) != 0:
-            entropy = compute_entropy_from_logits(logits.clone(), tp_group)
-        else:
-            entropy = logits.new_zeros((0,))
-    else:
-        entropy = None
-    return log_prob, entropy
-
-
 def vanilla_tis_function(
     args,
     *,
