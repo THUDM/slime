@@ -55,7 +55,7 @@ def get_chunked_loss_masks(
 
     chunked_loss_masks: list[torch.Tensor] = []
     chunk_lengths: list[int] = []
-    for total_length, response_length, loss_mask in zip(total_lengths, response_lengths, loss_masks, strict=False):
+    for total_length, response_length, loss_mask in zip(total_lengths, response_lengths, loss_masks, strict=True):
         prompt_length = total_length - response_length
         _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(total_length, response_length)
 

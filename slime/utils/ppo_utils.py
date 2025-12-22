@@ -2,6 +2,7 @@
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
 
 from argparse import Namespace
+from dataclasses import dataclass
 
 import torch
 import torch.distributed as dist
@@ -51,15 +52,44 @@ def compute_approx_kl(
     return kl
 
 
+@dataclass
+class OpsmInputs:
+    seq_kls: list[torch.Tensor]
+    loss_masks: list[torch.Tensor]
+    effective_loss_masks: list[torch.Tensor]
+
+
+def build_opsm_inputs_from_log_probs(
+    full_log_probs: list[torch.Tensor],
+    full_old_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+) -> OpsmInputs:
+    seq_kls = [
+        ((full_old_log_prob - full_log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+        for full_log_prob, full_old_log_prob, loss_mask in zip(
+            full_log_probs, full_old_log_probs, loss_masks, strict=True
+        )
+    ]
+
+    return OpsmInputs(seq_kls=seq_kls, loss_masks=loss_masks, effective_loss_masks=loss_masks)
+
+
+def build_opsm_inputs_from_seq_kls(
+    seq_kls: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    chunked_loss_masks: list[torch.Tensor],
+) -> OpsmInputs:
+    assert len(seq_kls) == len(loss_masks) == len(chunked_loss_masks), (
+        "seq_kls, loss_masks, and chunked_loss_masks must have the same length"
+    )
+    return OpsmInputs(seq_kls=seq_kls, loss_masks=loss_masks, effective_loss_masks=chunked_loss_masks)
+
+
 def compute_opsm_mask(
     args: Namespace,
     advantages: list[torch.Tensor],
-    loss_masks: list[torch.Tensor],
     *,
-    full_log_probs: list[torch.Tensor] | None = None,
-    full_old_log_probs: list[torch.Tensor] | None = None,
-    seq_kls: list[torch.Tensor] | None = None,
-    chunked_loss_masks: list[torch.Tensor] | None = None,
+    opsm_inputs: OpsmInputs,
     cp_group: dist.ProcessGroup | None = None,
     cp_size: int = 1,
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -68,16 +98,7 @@ def compute_opsm_mask(
     Args:
         args: Configuration containing `opsm_delta` threshold.
         advantages: Advantage values per sample.
-        loss_masks: Loss masks per sample.
-        full_log_probs: Current policy log-probs per sample. Required when
-            ``seq_kls`` is not provided.
-        full_old_log_probs: Old policy log-probs per sample. Required when
-            ``seq_kls`` is not provided.
-        seq_kls: Optional list of precomputed sequence-level KL scalars. When
-            provided, ``chunked_loss_masks`` must also be provided and
-            ``full_log_probs``/``full_old_log_probs`` are ignored.
-        chunked_loss_masks: Loss masks aligned to the local (context-parallel)
-            chunks used in ``advantages`` when ``seq_kls`` is provided.
+        opsm_inputs: Precomputed sequence-level KLs and aligned loss masks.
         cp_group: Optional context-parallel process group for distributed
             reductions when ``cp_size > 1``.
         cp_size: Context-parallel world size.
@@ -87,27 +108,15 @@ def compute_opsm_mask(
         concatenated tensor of per-token masks and
         `opsm_clipfrac` is the count of masked sequences.
     """
-    if seq_kls is None:
-        assert full_log_probs is not None and full_old_log_probs is not None, (
-            "full_log_probs and full_old_log_probs are required when seq_kls is not provided"
-        )
-        seq_kls = [
-            ((full_old_log_prob - full_log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
-            for full_log_prob, full_old_log_prob, loss_mask in zip(
-                full_log_probs, full_old_log_probs, loss_masks, strict=False
-            )
-        ]
-        effective_loss_masks = loss_masks
-    else:
-        assert chunked_loss_masks is not None, "chunked_loss_masks must be provided when seq_kls is provided"
-        effective_loss_masks = chunked_loss_masks
+    if cp_size > 1:
+        assert cp_group is not None, "cp_group is required when cp_size > 1"
 
     opsm_mask_list = []
     device = advantages[0].device
     token_counts: list[torch.Tensor] = []
 
-    for advantage, _loss_mask, effective_loss_mask, seq_kl in zip(
-        advantages, loss_masks, effective_loss_masks, seq_kls, strict=False
+    for advantage, _full_loss_mask, effective_loss_mask, seq_kl in zip(
+        advantages, opsm_inputs.loss_masks, opsm_inputs.effective_loss_masks, opsm_inputs.seq_kls, strict=True
     ):
         mask = ((advantage < 0) & (seq_kl > args.opsm_delta)).float() * effective_loss_mask
         opsm_mask_list.append(1 - mask)
@@ -119,10 +128,13 @@ def compute_opsm_mask(
     opsm_clipfrac = torch.tensor(0.0, device=device)
     if token_counts:
         stacked_counts = torch.stack(token_counts)
-        if cp_size > 1 and chunked_loss_masks is not None:
+        if cp_size > 1:
             dist.all_reduce(stacked_counts, group=cp_group)
         masked_tokens, total_tokens = stacked_counts.unbind(dim=1)
         opsm_clipfrac = (masked_tokens / torch.clamp_min(total_tokens, 1)).sum()
+
+        if cp_size > 1:
+            opsm_clipfrac = opsm_clipfrac / cp_size
 
     opsm_mask = torch.cat(opsm_mask_list, dim=0) if opsm_mask_list else torch.tensor([], device=device)
     return opsm_mask, opsm_clipfrac
