@@ -30,7 +30,7 @@ fi
 MODEL_NAME_LOWER=$(echo "$MODEL_NAME" | tr '[:upper:]' '[:lower:]')
 
 SLIME_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &>/dev/null && pwd)"
-MODEL_ARGS_FILE=$(echo "$MODEL_NAME_LOWER" | sed 's/-instruct//g; s/-thinking//g')
+MODEL_ARGS_FILE=$(echo "$MODEL_NAME" | sed 's/-Instruct//g; s/-Thinking//g; s/Qwen3-VL-/qwen3-/g; s/-2B/-1.7B/g')
 source "${SLIME_DIR}/scripts/models/${MODEL_ARGS_FILE}.sh"
 
 # External Ray flag
