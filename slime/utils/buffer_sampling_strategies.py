@@ -204,12 +204,12 @@ class FIFOWithStalenessStrategy(BaseSamplingStrategy):
         num_samples: int
     ) -> List[List[Sample]]:
         """
-        Sample using FIFO with staleness filtering.
+        Sample using FIFO with staleness filtering and version-aware stratified sampling.
 
         Algorithm:
         1. Filter by staleness
         2. Filter by reuse count
-        3. Take first num_samples groups (FIFO)
+        3. 🔧 NEW: Stratified sampling by version for diversity
         4. Remove from buffer if remove_on_sample=True or if exhausted
         """
         if len(buffer) == 0 or num_samples == 0:
@@ -230,9 +230,15 @@ class FIFOWithStalenessStrategy(BaseSamplingStrategy):
             print(f"[Buffer Sampling] All {len(exhausted_groups)} groups exhausted reuse limit (>={self.max_reuse_count}). "
                   f"Auto-evicting to make room for new rollout data.")
 
-        # Step 3: FIFO sampling
+        # Step 3: 🔧 NEW: Version-aware stratified sampling for off-policy diversity
+        # Instead of pure FIFO (always taking oldest), stratify by version to ensure
+        # each training batch contains samples from multiple policy versions
         num_to_sample = min(len(reusable_groups), num_samples)
-        sampled = reusable_groups[:num_to_sample]
+
+        if num_to_sample > 0:
+            sampled = self._stratified_sample_by_version(reusable_groups, num_to_sample)
+        else:
+            sampled = []
 
         # Step 4: Update reuse count (if not removing)
         if not self.remove_on_sample and len(sampled) > 0:
@@ -255,6 +261,100 @@ class FIFOWithStalenessStrategy(BaseSamplingStrategy):
 
         self.total_sampled += len(sampled)
         return sampled
+
+    def _stratified_sample_by_version(
+        self,
+        groups: List[List[Sample]],
+        num_samples: int
+    ) -> List[List[Sample]]:
+        """
+        Stratified sampling by policy version to ensure diversity.
+
+        Key insight for off-policy GRPO:
+        - Training should use samples from MULTIPLE policy versions
+        - Not just the oldest version (pure FIFO problem)
+        - Importance weight correction handles version mismatch
+
+        Algorithm:
+        1. Group samples by policy_version
+        2. Sample proportionally from each version
+        3. Fill remaining slots with round-robin across versions
+
+        Args:
+            groups: Available groups (already filtered by staleness & reuse)
+            num_samples: Number of groups to sample
+
+        Returns:
+            Sampled groups with version diversity
+        """
+        if len(groups) == 0:
+            return []
+
+        # Group by version
+        version_groups = {}
+        for group in groups:
+            version = group[0].policy_version if group[0].policy_version is not None else -1
+            if version not in version_groups:
+                version_groups[version] = []
+            version_groups[version].append(group)
+
+        num_versions = len(version_groups)
+
+        # If only one version, fall back to FIFO
+        if num_versions == 1:
+            return groups[:num_samples]
+
+        # Stratified sampling: sample proportionally from each version
+        sampled = []
+        samples_per_version = num_samples // num_versions
+        remainder = num_samples % num_versions
+
+        # Sort versions (oldest first for FIFO-like behavior)
+        sorted_versions = sorted(version_groups.keys())
+
+        # Phase 1: Sample proportionally from each version
+        for version in sorted_versions:
+            version_pool = version_groups[version]
+            # Take from front (FIFO within each version)
+            quota = samples_per_version
+            if remainder > 0:
+                quota += 1
+                remainder -= 1
+
+            take = min(quota, len(version_pool))
+            sampled.extend(version_pool[:take])
+
+        # Phase 2: If we haven't sampled enough (some versions exhausted),
+        # fill remainder with round-robin across versions
+        if len(sampled) < num_samples:
+            # Collect remaining samples from each version
+            remaining_pools = {}
+            for version in sorted_versions:
+                used = samples_per_version + (1 if version in sorted_versions[:num_samples % num_versions] else 0)
+                used = min(used, len(version_groups[version]))
+                if len(version_groups[version]) > used:
+                    remaining_pools[version] = version_groups[version][used:]
+
+            # Round-robin fill
+            while len(sampled) < num_samples and remaining_pools:
+                for version in sorted(remaining_pools.keys()):
+                    if len(sampled) >= num_samples:
+                        break
+                    if remaining_pools[version]:
+                        sampled.append(remaining_pools[version].pop(0))
+                    if not remaining_pools[version]:
+                        del remaining_pools[version]
+
+        # Log version distribution
+        sampled_versions = [g[0].policy_version for g in sampled if g[0].policy_version is not None]
+        if sampled_versions:
+            version_counts = {}
+            for v in sampled_versions:
+                version_counts[v] = version_counts.get(v, 0) + 1
+            print(f"[Buffer Sampling] Stratified sample: {dict(sorted(version_counts.items()))} "
+                  f"(total={len(sampled)} groups from {len(version_counts)} versions)")
+
+        return sampled[:num_samples]
 
 
 class PrioritySamplingStrategy(BaseSamplingStrategy):

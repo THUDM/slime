@@ -95,8 +95,8 @@ OFFPOLICY_GRPO_ARGS=(
    # - η=1: allows data from 1 version ago
    # - η=5: allows data from up to 5 versions ago (more aggressive off-policy)
    # Recommended: start with 2-3 for moderate off-policy
-   # --max-staleness 2
-   --max-staleness 4
+   --max-staleness 1
+   # --max-staleness 4
 
    # === PPO Clipping Parameters ===
    # Asymmetric clipping: allows more aggressive positive updates
@@ -181,8 +181,8 @@ export WANDB_KEY="968275bc822c87ac741ecce2f06cdfb54dbc1608"  # Replace with your
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-project slime-search-r1-offpolicy-stale4
-   --wandb-group qwen3-4B-2xgpu-offpolicy-stale4
+   --wandb-project slime-search-r1-offpolicy-stale
+   --wandb-group qwen3-4B-2xgpu-offpolicy-stale1
    --wandb-key ${WANDB_KEY}
 )
 
@@ -242,4 +242,4 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${CUSTOM_ARGS[@]}
 
 
-#  bash examples/search-r1/run_qwen3_4B_2xgpu_offpolicy_enhanced.sh 2>&1 | tee /mnt/shared-storage-user/puyuan/code/slime/examples/search-r1/logs/output_stale4.log
+#  bash examples/search-r1/run_qwen3_4B_2xgpu_offpolicy_enhanced.sh 2>&1 | tee /mnt/shared-storage-user/puyuan/code/slime/examples/search-r1/logs/output_stale1.log
