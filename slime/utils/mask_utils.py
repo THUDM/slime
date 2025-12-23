@@ -108,7 +108,43 @@ class MultiTurnLossMaskGenerator:
             loss_mask = [0] * len(token_ids)
         return token_ids, loss_mask
 
-    def get_loss_mask(self, messages: list[dict]) -> list[int]:
+    def gen_multi_turn_loss_mask_with_tools(self, messages: list[dict], tools: list[dict]) -> tuple[list[int], list[int]]:
+        """Delta-based tokenization for tool-calling conversations."""
+        all_token_ids = []
+        all_loss_masks = []
+
+        for i in range(len(messages)):
+            curr_messages = messages[: i + 1]
+            curr = self.tokenizer.apply_chat_template(
+                curr_messages, add_generation_prompt=False, tokenize=False, tools=tools, add_special_tokens=False
+            )
+
+            if i == 0:
+                token_ids = self.tokenizer.encode(curr, add_special_tokens=False)
+                assert messages[i]["role"] != "assistant", "First message role must not be 'assistant'."
+                loss_mask = [0] * len(token_ids)
+            else:
+                prev_messages = messages[:i]
+                add_gen = messages[i]["role"] == "assistant"
+                prev = self.tokenizer.apply_chat_template(
+                    prev_messages, add_generation_prompt=add_gen, tokenize=False, tools=tools, add_special_tokens=False 
+                )
+                delta_text = curr[len(prev):]
+                token_ids = self.tokenizer.encode(delta_text, add_special_tokens=False)
+                loss_mask = [1] * len(token_ids) if messages[i]["role"] == "assistant" else [0] * len(token_ids)
+
+            if messages[i].get("step_loss_mask", 1) != 1:
+                loss_mask = [0] * len(token_ids)
+
+            all_token_ids.extend(token_ids)
+            all_loss_masks.extend(loss_mask)
+
+        return all_token_ids, all_loss_masks
+
+    def get_loss_mask(self, messages: list[dict], tools: list[dict] = None) -> tuple[list[int], list[int]]:
+        if tools is not None:
+            return self.gen_multi_turn_loss_mask_with_tools(messages, tools)
+
         if self.tokenizer_type == "qwen":
             if "<｜Assistant｜>" in self.tokenizer.get_added_vocab():
                 return self.gen_multi_turn_loss_mask_distill_qwen(messages)

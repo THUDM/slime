@@ -478,6 +478,10 @@ ROLLOUT_ARGS=(
    # 4. 将预先构造好的 "metadata" 列加载到 Sample.metadata
    #    slime 会自动将其解析为 Python 字典
    --metadata-key metadata
+
+   # （可选）如果你的数据集中包含 tool calling 所需的工具定义，可提供 tool 列对应的 key
+   # 以便 slime 将 tool schema 加载到 `sample.metadata["tools"]`（用于 message 驱动的 tool-aware chat template）
+   # --tool-key tools
 )
 ```
 
@@ -499,6 +503,10 @@ ROLLOUT_ARGS=(
     -  需要注意的是： `loss_mask` 应该和 `response` 一样长，其中需要算 loss 的 token 为 1，mask 掉的为 0
     -   **模型生成**的 token (如思考、动作指令) → `loss_mask` 设为 `1`，参与损失计算。
     -   **工具或环境返回**的 token (如 API 结果) → `loss_mask` 设为 `0`，不参与损失计算。
+    -  小提示：如果你的自定义 `generate()` 是 **message 驱动** 的（你拿到 OpenAI `messages` + 可选的 `tools`），可以用 `MultiTurnLossMaskGenerator` 自动生成对齐的 `token_ids` 与 tool-aware 的 `loss_mask`：
+       - `token_ids, full_loss_mask = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type=args.loss_mask_type).get_loss_mask(messages, tools=tools)`
+       - `response_length = get_response_lengths([full_loss_mask])[0]`，再设置 `sample.tokens = token_ids`、`sample.response_length = response_length`，以及 `sample.loss_mask = full_loss_mask[-response_length:]`
+       - 如果在 RL rollout 中你直接使用 **SGLang 返回的 token ids**，则不要重新 tokenize；建议按追加 token 段的长度来构造 `loss_mask`，以保证对齐。
 6.  **终止条件**: 当模型生成终止标签（如 `<answer>...`）或达到最大轮次时，结束循环。
 7.  **封装返回**: 将完整的交互历史、token ID 和 `loss_masks` 填充到 `Sample` 对象中并返回。
 

@@ -169,6 +169,8 @@ This corresponds to the following configuration:
 Please note that the `step_loss_mask` (default=1) here is for SFT phase. If it is set to 0, the turn will not contibute to the final loss; if it is set to 1, slime will use the normal `loss_mask`.
 Additionally, we provide a `metadata_key`, which defaults to `"metadata"`. When read, slime will load the metadata from the data, which can be helpful for custom data generation or creating custom reward models.
 
+If your dataset contains tool definitions for tool-calling chat templates, you can also provide `--tool-key <key>`. slime will load it into `sample.metadata["tools"]` (a list of tool schemas). In the built-in SFT rollout, this automatically enables tool-aware chat template tokenization and loss masking (tool / observation tokens are masked out).
+
 ### Hyperparameters for RL Training
 
 - `--advantage-estimator`: Specifies the RL algorithm for the training process. Currently supported algorithms include:
