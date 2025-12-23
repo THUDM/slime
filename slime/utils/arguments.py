@@ -11,7 +11,6 @@ from transformers import AutoConfig
 from slime.backends.sglang_utils.arguments import add_sglang_arguments
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
-
 from slime.utils.logging_utils import configure_logger
 
 logger = logging.getLogger(__name__)
@@ -171,11 +170,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
-                "--use-hf-config-for-megatron",
-                action="store_true",
-                help="Whether to use HF config for Megatron core to define the model architecture.",
-            )
-            parser.add_argument(
                 "--model-name",
                 type=str,
                 default=None,
@@ -320,6 +314,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Whether to use partial rollout. "
                     "If set, the unfinished samples during dynamic sampling will be recycled back to data buffer. "
                     "This is useful for long responses."
+                ),
+            )
+            parser.add_argument(
+                "--mask-offpolicy-in-partial-rollout",
+                action="store_true",
+                default=False,
+                help=(
+                    "Whether to mask previous generation in partial rollout. "
+                    "If set, only on-policy generated tokens will be used in training"
                 ),
             )
             parser.add_argument(
@@ -605,6 +608,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Path to an OmegaConf YAML/JSON file describing evaluation datasets. "
                     "When provided, this overrides --eval-prompt-data."
                 ),
+            )
+            parser.add_argument(
+                "--skip-eval-before-train",
+                action="store_true",
+                default=False,
+                help="Whether to skip evaluation before training.",
             )
 
             # The following keys are used to override the rollout version during eval.
@@ -927,6 +936,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Log statistics of the category of reward, such as why the reward function considers it as failed. "
                     "Specify the key in the reward dict using this argument.",
                 ),
+            )
+            parser.add_argument(
+                "--log-correct-samples",
+                action="store_true",
+                default=False,
+                help="Whether to turn on passrate logging, which will log the pass@n of the responses in the rollout.",
             )
             parser.add_argument("--wandb-run-id", type=str, default=None)
             return parser
@@ -1288,19 +1303,13 @@ def parse_args(add_custom_arguments=None):
 
     backend = parse_args_train_backend()
     if backend == "megatron":
-        from slime.backends.megatron_utils import parse_args as megatron_parse_args
-        from slime.backends.megatron_utils import set_default_megatron_args
-        from slime.backends.megatron_utils import validate_args as megatron_validate_args
+        from slime.backends.megatron_utils.arguments import parse_args as megatron_parse_args
+        from slime.backends.megatron_utils.arguments import set_default_megatron_args
+        from slime.backends.megatron_utils.arguments import validate_args as megatron_validate_args
 
         args = megatron_parse_args(extra_args_provider=add_slime_arguments)
         if args.hf_checkpoint:
             hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
-            if args.use_hf_config_for_megatron:
-                from slime.backends.megatron_utils.config_mapping import get_mapper
-
-                megatron_config_from_hf = get_mapper(hf_config.model_type)(hf_config)
-                _validate_and_update_megatron_args_from_hf(args, megatron_config_from_hf.transformer_config)
-                _validate_and_update_megatron_args_from_hf(args, megatron_config_from_hf.gpt_model_args)
             hf_validate_args(args, hf_config)
 
         args.rank = 0
@@ -1399,17 +1408,22 @@ def slime_validate_args(args):
             )
 
     # TODO: During loading, we need to set the start_rollout_id here.
-    if args.megatron_to_hf_mode != "bridge" and (
-        args.load is None
-        or not os.path.exists(args.load)
-        or not os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
-    ):
-        args.no_load_optim = True
-        args.no_load_rng = True
-        args.finetune = True
-        args.load = args.ref_load
-        if args.ref_ckpt_step is not None:
-            args.ckpt_step = args.ref_ckpt_step
+    if args.megatron_to_hf_mode == "bridge":
+        if args.load is None:
+            args.load = args.ref_load or args.hf_checkpoint
+        args.start_rollout_id = 0
+    else:
+        if (
+            args.load is None
+            or not os.path.exists(args.load)
+            or not os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
+        ):
+            args.no_load_optim = True
+            args.no_load_rng = True
+            args.finetune = True
+            args.load = args.ref_load
+            if args.ref_ckpt_step is not None:
+                args.ckpt_step = args.ref_ckpt_step
         args.start_rollout_id = 0
 
     if args.eval_interval is not None:
@@ -1586,8 +1600,9 @@ def slime_validate_args(args):
             args.rollout_max_prompt_len <= args.rollout_max_context_len - 1
         ), f"args.rollout_max_prompt_len ({args.rollout_max_prompt_len}) must be smaller than args.rollout_max_context_len ({args.rollout_max_context_len}) so that there is at least one generated token to compute loss."
 
-    if args.prefill_num_servers is not None:
-        assert not args.use_fault_tolerance, "fault tolerance is not supported when prefill_num_servers is set."
+    assert not (
+        args.prefill_num_servers is not None and args.rollout_external
+    ), "prefill_num_servers cannot be set when rollout_external is set."
 
 
 def hf_validate_args(args, hf_config):
@@ -1595,6 +1610,10 @@ def hf_validate_args(args, hf_config):
         return x == y
 
     errors = []
+
+    # multimodal models have different config structure
+    if hasattr(hf_config, "text_config"):
+        hf_config = hf_config.text_config
 
     for hf_config_name, megatron_config_name, compare_fn in [
         ("hidden_size", "hidden_size", equal),
@@ -1614,12 +1633,3 @@ def hf_validate_args(args, hf_config):
 
     if len(errors) > 0:
         raise AssertionError("hf_validate_args failed: " + "; ".join(errors))
-
-
-def _validate_and_update_megatron_args_from_hf(args, args_from_hf_config: dict[str, Any]):
-    for key, value in args_from_hf_config.items():
-        if hasattr(args, key) and getattr(args, key) != value:
-            raise ValueError(
-                f"Argument {key} is not consistent. {key} in args is {getattr(args, key)}, but from HF config is {value}."
-            )
-        setattr(args, key, value)

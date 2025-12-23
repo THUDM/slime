@@ -36,10 +36,14 @@ SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-4B-Instruct ./examples/geo3k_vlm/run_geo3k_vlm.
 - `Qwen3-VL-2B-Instruct`
 - `Qwen3-VL-4B-Instruct`
 - `Qwen3-VL-8B-Instruct`
+- `Qwen3-VL-30B-A3B-Instruct`
+- `Qwen3-VL-235B-A22B-Instruct`
 - `Qwen3-VL-2B-Thinking`
 - `Qwen3-VL-4B-Thinking`
 - `Qwen3-VL-8B-Thinking`
-- 
+- `Qwen3-VL-30B-A3B-Thinking`
+- `Qwen3-VL-235B-A22B-Thinking`
+
 ## Notes
 
 ### Reward Model Configuration
