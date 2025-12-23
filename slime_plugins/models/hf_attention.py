@@ -5,6 +5,7 @@ import torch.distributed as dist
 from megatron.core import mpu, tensor_parallel
 from megatron.core.inference.contexts import BaseInferenceContext
 from megatron.core.packed_seq_params import PackedSeqParams
+from megatron.core.process_groups_config import ProcessGroupCollection
 from megatron.core.transformer.module import MegatronModule
 from transformers import AutoConfig
 
@@ -22,7 +23,7 @@ class HuggingfaceAttention(MegatronModule, ABC):
         config,
         layer_number: int,
         cp_comm_type: str = "p2p",
-        model_comm_pgs=None,
+        pg_collection: ProcessGroupCollection = None,
     ):
         super().__init__(config=config)
         self.args = args
@@ -43,6 +44,7 @@ class HuggingfaceAttention(MegatronModule, ABC):
         rotary_pos_emb: torch.Tensor | tuple[torch.Tensor, torch.Tensor] | None = None,
         rotary_pos_cos: torch.Tensor | None = None,
         rotary_pos_sin: torch.Tensor | None = None,
+        rotary_pos_cos_sin: torch.Tensor | None = None,
         attention_bias: torch.Tensor | None = None,
         packed_seq_params: PackedSeqParams | None = None,
         sequence_len_offset: int | None = None,

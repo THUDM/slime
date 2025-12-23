@@ -18,9 +18,13 @@ VALID_MODELS="
   Qwen3-VL-2B-Instruct
   Qwen3-VL-4B-Instruct
   Qwen3-VL-8B-Instruct
+  Qwen3-VL-30B-A3B-Instruct
+  Qwen3-VL-235B-A22B-Instruct
   Qwen3-VL-2B-Thinking
   Qwen3-VL-4B-Thinking
   Qwen3-VL-8B-Thinking
+  Qwen3-VL-30B-A3B-Thinking
+  Qwen3-VL-235B-A22B-Thinking
 "
 if ! echo "$VALID_MODELS" | grep -qw "$MODEL_NAME"; then
    echo "Error: MODEL_NAME must be one of: $VALID_MODELS"
@@ -28,10 +32,6 @@ if ! echo "$VALID_MODELS" | grep -qw "$MODEL_NAME"; then
 fi
 
 MODEL_NAME_LOWER=$(echo "$MODEL_NAME" | tr '[:upper:]' '[:lower:]')
-
-SLIME_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &>/dev/null && pwd)"
-MODEL_ARGS_FILE=$(echo "$MODEL_NAME_LOWER" | sed 's/-instruct//g; s/-thinking//g')
-source "${SLIME_DIR}/scripts/models/${MODEL_ARGS_FILE}.sh"
 
 # External Ray flag
 if [ -z "$SLIME_SCRIPT_EXTERNAL_RAY" ] || [ "$SLIME_SCRIPT_EXTERNAL_RAY" = "0" ]; then
@@ -80,6 +80,8 @@ fi
 # Common args
 CKPT_ARGS=(
    --hf-checkpoint /root/models/${MODEL_NAME}
+   # vl model has rotary base 5000000
+   --rotary-base 5000000
 )
 
 ROLLOUT_ARGS=(
@@ -134,15 +136,15 @@ SGLANG_ARGS=(
 
 # Wandb args (only if WANDB_API_KEY is set)
 if [ -n "$WANDB_API_KEY" ]; then
-    WANDB_ARGS=(
-        --use-wandb
-        --wandb-project slime-geo3k-vlm
-        --wandb-group ${MODEL_NAME_LOWER}-${TRAIN_BACKEND}
-        --wandb-key ${WANDB_API_KEY}
-        --disable-wandb-random-suffix
-    )
+   WANDB_ARGS=(
+      --use-wandb
+      --wandb-project slime-geo3k-vlm
+      --wandb-group ${MODEL_NAME_LOWER}-${TRAIN_BACKEND}
+      --wandb-key ${WANDB_API_KEY}
+      --disable-wandb-random-suffix
+   )
 else
-    WANDB_ARGS=()
+   WANDB_ARGS=()
 fi
 
 MISC_ARGS=(
@@ -151,36 +153,42 @@ MISC_ARGS=(
 
 # Backend-specific args
 if [ "$TRAIN_BACKEND" = "fsdp" ]; then
-    BACKEND_ARGS=(
-      --train-backend fsdp
-      --gradient-checkpointing
-      --sglang-attention-backend fa3
-      --attn-implementation flash_attention_3
-      --update-weight-buffer-size 536870912
-    )
+   BACKEND_ARGS=(
+   --train-backend fsdp
+   --gradient-checkpointing
+   --sglang-attention-backend fa3
+   --attn-implementation flash_attention_3
+   --update-weight-buffer-size 536870912
+   )
+   MODEL_ARGS=()
 else
-    # megatron backend (default)
-    BACKEND_ARGS=(
-      --train-backend megatron
-      --load /root/models/${MODEL_NAME}
-      --tensor-model-parallel-size 4
-      --sequence-parallel
-      --pipeline-model-parallel-size 1
-      --context-parallel-size 1
-      --expert-model-parallel-size 1
-      --expert-tensor-parallel-size 1
-      --recompute-granularity full
-      --recompute-method uniform
-      --recompute-num-layers 1
-      --use-dynamic-batch-size
-      --max-tokens-per-gpu 4096
-      --attention-dropout 0.0
-      --hidden-dropout 0.0
-      --accumulate-allreduce-grads-in-fp32
-      --attention-softmax-in-fp32
-      --attention-backend flash
-      --megatron-to-hf-mode bridge
-    )
+   # megatron backend (default)
+   BACKEND_ARGS=(
+   --train-backend megatron
+   --load /root/models/${MODEL_NAME}
+   --tensor-model-parallel-size 4
+   --sequence-parallel
+   --pipeline-model-parallel-size 1
+   --context-parallel-size 1
+   --expert-model-parallel-size 1
+   --expert-tensor-parallel-size 1
+   --recompute-granularity full
+   --recompute-method uniform
+   --recompute-num-layers 1
+   --use-dynamic-batch-size
+   --max-tokens-per-gpu 4096
+   --attention-dropout 0.0
+   --hidden-dropout 0.0
+   --accumulate-allreduce-grads-in-fp32
+   --attention-softmax-in-fp32
+   --attention-backend flash
+   --megatron-to-hf-mode bridge
+   )
+   
+   # get MODEL_ARGS from scripts/models for megatron backend
+   SLIME_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &>/dev/null && pwd)"
+   MODEL_ARGS_FILE=$(echo "$MODEL_NAME" | sed 's/-Instruct//g; s/-Thinking//g; s/Qwen3-VL-/qwen3-/g; s/-2B/-1.7B/g')
+   source "${SLIME_DIR}/scripts/models/${MODEL_ARGS_FILE}.sh"
 fi
 
 # Start Ray if not using external Ray

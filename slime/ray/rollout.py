@@ -435,6 +435,12 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
     )
     addr_and_ports = [{} for _ in range(num_engines)]
 
+    # Calculate prefill limit to identify prefill engines
+    prefill_limit = 0
+    if args.prefill_num_servers is not None:
+        num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
+        prefill_limit = args.prefill_num_servers * args.rollout_num_gpus_per_engine // num_gpu_per_engine
+
     visited_nodes = set()
     for rank, engine in rollout_engines:
         if rank // num_engines_per_node in visited_nodes:
@@ -469,9 +475,13 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
         get_addr, get_port = get_addr_and_ports(engine)
 
         for i in range(num_engines_on_this_node):
-            addr_and_ports[rank + i]["host"] = get_addr()
-            addr_and_ports[rank + i]["port"] = get_port()
-            addr_and_ports[rank + i]["nccl_port"] = get_port()
+            current_rank = rank + i
+            addr_and_ports[current_rank]["host"] = get_addr()
+            addr_and_ports[current_rank]["port"] = get_port()
+            addr_and_ports[current_rank]["nccl_port"] = get_port()
+
+            if args.prefill_num_servers is not None and current_rank < prefill_limit:
+                addr_and_ports[current_rank]["disaggregation_bootstrap_port"] = get_port()
 
         if args.rollout_num_gpus_per_engine > args.num_gpus_per_node:
             num_node_per_engine = args.rollout_num_gpus_per_engine // args.num_gpus_per_node
