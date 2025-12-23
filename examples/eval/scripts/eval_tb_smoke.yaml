@@ -1,0 +1,22 @@
+eval:
+  defaults:
+    n_samples_per_eval_prompt: 1
+    # temperature: 0.6
+    top_p: 0.95
+    top_k: -1
+    max_response_len: 24576
+  datasets: # minimal smoke eval to keep eval-only path happy
+    - name: smoke
+      path: /mnt/data/zhiyao/tb_evaluation/tb_eval_smoke/eval_smoke.jsonl
+      rm_type: deepscaler
+  delegate:
+    - name: terminal_bench
+      type: examples.eval.terminal_bench.tb_config.build_terminal_bench_config
+      url: http://172.17.0.1:9052
+      timeout_secs: 14400
+      max_retries: 1
+      model_name: openai/qwen3-8b
+      api_base: http://127.0.1.1:30005/v1
+      dataset_path: /mnt/data/xinyu/program/slime-tb/terminal-bench/tasks
+      task_id: hello-world
+      n_concurrent: 8
