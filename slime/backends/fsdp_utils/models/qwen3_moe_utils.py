@@ -1,49 +1,7 @@
-"""Qwen3-MoE utility functions: SonicMoE import, routing, and weight preparation."""
-
-import importlib
-import sys
-from pathlib import Path
+"""Qwen3-MoE utility functions: routing, and weight preparation."""
 
 import torch
 import torch.nn.functional as F
-
-
-_SONICMOE_FUNCTIONAL = None
-_SONICMOE_ENUMS = None
-
-
-def _import_sonicmoe():
-    """Import sonicmoe with fallback to vendored installation."""
-    try:
-        functional = importlib.import_module("sonicmoe.functional")
-        enums = importlib.import_module("sonicmoe.enums")
-        return functional, enums
-    except ModuleNotFoundError:
-        cur = Path(__file__).resolve()
-        for parent in cur.parents:
-            candidate = parent / "sonic-moe"
-            if candidate.is_dir():
-                sys.path.insert(0, str(candidate))
-                break
-        functional = importlib.import_module("sonicmoe.functional")
-        enums = importlib.import_module("sonicmoe.enums")
-        return functional, enums
-
-
-def get_sonicmoe_kernel():
-    """Get moe_general_routing_inputs function (cached)."""
-    global _SONICMOE_FUNCTIONAL
-    if _SONICMOE_FUNCTIONAL is None:
-        _SONICMOE_FUNCTIONAL, _ = _import_sonicmoe()
-    return _SONICMOE_FUNCTIONAL.moe_general_routing_inputs
-
-
-def get_sonicmoe_activation_type():
-    """Get ActivationType enum (cached)."""
-    global _SONICMOE_ENUMS
-    if _SONICMOE_ENUMS is None:
-        _, _SONICMOE_ENUMS = _import_sonicmoe()
-    return _SONICMOE_ENUMS.ActivationType
 
 
 def qwen3_moe_routing(
