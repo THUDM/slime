@@ -51,7 +51,10 @@ class MultiTurnLossMaskGenerator:
         all_token_ids = []
 
         for i, message in enumerate(messages):
-            message_ids = self.tokenizer.apply_chat_template([message], tokenize=True, tools=tools)
+            if i == 0:
+                message_ids = self.tokenizer.apply_chat_template([message], tokenize=True, tools=tools)
+            else:
+                message_ids = self.tokenizer.apply_chat_template([message], tokenize=True)
 
             if message["role"] != "system" and i > 0:
                 message_ids = message_ids[self.system_message_length :]
@@ -76,13 +79,17 @@ class MultiTurnLossMaskGenerator:
         all_token_ids = []
 
         prefix_message = {"role": "user", "content": "FOR CALCULATING LOSS MASK ONLY"}
-        prefix_token_ids = self.tokenizer.apply_chat_template([prefix_message], tokenize=True, tools=tools)
+        prefix_token_ids = self.tokenizer.apply_chat_template([prefix_message], tokenize=True)
 
         for i, message in enumerate(messages):
-            prefixed_message_ids = self.tokenizer.apply_chat_template(
-                [prefix_message, message], tokenize=True, tools=tools
-            )
-            message_ids = prefixed_message_ids[len(prefix_token_ids) :]
+            if i == 0:
+                tailed_message_ids = self.tokenizer.apply_chat_template(
+                    [message, prefix_message], tokenize=True, tools=tools
+                )
+                message_ids = tailed_message_ids[: -len(prefix_token_ids)]
+            else:
+                prefixed_message_ids = self.tokenizer.apply_chat_template([prefix_message, message], tokenize=True)
+                message_ids = prefixed_message_ids[len(prefix_token_ids) :]
 
             if message["role"] != "system" and i > 0:
                 message_ids = message_ids[self.system_message_length :]
