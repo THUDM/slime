@@ -1,5 +1,7 @@
 import argparse
+import asyncio
 import json
+import threading
 
 import httpx
 import uvicorn
@@ -7,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
+from slime.router.utils.component_registry import ComponentRegistry
 from slime.utils.misc import load_function
 
 
@@ -15,7 +18,7 @@ def run_router(args):
     Run the Slime router with the specified configuration.
     """
     # Initialize the router with tokenizer and lazy worker initialization
-    slime_router = SlimeRouter(args, verbose=False)
+    slime_router = SlimeRouter(args, verbose=args.verbose)
 
     # Start the server
     uvicorn.run(slime_router.app, host=args.sglang_router_ip, port=args.sglang_router_port, log_level="info")
@@ -29,6 +32,17 @@ class SlimeRouter:
 
         self.app = FastAPI()
 
+        # Initialize component registry for dependency injection
+        self._component_registry = None
+        self._registry_lock = threading.RLock()  # Use RLock for safer recursive access
+
+        # Cache availability check result (None = not checked yet)
+        self._cache_available = None
+        self._cache_lock = threading.RLock()  # Use RLock for safer recursive access
+
+        # Lazy-initialized chat completion handler (singleton)
+        self._chat_completion_handler = None
+
         # Worker information
         self.worker_urls: dict[str, int] = {}
         self.max_weight_version = None
@@ -40,6 +54,7 @@ class SlimeRouter:
             )
 
         timeout = getattr(args, "slime_router_timeout", None)
+        self._url_lock = asyncio.Lock()
 
         self.client = httpx.AsyncClient(
             limits=httpx.Limits(max_connections=max_connections),
@@ -60,17 +75,69 @@ class SlimeRouter:
         self.app.post("/add_worker")(self.add_worker)
         self.app.get("/list_workers")(self.list_workers)
         self.app.post("/retrieve_from_text")(self.retrieve_from_text)
+        self.app.post("/retrieve_from_messages_template")(self.retrieve_from_messages_template)
+
+        # OpenAI Chat Completion API (non-streaming only for now)
+        self.app.post("/v1/chat/completions")(self.chat_completions)
+
         # Catch-all route for proxying to SGLang - must be registered LAST
         self.app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE"])(self.proxy)
+
+    def get_component_registry(self) -> ComponentRegistry:
+        """
+        Get or create the component registry (thread-safe lazy initialization).
+
+        Returns:
+            ComponentRegistry instance
+        """
+        if self._component_registry is None:
+            with self._registry_lock:
+                # Double-check locking pattern
+                if self._component_registry is None:
+                    self._component_registry = ComponentRegistry()
+        return self._component_registry
+
+    @property
+    def component_registry(self) -> ComponentRegistry:
+        """Property accessor for component registry."""
+        return self.get_component_registry()
+
+    def _check_cache_availability(self) -> bool:
+        """
+        Check if cache support is available (thread-safe).
+
+        This method checks if the router has radix tree caching enabled
+        by looking for the radix_tree attribute or checking the component registry.
+
+        Returns:
+            bool: True if cache is available, False otherwise
+        """
+        if self._cache_available is not None:
+            return self._cache_available
+
+        with self._cache_lock:
+            # Double-check locking
+            if self._cache_available is not None:
+                return self._cache_available
+
+            # Check if radix tree is available in component registry
+            has_radix_tree = self.component_registry.has("radix_tree")
+
+            self._cache_available = has_radix_tree
+
+            if self.verbose:
+                print(f"[slime-router] Cache availability check: {has_radix_tree}")
+
+            return self._cache_available
 
     async def health_check(self, request: Request):
         # TODO: do health check in background
         pass
 
     async def proxy(self, request: Request, path: str):
-        """Proxy all other requests to the SGLang router"""
+        """Proxy all other requests to the SGLang router (non-streaming)"""
         # Forward all other paths to SGLang router
-        worker_url = self._use_url()
+        worker_url = await self._use_url()
         url = f"{worker_url}/{path}"
 
         # Get request body and headers
@@ -100,7 +167,7 @@ class SlimeRouter:
                 )
 
         finally:
-            self._finish_url(worker_url)
+            await self._finish_url(worker_url)
 
     async def add_worker(self, request: Request):
         """Add a new worker to the router.
@@ -142,8 +209,21 @@ class SlimeRouter:
 
         text = payload.get("text", "")
 
+        # Get radix tree from component registry
+        radix_tree = self.component_registry.get("radix_tree")
+        # Handle empty string early - return empty response
+        if not text:
+            return {
+                "tokens": [],
+                "response": text,
+                "loss_mask": [],
+                "token_length": 0,
+                "loss_mask_length": 0,
+                "rollout_logp": [],
+            }
+
         # Use radix tree's retrieve_from_text method (no need to fetch weight version here)
-        token_ids, logp, loss_mask = self.radix_tree.retrieve_from_text(text, return_logprob=True)
+        token_ids, logp, loss_mask = radix_tree.retrieve_from_text(text, return_logprob=True)
 
         # Handle the result based on whether logp was requested
         result = {
@@ -161,16 +241,18 @@ class SlimeRouter:
         """Select a worker URL using round-robin strategy"""
         assert len(self.worker_urls) > 0, "No workers available"
 
-        # get the url with mininal count
-        url = min(self.worker_urls, key=self.worker_urls.get)
-        self.worker_urls[url] += 1
-        return url
+        async with self._url_lock:
+            # get the url with minimal count
+            url = min(self.worker_urls, key=self.worker_urls.get)
+            self.worker_urls[url] += 1
+            return url
 
-    def _finish_url(self, url):
-        """Mark the request to the given URL as finished"""
+    async def _finish_url(self, url):
+        """Mark the request to the given URL as finished (async with lock)"""
         assert url in self.worker_urls, f"URL {url} not recognized"
-        self.worker_urls[url] -= 1
-        assert self.worker_urls[url] >= 0, f"URL {url} count went negative"
+        async with self._url_lock:
+            self.worker_urls[url] -= 1
+            assert self.worker_urls[url] >= 0, f"URL {url} count went negative"
 
 
 if __name__ == "__main__":
