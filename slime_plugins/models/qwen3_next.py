@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from megatron.core.models.gpt.gpt_layer_specs import get_gpt_decoder_block_spec
+from megatron.core.process_groups_config import ProcessGroupCollection
 from megatron.core.transformer.spec_utils import ModuleSpec
 from megatron.core.transformer.transformer_block import get_num_layers_to_build
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
@@ -169,14 +170,14 @@ class Attention(HuggingfaceAttention):
         config,
         layer_number: int,
         cp_comm_type: str = "p2p",
-        model_comm_pgs=None,
+        pg_collection: ProcessGroupCollection = None,
     ):
         super().__init__(
             args,
             config,
             layer_number,
             cp_comm_type,
-            model_comm_pgs,
+            pg_collection,
         )
         if Qwen3NextAttention is None:
             raise ImportError("Please install transformers>=4.35.0 to use Qwen3NextAttention.")
@@ -223,5 +224,4 @@ def get_qwen3_next_spec(args, config, vp_stage):
                 params={"args": args},
             )
             transformer_layer_spec.layer_specs[layer_id] = layer_specs
-        transformer_layer_spec.layer_specs[layer_id].submodules.mlp.submodules.shared_experts.params = {"gate": True}
     return transformer_layer_spec
