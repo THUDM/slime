@@ -84,7 +84,7 @@ ROLLOUT_ARGS=(
   --num-rollout 40
   --rollout-batch-size 4
   --n-samples-per-prompt 1
-  --rollout-max-response-len 512
+  --rollout-max-response-len 2048
   --rollout-temperature 0.8
 
   --global-batch-size 4
@@ -109,7 +109,7 @@ PERF_ARGS=(
   --sequence-parallel
 
   --use-dynamic-batch-size
-  --max-tokens-per-gpu 4096
+  --max-tokens-per-gpu 8092
 )
 
 GRPO_ARGS=(
