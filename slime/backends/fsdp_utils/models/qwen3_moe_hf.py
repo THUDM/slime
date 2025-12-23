@@ -1,4 +1,6 @@
 import torch
+from sonicmoe.functional import moe_general_routing_inputs
+from sonicmoe.enums import ActivationType
 
 from .qwen3_moe_utils import (
     qwen3_moe_routing,

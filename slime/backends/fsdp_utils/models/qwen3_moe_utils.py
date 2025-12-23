@@ -20,12 +20,21 @@ def qwen3_moe_routing(
 
 
 def stack_expert_weights_for_sonicmoe(experts):
-    """Stack expert weights in SonicMoE format: w13=(2I,H,E), w2=(H,I,E)."""
-    w13_weight = torch.stack(
-        [torch.cat([e.gate_proj.weight, e.up_proj.weight], dim=0) for e in experts],
-        dim=-1
-    ).contiguous()
-    w2_weight = torch.stack([e.down_proj.weight for e in experts], dim=-1).contiguous()
+    per_expert_w13 = [
+        torch.cat([e.gate_proj.weight, e.up_proj.weight], dim=0)  # (I, H)  I=2*intermediate_dim
+        for e in experts
+    ]
+    w13_base = torch.stack(per_expert_w13, dim=0)          # (E, I, H) contiguous
+    w13_weight = w13_base.permute(1, 2, 0)                 # (I, H, E) view
+    assert w13_weight.stride(1) == 1, w13_weight.stride()
+
+    per_expert_w2 = [e.down_proj.weight for e in experts]  # each (H, I)
+
+    w2_base = torch.stack(per_expert_w2, dim=0)            # (E, H, I) contiguous
+
+    w2_weight = w2_base.permute(1, 2, 0)                   # (H, I, E) view, NOT contiguous
+    assert w2_weight.stride(1) == 1, w2_weight.stride()
+
     return w13_weight, w2_weight
 
 
