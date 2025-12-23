@@ -317,6 +317,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--mask-offpolicy-in-partial-rollout",
+                action="store_true",
+                default=False,
+                help=(
+                    "Whether to mask previous generation in partial rollout. "
+                    "If set, only on-policy generated tokens will be used in training"
+                ),
+            )
+            parser.add_argument(
                 "--custom-generate-function-path",
                 type=str,
                 default=None,
@@ -599,6 +608,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Path to an OmegaConf YAML/JSON file describing evaluation datasets. "
                     "When provided, this overrides --eval-prompt-data."
                 ),
+            )
+            parser.add_argument(
+                "--skip-eval-before-train",
+                action="store_true",
+                default=False,
+                help="Whether to skip evaluation before training.",
             )
 
             # The following keys are used to override the rollout version during eval.
@@ -921,6 +936,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Log statistics of the category of reward, such as why the reward function considers it as failed. "
                     "Specify the key in the reward dict using this argument.",
                 ),
+            )
+            parser.add_argument(
+                "--log-correct-samples",
+                action="store_true",
+                default=False,
+                help="Whether to turn on passrate logging, which will log the pass@n of the responses in the rollout.",
             )
             parser.add_argument("--wandb-run-id", type=str, default=None)
             return parser

@@ -213,6 +213,10 @@ async def generate_and_rm(
     sampling_params: dict[str, Any],
     evaluation: bool = False,
 ) -> Sample | list[Sample]:
+    # mask previous off-policy generation for partial rollout
+    if args.partial_rollout and args.mask_offpolicy_in_partial_rollout and sample.response_length > 0:
+        sample.loss_mask = [0] * sample.response_length
+
     # For samples with existing response, check if they're complete
     if sample.status == Sample.Status.COMPLETED or sample.status == Sample.Status.TRUNCATED:
         assert sample.response is not None

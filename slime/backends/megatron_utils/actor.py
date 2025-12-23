@@ -25,6 +25,7 @@ from slime.utils.routing_replay import RoutingReplay
 from slime.utils.timer import Timer, inverse_timer, timer
 from slime.utils.tracking_utils import init_tracking
 from slime.utils.types import RolloutBatch
+
 from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
 from .checkpoint import load_checkpoint
@@ -66,7 +67,6 @@ class MegatronTrainRayActor(TrainRayActor):
             if i == dist.get_rank():
                 self.hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
                 self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
-
             dist.barrier(group=get_gloo_group())
 
         self.train_parallel_config = {
