@@ -730,14 +730,14 @@ def value_loss_function(
     loss = sum_of_sample_mean(loss)
     values_clipfrac = sum_of_sample_mean(values_clipfrac.float())
 
+    # Ensure gradients propagate even when local sequences are empty
+    if values.numel() == 0:
+        loss = loss + 0 * values.sum()
+
     reported_loss = {
         "value_loss": loss.clone().detach(),
         "value_clipfrac": values_clipfrac.clone().detach(),
     }
-
-    # Ensure gradients propagate even when local sequences are empty
-    if values.numel() == 0:
-        loss = loss + 0 * logits.sum()
 
     return loss, reported_loss
 

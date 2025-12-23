@@ -1,7 +1,7 @@
 from collections.abc import Callable
 
 import torch
-import torch.distributed.nn.functional as distnnf
+import torch.distributed as dist
 import torch.nn.functional as F
 from megatron.core import mpu
 
@@ -212,7 +212,7 @@ def all_gather_with_cp(tensor: torch.Tensor, total_length: int, response_length:
         full_tensor = torch.cat([left, chunk_0, mid, chunk_1, right], dim=0)
 
     assert full_tensor.shape[0] == response_length, f"Expected {response_length}, got {full_tensor.shape}"
-    full_tensor = distnnf.all_reduce(full_tensor, group=cp_group)
+    full_tensor = dist.nn.all_reduce(full_tensor, group=cp_group)
     return full_tensor
 
 
