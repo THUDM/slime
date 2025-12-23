@@ -14,7 +14,8 @@ def quantize_params(args, megatron_name, converted_named_params, quantization_co
         return converted_named_params
 
     quant_method = quantization_config.get("quant_method")
-    if quant_method == "compressed-tensors":
+
+    if args.int4_params_rollout and quant_method == "compressed-tensors":
         return _quantize_params_int4(converted_named_params, quantization_config)
 
     assert quantization_config["quant_method"] == "fp8"
