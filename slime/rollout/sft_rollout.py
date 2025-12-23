@@ -41,7 +41,8 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
     for i, sample in enumerate(samples):
         (sample,) = sample
         messages = sample.prompt
-        token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages)
+        tools = sample.metadata.get("tools", None)
+        token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
         response_length = MASK_GENERATOR.get_response_lengths([loss_mask])[0]
 
         sample.tokens = token_ids
