@@ -187,7 +187,7 @@ class FSDPTrainRayActor(TrainRayActor):
         else:
             from .models.qwen3_moe_hf import apply_fsdp_moe_patch
 
-            apply_fsdp_moe_patch()
+            apply_fsdp_moe_patch(args)
 
     def _setup_device_mesh(self) -> None:
         """Setup device mesh for parallelism (always called, handles both CP and non-CP cases).
@@ -549,6 +549,15 @@ class FSDPTrainRayActor(TrainRayActor):
             raise NotImplementedError(f"Unsupported advantage_estimator {self.args.advantage_estimator}")
 
         packed_batches, grad_accum = self._packed_data(rollout_data)
+        
+        if dist.get_rank() == 0:
+            logger.info(
+                f"Actor train: len(packed_batches)={len(packed_batches)}, "
+                f"len(tokens)={len(rollout_data['tokens'])}, "
+                f"local_batch_size={self.args.global_batch_size // self.dp_size}, "
+                f"dp_size={self.dp_size}, "
+                f"grad_accum={grad_accum}"
+            )
 
         assert (
             len(grad_accum) > 0
@@ -591,9 +600,15 @@ class FSDPTrainRayActor(TrainRayActor):
             self.ref_model.cpu()
 
     def _train_step(self, packed_batch, reported_accum, mbs_id, grad_accum):
+        if dist.get_rank() == 0:
+            logger.info(f"[DEBUG] _train_step: mbs_id={mbs_id}, grad_accum={grad_accum}")
         # Prepare model inputs
         model_args = self._get_model_inputs_args(packed_batch)
+        if dist.get_rank() == 0:
+            logger.info(f"[DEBUG] Before model forward")
         logits = self.model(**model_args).logits.squeeze(0).float()
+        if dist.get_rank() == 0:
+            logger.info(f"[DEBUG] After model forward")
 
         # Compute log probs and entropy (unified for both CP and non-CP modes)
         log_probs, entropy_result = get_logprob_and_entropy_with_cp(
@@ -756,27 +771,48 @@ class FSDPTrainRayActor(TrainRayActor):
 
         # Scale loss for gradient accumulation
         loss = loss * self.dp_size / self.args.global_batch_size
+        if dist.get_rank() == 0:
+            logger.info(f"[DEBUG] Before loss.backward(), mbs_id={mbs_id}")
         loss.backward()
+        if dist.get_rank() == 0:
+            logger.info(f"[DEBUG] After loss.backward(), mbs_id={mbs_id}")
 
         # Accumulate reported metrics (store tensors for later mean)
         for k, v in reported.items():
             reported_accum.setdefault(k, []).append(v)
 
         if (mbs_id + 1) in grad_accum:
+            if dist.get_rank() == 0:
+                logger.info(f"[DEBUG] mbs_id={mbs_id}, grad_accum={grad_accum}, starting optimizer step")
             # TODO: check if the grad norm is global grad norm.
+            if dist.get_rank() == 0:
+                logger.info(f"[DEBUG] Before clip_grad_norm_")
             grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
+
+            if dist.get_rank() == 0:
+                logger.info(f"[DEBUG] Afteer clip_grad_norm_, start float(grad_norm)")
             # the grad norm used to be of DTensor
             grad_norm = float(grad_norm)
+            if dist.get_rank() == 0:
+                logger.info(f"[DEBUG] After float(grad_norm), grad_norm={grad_norm}, starting optimizer.step()")
 
             self.optimizer.step()
+            if dist.get_rank() == 0:
+                logger.info(f"[DEBUG] After optimizer.step(), starting lr_scheduler.step()")
             # Update learning rate
             self.lr_scheduler.step()
             self.optimizer.zero_grad(set_to_none=True)
+            if dist.get_rank() == 0:
+                logger.info(f"[DEBUG] After zero_grad(), aggregating logs")
             # Aggregate logs
             aggregated = {k: torch.stack(v).sum().item() for k, v in reported_accum.items()}
             # TODO: change this, this is slow.
             reduced_aggregated = [None] * self.dp_size
+            if dist.get_rank() == 0:
+                logger.info(f"[DEBUG] Before dist.all_gather_object, dp_size={self.dp_size}")
             dist.all_gather_object(reduced_aggregated, aggregated, group=self.dp_group)
+            if dist.get_rank() == 0:
+                logger.info(f"[DEBUG] After dist.all_gather_object")
             aggregated = {}
             for k in reported_accum.keys():
                 aggregated[k] = sum([r[k] for r in reduced_aggregated]) / (self.args.global_batch_size)
