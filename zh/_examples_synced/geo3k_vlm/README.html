@@ -52,7 +52,7 @@
     <link rel="search" title="搜索" href="../../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2025 年 12 月 22 日"/>
+    <meta name="docbuild:last-update" content="2025 年 12 月 24 日"/>
   </head>
   
   
@@ -431,6 +431,7 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#data-preparation-for-sft-training">Data Preparation (For SFT Training)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reproduce">Reproduce</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#supported-models">Supported Models</a></li>
@@ -459,6 +460,38 @@ document.write(`
 <p align="center">
   <img src="fsdp_vs_megatron.png" alt="FSDP vs Megatron Reward Plot" width="800">
 </p>
+<section id="data-preparation-for-sft-training">
+<h2>Data Preparation (For SFT Training)<a class="headerlink" href="#data-preparation-for-sft-training" title="Link to this heading">#</a></h2>
+<p>The <a class="reference external" href="https://huggingface.co/datasets/chenhegu/geo3k_imgurl">geo3k_imgurl</a> dataset contains:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">problem</span></code>: The math problem text (string)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">answer</span></code>: The answer (string, e.g., &quot;270&quot;)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">images</span></code>: Image data (list)</p></li>
+</ul>
+<p>For SFT training, we need to format the <code class="docutils literal notranslate"><span class="pre">answer</span></code> field for <code class="docutils literal notranslate"><span class="pre">\boxed{}</span></code> format and the messages. You can use the following script to format the answer field:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">datasets</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_dataset</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+
+<span class="n">ds</span> <span class="o">=</span> <span class="n">load_dataset</span><span class="p">(</span><span class="s2">&quot;chenhegu/geo3k_imgurl&quot;</span><span class="p">,</span> <span class="n">split</span><span class="o">=</span><span class="s2">&quot;train&quot;</span><span class="p">)</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">format_answer</span><span class="p">(</span><span class="n">answer</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">str</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Format answer to include \\boxed{} format.&quot;&quot;&quot;</span>
+    <span class="k">return</span> <span class="sa">f</span><span class="s2">&quot;Answer: </span><span class="se">\\</span><span class="s2">boxed</span><span class="se">{{</span><span class="si">{</span><span class="n">answer</span><span class="si">}</span><span class="se">}}</span><span class="s2">&quot;</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">process_sample</span><span class="p">(</span><span class="n">sample</span><span class="p">):</span>
+    <span class="n">formatted_answer</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;Answer: </span><span class="se">\\</span><span class="s2">boxed</span><span class="se">{{</span><span class="si">{</span><span class="n">sample</span><span class="p">[</span><span class="s1">&#39;answer&#39;</span><span class="p">]</span><span class="si">}</span><span class="se">}}</span><span class="s2">&quot;</span>
+    
+    <span class="n">sample</span><span class="p">[</span><span class="s2">&quot;messages&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">[</span>
+        <span class="p">{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="p">[</span><span class="s2">&quot;problem&quot;</span><span class="p">]},</span>
+        <span class="p">{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;assistant&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">formatted_answer</span><span class="p">}</span>
+    <span class="p">]</span>
+    <span class="k">return</span> <span class="n">sample</span>
+
+<span class="n">ds</span> <span class="o">=</span> <span class="n">ds</span><span class="o">.</span><span class="n">map</span><span class="p">(</span><span class="n">process_sample</span><span class="p">)</span>
+<span class="n">ds</span><span class="o">.</span><span class="n">to_parquet</span><span class="p">(</span><span class="s2">&quot;/root/datasets/geo3k_imgurl/train_formatted.parquet&quot;</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
 <section id="reproduce">
 <h2>Reproduce<a class="headerlink" href="#reproduce" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">WANDB_API_KEY</span><span class="o">=</span>your_wandb_api_key
@@ -471,6 +504,9 @@ document.write(`
 
 <span class="c1"># With different model</span>
 <span class="nv">SLIME_SCRIPT_MODEL_NAME</span><span class="o">=</span>Qwen3-VL-4B-Instruct<span class="w"> </span>./examples/geo3k_vlm/run_geo3k_vlm.sh
+
+<span class="c1"># SFT</span>
+./examples/geo_3k_vlm/run_geo3k_vlm_sft.sh
 </pre></div>
 </div>
 <section id="configuration">
@@ -574,6 +610,7 @@ document.write(`
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#data-preparation-for-sft-training">Data Preparation (For SFT Training)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reproduce">Reproduce</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#supported-models">Supported Models</a></li>
@@ -618,7 +655,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2025 年 12 月 22 日.
+  最后更新于 2025 年 12 月 24 日.
   <br/>
 </p>
   </div>
