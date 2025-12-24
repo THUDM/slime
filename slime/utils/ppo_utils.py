@@ -13,6 +13,7 @@ def compute_approx_kl(
     log_probs: torch.Tensor,
     log_probs_base: torch.Tensor,
     kl_loss_type: str,
+    importance_ratio: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
     Compute the approximate KL divergence between two distributions.
@@ -21,29 +22,33 @@ def compute_approx_kl(
     Args:
         log_probs: Log probabilities of the new distribution.
         log_probs_base: Log probabilities of the base distribution.
-        action_mask: Mask for actions.
+        kl_loss_type: Type of KL estimator (k1, k2, k3, low_var_kl).
+        importance_ratio: Optional IS ratio (π_θ/π_old) for unbiased KL estimation.
     """
-
     log_ratio = log_probs.float() - log_probs_base.float()
 
     if kl_loss_type == "k1":
-        return log_ratio
+        kl = log_ratio
     elif kl_loss_type == "k2":
-        log_ratio = log_ratio**2 / 2.0
-        return log_ratio
-    elif kl_loss_type == "k3":
+        kl = log_ratio**2 / 2.0
+    elif kl_loss_type in ["k3", "low_var_kl"]:
         # The non negative kl approximation in
         # http://joschu.net/blog/kl-approx.html
         # Besides non negative, it is also unbiased and have lower variance.
         log_ratio = -log_ratio
-        log_ratio = log_ratio.exp() - 1 - log_ratio
-        return log_ratio
-    elif kl_loss_type == "low_var_kl":
-        log_ratio = -log_ratio
-        log_ratio = log_ratio.exp() - 1 - log_ratio
-        return torch.clamp(log_ratio, min=-10, max=10)
+        kl = log_ratio.exp() - 1 - log_ratio
     else:
         raise ValueError(f"Unknown kl_loss_type: {kl_loss_type}")
+
+    # Apply IS ratio for unbiased KL estimation (DeepSeek-V3.2)
+    if importance_ratio is not None:
+        kl = importance_ratio * kl
+
+    # Clamp only for low_var_kl for numerical stability
+    if kl_loss_type == "low_var_kl":
+        kl = torch.clamp(kl, min=-10, max=10)
+
+    return kl
 
 
 def compute_opsm_mask(
@@ -711,3 +716,40 @@ def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool
     else:
         entropy = None
     return log_prob, entropy
+
+
+def vanilla_tis_function(
+    args,
+    *,
+    pg_loss: torch.Tensor,
+    train_log_probs: list[torch.Tensor],
+    rollout_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    **kwargs,
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
+    """Apply TIS off-policy correction using importance sampling.
+
+    Parameters:
+        args: Arguments containing TIS settings.
+        pg_loss: Policy gradient loss tensor of shape [total_seq_len - 1].
+        train_log_probs: List of tensors containing training log-probabilities
+            for each sequence.
+        rollout_log_probs: List of tensors containing rollout log-probabilities
+            for each sequence.
+        loss_masks: List of tensors containing loss masks for each sequence.
+    """
+    rollout_log_probs = torch.cat(rollout_log_probs, dim=0)
+    old_log_probs = torch.cat(train_log_probs, dim=0)
+    tis = torch.exp(old_log_probs - rollout_log_probs)
+    tis_abs = (tis - 1).abs()
+    tis_clip_low = args.tis_clip_low if args.tis_clip_low is not None else 0.1
+    tis_clip_high = args.tis_clip if args.tis_clip is not None else 2.0
+    tis_weights = torch.clamp(tis, min=tis_clip_low, max=tis_clip_high)
+    tis_clipfrac = (tis_weights != tis).float()
+    metrics = {
+        "tis": tis.clone().detach(),
+        "tis_clipfrac": tis_clipfrac.clone().detach(),
+        "tis_abs": tis_abs.clone().detach(),
+    }
+    pg_loss = pg_loss * tis_weights
+    return pg_loss, loss_masks, metrics

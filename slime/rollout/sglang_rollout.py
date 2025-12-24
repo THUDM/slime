@@ -7,6 +7,7 @@ from collections.abc import Callable
 from typing import Any
 
 import numpy as np
+import pybase64
 import sglang_router
 from packaging.version import parse
 from tqdm import tqdm
@@ -101,9 +102,11 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         state.tokenizer,
         state.processor,
         sample.metadata,
+        args.apply_chat_template,
         args.apply_chat_template_kwargs,
     )
 
+    sample.prompt = extra_info.get("formatted_prompt", sample.prompt)
     image_data = extra_info.get("images", [])
     video_data = extra_info.get("videos", [])
     multimodal_inputs = extra_info.get("multimodal_inputs", None)
@@ -147,7 +150,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     # Extract new response tokens
 
     if args.use_slime_router and "RadixTreeMiddleware" in args.slime_router_middleware_paths:
-        assert not args.partial_rollout, "Currently parital rollout is not suppurted when using slime router"
+        assert not args.partial_rollout, "Currently partial rollout is not supported when using slime router"
         retrieve_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/retrieve_from_text"
         retrieve_payload = {"text": sample.prompt + output["text"], "return_logp": True}
         retrieve_output = await post(retrieve_url, retrieve_payload)
@@ -185,8 +188,14 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.weight_versions.append(output["meta_info"]["weight_version"])
 
     if "routed_experts" in output["meta_info"]:
-        assert len(output["meta_info"]["routed_experts"]) == len(sample.tokens)
-        sample.rollout_routed_experts = np.array(output["meta_info"]["routed_experts"])
+        sample.rollout_routed_experts = np.frombuffer(
+            pybase64.b64decode(output["meta_info"]["routed_experts"].encode("ascii")),
+            dtype=np.int32,
+        ).reshape(
+            len(sample.tokens) - 1,
+            args.num_layers,
+            args.moe_router_topk,
+        )
 
     match output["meta_info"]["finish_reason"]["type"]:
         case "length":
@@ -205,6 +214,10 @@ async def generate_and_rm(
     sampling_params: dict[str, Any],
     evaluation: bool = False,
 ) -> Sample | list[Sample]:
+    # mask previous off-policy generation for partial rollout
+    if args.partial_rollout and args.mask_offpolicy_in_partial_rollout and sample.response_length > 0:
+        sample.loss_mask = [0] * sample.response_length
+
     # For samples with existing response, check if they're complete
     if sample.status == Sample.Status.COMPLETED or sample.status == Sample.Status.TRUNCATED:
         assert sample.response is not None
@@ -270,7 +283,7 @@ async def generate_and_rm_group(
 
     group = await asyncio.gather(*tasks)
 
-    # for the rm that need the whole group, we will not do the rm here
+    # for the rm that need the whole group, we will do the rm here
     if not state.aborted and args.group_rm:
         rewards = await batched_async_rm(args, group)
         for sample, reward in zip(group, rewards, strict=False):
@@ -293,9 +306,8 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
         response = await get(f"http://{args.sglang_router_ip}:{args.sglang_router_port}/workers")
         urls = [worker["url"] for worker in response["workers"]]
 
-    for url in urls:
-        logger.info(f"Abort request for {url}")
-        await post(f"{url}/abort_request", {"abort_all": True})
+    logger.info(f"Abort request for {urls}")
+    await asyncio.gather(*[post(f"{url}/abort_request", {"abort_all": True}) for url in urls])
 
     # make sure all the pending tasks are finished
     count = 0
@@ -350,6 +362,7 @@ async def generate_rollout_async(
     target_data_size = args.rollout_batch_size
 
     data = []
+    all_data = []
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
     while len(data) < target_data_size:
@@ -371,6 +384,7 @@ async def generate_rollout_async(
                 do_print = False
 
             assert len(group) == args.n_samples_per_prompt
+            all_data.append(group)
             dynamic_filter_output = _call_dynamic_filter(dynamic_filter, args, group)
             if not dynamic_filter_output.keep:
                 metric_gatherer.on_dynamic_filter_drop(reason=dynamic_filter_output.reason)
@@ -394,12 +408,18 @@ async def generate_rollout_async(
 
     assert len(data) == args.rollout_batch_size, f"Got {len(data)} samples, expected {args.rollout_batch_size}"
     data = sorted(data, key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)
+    all_samples = sorted(data, key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)
 
     # reset the global state to prevent effects on the next rollout or eval.
     state.reset()
     if args.rollout_sample_filter_path is not None:
         filter_func = load_function(args.rollout_sample_filter_path)
         filter_func(args, data)
+
+    # There can be circumstances where users want to process all samples including filtered ones.
+    if args.rollout_all_samples_process_path is not None:
+        process_func = load_function(args.rollout_all_samples_process_path)
+        process_func(args, all_samples, data_source)
 
     return RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect()), aborted_samples
 

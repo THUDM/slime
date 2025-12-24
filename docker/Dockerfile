@@ -1,10 +1,10 @@
-ARG SGLANG_IMAGE_TAG=v0.5.5.post1
+ARG SGLANG_IMAGE_TAG=nightly-dev-20251208-5e2cda61
 FROM lmsysorg/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
 
 ARG PATCH_VERSION=latest
-ARG MEGATRON_COMMIT=core_v0.14.0
+ARG MEGATRON_COMMIT=3714d81d418c9f1bca4594fc35f9e8289f652862
 
 ARG ENABLE_CUDA_13=0
 
@@ -38,10 +38,10 @@ RUN pip install flash-linear-attention==0.4.0
 
 # TE does not have wheel on cuda 13 yet, thus need to install from source
 RUN if [ "${ENABLE_CUDA_13}" = "1" ]; then \
-      pip install nvidia-mathdx==25.6.0 && \
-      pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.8; \
+      pip install nvidia-mathdx==26.6.0 && \
+      pip -v install --no-build-isolation git+https://github.com/NVIDIA/TransformerEngine.git@release_v2.10; \
     else \
-      pip -v install --no-build-isolation "transformer_engine[pytorch]==2.8.0"; \
+      pip -v install --no-build-isolation "transformer_engine[pytorch]==2.10.0"; \
     fi
 
 RUN NVCC_APPEND_FLAGS="--threads 4" \
@@ -53,7 +53,7 @@ RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
     cd Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
     pip install -e .
 
-RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@9b8b788fdeb9c2ee528183214cef65a99b71e7d5 --no-cache-dir --force-reinstall
+RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@dc6876905830430b5054325fa4211ff302169c6b --no-cache-dir --force-reinstall
 RUN pip install git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl --no-build-isolation
 RUN pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation
 
@@ -71,26 +71,14 @@ RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
     python3 -m pip install https://github.com/sgl-project/whl/releases/download/v${SGL_KERNEL_VERSION}/sgl_kernel-${SGL_KERNEL_VERSION}+cu130-cp310-abi3-manylinux2014_$(uname -m).whl --force-reinstall --no-deps; \
   fi
 
-# This patch is merged into main, but we are using stable version, thus still need it
-RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
-    curl -L https://github.com/NVIDIA/TransformerEngine/pull/2286.patch -o /root/te2286.patch && (cd /usr/local/lib/python3.12/dist-packages/transformer_engine && (patch -p2 < /root/te2286.patch)); \
-  fi
+# https://github.com/pytorch/pytorch/issues/168167
+RUN pip install nvidia-cudnn-cu12==9.16.0.29
 
-# AMEM
-# we need to create a fake libcuda.so.1 to make the linker happy when building AMEM
-ENV CUDA_DIR=/usr/local/cuda
-ENV CUDA_STUBS=${CUDA_DIR}/lib64/stubs
-RUN ln -s ${CUDA_STUBS}/libcuda.so ${CUDA_STUBS}/libcuda.so.1 && \
-    echo "${CUDA_STUBS}" > /etc/ld.so.conf.d/z-cuda-stubs.conf && \
-    ldconfig
-RUN git clone https://github.com/inclusionAI/asystem-amem.git && \
-    cd asystem-amem && git checkout 6483bb17c9a98b51c3a94b7048467d5b50fbad4b && \
-    git submodule init && git submodule update && \
-    MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi/ ./build.sh && \
-    mv /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libnccl.so.2 /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libnccl.so.2.bak && \
-    cp -r third_party/nccl/build/lib/* /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/
+# reinstall numpy 1.x for megatron
+RUN pip install "numpy<2"
 
 RUN rm /root/.tmux.conf
+RUN rm -rf /root/.cache/pip /root/flash-attention
 
 # ====================================== Patches ============================================
 
@@ -110,7 +98,7 @@ COPY docker/patch/${PATCH_VERSION}/sglang.patch /sgl-workspace/sglang/
 RUN if [ "$ENABLE_SGLANG_PATCH" = "1" ]; then \
   cd /sgl-workspace/sglang && \
   git update-index --refresh && \
-  git apply sglang.patch && \
+  git apply sglang.patch --3way && \
   if grep -R -n '^<<<<<<< ' .; then \
     echo "Patch failed to apply cleanly. Please resolve conflicts." && \
     exit 1; \

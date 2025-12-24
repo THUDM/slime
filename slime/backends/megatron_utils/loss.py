@@ -4,6 +4,7 @@ from typing import Any
 
 import torch
 from megatron.core import mpu
+from torch.utils.checkpoint import checkpoint
 
 from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
@@ -247,12 +248,12 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         advantages = [r for r in returns]
 
     elif args.advantage_estimator == "ppo":
-        # TODO: optimize this
         old_rewards = rewards
         rewards = []
+        kl_coef = -args.kl_coef
+        cp_rank = mpu.get_context_parallel_rank()
         for reward, k in zip(old_rewards, kl, strict=False):
-            k *= -args.kl_coef
-            cp_rank = mpu.get_context_parallel_rank()
+            k *= kl_coef
             if cp_rank == 0:
                 k[-1] += reward
             rewards.append(k)
@@ -420,7 +421,7 @@ def policy_loss_function(
     Computes current log-probabilities and entropy from model logits, then
     calculates PPO-style clipped policy gradient loss. For GSPO, gathers
     full sequences via context-parallel all-gather before computing per-sample
-    KL. Optionally applies TIS (Temporal Importance Sampling) correction and
+    KL. Optionally applies TIS (Truncated Importance Sampling) correction and
     adds KL loss term if configured.
 
     Args:
@@ -511,6 +512,16 @@ def policy_loss_function(
 
     # Apply off-policy correction using importance sampling if enabled
     if args.get_mismatch_metrics or args.use_tis:
+        # NOTE:
+        # `tis_func` may apply rejection-sampling style masking (RS) and return `modified_response_masks`.
+        # We rebuild `sum_of_sample_mean` with those masks to correct denominators for loss/backprop.
+        #
+        # However, mismatch/TIS/RS metrics (e.g., "truncate_fraction") are often defined over the
+        # *pre-RS* valid tokens. If we aggregate metrics with `modified_response_masks`, the rejected
+        # tokens are excluded from the denominator and the metric can be artificially driven to 0.
+        # Keep a copy of the original reducer (based on `batch["loss_masks"]`) for metric aggregation.
+        sum_of_sample_mean_for_mismatch_metrics = sum_of_sample_mean
+
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
 
         ois = (-ppo_kl).exp()
@@ -550,10 +561,14 @@ def policy_loss_function(
     if args.use_kl_loss:
         ref_log_probs = batch["ref_log_probs"]
         ref_log_probs = torch.cat(ref_log_probs, dim=0)
+        importance_ratio = None
+        if args.use_unbiased_kl:
+            importance_ratio = torch.exp(log_probs - old_log_probs)
         kl = compute_approx_kl(
             log_probs,
             ref_log_probs,
             kl_loss_type=args.kl_loss_type,
+            importance_ratio=importance_ratio,
         )
         kl_loss = sum_of_sample_mean(kl)
 
@@ -583,11 +598,13 @@ def policy_loss_function(
         reported_loss["kl_loss"] = kl_loss.clone().detach()
 
     if args.get_mismatch_metrics or args.use_tis:
-        reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
+        # Aggregate mismatch/TIS/RS related metrics with the *pre-RS* masks.
+        # See comment above where `sum_of_sample_mean_for_mismatch_metrics` is defined.
+        reported_loss["ois"] = sum_of_sample_mean_for_mismatch_metrics(ois).clone().detach()
         # Assume all metrics are already cloned and detached
         for metric_key, metric_value in tis_metrics.items():
             key_name = f"{metric_key}"
-            reported_loss[key_name] = sum_of_sample_mean(metric_value)
+            reported_loss[key_name] = sum_of_sample_mean_for_mismatch_metrics(metric_value)
 
     if args.use_opsm:
         reported_loss["opsm_clipfrac"] = opsm_clipfrac
@@ -741,25 +758,22 @@ def loss_function(
         args.calculate_per_token_loss,
     )
 
-    loss_function_kwargs = {
-        "args": args,
-        "batch": batch,
-        "logits": logits,
-        "sum_of_sample_mean": sum_of_sample_mean,
-    }
-
     match args.loss_type:
         case "policy_loss":
-            loss, log = policy_loss_function(**loss_function_kwargs)
+            func = policy_loss_function
         case "value_loss":
-            loss, log = value_loss_function(**loss_function_kwargs)
+            func = value_loss_function
         case "sft_loss":
-            loss, log = sft_loss_function(**loss_function_kwargs)
+            func = sft_loss_function
         case "custom_loss":
-            custom_loss_function = load_function(args.custom_loss_function_path)
-            loss, log = custom_loss_function(**loss_function_kwargs)
+            func = load_function(args.custom_loss_function_path)
         case _:
             raise ValueError(f"Unknown loss type: {args.loss_type}")
+
+    if args.recompute_loss_function:
+        loss, log = checkpoint(func, args, batch, logits, sum_of_sample_mean)
+    else:
+        loss, log = func(args, batch, logits, sum_of_sample_mean)
 
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
     if not args.calculate_per_token_loss:
@@ -774,7 +788,7 @@ def loss_function(
 
     return (
         loss,
-        num_tokens if args.calculate_per_token_loss else 1,
+        torch.tensor(num_tokens if args.calculate_per_token_loss else 1, device=logits.device),
         {
             "keys": list(log.keys()),
             "values": torch.tensor(

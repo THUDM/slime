@@ -92,12 +92,12 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     --save /root/GLM-Z1-9B-0414_torch_dist
 ```
 
-For larger models, you can use `torchrun` to start the covnersion script to convert with multi-gpus or even multi-nodes.
+For larger models, you can use `torchrun` to start the conversion script to convert with multi-gpus or even multi-nodes.
 Note: When converting the kimi-k2 model weights, you need to open config.json in the model path and change "model_type": "kimi_k2" to "model_type": "deepseek_v3".
 
 ### Convert from Megatron Format to Hugging Face Format
 
-You can use the following script to convert the saved Megatron chekcpoints back to Hugging Face format:
+You can use the following script to convert the saved Megatron checkpoints back to Hugging Face format:
 
 ```bash
 PYTHONPATH=/root/Megatron-LM python tools/convert_torch_dist_to_hf.py \
@@ -108,6 +108,14 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_torch_dist_to_hf.py \
 
 Note that as Megatron will do padding to embedding for better performance, it may happen that the converted embedding is not correct. In that case, please manually set `--vocab-size` during convertion.
 
+For FSDP checkpoints (without `common.pt`), use the dedicated conversion script. Point `--input-dir` to the checkpoint directory (e.g. `iter_xxx` or `iter_xxx/model`) and provide the original Hugging Face directory:
+
+```bash
+python tools/convert_fsdp_to_hf.py \
+  --input-dir /path/to/fsdp_ckpt/iter_xxx \
+  --output-dir /root/fsdp-converted \
+  --origin-hf-dir /root/GLM-Z1-9B-0414
+```
 
 ## Training Script and Parameter Overview
 
@@ -571,5 +579,5 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 slime has been deeply optimized for distributed training of large-scale Mixture of Experts (MoE) models. We provide some end-to-end training cases for reference:
 
-- [Example: 64xH100 Training GLM-4.5](models/glm4.5-355B-A32B.md)
-- [Example: 128xH100 Training DeepSeek-R1](models/deepseek-r1.md)
+- [Example: 64xH100 Training GLM-4.5](../examples/glm4.5-355B-A32B.md)
+- [Example: 128xH100 Training DeepSeek-R1](../examples/deepseek-r1.md)

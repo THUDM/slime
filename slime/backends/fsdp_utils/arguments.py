@@ -10,7 +10,16 @@ class FSDPArgs:
     # Optim
     optimizer: str = "adam"  # Optimizer type: "adam" (AdamW)
     lr: float = 2e-5
+    lr_warmup_init: float = 0.0
+    min_lr: float = 0.0
     lr_decay_style: str = "constant"
+    lr_decay_iters: int | None = None
+    lr_warmup_iters: int = 0
+    lr_warmup_fraction: float | None = None
+    lr_wsd_decay_iters: int | None = None
+    lr_wsd_decay_style: str | None = None
+    use_checkpoint_lr_scheduler: bool = True
+    override_lr_scheduler: bool = False
     weight_decay: float = 0.0
     adam_beta1: float = 0.9
     adam_beta2: float = 0.95
@@ -59,7 +68,13 @@ def parse_fsdp_cli(extra_args_provider=None):
         if f.name == "config":
             continue
 
-        arg_type = str if f.type == (str | None) else f.type
+        # Handle union types like int | None, str | None, etc.
+        if hasattr(f.type, "__args__"):  # Check if it's a Union type
+            # For T | None, use T as the type
+            non_none_types = [t for t in f.type.__args__ if t is not type(None)]
+            arg_type = non_none_types[0] if non_none_types else str
+        else:
+            arg_type = f.type
 
         if arg_type is bool:
             parser.add_argument(f"--{f.name.replace('_', '-')}", action="store_true")

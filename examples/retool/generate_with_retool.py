@@ -230,9 +230,20 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     tool_call_count = 0  # Track actual tool call rounds
 
     for turn in range(TOOL_CONFIGS["max_turns"]):
-        # Simple: just send prompt + response
+        # Check if total length exceeds max context length
+        total_length = len(prompt_tokens_ids) + len(response_token_ids)
+        if args.rollout_max_context_len is not None:
+            max_context_length = args.rollout_max_context_len
+        else:
+            max_context_length = args.context_parallel_size * args.max_tokens_per_gpu
+        if total_length >= max_context_length:
+            sample.status = Sample.Status.TRUNCATED
+            break
+
+        # Use token IDs instead of text
+        current_token_ids = prompt_tokens_ids + response_token_ids
         payload = {
-            "text": prompt + response,
+            "input_ids": current_token_ids,
             "sampling_params": sampling_params,
             "return_logprob": True,  # Request log probabilities for training
         }
@@ -265,15 +276,16 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
             sample.status = Sample.Status.ABORTED
             return sample
 
-        cur_response = output["text"]
-
         if "output_token_logprobs" in output["meta_info"]:
             cur_response_token_ids = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
+            cur_response = state.tokenizer.decode(cur_response_token_ids)
             cur_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
             if sample.rollout_log_probs is None:
                 sample.rollout_log_probs = []
             sample.rollout_log_probs += cur_log_probs
+
         else:
+            cur_response = output["text"]
             cur_response = postprocess_responses(cur_response)
             cur_response_token_ids = state.tokenizer(cur_response, add_special_tokens=False)["input_ids"]
 

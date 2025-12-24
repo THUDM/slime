@@ -25,9 +25,13 @@ class ScriptArgs(U.ExecuteTrainConfig):
     enable_eval: bool = True
     extra_args: str = ""
     rollout_fp8: bool = False
+    rollout_attn_fp8: bool = False
     enable_mtp: bool = False  # TODO enable by default
     dynamic_sampling: bool = False
     enable_benchmark: bool = False
+    enable_mis: bool = False
+    # TODO improve, should be able to override more easily
+    tis_use_rs: bool = True
     task: Literal["dapo_aime", "gsm8k"] = "dapo_aime"
 
 
@@ -243,9 +247,11 @@ def train(args: ScriptArgs):
         # """--sglang-json-model-override-args '{"num_hidden_layers": 5}' """
     )
     sglang_extra_env_vars = {}
+    if U.GENERATION_HARDWARE[args.hardware] == "Blackwell":
+        sglang_args += "--sglang-attention-backend trtllm_mha "
     if args.rollout_fp8:
         sglang_decode_max_bs = 256
-        sglang_attn_tp_size = 8
+        sglang_attn_tp_size = min(8, sglang_world_size)
         sglang_attn_dp_size = sglang_world_size // sglang_attn_tp_size
         sglang_args += (
             f"--sglang-ep-size {sglang_world_size} "
@@ -306,6 +312,35 @@ def train(args: ScriptArgs):
     if args.enable_benchmark:
         misc_args += (
             "--custom-generate-function-path slime.rollout.generate_hub.benchmarkers.generate_with_random_osl "
+            "--rollout-batch-size 128 "
+            "--n-samples-per-prompt 8 "
+            "--use-distributed-post "
+            "--router-policy round_robin "
+            "--sglang-server-concurrency 10000 "
+            # GB200 w/ mem-frac 0.8 will lead to oom in long jobs currently, but here we use large value to make baseline more fair
+            f"--sglang-mem-fraction-static {0.8 if args.hardware == 'GB300' else 0.75} "
+        )
+
+    if args.rollout_attn_fp8:
+        sglang_args += "--sglang-kv-cache-dtype fp8_e4m3 "
+
+    if args.enable_mis:
+        config_text = f"""
+use_tis: true
+use_rs: {"true" if args.tis_use_rs else "false"}
+tis_level: "token"
+rs_level: "token"
+tis_mode: "truncate"
+tis_lower_bound: 0.5
+tis_upper_bound: 2.0
+rs_lower_bound: null
+rs_upper_bound: null
+rs_veto_threshold: 1.0e-4
+tis_batch_normalize: true
+""".strip()
+        misc_args += (
+            f"--custom-config-path {U.save_to_temp_file(config_text, 'yaml')} "
+            "--custom-tis-function-path examples.train_infer_mismatch_helper.mis.compute_mis_weights_with_cp "
         )
 
     train_args = (

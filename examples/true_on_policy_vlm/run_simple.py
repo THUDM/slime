@@ -1,28 +1,13 @@
-import json
 import os
-import subprocess
 
 import slime.utils.misc as U
+from slime.utils.external_utils.command_utils import execute_train, get_default_wandb_args
 
 MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")
 assert MODEL_NAME in {"Qwen2.5-VL-3B-Instruct", "Qwen3-VL-2B-Instruct", "Qwen3-VL-4B-Instruct", "Qwen3-VL-8B-Instruct"}
 
 NUM_GPUS = int(os.environ.get("SLIME_SCRIPT_NUM_GPUS", "1"))
 EXTERNAL_RAY = int(os.environ.get("SLIME_SCRIPT_EXTERNAL_RAY", "0"))
-MASTER_ADDR = os.environ.get("MASTER_ADDR", "127.0.0.1")
-
-
-def detect_nvlink():
-    """Detect if NVLink is available on the system."""
-    try:
-        result = subprocess.run(["nvidia-smi"], capture_output=True, text=True, check=True)
-        nvlink_count = result.stdout.count("NVLink")
-        has_nvlink = 1 if nvlink_count > 0 else 0
-        print(f"HAS_NVLINK: {has_nvlink} (detected {nvlink_count} NVLink references)")
-        return has_nvlink
-    except Exception as e:
-        print(f"Failed to detect NVLink: {e}")
-        return 0
 
 
 def prepare():
@@ -34,9 +19,6 @@ def prepare():
 
 
 def execute():
-    # Detect NVLink for optimized NCCL settings
-    has_nvlink = detect_nvlink()
-
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} "
 
     rollout_args = (
@@ -56,8 +38,8 @@ def execute():
     )
 
     eval_args = (
-        # "--eval-interval 20 "
-        "--eval-prompt-data geo3k-test /root/datasets/geo3k_imgurl/test.parquet "
+        "--eval-interval 20 "
+        "--eval-prompt-data geo3k /root/datasets/geo3k_imgurl/test.parquet "
         "--n-samples-per-eval-prompt 1 "
         "--eval-max-response-len 4096 "
         "--eval-top-k 1 "
@@ -100,12 +82,11 @@ def execute():
         "--attn-implementation flash_attention_3 "
     )
 
-    wandb_args = (
-        "--use-wandb "
-        "--wandb-project geo3k-vlm "
-        "--wandb-group geo3k-vlm "
-        "--wandb-key ${WANDB_API_KEY} "
-        "--disable-wandb-random-suffix "
+    ci_args = (
+        "--ci-test "
+        "--ci-disable-kl-checker "
+        "--ci-metric-checker-key eval/geo3k "
+        "--ci-metric-checker-threshold 0.5 "  # loose threshold at 60 step
     )
 
     misc_args = "--actor-num-nodes 1 " f"--actor-num-gpus-per-node {NUM_GPUS} " "--colocate "
@@ -116,19 +97,20 @@ def execute():
     #     "--max-tokens-per-gpu 2048 "
     # )
 
-    # true_on_policy_args = (
-    #     "--sglang-enable-deterministic-inference "
-    #     "--sglang-rl-on-policy-target fsdp "
-    #     "--deterministic-mode "
-    #     "--true-on-policy-mode "
-    # )
-    # true_on_policy_envs = {
-    #     # TODO note: "Ring" in original RL PR, "allreduce:tree" in SGLang
-    #     # "NCCL_ALGO": "Ring",
-    #     "NCCL_ALGO": "allreduce:tree",
-    #     "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
-    #     "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
-    # }
+    true_on_policy_args = (
+        "--sglang-enable-deterministic-inference "
+        "--sglang-rl-on-policy-target fsdp "
+        "--deterministic-mode "
+        "--true-on-policy-mode "
+    )
+    true_on_policy_envs = {
+        # TODO note: "Ring" in original RL PR, "allreduce:tree" in SGLang
+        # "NCCL_ALGO": "Ring",
+        "NCCL_ALGO": "allreduce:tree",
+        "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
+        "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+        "SGLANG_VLM_CACHE_SIZE_MB": "0",
+    }
 
     train_args = (
         f"{ckpt_args} "
@@ -137,54 +119,21 @@ def execute():
         f"{grpo_args} "
         f"{sglang_args} "
         f"{fsdp_args} "
+        f"{ci_args} "
         f"{eval_args} "
         f"{misc_args} "
-        f"{wandb_args} "
-        # f"{true_on_policy_args} "
-    )
-
-    # Kill existing processes
-    U.exec_command(
-        "pkill -9 sglang; "
-        "sleep 3; "
-        f"{'' if EXTERNAL_RAY else 'ray stop --force; '}"
-        f"{'' if EXTERNAL_RAY else 'pkill -9 ray; '}"
-        "pkill -9 slime; "
-        "sleep 3; "
-        f"{'' if EXTERNAL_RAY else 'pkill -9 ray; '}"
-        "pkill -9 slime; "
-        "pkill -9 redis; "
-        "true; "
-    )
-
-    if not EXTERNAL_RAY:
-        # Start Ray
-        U.exec_command(
-            f"export PYTHONBUFFERED=16 && "
-            f"ray start --head --node-ip-address {MASTER_ADDR} --num-gpus {NUM_GPUS} "
-            f"--disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265"
-        )
-
-    # Prepare runtime environment
-    runtime_env_json = json.dumps(
-        {
-            "env_vars": {
-                "CUDA_DEVICE_MAX_CONNECTIONS": "1",
-                "NCCL_NVLS_ENABLE": str(has_nvlink),
-                # **true_on_policy_envs,
-                # "SGLANG_DUMPER_ENABLE": "0",
-                # "SGLANG_TEMP_UTILS_ENABLE_DEBUG_PRINT": "0",
-            }
-        }
+        f"{get_default_wandb_args(__file__)} "
+        f"{true_on_policy_args} "
     )
 
     # Submit Ray job
-    U.exec_command(
-        f"export no_proxy=127.0.0.1 && export PYTHONBUFFERED=16 && "
-        f'ray job submit --address="http://127.0.0.1:8265" '
-        f"--runtime-env-json='{runtime_env_json}' "
-        f"-- python3 /root/slime/train.py "
-        f"{train_args}"
+    execute_train(
+        train_args=train_args,
+        num_gpus_per_node=NUM_GPUS,
+        megatron_model_type=None,
+        extra_env_vars={
+            **true_on_policy_envs,
+        },
     )
 
 

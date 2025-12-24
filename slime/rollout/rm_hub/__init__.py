@@ -1,4 +1,5 @@
 import asyncio
+import random
 
 import aiohttp
 
@@ -57,6 +58,8 @@ async def async_rm(args, sample: Sample, **kwargs):
         from .ifbench import compute_ifbench_reward
 
         return compute_ifbench_reward(response, label, metadata=metadata)
+    elif rm_type == "random":
+        return random.randint(0, 1)
     elif rm_type:
         raise NotImplementedError(f"Rule-based RM for {rm_type} is not implemented.")
     else:

@@ -1,6 +1,6 @@
 # AMD
 
-⚠️ If you encounter problems on AMD instinct, feel free to reach out [Yusheng Su](https://yushengsu-thu.github.io/). 
+⚠️ If you encounter problems on AMD instinct, feel free to reach out [Yusheng Su](https://yushengsu-thu.github.io/).
 
 
 ## Introduction
@@ -12,7 +12,7 @@ If you are running slime on AMD's Instinct, please refer to the following materi
 
 ## Docker
 
-You can download the prebuilt image from DockerHub: [rlsys/slime](https://hub.docker.com/r/rlsys/slime/tags). 
+You can download the prebuilt image from DockerHub: [rlsys/slime](https://hub.docker.com/r/rlsys/slime/tags).
 ```bash
 docker pull rlsys/slime:latest
 ```
@@ -72,11 +72,12 @@ source scripts/models/qwen3-4B.sh
 MEGATRON_LM_PATH=$(pip list | grep megatron-core | awk '{print $NF}')
 PYTHONPATH=${MEGATRON_LM_PATH} python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
+    --no-gradient-accumulation-fusion \
     --hf-checkpoint model/Qwen3-4B \
     --save model/Qwen3-4B_torch_dist
 ```
 
-Note: You might encounter some issue in the current model convert script on AMD GPUs. You can go [here](https://huggingface.co/zyzshishui0627/models) to dowload the converted models.
+Note: We implemented a dedicated AMD conversion script that forces a CPU-only conversion workflow using the Gloo backend to bypass hardware-specific issues. A GPU-based script for ROCm is currently in development.
 
 ⚠️ If you encounter an issue where slime cannot be found, please run `pip install -e .` in the slime directory.
 
@@ -84,20 +85,18 @@ Note: You might encounter some issue in the current model convert script on AMD 
 ### Example: Qwen3-4B
 
 We provide examples to use [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B), please refer to:
-- [Example: Qwen3-4B Model](scripts/run-qwen3-4B-amd.sh): Just run `scripts/run-qwen3-4B-amd.sh` 
+- [Example: Qwen3-4B Model](https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B-amd.sh): Just run `scripts/run-qwen3-4B-amd.sh`
 
-⚠️ TODO: The [ROCm-version torch_memory_saver](https://github.com/yushengsu-thu/torch_memory_saver.git) does not seem to clear memory properly; thus, we set `--sglang-mem-fraction-static` as `0.4` currently. We will continue investigating and focus on ROCm's virtual memory management for further modifications.
-
-⚠️ TODO: ROCM seems to not support `apex` yet. Thus, we need to disable `--no-gradient-accumulation-fusion` currently. We will continue investigating how to enable this. 
+⚠️ TODO: ROCM seems to not support `apex` yet. Thus, we need to disable gradient accumulation fusionby adding the `--no-gradient-accumulation-fusion` flag in the training script currently. We will continue investigating how to enable this.
 
 ⚠️ Note: The main difference between ROCm's training script and NVIDIA's script is that you need to set `RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES` and `HIP_VISIBLE_DEVICES` for ray to function properly on AMD GPUs.
 
-- We show the training script below: 
+- We show the training script below:
 
 ```bash
 #!/bin/bash
 
-####clear before training
+# for rerun the task
 pkill -9 sglang
 sleep 3
 ray stop --force
@@ -107,34 +106,35 @@ sleep 3
 pkill -9 ray
 pkill -9 python
 
+
 set -euxo pipefail
 
-### ROCm Support ###
-SLIME_DIR="/home/yushensu/projects/slime" # Need to change to your own path
-export SLIME_DIR=$SLIME_DIR
 
-MODEL_DIR="/home/yushensu/projects/model" # Need to change to your own path
-export MODEL_DIR=$MODEL_DIR
+### AMD Support ###
+SLIME_DIR="${SLIME_DIR:-/home/yushensu/projects/slime}" # Default path if not set in environment
+export SLIME_DIR
 
-DATA_DIR="/home/yushensu/projects/data"  # Need to change to your own path
-export DATA_DIR=$DATA_DIR
+MODEL_DIR="${MODEL_DIR:-/home/yushensu/projects/model}" # Default path if not set in environment
+export MODEL_DIR
+
+DATA_DIR="${DATA_DIR:-/home/yushensu/projects/data}"  # Default path if not set in environment
+export DATA_DIR
 
 # For AMD GPU
 export RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=${RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES:-"1"} # Must set to 1
 export HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"} #You can choose which gpus to use
 ####################
 
+
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
-
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/qwen3-4B.sh"
 
 CKPT_ARGS=(
    --hf-checkpoint ${MODEL_DIR}/Qwen3-4B
-   #--hf-checkpoint /root/Qwen3-4B-FP8
-   --ref-load ${MODEL_DIR}/Qwen3-4B_torch
+   --ref-load ${MODEL_DIR}/Qwen3-4B_torch_dist
    --load ${MODEL_DIR}/Qwen3-4B_slime/
    --save ${MODEL_DIR}/Qwen3-4B_slime/
    --save-interval 20
@@ -146,9 +146,7 @@ ROLLOUT_ARGS=(
    --label-key label
    --apply-chat-template
    --rollout-shuffle
-
    --rm-type deepscaler
-
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
@@ -204,24 +202,16 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   #--use-wandb
+   # --use-wandb
    # --wandb-project slime-dev
    # --wandb-group qwen3-4B-test
    # --wandb-key ${WANDB_KEY}
 )
 
-### AMD Support ###
-# Need to fix some issue with torch_memory_saver in rocm to support larger  --sglang-mem-fraction-static 
-# SGLANG_ARGS=(
-#    --rollout-num-gpus-per-engine 2
-#    --sglang-mem-fraction-static 0.7
-# )
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
-   --sglang-mem-fraction-static 0.4
+   --sglang-mem-fraction-static 0.7
 )
-####################
-
 
 MISC_ARGS=(
    # default dropout in megatron is 0.1
@@ -242,14 +232,16 @@ MISC_ARGS=(
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 
 NUM_GPUS=$(echo ${HIP_VISIBLE_DEVICES} | tr ',' '\n' | wc -l)
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus ${NUM_GPUS} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 
-# "PYTHONPATH": "$(dirname $(python3 -c 'import megatron.core; print(megatron.core.__file__)'))"
+# "PYTHONPATH": "/workspace/Megatron-LM/",
+MEGATRON_LM_PATH=$(pip list | grep megatron-core | awk '{print $NF}')
+
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json='{
      "env_vars": {
-        "PYTHONPATH": "'${SLIME_DIR}'/Megatron-LM/",
+        "PYTHONPATH": "/workspace/Megatron-LM/",
         "CUDA_DEVICE_MAX_CONNECTIONS": "1"
      }
    }' \

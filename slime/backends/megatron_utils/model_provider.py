@@ -53,6 +53,20 @@ def get_model_provider_func(
     args: argparse.Namespace,
     role: Literal["actor", "critic"] = "actor",
 ):
+    if args.megatron_to_hf_mode == "bridge":
+        from megatron.bridge import AutoBridge
+
+        bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        provider = bridge.to_megatron_provider(load_weights=False)
+        # TODO: we should not manually set this...
+        provider.tensor_model_parallel_size = args.tensor_model_parallel_size
+        provider.pipeline_model_parallel_size = args.pipeline_model_parallel_size
+        provider.expert_model_parallel_size = args.expert_model_parallel_size
+        provider.expert_tensor_parallel_size = args.expert_tensor_parallel_size
+        provider.sequence_parallel = args.sequence_parallel
+        provider.finalize()
+        return provider.provide
+
     def model_provider(pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None) -> GPTModel:
         """Builds the model.
 
@@ -89,19 +103,19 @@ def get_model_provider_func(
                 # Define the decoder layer spec
                 if use_te:
                     transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec(
-                        args.num_experts,
-                        args.moe_grouped_gemm,
-                        args.qk_layernorm,
-                        args.multi_latent_attention,
-                        args.moe_use_legacy_grouped_gemm,
+                        num_experts=args.num_experts,
+                        moe_grouped_gemm=args.moe_grouped_gemm,
+                        qk_layernorm=args.qk_layernorm,
+                        multi_latent_attention=args.multi_latent_attention,
+                        moe_use_legacy_grouped_gemm=args.moe_use_legacy_grouped_gemm,
                     )
                 else:
                     transformer_layer_spec = get_gpt_layer_local_spec(
-                        args.num_experts,
-                        args.moe_grouped_gemm,
-                        args.qk_layernorm,
-                        args.multi_latent_attention,
-                        args.moe_use_legacy_grouped_gemm,
+                        num_experts=args.num_experts,
+                        moe_grouped_gemm=args.moe_grouped_gemm,
+                        qk_layernorm=args.qk_layernorm,
+                        multi_latent_attention=args.multi_latent_attention,
+                        moe_use_legacy_grouped_gemm=args.moe_use_legacy_grouped_gemm,
                     )
 
         build_model_context = nullcontext

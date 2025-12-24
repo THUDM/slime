@@ -262,3 +262,9 @@ NUM_GPUS_OF_HARDWARE = {
     "GB200": 4,
     "GB300": 4,
 }
+
+GENERATION_HARDWARE = {
+    "H100": "Hopper",
+    "GB200": "Blackwell",
+    "GB300": "Blackwell",
+}

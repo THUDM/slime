@@ -1,1 +1,1 @@
-nightly-dev-202511127a
+nightly-dev-20251222a

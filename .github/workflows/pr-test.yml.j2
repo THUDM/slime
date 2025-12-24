@@ -24,6 +24,13 @@
         {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
       ],
     },
+    'e2e-test-ckpt': {
+      'label': 'run-ci-ckpt',
+      'tests': [
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py --async-save', 'num_gpus': 8},
+      ],
+    },
 } %>
 name: PR Test
 
@@ -61,6 +68,10 @@ jobs:
         --ulimit stack=67108864
         --memory=0
         --memory-swap=0
+        -e http_proxy=$http_proxy
+        -e https_proxy=$https_proxy
+        -e HTTP_PROXY=$HTTP_PROXY
+        -e HTTPS_PROXY=$HTTPS_PROXY
         -v /mnt/nvme0n1/slime_ci:/data/slime_ci
         -v /mnt/nvme0n1/slime_ci/models:/root/models
         -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
@@ -82,7 +93,7 @@ jobs:
 
       - name: Install
         shell: bash
-        run: cd $GITHUB_WORKSPACE && pip install -e .
+        run: cd $GITHUB_WORKSPACE && pip install -e . --break-system-packages
 
       - name: Execute
         shell: bash

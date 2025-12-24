@@ -2,6 +2,7 @@ import base64
 import io
 import logging
 
+import numpy as np
 from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 
 logger = logging.getLogger(__name__)
@@ -25,7 +26,9 @@ def load_processor(name_or_path: str, **kwargs):
     return proc
 
 
-def prepare_model_inputs(prompt, tokenizer, processor=None, metadata=None, apply_chat_template_kwargs=None):
+def prepare_model_inputs(
+    prompt, tokenizer, processor=None, metadata=None, apply_chat_template=False, apply_chat_template_kwargs=None
+):
     """Prepare all inputs for model inference.
 
     Returns:
@@ -34,17 +37,28 @@ def prepare_model_inputs(prompt, tokenizer, processor=None, metadata=None, apply
             - extra_info: Dict with 'images', 'videos', 'multimodal_inputs' (or empty dict)
     """
     tools = metadata.get("tools") if metadata else None
-    text_prompt = tokenizer.apply_chat_template(
-        prompt,
-        tools=tools,
-        tokenize=False,
-        add_generation_prompt=True,
-        **(apply_chat_template_kwargs or {}),
-    )
+    if isinstance(prompt, (list, np.ndarray)):
+        assert (
+            apply_chat_template
+        ), f"apply_chat_template must be True when prompt is a list or numpy array, current prompt is {prompt}"
+        formatted_prompt = tokenizer.apply_chat_template(
+            prompt,
+            tools=tools,
+            tokenize=False,
+            add_generation_prompt=True,
+            **(apply_chat_template_kwargs or {}),
+        )
+    elif isinstance(prompt, str):
+        assert (
+            not apply_chat_template
+        ), f"apply_chat_template must be False when prompt is a string, current prompt is {prompt}"
+        formatted_prompt = prompt
+    else:
+        raise ValueError(f"Invalid prompt type: {type(prompt)}, current prompt is {prompt}")
 
     if not processor:
-        input_ids = tokenizer.encode(text_prompt, add_special_tokens=False)
-        return input_ids, {}
+        input_ids = tokenizer.encode(formatted_prompt, add_special_tokens=False)
+        return input_ids, {"formatted_prompt": formatted_prompt}
     else:
         # temporary solution, will write image utils for slime later
         from qwen_vl_utils import process_vision_info
@@ -52,13 +66,14 @@ def prepare_model_inputs(prompt, tokenizer, processor=None, metadata=None, apply
         images, videos = process_vision_info(prompt)
 
         # Get input IDs with full prompt (text + multimodal)
-        processor_output = processor(text=text_prompt, images=images, videos=videos)
+        processor_output = processor(text=formatted_prompt, images=images, videos=videos)
         input_ids = processor_output["input_ids"][0]
 
         # Extract multimodal tokens (exclude text-related tokens)
         multimodal_inputs = {k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]}
 
         extra_info = {
+            "formatted_prompt": formatted_prompt,
             "images": images,
             "videos": videos,
             "multimodal_inputs": multimodal_inputs,
@@ -72,5 +87,5 @@ def encode_image_for_rollout_engine(image) -> str:
     buffer = io.BytesIO()
     if image.mode != "RGB":
         image = image.convert("RGB")
-    image.save(buffer, format="JPEG")
+    image.save(buffer, format="PNG")
     return base64.b64encode(buffer.getvalue()).decode("utf-8")
