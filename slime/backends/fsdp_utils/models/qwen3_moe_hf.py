@@ -4,8 +4,6 @@ from sonicmoe.enums import ActivationType
 
 from .qwen3_moe_utils import (
     qwen3_moe_routing,
-    get_sonicmoe_kernel,
-    get_sonicmoe_activation_type,
     stack_expert_weights_for_sonicmoe,
     prepare_sonicmoe_routing_inputs,
 )
@@ -38,10 +36,7 @@ def apply_fsdp_moe_patch(args=None):
                 routing_weights, selected_experts, hidden_states.device
             )
 
-            # Call SonicMoE kernel
-            moe_general_routing_inputs = get_sonicmoe_kernel()
-            ActivationType = get_sonicmoe_activation_type()
-            
+            # Call SonicMoE kernel with detailed step-by-step comparison
             stream_id = int(torch.cuda.current_stream().cuda_stream)
             is_inference_mode_enabled = (not torch.is_grad_enabled()) or torch.is_inference_mode_enabled()
 
