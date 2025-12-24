@@ -272,34 +272,54 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
             next_user_message = _format_observation(env_module, observation)
             messages.append(next_user_message)
 
-            # Temporary solution: Re-encode the full conversation (including the new observation) so tokens/images stay aligned
-            # TODO: make it more efficient by only re-encoding the new observation and the last assistant response but still keep tokens/images stay aligned.
-            next_prompt_ids, next_image_data, next_multimodal_inputs = _encode_for_generation(
+            # Encode only the new observation turn and append its tokens.
+            obs_prompt_ids, obs_image_data, obs_multimodal_inputs = _encode_for_generation(
                 tokenizer,
                 processor,
-                messages,
+                [next_user_message],
                 sample.metadata,
                 getattr(args, "apply_chat_template", False),
                 args.apply_chat_template_kwargs,
             )
 
-            if sample.tokens != next_prompt_ids[: len(sample.tokens)]:
-                raise RuntimeError(
-                    "Token prefix mismatch after adding observation; generated response tokens do not align with re-encoded prompt."
-                )
+            # Drop a leading BOS if present to avoid injecting it mid-stream.
+            bos_id = getattr(tokenizer, "bos_token_id", None)
+            if bos_id is not None and obs_prompt_ids and obs_prompt_ids[0] == bos_id:
+                obs_prompt_ids = obs_prompt_ids[1:]
 
-            delta_tokens = next_prompt_ids[len(sample.tokens) :]
-            if stop_on_max_tokens and len(sample.tokens) + len(delta_tokens) > token_budget:
+            if stop_on_max_tokens and len(sample.tokens) + len(obs_prompt_ids) > token_budget:
                 status = Sample.Status.TRUNCATED
                 break
-            sample.tokens.extend(delta_tokens)
-            response_tokens.extend(delta_tokens)
-            sample.loss_mask.extend([0] * len(delta_tokens))  # user/obs + next assistant prefix => masked
-            sample.rollout_log_probs.extend([0.0] * len(delta_tokens))  # keep logprob aligned with loss_mask
+            sample.tokens.extend(obs_prompt_ids)
+            response_tokens.extend(obs_prompt_ids)
+            sample.loss_mask.extend([0] * len(obs_prompt_ids))  # user/obs + next assistant prefix => masked
+            sample.rollout_log_probs.extend([0.0] * len(obs_prompt_ids))  # keep logprob aligned with loss_mask
             sample.response_length = len(response_tokens)
 
-            sample.multimodal_inputs = next_multimodal_inputs
-            current_image_data = next_image_data
+            if obs_image_data:
+                current_image_data = (current_image_data or []) + obs_image_data
+
+            if obs_multimodal_inputs:
+                if not sample.multimodal_inputs:
+                    sample.multimodal_inputs = obs_multimodal_inputs
+                elif isinstance(sample.multimodal_inputs, dict) and isinstance(obs_multimodal_inputs, dict):
+                    for key, val in obs_multimodal_inputs.items():
+                        if (
+                            key in sample.multimodal_inputs
+                            and isinstance(sample.multimodal_inputs[key], list)
+                            and isinstance(val, list)
+                        ):
+                            sample.multimodal_inputs[key].extend(val)
+                        elif (
+                            key in sample.multimodal_inputs
+                            and isinstance(sample.multimodal_inputs[key], dict)
+                            and isinstance(val, dict)
+                        ):
+                            sample.multimodal_inputs[key] = {**sample.multimodal_inputs[key], **val}
+                        else:
+                            sample.multimodal_inputs[key] = val
+                else:
+                    sample.multimodal_inputs = obs_multimodal_inputs
 
         
             if sampling_params.get("max_new_tokens", None) is not None and sampling_params["max_new_tokens"] <= 0:
