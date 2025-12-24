@@ -32,7 +32,7 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
     global TOKENIZER, PROCESSOR, MASK_GENERATOR, SAMPLE_PRINTED
     if TOKENIZER is None:
         TOKENIZER = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
-    
+
     if PROCESSOR is None:
         PROCESSOR = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
@@ -45,12 +45,11 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
         (sample,) = sample
         messages = sample.prompt
         tools = sample.metadata.get("tools", None)
-        
+
         input_ids, extra_info = prepare_model_inputs(
-            messages, TOKENIZER, PROCESSOR, sample.metadata,
-            args.apply_chat_template, args.apply_chat_template_kwargs
+            messages, TOKENIZER, PROCESSOR, sample.metadata, args.apply_chat_template, args.apply_chat_template_kwargs
         )
-        
+
         has_multimodal = bool(extra_info.get("images") or extra_info.get("videos"))
         if has_multimodal:
             sample.multimodal_inputs = extra_info["multimodal_inputs"]
@@ -59,7 +58,7 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
             )
         else:
             token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
-        
+
         response_length = MASK_GENERATOR.get_response_lengths([loss_mask])[0]
 
         sample.tokens = token_ids
