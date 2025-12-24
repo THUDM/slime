@@ -99,7 +99,7 @@ def get_batch(
         strict=True,
     ):
         prompt_length = total_length - response_length
-        F.pad(loss_mask, (prompt_length - 1, 1), value=0)
+        loss_mask = F.pad(loss_mask, (prompt_length - 1, 1), value=0)
         loss_mask = slice_with_cp(loss_mask, 0)
         loss_masks.append(loss_mask)
     loss_masks = torch.cat(loss_masks)
