@@ -6,6 +6,38 @@ Training VLMs with FSDP or Megatron on single-turn reasoning task using GRPO on 
   <img src="fsdp_vs_megatron.png" alt="FSDP vs Megatron Reward Plot" width="800">
 </p>
 
+## Data Preparation (For SFT Training)
+
+The [geo3k_imgurl](https://huggingface.co/datasets/chenhegu/geo3k_imgurl) dataset contains:
+- `problem`: The math problem text (string)
+- `answer`: The answer (string, e.g., "270")
+- `images`: Image data (list)
+
+For SFT training, we need to format the `answer` field for `\boxed{}` format and the messages. You can use the following script to format the answer field:
+
+```python
+from datasets import load_dataset
+import pandas as pd
+
+ds = load_dataset("chenhegu/geo3k_imgurl", split="train")
+
+def format_answer(answer: str) -> str:
+    """Format answer to include \\boxed{} format."""
+    return f"Answer: \\boxed{{{answer}}}"
+
+def process_sample(sample):
+    formatted_answer = f"Answer: \\boxed{{{sample['answer']}}}"
+    
+    sample["messages"] = [
+        {"role": "user", "content": sample["problem"]},
+        {"role": "assistant", "content": formatted_answer}
+    ]
+    return sample
+
+ds = ds.map(process_sample)
+ds.to_parquet("/root/datasets/geo3k_imgurl/train_formatted.parquet")
+```
+
 ## Reproduce
 
 ```bash
@@ -19,6 +51,9 @@ SLIME_SCRIPT_TRAIN_BACKEND=fsdp ./examples/geo3k_vlm/run_geo3k_vlm.sh
 
 # With different model
 SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-4B-Instruct ./examples/geo3k_vlm/run_geo3k_vlm.sh
+
+# SFT
+./examples/geo_3k_vlm/run_geo3k_vlm_sft.sh
 ```
 
 ### Configuration

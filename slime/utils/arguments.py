@@ -334,6 +334,26 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This should be useful if you need to implement some special rollout logic, e.g. multi-turn, function calling."
                 ),
             )
+            parser.add_argument(
+                "--custom-rollout-log-function-path",
+                type=str,
+                default=None,
+                help=(
+                    "The custom function for logging rollout data. The signature of the functions is: "
+                    "def log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_time) -> bool. "
+                    "The return value indicates whether to skip the default logging. "
+                ),
+            )
+            parser.add_argument(
+                "--custom-eval-rollout-log-function-path",
+                type=str,
+                default=None,
+                help=(
+                    "The custom function for logging eval rollout data. "
+                    "def log_eval_rollout_data(rollout_id, args, data, extra_metrics) -> bool. "
+                    "The return value indicates whether to skip the default logging. "
+                ),
+            )
 
             parser.add_argument(
                 "--buffer-filter-path",
@@ -413,8 +433,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--rollout-health-check-first-wait",
                 type=float,
-                default=300.0,
-                help="Time to wait for the compilation before the actual health check.",
+                default=0,
+                help="Initial grace period (in seconds) before starting health checks. This allows time for model compilation and initialization. Increase this value significantly when using deepgemm.",
             )
             return parser
 
@@ -1275,20 +1295,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_mtp_training_arguments(parser)
         parser = add_prefill_decode_disaggregation_arguments(parser)
         parser = add_ci_arguments(parser)
-        parser.set_defaults(sglang_tensor_parallel_size=add_sglang_tp_size())
-
-        # For megatron
         parser = add_custom_megatron_plugins_arguments(parser)
-        try:
-            parser.add_argument(
-                "--custom-config-path",
-                type=str,
-                default=None,
-                help="Path to the YAML config for custom function arguments.",
-            )
-            parser.add_argument("--padded-vocab-size", type=int, default=None)
-        except argparse.ArgumentError:
-            pass
+        reset_arg(
+            parser,
+            "--custom-config-path",
+            type=str,
+            default=None,
+            help="Path to the YAML config for custom function arguments.",
+        )
+        reset_arg(parser, "--padded-vocab-size", type=int, default=None)
+
+        parser.set_defaults(sglang_tensor_parallel_size=add_sglang_tp_size())
 
         return parser
 

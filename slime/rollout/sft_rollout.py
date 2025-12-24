@@ -1,8 +1,7 @@
 import logging
 
-from transformers import AutoTokenizer
-
 from slime.utils.mask_utils import MultiTurnLossMaskGenerator
+from slime.utils.processing_utils import load_processor, load_tokenizer, prepare_model_inputs
 
 __all__ = ["generate_rollout"]
 
@@ -10,6 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 TOKENIZER = None
+PROCESSOR = None
 MASK_GENERATOR = None
 SAMPLE_PRINTED = False
 
@@ -29,9 +29,12 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
     assert not evaluation
     assert args.rollout_global_dataset
 
-    global TOKENIZER, MASK_GENERATOR, SAMPLE_PRINTED
+    global TOKENIZER, PROCESSOR, MASK_GENERATOR, SAMPLE_PRINTED
     if TOKENIZER is None:
-        TOKENIZER = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        TOKENIZER = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
+
+    if PROCESSOR is None:
+        PROCESSOR = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
     if MASK_GENERATOR is None:
         MASK_GENERATOR = MultiTurnLossMaskGenerator(TOKENIZER, tokenizer_type=args.loss_mask_type)
@@ -41,7 +44,21 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
     for i, sample in enumerate(samples):
         (sample,) = sample
         messages = sample.prompt
-        token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages)
+        tools = sample.metadata.get("tools", None)
+
+        input_ids, extra_info = prepare_model_inputs(
+            messages, TOKENIZER, PROCESSOR, sample.metadata, args.apply_chat_template, args.apply_chat_template_kwargs
+        )
+
+        has_multimodal = bool(extra_info.get("images") or extra_info.get("videos"))
+        if has_multimodal:
+            sample.multimodal_inputs = extra_info["multimodal_inputs"]
+            token_ids, loss_mask = MASK_GENERATOR.get_loss_mask_with_multimodal_alignment(
+                messages, input_ids, tools=tools
+            )
+        else:
+            token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
+
         response_length = MASK_GENERATOR.get_response_lengths([loss_mask])[0]
 
         sample.tokens = token_ids

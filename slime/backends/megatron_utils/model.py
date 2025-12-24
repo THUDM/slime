@@ -25,7 +25,6 @@ from slime.utils import tracking_utils
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
-from .cp_utils import slice_with_cp
 from .data import DataIterator, get_batch
 from .loss import loss_function
 from .model_provider import get_model_provider_func
@@ -207,6 +206,7 @@ def forward_only(
             data_iterator,
             [
                 "tokens",
+                "loss_masks",
                 "multimodal_inputs",
                 "total_lengths",
                 "response_lengths",
@@ -224,6 +224,7 @@ def forward_only(
             attention_mask=None,
             labels=None,
             packed_seq_params=packed_seq_params,
+            loss_mask=batch["full_loss_masks"],
             **(batch["multimodal_inputs"] if batch["multimodal_inputs"] is not None else {}),
         )
 
@@ -372,36 +373,6 @@ def train_one_step(
             old_stage = os.environ["ROUTING_REPLAY_STAGE"]
             os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
 
-        def build_loss_mask_for_mtp(batch: dict[str, object]) -> torch.Tensor | None:
-            tokens_tensor: torch.Tensor = batch["tokens"]
-
-            mask_chunks: list[torch.Tensor] = []
-            for total_len, response_len, resp_mask in zip(
-                batch["total_lengths"], batch["response_lengths"], batch["loss_masks"], strict=False
-            ):
-                assert (
-                    resp_mask.numel() == response_len
-                ), f"Unexpected loss mask size {resp_mask.numel()} (expected {response_len} or {total_len})."
-                prompt_len = total_len - response_len
-                full_mask = resp_mask.new_zeros(total_len)
-                full_mask[prompt_len:] = resp_mask
-
-                mask_chunks.append(slice_with_cp(full_mask, 0.0))
-
-            flattened_mask = torch.cat(mask_chunks, dim=0)
-            seq_len = tokens_tensor.size(-1)
-            assert (
-                flattened_mask.numel() <= seq_len
-            ), f"MTP loss mask ({flattened_mask.numel()}) exceeds token length ({seq_len})."
-
-            # token tensor may be padded by 128, so pad loss mask to the same length
-            loss_mask_tensor = flattened_mask.new_zeros(seq_len)
-            loss_mask_tensor[: flattened_mask.numel()] = flattened_mask
-            return loss_mask_tensor.unsqueeze(0)
-
-        loss_mask = None
-        mtp_kwargs = None
-
         if return_schedule_plan:
             assert not args.enable_mtp_training, "MTP training should not be enabled when using combined 1f1b"
             output_tensor = model.build_schedule_plan(
@@ -410,29 +381,18 @@ def train_one_step(
                 attention_mask=None,
                 labels=None,
                 packed_seq_params=batch["packed_seq_params"],
+                loss_mask=batch["full_loss_masks"],
             )
         else:
-            # If enabling MTP training: trigger MTP loss inside Megatron while returning logits
-            # for the target model's loss.
-            if args.enable_mtp_training:
-                loss_mask = build_loss_mask_for_mtp(batch)
-                assert (
-                    loss_mask.shape == batch["tokens"].shape
-                ), f"loss_mask shape {loss_mask.shape} mismatches token shape {batch['tokens'].shape}"
-                mtp_kwargs = {
-                    # We have to set labels to tokens for MTP training, to point out samples to train.
-                    "mtp_labels": batch["tokens"],
-                }
-
             output_tensor = model(
                 input_ids=batch["tokens"],
                 position_ids=None,
                 attention_mask=None,
                 labels=None,
                 packed_seq_params=batch["packed_seq_params"],
-                loss_mask=loss_mask,
+                loss_mask=batch["full_loss_masks"],
+                mtp_kwargs={"mtp_labels": batch["tokens"]} if args.enable_mtp_training else {},
                 **(batch["multimodal_inputs"] if batch["multimodal_inputs"] is not None else {}),
-                **(dict(mtp_kwargs=mtp_kwargs) if mtp_kwargs is not None else {}),
             )
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
