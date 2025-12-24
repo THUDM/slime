@@ -2,6 +2,7 @@ import dataclasses
 import logging
 import multiprocessing
 import time
+from urllib.parse import quote
 
 import requests
 import sglang_router
@@ -276,6 +277,7 @@ class SGLangEngine(RayActor):
                     f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
                 )
             else:
+                worker_url = quote(worker_url, safe="")
                 response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}")
             response.raise_for_status()
         kill_process_tree(self.process.pid)
