@@ -101,11 +101,10 @@ def get_batch(
         prompt_length = total_length - response_length
         F.pad(loss_mask, (prompt_length - 1, 1), value=0)
         loss_mask = slice_with_cp(loss_mask, 0)
-        loss_mask = F.pad(loss_mask, (0, pad), value=0)
         loss_masks.append(loss_mask)
     loss_masks = torch.cat(loss_masks)
     loss_masks = F.pad(loss_masks, (0, pad), value=0).unsqueeze(0)
-    assert loss_masks.shape == tokens.shape
+    assert loss_masks.shape == tokens.shape, f"loss_masks.shape: {loss_masks.shape}, tokens.shape: {tokens.shape}"
     batch["full_loss_masks"] = loss_masks
 
     # Process multimodal inputs if present
