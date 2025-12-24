@@ -224,6 +224,7 @@ def forward_only(
             attention_mask=None,
             labels=None,
             packed_seq_params=packed_seq_params,
+            loss_mask=batch["full_loss_masks"],
             **(batch["multimodal_inputs"] if batch["multimodal_inputs"] is not None else {}),
         )
 
