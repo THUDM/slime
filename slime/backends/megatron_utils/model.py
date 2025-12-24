@@ -391,7 +391,7 @@ def train_one_step(
                 labels=None,
                 packed_seq_params=batch["packed_seq_params"],
                 loss_mask=batch["full_loss_masks"],
-                mtp_kwargs={"mtp_labels": batch["tokens"]} if args.enable_mtp_training else None,
+                mtp_kwargs={"mtp_labels": batch["tokens"]} if args.enable_mtp_training else {},
                 **(batch["multimodal_inputs"] if batch["multimodal_inputs"] is not None else {}),
             )
 
