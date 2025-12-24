@@ -24,6 +24,7 @@ from slime.utils.ppo_utils import (
     get_reinforce_plus_plus_baseline_advantages,
     get_reinforce_plus_plus_returns,
 )
+from slime.utils.timer import timer
 from slime.utils.types import RolloutBatch
 
 from .cp_utils import get_chunked_loss_masks, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
@@ -511,22 +512,23 @@ def policy_loss_function(
     cp_rank = mpu.get_context_parallel_rank() if cp_size > 1 else None
     cp_group = mpu.get_context_parallel_group() if cp_size > 1 else None
     if need_full_log_probs:
-        if cp_size > 1:
-            assert cp_rank is not None and cp_group is not None
-            seq_kls, chunked_loss_masks = _compute_seq_kls_with_cp(
-                log_probs,
-                old_log_probs,
-                loss_masks,
-                total_lengths,
-                response_lengths,
-                cp_group=cp_group,
-                cp_rank=cp_rank,
-                cp_size=cp_size,
-                track_grad=args.advantage_estimator == "gspo",
-            )
-        else:
-            full_log_probs = log_probs
-            full_old_log_probs = old_log_probs
+        with timer("cp_seq_kl_prep"):
+            if cp_size > 1:
+                assert cp_rank is not None and cp_group is not None
+                seq_kls, chunked_loss_masks = _compute_seq_kls_with_cp(
+                    log_probs,
+                    old_log_probs,
+                    loss_masks,
+                    total_lengths,
+                    response_lengths,
+                    cp_group=cp_group,
+                    cp_rank=cp_rank,
+                    cp_size=cp_size,
+                    track_grad=args.advantage_estimator == "gspo",
+                )
+            else:
+                full_log_probs = log_probs
+                full_old_log_probs = old_log_probs
 
     if args.use_opsm:
         if seq_kls is not None and chunked_loss_masks is not None:
