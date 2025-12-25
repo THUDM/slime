@@ -1,0 +1,1 @@
+MODEL_ARGS_ROTARY_BASE=10000000 source "$(dirname -- "${BASH_SOURCE[0]}")/qwen3-30B-A3B.sh"
