@@ -152,6 +152,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
                 help="Whether to disable recompute loss function to save memory during training.",
             )
+            parser.add_argument(
+                "--log-probs-chunk-size", type=int, default=-1, help="Chunk size to compute log probs to save memory"
+            )
 
             return parser
 
@@ -1306,7 +1309,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         reset_arg(parser, "--padded-vocab-size", type=int, default=None)
 
         parser.set_defaults(sglang_tensor_parallel_size=add_sglang_tp_size())
-
         return parser
 
     return add_slime_arguments
