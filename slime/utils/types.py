@@ -31,6 +31,7 @@ class Sample:
         COMPLETED = "completed"
         TRUNCATED = "truncated"
         ABORTED = "aborted"
+        FAILED = "failed"
 
     status: Status = Status.PENDING
 
