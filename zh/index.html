@@ -53,7 +53,7 @@
     <link rel="next" title="快速使用" href="get_started/quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2025 年 12 月 24 日"/>
+    <meta name="docbuild:last-update" content="2025 年 12 月 25 日"/>
   </head>
   
   
@@ -167,6 +167,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="get_started/quick_start.html">快速使用</a></li>
 <li class="toctree-l1"><a class="reference internal" href="get_started/usage.html">使用文档</a></li>
+<li class="toctree-l1"><a class="reference internal" href="get_started/customization.html">自定义指南</a></li>
 <li class="toctree-l1"><a class="reference internal" href="get_started/qa.html">常见 Q&amp;A</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
@@ -186,6 +187,7 @@
 <li class="toctree-l1"><a class="reference internal" href="advanced/speculative-decoding.html">投机采样</a></li>
 <li class="toctree-l1"><a class="reference internal" href="advanced/fault-torlance.html">容灾</a></li>
 <li class="toctree-l1"><a class="reference internal" href="advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
+<li class="toctree-l1"><a class="reference internal" href="advanced/pd-disaggregation.html">PD 分离</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
 <ul class="nav bd-sidenav">
@@ -194,6 +196,10 @@
 <li class="toctree-l1"><a class="reference internal" href="_examples_synced/fully_async/README.html">Fully Asynchronous Rollout Example</a></li>
 <li class="toctree-l1"><a class="reference internal" href="_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+
+
+
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
 <ul class="nav bd-sidenav">
@@ -441,7 +447,7 @@ document.write(`
 <li><p>高性能训练：通过连接 Megatron 与 SGLang，支持多种模式下的高效训练；</p></li>
 <li><p>灵活的数据生成：通过自定义数据生成接口与基于服务器的引擎，实现任意训练数据生成流程。</p></li>
 </ul>
-<p>slime 是 GLM-4.5 与 GLM-4.6 背后的 RL 训练框架。除此之外，slime 还支持:</p>
+<p>slime 是 GLM-4.7、GLM-4.6、GLM-4.5 背后的 RL 训练框架。除此之外，slime 还支持:</p>
 <ul class="simple">
 <li><p>Qwen3 系列 (Qwen3Next, Qwen3MoE, Qwen3), Qwen2.5 系列；</p></li>
 <li><p>DeepSeek V3 系列 (DeepSeek V3, V3.1, DeepSeek R1)；</p></li>
@@ -452,6 +458,7 @@ document.write(`
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="get_started/quick_start.html">快速使用</a></li>
 <li class="toctree-l1"><a class="reference internal" href="get_started/usage.html">使用文档</a></li>
+<li class="toctree-l1"><a class="reference internal" href="get_started/customization.html">自定义指南</a></li>
 <li class="toctree-l1"><a class="reference internal" href="get_started/qa.html">常见 Q&amp;A</a></li>
 </ul>
 </div>
@@ -477,6 +484,7 @@ document.write(`
 <li class="toctree-l1"><a class="reference internal" href="advanced/speculative-decoding.html">投机采样</a></li>
 <li class="toctree-l1"><a class="reference internal" href="advanced/fault-torlance.html">容灾</a></li>
 <li class="toctree-l1"><a class="reference internal" href="advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
+<li class="toctree-l1"><a class="reference internal" href="advanced/pd-disaggregation.html">PD 分离</a></li>
 </ul>
 </div>
 <div class="toctree-wrapper compound">
@@ -487,6 +495,10 @@ document.write(`
 <li class="toctree-l1"><a class="reference internal" href="_examples_synced/fully_async/README.html">Fully Asynchronous Rollout Example</a></li>
 <li class="toctree-l1"><a class="reference internal" href="_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html#preliminary-results">Preliminary Results</a></li>
+<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html#faq">FAQ</a></li>
+<li class="toctree-l1"><a class="reference internal" href="_examples_synced/on_policy_distillation/README.html#references">References</a></li>
 </ul>
 </div>
 <div class="toctree-wrapper compound">
@@ -559,7 +571,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2025 年 12 月 24 日.
+  最后更新于 2025 年 12 月 25 日.
   <br/>
 </p>
   </div>

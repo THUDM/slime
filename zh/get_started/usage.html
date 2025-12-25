@@ -50,11 +50,11 @@
     <link rel="icon" href="../_static/logo.ico"/>
     <link rel="index" title="索引" href="../genindex.html" />
     <link rel="search" title="搜索" href="../search.html" />
-    <link rel="next" title="常见 Q&amp;A" href="qa.html" />
+    <link rel="next" title="自定义指南" href="customization.html" />
     <link rel="prev" title="快速使用" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2025 年 12 月 24 日"/>
+    <meta name="docbuild:last-update" content="2025 年 12 月 25 日"/>
   </head>
   
   
@@ -166,6 +166,7 @@
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="quick_start.html">快速使用</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">使用文档</a></li>
+<li class="toctree-l1"><a class="reference internal" href="customization.html">自定义指南</a></li>
 <li class="toctree-l1"><a class="reference internal" href="qa.html">常见 Q&amp;A</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
@@ -185,6 +186,7 @@
 <li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">投机采样</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/fault-torlance.html">容灾</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD 分离</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
 <ul class="nav bd-sidenav">
@@ -193,6 +195,10 @@
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully Asynchronous Rollout Example</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+
+
+
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
 <ul class="nav bd-sidenav">
@@ -433,31 +439,32 @@ document.write(`
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#slime">slime 参数简介</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">集群资源分配</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">选择训练后端</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron">加载 megatron</a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">配置模型参数</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">设置各种并行与重计算</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">配置模型参数</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">设置各种并行与重计算</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-ckpt">加载 megatron ckpt</a></li>
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang">加载 sglang</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">数据格式</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">数据格式</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rl">RL 训练需要的超参</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout">自定义 rollout 函数</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">sglang 使用方法</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">参数配置</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">sglang 使用方法</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">参数配置</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#router">router 使用方法</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">megatron 使用方法</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">参数配置</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">自定义参数</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">megatron 使用方法</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">参数配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">自定义参数</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fsdp">FSDP 使用方法</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">参数</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">FSDP 一键启动</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">参数</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id13">FSDP 一键启动</a></li>
 </ul>
 </li>
 </ul>
@@ -499,6 +506,15 @@ document.write(`
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--colocate</span></code>：开启训推一体。开启后会忽略 <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code> 让训练和推理的卡数相等。</p></li>
 </ul>
+<p>此外，slime 支持 Prefill 和 Decode 的分离部署 (PD Disaggregation)，可以通过设置 <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code> 参数来指定用于 Prefill 的服务器数量。</p>
+</section>
+<section id="id3">
+<h3>选择训练后端<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<p>slime 支持多种训练后端，可以通过 <code class="docutils literal notranslate"><span class="pre">--train-backend</span></code> 参数进行选择：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">megatron</span></code>（默认）：使用 Megatron-LM 作为训练后端，支持大规模模型的高效训练；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">fsdp</span></code>：使用 PyTorch FSDP 作为训练后端，可以直接加载 HuggingFace 格式权重，无需转换。</p></li>
+</ul>
 </section>
 <section id="megatron">
 <h3>加载 megatron<a class="headerlink" href="#megatron" title="Link to this heading">#</a></h3>
@@ -510,8 +526,8 @@ document.write(`
 <li><p>配置需要加载的 ckpt</p></li>
 </ul>
 <p>对于一些 megatron 的自定义以及 slime 引入 megatron 的原理，请见 megatron 使用方法一节。</p>
-<section id="id3">
-<h4>配置模型参数<a class="headerlink" href="#id3" title="Link to this heading">#</a></h4>
+<section id="id4">
+<h4>配置模型参数<a class="headerlink" href="#id4" title="Link to this heading">#</a></h4>
 <p>这里以 qwen3 4B 为例，我们需要这些参数：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">MODEL_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--num-layers<span class="w"> </span><span class="m">36</span>
@@ -542,8 +558,8 @@ document.write(`
 <li><p>slime 会使用 data packing (或称 varlen 或 thd) 进行训练，无需配置 <code class="docutils literal notranslate"><span class="pre">--seq-length</span></code> 或 <code class="docutils literal notranslate"><span class="pre">--max-positional-embedding</span></code>，这两个参数不会影响训练模型的最大 context length。</p></li>
 </ul>
 </section>
-<section id="id4">
-<h4>设置各种并行与重计算<a class="headerlink" href="#id4" title="Link to this heading">#</a></h4>
+<section id="id5">
+<h4>设置各种并行与重计算<a class="headerlink" href="#id5" title="Link to this heading">#</a></h4>
 <p>megatron 是目前优化最为齐全的训练框架，大家使用 megatron 的一个主要目的就是追求其卓越的性能，这里简单介绍一些 megatron 的并行和重计算的配置方法。</p>
 <ul class="simple">
 <li><p>这里我们简单陈列 megatron 的并行策略，关于这些并行策略之间的 trade-off 请参考更专业的一些讨论：</p>
@@ -613,8 +629,8 @@ document.write(`
 </ul>
 <p>对于一些 sglang 的自定义以及 slime 引入 sglang 的原理，请见 sglang 使用方法一节。</p>
 </section>
-<section id="id5">
-<h3>数据格式<a class="headerlink" href="#id5" title="Link to this heading">#</a></h3>
+<section id="id6">
+<h3>数据格式<a class="headerlink" href="#id6" title="Link to this heading">#</a></h3>
 <p>目前 slime 只支持加载 <code class="docutils literal notranslate"><span class="pre">.jsonl</span></code> 格式文件，即文件的每一行都是一个 json，一行数据的样例（展开后）为：</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
@@ -645,11 +661,13 @@ document.write(`
 <li><p><code class="docutils literal notranslate"><span class="pre">grpo</span></code>（https://arxiv.org/abs/2402.03300）；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">gspo</span></code>（https://arxiv.org/abs/2507.18071）；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">reinforce_plus_plus</span></code> 与 <code class="docutils literal notranslate"><span class="pre">reinforce_plus_plus_baseline</span></code>（https://arxiv.org/abs/2501.03262）；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">ppo</span></code>（https://arxiv.org/abs/1707.06347）。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ppo</span></code>（https://arxiv.org/abs/1707.06347）；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">on_policy_distillation</span></code>。</p></li>
 </ul>
 </li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>：slime 中默认的方案是 per sample loss，即 <code class="docutils literal notranslate"><span class="pre">mean(sum(sample_i)</span> <span class="pre">/</span> <span class="pre">len(sample_i))</span></code>，如果需要计算 per token loss，即 <code class="docutils literal notranslate"><span class="pre">sum(sum(sample_i))</span> <span class="pre">/</span> <span class="pre">sum(len(sample_i))</span></code>，可以开启 <code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--true-on-policy-mode</span></code>：开启 True On-Policy 模式，即在训练过程中严格保证数据是当前策略生成的。</p></li>
 </ul>
 </section>
 </section>
@@ -727,11 +745,11 @@ document.write(`
 <li><p>有的时候，我们还需要支持自定义的 reward model，可以通过配置 <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code> 来进行配置。</p></li>
 </ul>
 </section>
-<section id="id6">
-<h2>sglang 使用方法<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
-<p>slime 通过 <code class="docutils literal notranslate"><span class="pre">HttpServerEngineAdapter</span></code> 作为中介，实现了基于 sglang 的 server based engine。</p>
 <section id="id7">
-<h3>参数配置<a class="headerlink" href="#id7" title="Link to this heading">#</a></h3>
+<h2>sglang 使用方法<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
+<p>slime 通过 <code class="docutils literal notranslate"><span class="pre">HttpServerEngineAdapter</span></code> 作为中介，实现了基于 sglang 的 server based engine。</p>
+<section id="id8">
+<h3>参数配置<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
 <p>slime 通过引入 sglang 的 <code class="docutils literal notranslate"><span class="pre">ServerArgs.add_cli_args</span></code>，从而引入了几乎所有的 sglang 参数，在设置一个 sglang 参数的时候，需要在参数前加上 <code class="docutils literal notranslate"><span class="pre">--sglang</span></code> 的前缀，例如：</p>
 <ul class="simple">
 <li><p>在训推一体的训练时，往往需要限制 <code class="docutils literal notranslate"><span class="pre">--mem-fraction-static</span></code>，这个参数需要转变为 <code class="docutils literal notranslate"><span class="pre">--sglang-mem-fraction-static</span></code>；</p></li>
@@ -752,11 +770,11 @@ document.write(`
 <p>当通过 <code class="docutils literal notranslate"><span class="pre">--sglang-router-ip</span></code> 与 <code class="docutils literal notranslate"><span class="pre">--sglang-router-port</span></code> 来配置传入一个外部的 router，此时 slime 不再会在内部启动一个 router，而是会把所有的 server 都注册在这个外部 router 上。这时可以利用这个外部的 router 地址来实现更复杂的数据生成流程。注意 router 是支持 openai compatible api 的。</p>
 </section>
 </section>
-<section id="id8">
-<h2>megatron 使用方法<a class="headerlink" href="#id8" title="Link to this heading">#</a></h2>
-<p>slime 通过复用 <code class="docutils literal notranslate"><span class="pre">megatron.training</span></code> 目录下的常规函数，如 <code class="docutils literal notranslate"><span class="pre">parse_args</span></code>， <code class="docutils literal notranslate"><span class="pre">save_checkpoint</span></code>，<code class="docutils literal notranslate"><span class="pre">load_checkpoint</span></code>，从而实现对不同版本以及轻度魔改的 megatron 的支持。所以在使用时，需要保证 <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code> 中能访问到 megatron，例如在运行时加入 <code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">PYTHONPATH=/root/Megatron-LM</span></code>。</p>
 <section id="id9">
-<h3>参数配置<a class="headerlink" href="#id9" title="Link to this heading">#</a></h3>
+<h2>megatron 使用方法<a class="headerlink" href="#id9" title="Link to this heading">#</a></h2>
+<p>slime 通过复用 <code class="docutils literal notranslate"><span class="pre">megatron.training</span></code> 目录下的常规函数，如 <code class="docutils literal notranslate"><span class="pre">parse_args</span></code>， <code class="docutils literal notranslate"><span class="pre">save_checkpoint</span></code>，<code class="docutils literal notranslate"><span class="pre">load_checkpoint</span></code>，从而实现对不同版本以及轻度魔改的 megatron 的支持。所以在使用时，需要保证 <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code> 中能访问到 megatron，例如在运行时加入 <code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">PYTHONPATH=/root/Megatron-LM</span></code>。</p>
+<section id="id10">
+<h3>参数配置<a class="headerlink" href="#id10" title="Link to this heading">#</a></h3>
 <p>slime 通过直接引入 <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">megatron.training.arguments</span> <span class="pre">import</span> <span class="pre">parse_args</span></code> 引入了当前环境中 megatron 的所有参数。如果当前使用的 megatron 有在 <code class="docutils literal notranslate"><span class="pre">parse_args</span></code> 之外的参数，可以通过像 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/train.py">train.py</a> 中传入参数来进行配置，例如：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
     <span class="k">try</span><span class="p">:</span>
@@ -768,8 +786,8 @@ document.write(`
 </pre></div>
 </div>
 </section>
-<section id="id10">
-<h3>自定义参数<a class="headerlink" href="#id10" title="Link to this heading">#</a></h3>
+<section id="id11">
+<h3>自定义参数<a class="headerlink" href="#id11" title="Link to this heading">#</a></h3>
 <p>在一些定制版 megatron 的实现中，需要在初始化，或者训练步的前后进行特殊的操作。目前我们加入如下的插件：</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>：会增加一些 init 的调用；</p></li>
@@ -785,8 +803,8 @@ document.write(`
 <div><p>FSDP 通过 <code class="docutils literal notranslate"><span class="pre">AutoModelForCausalLM.from_pretrained()</span></code> 自动读取所有架构信息，无需手动指定。Megatron 需要手动配置参数读取 model 架构信息，FSDP可以全部从 <code class="docutils literal notranslate"><span class="pre">config.json</span></code> 自动读取，可以直接避免权重格式转换步骤。</p>
 </div></blockquote>
 <p>可以通过在命令行传递 <code class="docutils literal notranslate"><span class="pre">--train-backend</span> <span class="pre">fsdp</span></code> 来启动 FSDP 作为训练后端。</p>
-<section id="id11">
-<h3>参数<a class="headerlink" href="#id11" title="Link to this heading">#</a></h3>
+<section id="id12">
+<h3>参数<a class="headerlink" href="#id12" title="Link to this heading">#</a></h3>
 <p>FSDP和Megatron后端支持的参数的对比如下表所示，接下来FSDP会有更多的支持。</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
@@ -891,8 +909,8 @@ document.write(`
 </table>
 </div>
 </section>
-<section id="id12">
-<h3>FSDP 一键启动<a class="headerlink" href="#id12" title="Link to this heading">#</a></h3>
+<section id="id13">
+<h3>FSDP 一键启动<a class="headerlink" href="#id13" title="Link to this heading">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 如果需要使用 WANDB，需要提前设置好环境变量 WANDB_API_KEY</span>
 <span class="c1"># 下载模型权重 (Qwen3-4B)</span>
 hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-4B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-4B
@@ -941,11 +959,11 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
       </div>
     </a>
     <a class="right-next"
-       href="qa.html"
+       href="customization.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">下一页</p>
-        <p class="prev-next-title">常见 Q&amp;A</p>
+        <p class="prev-next-title">自定义指南</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -967,31 +985,32 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#slime">slime 参数简介</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">集群资源分配</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">选择训练后端</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron">加载 megatron</a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">配置模型参数</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">设置各种并行与重计算</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">配置模型参数</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">设置各种并行与重计算</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-ckpt">加载 megatron ckpt</a></li>
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang">加载 sglang</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">数据格式</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">数据格式</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rl">RL 训练需要的超参</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout">自定义 rollout 函数</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">sglang 使用方法</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">参数配置</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">sglang 使用方法</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">参数配置</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#router">router 使用方法</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">megatron 使用方法</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">参数配置</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">自定义参数</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">megatron 使用方法</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">参数配置</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">自定义参数</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fsdp">FSDP 使用方法</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">参数</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">FSDP 一键启动</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">参数</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id13">FSDP 一键启动</a></li>
 </ul>
 </li>
 </ul>
@@ -1027,7 +1046,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2025 年 12 月 24 日.
+  最后更新于 2025 年 12 月 25 日.
   <br/>
 </p>
   </div>

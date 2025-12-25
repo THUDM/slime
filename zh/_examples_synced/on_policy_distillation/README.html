@@ -50,9 +50,11 @@
     <link rel="icon" href="../../_static/logo.ico"/>
     <link rel="index" title="索引" href="../../genindex.html" />
     <link rel="search" title="搜索" href="../../search.html" />
+    <link rel="next" title="Debug 指南" href="../../developer_guide/debug.html" />
+    <link rel="prev" title="Multi-Agent RL" href="../multi_agent/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2025 年 12 月 24 日"/>
+    <meta name="docbuild:last-update" content="2025 年 12 月 25 日"/>
   </head>
   
   
@@ -113,8 +115,6 @@
       
       
       
-        
-      
       <div class="bd-sidebar-primary bd-sidebar">
         
 
@@ -166,6 +166,7 @@
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../../get_started/quick_start.html">快速使用</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../get_started/usage.html">使用文档</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../get_started/customization.html">自定义指南</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../get_started/qa.html">常见 Q&amp;A</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
@@ -185,14 +186,19 @@
 <li class="toctree-l1"><a class="reference internal" href="../../advanced/speculative-decoding.html">投机采样</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../advanced/fault-torlance.html">容灾</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../advanced/pd-disaggregation.html">PD 分离</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
-<ul class="nav bd-sidenav">
+<ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../search-r1/README.html">Search-R1 lite</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../fully_async/README.html">Fully Asynchronous Rollout Example</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../multi_agent/README.html">Multi-Agent RL</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">On-Policy Distillation Example</a></li>
+
+
+
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
 <ul class="nav bd-sidenav">
@@ -543,6 +549,24 @@ The teacher runs on an independent SGLang server that Slime treats as a reward m
                 <footer class="prev-next-footer d-print-none">
                   
 <div class="prev-next-area">
+    <a class="left-prev"
+       href="../multi_agent/README.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">上一页</p>
+        <p class="prev-next-title">Multi-Agent RL</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="../../developer_guide/debug.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">下一页</p>
+        <p class="prev-next-title">Debug 指南</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
 </div>
                 </footer>
               
@@ -601,7 +625,7 @@ The teacher runs on an independent SGLang server that Slime treats as a reward m
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2025 年 12 月 24 日.
+  最后更新于 2025 年 12 月 25 日.
   <br/>
 </p>
   </div>

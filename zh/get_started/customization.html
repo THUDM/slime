@@ -1,0 +1,1082 @@
+
+<!DOCTYPE html>
+
+
+<html lang="zh" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>自定义指南 &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/bootstrap.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+
+  
+  <link href="../_static/vendor/fontawesome/6.5.2/css/all.min.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-solid-900.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-brands-400.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-regular-400.woff2" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+  
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b" />
+  <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+    <script src="../_static/documentation_options.js?v=30c3115b"></script>
+    <script src="../_static/doctools.js?v=9bcbadda"></script>
+    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'get_started/customization';</script>
+    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="next" title="常见 Q&amp;A" href="qa.html" />
+    <link rel="prev" title="使用文档" href="usage.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="zh"/>
+    <meta name="docbuild:last-update" content="2025 年 12 月 25 日"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-primary-sidebar-checkbox"/>
+  <label class="overlay overlay-primary" for="pst-primary-sidebar-checkbox"></label>
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-secondary-sidebar-checkbox"/>
+  <label class="overlay overlay-secondary" for="pst-secondary-sidebar-checkbox"></label>
+  
+  <div class="search-button__wrapper">
+    <div class="search-button__overlay"></div>
+    <div class="search-button__search-container">
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         id="search-input"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form></div>
+  </div>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <div class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <script>document.write(`<img src="../_static/logo.jpg" class="logo__image only-dark" alt="slime - Home"/>`);</script>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">搜索</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="quick_start.html">快速使用</a></li>
+<li class="toctree-l1"><a class="reference internal" href="usage.html">使用文档</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">自定义指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="qa.html">常见 Q&amp;A</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.5-355B-A32B.html">64xH100 训练 GLM-4.5</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/reproducibility/README.html">Reproducibility</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">投机采样</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/fault-torlance.html">容灾</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD 分离</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully Asynchronous Rollout Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+
+
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+  
+  <div id="rtd-footer-container"></div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="源码库"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/get_started/customization.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/get_started/customization.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fget_started/customization.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="创建议题"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="下载此页面">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/get_started/customization.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="下载源文件"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="列印成 PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button"
+  title="全屏模式"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script>
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm pst-navbar-icon search-button search-button__button" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+  </button>
+`);
+</script>
+<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>自定义指南</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> 目录 </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">自定义接口概览</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">详细接口参考</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-function-path">1. Rollout 函数 (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-path">2. 自定义生成函数 (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rm-path">3. 奖励模型 (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling-filter-path">4. 动态采样过滤器 (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#buffer-buffer-filter-path">5. Buffer 过滤器 (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-sample-filter-path">6. Rollout 样本过滤器 (<code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-all-samples-process-path">7. Rollout 全样本处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-data-postprocess-path">8. Rollout 数据后处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-loss-function-path">9. 自定义损失函数 (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tis-rs-custom-tis-function-path">10. 自定义 TIS/RS 函数 (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-reward-post-process-path">11. 奖励后处理 (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">12. 日志函数</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-custom-rollout-log-function-path">训练 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-custom-eval-rollout-log-function-path">评估 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>)</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-path">13. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-function-path">14. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron">15. Megatron 钩子</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-custom-megatron-init-path">Megatron 初始化 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#log-prob-custom-megatron-before-log-prob-hook-path">Log Prob 前钩子 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-megatron-before-train-step-hook-path">训练步骤前钩子 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-slime-router-middleware-paths">16. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sample">Sample 数据结构</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">示例：实现自定义奖励</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">示例：实现多轮生成</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">最佳实践</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="id1">
+<h1>自定义指南<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
+<p>slime 通过函数路径参数提供了广泛的自定义能力。这些参数允许你在训练和推理流程的各个阶段注入自定义逻辑，而无需修改核心代码库。</p>
+<section id="id2">
+<h2>自定义接口概览<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<p>下表总结了所有可用的自定义接口及其用途。</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head text-left"><p>接口参数</p></th>
+<th class="head text-left"><p>用途</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td class="text-left"><p>--rollout-function-path</p></td>
+<td class="text-left"><p>覆盖整个 rollout 生成逻辑。</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>--custom-generate-function-path</p></td>
+<td class="text-left"><p>仅覆盖生成步骤（例如用于 RAG 或工具调用）。</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>--custom-rm-path</p></td>
+<td class="text-left"><p>实现自定义奖励计算逻辑。</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>--dynamic-sampling-filter-path</p></td>
+<td class="text-left"><p>在动态采样过程中过滤样本（例如 DAPO）。</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>--buffer-filter-path</p></td>
+<td class="text-left"><p>在训练前过滤 rollout buffer 中的样本。</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>--rollout-sample-filter-path</p></td>
+<td class="text-left"><p>决定单个样本是否参与损失计算。</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>--rollout-all-samples-process-path</p></td>
+<td class="text-left"><p>在 rollout 后处理所有样本（包括被过滤的样本）。</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>--rollout-data-postprocess-path</p></td>
+<td class="text-left"><p>在计算 log probabilities 后对 rollout 数据进行后处理。</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>--custom-loss-function-path</p></td>
+<td class="text-left"><p>实现自定义训练损失计算。</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>--custom-tis-function-path</p></td>
+<td class="text-left"><p>实现用于离策略（off-policy）校正的自定义重要性采样。</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>--custom-reward-post-process-path</p></td>
+<td class="text-left"><p>在优势计算前对奖励进行自定义后处理。</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>--custom-rollout-log-function-path</p></td>
+<td class="text-left"><p>训练 rollout 的自定义日志记录。</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>--custom-eval-rollout-log-function-path</p></td>
+<td class="text-left"><p>评估 rollout 的自定义日志记录。</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>--data-source-path</p></td>
+<td class="text-left"><p>覆盖 rollout 提示词的数据源。</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>--eval-function-path</p></td>
+<td class="text-left"><p>专门为评估覆盖 rollout 函数。</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>--custom-megatron-init-path</p></td>
+<td class="text-left"><p>Megatron 设置后的自定义初始化。</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>--custom-megatron-before-log-prob-hook-path</p></td>
+<td class="text-left"><p>log probability 计算前的自定义逻辑。</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>--custom-megatron-before-train-step-hook-path</p></td>
+<td class="text-left"><p>每个训练步骤前的自定义逻辑。</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>--slime-router-middleware-paths</p></td>
+<td class="text-left"><p>向 slime router 添加自定义中间件。</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id3">
+<h2>详细接口参考<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<section id="rollout-rollout-function-path">
+<h3>1. Rollout 函数 (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)<a class="headerlink" href="#rollout-rollout-function-path" title="Link to this heading">#</a></h3>
+<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.sglang_rollout.generate_rollout</span></code></p>
+<p><strong>用途</strong>: 覆盖整个 rollout 生成逻辑。</p>
+<p><strong>函数签名</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_rollout</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">RolloutFnTrainOutput</span> <span class="o">|</span> <span class="n">RolloutFnEvalOutput</span>
+</pre></div>
+</div>
+<p><strong>使用场景</strong>:</p>
+<ul class="simple">
+<li><p>实现复杂的多轮对话</p></li>
+<li><p>添加自定义采样策略</p></li>
+<li><p>在生成过程中集成外部工具或 API</p></li>
+</ul>
+<p><strong>示例</strong>: 参见 <a class="reference download internal" download="" href="../_downloads/fcb74b88a8b414d1a6f967a6f94cdf7b/rollout_with_multi_agents.py"><span class="xref download myst">examples/multi_agent/rollout_with_multi_agents.py</span></a></p>
+</section>
+<hr class="docutils" />
+<section id="custom-generate-function-path">
+<h3>2. 自定义生成函数 (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)<a class="headerlink" href="#custom-generate-function-path" title="Link to this heading">#</a></h3>
+<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（使用内置生成函数）</p>
+<p><strong>用途</strong>: 仅覆盖默认 rollout 函数中的生成步骤。</p>
+<p><strong>函数签名</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">custom_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Sample</span>
+</pre></div>
+</div>
+<p><strong>使用场景</strong>:</p>
+<ul class="simple">
+<li><p>实现工具调用（tool-calling）或函数调用（function-calling）能力</p></li>
+<li><p>添加检索增强生成（RAG）</p></li>
+<li><p>多轮对话处理</p></li>
+</ul>
+<p><strong>示例</strong>: 参见 <a class="reference download internal" download="" href="../_downloads/bee5a872ccae7eb6b44c1ed0e0f6eb4a/generate_with_search.py"><span class="xref download myst">examples/search-r1/generate_with_search.py</span></a></p>
+</section>
+<hr class="docutils" />
+<section id="custom-rm-path">
+<h3>3. 奖励模型 (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)<a class="headerlink" href="#custom-rm-path" title="Link to this heading">#</a></h3>
+<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（基于 <code class="docutils literal notranslate"><span class="pre">--rm-type</span></code> 使用内置奖励模型）</p>
+<p><strong>用途</strong>: 实现自定义奖励计算逻辑。</p>
+<p><strong>函数签名</strong>（单样本模式）:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">custom_rm</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span>
+</pre></div>
+</div>
+<p><strong>函数签名</strong>（批量模式，当启用 <code class="docutils literal notranslate"><span class="pre">--group-rm</span></code> 时）:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">batched_custom_rm</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span>
+</pre></div>
+</div>
+<p><strong>使用场景</strong>:</p>
+<ul class="simple">
+<li><p>自定义基于规则的奖励</p></li>
+<li><p>集成外部奖励模型服务</p></li>
+<li><p>多维度奖励信号</p></li>
+</ul>
+<p><strong>内置选项</strong> (<code class="docutils literal notranslate"><span class="pre">--rm-type</span></code>):</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">math</span></code>: 数学答案验证</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">dapo</span></code>: DAPO 风格评分</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">deepscaler</span></code>: DeepScaler 基于规则的奖励</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">f1</span></code>: F1 分数计算</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">gpqa</span></code>: GPQA 奖励计算</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ifbench</span></code>: IFBench 奖励计算</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">remote_rm</span></code>: 远程奖励模型服务（需要 <code class="docutils literal notranslate"><span class="pre">--rm-url</span></code>）</p></li>
+</ul>
+</section>
+<hr class="docutils" />
+<section id="dynamic-sampling-filter-path">
+<h3>4. 动态采样过滤器 (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)<a class="headerlink" href="#dynamic-sampling-filter-path" title="Link to this heading">#</a></h3>
+<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
+<p><strong>用途</strong>: 在动态采样过程中过滤样本（例如 DAPO 风格的过滤）。</p>
+<p><strong>函数签名</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">filter_function</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">],</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">DynamicFilterOutput</span>
+</pre></div>
+</div>
+<p><strong>返回类型</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">DynamicFilterOutput</span><span class="p">:</span>
+    <span class="n">keep</span><span class="p">:</span> <span class="nb">bool</span>  <span class="c1"># 是否保留该样本组</span>
+    <span class="n">reason</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span>  <span class="c1"># 过滤原因（用于日志）</span>
+</pre></div>
+</div>
+<p><strong>使用场景</strong>:</p>
+<ul class="simple">
+<li><p>过滤所有响应具有相同奖励的样本</p></li>
+<li><p>实现课程学习策略</p></li>
+<li><p>基于质量的样本选择</p></li>
+</ul>
+<p><strong>示例</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std</span></code></p>
+</section>
+<hr class="docutils" />
+<section id="buffer-buffer-filter-path">
+<h3>5. Buffer 过滤器 (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)<a class="headerlink" href="#buffer-buffer-filter-path" title="Link to this heading">#</a></h3>
+<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
+<p><strong>用途</strong>: 在训练前过滤 rollout buffer 中的样本。</p>
+<p><strong>函数签名</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">buffer_filter</span><span class="p">(</span><span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]</span>
+</pre></div>
+</div>
+<p><strong>使用场景</strong>:</p>
+<ul class="simple">
+<li><p>在训练前移除低质量样本</p></li>
+<li><p>实现基于优先级的样本选择</p></li>
+<li><p>平衡样本分布</p></li>
+</ul>
+</section>
+<hr class="docutils" />
+<section id="rollout-rollout-sample-filter-path">
+<h3>6. Rollout 样本过滤器 (<code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code>)<a class="headerlink" href="#rollout-rollout-sample-filter-path" title="Link to this heading">#</a></h3>
+<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
+<p><strong>用途</strong>: 决定单个样本是否参与损失计算。</p>
+<p><strong>函数签名</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">filter_function</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">])</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</pre></div>
+</div>
+<p><strong>注意</strong>: 此函数应直接修改每个 <code class="docutils literal notranslate"><span class="pre">Sample</span></code> 对象的 <code class="docutils literal notranslate"><span class="pre">remove_sample</span></code> 属性。</p>
+<p><strong>使用场景</strong>:</p>
+<ul class="simple">
+<li><p>基于响应质量过滤样本</p></li>
+<li><p>实现选择性训练策略</p></li>
+</ul>
+</section>
+<hr class="docutils" />
+<section id="rollout-rollout-all-samples-process-path">
+<h3>7. Rollout 全样本处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>)<a class="headerlink" href="#rollout-rollout-all-samples-process-path" title="Link to this heading">#</a></h3>
+<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
+<p><strong>用途</strong>: 在 rollout 后处理所有样本（包括被过滤的样本）。</p>
+<p><strong>函数签名</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">process_function</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]])</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</pre></div>
+</div>
+<p><strong>使用场景</strong>:</p>
+<ul class="simple">
+<li><p>记录和分析所有生成的样本</p></li>
+<li><p>计算过滤和保留样本的统计数据</p></li>
+</ul>
+</section>
+<hr class="docutils" />
+<section id="rollout-rollout-data-postprocess-path">
+<h3>8. Rollout 数据后处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code>)<a class="headerlink" href="#rollout-rollout-data-postprocess-path" title="Link to this heading">#</a></h3>
+<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
+<p><strong>用途</strong>: 在计算 log probabilities 后对 rollout 数据进行后处理。</p>
+<p><strong>函数签名</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">postprocess_function</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]])</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</pre></div>
+</div>
+<p><strong>使用场景</strong>:</p>
+<ul class="simple">
+<li><p>基于计算值更新损失掩码</p></li>
+<li><p>向样本添加额外元数据</p></li>
+</ul>
+</section>
+<hr class="docutils" />
+<section id="custom-loss-function-path">
+<h3>9. 自定义损失函数 (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)<a class="headerlink" href="#custom-loss-function-path" title="Link to this heading">#</a></h3>
+<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（需要 <code class="docutils literal notranslate"><span class="pre">--loss-type</span> <span class="pre">custom_loss</span></code>）</p>
+<p><strong>用途</strong>: 实现自定义训练损失计算。</p>
+<p><strong>使用场景</strong>:</p>
+<ul class="simple">
+<li><p>新颖的 RL 目标函数</p></li>
+<li><p>多目标优化</p></li>
+<li><p>自定义正则化项</p></li>
+</ul>
+</section>
+<hr class="docutils" />
+<section id="tis-rs-custom-tis-function-path">
+<h3>10. 自定义 TIS/RS 函数 (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)<a class="headerlink" href="#tis-rs-custom-tis-function-path" title="Link to this heading">#</a></h3>
+<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
+<p><strong>用途</strong>: 实现用于离策略（off-policy）校正的自定义重要性采样。</p>
+<p><strong>使用场景</strong>:</p>
+<ul class="simple">
+<li><p>自定义重要性采样比率计算</p></li>
+<li><p>高级离策略校正方法</p></li>
+</ul>
+<p><strong>示例</strong>: <code class="docutils literal notranslate"><span class="pre">examples/train_infer_mismatch_helper/mis.py:compute_mis_weights_with_cp</span></code></p>
+</section>
+<hr class="docutils" />
+<section id="custom-reward-post-process-path">
+<h3>11. 奖励后处理 (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)<a class="headerlink" href="#custom-reward-post-process-path" title="Link to this heading">#</a></h3>
+<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（使用默认的 GRPO 归一化）</p>
+<p><strong>用途</strong>: 在优势计算前对奖励进行自定义后处理。</p>
+<p><strong>使用场景</strong>:</p>
+<ul class="simple">
+<li><p>自定义奖励归一化策略</p></li>
+<li><p>奖励塑形（reward shaping）</p></li>
+</ul>
+</section>
+<hr class="docutils" />
+<section id="id4">
+<h3>12. 日志函数<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<section id="rollout-custom-rollout-log-function-path">
+<h4>训练 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)<a class="headerlink" href="#rollout-custom-rollout-log-function-path" title="Link to this heading">#</a></h4>
+<p><strong>函数签名</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">log_rollout_data</span><span class="p">(</span><span class="n">rollout_id</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">samples</span><span class="p">,</span> <span class="n">rollout_extra_metrics</span><span class="p">,</span> <span class="n">rollout_time</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
+</pre></div>
+</div>
+<p><strong>返回值</strong>: <code class="docutils literal notranslate"><span class="pre">True</span></code> 跳过默认日志，<code class="docutils literal notranslate"><span class="pre">False</span></code> 继续默认日志。</p>
+</section>
+<section id="rollout-custom-eval-rollout-log-function-path">
+<h4>评估 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>)<a class="headerlink" href="#rollout-custom-eval-rollout-log-function-path" title="Link to this heading">#</a></h4>
+<p><strong>函数签名</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">log_eval_rollout_data</span><span class="p">(</span><span class="n">rollout_id</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">extra_metrics</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
+</pre></div>
+</div>
+<p><strong>返回值</strong>: <code class="docutils literal notranslate"><span class="pre">True</span></code> 跳过默认日志，<code class="docutils literal notranslate"><span class="pre">False</span></code> 继续默认日志。</p>
+</section>
+</section>
+<hr class="docutils" />
+<section id="data-source-path">
+<h3>13. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)<a class="headerlink" href="#data-source-path" title="Link to this heading">#</a></h3>
+<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.RolloutDataSourceWithBuffer</span></code></p>
+<p><strong>用途</strong>: 覆盖 rollout 提示词的数据源。</p>
+<p><strong>基类</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.DataSource</span></code></p>
+<p><strong>必需方法</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">class</span><span class="w"> </span><span class="nc">CustomDataSource</span><span class="p">(</span><span class="n">DataSource</span><span class="p">):</span>
+    <span class="k">def</span><span class="w"> </span><span class="nf">get_samples</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">num_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]:</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;返回 num_samples 个样本&quot;&quot;&quot;</span>
+        
+    <span class="k">def</span><span class="w"> </span><span class="nf">add_samples</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;将样本添加回数据源&quot;&quot;&quot;</span>
+        
+    <span class="k">def</span><span class="w"> </span><span class="nf">save</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;保存状态用于检查点&quot;&quot;&quot;</span>
+        
+    <span class="k">def</span><span class="w"> </span><span class="nf">load</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">rollout_id</span><span class="o">=</span><span class="kc">None</span><span class="p">):</span>
+<span class="w">        </span><span class="sd">&quot;&quot;&quot;从检查点加载状态&quot;&quot;&quot;</span>
+</pre></div>
+</div>
+</section>
+<hr class="docutils" />
+<section id="eval-function-path">
+<h3>14. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)<a class="headerlink" href="#eval-function-path" title="Link to this heading">#</a></h3>
+<p><strong>默认值</strong>: 与 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> 相同</p>
+<p><strong>用途</strong>: 专门为评估覆盖 rollout 函数。</p>
+<p><strong>使用场景</strong>:</p>
+<ul class="simple">
+<li><p>评估时使用不同的采样参数</p></li>
+<li><p>评估专用逻辑</p></li>
+</ul>
+</section>
+<hr class="docutils" />
+<section id="megatron">
+<h3>15. Megatron 钩子<a class="headerlink" href="#megatron" title="Link to this heading">#</a></h3>
+<section id="megatron-custom-megatron-init-path">
+<h4>Megatron 初始化 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)<a class="headerlink" href="#megatron-custom-megatron-init-path" title="Link to this heading">#</a></h4>
+<p><strong>函数签名</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">custom_init</span><span class="p">(</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</pre></div>
+</div>
+<p><strong>用途</strong>: Megatron 设置后的自定义初始化。</p>
+</section>
+<section id="log-prob-custom-megatron-before-log-prob-hook-path">
+<h4>Log Prob 前钩子 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)<a class="headerlink" href="#log-prob-custom-megatron-before-log-prob-hook-path" title="Link to this heading">#</a></h4>
+<p><strong>函数签名</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">custom_hook</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">store_prefix</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</pre></div>
+</div>
+<p><strong>用途</strong>: log probability 计算前的自定义逻辑。</p>
+</section>
+<section id="custom-megatron-before-train-step-hook-path">
+<h4>训练步骤前钩子 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)<a class="headerlink" href="#custom-megatron-before-train-step-hook-path" title="Link to this heading">#</a></h4>
+<p><strong>函数签名</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">custom_hook</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">step_id</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="p">,</span> <span class="n">opt_param_scheduler</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+</pre></div>
+</div>
+<p><strong>用途</strong>: 每个训练步骤前的自定义逻辑。</p>
+</section>
+</section>
+<hr class="docutils" />
+<section id="slime-router-slime-router-middleware-paths">
+<h3>16. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)<a class="headerlink" href="#slime-router-slime-router-middleware-paths" title="Link to this heading">#</a></h3>
+<p><strong>用途</strong>: 向 slime router 添加自定义中间件用于请求处理。</p>
+<p><strong>使用场景</strong>:</p>
+<ul class="simple">
+<li><p>请求/响应转换</p></li>
+<li><p>自定义路由逻辑</p></li>
+<li><p>缓存和优化</p></li>
+</ul>
+</section>
+</section>
+<hr class="docutils" />
+<section id="sample">
+<h2>Sample 数据结构<a class="headerlink" href="#sample" title="Link to this heading">#</a></h2>
+<p>在实现自定义函数时，你将使用 <code class="docutils literal notranslate"><span class="pre">Sample</span></code> 数据类：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@dataclass</span>
+<span class="k">class</span><span class="w"> </span><span class="nc">Sample</span><span class="p">:</span>
+    <span class="n">group_index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+    <span class="n">tokens</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+    <span class="n">multimodal_inputs</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">response</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+    <span class="n">response_length</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="n">label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">reward</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">loss_mask</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">weight_versions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
+    <span class="n">rollout_log_probs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">rollout_routed_experts</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+    <span class="n">remove_sample</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
+    <span class="n">status</span><span class="p">:</span> <span class="n">Status</span> <span class="o">=</span> <span class="n">Status</span><span class="o">.</span><span class="n">PENDING</span>  <span class="c1"># PENDING, COMPLETED, TRUNCATED, ABORTED</span>
+    <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
+    <span class="n">train_metadata</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
+</pre></div>
+</div>
+</section>
+<section id="id5">
+<h2>示例：实现自定义奖励<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
+<p>以下是实现自定义奖励函数的完整示例：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># my_rewards.py</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.types</span><span class="w"> </span><span class="kn">import</span> <span class="n">Sample</span>
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">my_custom_reward</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    组合多个信号的自定义奖励函数。</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">response</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">response</span>
+    <span class="n">label</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">label</span>
+    
+    <span class="c1"># 你的奖励逻辑</span>
+    <span class="n">correctness</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="k">if</span> <span class="n">check_answer</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="n">label</span><span class="p">)</span> <span class="k">else</span> <span class="mf">0.0</span>
+    <span class="n">format_score</span> <span class="o">=</span> <span class="n">check_format</span><span class="p">(</span><span class="n">response</span><span class="p">)</span>
+    <span class="n">length_penalty</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">response</span><span class="p">)</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">)</span>
+    
+    <span class="k">return</span> <span class="n">correctness</span> <span class="o">*</span> <span class="mf">0.7</span> <span class="o">+</span> <span class="n">format_score</span> <span class="o">*</span> <span class="mf">0.2</span> <span class="o">+</span> <span class="n">length_penalty</span> <span class="o">*</span> <span class="mf">0.1</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">check_answer</span><span class="p">(</span><span class="n">response</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
+    <span class="c1"># 实现你的答案检查逻辑</span>
+    <span class="k">pass</span>
+
+<span class="k">def</span><span class="w"> </span><span class="nf">check_format</span><span class="p">(</span><span class="n">response</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
+    <span class="c1"># 实现你的格式检查逻辑</span>
+    <span class="k">pass</span>
+</pre></div>
+</div>
+<p>使用方法：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--custom-rm-path<span class="w"> </span>my_rewards.my_custom_reward<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="c1"># ... 其他参数</span>
+</pre></div>
+</div>
+</section>
+<section id="id6">
+<h2>示例：实现多轮生成<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># my_generation.py</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.types</span><span class="w"> </span><span class="kn">import</span> <span class="n">Sample</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">slime.rollout.sglang_rollout</span><span class="w"> </span><span class="kn">import</span> <span class="n">generate</span>
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">multi_turn_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Sample</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    带工具调用的多轮生成。</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">max_turns</span> <span class="o">=</span> <span class="mi">3</span>
+    
+    <span class="k">for</span> <span class="n">turn</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">max_turns</span><span class="p">):</span>
+        <span class="c1"># 生成响应</span>
+        <span class="n">sample</span> <span class="o">=</span> <span class="k">await</span> <span class="n">generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">)</span>
+        
+        <span class="c1"># 检查是否需要工具调用</span>
+        <span class="k">if</span> <span class="s2">&quot;&lt;tool_call&gt;&quot;</span> <span class="ow">in</span> <span class="n">sample</span><span class="o">.</span><span class="n">response</span><span class="p">:</span>
+            <span class="n">tool_result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">execute_tool</span><span class="p">(</span><span class="n">sample</span><span class="o">.</span><span class="n">response</span><span class="p">)</span>
+            <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span> <span class="o">+</span> <span class="n">sample</span><span class="o">.</span><span class="n">response</span> <span class="o">+</span> <span class="n">tool_result</span>
+            <span class="n">sample</span><span class="o">.</span><span class="n">response</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
+            <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">PENDING</span>
+        <span class="k">else</span><span class="p">:</span>
+            <span class="k">break</span>
+    
+    <span class="k">return</span> <span class="n">sample</span>
+</pre></div>
+</div>
+<p>使用方法：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--custom-generate-function-path<span class="w"> </span>my_generation.multi_turn_generate<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="c1"># ... 其他参数</span>
+</pre></div>
+</div>
+</section>
+<section id="id7">
+<h2>最佳实践<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
+<ol class="arabic simple">
+<li><p><strong>使用异步函数</strong>: 大多数与 rollout 相关的函数应该是异步的，以获得更好的性能。</p></li>
+<li><p><strong>优雅地处理错误</strong>: 将自定义逻辑包装在 try-except 块中以防止崩溃。</p></li>
+<li><p><strong>记录重要信息</strong>: 使用 Python 的 logging 模块跟踪你的自定义逻辑。</p></li>
+<li><p><strong>独立测试</strong>: 在与完整训练流程集成之前，先测试你的自定义函数。</p></li>
+<li><p><strong>编写文档</strong>: 添加文档字符串解释预期的输入和输出。</p></li>
+<li><p><strong>考虑批处理</strong>: 对于昂贵的操作（如 API 调用），尽可能考虑批处理。</p></li>
+</ol>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="usage.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">上一页</p>
+        <p class="prev-next-title">使用文档</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="qa.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">下一页</p>
+        <p class="prev-next-title">常见 Q&amp;A</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+  <div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> 目录
+  </div>
+  <nav class="bd-toc-nav page-toc">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">自定义接口概览</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">详细接口参考</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-function-path">1. Rollout 函数 (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-generate-function-path">2. 自定义生成函数 (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-rm-path">3. 奖励模型 (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#dynamic-sampling-filter-path">4. 动态采样过滤器 (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#buffer-buffer-filter-path">5. Buffer 过滤器 (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-sample-filter-path">6. Rollout 样本过滤器 (<code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-all-samples-process-path">7. Rollout 全样本处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-data-postprocess-path">8. Rollout 数据后处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-loss-function-path">9. 自定义损失函数 (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tis-rs-custom-tis-function-path">10. 自定义 TIS/RS 函数 (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-reward-post-process-path">11. 奖励后处理 (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">12. 日志函数</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-custom-rollout-log-function-path">训练 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-custom-eval-rollout-log-function-path">评估 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>)</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-path">13. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-function-path">14. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron">15. Megatron 钩子</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-custom-megatron-init-path">Megatron 初始化 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#log-prob-custom-megatron-before-log-prob-hook-path">Log Prob 前钩子 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-megatron-before-train-step-hook-path">训练步骤前钩子 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-slime-router-middleware-paths">16. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sample">Sample 数据结构</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">示例：实现自定义奖励</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">示例：实现多轮生成</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">最佳实践</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+作者： slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2025, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  最后更新于 2025 年 12 月 25 日.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b"></script>
+<script src="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>
