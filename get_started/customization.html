@@ -470,10 +470,6 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-middleware-slime-router-middleware-paths">16. slime Router Middleware (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sample-data-structure">Sample Data Structure</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#example-implementing-custom-reward">Example: Implementing Custom Reward</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#example-implementing-multi-turn-generation">Example: Implementing Multi-Turn Generation</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#best-practices">Best Practices</a></li>
 </ul>
             </nav>
         </div>
@@ -838,114 +834,6 @@ document.write(`
 </ul>
 </section>
 </section>
-<hr class="docutils" />
-<section id="sample-data-structure">
-<h2>Sample Data Structure<a class="headerlink" href="#sample-data-structure" title="Link to this heading">#</a></h2>
-<p>When implementing custom functions, you’ll work with the <code class="docutils literal notranslate"><span class="pre">Sample</span></code> dataclass:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@dataclass</span>
-<span class="k">class</span><span class="w"> </span><span class="nc">Sample</span><span class="p">:</span>
-    <span class="n">group_index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
-    <span class="n">tokens</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-    <span class="n">multimodal_inputs</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">response</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
-    <span class="n">response_length</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
-    <span class="n">label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">reward</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">loss_mask</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">weight_versions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-    <span class="n">rollout_log_probs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">rollout_routed_experts</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">remove_sample</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
-    <span class="n">status</span><span class="p">:</span> <span class="n">Status</span> <span class="o">=</span> <span class="n">Status</span><span class="o">.</span><span class="n">PENDING</span>  <span class="c1"># PENDING, COMPLETED, TRUNCATED, ABORTED</span>
-    <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
-    <span class="n">train_metadata</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-</pre></div>
-</div>
-</section>
-<section id="example-implementing-custom-reward">
-<h2>Example: Implementing Custom Reward<a class="headerlink" href="#example-implementing-custom-reward" title="Link to this heading">#</a></h2>
-<p>Here’s a complete example of implementing a custom reward function:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># my_rewards.py</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.types</span><span class="w"> </span><span class="kn">import</span> <span class="n">Sample</span>
-
-<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">my_custom_reward</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Custom reward function that combines multiple signals.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">response</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">response</span>
-    <span class="n">label</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">label</span>
-    
-    <span class="c1"># Your reward logic here</span>
-    <span class="n">correctness</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="k">if</span> <span class="n">check_answer</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="n">label</span><span class="p">)</span> <span class="k">else</span> <span class="mf">0.0</span>
-    <span class="n">format_score</span> <span class="o">=</span> <span class="n">check_format</span><span class="p">(</span><span class="n">response</span><span class="p">)</span>
-    <span class="n">length_penalty</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">response</span><span class="p">)</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">)</span>
-    
-    <span class="k">return</span> <span class="n">correctness</span> <span class="o">*</span> <span class="mf">0.7</span> <span class="o">+</span> <span class="n">format_score</span> <span class="o">*</span> <span class="mf">0.2</span> <span class="o">+</span> <span class="n">length_penalty</span> <span class="o">*</span> <span class="mf">0.1</span>
-
-<span class="k">def</span><span class="w"> </span><span class="nf">check_answer</span><span class="p">(</span><span class="n">response</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-    <span class="c1"># Implement your answer checking logic</span>
-    <span class="k">pass</span>
-
-<span class="k">def</span><span class="w"> </span><span class="nf">check_format</span><span class="p">(</span><span class="n">response</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
-    <span class="c1"># Implement your format checking logic</span>
-    <span class="k">pass</span>
-</pre></div>
-</div>
-<p>Usage:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--custom-rm-path<span class="w"> </span>my_rewards.my_custom_reward<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span><span class="c1"># ... other arguments</span>
-</pre></div>
-</div>
-</section>
-<section id="example-implementing-multi-turn-generation">
-<h2>Example: Implementing Multi-Turn Generation<a class="headerlink" href="#example-implementing-multi-turn-generation" title="Link to this heading">#</a></h2>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># my_generation.py</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.types</span><span class="w"> </span><span class="kn">import</span> <span class="n">Sample</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">slime.rollout.sglang_rollout</span><span class="w"> </span><span class="kn">import</span> <span class="n">generate</span>
-
-<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">multi_turn_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Sample</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    Multi-turn generation with tool calling.</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">max_turns</span> <span class="o">=</span> <span class="mi">3</span>
-    
-    <span class="k">for</span> <span class="n">turn</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">max_turns</span><span class="p">):</span>
-        <span class="c1"># Generate response</span>
-        <span class="n">sample</span> <span class="o">=</span> <span class="k">await</span> <span class="n">generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">)</span>
-        
-        <span class="c1"># Check if tool call is needed</span>
-        <span class="k">if</span> <span class="s2">&quot;&lt;tool_call&gt;&quot;</span> <span class="ow">in</span> <span class="n">sample</span><span class="o">.</span><span class="n">response</span><span class="p">:</span>
-            <span class="n">tool_result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">execute_tool</span><span class="p">(</span><span class="n">sample</span><span class="o">.</span><span class="n">response</span><span class="p">)</span>
-            <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span> <span class="o">+</span> <span class="n">sample</span><span class="o">.</span><span class="n">response</span> <span class="o">+</span> <span class="n">tool_result</span>
-            <span class="n">sample</span><span class="o">.</span><span class="n">response</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
-            <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">PENDING</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">break</span>
-    
-    <span class="k">return</span> <span class="n">sample</span>
-</pre></div>
-</div>
-<p>Usage:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--custom-generate-function-path<span class="w"> </span>my_generation.multi_turn_generate<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span><span class="c1"># ... other arguments</span>
-</pre></div>
-</div>
-</section>
-<section id="best-practices">
-<h2>Best Practices<a class="headerlink" href="#best-practices" title="Link to this heading">#</a></h2>
-<ol class="arabic simple">
-<li><p><strong>Use Async Functions</strong>: Most rollout-related functions should be async for better performance.</p></li>
-<li><p><strong>Handle Errors Gracefully</strong>: Wrap your custom logic in try-except blocks to prevent crashes.</p></li>
-<li><p><strong>Log Important Information</strong>: Use Python’s logging module to track your custom logic.</p></li>
-<li><p><strong>Test Independently</strong>: Test your custom functions before integrating with the full training pipeline.</p></li>
-<li><p><strong>Document Your Functions</strong>: Add docstrings explaining the expected inputs and outputs.</p></li>
-<li><p><strong>Consider Batching</strong>: For expensive operations (like API calls), consider batch processing when possible.</p></li>
-</ol>
-</section>
 </section>
 
 
@@ -1022,10 +910,6 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-middleware-slime-router-middleware-paths">16. slime Router Middleware (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sample-data-structure">Sample Data Structure</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#example-implementing-custom-reward">Example: Implementing Custom Reward</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#example-implementing-multi-turn-generation">Example: Implementing Multi-Turn Generation</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#best-practices">Best Practices</a></li>
 </ul>
   </nav></div>
 

@@ -23,9 +23,9 @@ slime 通过函数路径参数提供了广泛的自定义能力。这些参数�
 | [`--custom-eval-rollout-log-function-path`](#12-日志函数) | 评估 rollout 的自定义日志记录。 |
 | [`--data-source-path`](#13-数据源---data-source-path) | 覆盖 rollout 提示词的数据源。 |
 | [`--eval-function-path`](#14-评估函数---eval-function-path) | 专门为评估覆盖 rollout 函数。 |
-| [`--custom-megatron-init-path`](#15-megatron-钩子) | Megatron 设置后的自定义初始化。 |
-| [`--custom-megatron-before-log-prob-hook-path`](#15-megatron-钩子) | log probability 计算前的自定义逻辑。 |
-| [`--custom-megatron-before-train-step-hook-path`](#15-megatron-钩子) | 每个训练步骤前的自定义逻辑。 |
+| [`--custom-megatron-init-path`](#15-megatron-Hook) | Megatron 设置后的自定义初始化。 |
+| [`--custom-megatron-before-log-prob-hook-path`](#15-megatron-Hook) | log probability 计算前的自定义逻辑。 |
+| [`--custom-megatron-before-train-step-hook-path`](#15-megatron-Hook) | 每个训练步骤前的自定义逻辑。 |
 | [`--slime-router-middleware-paths`](#16-slime-router-中间件---slime-router-middleware-paths) | 向 slime router 添加自定义中间件。 |
 
 ## 详细接口参考
@@ -300,7 +300,7 @@ class CustomDataSource(DataSource):
 
 ---
 
-### 15. Megatron 钩子
+### 15. Megatron Hook
 
 #### Megatron 初始化 (`--custom-megatron-init-path`)
 
@@ -311,7 +311,7 @@ def custom_init(args) -> None
 
 **用途**: Megatron 设置后的自定义初始化。
 
-#### Log Prob 前钩子 (`--custom-megatron-before-log-prob-hook-path`)
+#### Log Prob 前 Hook (`--custom-megatron-before-log-prob-hook-path`)
 
 **函数签名**:
 ```python
@@ -320,7 +320,7 @@ def custom_hook(args, model, store_prefix) -> None
 
 **用途**: log probability 计算前的自定义逻辑。
 
-#### 训练步骤前钩子 (`--custom-megatron-before-train-step-hook-path`)
+#### 训练步骤前 Hook (`--custom-megatron-before-train-step-hook-path`)
 
 **函数签名**:
 ```python
@@ -340,118 +340,4 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 - 自定义路由逻辑
 - 缓存和优化
 
----
 
-## Sample 数据结构
-
-在实现自定义函数时，你将使用 `Sample` 数据类：
-
-```python
-@dataclass
-class Sample:
-    group_index: int | None = None
-    index: int | None = None
-    prompt: str | list[dict[str, str]] = ""
-    tokens: list[int] = field(default_factory=list)
-    multimodal_inputs: dict[str, Any] = None
-    response: str = ""
-    response_length: int = 0
-    label: str | None = None
-    reward: float | dict[str, Any] | None = None
-    loss_mask: list[int] | None = None
-    weight_versions: list[str] = field(default_factory=list)
-    rollout_log_probs: list[float] | None = None
-    rollout_routed_experts: list[list[int]] | None = None
-    remove_sample: bool = False
-    status: Status = Status.PENDING  # PENDING, COMPLETED, TRUNCATED, ABORTED
-    metadata: dict = field(default_factory=dict)
-    train_metadata: dict | None = None
-```
-
-## 示例：实现自定义奖励
-
-以下是实现自定义奖励函数的完整示例：
-
-```python
-# my_rewards.py
-from slime.utils.types import Sample
-
-async def my_custom_reward(args, sample: Sample) -> float:
-    """
-    组合多个信号的自定义奖励函数。
-    """
-    response = sample.response
-    label = sample.label
-    
-    # 你的奖励逻辑
-    correctness = 1.0 if check_answer(response, label) else 0.0
-    format_score = check_format(response)
-    length_penalty = min(1.0, len(response) / 1000)
-    
-    return correctness * 0.7 + format_score * 0.2 + length_penalty * 0.1
-
-def check_answer(response: str, label: str) -> bool:
-    # 实现你的答案检查逻辑
-    pass
-
-def check_format(response: str) -> float:
-    # 实现你的格式检查逻辑
-    pass
-```
-
-使用方法：
-```bash
-python train.py \
-    --custom-rm-path my_rewards.my_custom_reward \
-    # ... 其他参数
-```
-
-## 示例：实现多轮生成
-
-```python
-# my_generation.py
-from slime.utils.types import Sample
-from slime.rollout.sglang_rollout import generate
-
-async def multi_turn_generate(args, sample: Sample, sampling_params: dict) -> Sample:
-    """
-    带工具调用的多轮生成。
-    """
-    max_turns = 3
-    
-    for turn in range(max_turns):
-        # 生成响应
-        sample = await generate(args, sample, sampling_params)
-        
-        # 检查是否需要工具调用
-        if "<tool_call>" in sample.response:
-            tool_result = await execute_tool(sample.response)
-            sample.prompt = sample.prompt + sample.response + tool_result
-            sample.response = ""
-            sample.status = Sample.Status.PENDING
-        else:
-            break
-    
-    return sample
-```
-
-使用方法：
-```bash
-python train.py \
-    --custom-generate-function-path my_generation.multi_turn_generate \
-    # ... 其他参数
-```
-
-## 最佳实践
-
-1. **使用异步函数**: 大多数与 rollout 相关的函数应该是异步的，以获得更好的性能。
-
-2. **优雅地处理错误**: 将自定义逻辑包装在 try-except 块中以防止崩溃。
-
-3. **记录重要信息**: 使用 Python 的 logging 模块跟踪你的自定义逻辑。
-
-4. **独立测试**: 在与完整训练流程集成之前，先测试你的自定义函数。
-
-5. **编写文档**: 添加文档字符串解释预期的输入和输出。
-
-6. **考虑批处理**: 对于昂贵的操作（如 API 调用），尽可能考虑批处理。

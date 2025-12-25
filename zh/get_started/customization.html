@@ -457,19 +457,15 @@ document.write(`
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-path">13. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-function-path">14. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron">15. Megatron 钩子</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hook">15. Megatron Hook</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-custom-megatron-init-path">Megatron 初始化 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#log-prob-custom-megatron-before-log-prob-hook-path">Log Prob 前钩子 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-megatron-before-train-step-hook-path">训练步骤前钩子 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#log-prob-hook-custom-megatron-before-log-prob-hook-path">Log Prob 前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#hook-custom-megatron-before-train-step-hook-path">训练步骤前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)</a></li>
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-slime-router-middleware-paths">16. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sample">Sample 数据结构</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">示例：实现自定义奖励</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">示例：实现多轮生成</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">最佳实践</a></li>
 </ul>
             </nav>
         </div>
@@ -795,8 +791,8 @@ document.write(`
 </ul>
 </section>
 <hr class="docutils" />
-<section id="megatron">
-<h3>15. Megatron 钩子<a class="headerlink" href="#megatron" title="Link to this heading">#</a></h3>
+<section id="megatron-hook">
+<h3>15. Megatron Hook<a class="headerlink" href="#megatron-hook" title="Link to this heading">#</a></h3>
 <section id="megatron-custom-megatron-init-path">
 <h4>Megatron 初始化 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)<a class="headerlink" href="#megatron-custom-megatron-init-path" title="Link to this heading">#</a></h4>
 <p><strong>函数签名</strong>:</p>
@@ -805,16 +801,16 @@ document.write(`
 </div>
 <p><strong>用途</strong>: Megatron 设置后的自定义初始化。</p>
 </section>
-<section id="log-prob-custom-megatron-before-log-prob-hook-path">
-<h4>Log Prob 前钩子 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)<a class="headerlink" href="#log-prob-custom-megatron-before-log-prob-hook-path" title="Link to this heading">#</a></h4>
+<section id="log-prob-hook-custom-megatron-before-log-prob-hook-path">
+<h4>Log Prob 前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)<a class="headerlink" href="#log-prob-hook-custom-megatron-before-log-prob-hook-path" title="Link to this heading">#</a></h4>
 <p><strong>函数签名</strong>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">custom_hook</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">store_prefix</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </pre></div>
 </div>
 <p><strong>用途</strong>: log probability 计算前的自定义逻辑。</p>
 </section>
-<section id="custom-megatron-before-train-step-hook-path">
-<h4>训练步骤前钩子 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)<a class="headerlink" href="#custom-megatron-before-train-step-hook-path" title="Link to this heading">#</a></h4>
+<section id="hook-custom-megatron-before-train-step-hook-path">
+<h4>训练步骤前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)<a class="headerlink" href="#hook-custom-megatron-before-train-step-hook-path" title="Link to this heading">#</a></h4>
 <p><strong>函数签名</strong>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">custom_hook</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">step_id</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="p">,</span> <span class="n">opt_param_scheduler</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </pre></div>
@@ -833,114 +829,6 @@ document.write(`
 <li><p>缓存和优化</p></li>
 </ul>
 </section>
-</section>
-<hr class="docutils" />
-<section id="sample">
-<h2>Sample 数据结构<a class="headerlink" href="#sample" title="Link to this heading">#</a></h2>
-<p>在实现自定义函数时，你将使用 <code class="docutils literal notranslate"><span class="pre">Sample</span></code> 数据类：</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@dataclass</span>
-<span class="k">class</span><span class="w"> </span><span class="nc">Sample</span><span class="p">:</span>
-    <span class="n">group_index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">index</span><span class="p">:</span> <span class="nb">int</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">prompt</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="nb">str</span><span class="p">]]</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
-    <span class="n">tokens</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-    <span class="n">multimodal_inputs</span><span class="p">:</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">response</span><span class="p">:</span> <span class="nb">str</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
-    <span class="n">response_length</span><span class="p">:</span> <span class="nb">int</span> <span class="o">=</span> <span class="mi">0</span>
-    <span class="n">label</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">reward</span><span class="p">:</span> <span class="nb">float</span> <span class="o">|</span> <span class="nb">dict</span><span class="p">[</span><span class="nb">str</span><span class="p">,</span> <span class="n">Any</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">loss_mask</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">weight_versions</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">str</span><span class="p">]</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">list</span><span class="p">)</span>
-    <span class="n">rollout_log_probs</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">rollout_routed_experts</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]]</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-    <span class="n">remove_sample</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span>
-    <span class="n">status</span><span class="p">:</span> <span class="n">Status</span> <span class="o">=</span> <span class="n">Status</span><span class="o">.</span><span class="n">PENDING</span>  <span class="c1"># PENDING, COMPLETED, TRUNCATED, ABORTED</span>
-    <span class="n">metadata</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">=</span> <span class="n">field</span><span class="p">(</span><span class="n">default_factory</span><span class="o">=</span><span class="nb">dict</span><span class="p">)</span>
-    <span class="n">train_metadata</span><span class="p">:</span> <span class="nb">dict</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span>
-</pre></div>
-</div>
-</section>
-<section id="id5">
-<h2>示例：实现自定义奖励<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
-<p>以下是实现自定义奖励函数的完整示例：</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># my_rewards.py</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.types</span><span class="w"> </span><span class="kn">import</span> <span class="n">Sample</span>
-
-<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">my_custom_reward</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    组合多个信号的自定义奖励函数。</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">response</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">response</span>
-    <span class="n">label</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">label</span>
-    
-    <span class="c1"># 你的奖励逻辑</span>
-    <span class="n">correctness</span> <span class="o">=</span> <span class="mf">1.0</span> <span class="k">if</span> <span class="n">check_answer</span><span class="p">(</span><span class="n">response</span><span class="p">,</span> <span class="n">label</span><span class="p">)</span> <span class="k">else</span> <span class="mf">0.0</span>
-    <span class="n">format_score</span> <span class="o">=</span> <span class="n">check_format</span><span class="p">(</span><span class="n">response</span><span class="p">)</span>
-    <span class="n">length_penalty</span> <span class="o">=</span> <span class="nb">min</span><span class="p">(</span><span class="mf">1.0</span><span class="p">,</span> <span class="nb">len</span><span class="p">(</span><span class="n">response</span><span class="p">)</span> <span class="o">/</span> <span class="mi">1000</span><span class="p">)</span>
-    
-    <span class="k">return</span> <span class="n">correctness</span> <span class="o">*</span> <span class="mf">0.7</span> <span class="o">+</span> <span class="n">format_score</span> <span class="o">*</span> <span class="mf">0.2</span> <span class="o">+</span> <span class="n">length_penalty</span> <span class="o">*</span> <span class="mf">0.1</span>
-
-<span class="k">def</span><span class="w"> </span><span class="nf">check_answer</span><span class="p">(</span><span class="n">response</span><span class="p">:</span> <span class="nb">str</span><span class="p">,</span> <span class="n">label</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span><span class="p">:</span>
-    <span class="c1"># 实现你的答案检查逻辑</span>
-    <span class="k">pass</span>
-
-<span class="k">def</span><span class="w"> </span><span class="nf">check_format</span><span class="p">(</span><span class="n">response</span><span class="p">:</span> <span class="nb">str</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">float</span><span class="p">:</span>
-    <span class="c1"># 实现你的格式检查逻辑</span>
-    <span class="k">pass</span>
-</pre></div>
-</div>
-<p>使用方法：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--custom-rm-path<span class="w"> </span>my_rewards.my_custom_reward<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span><span class="c1"># ... 其他参数</span>
-</pre></div>
-</div>
-</section>
-<section id="id6">
-<h2>示例：实现多轮生成<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="c1"># my_generation.py</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.types</span><span class="w"> </span><span class="kn">import</span> <span class="n">Sample</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">slime.rollout.sglang_rollout</span><span class="w"> </span><span class="kn">import</span> <span class="n">generate</span>
-
-<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">multi_turn_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">:</span> <span class="n">Sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">:</span> <span class="nb">dict</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Sample</span><span class="p">:</span>
-<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
-<span class="sd">    带工具调用的多轮生成。</span>
-<span class="sd">    &quot;&quot;&quot;</span>
-    <span class="n">max_turns</span> <span class="o">=</span> <span class="mi">3</span>
-    
-    <span class="k">for</span> <span class="n">turn</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">max_turns</span><span class="p">):</span>
-        <span class="c1"># 生成响应</span>
-        <span class="n">sample</span> <span class="o">=</span> <span class="k">await</span> <span class="n">generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">)</span>
-        
-        <span class="c1"># 检查是否需要工具调用</span>
-        <span class="k">if</span> <span class="s2">&quot;&lt;tool_call&gt;&quot;</span> <span class="ow">in</span> <span class="n">sample</span><span class="o">.</span><span class="n">response</span><span class="p">:</span>
-            <span class="n">tool_result</span> <span class="o">=</span> <span class="k">await</span> <span class="n">execute_tool</span><span class="p">(</span><span class="n">sample</span><span class="o">.</span><span class="n">response</span><span class="p">)</span>
-            <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span> <span class="o">=</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span> <span class="o">+</span> <span class="n">sample</span><span class="o">.</span><span class="n">response</span> <span class="o">+</span> <span class="n">tool_result</span>
-            <span class="n">sample</span><span class="o">.</span><span class="n">response</span> <span class="o">=</span> <span class="s2">&quot;&quot;</span>
-            <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">PENDING</span>
-        <span class="k">else</span><span class="p">:</span>
-            <span class="k">break</span>
-    
-    <span class="k">return</span> <span class="n">sample</span>
-</pre></div>
-</div>
-<p>使用方法：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--custom-generate-function-path<span class="w"> </span>my_generation.multi_turn_generate<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span><span class="c1"># ... 其他参数</span>
-</pre></div>
-</div>
-</section>
-<section id="id7">
-<h2>最佳实践<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
-<ol class="arabic simple">
-<li><p><strong>使用异步函数</strong>: 大多数与 rollout 相关的函数应该是异步的，以获得更好的性能。</p></li>
-<li><p><strong>优雅地处理错误</strong>: 将自定义逻辑包装在 try-except 块中以防止崩溃。</p></li>
-<li><p><strong>记录重要信息</strong>: 使用 Python 的 logging 模块跟踪你的自定义逻辑。</p></li>
-<li><p><strong>独立测试</strong>: 在与完整训练流程集成之前，先测试你的自定义函数。</p></li>
-<li><p><strong>编写文档</strong>: 添加文档字符串解释预期的输入和输出。</p></li>
-<li><p><strong>考虑批处理</strong>: 对于昂贵的操作（如 API 调用），尽可能考虑批处理。</p></li>
-</ol>
 </section>
 </section>
 
@@ -1009,19 +897,15 @@ document.write(`
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-path">13. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-function-path">14. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron">15. Megatron 钩子</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hook">15. Megatron Hook</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-custom-megatron-init-path">Megatron 初始化 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#log-prob-custom-megatron-before-log-prob-hook-path">Log Prob 前钩子 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-megatron-before-train-step-hook-path">训练步骤前钩子 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#log-prob-hook-custom-megatron-before-log-prob-hook-path">Log Prob 前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#hook-custom-megatron-before-train-step-hook-path">训练步骤前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)</a></li>
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-slime-router-middleware-paths">16. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sample">Sample 数据结构</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">示例：实现自定义奖励</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">示例：实现多轮生成</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">最佳实践</a></li>
 </ul>
   </nav></div>
 
