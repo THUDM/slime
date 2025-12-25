@@ -30,13 +30,13 @@ def execute():
         "--rollout-shuffle "
         "--rm-type math "
         "--num-rollout 3 "
-        "--rollout-batch-size 32 "
-        "--n-samples-per-prompt 8 "
+        "--rollout-batch-size 4 "
+        "--n-samples-per-prompt 16 "
         "--rollout-max-response-len 1024 "
         "--rollout-temperature 1.0 "
-        "--over-sampling-batch-size 64 "
+        "--over-sampling-batch-size 8 "
         "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "
-        "--global-batch-size 256 "
+        "--global-batch-size 64 "
     )
 
     perf_args = (
