@@ -291,6 +291,66 @@ def forward_only(
     return rollout_data
 
 
+def _check_mtp_only_grad(model: Sequence[DDP], step_id: int) -> None:
+    """Check that only MTP parameters have non-zero gradients.
+
+    This is used for CI testing to verify that when all outputs are truncated,
+    only the MTP layers receive gradients (since only mtp_loss contributes).
+
+    Args:
+        model: Sequence of DDP-wrapped model chunks.
+        step_id: Current step index for logging.
+
+    Raises:
+        AssertionError: If any non-MTP parameter has a non-zero gradient.
+    """
+    non_mtp_nonzero_grads = []
+    mtp_nonzero_grads = []
+
+    for model_chunk in model:
+        for name, param in model_chunk.named_parameters():
+            # Get the main_grad from the distributed optimizer if available
+            grad = getattr(param, "main_grad", None)
+            if grad is None:
+                grad = param.grad
+            if grad is None:
+                continue
+
+            grad_norm = grad.abs().max().item()
+            is_mtp = ".mtp." in name
+
+            if is_mtp:
+                if grad_norm > 0:
+                    mtp_nonzero_grads.append((name, grad_norm))
+            else:
+                if grad_norm > 0:
+                    non_mtp_nonzero_grads.append((name, grad_norm))
+
+    # Log the results
+    logger.info(
+        f"[CI MTP Grad Check] Step {step_id}: "
+        f"MTP params with non-zero grad: {len(mtp_nonzero_grads)}, "
+        f"non-MTP params with non-zero grad: {len(non_mtp_nonzero_grads)}"
+    )
+
+    if non_mtp_nonzero_grads:
+        # Log the first few non-MTP params with non-zero gradients for debugging
+        for name, grad_norm in non_mtp_nonzero_grads[:5]:
+            logger.error(f"[CI MTP Grad Check] Non-MTP param with non-zero grad: {name}, max_grad={grad_norm}")
+
+    assert len(non_mtp_nonzero_grads) == 0, (
+        f"Expected all non-MTP parameters to have zero gradients, "
+        f"but found {len(non_mtp_nonzero_grads)} with non-zero gradients. "
+        f"First few: {non_mtp_nonzero_grads[:5]}"
+    )
+
+    # Also verify that MTP params do have gradients (otherwise the test is not valid)
+    assert len(mtp_nonzero_grads) > 0, (
+        "Expected MTP parameters to have non-zero gradients, but all were zero. "
+        "This may indicate the MTP loss is not being computed."
+    )
+
+
 def train_one_step(
     args: Namespace,
     rollout_id: int,
@@ -424,6 +484,11 @@ def train_one_step(
                 valid_step = not (torch.isnan(grad_norm) or torch.isinf(grad_norm))
             else:
                 valid_step = not (math.isnan(grad_norm) or math.isinf(grad_norm))
+
+    # CI check: verify only MTP parameters have non-zero gradients when truncation happens
+    # This check must happen before optimizer.step() as gradients may be modified during step
+    if args.ci_check_mtp_only_grad:
+        _check_mtp_only_grad(model, step_id)
 
     if valid_step:
         # Update parameters.
