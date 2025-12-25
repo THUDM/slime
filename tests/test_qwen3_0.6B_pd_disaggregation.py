@@ -6,7 +6,7 @@ FEW_GPU = U.get_bool_env_var("SLIME_TEST_FEW_GPU", "1")
 
 MODEL_NAME = "Qwen3-0.6B"
 MODEL_TYPE = "qwen3-0.6B"
-NUM_GPUS = 4 if FEW_GPU else 8
+NUM_GPUS = 8
 
 
 def prepare():
@@ -80,11 +80,10 @@ def execute():
     )
 
     # PD disaggregation: 2 prefill servers, 6 decode servers in 8 GPU setup
-    # With FEW_GPU=1: 4 GPUs total, 1 prefill server, 3 decode servers
     sglang_args = (
         "--rollout-num-gpus-per-engine 1 "
         f"--rollout-num-gpus {NUM_GPUS} "
-        f"--prefill-num-servers {1 if FEW_GPU else 2} "
+        "--prefill-num-servers 2 "
         "--sglang-enable-metrics "
     )
 
@@ -105,7 +104,8 @@ def execute():
         # need to comment this when using model with MLA
         "--attention-backend flash "
         "--actor-num-nodes 1 "
-        f"--actor-num-gpus-per-node {1 if FEW_GPU else 2} "
+        f"--actor-num-gpus-per-node {NUM_GPUS} "
+        "--colocate "
         "--megatron-to-hf-mode bridge "
     )
 
@@ -122,14 +122,10 @@ def execute():
         f"{misc_args} "
     )
 
-    # PD disaggregation: 4 GPUs (FEW_GPU) or 8 GPUs total
-    # FEW_GPU=1: 1 prefill + 3 decode = 4 GPUs
-    # FEW_GPU=0: 2 prefill + 6 decode = 8 GPUs
     U.execute_train(
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=MODEL_TYPE,
-        train_script="train_async.py",
     )
 
 
