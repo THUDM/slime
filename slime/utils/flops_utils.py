@@ -17,7 +17,7 @@ def calculate_qkv_projection_flops(args, seqlen, hidden_size, num_attention_head
             * (args.hidden_size + args.num_attention_heads * (args.qk_head_dim + args.qk_pos_emb_head_dim))
         )
     if args.kv_lora_rank is None:
-        kv_flops = 2 * seqlen * hidden_size * (num_attention_heads // num_query_groups) * args.kv_channels
+        kv_flops = 2 * 2 * seqlen * hidden_size * num_query_groups * args.kv_channels
     else:
         kv_flops = (
             2
