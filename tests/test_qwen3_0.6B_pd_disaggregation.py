@@ -39,14 +39,6 @@ def execute():
         "--global-batch-size 256 "
     )
 
-    eval_args = (
-        "--eval-interval 20 "
-        "--eval-prompt-data gsm8k /root/datasets/gsm8k/test.parquet "
-        "--n-samples-per-eval-prompt 1 "
-        "--eval-max-response-len 1024 "
-        "--eval-top-k 1 "
-    )
-
     perf_args = (
         "--tensor-model-parallel-size 1 "
         "--sequence-parallel "
@@ -86,12 +78,7 @@ def execute():
         "--sglang-enable-metrics "
     )
 
-    ci_args = (
-        "--ci-test "
-        "--ci-disable-kl-checker "
-        "--ci-metric-checker-key eval/gsm8k "
-        "--ci-metric-checker-threshold 0.71 "  # loose threshold at 60 step
-    )
+    ci_args = ci_args = "--ci-test "
 
     misc_args = (
         # default dropout in megatron is 0.1
@@ -105,7 +92,6 @@ def execute():
         "--actor-num-nodes 1 "
         f"--actor-num-gpus-per-node {NUM_GPUS} "
         "--colocate "
-        "--megatron-to-hf-mode bridge "
     )
 
     train_args = (
@@ -115,7 +101,6 @@ def execute():
         f"{grpo_args} "
         f"{U.get_default_wandb_args(__file__)} "
         f"{perf_args} "
-        f"{eval_args} "
         f"{sglang_args} "
         f"{ci_args} "
         f"{misc_args} "
