@@ -30,12 +30,13 @@ def prepare():
         megatron_model_type=MODEL_TYPE,
         num_gpus_per_node=NUM_GPUS,
         extra_args=" --mtp-num-layers 1",
+        dir_dst="/root/models",
     )
 
 
 def execute():
     """Run training with MTP enabled and very short output length to cause truncation."""
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/{MODEL_NAME}_torch_dist "
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}_torch_dist "
 
     # Use very short rollout-max-response-len to ensure all outputs are truncated
     # This should result in zero loss for the main model, leaving only MTP loss
@@ -99,8 +100,7 @@ def execute():
     ci_args = (
         "--ci-test "
         "--ci-disable-kl-checker "
-        # This flag triggers the check that only MTP params have non-zero gradients
-        "--ci-check-mtp-only-grad "
+        # MTP grad check is automatically triggered when ci_test and enable_mtp_training are both set
     )
 
     misc_args = (

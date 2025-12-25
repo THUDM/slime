@@ -62,13 +62,14 @@ index acb93ef78..20ee977b0 100644
                  # Reduce the gradient on the expert_data_parallel group for expert linear layers
                  setattr(param, "allreduce", not self.expert_parallel)
 diff --git a/megatron/core/models/common/language_module/language_module.py b/megatron/core/models/common/language_module/language_module.py
-index 13d74aa52..b162096f7 100644
+index 13d74aa52..060898a7a 100644
 --- a/megatron/core/models/common/language_module/language_module.py
 +++ b/megatron/core/models/common/language_module/language_module.py
-@@ -184,6 +184,15 @@ class LanguageModule(MegatronModule):
+@@ -184,7 +184,15 @@ class LanguageModule(MegatronModule):
              assert (
                  column_parallel_linear is not None
              ), "column_parallel_linear cannot be None when not using fused linear cross entropy."
+-            logits, _ = column_parallel_linear(hidden, **col_linear_kwargs)
 +            # output
 +            output_layer_params = {k: v.detach() for k, v in column_parallel_linear.named_parameters()}
 +            output_layer_buffers = dict(column_parallel_linear.named_buffers())
@@ -78,9 +79,9 @@ index 13d74aa52..b162096f7 100644
 +                (hidden,),
 +                col_linear_kwargs,
 +            )
-             logits, _ = column_parallel_linear(hidden, **col_linear_kwargs)
  
              return self.compute_language_model_loss(labels, logits)
+ 
 diff --git a/megatron/core/models/gpt/gpt_layer_specs.py b/megatron/core/models/gpt/gpt_layer_specs.py
 index e21127b87..712793853 100755
 --- a/megatron/core/models/gpt/gpt_layer_specs.py

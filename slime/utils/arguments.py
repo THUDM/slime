@@ -1264,12 +1264,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
             )
-            parser.add_argument(
-                "--ci-check-mtp-only-grad",
-                action="store_true",
-                default=False,
-                help="Check that only MTP parameters have non-zero gradients (for testing MTP-only training)",
-            )
             return parser
 
         def add_sglang_tp_size():
