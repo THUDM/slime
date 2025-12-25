@@ -77,6 +77,7 @@ jobs:
         -v /mnt/nvme0n1/slime_ci:/data/slime_ci
         -v /mnt/nvme0n1/slime_ci/models:/root/models
         -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
+        -v /dev/infiniband:/dev/infiniband
     strategy:
       fail-fast: false
       matrix:
