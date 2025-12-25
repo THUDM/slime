@@ -137,7 +137,7 @@ class RolloutManager:
     def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
             data = torch.load(
-                open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
+                self.args.load_debug_rollout_data.format(rollout_id=rollout_id),
                 weights_only=False,
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]

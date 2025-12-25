@@ -1,5 +1,5 @@
+import asyncio
 import json
-from time import sleep
 
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -108,7 +108,7 @@ class RadixTreeMiddleware(BaseHTTPMiddleware):
             ):
                 break
             # await 30 seconds for aborted responses
-            sleep(30)
+            await asyncio.sleep(30)
 
         if isinstance(response_data, dict) and "text" in response_data and "output_ids" in response_data:
             generated_text = response_data["text"]
