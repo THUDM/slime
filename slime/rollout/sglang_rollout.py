@@ -20,12 +20,7 @@ from slime.utils.eval_config import EvalDatasetConfig
 from slime.utils.http_utils import get, post
 from slime.utils.mask_utils import get_response_lengths
 from slime.utils.misc import SingletonMeta, load_function
-from slime.utils.processing_utils import (
-    encode_image_for_rollout_engine,
-    load_processor,
-    load_tokenizer,
-    prepare_model_inputs,
-)
+from slime.utils.processing_utils import encode_image_for_rollout_engine, load_processor, load_tokenizer
 from slime.utils.types import Sample
 
 from .rm_hub import async_rm, batched_async_rm
@@ -97,19 +92,11 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
     ), f"Sample status is {sample.status}"
 
-    prompt_ids, extra_info = prepare_model_inputs(
-        sample.prompt,
-        state.tokenizer,
-        state.processor,
-        sample.metadata,
-        args.apply_chat_template,
-        args.apply_chat_template_kwargs,
-    )
-
-    sample.prompt = extra_info.get("formatted_prompt", sample.prompt)
-    image_data = extra_info.get("images", [])
-    video_data = extra_info.get("videos", [])
-    multimodal_inputs = extra_info.get("multimodal_inputs", None)
+    if state.processor:
+        processor_output = state.processor(text=sample.prompt, **sample.multimodal_inputs)
+        prompt_ids = processor_output["input_ids"][0]
+    else:
+        prompt_ids = state.tokenizer.encode(sample.prompt, add_special_tokens=False)
 
     if len(sample.response) > 0:
         sampling_params["max_new_tokens"] -= len(sample.tokens) - len(prompt_ids)
@@ -130,12 +117,8 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
 
-    if image_data:
+    if image_data := sample.multimodal_inputs.get("images", None):
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
-        sample.multimodal_inputs = multimodal_inputs
-
-    if video_data:
-        raise NotImplementedError("Video data is not supported yet")
 
     # Use existing tokens for multi-turn or tokenize the new prompt
     if len(sample.response) > 0:
