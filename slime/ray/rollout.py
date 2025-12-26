@@ -435,6 +435,12 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
     )
     addr_and_ports = [{} for _ in range(num_engines)]
 
+    # Calculate prefill limit to identify prefill engines
+    prefill_limit = 0
+    if args.prefill_num_servers is not None:
+        num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
+        prefill_limit = args.prefill_num_servers * args.rollout_num_gpus_per_engine // num_gpu_per_engine
+
     visited_nodes = set()
     for rank, engine in rollout_engines:
         if rank // num_engines_per_node in visited_nodes:
@@ -469,20 +475,24 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
         get_addr, get_port = get_addr_and_ports(engine)
 
         for i in range(num_engines_on_this_node):
-            addr_and_ports[rank + i]["host"] = get_addr()
-            addr_and_ports[rank + i]["port"] = get_port()
-            addr_and_ports[rank + i]["nccl_port"] = get_port()
+            current_rank = rank + i
+            addr_and_ports[current_rank]["host"] = get_addr()
+            addr_and_ports[current_rank]["port"] = get_port()
+            addr_and_ports[current_rank]["nccl_port"] = get_port()
+
+            if args.prefill_num_servers is not None and current_rank < prefill_limit:
+                addr_and_ports[current_rank]["disaggregation_bootstrap_port"] = get_port()
 
         if args.rollout_num_gpus_per_engine > args.num_gpus_per_node:
             num_node_per_engine = args.rollout_num_gpus_per_engine // args.num_gpus_per_node
             if rank % num_node_per_engine == 0:
                 # this is the first node in the engine, we need to allocate the dist_init_addr port
-                dist_init_addr = f"{get_addr()}:{get_port(6 + args.sglang_dp_size)}"
+                dist_init_addr = f"{get_addr()}:{get_port(30 + args.sglang_dp_size)}"
                 for i in range(num_node_per_engine):
                     addr_and_ports[rank + i]["dist_init_addr"] = dist_init_addr
         else:
             for i in range(num_engines_on_this_node):
-                addr_and_ports[rank + i]["dist_init_addr"] = f"{get_addr()}:{get_port(6 + args.sglang_dp_size)}"
+                addr_and_ports[rank + i]["dist_init_addr"] = f"{get_addr()}:{get_port(30 + args.sglang_dp_size)}"
 
     for i, _ in rollout_engines:
         for key in ["port", "nccl_port", "dist_init_addr"]:
@@ -492,7 +502,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
     return addr_and_ports
 
 
-def _start_router(args, prefill_and_decode_urls=None):
+def _start_router(args):
     """start sgl router and slime router"""
     if args.sglang_router_ip is not None:
         return
@@ -539,6 +549,11 @@ def _start_router(args, prefill_and_decode_urls=None):
 
 
 def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any] | None = None):
+    if args.custom_eval_rollout_log_function_path is not None:
+        custom_log_func = load_function(args.custom_eval_rollout_log_function_path)
+        if custom_log_func(rollout_id, args, data, extra_metrics):
+            return
+
     log_dict = extra_metrics or {}
     for key in data.keys():
         rewards = data[key]["rewards"]
@@ -567,6 +582,11 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
 
 
 def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
+    if args.custom_rollout_log_function_path is not None:
+        custom_log_func = load_function(args.custom_rollout_log_function_path)
+        if custom_log_func(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
+            return
+
     if args.load_debug_rollout_data:
         return
 

@@ -4,6 +4,7 @@ import random
 import numpy as np
 import torch
 from megatron.core import mpu, tensor_parallel
+from megatron.core.config import set_experimental_flag
 from megatron.core.num_microbatches_calculator import init_num_microbatches_calculator
 from megatron.training.global_vars import _build_tokenizer, set_args
 
@@ -54,6 +55,10 @@ def _initialize_distributed(args, get_embedding_ranks=None, get_position_embeddi
 
 def init(args):
     set_args(args)
+    if args.enable_experimental:
+        logger.info("Enable megatron experimental")
+        set_experimental_flag(True)
+
     # Pytorch distributed.
     _initialize_distributed(args)
 

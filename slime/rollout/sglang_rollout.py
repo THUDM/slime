@@ -106,6 +106,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         args.apply_chat_template_kwargs,
     )
 
+    sample.prompt = extra_info.get("formatted_prompt", sample.prompt)
     image_data = extra_info.get("images", [])
     video_data = extra_info.get("videos", [])
     multimodal_inputs = extra_info.get("multimodal_inputs", None)
@@ -149,7 +150,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     # Extract new response tokens
 
     if args.use_slime_router and "RadixTreeMiddleware" in args.slime_router_middleware_paths:
-        assert not args.partial_rollout, "Currently parital rollout is not suppurted when using slime router"
+        assert not args.partial_rollout, "Currently partial rollout is not supported when using slime router"
         retrieve_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/retrieve_from_text"
         retrieve_payload = {"text": sample.prompt + output["text"], "return_logp": True}
         retrieve_output = await post(retrieve_url, retrieve_payload)
@@ -213,6 +214,10 @@ async def generate_and_rm(
     sampling_params: dict[str, Any],
     evaluation: bool = False,
 ) -> Sample | list[Sample]:
+    # mask previous off-policy generation for partial rollout
+    if args.partial_rollout and args.mask_offpolicy_in_partial_rollout and sample.response_length > 0:
+        sample.loss_mask = [0] * sample.response_length
+
     # For samples with existing response, check if they're complete
     if sample.status == Sample.Status.COMPLETED or sample.status == Sample.Status.TRUNCATED:
         assert sample.response is not None

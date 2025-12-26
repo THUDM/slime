@@ -5,7 +5,7 @@
 在使用 slime 时，传参主要是为了如下几件事：
 
 1. 把集群中一部分 GPU 分配做训练，一部分分配做推理；
-2. 训练的部分加载 megatron；
+2. 训练的部分加载 megatron或者FSDP；
 3. 推理部分加载 sglang；
 4. 配置 RL 训练需要的超参。
 
@@ -30,6 +30,15 @@
 当需要训推一体的时候，还需要配置上：
 
 - `--colocate`：开启训推一体。开启后会忽略 `--rollout-num-gpus` 让训练和推理的卡数相等。
+
+此外，slime 支持 Prefill 和 Decode 的分离部署 (PD Disaggregation)，可以通过设置 `--prefill-num-servers` 参数来指定用于 Prefill 的服务器数量。
+
+### 选择训练后端
+
+slime 支持多种训练后端，可以通过 `--train-backend` 参数进行选择：
+
+- `megatron`（默认）：使用 Megatron-LM 作为训练后端，支持大规模模型的高效训练；
+- `fsdp`：使用 PyTorch FSDP 作为训练后端，可以直接加载 HuggingFace 格式权重，无需转换。
 
 ### 加载 megatron
 
@@ -70,7 +79,7 @@ MODEL_ARGS=(
 )
 ```
 
-我们在 [scripts/models](../../scripts/models) 提供了常用模型的配置，可以直接复用。如果你也在使用 megatron 进行 pretrain/sft 的话，可以直接复用 pretrain/sft 中的模型配置。
+我们在 [scripts/models](../../../scripts/models) 提供了常用模型的配置，可以直接复用。如果你也在使用 megatron 进行 pretrain/sft 的话，可以直接复用 pretrain/sft 中的模型配置。
 
 注意：
 
@@ -103,7 +112,7 @@ megatron 支持多种其自定义的 ckpt 格式，这里介绍 2 种比较主�
 
 torch 格式是 megatron 的老存储格式，里面的结构大约是一些 `mp_rank_xxx` 的文件夹，每个文件夹对应了在对应的并行划分下，每个 rank 存储的 ckpt。也是因为如此，在加载 torch 格式的 ckpt 的时候，需要保证 ckpt 的并行策略和训练任务的并行策略是相同的。
 
-我们推荐使用 torch_dist 格式 ckpt，因为 torch_dist 格式可以支持自动并行切分，也就是不同并行的训练任务都可以共用同一个 ckpt，会方便很多。torch_dist 这也是开源 megatron 目前的默认格式。torch_dist 格式的 ckpt 中一般是一堆 `.distcp` 文件。在使用 torch_dist 时，可以使用 [README](../../README_zh.md) 中介绍的 ckpt 转化方法从 huggingface 转化为 torch_dist，反之亦然。
+我们推荐使用 torch_dist 格式 ckpt，因为 torch_dist 格式可以支持自动并行切分，也就是不同并行的训练任务都可以共用同一个 ckpt，会方便很多。torch_dist 这也是开源 megatron 目前的默认格式。torch_dist 格式的 ckpt 中一般是一堆 `.distcp` 文件。在使用 torch_dist 时，可以使用 [README](../../../README_zh.md) 中介绍的 ckpt 转化方法从 huggingface 转化为 torch_dist，反之亦然。
 
 在存储结构上，megatron 的 ckpt 一般是这样的结构，这里假设存储的路径为 `/ckpt/`：
 
@@ -179,15 +188,17 @@ sglang 的加载非常简单，只需要：
   - `grpo`（https://arxiv.org/abs/2402.03300）；
   - `gspo`（https://arxiv.org/abs/2507.18071）；
   - `reinforce_plus_plus` 与 `reinforce_plus_plus_baseline`（https://arxiv.org/abs/2501.03262）；
-  - `ppo`（https://arxiv.org/abs/1707.06347）。
+  - `ppo`（https://arxiv.org/abs/1707.06347）；
+  - `on_policy_distillation`。
 - `--calculate-per-token-loss`：slime 中默认的方案是 per sample loss，即 `mean(sum(sample_i) / len(sample_i))`，如果需要计算 per token loss，即 `sum(sum(sample_i)) / sum(len(sample_i))`，可以开启 `--calculate-per-token-loss`；
-- `--use-tis`：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置。
+- `--use-tis`：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；
+- `--true-on-policy-mode`：开启 True On-Policy 模式，即在训练过程中严格保证数据是当前策略生成的。
 
 ## 自定义 rollout 函数
 
 slime 支持不同程度的自定义数据生成（rollout）。
 
-- 默认会使用 [slime/rollout/sglang_rollout.py](../../slime/rollout/sglang_rollout.py) 中的 `generate_rollout` 函数进行数据生成。这个文件中实现了基于 sglang 的异步（asyncio）数据生成流程，并支持了例如 dynamic sampling，partial rollout 等功能；
+- 默认会使用 [slime/rollout/sglang_rollout.py](https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py) 中的 `generate_rollout` 函数进行数据生成。这个文件中实现了基于 sglang 的异步（asyncio）数据生成流程，并支持了例如 dynamic sampling，partial rollout 等功能；
 
 - 可以通过 `--rollout-function-path` 参数，完全替换 sglang_rollout.py 中的 `generate_rollout`，只需要保证 `--rollout-function-path` 传入的函数签名满足：
 
@@ -213,7 +224,7 @@ slime 支持不同程度的自定义数据生成（rollout）。
   - `rollout_id` 对应的是当前是第几次数据生成，用作保证续训时的数据顺序；
   - `data_buffer` 是 slime 中全局唯一的数据 buffer，可以用来获取初始 prompt，数据 id，将生成至一半的 sample 存储下来下次留作下次使用等；
   - `evaluation` 是否是当做 evaluation 使用。可以通过 `--eval-function-path` 单独配置 eval 的函数；
-  -  返回的 `Sample` 类型见 [slime/utils/types.py](../../slime/utils/types.py)，在实现时，需要保证
+  -  返回的 `Sample` 类型见 [slime/utils/types.py](https://github.com/THUDM/slime/blob/main/slime/utils/types.py)，在实现时，需要保证
      -   `tokens`：prompt + response 的 token；
      -  `response_length`：response 的总长。对于多轮任务，则是除去第一轮 prompt，剩余的 token 长度；
      -  `reward`：这条数据的 reward；
@@ -253,7 +264,7 @@ slime 支持不同程度的自定义数据生成（rollout）。
       return sample
   ```
 
-   更完备的版本请查看 [slime/rollout/sglang_rollout.py](../../slime/rollout/sglang_rollout.py)。
+   更完备的版本请查看 [slime/rollout/sglang_rollout.py](https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py)。
 
 - 有的时候，我们还需要支持自定义的 reward model，可以通过配置 `--custom-rm-path` 来进行配置。
 
@@ -274,7 +285,7 @@ slime 通过引入 sglang 的 `ServerArgs.add_cli_args`，从而引入了几乎�
 - `--tp-size` 在 slime 中会使用 `--rollout-num-gpus-per-engine`
 - `--model-path` 在 slime 中会使用 `--hf-checkpoint`
 
-sglang 参数引入 slime 的方式可以参考 [slime/backends/sglang_utils/arguments.py](../../slime/backends/sglang_utils/arguments.py)。
+sglang 参数引入 slime 的方式可以参考 [slime/backends/sglang_utils/arguments.py](https://github.com/THUDM/slime/blob/main/slime/backends/sglang_utils/arguments.py)。
 
 ### router 使用方法
 
@@ -290,7 +301,7 @@ slime 通过复用 `megatron.training` 目录下的常规函数，如 `parse_arg
 
 ### 参数配置
 
-slime 通过直接引入 `from megatron.training.arguments import parse_args` 引入了当前环境中 megatron 的所有参数。如果当前使用的 megatron 有在 `parse_args` 之外的参数，可以通过像 [train.py](../../train.py) 中传入参数来进行配置，例如：
+slime 通过直接引入 `from megatron.training.arguments import parse_args` 引入了当前环境中 megatron 的所有参数。如果当前使用的 megatron 有在 `parse_args` 之外的参数，可以通过像 [train.py](https://github.com/THUDM/slime/blob/main/train.py) 中传入参数来进行配置，例如：
 
 ```python
 if __name__ == "__main__":
@@ -309,3 +320,61 @@ if __name__ == "__main__":
 - `--custom-megatron-init-path`：会增加一些 init 的调用；
 - `--custom-megatron-before-log-prob-hook-path`：会在计算 log prob 之前调用；
 - `--custom-megatron-before-train-step-hook-path`：会在每个训练步之前调用。可以考虑用这种方式混入特殊的训练 loss 之类的。
+
+## FSDP 使用方法
+
+slime 同样也支持FSDP2作为训练后端，可以参考[文档](https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/slime/fsdp/readme.md)。
+
+> FSDP 通过 `AutoModelForCausalLM.from_pretrained()` 自动读取所有架构信息，无需手动指定。Megatron 需要手动配置参数读取 model 架构信息，FSDP可以全部从 `config.json` 自动读取，可以直接避免权重格式转换步骤。
+
+可以通过在命令行传递 `--train-backend fsdp` 来启动 FSDP 作为训练后端。
+
+### 参数
+
+FSDP和Megatron后端支持的参数的对比如下表所示，接下来FSDP会有更多的支持。
+
+| 配置类别 | Megatron 参数 | FSDP 参数 | 说明 |
+| --- | --- | --- | --- |
+| **模型加载** | `--load` (Megatron checkpoint) + 架构参数 (`--num-layers`, `--hidden-size` 等) | `--hf-checkpoint` (必需) | **FSDP**: 直接使用 HuggingFace 格式，无需转换权重，通过 `AutoConfig` 自动推断架构 |
+| **张量并行** | `--tensor-model-parallel-size` | Coming Soon |  |
+| **流水线并行** | `--pipeline-model-parallel-size` | Coming Soon |  |
+| **专家并行** | `--expert-model-parallel-size` | Coming Soon |  |
+| **上下文并行** | `--context-parallel-size` | `--context-parallel-size` | 两者都支持 CP |
+| **初始学习率** | `--lr` | `--lr` | 参数相同 |
+| **学习率衰减** | `--lr-decay-style` (linear/cosine 等) | `--lr-decay-style` | 参数相同 |
+| **Warmup** | `--lr-warmup-iters` (步数) | `--lr-warmup-iters` | 参数相同 |
+| **最小学习率** | `--min-lr` | `--min-lr` | 参数相同 |
+| **优化器类型** | `--optimizer` (adam/sgd 等) | `--optimizer` (默认 adam) | 基本相同 |
+| **分布式优化器** | `--use-distributed-optimizer` | 内置于 FSDP | FSDP 默认使用分布式优化器 |
+| **梯度检查点** | `--recompute-granularity`, `--recompute-method` | `--gradient-checkpointing` | **FSDP**: 简化为布尔开关 |
+| **CPU Offload** | 通过分布式优化器实现 | `--fsdp-cpu-offload` | **FSDP**: 将参数/梯度/优化器状态卸载到 CPU |
+| **CPU 后端** | 通过分布式优化器实现 | `--fsdp-cpu-backend` | **FSDP**: 指定CPU的后端并且当CPU offload时使用混合后端 |
+| **Attention 后端** | 由 Megatron Core 决定 | `--attn-implementation` (flash_attention_2/sdpa/eager) | **FSDP**: 直接透传给 HuggingFace |
+| **混合精度** | `--fp16` 或 `--bf16` | `--fp16` (bf16 自动推断) | 基本相同 |
+| **训练后端** | 默认或 `--train-backend megatron` | `--train-backend fsdp` (必需) | 用于切换后端 |
+| **参数配置** | | `--config` | **FSDP**: 为FSDP设置额外的参数 |
+
+### FSDP 一键启动
+
+```bash
+# 如果需要使用 WANDB，需要提前设置好环境变量 WANDB_API_KEY
+# 下载模型权重 (Qwen3-4B)
+hf download Qwen/Qwen3-4B --local-dir /root/Qwen3-4B
+
+# 下载训练数据集 (dapo-math-17k)
+hf download --repo-type dataset zhuzilin/dapo-math-17k \
+  --local-dir /root/dapo-math-17k
+
+# 下载评估数据集 (aime-2024)
+hf download --repo-type dataset zhuzilin/aime-2024 \
+  --local-dir /root/aime-2024
+  
+# 克隆代码并安装依赖
+git clone https://github.com/THUDM/slime.git
+cd slime
+pip install -e .
+
+
+# FSDP不用进行权重转换，native 支持 huggingface 格式
+# 开启 reference model，在 colocated 模式下训练 Qwen3-4B
+source /root/slime/scripts/run-qwen3-4B-fsdp.sh

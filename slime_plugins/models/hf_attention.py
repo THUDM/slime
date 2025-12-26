@@ -22,7 +22,7 @@ class HuggingfaceAttention(MegatronModule, ABC):
         config,
         layer_number: int,
         cp_comm_type: str = "p2p",
-        model_comm_pgs=None,
+        pg_collection=None,
     ):
         super().__init__(config=config)
         self.args = args
@@ -43,6 +43,7 @@ class HuggingfaceAttention(MegatronModule, ABC):
         rotary_pos_emb: torch.Tensor | tuple[torch.Tensor, torch.Tensor] | None = None,
         rotary_pos_cos: torch.Tensor | None = None,
         rotary_pos_sin: torch.Tensor | None = None,
+        rotary_pos_cos_sin: torch.Tensor | None = None,
         attention_bias: torch.Tensor | None = None,
         packed_seq_params: PackedSeqParams | None = None,
         sequence_len_offset: int | None = None,

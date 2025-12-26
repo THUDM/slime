@@ -51,7 +51,6 @@ def get_batch(
     assert "tokens" in keys
     batch = data_iterator.get_next(keys)
 
-    packed_seq_params = None
     tokens = batch["tokens"]
     # use 0 as the pad token id should be fine?
     pad_token_id = 0
@@ -90,6 +89,41 @@ def get_batch(
     tokens = tokens.unsqueeze(0)
     batch["tokens"] = tokens
     batch["packed_seq_params"] = packed_seq_params
+
+    # loss masks
+    loss_masks = []
+    for loss_mask, total_length, response_length in zip(
+        batch["loss_masks"],
+        batch["total_lengths"],
+        batch["response_lengths"],
+        strict=True,
+    ):
+        prompt_length = total_length - response_length
+        loss_mask = F.pad(loss_mask, (prompt_length - 1, 1), value=0)
+        loss_mask = slice_with_cp(loss_mask, 0)
+        loss_masks.append(loss_mask)
+    loss_masks = torch.cat(loss_masks)
+    loss_masks = F.pad(loss_masks, (0, pad), value=0).unsqueeze(0)
+    assert loss_masks.shape == tokens.shape, f"loss_masks.shape: {loss_masks.shape}, tokens.shape: {tokens.shape}"
+    batch["full_loss_masks"] = loss_masks
+
+    # Process multimodal inputs if present
+    multimodal_inputs = batch.get("multimodal_inputs", None)
+    if multimodal_inputs is not None:
+        multimodal_data = {}  # key -> concatenated tensor
+        multimodal_num_items = {}  # key -> list of item counts per sequence
+        for mm_input_dict in multimodal_inputs:
+            if mm_input_dict is not None:
+                for key, mm_tensor in mm_input_dict.items():
+                    if key not in multimodal_data:
+                        multimodal_data[key] = mm_tensor
+                        multimodal_num_items[key] = [mm_tensor.size(0)]
+                    else:
+                        multimodal_data[key] = torch.cat([multimodal_data[key], mm_tensor], dim=0)
+                        multimodal_num_items[key].append(mm_tensor.size(0))
+        batch["multimodal_inputs"] = multimodal_data
+        batch["multimodal_num_items"] = multimodal_num_items
+
     return batch
 
 
@@ -315,6 +349,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
         for key, val in rollout_data.items():
             if key in [
                 "tokens",
+                "multimodal_inputs",
                 "loss_masks",
                 "sample_indices",
                 "rollout_routed_experts",
@@ -358,6 +393,64 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
         log_multi_turn_data(rollout_id, args, rollout_data)
     if args.log_passrate:
         log_passrate(rollout_id, args, rollout_data)
+
+    if args.log_correct_samples:
+        if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
+            cp_size = mpu.get_context_parallel_world_size()
+            log_dict = {}
+            response_lengths = rollout_data["response_lengths"]
+            loss_masks = rollout_data["loss_masks"]
+            total_lengths = rollout_data["total_lengths"]
+
+            def quantile(total_value, n_quantiles, data) -> dict:
+                import math
+
+                assert n_quantiles > 1, f"n_quantiles({n_quantiles}) must be greater than 1."
+
+                quantiles = [((i + 1) / n_quantiles) for i in range(n_quantiles)]
+                cut_points = [total_value * q for q in quantiles]
+                cut_points[-1] = total_value
+
+                count = [0] * n_quantiles
+                for d in data:
+                    for i, point in enumerate(cut_points):
+                        if d <= point:
+                            count[i] += 1
+                            break
+
+                total = sum(count) + 1e-9
+                percentile = [c / total for c in count]
+
+                percentile = {f"p{min(math.ceil(q*100),100)}": p for q, p in zip(quantiles, percentile, strict=True)}
+                return percentile
+
+            raw_rewards = rollout_data["raw_reward"]
+            # Additional metrics for correct cases are calculated separately below.
+            correct_response_lengths = []
+            correct_total_lengths = []
+            correct_loss_masks = []
+            correct_entropy = []
+            for i, raw_reward in enumerate(raw_rewards):
+                if raw_reward == 1:
+                    correct_response_lengths.append(response_lengths[i])
+                    correct_total_lengths.append(total_lengths[i])
+                    correct_loss_masks.append(loss_masks[i])
+                    correct_entropy.append(-rollout_data["log_probs"][i])
+            num_correct_responses = len(correct_total_lengths)
+            rollout_data["correct_response_lengths"] = correct_response_lengths
+            correct_response_length_percentile = quantile(
+                args.rollout_max_response_len, 4, rollout_data["correct_response_lengths"]
+            )
+            for p, val in correct_response_length_percentile.items():
+                rollout_data[f"correct_length/{p}"] = [val] * num_correct_responses
+            if len(correct_entropy) > 0:
+                sum_of_sample_mean = get_sum_of_sample_mean(
+                    correct_total_lengths, correct_response_lengths, correct_loss_masks
+                )
+                correct_entropy = sum_of_sample_mean(torch.cat(correct_entropy, dim=0))
+                rollout_data["correct_entropy"] = [correct_entropy.item()] * num_correct_responses
+            else:
+                rollout_data["correct_entropy"] = [0] * num_correct_responses
 
 
 def log_multi_turn_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -> None:

@@ -85,7 +85,7 @@ Note: We implemented a dedicated AMD conversion script that forces a CPU-only co
 ### Example: Qwen3-4B
 
 We provide examples to use [Qwen3-4B](https://huggingface.co/Qwen/Qwen3-4B), please refer to:
-- [Example: Qwen3-4B Model](../../../scripts/run-qwen3-4B-amd.sh): Just run `scripts/run-qwen3-4B-amd.sh`
+- [Example: Qwen3-4B Model](https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B-amd.sh): Just run `scripts/run-qwen3-4B-amd.sh`
 
 ⚠️ TODO: ROCM seems to not support `apex` yet. Thus, we need to disable gradient accumulation fusionby adding the `--no-gradient-accumulation-fusion` flag in the training script currently. We will continue investigating how to enable this.
 
