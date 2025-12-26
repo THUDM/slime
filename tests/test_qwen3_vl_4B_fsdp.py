@@ -15,11 +15,7 @@ def prepare():
 
 
 def execute():
-    ckpt_args = (
-        f"--hf-checkpoint /root/models/{MODEL_NAME} "
-        # vl model has rotary base 5000000
-        "--rotary-base 5000000 "
-    )
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} "
 
     rollout_args = (
         "--prompt-data /root/datasets/geo3k_imgurl/train.parquet "

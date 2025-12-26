@@ -72,7 +72,6 @@ fi
 CKPT_ARGS=(
    --hf-checkpoint /root/models/${MODEL_NAME}
    --load /root/models/${MODEL_NAME}
-   --rotary-base 5000000
 )
 
 SFT_ARGS=(
@@ -153,6 +152,8 @@ else
    SLIME_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &>/dev/null && pwd)"
    MODEL_ARGS_FILE=$(echo "$MODEL_NAME" | sed 's/-Instruct//g; s/-Thinking//g; s/Qwen3-VL-/qwen3-/g; s/-2B/-1.7B/g')
    source "${SLIME_DIR}/scripts/models/${MODEL_ARGS_FILE}.sh"
+   # VL models require rotary-base 5000000
+   MODEL_ARGS+=(--rotary-base 5000000)
 fi
 
 # Start Ray if not using external Ray
