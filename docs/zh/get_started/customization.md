@@ -276,7 +276,7 @@ dict: {
 ```
 
 **使用场景**:
-- 处理 `list[list[Sample]]`
+- 处理 `list[list[Sample]]` 输入
 - 自定义训练数据格式需求
   
 ---
