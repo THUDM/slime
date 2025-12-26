@@ -279,7 +279,9 @@ async def generate_and_rm_group(
         if getattr(args, "sglang_enable_deterministic_inference", False):
             seed = state.group_sampling_seeds[idx]
             current_sampling_params["sampling_seed"] = seed
-        tasks.append(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
+        tasks.append(
+            asyncio.create_task(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
+        )
 
     group = await asyncio.gather(*tasks)
 
@@ -529,11 +531,13 @@ async def eval_rollout_single_dataset(
                 sampling_params = base_sampling_params.copy()
                 sampling_params["sampling_seed"] = args.rollout_seed + j
             tasks.append(
-                generate_and_rm(
-                    args,
-                    sample,
-                    sampling_params=sampling_params,
-                    evaluation=True,
+                asyncio.create_task(
+                    generate_and_rm(
+                        args,
+                        sample,
+                        sampling_params=sampling_params,
+                        evaluation=True,
+                    )
                 )
             )
 
