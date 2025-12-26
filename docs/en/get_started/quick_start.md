@@ -39,13 +39,12 @@ docker run --rm --gpus all --ipc=host --shm-size=16g \
 
 ### Install slime
 
-After entering the Docker container, please follow these steps to clone the slime repository and install it:
+slime is already installed in the docker image. To update to the latest verison, please execute the following command:
 
 ```bash
 # Path can be adjusted according to actual situation
-cd /root/
-git clone https://github.com/THUDM/slime.git
-cd slime
+cd /root/slime
+git pull
 pip install -e .
 ```
 
@@ -54,8 +53,6 @@ pip install -e .
 You can download required models and datasets from platforms like Hugging Face, ModelScope, etc. Here are the commands to download example resources using `huggingface_hub`:
 
 ```bash
-pip install -U huggingface_hub
-
 # Download model weights (GLM-Z1-9B)
 hf download zai-org/GLM-Z1-9B-0414 --local-dir /root/GLM-Z1-9B-0414
 
