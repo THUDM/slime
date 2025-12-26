@@ -147,6 +147,7 @@ Note:
   - Before the first training step, slime will synchronize the parameters from Megatron to SGLang. Therefore, the `--hf-checkpoint` does not need to contain the latest training parameters, and you do not need to change the HF checkpoint when resuming training.
   - By default, SGLang reads the maximum context length from the `config.json` in the Hugging Face checkpoint. You can use the `--sglang-context-length` parameter to override this value to support longer inference.
   - During co-located training and inference, although Megatron and SGLang will offload sequentially, they still need to leave some memory for each other. You need to adjust SGLang's total VRAM usage by reducing `--sglang-mem-fraction-static`.
+  - slime supports passing through sgl-router parameters by adding a `router` prefix to the original parameter name. For example, sgl-router's `--balance-abs-threshold` parameter should be set as `--router-balance-abs-threshold`. Since sgl-router uses cache-aware routing by default, it may cause uneven request distribution. You can set `--router-balance-abs-threshold 0` to force balanced distribution, but this may affect prefix cache hit rate in multi-turn conversation scenarios.
 
 For details on some of SGLang's customizations and the principles behind how slime incorporates SGLang, please see the "How to Use SGLang" section.
 

@@ -54,7 +54,7 @@
     <link rel="prev" title="Quick Start" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Dec 25, 2025"/>
+    <meta name="docbuild:last-update" content="Dec 26, 2025"/>
   </head>
   
   
@@ -629,6 +629,7 @@ The reason for not using a parameter like <code class="docutils literal notransl
 <li><p>Before the first training step, slime will synchronize the parameters from Megatron to SGLang. Therefore, the <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> does not need to contain the latest training parameters, and you do not need to change the HF checkpoint when resuming training.</p></li>
 <li><p>By default, SGLang reads the maximum context length from the <code class="docutils literal notranslate"><span class="pre">config.json</span></code> in the Hugging Face checkpoint. You can use the <code class="docutils literal notranslate"><span class="pre">--sglang-context-length</span></code> parameter to override this value to support longer inference.</p></li>
 <li><p>During co-located training and inference, although Megatron and SGLang will offload sequentially, they still need to leave some memory for each other. You need to adjust SGLang’s total VRAM usage by reducing <code class="docutils literal notranslate"><span class="pre">--sglang-mem-fraction-static</span></code>.</p></li>
+<li><p>slime supports passing through sgl-router parameters by adding a <code class="docutils literal notranslate"><span class="pre">router</span></code> prefix to the original parameter name. For example, sgl-router’s <code class="docutils literal notranslate"><span class="pre">--balance-abs-threshold</span></code> parameter should be set as <code class="docutils literal notranslate"><span class="pre">--router-balance-abs-threshold</span></code>. Since sgl-router uses cache-aware routing by default, it may cause uneven request distribution. You can set <code class="docutils literal notranslate"><span class="pre">--router-balance-abs-threshold</span> <span class="pre">0</span></code> to force balanced distribution, but this may affect prefix cache hit rate in multi-turn conversation scenarios.</p></li>
 </ul>
 <p>For details on some of SGLang’s customizations and the principles behind how slime incorporates SGLang, please see the “How to Use SGLang” section.</p>
 </section>
@@ -1049,7 +1050,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Dec 25, 2025.
+  Last updated on Dec 26, 2025.
   <br/>
 </p>
   </div>
