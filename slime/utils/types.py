@@ -31,6 +31,9 @@ class Sample:
         COMPLETED = "completed"
         TRUNCATED = "truncated"
         ABORTED = "aborted"
+        # Indicates a recoverable or non-critical failure during generation (e.g., tool call failure,
+        # external API error, parsing error). Unlike ABORTED, FAILED samples may still contain partial
+        # valid output and can be retried or handled gracefully.
         FAILED = "failed"
 
     status: Status = Status.PENDING
