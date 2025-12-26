@@ -463,8 +463,8 @@ class FSDPTrainRayActor(TrainRayActor):
                     rollout_log_probs=(
                         rollout_data["rollout_log_probs"][start:end] if "rollout_log_probs" in rollout_data else None
                     ),
-                    multimodal_inputs=(
-                        rollout_data["multimodal_inputs"][start:end] if "multimodal_inputs" in rollout_data else None
+                    multimodal_tensor=(
+                        rollout_data["multimodal_tensor"][start:end] if "multimodal_tensor" in rollout_data else None
                     ),
                     num_packs=mbs_size,
                 )
@@ -890,8 +890,8 @@ class FSDPTrainRayActor(TrainRayActor):
             "position_ids": position_ids,
             "attention_mask": None,
         }
-        if packed_sequence.get("multimodal_inputs"):
-            model_args.update(packed_sequence["multimodal_inputs"])
+        if packed_sequence.get("multimodal_tensor"):
+            model_args.update(packed_sequence["multimodal_tensor"])
         return model_args
 
 

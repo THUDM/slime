@@ -49,12 +49,12 @@ def _parse_generalized_path(s: str):
     return s, None
 
 
-def _should_skip_prompt(formatted_prompt: str, tokenizer, processor, max_length, multimodal_data=None):
+def _should_skip_prompt(formatted_prompt: str, tokenizer, processor, max_length, multimodal_raw=None):
     if max_length is None:
         return False
 
     if processor:
-        processor_output = processor(text=formatted_prompt, **multimodal_data)
+        processor_output = processor(text=formatted_prompt, **multimodal_raw)
         input_ids = processor_output["input_ids"][0]
     else:
         input_ids = tokenizer.encode(formatted_prompt, add_special_tokens=False)
@@ -168,12 +168,12 @@ class Dataset:
                     prompt, list
                 ), f"prompt must be a list when processor is not None, got {type(prompt)} instead"
                 images, videos = process_vision_info(prompt)
-                multimodal_data = {"images": images, "videos": videos}
+                multimodal_raw = {"images": images, "videos": videos}
             else:
-                multimodal_data = None
+                multimodal_raw = None
 
             # TODO: this is slow.
-            if _should_skip_prompt(formatted_prompt, tokenizer, processor, max_length, multimodal_data):
+            if _should_skip_prompt(formatted_prompt, tokenizer, processor, max_length, multimodal_raw):
                 continue
 
             self.origin_samples.append(
@@ -181,7 +181,7 @@ class Dataset:
                     prompt=formatted_prompt,
                     label=data[label_key] if label_key is not None else None,
                     metadata=metadata,
-                    multimodal_data=multimodal_data,
+                    multimodal_raw=multimodal_raw,
                 )
             )
 

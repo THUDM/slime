@@ -14,8 +14,8 @@ class Sample:
     # prompt
     prompt: str | list[dict[str, str]] = ""
     tokens: list[int] = field(default_factory=list)
-    multimodal_data: dict[str, Any] = None  # raw multimodal data, e.g. images, videos, etc.
-    multimodal_inputs: dict[str, Any] = None  # processed multimodal data, e.g. pixel_values, etc
+    multimodal_raw: dict[str, Any] = None  # raw multimodal data, e.g. images, videos, etc.
+    multimodal_tensor: dict[str, Any] = None  # processed multimodal data, e.g. pixel_values, etc.
     # response
     response: str = ""
     response_length: int = 0
