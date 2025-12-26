@@ -5,18 +5,25 @@ eval:
     top_p: 0.95
     top_k: -1
     max_response_len: 24576
-  datasets: # minimal smoke eval to keep eval-only path happy
-    - name: smoke
-      path: /mnt/data/zhiyao/tb_evaluation/tb_eval_smoke/eval_smoke.jsonl
-      rm_type: deepscaler
+  datasets: # these eval tasks go through slime dataset config and default rollout function (slime.rollout.sglang_rollout.generate_rollout)
+    - name: gpqa    # huggingface-cli download --repo-type dataset zyzshishui0627/gpqa_diamond --local-dir /root/gpqa
+      path: /root/gpqa/gpqa_eval.jsonl
+      rm_type: gpqa
+      n_samples_per_eval_prompt: 2
+    - name: ifbench   # huggingface-cli download --repo-type dataset zyzshishui0627/IFBench --local-dir /root/ifbench
+      path: /root/ifbench/IFBench_eval.jsonl
+      rm_type: ifbench
+      n_samples_per_eval_prompt: 1
   delegate:
     - name: terminal_bench
-      type: examples.eval.terminal_bench.tb_config.build_terminal_bench_config
+      # type: examples.eval.terminal_bench.tb_config.build_terminal_bench_config
       url: http://172.17.0.1:9052
-      timeout_secs: 14400
-      max_retries: 1
-      model_name: openai/qwen3-8b
+      timeout_secs: 86400  # 24 hours
+      max_retries: 1 # HTTP request retries from Slime to the TB server
+      model_name: qwen3-8b
       api_base: http://127.0.1.1:30005/v1
       dataset_path: /mnt/data/xinyu/program/slime-tb/terminal-bench/tasks
       task_id: hello-world
+      # n_tasks: 10
+      n_attempts: 2 # TB task-level retries (per task within tb run)
       n_concurrent: 8

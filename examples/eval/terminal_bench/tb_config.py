@@ -12,12 +12,14 @@ class TerminalBenchConfig(EvalEnvConfig):
     """Environment configuration shared by the Terminal Bench client/server."""
 
     model_name: str = "qwen3-8b"
-    api_base: str = "http://172.17.0.1:30001/v1"
-    n_tasks: int = 10
-    n_concurrent: int = 4
+    api_base: str = "http://127.0.1.1:30001/v1"
     dataset_path: str | None = None
+    n_tasks: int | None = None
     task_id: str | None = None
     task_ids: list[str] = field(default_factory=list)
+    n_attempts: int | None = None
+    n_concurrent: int = 8
+
 
     @classmethod
     def parse(cls, args, raw_env_config: Mapping[str, Any], defaults: Mapping[str, Any]) -> TerminalBenchConfig:
@@ -30,6 +32,9 @@ class TerminalBenchConfig(EvalEnvConfig):
         api_base = clean_raw.get("api_base")
         if api_base is not None:
             base_cfg.api_base = str(api_base)
+        n_attempts = clean_raw.get("n_attempts")
+        if n_attempts is not None:
+            base_cfg.n_attempts = int(n_attempts)
         n_tasks = clean_raw.get("n_tasks")
         if n_tasks is not None:
             base_cfg.n_tasks = int(n_tasks)
