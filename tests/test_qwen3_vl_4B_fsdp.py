@@ -46,11 +46,7 @@ def execute():
         "--eval-max-response-len 4096 "
     )
 
-    fsdp_args = (
-        "--train-backend fsdp "
-        "--gradient-checkpointing "
-        "--update-weight-buffer-size 536870912 "
-    )
+    fsdp_args = "--train-backend fsdp " "--gradient-checkpointing " "--update-weight-buffer-size 536870912 "
 
     grpo_args = (
         "--advantage-estimator grpo "
