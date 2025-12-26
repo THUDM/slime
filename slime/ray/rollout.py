@@ -56,6 +56,11 @@ class RolloutManager:
         self.custom_reward_post_process_func = None
         if self.args.custom_reward_post_process_path is not None:
             self.custom_reward_post_process_func = load_function(self.args.custom_reward_post_process_path)
+        self.custom_convert_samples_to_train_data_func = None
+        if self.args.custom_convert_samples_to_train_data_path is not None:
+            self.custom_convert_samples_to_train_data_func = load_function(
+                self.args.custom_convert_samples_to_train_data_path
+            )
         logger.info(f"import {self.args.rollout_function_path} as generate_rollout function.")
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
@@ -216,6 +221,9 @@ class RolloutManager:
         """
         Convert inference generated samples to training data.
         """
+        if self.custom_convert_samples_to_train_data_func is not None:
+            return self.custom_convert_samples_to_train_data_func(self.args, samples)
+
         raw_rewards, rewards = self._post_process_rewards(samples)
 
         assert len(raw_rewards) == len(samples)
