@@ -44,6 +44,7 @@ class UpdateWeightFromRemote:
         self.weight_version = 0
         self.transfer_plan = RemoteTransferPlan(args, model, weight_update_mode)
         self._is_source = self.transfer_plan.is_source()
+        self.global_rank = dist.get_rank(group=get_gloo_group())
 
     @abstractmethod
     def connect_rollout_engines(

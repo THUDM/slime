@@ -71,6 +71,18 @@ class RayTrainGroup:
             env_vars["LD_PRELOAD"] = dynlib_path
             env_vars["TMS_INIT_ENABLE"] = "1"
             env_vars["TMS_INIT_ENABLE_CPU_BACKUP"] = "1"
+        elif self.args.update_weight_transfer_mode == "rdma":
+            import torch_memory_saver
+
+            dynlib_path = os.path.join(
+                os.path.dirname(os.path.dirname(torch_memory_saver.__file__)),
+                "torch_memory_saver_hook_mode_preload.abi3.so",
+            )
+            assert os.path.exists(dynlib_path), f"LD_PRELOAD so file {dynlib_path} does not exist."
+
+            env_vars["LD_PRELOAD"] = dynlib_path
+            # env_vars["TMS_INIT_ENABLE"] = "1"
+            env_vars["TMS_INIT_ENABLE_CPU_BACKUP"] = "1"
 
         if self.args.use_routing_replay:
             env_vars["ENABLE_ROUTING_REPLAY"] = "1"

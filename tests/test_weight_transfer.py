@@ -100,6 +100,7 @@ def execute(args: ScriptArgs):
         "--actor-num-gpus-per-node 1 "
         # 1GB buffer for weight update
         f"--update-weight-buffer-size {1 * 1024 ** 3} "
+        # enable correctness check
         f"--check-weight-update-equal "
     )
     if args.mode == "rdma":
