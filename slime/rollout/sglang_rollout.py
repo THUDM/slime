@@ -96,8 +96,11 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     ), f"Sample status is {sample.status}"
 
     if state.processor:
-        processor_output = state.processor(text=sample.prompt, **sample.multimodal_inputs)
+        processor_output = state.processor(text=sample.prompt, **sample.multimodal_data)
         prompt_ids = processor_output["input_ids"][0]
+        sample.multimodal_inputs = {
+            k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]
+        } or None
     else:
         prompt_ids = state.tokenizer.encode(sample.prompt, add_special_tokens=False)
 
@@ -120,8 +123,8 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
 
-    if sample.multimodal_inputs and sample.multimodal_inputs["images"]:
-        image_data = sample.multimodal_inputs["images"]
+    if sample.multimodal_data and sample.multimodal_data["images"]:
+        image_data = sample.multimodal_data["images"]
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
 
     # Use existing tokens for multi-turn or tokenize the new prompt
