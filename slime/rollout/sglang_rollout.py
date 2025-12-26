@@ -85,6 +85,9 @@ class GenerateState(metaclass=SingletonMeta):
 
 async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, Any]) -> Sample:
     """Generate using traditional SGLang router with token-based workflow"""
+    if args.ci_test:
+        assert isinstance(sample.prompt, str)
+
     state = GenerateState(args)
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
@@ -117,7 +120,8 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
 
-    if image_data := sample.multimodal_inputs.get("images", None):
+    if sample.multimodal_inputs and sample.multimodal_inputs["images"]:
+        image_data = sample.multimodal_inputs["images"]
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
 
     # Use existing tokens for multi-turn or tokenize the new prompt
