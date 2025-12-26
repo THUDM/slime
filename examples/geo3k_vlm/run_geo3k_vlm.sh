@@ -187,7 +187,10 @@ else
    SLIME_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &>/dev/null && pwd)"
    MODEL_ARGS_FILE=$(echo "$MODEL_NAME" | sed 's/-Instruct//g; s/-Thinking//g; s/Qwen3-VL-/qwen3-/g; s/-2B/-1.7B/g')
    source "${SLIME_DIR}/scripts/models/${MODEL_ARGS_FILE}.sh"
+
    # VL models require rotary-base 5000000
+   # MODEL_ARGS contains `--rotary-base` and we need to override the value
+   # argparse will take the last value, so we need to add it after the sourced model file
    MODEL_ARGS+=(--rotary-base 5000000)
    
 fi
