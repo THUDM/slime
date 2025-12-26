@@ -170,7 +170,7 @@ class Dataset:
                 multimodal_inputs = None
 
             # TODO: this is slow.
-            if _should_skip_prompt(formatted_prompt, tokenizer, processor, max_length, images, videos):
+            if _should_skip_prompt(formatted_prompt, tokenizer, processor, max_length, multimodal_inputs):
                 continue
 
             self.origin_samples.append(
