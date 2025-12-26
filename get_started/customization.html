@@ -454,20 +454,21 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-loss-function-custom-loss-function-path">9. Custom Loss Function (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-tis-rs-function-custom-tis-function-path">10. Custom TIS/RS Function (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reward-post-processing-custom-reward-post-process-path">11. Reward Post-Processing (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logging-functions">12. Logging Functions</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#samples-to-train-data-conversion-custom-convert-samples-to-train-data-path">12. Samples to Train Data Conversion (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logging-functions">13. Logging Functions</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#training-rollout-logging-custom-rollout-log-function-path">Training Rollout Logging (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#evaluation-rollout-logging-custom-eval-rollout-log-function-path">Evaluation Rollout Logging (<code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-data-source-path">13. Data Source (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#evaluation-function-eval-function-path">14. Evaluation Function (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hooks">15. Megatron Hooks</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-data-source-path">14. Data Source (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#evaluation-function-eval-function-path">15. Evaluation Function (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hooks">16. Megatron Hooks</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-initialization-custom-megatron-init-path">Megatron Initialization (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#before-log-prob-hook-custom-megatron-before-log-prob-hook-path">Before Log Prob Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#before-train-step-hook-custom-megatron-before-train-step-hook-path">Before Train Step Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-middleware-slime-router-middleware-paths">16. slime Router Middleware (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-middleware-slime-router-middleware-paths">17. slime Router Middleware (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
 </ul>
 </li>
 </ul>
@@ -527,28 +528,31 @@ document.write(`
 <tr class="row-even"><td class="text-left"><p>–custom-reward-post-process-path</p></td>
 <td class="text-left"><p>Custom post-processing of rewards before advantage computation.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>–custom-rollout-log-function-path</p></td>
+<tr class="row-odd"><td class="text-left"><p>–custom-convert-samples-to-train-data-path</p></td>
+<td class="text-left"><p>Override the conversion of samples to training data format.</p></td>
+</tr>
+<tr class="row-even"><td class="text-left"><p>–custom-rollout-log-function-path</p></td>
 <td class="text-left"><p>Custom logging for training rollouts.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>–custom-eval-rollout-log-function-path</p></td>
+<tr class="row-odd"><td class="text-left"><p>–custom-eval-rollout-log-function-path</p></td>
 <td class="text-left"><p>Custom logging for evaluation rollouts.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>–data-source-path</p></td>
+<tr class="row-even"><td class="text-left"><p>–data-source-path</p></td>
 <td class="text-left"><p>Override the data source for rollout prompts.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>–eval-function-path</p></td>
+<tr class="row-odd"><td class="text-left"><p>–eval-function-path</p></td>
 <td class="text-left"><p>Override the rollout function specifically for evaluation.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>–custom-megatron-init-path</p></td>
+<tr class="row-even"><td class="text-left"><p>–custom-megatron-init-path</p></td>
 <td class="text-left"><p>Custom initialization after Megatron setup.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>–custom-megatron-before-log-prob-hook-path</p></td>
+<tr class="row-odd"><td class="text-left"><p>–custom-megatron-before-log-prob-hook-path</p></td>
 <td class="text-left"><p>Custom logic before log probability computation.</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>–custom-megatron-before-train-step-hook-path</p></td>
+<tr class="row-even"><td class="text-left"><p>–custom-megatron-before-train-step-hook-path</p></td>
 <td class="text-left"><p>Custom logic before each training step.</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>–slime-router-middleware-paths</p></td>
+<tr class="row-odd"><td class="text-left"><p>–slime-router-middleware-paths</p></td>
 <td class="text-left"><p>Add custom middleware to slime router.</p></td>
 </tr>
 </tbody>
@@ -742,8 +746,45 @@ document.write(`
 </ul>
 </section>
 <hr class="docutils" />
+<section id="samples-to-train-data-conversion-custom-convert-samples-to-train-data-path">
+<h3>12. Samples to Train Data Conversion (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)<a class="headerlink" href="#samples-to-train-data-conversion-custom-convert-samples-to-train-data-path" title="Link to this heading">#</a></h3>
+<p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code> (uses built-in conversion logic)</p>
+<p><strong>Purpose</strong>: Override the conversion of samples to training data format.</p>
+<p><strong>Signature</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">convert_samples_to_train_data</span><span class="p">(</span>
+    <span class="n">args</span><span class="p">,</span>
+    <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]</span> <span class="o">|</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]],</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span>
+</pre></div>
+</div>
+<p><strong>Return Type</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nb">dict</span><span class="p">:</span> <span class="p">{</span>
+    <span class="s2">&quot;tokens&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span>           <span class="c1"># Token IDs for each sample</span>
+    <span class="s2">&quot;response_lengths&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>        <span class="c1"># Response lengths</span>
+    <span class="s2">&quot;rewards&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">],</span>               <span class="c1"># Normalized rewards</span>
+    <span class="s2">&quot;raw_reward&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">float</span><span class="p">],</span>            <span class="c1"># Raw rewards</span>
+    <span class="s2">&quot;truncated&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>               <span class="c1"># Truncation flags (0 or 1)</span>
+    <span class="s2">&quot;sample_indices&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>          <span class="c1"># Sample indices</span>
+    <span class="s2">&quot;loss_masks&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">]],</span>        <span class="c1"># Loss masks for each sample</span>
+    <span class="c1"># Optional fields:</span>
+    <span class="s2">&quot;round_number&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>            <span class="c1"># Round numbers (for rollout buffer)</span>
+    <span class="s2">&quot;rollout_log_probs&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>            <span class="c1"># Log probs (for off-policy correction)</span>
+    <span class="s2">&quot;rollout_routed_experts&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>       <span class="c1"># Routed experts (for MoE)</span>
+    <span class="s2">&quot;metadata&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>                     <span class="c1"># Train metadata</span>
+    <span class="s2">&quot;multimodal_inputs&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>            <span class="c1"># Multimodal inputs (for VLM)</span>
+    <span class="s2">&quot;teacher_log_probs&quot;</span><span class="p">:</span> <span class="nb">list</span><span class="p">,</span>            <span class="c1"># Teacher log probs (for distillation)</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p><strong>Use Cases</strong>:</p>
+<ul class="simple">
+<li><p>Handling <code class="docutils literal notranslate"><span class="pre">list[list[Sample]]</span></code> inputs</p></li>
+<li><p>Custom data format requirements for training</p></li>
+</ul>
+</section>
+<hr class="docutils" />
 <section id="logging-functions">
-<h3>12. Logging Functions<a class="headerlink" href="#logging-functions" title="Link to this heading">#</a></h3>
+<h3>13. Logging Functions<a class="headerlink" href="#logging-functions" title="Link to this heading">#</a></h3>
 <section id="training-rollout-logging-custom-rollout-log-function-path">
 <h4>Training Rollout Logging (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)<a class="headerlink" href="#training-rollout-logging-custom-rollout-log-function-path" title="Link to this heading">#</a></h4>
 <p><strong>Signature</strong>:</p>
@@ -763,7 +804,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="data-source-data-source-path">
-<h3>13. Data Source (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)<a class="headerlink" href="#data-source-data-source-path" title="Link to this heading">#</a></h3>
+<h3>14. Data Source (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)<a class="headerlink" href="#data-source-data-source-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.RolloutDataSourceWithBuffer</span></code></p>
 <p><strong>Purpose</strong>: Override the data source for rollout prompts.</p>
 <p><strong>Base Class</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.DataSource</span></code></p>
@@ -785,7 +826,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="evaluation-function-eval-function-path">
-<h3>14. Evaluation Function (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)<a class="headerlink" href="#evaluation-function-eval-function-path" title="Link to this heading">#</a></h3>
+<h3>15. Evaluation Function (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)<a class="headerlink" href="#evaluation-function-eval-function-path" title="Link to this heading">#</a></h3>
 <p><strong>Default</strong>: Same as <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code></p>
 <p><strong>Purpose</strong>: Override the rollout function specifically for evaluation.</p>
 <p><strong>Use Cases</strong>:</p>
@@ -796,7 +837,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="megatron-hooks">
-<h3>15. Megatron Hooks<a class="headerlink" href="#megatron-hooks" title="Link to this heading">#</a></h3>
+<h3>16. Megatron Hooks<a class="headerlink" href="#megatron-hooks" title="Link to this heading">#</a></h3>
 <section id="megatron-initialization-custom-megatron-init-path">
 <h4>Megatron Initialization (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)<a class="headerlink" href="#megatron-initialization-custom-megatron-init-path" title="Link to this heading">#</a></h4>
 <p><strong>Signature</strong>:</p>
@@ -824,7 +865,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="slime-router-middleware-slime-router-middleware-paths">
-<h3>16. slime Router Middleware (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)<a class="headerlink" href="#slime-router-middleware-slime-router-middleware-paths" title="Link to this heading">#</a></h3>
+<h3>17. slime Router Middleware (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)<a class="headerlink" href="#slime-router-middleware-slime-router-middleware-paths" title="Link to this heading">#</a></h3>
 <p><strong>Purpose</strong>: Add custom middleware to the slime router for request processing.</p>
 <p><strong>Use Cases</strong>:</p>
 <ul class="simple">
@@ -894,20 +935,21 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-loss-function-custom-loss-function-path">9. Custom Loss Function (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-tis-rs-function-custom-tis-function-path">10. Custom TIS/RS Function (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reward-post-processing-custom-reward-post-process-path">11. Reward Post-Processing (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logging-functions">12. Logging Functions</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#samples-to-train-data-conversion-custom-convert-samples-to-train-data-path">12. Samples to Train Data Conversion (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logging-functions">13. Logging Functions</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#training-rollout-logging-custom-rollout-log-function-path">Training Rollout Logging (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#evaluation-rollout-logging-custom-eval-rollout-log-function-path">Evaluation Rollout Logging (<code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-data-source-path">13. Data Source (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#evaluation-function-eval-function-path">14. Evaluation Function (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hooks">15. Megatron Hooks</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-data-source-path">14. Data Source (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#evaluation-function-eval-function-path">15. Evaluation Function (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hooks">16. Megatron Hooks</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-initialization-custom-megatron-init-path">Megatron Initialization (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#before-log-prob-hook-custom-megatron-before-log-prob-hook-path">Before Log Prob Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#before-train-step-hook-custom-megatron-before-train-step-hook-path">Before Train Step Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-middleware-slime-router-middleware-paths">16. slime Router Middleware (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-middleware-slime-router-middleware-paths">17. slime Router Middleware (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
 </ul>
 </li>
 </ul>
