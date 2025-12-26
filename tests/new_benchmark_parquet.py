@@ -25,7 +25,7 @@ def read_file(path):
     if path.endswith(".jsonl"):
 
         def jsonl_reader(p):
-            with open(p, "r", encoding="utf-8") as f:
+            with open(p, encoding="utf-8") as f:
                 for line_num, line in enumerate(f):
                     line = line.strip()
                     if not line:
@@ -47,8 +47,7 @@ def read_file(path):
 
             for batch in pf.iter_batches():
 
-                for row_dict in batch.to_pylist():
-                    yield row_dict
+                yield from batch.to_pylist()
 
         reader = parquet_reader(path)
 
@@ -140,7 +139,7 @@ def run_benchmark(file_path: str, total_rows: int):
     tracemalloc.stop()
 
     peak_memory_mb = peak / (1024 * 1024)
-    print(f"--- Benchmark Complete ---")
+    print("--- Benchmark Complete ---")
     print(f"  Total Rows: {row_count:,}")
     print(f"  Total Time: {duration:.2f} seconds")
     print(f"  Peak Memory: {peak_memory_mb:.2f} MB")

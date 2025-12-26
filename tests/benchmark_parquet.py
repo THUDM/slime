@@ -27,7 +27,7 @@ def read_file(path):
         print(f"Reading Parquet with pd.read_parquet: {path}")
         df = pd.read_parquet(path, dtype_backend="pyarrow")
     else:
-        raise ValueError(f"This script only supports .parquet files.")
+        raise ValueError("This script only supports .parquet files.")
 
     if row_slice is not None:
         df = df.iloc[row_slice]
@@ -104,7 +104,7 @@ def run_benchmark(file_path: str):
     tracemalloc.stop()
 
     peak_memory_mb = peak / (1024 * 1024)
-    print(f"--- Benchmark Complete ---")
+    print("--- Benchmark Complete ---")
     print(f"  Total Rows: {row_count:,}")
     print(f"  Total Time: {duration:.2f} seconds")
     print(f"  Peak Memory: {peak_memory_mb:.2f} MB")
