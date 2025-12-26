@@ -78,6 +78,7 @@ class RolloutManager:
         self._metric_checker = MetricChecker.maybe_create(args)
         if self.args.use_fault_tolerance:
             self._health_monitor = RolloutHealthMonitor(self, args)
+        self.processor = None
 
     def dispose(self):
         if self._metric_checker is not None:
@@ -276,11 +277,12 @@ class RolloutManager:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
 
         if samples[0].multimodal_inputs is not None:
+            if self.processor is None:
+                self.processor = load_processor(self.args.hf_checkpoint, trust_remote_code=True)
             train_data["multimodal_inputs"] = []
             for sample in samples:
-                processor = load_processor(self.args.hf_checkpoint, trust_remote_code=True)
                 # Get input IDs with full prompt (text + multimodal)
-                processor_output = processor(text=sample.prompt, **sample.multimodal_inputs)
+                processor_output = self.processor(text=sample.prompt, **sample.multimodal_inputs)
 
                 # Extract multimodal tokens (exclude text-related tokens)
                 train_data["multimodal_inputs"].append(
