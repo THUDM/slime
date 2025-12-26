@@ -14,6 +14,16 @@ eval:
       path: /root/ifbench/IFBench_eval.jsonl
       rm_type: ifbench
       n_samples_per_eval_prompt: 1
+    - name: tau2-airline
+      path: /root/tau2-bench/data/tau2/airline_test_tasks.jsonl
+      custom_generate_function_path: examples.tau2-bench.generate_with_tau2.generate
+      input_key: task_id
+      label_key: null
+      apply_chat_template: False
+      top_k: 1
+      max_response_len: 1024
+      max_context_len: 40000
+      n_samples_per_eval_prompt: 1
   delegate: # these tasks go through delegate eval function (examples.eval.eval_delegate_rollout.generate_rollout)
     - name: skills 
       # this url should align with env docker network alias
@@ -24,9 +34,9 @@ eval:
       datasets:
         - name: aime25
           max_response_len: 8192
-          n_samples_per_eval_prompt: 8
-        - name: arena-hard
           n_samples_per_eval_prompt: 2
+        - name: arena-hard
+          n_samples_per_eval_prompt: 1
+          max_response_len: 24576
         - name: hle
-          max_response_len: 32768
-
+          max_response_len: 24576
