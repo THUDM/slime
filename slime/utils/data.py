@@ -8,15 +8,11 @@ import re
 import numpy as np
 import ray
 
-
 try:
     import pyarrow.parquet as pq
 except ImportError:
     pq = None
 
-from slime.utils.types import Sample
-
-from .seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.types import MultimodalTypes, Sample
 
 from .timer import Timer
@@ -36,7 +32,7 @@ def read_file(path):
     if path.endswith(".jsonl"):
 
         def jsonl_reader(p):
-            with open(p, "r", encoding="utf-8") as f:
+            with open(p, encoding="utf-8") as f:
                 for line_num, line in enumerate(f):
                     line = line.strip()
                     if not line:
@@ -57,8 +53,7 @@ def read_file(path):
             pf = pq.ParquetFile(p)
 
             for batch in pf.iter_batches():
-                for row_dict in batch.to_pylist():
-                    yield row_dict
+                yield from batch.to_pylist()
 
         reader = parquet_reader(path)
 
@@ -67,9 +62,8 @@ def read_file(path):
 
     if row_slice is not None:
 
-        print(f"read_file path={path} applying slice {row_slice=}")
+        logger.info("read_file path=%s applying slice row_slice=%s", path, row_slice)
         reader = itertools.islice(reader, row_slice.start, row_slice.stop, row_slice.step)
-
 
     yield from reader
 
