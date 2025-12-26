@@ -1,6 +1,7 @@
 import logging
 import multiprocessing
 import random
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -77,6 +78,20 @@ class RolloutManager:
         self._metric_checker = MetricChecker.maybe_create(args)
         if self.args.use_fault_tolerance:
             self._health_monitor = RolloutHealthMonitor(self, args)
+            if self.args.ci_test:
+                self._schedule_ci_fault_injection()
+
+    def _schedule_ci_fault_injection(self):
+        def _inject_fault():
+            # Wait for system to stabilize and training to start
+            time.sleep(200)
+            if self.all_rollout_engines and self.all_rollout_engines[0]:
+                logger.info("CI Fault Injection: Simulating crash on engine 0")
+                # We use remote call to make the actor process exit
+                self.all_rollout_engines[0].simulate_crash.remote()
+
+        t = threading.Thread(target=_inject_fault, daemon=True)
+        t.start()
 
     def dispose(self):
         if self._metric_checker is not None:

@@ -87,6 +87,10 @@ def execute():
         "--ci-metric-checker-threshold 0.55 "  # loose threshold at 250 step
     )
 
+    fault_tolerance_args = (
+        "--use-fault-tolerance " "--rollout-health-check-interval 0 " "--rollout-health-check-timeout 5 "
+    )
+
     misc_args = (
         # default dropout in megatron is 0.1
         "--attention-dropout 0.0 "
@@ -112,6 +116,7 @@ def execute():
         f"{eval_args} "
         f"{sglang_args} "
         f"{ci_args} "
+        f"{fault_tolerance_args} "
         f"{misc_args} "
     )
 
