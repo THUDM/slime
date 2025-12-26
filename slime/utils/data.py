@@ -164,6 +164,7 @@ class Dataset:
                 # temporary solution, will write image utils for slime later
                 from qwen_vl_utils import process_vision_info
 
+                assert isinstance(prompt, list)
                 images, videos = process_vision_info(prompt)
                 multimodal_inputs = {"images": images, "videos": videos}
             else:
