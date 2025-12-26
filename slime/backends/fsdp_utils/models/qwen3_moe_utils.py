@@ -20,12 +20,22 @@ def qwen3_moe_routing(
 
 
 def stack_expert_weights_for_sonicmoe(experts):
+    # First, stack gate and up weights for each expert: [gate, up] -> (2*I, H)
     per_expert_w13 = [
-        torch.cat([e.gate_proj.weight, e.up_proj.weight], dim=0)  # (I, H)  I=2*intermediate_dim
+        torch.cat([e.gate_proj.weight, e.up_proj.weight], dim=0)  # (2*I, H) where I=intermediate_dim
         for e in experts
     ]
-    w13_base = torch.stack(per_expert_w13, dim=0)          # (E, I, H) contiguous
-    w13_weight = w13_base.permute(1, 2, 0)                 # (I, H, E) view
+    w13_base = torch.stack(per_expert_w13, dim=0)          # (E, 2*I, H) contiguous
+    
+    # Interleave gate/up: [E, 2*I, H] concat -> [E, 2*I, H] interleaved
+    # Format: [gate_row0, up_row0, gate_row1, up_row1, ...]
+    I = w13_base.shape[1] // 2
+    gate_part = w13_base[:, :I, :]  # (E, I, H) - gate weights
+    up_part = w13_base[:, I:, :]    # (E, I, H) - up weights
+    # Stack along new dimension and reshape to interleave
+    w13_interleaved = torch.stack([gate_part, up_part], dim=2).reshape(w13_base.shape[0], 2 * I, w13_base.shape[2])  # (E, 2*I, H) interleaved
+    
+    w13_weight = w13_interleaved.permute(1, 2, 0)          # (2*I, H, E) view
     assert w13_weight.stride(1) == 1, w13_weight.stride()
 
     per_expert_w2 = [e.down_proj.weight for e in experts]  # each (H, I)
