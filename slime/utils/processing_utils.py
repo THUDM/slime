@@ -7,6 +7,8 @@ from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase, 
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_PATCH_SIZE = 14
+
 
 def load_tokenizer(name_or_path: str, **kwargs):
     return AutoTokenizer.from_pretrained(name_or_path, **kwargs)
@@ -63,7 +65,12 @@ def prepare_model_inputs(
         # temporary solution, will write image utils for slime later
         from qwen_vl_utils import process_vision_info
 
-        images, videos = process_vision_info(prompt)
+        image_patch_size = (
+            processor.image_processor.patch_size
+            if hasattr(processor.image_processor, "patch_size")
+            else DEFAULT_PATCH_SIZE
+        )
+        images, videos = process_vision_info(prompt, image_patch_size)
 
         # Get input IDs with full prompt (text + multimodal)
         processor_output = processor(text=formatted_prompt, images=images, videos=videos)
