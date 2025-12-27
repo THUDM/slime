@@ -272,14 +272,31 @@ class SGLangEngine(RayActor):
         logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
         if self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
+            response = None
             if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
                 )
-            else:
+            elif parse(sglang_router.__version__) < parse("0.3.0"):
                 worker_url = quote(worker_url, safe="")
                 response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}")
-            response.raise_for_status()
+            else:
+                try:
+                    all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
+                    for worker in all_workers:
+                        if worker["url"] == worker_url:
+                            worker_id = worker["id"]
+                            response = requests.delete(
+                                f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}"
+                            )
+                            break
+                    else:
+                        logger.warning(f"Worker {worker_url} not found in router during shutdown.")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch workers list or remove worker: {e}")
+
+            if response is not None:
+                response.raise_for_status()
         kill_process_tree(self.process.pid)
 
     def get_weight_version(self):

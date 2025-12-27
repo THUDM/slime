@@ -1,7 +1,7 @@
 import logging
 
 from slime.utils.mask_utils import MultiTurnLossMaskGenerator
-from slime.utils.processing_utils import load_processor, load_tokenizer, prepare_model_inputs
+from slime.utils.processing_utils import load_processor, load_tokenizer
 
 __all__ = ["generate_rollout"]
 
@@ -46,18 +46,7 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
         messages = sample.prompt
         tools = sample.metadata.get("tools", None)
 
-        input_ids, extra_info = prepare_model_inputs(
-            messages, TOKENIZER, PROCESSOR, sample.metadata, args.apply_chat_template, args.apply_chat_template_kwargs
-        )
-
-        has_multimodal = bool(extra_info.get("images") or extra_info.get("videos"))
-        if has_multimodal:
-            sample.multimodal_inputs = extra_info["multimodal_inputs"]
-            token_ids, loss_mask = MASK_GENERATOR.get_loss_mask_with_multimodal_alignment(
-                messages, input_ids, tools=tools
-            )
-        else:
-            token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
+        token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
 
         response_length = MASK_GENERATOR.get_response_lengths([loss_mask])[0]
 

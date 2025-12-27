@@ -152,6 +152,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
                 help="Whether to disable recompute loss function to save memory during training.",
             )
+            parser.add_argument(
+                "--log-probs-chunk-size", type=int, default=-1, help="Chunk size to compute log probs to save memory"
+            )
 
             return parser
 
@@ -1121,6 +1124,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Path to the custom function that will post process reward, by default it will be the normalization for grpo. "
                 ),
             )
+            parser.add_argument(
+                "--custom-convert-samples-to-train-data-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a custom function that converts samples to training data. "
+                    "If set, this function will replace the default _convert_samples_to_train_data. "
+                    "The function should have the signature `def convert_samples_to_train_data(args, samples) -> dict`."
+                ),
+            )
             return parser
 
         def add_rollout_buffer_arguments(parser):
@@ -1306,7 +1319,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         reset_arg(parser, "--padded-vocab-size", type=int, default=None)
 
         parser.set_defaults(sglang_tensor_parallel_size=add_sglang_tp_size())
-
         return parser
 
     return add_slime_arguments

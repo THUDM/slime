@@ -207,7 +207,7 @@ def forward_only(
             [
                 "tokens",
                 "loss_masks",
-                "multimodal_inputs",
+                "multimodal_train_inputs",
                 "total_lengths",
                 "response_lengths",
             ],
@@ -225,7 +225,7 @@ def forward_only(
             labels=None,
             packed_seq_params=packed_seq_params,
             loss_mask=batch["full_loss_masks"],
-            **(batch["multimodal_inputs"] if batch["multimodal_inputs"] is not None else {}),
+            **(batch["multimodal_train_inputs"] if batch["multimodal_train_inputs"] is not None else {}),
         )
 
         return output_tensor, partial(
@@ -354,7 +354,7 @@ def train_one_step(
             data_iterator,
             [
                 "tokens",
-                "multimodal_inputs",
+                "multimodal_train_inputs",
                 "packed_seq_params",
                 "total_lengths",
                 "response_lengths",
@@ -392,7 +392,7 @@ def train_one_step(
                 packed_seq_params=batch["packed_seq_params"],
                 loss_mask=batch["full_loss_masks"],
                 mtp_kwargs={"mtp_labels": batch["tokens"]} if args.enable_mtp_training else {},
-                **(batch["multimodal_inputs"] if batch["multimodal_inputs"] is not None else {}),
+                **(batch["multimodal_train_inputs"] if batch["multimodal_train_inputs"] is not None else {}),
             )
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
@@ -424,6 +424,13 @@ def train_one_step(
                 valid_step = not (torch.isnan(grad_norm) or torch.isinf(grad_norm))
             else:
                 valid_step = not (math.isnan(grad_norm) or math.isinf(grad_norm))
+
+    # CI check: verify only MTP parameters have non-zero gradients when truncation happens
+    # This check must happen before optimizer.step() as gradients may be modified during step
+    if args.ci_test and args.enable_mtp_training:
+        from slime.backends.megatron_utils.ci_utils import check_mtp_only_grad
+
+        check_mtp_only_grad(model, step_id)
 
     if valid_step:
         # Update parameters.
@@ -586,6 +593,12 @@ def train(
                 # here we assume only one mtp layer
                 mtp_losses = (tracker["values"] * mtp_loss_scale).item()
                 MTPLossLoggingHelper.clean_loss_in_tracker()
+
+                # CI check: verify MTP loss is within expected bounds
+                if args.ci_test:
+                    from slime.backends.megatron_utils.ci_utils import check_mtp_loss
+
+                    check_mtp_loss(mtp_losses)
 
         # per train step log.
         if (
