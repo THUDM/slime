@@ -194,7 +194,7 @@ class MegatronTrainRayActor(TrainRayActor):
             torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
         ]
         if "multimodal_train_inputs" in rollout_data:
-            # Move multimodal tensors to GPU in advance
+            # Move multimodal training tensors to GPU in advance
             rollout_data["multimodal_train_inputs"] = [
                 (
                     {key: tensor.to(device=torch.cuda.current_device()) for key, tensor in mm_dict.items()}

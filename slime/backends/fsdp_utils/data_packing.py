@@ -33,7 +33,7 @@ def pack_sequences(
         advantages: List of advantages per sequence
         returns: List of returns per sequence
         rollout_log_probs: List of rollout log probabilities per sequence
-        multimodal_train_inputs: List of dict of multimodal tensors per sequence
+        multimodal_train_inputs: List of dict of multimodal tensors for training per sequence
         max_tokens_per_gpu: Maximum tokens per GPU pack
         num_packs: Explicit number of packs to create
 
@@ -100,7 +100,7 @@ def pack_sequences(
             ),
         }
 
-        # Collect and add multimodal tensors for this partition
+        # Collect and add multimodal training tensors for this partition
         if multimodal_train_inputs:
             multimodal_data = {}  # key -> concatenated tensor
             multimodal_num_items = {}  # key -> list of item counts per sequence
