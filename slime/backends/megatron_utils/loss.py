@@ -546,7 +546,18 @@ def policy_loss_function(
             total_lengths, response_lengths, modified_response_masks, args.calculate_per_token_loss
         )
 
-    pg_loss = sum_of_sample_mean(pg_loss)
+    # Determine pg_loss reducer: use custom if specified, otherwise default
+    if getattr(args, "custom_pg_loss_reducer_function_path", None) is not None:
+        custom_pg_loss_reducer_func = load_function(args.custom_pg_loss_reducer_function_path)
+        # Determine which loss_masks to use for pg_loss reducer
+        pg_loss_masks = modified_response_masks if (args.get_mismatch_metrics or args.use_tis) else batch["loss_masks"]
+        pg_loss_reducer = custom_pg_loss_reducer_func(
+            total_lengths, response_lengths, pg_loss_masks, args.calculate_per_token_loss
+        )
+    else:
+        pg_loss_reducer = sum_of_sample_mean
+
+    pg_loss = pg_loss_reducer(pg_loss)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
     ppo_kl = sum_of_sample_mean(ppo_kl)
 
