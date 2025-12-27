@@ -89,12 +89,30 @@ def get_batch(
     tokens = tokens.unsqueeze(0)
     batch["tokens"] = tokens
     batch["packed_seq_params"] = packed_seq_params
-    # Process multimodal inputs if present
-    multimodal_inputs = batch.get("multimodal_inputs", None)
-    if multimodal_inputs is not None:
+
+    # loss masks
+    loss_masks = []
+    for loss_mask, total_length, response_length in zip(
+        batch["loss_masks"],
+        batch["total_lengths"],
+        batch["response_lengths"],
+        strict=True,
+    ):
+        prompt_length = total_length - response_length
+        loss_mask = F.pad(loss_mask, (prompt_length - 1, 1), value=0)
+        loss_mask = slice_with_cp(loss_mask, 0)
+        loss_masks.append(loss_mask)
+    loss_masks = torch.cat(loss_masks)
+    loss_masks = F.pad(loss_masks, (0, pad), value=0).unsqueeze(0)
+    assert loss_masks.shape == tokens.shape, f"loss_masks.shape: {loss_masks.shape}, tokens.shape: {tokens.shape}"
+    batch["full_loss_masks"] = loss_masks
+
+    # Process multimodal training tensors if present
+    multimodal_train_inputs = batch.get("multimodal_train_inputs", None)
+    if multimodal_train_inputs is not None:
         multimodal_data = {}  # key -> concatenated tensor
         multimodal_num_items = {}  # key -> list of item counts per sequence
-        for mm_input_dict in multimodal_inputs:
+        for mm_input_dict in multimodal_train_inputs:
             if mm_input_dict is not None:
                 for key, mm_tensor in mm_input_dict.items():
                     if key not in multimodal_data:
@@ -103,7 +121,7 @@ def get_batch(
                     else:
                         multimodal_data[key] = torch.cat([multimodal_data[key], mm_tensor], dim=0)
                         multimodal_num_items[key].append(mm_tensor.size(0))
-        batch["multimodal_inputs"] = multimodal_data
+        batch["multimodal_train_inputs"] = multimodal_data
         batch["multimodal_num_items"] = multimodal_num_items
 
     return batch
@@ -331,7 +349,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
         for key, val in rollout_data.items():
             if key in [
                 "tokens",
-                "multimodal_inputs",
+                "multimodal_train_inputs",
                 "loss_masks",
                 "sample_indices",
                 "rollout_routed_experts",

@@ -134,7 +134,11 @@ def get_log_probs_and_entropy(
         response_lengths=response_lengths,
     ):
         log_prob, entropy = calculate_log_probs_and_entropy(
-            logits_chunk, tokens_chunk, mpu.get_tensor_model_parallel_group(), with_entropy=with_entropy
+            logits_chunk,
+            tokens_chunk,
+            mpu.get_tensor_model_parallel_group(),
+            with_entropy=with_entropy,
+            chunk_size=args.log_probs_chunk_size,
         )
 
         log_probs_list.append(log_prob.squeeze(-1))

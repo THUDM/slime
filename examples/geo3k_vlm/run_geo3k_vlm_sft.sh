@@ -1,12 +1,3 @@
-#!/bin/bash
-
-# Qwen3 VL RL training on geo3k dataset
-# Supports both megatron and fsdp training backends
-# Usage: 
-#   SLIME_SCRIPT_TRAIN_BACKEND=fsdp ./run_geo3k_vlm.sh
-#   SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-2B-Instruct ./run_geo3k_vlm.sh
-
-# Configuration
 TRAIN_BACKEND=${SLIME_SCRIPT_TRAIN_BACKEND:-"megatron"}
 MODEL_NAME=${SLIME_SCRIPT_MODEL_NAME:-"Qwen3-VL-8B-Instruct"}
 DATASET_NAME=${SLIME_SCRIPT_DATASET_NAME:-"chenhegu/geo3k_imgurl"}
@@ -18,11 +9,11 @@ VALID_MODELS="
   Qwen3-VL-2B-Instruct
   Qwen3-VL-4B-Instruct
   Qwen3-VL-8B-Instruct
-  Qwen3-VL-30B-A3B-Instruct
-  Qwen3-VL-235B-A22B-Instruct
   Qwen3-VL-2B-Thinking
   Qwen3-VL-4B-Thinking
   Qwen3-VL-8B-Thinking
+  Qwen3-VL-30B-A3B-Instruct
+  Qwen3-VL-235B-A22B-Instruct
   Qwen3-VL-30B-A3B-Thinking
   Qwen3-VL-235B-A22B-Thinking
 "
@@ -80,90 +71,64 @@ fi
 # Common args
 CKPT_ARGS=(
    --hf-checkpoint /root/models/${MODEL_NAME}
+   --load /root/models/${MODEL_NAME}
 )
 
-ROLLOUT_ARGS=(
-   --prompt-data /root/datasets/${DATASET_LOCAL_NAME}/train.parquet
-   --input-key problem
-   --label-key answer
+SFT_ARGS=(
+   --rollout-function-path slime.rollout.sft_rollout.generate_rollout
+   --prompt-data /root/datasets/${DATASET_LOCAL_NAME}/train_formatted.parquet
+   --input-key messages
    --apply-chat-template
    --rollout-shuffle
-   --rm-type math
-   --num-rollout 3000
-   --rollout-batch-size 64
-   --n-samples-per-prompt 8
-   --rollout-max-response-len 4096
-   --rollout-temperature 0.8
-   --global-batch-size 512
+   --num-epoch 3000
+   --rollout-batch-size 128
+   --global-batch-size 128
+   
+   --loss-type sft_loss
+   --calculate-per-token-loss
+   --disable-compute-advantages-and-returns
+   --debug-train-only
 )
 
 # required for vlm datasets
 MULTIMODAL_KEYS='{"image": "images"}'
 
-EVAL_ARGS=(
-   --eval-interval 20
-   --eval-prompt-data ${DATASET_LOCAL_NAME} /root/datasets/${DATASET_LOCAL_NAME}/test.parquet
-   --n-samples-per-eval-prompt 1
-   --eval-max-response-len 4096
-)
-
-GRPO_ARGS=(
-   --advantage-estimator grpo
-   --kl-loss-coef 0.00
-   --kl-loss-type low_var_kl
-   --kl-coef 0.00
-   --entropy-coef 0.00
-   --eps-clip 0.2
-   --eps-clip-high 0.28
-)
 
 OPTIMIZER_ARGS=(
    --optimizer adam
-   --lr 1e-6
-   --lr-decay-style constant
+   --lr 1e-5
+   --lr-decay-style cosine
+   --min-lr 1e-6
+   --lr-warmup-fraction 0.1
    --weight-decay 0.1
    --adam-beta1 0.9
-   --adam-beta2 0.98
+   --adam-beta2 0.95
 )
 
-SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 1
-   --sglang-mem-fraction-static 0.6
-   --sglang-cuda-graph-bs 1 2 4 8 16 24 32 40 48 56 64 72 80 88 96 104 112 120 128 136 144 152 160 168 176 184 192 200 208 216 224 232 240 248 256
-)
-
-# Wandb args (only if WANDB_API_KEY is set)
 if [ -n "$WANDB_API_KEY" ]; then
-   WANDB_ARGS=(
-      --use-wandb
-      --wandb-project slime-geo3k-vlm
-      --wandb-group ${MODEL_NAME_LOWER}-${TRAIN_BACKEND}
-      --wandb-key ${WANDB_API_KEY}
-      --disable-wandb-random-suffix
-   )
+    WANDB_ARGS=(
+        --use-wandb
+        --wandb-project slime-geo3k-vlm-sft
+        --wandb-group ${MODEL_NAME_LOWER}-${TRAIN_BACKEND}
+        --wandb-key ${WANDB_API_KEY}
+        --disable-wandb-random-suffix
+    )
 else
-   WANDB_ARGS=()
+    WANDB_ARGS=()
 fi
-
-MISC_ARGS=(
-   --colocate
-)
 
 # Backend-specific args
 if [ "$TRAIN_BACKEND" = "fsdp" ]; then
-   BACKEND_ARGS=(
+    BACKEND_ARGS=(
       --train-backend fsdp
       --gradient-checkpointing
-      --sglang-attention-backend fa3
       --attn-implementation flash_attention_3
       --update-weight-buffer-size 536870912
-   )
-   MODEL_ARGS=()
+    )
 else
-   # megatron backend (default)
-   BACKEND_ARGS=(
+    # megatron backend (default)
+    BACKEND_ARGS=(
       --train-backend megatron
-      --load /root/models/${MODEL_NAME}
       --tensor-model-parallel-size 4
       --sequence-parallel
       --pipeline-model-parallel-size 1
@@ -181,14 +146,13 @@ else
       --attention-softmax-in-fp32
       --attention-backend flash
       --megatron-to-hf-mode bridge
-   )
-   
+    )
+
    # get MODEL_ARGS from scripts/models for megatron backend
    SLIME_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." &>/dev/null && pwd)"
    MODEL_ARGS_FILE=$(echo "$MODEL_NAME" | sed 's/-Instruct//g; s/-Thinking//g; s/Qwen3-VL-/qwen3-/g; s/-2B/-1.7B/g')
    # VL models require rotary-base 5000000
    MODEL_ARGS_ROTARY_BASE=5000000 source "${SLIME_DIR}/scripts/models/${MODEL_ARGS_FILE}.sh"
-   
 fi
 
 # Start Ray if not using external Ray
@@ -209,17 +173,14 @@ RUNTIME_ENV_JSON="{
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
-   -- python3 train.py \
+   -- python3 train_async.py \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node ${NUM_GPUS} \
    --multimodal-keys "${MULTIMODAL_KEYS}" \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
-   ${ROLLOUT_ARGS[@]} \
+   ${SFT_ARGS[@]} \
    ${EVAL_ARGS[@]} \
-   ${GRPO_ARGS[@]} \
    ${OPTIMIZER_ARGS[@]} \
-   ${SGLANG_ARGS[@]} \
    ${WANDB_ARGS[@]} \
-   ${BACKEND_ARGS[@]} \
-   ${MISC_ARGS[@]}
+   ${BACKEND_ARGS[@]}
