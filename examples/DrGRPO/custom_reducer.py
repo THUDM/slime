@@ -6,6 +6,7 @@ the number of effective tokens. This is useful for Dr.GRPO algorithm.
 Usage:
     --custom-pg-loss-reducer-function-path examples.Dr.GRPO.custom_reducer:get_pg_loss_reducer
 """
+
 from collections.abc import Callable
 
 import torch
@@ -44,6 +45,7 @@ def get_pg_loss_reducer(
     assert mpu.get_context_parallel_world_size() == 1, "This custom reducer only supports cp_size == 1"
 
     if calculate_per_token_loss:
+
         def sum_of_token(x: torch.Tensor) -> torch.Tensor:
             return sum(
                 [
@@ -51,6 +53,7 @@ def get_pg_loss_reducer(
                     for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
                 ]
             )
+
         return sum_of_token
 
     def sum_of_sample_mean(x: torch.Tensor) -> torch.Tensor:
@@ -60,4 +63,5 @@ def get_pg_loss_reducer(
                 for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
             ]
         )
+
     return sum_of_sample_mean
