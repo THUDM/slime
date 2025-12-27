@@ -356,7 +356,24 @@ async def reward_func(args, sample, **kwargs):
         raise TypeError("Sample must be an instance of Sample class.")
 
     # Build complete solution string
-    solution_str = sample.prompt + sample.response
+    # Handle prompt being either str or list[dict[str, str]] (when apply_chat_template is True)
+    if isinstance(sample.prompt, str):
+        prompt_str = sample.prompt
+    elif isinstance(sample.prompt, list):
+        # Apply chat template to convert list of messages to string
+        state = GenerateState(args)
+        tools = sample.metadata.get("tools") if sample.metadata else None
+        prompt_str = state.tokenizer.apply_chat_template(
+            sample.prompt,
+            tools=tools,
+            tokenize=False,
+            add_generation_prompt=False,  # Don't add generation prompt for reward calculation
+            **(args.apply_chat_template_kwargs or {}),
+        )
+    else:
+        raise TypeError(f"Unsupported prompt type: {type(sample.prompt)}, expected str or list[dict[str, str]]")
+    
+    solution_str = prompt_str + sample.response
 
     # Get ground truth answer - label is a string, not a dict
     ground_truth = sample.label if sample.label is not None else ""
