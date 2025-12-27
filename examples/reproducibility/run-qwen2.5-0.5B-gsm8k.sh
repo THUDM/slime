@@ -164,11 +164,19 @@ RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"PYTHONPATH\": \"/root/Megatron-LM\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"NCCL_ALGO\": \"Ring\",
     \"NVTE_ALLOW_NONDETERMINISTIC_ALGO\": \"0\",
-    \"CUBLAS_WORKSPACE_CONFIG\": \":4096:8\"
+    \"CUBLAS_WORKSPACE_CONFIG\": \":4096:8\",
+
+    \"NCCL_IB_DISABLE\": \"1\",
+    \"NCCL_NET\": \"Socket\",
+    \"NCCL_SOCKET_IFNAME\": \"eth0\",
+    \"NCCL_ASYNC_ERROR_HANDLING\": \"1\",
+    \"NCCL_BLOCKING_WAIT\": \"1\",
+    \"NCCL_DEBUG\": \"INFO\",
+    \"NCCL_DEBUG_SUBSYS\": \"INIT,NET\"
   }
 }"
+
 
 # Submit job:
 # - actor-num-gpus-per-node = 2  (training uses 2 GPUs)
