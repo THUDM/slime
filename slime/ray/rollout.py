@@ -274,8 +274,8 @@ class RolloutManager:
         if samples[0].train_metadata is not None:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
 
-        if samples[0].multimodal_tensor is not None:
-            train_data["multimodal_tensor"] = [sample.multimodal_tensor for sample in samples]
+        if samples[0].multimodal_train_inputs is not None:
+            train_data["multimodal_train_inputs"] = [sample.multimodal_train_inputs for sample in samples]
 
         if "teacher_log_probs" in samples[0].__dict__:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
@@ -308,7 +308,7 @@ class RolloutManager:
             rollout_data["partition"] = partition
             for key in [
                 "tokens",
-                "multimodal_tensor",
+                "multimodal_train_inputs",
                 "response_lengths",
                 "rewards",
                 "truncated",

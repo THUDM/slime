@@ -108,11 +108,11 @@ def get_batch(
     batch["full_loss_masks"] = loss_masks
 
     # Process multimodal tensors if present
-    multimodal_tensor = batch.get("multimodal_tensor", None)
-    if multimodal_tensor is not None:
+    multimodal_train_inputs = batch.get("multimodal_train_inputs", None)
+    if multimodal_train_inputs is not None:
         multimodal_data = {}  # key -> concatenated tensor
         multimodal_num_items = {}  # key -> list of item counts per sequence
-        for mm_input_dict in multimodal_tensor:
+        for mm_input_dict in multimodal_train_inputs:
             if mm_input_dict is not None:
                 for key, mm_tensor in mm_input_dict.items():
                     if key not in multimodal_data:
@@ -121,7 +121,7 @@ def get_batch(
                     else:
                         multimodal_data[key] = torch.cat([multimodal_data[key], mm_tensor], dim=0)
                         multimodal_num_items[key].append(mm_tensor.size(0))
-        batch["multimodal_tensor"] = multimodal_data
+        batch["multimodal_train_inputs"] = multimodal_data
         batch["multimodal_num_items"] = multimodal_num_items
 
     return batch
@@ -349,7 +349,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
         for key, val in rollout_data.items():
             if key in [
                 "tokens",
-                "multimodal_tensor",
+                "multimodal_train_inputs",
                 "loss_masks",
                 "sample_indices",
                 "rollout_routed_experts",
