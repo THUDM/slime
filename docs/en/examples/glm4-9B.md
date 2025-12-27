@@ -92,7 +92,7 @@ ROLLOUT_ARGS=(
    --input-key prompt
    --label-key label
    # If the `input_key` in the prompt contains an OpenAI message,
-   # tokenizer....) will be executed
+   # tokenizer.apply_chat_template(...) will be executed
    --apply-chat-template
    # Whether to shuffle the data
    --rollout-shuffle
