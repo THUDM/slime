@@ -1,0 +1,13 @@
+/outputs/
+
+# Local secrets (template is tracked)
+/tau2/.env
+
+# Python caches
+**/__pycache__/
+*.pyc
+
+# Logs / experiment trackers
+wandb/
+weave/
+*.log
