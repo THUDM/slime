@@ -111,6 +111,9 @@ class EvalDatasetConfig:
     top_p: float | None = None
     top_k: int | None = None
     max_response_len: int | None = None
+    stop: list[str] | None = None
+    stop_token_ids: list[int] | None = None
+    min_new_tokens: int | None = None
 
     metadata_overrides: dict[str, Any] = field(default_factory=dict)
 

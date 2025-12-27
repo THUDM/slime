@@ -14,7 +14,8 @@ class Sample:
     # prompt
     prompt: str | list[dict[str, str]] = ""
     tokens: list[int] = field(default_factory=list)
-    multimodal_inputs: dict[str, Any] = None
+    multimodal_inputs: dict[str, Any] = None  # raw multimodal data, e.g. images, videos, etc.
+    multimodal_train_inputs: dict[str, Any] = None  # processed multimodal data, e.g. pixel_values, etc.
     # response
     response: str = ""
     response_length: int = 0
@@ -31,6 +32,10 @@ class Sample:
         COMPLETED = "completed"
         TRUNCATED = "truncated"
         ABORTED = "aborted"
+        # Indicates a recoverable or non-critical failure during generation (e.g., tool call failure,
+        # external API error, parsing error). Unlike ABORTED, FAILED samples may still contain partial
+        # valid output and can be retried or handled gracefully.
+        FAILED = "failed"
 
     status: Status = Status.PENDING
 

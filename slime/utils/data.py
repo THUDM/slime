@@ -49,17 +49,16 @@ def _parse_generalized_path(s: str):
     return s, None
 
 
-def _should_skip_prompt(
-    prompt, tokenizer, processor, metadata, max_length, apply_chat_template, apply_chat_template_kwargs
-):
+def _should_skip_prompt(formatted_prompt: str, tokenizer, processor, max_length, multimodal_inputs=None):
     if max_length is None:
         return False
 
-    from slime.utils.processing_utils import prepare_model_inputs
+    if processor:
+        processor_output = processor(text=formatted_prompt, **multimodal_inputs)
+        input_ids = processor_output["input_ids"][0]
+    else:
+        input_ids = tokenizer.encode(formatted_prompt, add_special_tokens=False)
 
-    input_ids, _ = prepare_model_inputs(
-        prompt, tokenizer, processor, metadata, apply_chat_template, apply_chat_template_kwargs
-    )
     return len(input_ids) > max_length
 
 
@@ -140,6 +139,7 @@ class Dataset:
             prompt = _build_messages(data, prompt_key, as_conversation, multimodal_keys)
 
             metadata = data.get(metadata_key) or {}
+            tools = None
             if tool_key is not None and tool_key in data:
                 tools = data[tool_key]
                 if isinstance(tools, str):
@@ -149,17 +149,39 @@ class Dataset:
                 assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
                 metadata["tools"] = tools
 
+            if apply_chat_template:
+                formatted_prompt = tokenizer.apply_chat_template(
+                    prompt,
+                    tools=tools,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    **(apply_chat_template_kwargs or {}),
+                )
+            else:
+                formatted_prompt = prompt
+
+            if processor:
+                # temporary solution, will write image utils for slime later
+                from qwen_vl_utils import process_vision_info
+
+                assert isinstance(
+                    prompt, list
+                ), f"prompt must be a list when processor is not None, got {type(prompt)} instead"
+                images, videos = process_vision_info(prompt)
+                multimodal_inputs = {"images": images, "videos": videos}
+            else:
+                multimodal_inputs = None
+
             # TODO: this is slow.
-            if _should_skip_prompt(
-                prompt, tokenizer, processor, metadata, max_length, apply_chat_template, apply_chat_template_kwargs
-            ):
+            if _should_skip_prompt(formatted_prompt, tokenizer, processor, max_length, multimodal_inputs):
                 continue
 
             self.origin_samples.append(
                 Sample(
-                    prompt=prompt,
+                    prompt=formatted_prompt,
                     label=data[label_key] if label_key is not None else None,
                     metadata=metadata,
+                    multimodal_inputs=multimodal_inputs,
                 )
             )
 
