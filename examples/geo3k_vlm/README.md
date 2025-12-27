@@ -2,6 +2,10 @@
 
 Training VLMs with FSDP or Megatron on single-turn reasoning task using GRPO on the [GEO3K dataset](https://huggingface.co/datasets/hiyouga/geometry3k). We used processed version [here](https://huggingface.co/datasets/chenhegu/geo3k_imgurl).
 
+Supported models:
+* Qwen2.5-VL
+* Qwen3-VL (Dense and Moe)
+
 <p align="center">
   <img src="fsdp_vs_megatron.png" alt="FSDP vs Megatron Reward Plot" width="800">
 </p>
