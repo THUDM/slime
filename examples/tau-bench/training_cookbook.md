@@ -15,6 +15,7 @@ This cookbook shows you how we did it. Everything is open source: [training data
 export SLIME_ROOT="$(pwd)" TAU_BENCH_OUT_DIR="${SLIME_ROOT}/examples/tau-bench/outputs"
 git clone https://github.com/sierra-research/tau2-bench.git "${TAU_BENCH_OUT_DIR}/_external/tau2-bench"
 cd "${TAU_BENCH_OUT_DIR}/_external/tau2-bench" && git checkout 337326e && pip install -e . --no-deps && cd "${SLIME_ROOT}"
+export TAU2_DATA_DIR="${TAU_BENCH_OUT_DIR}/_external/tau2-bench/data"
 pip install gymnasium addict deepdiff fs langfuse plotly pydantic-argparse redis ruff scikit-learn seaborn tenacity watchdog "litellm==1.65.0"
 cp examples/tau-bench/tau2/.env.template examples/tau-bench/tau2/.env  # ADD OPENAI_API_KEY
 set -a && source examples/tau-bench/tau2/.env && set +a
@@ -32,6 +33,7 @@ python3 examples/tau-bench/tau2/eval.py \
   --hf-checkpoint Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
   --sglang-url http://127.0.0.1:30000/generate \
   --domains airline,retail,telecom --task-split test --num-samples 4 \
+  --temperature 0.8 --top-p 0.8 --top-k 20 \
   --output "${TAU_BENCH_OUT_DIR}/tau2/eval/eval_pass4.json"
 ```
 
@@ -149,7 +151,7 @@ set -a && source examples/tau-bench/tau2/.env && set +a
 
 **Dataset**: [tau2-sft-seed-v3](https://huggingface.co/datasets/Jarrodbarnes/tau2-sft-seed-v3) - Filtered trajectories from rejection sampling
 
-**Training logs**: [WandB project](https://wandb.ai/jbarnes850-near-protocol/tau2-cookbook) - Full metrics, training curves, sample outputs
+**Training logs**: [WandB project](https://wandb.ai/jbarnes850-near-protocol/tau2-cookbook) - Full metrics, training curves, sample outputs (public; login if you hit access issues)
 
 ## Methodology (why this works)
 
@@ -292,12 +294,19 @@ python3 examples/tau-bench/tau2/eval.py \
   --hf-checkpoint Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
   --sglang-url http://127.0.0.1:30000/generate \
   --domains airline,retail,telecom --task-split test --num-samples 4 \
+  --temperature 0.8 --top-p 0.8 --top-k 20 \
   --output "${TAU_BENCH_OUT_DIR}/tau2/eval/eval_pass4.json"
 ```
 
 This takes ~2 hours on 2×H100. Results: Pass@1 and Pass@4 metrics across all domains.
 
 The script outputs both Pass@1 and Pass@4. Results are stochastic but should match the table above within a few percentage points.
+
+To run without external API keys, start the local user simulator and set:
+```bash
+export TAU2_USER_API_BASE=http://127.0.0.1:30001/v1
+export TAU2_USER_MODEL=openai/Qwen/Qwen3-4B-Instruct-2507
+```
 
 ## Train from Scratch (Optional)
 
@@ -310,6 +319,8 @@ We publish the [SFT checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau
 huggingface-cli download Qwen/Qwen3-4B-Instruct-2507 --local-dir "${TAU_BENCH_OUT_DIR}/models/Qwen3-4B-Instruct-2507"
 mkdir -p "${TAU_BENCH_OUT_DIR}/tau2/data/sft1"
 huggingface-cli download Jarrodbarnes/tau2-sft-seed-v3 --local-dir "${TAU_BENCH_OUT_DIR}/tau2/data/sft1" --repo-type dataset
+export TAU2_SFT_DATA_DIR="${TAU_BENCH_OUT_DIR}/tau2/data/sft1"
+export SFT_DATA_JSONL="${TAU2_SFT_DATA_DIR}/tau2_sft_merged_v3_rft.jsonl"
 ```
 
 **2. Convert to Megatron format**:
@@ -327,6 +338,7 @@ Run supervised fine-tuning on the filtered RFT trajectories:
 ```bash
 bash examples/tau-bench/tau2/run_sft.sh
 ```
+For a smaller debug run, set `SFT_DATA_JSONL="${TAU2_SFT_DATA_DIR}/seed_sft_v3.jsonl"`.
 
 ### Stage 2: GRPO
 
@@ -337,15 +349,17 @@ python3 examples/tau-bench/tau2/tasks.py \
   --domains airline,retail,telecom --splits train
 ```
 
-**Start user simulator** (separate terminal, uses GPUs 2-3):
+**Start user simulator** (separate terminal, keep GPUs distinct from training):
 ```bash
-bash examples/tau-bench/tau2/start_user_sim_server.sh
+GPUS=2,3 bash examples/tau-bench/tau2/start_user_sim_server.sh
 ```
 
-**Run GRPO training**:
+**Run GRPO training** (example for 4 GPUs total):
 ```bash
-bash examples/tau-bench/tau2/run_grpo.sh
+CUDA_VISIBLE_DEVICES=0,1 NUM_GPUS=2 bash examples/tau-bench/tau2/run_grpo.sh
 ```
+
+Adjust `GPUS`, `CUDA_VISIBLE_DEVICES`, and `NUM_GPUS` for your machine to avoid overlap.
 
 Training takes ~2 hours on 8×H100s. [Reference logs](https://wandb.ai/jbarnes850-near-protocol/tau2-cookbook).
 

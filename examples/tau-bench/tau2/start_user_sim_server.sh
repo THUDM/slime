@@ -6,6 +6,7 @@ TAU_BENCH_OUT_DIR="${TAU_BENCH_OUT_DIR:-${SCRIPT_DIR}/../outputs}"
 
 MODEL_DIR="${MODEL_DIR:-${TAU_BENCH_OUT_DIR}/models/Qwen3-4B-Instruct-2507}"
 PORT="${PORT:-30001}"
+# Keep these GPUs separate from training CUDA_VISIBLE_DEVICES.
 GPUS="${GPUS:-2,3}"
 TP="${TP:-2}"
 MEM_FRACTION="${MEM_FRACTION:-0.85}"
@@ -22,4 +23,3 @@ CUDA_VISIBLE_DEVICES="${GPUS}" python3 -m sglang.launch_server \
   --port "${PORT}" \
   --tp "${TP}" \
   --mem-fraction-static "${MEM_FRACTION}"
-

@@ -22,7 +22,10 @@ MEGATRON_LM_DIR="${MEGATRON_LM_DIR:-/root/Megatron-LM}"
 HF_DIR="${HF_DIR:-${TAU_BENCH_OUT_DIR}/models/Qwen3-4B-Instruct-2507}"
 TORCH_DIST_DIR="${TORCH_DIST_DIR:-${TAU_BENCH_OUT_DIR}/models/Qwen3-4B-Instruct-2507_torch_dist}"
 TAU2_SFT_DATA_DIR="${TAU2_SFT_DATA_DIR:-${TAU_BENCH_OUT_DIR}/tau2/data/sft1}"
-SFT_DATA_JSONL="${SFT_DATA_JSONL:-${TAU2_SFT_DATA_DIR}/train.jsonl}"
+SFT_DATA_JSONL="${SFT_DATA_JSONL:-${TAU2_SFT_DATA_DIR}/tau2_sft_merged_v3_rft.jsonl}"
+if [ ! -f "${SFT_DATA_JSONL}" ] && [ -f "${TAU2_SFT_DATA_DIR}/seed_sft_v3.jsonl" ]; then
+  SFT_DATA_JSONL="${TAU2_SFT_DATA_DIR}/seed_sft_v3.jsonl"
+fi
 SAVE_DIR="${SAVE_DIR:-${TAU_BENCH_OUT_DIR}/tau2/checkpoints/Qwen3-4B-tau2-sft1}"
 
 NUM_GPUS="${NUM_GPUS:-4}"

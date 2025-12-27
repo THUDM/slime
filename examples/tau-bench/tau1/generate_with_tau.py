@@ -2,8 +2,11 @@
 
 import logging
 import os
+import time
+import uuid
 from typing import Any
 
+from episode_logger import EpisodeLogger
 from tau_bench.envs import get_env
 from tau_bench.types import RunConfig
 from trainable_agents import InteractionResult, Status, agent_factory
@@ -21,6 +24,7 @@ TAU_CONFIGS = {
     "model_provider": "auto_router",  # Unused, required
     "model": "qwen3-4b",  # Unused, required
     "user_model_provider": "gemini",
+    # "user_model_provider": "stub",
 }
 GEMINI_API_KEY = "NONE"
 os.environ["GEMINI_API_KEY"] = GEMINI_API_KEY
@@ -68,11 +72,33 @@ def res_to_sample(res: InteractionResult, task_index: int) -> Sample:
     return sample
 
 
+def _default_run_root() -> str:
+    return os.environ.get("TAU_RUN_DIR", os.path.join(os.getcwd(), "runs", "tau1"))
+
+
 async def generate(args: dict[str, Any], sample: Sample, sampling_params: dict) -> Sample:
     """Run a single tau-bench interaction trajectory."""
     assert not args.partial_rollout, "Partial rollout is not supported for tau-bench interactions."
 
     task_index = int(sample.prompt)
+    run_root = _default_run_root()
+    run_id = time.strftime("%Y%m%d_%H%M%S") + f"_{os.getpid()}_{uuid.uuid4().hex[:8]}"
+    episode_dir = os.path.join(run_root, run_id, f"task_{task_index:06d}")
+    os.makedirs(episode_dir, exist_ok=True)
+
+    run_meta = {
+        "run_id": run_id,
+        "task_index": task_index,
+        "tau_config": TAU_CONFIGS,
+        "sampling_params": {
+            k: sampling_params.get(k)
+            for k in ["temperature", "top_p", "top_k", "max_new_tokens"]
+            if k in sampling_params
+        },
+        "pid": os.getpid(),
+    }
+    ep_logger = EpisodeLogger(log_dir=episode_dir, run_meta=run_meta)
+
     logger.info(f"Starting agent-environment interaction for task {task_index}")
 
     env = get_env(
@@ -90,11 +116,20 @@ async def generate(args: dict[str, Any], sample: Sample, sampling_params: dict) 
         config=tau_config,
         rollout_args=args,
         sampling_params=sampling_params,
+        episode_logger=ep_logger,
     )
 
     interaction_result = await agent.asolve(env, agent.rollout_args, agent.sampling_params, task_index)
 
     result_sample = res_to_sample(interaction_result, task_index)
+
+    ep_logger.finalize(
+        {
+            "status": str(interaction_result.status),
+            "reward": interaction_result.reward,
+            "response_length": getattr(interaction_result, "response_length", None),
+        }
+    )
 
     logger.info(f"Finished agent-environment interaction for task {task_index}")
     return result_sample

@@ -11,6 +11,14 @@ from tau_bench.types import Action
 logger = logging.getLogger(__name__)
 
 
+def _parse_tools_compat(parse_tools_fn, response: str, tools_info, parser_type: str | None):
+    """Compatibility wrapper for parse_tools() across versions."""
+    try:
+        return parse_tools_fn(response, tools_info, parser_type)
+    except TypeError:
+        return parse_tools_fn(response, tools_info)
+
+
 @dataclass
 class OpenAIToolCall:
     """OpenAI format tool call structure"""
@@ -62,20 +70,30 @@ class OpenAICompatibleToolCallAdapter:
             Exception: Thrown when parsing fails
         """
         try:
-            # Use existing parser to parse tool calls
-            parsed = parse_tools(response, self.tools_info, self.parser_type)
+            parsed = _parse_tools_compat(parse_tools, response, self.tools_info, self.parser_type)
 
-            # Extract parsing results
-            normal_text = parsed["normal_text"]
-            calls = parsed["calls"]
+            if isinstance(parsed, dict):
+                normal_text = parsed.get("normal_text")
+                calls = parsed.get("calls")
+            elif isinstance(parsed, (list, tuple)) and len(parsed) >= 2:
+                normal_text, calls = parsed[0], parsed[1]
+            else:
+                raise TypeError(f"Unexpected parse_tools result: {type(parsed)}")
+
+            if not isinstance(normal_text, str):
+                normal_text = response
+            if not isinstance(calls, list):
+                calls = []
 
             # Convert to OpenAI format
             openai_message = self._convert_to_openai_message(normal_text, calls)
 
-            return {"openai_message": openai_message, "parsed_result": parsed, "success": True}
+            parsed_result = {"normal_text": normal_text, "calls": calls}
+
+            return {"openai_message": openai_message, "parsed_result": parsed_result, "success": True}
 
         except Exception as e:
-            logger.warning(f"Parsing failed with error: {str(e)}")
+            logger.warning(f"Parsing failed with error: {type(e).__name__}: {str(e)}")
             return {"openai_message": None, "parsed_result": None, "success": False, "error": str(e)}
 
     def _convert_to_openai_message(self, normal_text: str, calls: list[dict[str, Any]]) -> OpenAIAssistantMessage:
