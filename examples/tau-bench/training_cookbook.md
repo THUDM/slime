@@ -310,7 +310,7 @@ export TAU2_USER_MODEL=openai/Qwen/Qwen3-4B-Instruct-2507
 
 ## Train from Scratch (Optional)
 
-We publish the [SFT checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-sft1) and [GRPO checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-grpo-v1). To train from scratch:
+We publish the [SFT checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-sft1) and [GRPO checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-grpo-v1) (public; login only needed for uploads). To train from scratch:
 
 ### Prerequisites
 

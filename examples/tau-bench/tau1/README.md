@@ -69,3 +69,6 @@ bash examples/tau-bench/tau1/run_qwen3_4B.sh
 ## Known gotchas
 - If you use an OpenAI-compatible server (e.g., sglang), set `OPENAI_API_BASE` and run tau-bench with `--model-provider openai` (not `openai_like`).
 - For tau-bench CLI runs, use a slashless `--model` name (e.g., `Qwen3-4B-Instruct-2507`) to avoid log path errors.
+
+## Debugging and CI notes
+- For offline or CPU-only debugging, you can set `user_model_provider="stub"` in `generate_with_tau.py` to bypass external API calls while preserving episode logging.

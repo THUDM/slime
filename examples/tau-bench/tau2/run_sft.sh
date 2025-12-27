@@ -100,8 +100,9 @@ else
 fi
 
 export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
+RAY_DASHBOARD_HOST="${RAY_DASHBOARD_HOST:-127.0.0.1}"
 ray start --head --node-ip-address "${MASTER_ADDR}" --num-gpus "${NUM_GPUS}" \
-  --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+  --disable-usage-stats --dashboard-host="${RAY_DASHBOARD_HOST}" --dashboard-port=8265
 
 RUNTIME_ENV_JSON="{
   \"working_dir\": \"${REPO_ROOT}\",
