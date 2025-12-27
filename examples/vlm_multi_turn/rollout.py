@@ -18,8 +18,6 @@ from slime.utils.types import Sample
 DEFAULT_ENV_MODULE = "examples.vlm_multi_turn.env_sokoban"
 DEFAULT_ROLLOUT_CONFIG = {
     "max_turns": 20,
-    "max_total_tokens": 8192,
-    "stop_on_max_tokens": True,
 }
 
 
@@ -43,10 +41,6 @@ def _resolve_rollout_config(args: Any, env_module) -> dict[str, Any]:
     cfg = deepcopy(getattr(env_module, "DEFAULT_ROLLOUT_CONFIG", DEFAULT_ROLLOUT_CONFIG))
     if getattr(args, "max_turns", None):
         cfg["max_turns"] = args.max_turns
-    for key in ("max_total_tokens", "stop_on_max_tokens"):
-        val = getattr(args, key, None)
-        if val is not None:
-            cfg[key] = val
     return cfg
 
 
@@ -155,14 +149,9 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
     processor = state.processor
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
     sampling_params = sampling_params.copy()
-    stop_on_max_tokens = rollout_config["stop_on_max_tokens"]
-    max_total_tokens = rollout_config["max_total_tokens"]
-    max_context_len = getattr(args, "rollout_max_context_len", None)
-    token_budget = min(max_total_tokens, max_context_len) if max_context_len is not None else max_total_tokens
 
     sample.metadata = sample.metadata or {}
     max_turns = getattr(args, "max_turns", None) or rollout_config["max_turns"]
-    sample.rollout_response_length = sample.rollout_response_length or 0
     env = _build_env(env_module, sample, args)
     try:
         observation, reset_info = env.reset()
@@ -179,17 +168,23 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
             getattr(args, "apply_chat_template", False),
             args.apply_chat_template_kwargs,
         )
-        is_resume = bool(sample.tokens)
 
-        if is_resume:
-            max_new_tokens = sampling_params.get("max_new_tokens")
-            if max_new_tokens is not None:
-                if sample.rollout_response_length >= max_new_tokens:
-                    sample.status = Sample.Status.TRUNCATED
-                    return sample
-                sampling_params["max_new_tokens"] = max_new_tokens - sample.rollout_response_length
+        #sample.rollout_response_length is length of response produced by the actor,
+        #excluding initial prompt tokens and env feedback tokens.
+        sample.rollout_response_length = sample.rollout_response_length or 0
+        #check for resumed sample
+        if len(sample.response) > 0:
+             if "max_new_tokens" in sampling_params and sampling_params["max_new_tokens"] is not None:
+                sampling_params["max_new_tokens"] -= sample.rollout_response_length
+        
+        assert (
+            sampling_params["max_new_tokens"] >= 0
+        ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
+        if sampling_params["max_new_tokens"] == 0:
+            sample.status = Sample.Status.TRUNCATED
+            return sample
 
-        # Initialize token/logprob/loss tracking to be perfectly aligned with model inputs
+        # Initialize token/logprob/loss_mask tracking to be perfectly aligned with model inputs
         if not sample.tokens:
             sample.tokens = list(prompt_ids)
         response_tokens: list[int] = sample.tokens[len(prompt_ids) :] if len(sample.tokens) >= len(prompt_ids) else []
@@ -200,26 +195,9 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
         current_image_data = image_data
 
         generated_responses: list[str] = []
-        status: Sample.Status | None = None
 
         for turn_idx in range(max_turns):
-            remaining_budget = token_budget - len(sample.tokens)
-            if stop_on_max_tokens and remaining_budget <= 0:
-                status = Sample.Status.TRUNCATED
-                break
-
             cur_sampling_params = sampling_params.copy()
-            # Apply both remaining response budget and context budget
-            max_new_tokens = cur_sampling_params.get("max_new_tokens")
-            if remaining_budget > 0:
-                effective_max_new = max_new_tokens if max_new_tokens is not None else remaining_budget
-                cur_sampling_params["max_new_tokens"] = min(effective_max_new, remaining_budget)
-            elif stop_on_max_tokens:
-                status = Sample.Status.TRUNCATED
-                break
-            if cur_sampling_params.get("max_new_tokens", 0) <= 0:
-                status = Sample.Status.TRUNCATED
-                break
 
             payload = {
                 "input_ids": sample.tokens,
@@ -232,7 +210,6 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
 
             output = await post(url, payload)
 
-
             response_text = output["text"]
             if "output_token_logprobs" in output["meta_info"]:
                 new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
@@ -243,29 +220,31 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
 
             # Append assistant response tokens/logprobs/masks
             sample.tokens.extend(new_response_tokens)
-
             response_tokens.extend(new_response_tokens)
             sample.loss_mask.extend([1] * len(new_response_tokens))
             sample.rollout_log_probs.extend(new_response_log_probs)
             sample.rollout_response_length += len(new_response_tokens)
-            if "max_new_tokens" in sampling_params and sampling_params["max_new_tokens"] is not None:
-                sampling_params["max_new_tokens"] = max(0, sampling_params["max_new_tokens"] - len(new_response_tokens))
             sample.response_length = len(response_tokens)
 
             messages.append({"role": "assistant", "content": response_text})
             generated_responses.append(response_text)
 
+            if "max_new_tokens" in sampling_params and sampling_params["max_new_tokens"] is not None:
+                sampling_params["max_new_tokens"] -= len(new_response_tokens)
+            
+            assert (
+                sampling_params["max_new_tokens"] >= 0
+            ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
+            if sampling_params["max_new_tokens"] == 0:
+                sample.status = Sample.Status.TRUNCATED
+                return sample
 
             observation, done, step_info = env.step(response_text)
             step_record = {"turn": turn_idx, "info": step_info}
             sample.metadata.setdefault("trajectory", []).append(step_record)
 
             if done:
-                status = Sample.Status.COMPLETED
-                break
-
-            if stop_on_max_tokens and len(sample.tokens) >= token_budget:
-                status = Sample.Status.TRUNCATED
+                sample.status = Sample.Status.COMPLETED
                 break
 
             # Combine previous action text with the new observation image for the next user turn
@@ -287,9 +266,6 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
             if bos_id is not None and obs_prompt_ids and obs_prompt_ids[0] == bos_id:
                 obs_prompt_ids = obs_prompt_ids[1:]
 
-            if stop_on_max_tokens and len(sample.tokens) + len(obs_prompt_ids) > token_budget:
-                status = Sample.Status.TRUNCATED
-                break
             sample.tokens.extend(obs_prompt_ids)
             response_tokens.extend(obs_prompt_ids)
             sample.loss_mask.extend([0] * len(obs_prompt_ids))  # user/obs + next assistant prefix => masked
@@ -321,22 +297,18 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                 else:
                     sample.multimodal_inputs = obs_multimodal_inputs
 
-        
-            if sampling_params.get("max_new_tokens", None) is not None and sampling_params["max_new_tokens"] <= 0:
-                status = Sample.Status.TRUNCATED
-                break
             
             if turn_idx + 1 >= max_turns:
-                status = Sample.Status.TRUNCATED
+                sample.status = Sample.Status.TRUNCATED
                 break
             
             finish_type = output["meta_info"]["finish_reason"]["type"]
             match finish_type:
                 case "length":
-                    status = Sample.Status.TRUNCATED
+                    sample.status = Sample.Status.TRUNCATED
                     break
                 case "abort":
-                    status = Sample.Status.ABORTED
+                    sample.status = Sample.Status.ABORTED
                     break
 
         # Decode only the response segment (everything after the initial prompt)
@@ -351,10 +323,8 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
         sample.response_length = len(response_tokens)
         _merge_metadata(sample, metadata_updates)
 
-        if status is None:
-            status = Sample.Status.COMPLETED
-        sample.status = status
-
+        if sample.status is None:
+            sample.status = Sample.Status.COMPLETED
         return sample
     finally:
         try:
