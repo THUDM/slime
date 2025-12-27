@@ -133,13 +133,17 @@ CUSTOM_ARGS=(
   --custom-reward-post-process-path reward.tau2_reward_post_process
 )
 
-# WandB logging (enabled by default for cookbook reproducibility)
-WANDB_ARGS=(
-  --use-wandb
-  --wandb-project "tau2-cookbook"
-  --wandb-group "grpo-qwen3-4b"
-  --wandb-exp-name "tau2-grpo-v1"
-)
+if [ -n "${WANDB_API_KEY:-}" ]; then
+  WANDB_ARGS=(
+    --use-wandb
+    --wandb-project "tau2-cookbook"
+    --wandb-group "grpo-qwen3-4b"
+    --wandb-exp-name "tau2-grpo-v1"
+  )
+else
+  echo "NOTE: WANDB_API_KEY not set, running without WandB logging"
+  WANDB_ARGS=()
+fi
 
 export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 ray start --head --node-ip-address "${MASTER_ADDR}" --num-gpus "${NUM_GPUS}" \

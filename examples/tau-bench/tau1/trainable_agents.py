@@ -42,16 +42,40 @@ def call_to_action_sglang(calls: list[Any], text_response: str) -> Action:
     """
     # Default action if no action was found.
     action = Action(name=RESPOND_ACTION_NAME, kwargs={"content": text_response})
-    if calls:
-        if len(calls) > 1:
-            logger.debug("Multiple tool calls identified, only taking first.")
-        tool_call = calls[0]
-        params = json.loads(tool_call["parameters"])
-        if not isinstance(params, dict):
-            logger.warning(f"{params} does not follow dict structure for action")
+    if not calls:
+        return action
+    if len(calls) > 1:
+        logger.debug("Multiple tool calls identified, only taking first.")
+
+    tool_call = calls[0]
+    tool_name = tool_call.get("name")
+
+    raw_params = tool_call.get("parameters")
+    if raw_params is None:
+        raw_params = tool_call.get("arguments")
+
+    params: Any = {}
+    try:
+        if isinstance(raw_params, dict):
+            params = raw_params
+        elif isinstance(raw_params, str):
+            raw_params_str = raw_params.strip()
+            params = json.loads(raw_params_str) if raw_params_str else {}
         else:
-            action = Action(name=tool_call["name"], kwargs=params)
-    return action
+            params = {}
+    except Exception as exc:
+        logger.warning(f"Failed to parse tool params: {exc}; raw_params={raw_params!r}")
+        return action
+
+    if not isinstance(params, dict):
+        logger.warning(f"Tool params is not a dict: {params!r}")
+        return action
+
+    if not tool_name:
+        logger.warning(f"Tool call missing name: {tool_call!r}")
+        return action
+
+    return Action(name=tool_name, kwargs=params)
 
 
 TOOL_INSTRUCTION = (
@@ -201,6 +225,7 @@ class TrainableAgentMixin:
         # Initialize environment and state
         state = GenerateState(rollout_args)
         url = f"http://{rollout_args.sglang_router_ip}:" f"{rollout_args.sglang_router_port}/generate"
+        step_id = 0
 
         # Get initial environment state
         obs, info = self._initialize_environment(env, task_index)
@@ -210,12 +235,13 @@ class TrainableAgentMixin:
         prompt_text, prompt_token_ids = self._prepare_prompt_tokens(state, messages)
 
         # Initialize tracking variables
-        loss_masks = []
-        response_token_ids = []
+        loss_masks: list[int] = []
+        response_token_ids: list[int] = []
         total_reward = 0.0
 
         # Initialize result
         res = InteractionResult(prompt=prompt_text, reward=0, messages=[], info={})
+        env_response = None
 
         # Multi-turn interaction loop
         for _ in range(max_num_steps):
@@ -229,44 +255,97 @@ class TrainableAgentMixin:
 
             # Send request to sglang server
             output = await self._call_llm(url, payload)
+            finish_reason = output.get("meta_info", {}).get("finish_reason", {})
+            finish_type = finish_reason.get("type")
 
             # Check for abort
-            if output["meta_info"]["finish_reason"]["type"] == "abort":
+            if finish_type == "abort":
+                if getattr(self, "episode_logger", None):
+                    self.episode_logger.log_step(
+                        {
+                            "step_id": step_id,
+                            "phase": "llm_output",
+                            "finish_type": finish_type,
+                            "assistant_raw": output.get("text", ""),
+                            "messages_len": len(messages),
+                        }
+                    )
                 res.status = Status.ABORTED
                 return self._build_final_result(
                     res, total_reward, info, messages, loss_masks, prompt_token_ids, response_token_ids
                 )
 
-            response = output["text"]
+            raw_response = output.get("text", "")
+            response = raw_response
             # Remove end of conversation token if present
             if response.endswith("<|im_end|>"):
                 response = response[:-10]
 
+            if getattr(self, "episode_logger", None):
+                self.episode_logger.log_step(
+                    {
+                        "step_id": step_id,
+                        "phase": "llm_output",
+                        "finish_type": finish_type,
+                        "assistant_raw": raw_response,
+                        "assistant": response,
+                        "text_input_chars": len(text_input) if isinstance(text_input, str) else None,
+                        "messages_len": len(messages),
+                    }
+                )
+
             # Parse tool calls using OpenAI adapter
-            logger.debug(f"Using OpenAI adapter to parse response: {response[:100]}...")
             try:
                 openai_result = self._parse_tool(response)
-                logger.debug(f"OpenAI adapter result: success={openai_result['success']}")
+                parse_ok = bool(openai_result.get("success", False))
 
-                if not openai_result["success"]:
-                    logger.warning(f"OpenAI adapter failed: {openai_result['error']}")
-                    logger.warning(
-                        f"rollout response: {response} can not be parsed into " f"tool calls {openai_result['error']}"
-                    )
+                if not parse_ok:
+                    if getattr(self, "episode_logger", None):
+                        self.episode_logger.log_step(
+                            {
+                                "step_id": step_id,
+                                "phase": "tool_parse",
+                                "tool_parse_ok": False,
+                                "tool_parse_error": openai_result.get("error"),
+                                "assistant": response,
+                            }
+                        )
                     res.status = Status.ABORTED
                     return self._build_final_result(
                         res, total_reward, info, messages, loss_masks, prompt_token_ids, response_token_ids
                     )
 
-                # Extract parsed results
-                parsed = openai_result["parsed_result"]
+                parsed = openai_result.get("parsed_result") or {}
+                if getattr(self, "episode_logger", None):
+                    self.episode_logger.log_step(
+                        {
+                            "step_id": step_id,
+                            "phase": "tool_parse",
+                            "tool_parse_ok": True,
+                            "normal_text": parsed.get("normal_text"),
+                            "tool_calls": parsed.get("calls"),
+                        }
+                    )
+
                 logger.debug(
-                    f"Successfully parsed - normal_text: '{parsed['normal_text']}', " f"calls: {parsed['calls']}"
+                    "Successfully parsed - normal_text=%r calls=%r",
+                    parsed.get("normal_text"),
+                    parsed.get("calls"),
                 )
 
             except Exception as e:
                 logger.warning(f"Exception in OpenAI adapter: {e}")
-                logger.warning(f"rollout response: {response} can not be parsed into " f"tool calls {e}")
+                logger.warning("rollout response: can not be parsed into tool calls")
+                if getattr(self, "episode_logger", None):
+                    self.episode_logger.log_step(
+                        {
+                            "step_id": step_id,
+                            "phase": "tool_parse",
+                            "tool_parse_ok": False,
+                            "tool_parse_error": repr(e),
+                            "assistant_raw": response,
+                        }
+                    )
                 res.status = Status.ABORTED
                 return self._build_final_result(
                     res, total_reward, info, messages, loss_masks, prompt_token_ids, response_token_ids
@@ -280,33 +359,50 @@ class TrainableAgentMixin:
 
             # Execute action in environment
             agent_content, calls = parsed["normal_text"], parsed["calls"]
-            logger.debug(f"Creating action from - content: '{agent_content}', " f"calls: {calls}")
             action = call_to_action_sglang(calls, agent_content)
-            logger.debug(f"Created action: {action}")
 
             try:
                 env_response = await self._execute_tool(env, action)
+                if getattr(self, "episode_logger", None):
+                    info_dict = None
+                    try:
+                        info_dict = env_response.info.model_dump()
+                    except Exception:
+                        info_dict = None
+                    self.episode_logger.log_step(
+                        {
+                            "step_id": step_id,
+                            "phase": "env_step",
+                            "env_step_ok": True,
+                            "action_name": action.name,
+                            "action_kwargs": getattr(action, "kwargs", None),
+                            "reward": env_response.reward,
+                            "done": env_response.done,
+                            "observation": env_response.observation,
+                            "info_keys": list(info_dict.keys()) if isinstance(info_dict, dict) else None,
+                        }
+                    )
             except Exception as e:
-                logger.warning("Environment step failed, this is usually related to " "the User simulation call.")
-                logger.warning(f"Error: {e}")
+                if getattr(self, "episode_logger", None):
+                    self.episode_logger.log_step(
+                        {
+                            "step_id": step_id,
+                            "phase": "env_step",
+                            "env_step_ok": False,
+                            "error": repr(e),
+                            "action_name": action.name,
+                            "action_kwargs": getattr(action, "kwargs", None),
+                        }
+                    )
                 res.status = Status.ABORTED
                 return self._build_final_result(
                     res, total_reward, info, messages, loss_masks, prompt_token_ids, response_token_ids
                 )
 
-            logger.debug(f"Environment response: reward={env_response.reward}, " f"done={env_response.done}")
-
             # Update message history based on action type
             if action.name != RESPOND_ACTION_NAME:
-                messages.append(
-                    {
-                        "role": "tool",
-                        "name": action.name,
-                        "content": env_response.observation,
-                    }
-                )
+                messages.append({"role": "tool", "name": action.name, "content": env_response.observation})
             else:
-                # Direct response from user
                 messages.append({"role": "user", "content": env_response.observation})
 
             # Update token tracking
@@ -321,10 +417,15 @@ class TrainableAgentMixin:
             # Check if done
             if env_response.done:
                 res.status = Status.COMPLETED
+                step_id += 1
                 break
 
+            step_id += 1
+
         # Handle truncation
-        if not env_response.done:
+        if env_response is None:
+            res.status = Status.ABORTED
+        elif not env_response.done:
             res.status = Status.TRUNCATED
 
         return self._build_final_result(
@@ -427,6 +528,7 @@ class TrainableToolCallingAgent(ToolCallingAgent, TrainableAgentMixin):
         temperature: float = 0.0,
         rollout_args: dict[str, Any] | None = None,
         sampling_params: dict[str, Any] | None = None,
+        episode_logger=None,
     ):
         # Initialize the parent ToolCallingAgent
         super().__init__(
@@ -451,6 +553,7 @@ class TrainableToolCallingAgent(ToolCallingAgent, TrainableAgentMixin):
         }
         # Initialize OpenAI adapter
         self.openai_adapter = create_openai_adapter(tools_info=self.tools_info, parser_type="qwen25")
+        self.episode_logger = episode_logger
 
 
 def agent_factory(
@@ -459,6 +562,7 @@ def agent_factory(
     config: RunConfig,
     rollout_args: dict[str, Any] | None = None,
     sampling_params: dict[str, Any] | None = None,
+    episode_logger=None,
 ) -> Agent:
     if config.agent_strategy == "tool-calling":
         return TrainableToolCallingAgent(
@@ -469,6 +573,7 @@ def agent_factory(
             temperature=config.temperature,
             rollout_args=rollout_args,
             sampling_params=sampling_params,
+            episode_logger=episode_logger,
         )
     else:
         raise NotImplementedError(f"Unsupported agent strategy: {config.agent_strategy}")
