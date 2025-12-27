@@ -299,7 +299,7 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
 
             
             if turn_idx + 1 >= max_turns:
-                sample.status = Sample.Status.TRUNCATED
+                sample.status = Sample.Status.COMPLETED
                 break
             
             finish_type = output["meta_info"]["finish_reason"]["type"]
