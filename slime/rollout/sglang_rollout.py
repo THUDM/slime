@@ -98,6 +98,9 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if state.processor:
         processor_output = state.processor(text=sample.prompt, **sample.multimodal_inputs)
         prompt_ids = processor_output["input_ids"][0]
+        sample.multimodal_train_inputs = {
+            k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]
+        } or None
     else:
         prompt_ids = state.tokenizer.encode(sample.prompt, add_special_tokens=False)
 

@@ -26,7 +26,7 @@ def load_processor(name_or_path: str, **kwargs):
 
 
 def encode_image_for_rollout_engine(image) -> str:
-    """Load an image from path, ensure RGB, encode as JPEG base64 string."""
+    """Load an image from path, ensure RGB, encode as PNG base64 string."""
     buffer = io.BytesIO()
     if image.mode != "RGB":
         image = image.convert("RGB")

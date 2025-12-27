@@ -20,7 +20,6 @@ from slime.utils.logging_utils import configure_logger
 from slime.utils.metric_checker import MetricChecker
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from slime.utils.misc import load_function
-from slime.utils.processing_utils import load_processor
 from slime.utils.ray_utils import Box
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.tracking_utils import init_tracking
@@ -78,7 +77,6 @@ class RolloutManager:
         self._metric_checker = MetricChecker.maybe_create(args)
         if self.args.use_fault_tolerance:
             self._health_monitor = RolloutHealthMonitor(self, args)
-        self.processor = None
 
     def dispose(self):
         if self._metric_checker is not None:
@@ -276,18 +274,8 @@ class RolloutManager:
         if samples[0].train_metadata is not None:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
 
-        if samples[0].multimodal_inputs is not None:
-            if self.processor is None:
-                self.processor = load_processor(self.args.hf_checkpoint, trust_remote_code=True)
-            train_data["multimodal_inputs"] = []
-            for sample in samples:
-                # Get input IDs with full prompt (text + multimodal)
-                processor_output = self.processor(text=sample.prompt, **sample.multimodal_inputs)
-
-                # Extract multimodal tokens (exclude text-related tokens)
-                train_data["multimodal_inputs"].append(
-                    {k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]}
-                )
+        if samples[0].multimodal_train_inputs is not None:
+            train_data["multimodal_train_inputs"] = [sample.multimodal_train_inputs for sample in samples]
 
         if "teacher_log_probs" in samples[0].__dict__:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
@@ -320,7 +308,7 @@ class RolloutManager:
             rollout_data["partition"] = partition
             for key in [
                 "tokens",
-                "multimodal_inputs",
+                "multimodal_train_inputs",
                 "response_lengths",
                 "rewards",
                 "truncated",
