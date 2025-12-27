@@ -40,13 +40,6 @@ export PYTHONBUFFERED=16
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 export MASTER_ADDR="${MASTER_ADDR:-127.0.0.1}"
 
-# Optional: make NCCL logs cleaner
-export NCCL_DEBUG="${NCCL_DEBUG:-WARN}"
-
-# (Optional) NVLink detection for NCCL NVLS; safe to keep
-NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l || true)
-if [ "${NVLINK_COUNT}" -gt 0 ]; then HAS_NVLINK=1; else HAS_NVLINK=0; fi
-echo "HAS_NVLINK: ${HAS_NVLINK} (detected ${NVLINK_COUNT} NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 # qwen2.5-0.5B model spec args
