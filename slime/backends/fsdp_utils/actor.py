@@ -21,6 +21,7 @@ from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.metric_utils import compute_rollout_step
 from slime.utils.misc import load_function
 from slime.utils.ppo_utils import (
+    build_opsm_inputs_from_log_probs,
     compute_approx_kl,
     compute_gspo_kl,
     compute_opsm_mask,
@@ -633,12 +634,15 @@ class FSDPTrainRayActor(TrainRayActor):
         ppo_kl = old_log_probs - log_probs
 
         if self.args.use_opsm:
-            opsm_mask, opsm_clipfrac = compute_opsm_mask(
-                args=self.args,
+            opsm_inputs = build_opsm_inputs_from_log_probs(
                 full_log_probs=[batch["cur_log_probs"] for batch in unpacked_batches],
                 full_old_log_probs=[batch[old_log_prob_key] for batch in unpacked_batches],
-                advantages=[batch["advantages"] for batch in unpacked_batches],
                 loss_masks=loss_masks,
+            )
+            opsm_mask, opsm_clipfrac = compute_opsm_mask(
+                args=self.args,
+                advantages=[batch["advantages"] for batch in unpacked_batches],
+                opsm_inputs=opsm_inputs,
             )
 
         if self.args.advantage_estimator == "gspo":
@@ -1058,7 +1062,7 @@ def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks:
     return sum(
         [
             (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)
-            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
+            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=True)
         ]
     )
 
@@ -1137,6 +1141,6 @@ def sum_of_token(x: torch.Tensor, response_lengths: list[int], loss_masks: list[
     return sum(
         [
             (x_i * loss_mask_i).sum()
-            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
+            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=True)
         ]
     )
