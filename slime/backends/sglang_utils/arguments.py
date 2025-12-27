@@ -1,7 +1,6 @@
+import sglang
 from packaging.version import parse
 from sglang.srt.server_args import ServerArgs
-
-import sglang
 from slime.utils.http_utils import _wrap_ipv6
 
 
