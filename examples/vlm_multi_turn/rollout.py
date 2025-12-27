@@ -39,7 +39,7 @@ def _load_env_module(env_path: str | None):
 def _resolve_rollout_config(args: Any, env_module) -> dict[str, Any]:
     """Combine rollout defaults with optional overrides from args."""
     cfg = deepcopy(getattr(env_module, "DEFAULT_ROLLOUT_CONFIG", DEFAULT_ROLLOUT_CONFIG))
-    if getattr(args, "max_turns", None):
+    if getattr(args, "max_turns", None) is not None:
         cfg["max_turns"] = args.max_turns
     return cfg
 
@@ -151,7 +151,7 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
     sampling_params = sampling_params.copy()
 
     sample.metadata = sample.metadata or {}
-    max_turns = getattr(args, "max_turns", None) or rollout_config["max_turns"]
+    max_turns = rollout_config["max_turns"]
     env = _build_env(env_module, sample, args)
     try:
         observation, reset_info = env.reset()
