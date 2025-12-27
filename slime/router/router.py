@@ -18,7 +18,7 @@ def run_router(args):
     Run the Slime router with the specified configuration.
     """
     # Initialize the router with tokenizer and lazy worker initialization
-    slime_router = SlimeRouter(args, verbose=args.verbose)
+    slime_router = SlimeRouter(args, verbose=False)
 
     # Start the server
     uvicorn.run(slime_router.app, host=args.sglang_router_ip, port=args.sglang_router_port, log_level="info")
@@ -237,7 +237,7 @@ class SlimeRouter:
 
         return result
 
-    def _use_url(self):
+    async def _use_url(self):
         """Select a worker URL using round-robin strategy"""
         assert len(self.worker_urls) > 0, "No workers available"
 
