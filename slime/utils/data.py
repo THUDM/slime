@@ -1,3 +1,4 @@
+import itertools
 import json
 import logging
 import os
@@ -5,8 +6,12 @@ import random
 import re
 
 import numpy as np
-import pandas as pd
 import ray
+
+try:
+    import pyarrow.parquet as pq
+except ImportError:
+    pq = None
 
 from slime.utils.types import MultimodalTypes, Sample
 
@@ -17,26 +22,50 @@ __all__ = ["Dataset"]
 logger = logging.getLogger(__name__)
 
 
-# TODO: don't read the whole file into memory.
 def read_file(path):
     path, row_slice = _parse_generalized_path(path)
+    reader = None
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"Prompt dataset path '{path}' does not exist.")
 
     if path.endswith(".jsonl"):
-        df = pd.read_json(path, lines=True, dtype={"label": str})
+
+        def jsonl_reader(p):
+            with open(p, encoding="utf-8") as f:
+                for line_num, line in enumerate(f):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError as e:
+                        print(f"JSON decode error at line {line_num}: {e}")
+                        continue
+
+        reader = jsonl_reader(path)
+
     elif path.endswith(".parquet"):
-        df = pd.read_parquet(path, dtype_backend="pyarrow")
+        if pq is None:
+            raise ImportError("pyarrow is required for parquet support")
+
+        def parquet_reader(p):
+            pf = pq.ParquetFile(p)
+
+            for batch in pf.iter_batches():
+                yield from batch.to_pylist()
+
+        reader = parquet_reader(path)
+
     else:
         raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
 
     if row_slice is not None:
-        logger.info(f"read_file path={path} slice {len(df)=} rows into {row_slice=}")
-        df = df.iloc[row_slice]
 
-    for _, row in df.iterrows():
-        yield row.to_dict()
+        logger.info("read_file path=%s applying slice row_slice=%s", path, row_slice)
+        reader = itertools.islice(reader, row_slice.start, row_slice.stop, row_slice.step)
+
+    yield from reader
 
 
 def _parse_generalized_path(s: str):
