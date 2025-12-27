@@ -464,7 +464,9 @@ class FSDPTrainRayActor(TrainRayActor):
                         rollout_data["rollout_log_probs"][start:end] if "rollout_log_probs" in rollout_data else None
                     ),
                     multimodal_train_inputs=(
-                        rollout_data["multimodal_train_inputs"][start:end] if "multimodal_train_inputs" in rollout_data else None
+                        rollout_data["multimodal_train_inputs"][start:end]
+                        if "multimodal_train_inputs" in rollout_data
+                        else None
                     ),
                     num_packs=mbs_size,
                 )
