@@ -6,20 +6,43 @@ def calculate_lm_head_flops(seqlen, hidden_size, vocab_size):
     return 2 * seqlen * hidden_size * vocab_size
 
 
-def calculate_qkv_projection_flops(seqlen, hidden_size, num_attention_heads, num_query_groups):
-    head_dim = hidden_size // num_attention_heads
-    n_q_heads = num_attention_heads
-    n_kv_heads = num_query_groups
-    q_flops = 2 * seqlen * hidden_size * n_q_heads * head_dim
-    kv_flops = 2 * seqlen * hidden_size * n_kv_heads * head_dim * 2
+def calculate_qkv_projection_flops(args, seqlen, hidden_size, num_attention_heads, num_query_groups):
+    if args.q_lora_rank is None:
+        q_flops = 2 * seqlen * hidden_size * num_attention_heads * args.kv_channels
+    else:
+        q_flops = (
+            2
+            * seqlen
+            * args.q_lora_rank
+            * (args.hidden_size + args.num_attention_heads * (args.qk_head_dim + args.qk_pos_emb_head_dim))
+        )
+    if args.kv_lora_rank is None:
+        kv_flops = 2 * 2 * seqlen * hidden_size * num_query_groups * args.kv_channels
+    else:
+        kv_flops = (
+            2
+            * seqlen
+            * (
+                args.kv_lora_rank
+                * (args.hidden_size + args.num_attention_heads * (args.qk_head_dim + args.v_head_dim))
+                + args.hidden_size * args.qk_pos_emb_head_dim
+            )
+        )
+
     return q_flops + kv_flops
 
 
-def calculate_attention_flops(seqlen, num_attention_heads, head_dim):
+def calculate_attention_flops(args, seqlen, num_attention_heads):
     # QK^T with causal
-    flops = 2 * num_attention_heads * seqlen * seqlen * head_dim // 2
+    if args.qk_pos_emb_head_dim:
+        flops = 2 * num_attention_heads * seqlen * seqlen * (args.qk_head_dim + args.qk_pos_emb_head_dim) / 2
+    else:
+        flops = 2 * num_attention_heads * seqlen * seqlen * args.kv_channels / 2
     # A*V
-    flops += 2 * num_attention_heads * seqlen * seqlen * head_dim
+    if args.v_head_dim:
+        flops += num_attention_heads * seqlen * seqlen * args.v_head_dim
+    else:
+        flops += num_attention_heads * seqlen * seqlen * args.kv_channels
     return flops
 
 
@@ -31,12 +54,10 @@ def calculate_mlp_flops(seqlen, hidden_size, ffn_hidden_size):
     return 2 * seqlen * hidden_size * ffn_hidden_size * 3
 
 
-def calculate_layer_flops(seqlen, hidden_size, num_attention_heads, num_query_groups, ffn_hidden_size, head_dim):
-    if head_dim is None:
-        head_dim = hidden_size // num_attention_heads
+def calculate_layer_flops(args, seqlen, hidden_size, num_attention_heads, num_query_groups, ffn_hidden_size):
     return (
-        calculate_qkv_projection_flops(seqlen, hidden_size, num_attention_heads, num_query_groups)
-        + calculate_attention_flops(seqlen, num_attention_heads, head_dim)
+        calculate_qkv_projection_flops(args, seqlen, hidden_size, num_attention_heads, num_query_groups)
+        + calculate_attention_flops(args, seqlen, num_attention_heads)
         + calculate_output_flops(seqlen, hidden_size)
         + calculate_mlp_flops(seqlen, hidden_size, ffn_hidden_size)
     )
@@ -50,7 +71,6 @@ def calculate_fwd_flops(
     num_attention_heads = args.num_attention_heads
     num_query_groups = args.num_query_groups
     vocab_size = args.vocab_size
-    kv_channels = args.kv_channels
 
     total_flops = 0
 
@@ -79,12 +99,12 @@ def calculate_fwd_flops(
         if num_dense_layers > 0:
             total_flops += (
                 calculate_layer_flops(
+                    args,
                     seqlen,
                     hidden_size,
                     num_attention_heads,
                     num_query_groups,
                     dense_ffn,
-                    kv_channels,
                 )
                 * num_dense_layers
             )
@@ -92,12 +112,12 @@ def calculate_fwd_flops(
         if num_moe_layers > 0:
             total_flops += (
                 calculate_layer_flops(
+                    args,
                     seqlen,
                     hidden_size,
                     num_attention_heads,
                     num_query_groups,
                     moe_ffn,
-                    kv_channels,
                 )
                 * num_moe_layers
             )

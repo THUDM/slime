@@ -56,6 +56,11 @@ class RolloutManager:
         self.custom_reward_post_process_func = None
         if self.args.custom_reward_post_process_path is not None:
             self.custom_reward_post_process_func = load_function(self.args.custom_reward_post_process_path)
+        self.custom_convert_samples_to_train_data_func = None
+        if self.args.custom_convert_samples_to_train_data_path is not None:
+            self.custom_convert_samples_to_train_data_func = load_function(
+                self.args.custom_convert_samples_to_train_data_path
+            )
         logger.info(f"import {self.args.rollout_function_path} as generate_rollout function.")
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
@@ -216,6 +221,9 @@ class RolloutManager:
         """
         Convert inference generated samples to training data.
         """
+        if self.custom_convert_samples_to_train_data_func is not None:
+            return self.custom_convert_samples_to_train_data_func(self.args, samples)
+
         raw_rewards, rewards = self._post_process_rewards(samples)
 
         assert len(raw_rewards) == len(samples)
@@ -266,8 +274,8 @@ class RolloutManager:
         if samples[0].train_metadata is not None:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
 
-        if samples[0].multimodal_inputs is not None:
-            train_data["multimodal_inputs"] = [sample.multimodal_inputs for sample in samples]
+        if samples[0].multimodal_train_inputs is not None:
+            train_data["multimodal_train_inputs"] = [sample.multimodal_train_inputs for sample in samples]
 
         if "teacher_log_probs" in samples[0].__dict__:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
@@ -300,7 +308,7 @@ class RolloutManager:
             rollout_data["partition"] = partition
             for key in [
                 "tokens",
-                "multimodal_inputs",
+                "multimodal_train_inputs",
                 "response_lengths",
                 "rewards",
                 "truncated",
