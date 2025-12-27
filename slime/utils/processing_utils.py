@@ -30,6 +30,20 @@ def load_processor(name_or_path: str, **kwargs):
     return proc
 
 
+def process_vision_info(prompt, processor):
+    # temporary solution, will write image utils for slime later
+    from qwen_vl_utils import process_vision_info
+
+    if hasattr(processor.image_processor, "patch_size"):
+        image_patch_size = processor.image_processor.patch_size
+    else:
+        logger.info(f"Using default patch size: {DEFAULT_PATCH_SIZE}")
+        image_patch_size = DEFAULT_PATCH_SIZE
+    images, videos = process_vision_info(prompt, image_patch_size)
+    multimodal_inputs = {"images": images, "videos": videos}
+    return multimodal_inputs
+
+
 def encode_image_for_rollout_engine(image) -> str:
     """Load an image from path, ensure RGB, encode as PNG base64 string."""
     buffer = io.BytesIO()
