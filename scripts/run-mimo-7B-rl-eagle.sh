@@ -111,8 +111,8 @@ SGLANG_ARGS=(
    # for speculative decoding
    --sglang-speculative-algorithm EAGLE
    --sglang-speculative-num-steps 3
-   --sglang-speculative-eagle-topk 1
-   --sglang-speculative-num-draft-tokens 4
+   --sglang-speculative-eagle-topk 2
+   --sglang-speculative-num-draft-tokens 5
 
    # sometimes flashinfer has IMA bugs. Use fa3 as instead
    --sglang-attention-backend fa3
