@@ -108,7 +108,7 @@ DATA_DIR=/root \
 bash scripts/run-qwen3-4B-amd.sh
 ``` 
 
-⚠️ TODO: ROCM seems to not support `apex` yet. Thus, we need to disable gradient accumulation fusionby adding the `--no-gradient-accumulation-fusion` flag in the training script currently. We will continue investigating how to enable this.
+⚠️ TODO: ROCM seems to not support `apex` yet. Thus, we need to disable gradient accumulation fusion by adding the `--no-gradient-accumulation-fusion` flag in the training script currently. We will continue investigating how to enable this.
 
 ⚠️ Note: The main difference between ROCm's training script and NVIDIA's script is that you need to set `RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES` and `HIP_VISIBLE_DEVICES` for ray to function properly on AMD GPUs.
 
