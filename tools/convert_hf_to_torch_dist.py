@@ -8,12 +8,14 @@ from megatron.core.enums import ModelType
 from megatron.training.arguments import parse_args, validate_args
 from megatron.training.checkpointing import get_checkpoint_name, get_checkpoint_tracker_filename, save_checkpoint
 from megatron.training.training import get_model
+from transformers import AutoConfig
 
 import slime_plugins.mbridge  # noqa: F401
 from mbridge import AutoBridge
 from slime.backends.megatron_utils.arguments import set_default_megatron_args
 from slime.backends.megatron_utils.initialize import init
 from slime.backends.megatron_utils.model_provider import get_model_provider_func
+from slime.utils.arguments import hf_validate_args
 from slime.utils.logging_utils import configure_logger
 from slime.utils.memory_utils import print_memory
 
@@ -105,6 +107,11 @@ def main():
         device_id=torch.device(f"cuda:{local_rank}"),
     )
     args = get_args()
+
+    # Validate HuggingFace config matches script config to catch misconfigurations early
+    hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
+    hf_validate_args(args, hf_config)
+
     init(args)
     model = get_model(get_model_provider_func(args), ModelType.encoder_or_decoder, wrap_with_ddp=False)
 
