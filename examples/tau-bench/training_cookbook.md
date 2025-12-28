@@ -319,6 +319,12 @@ export TAU2_USER_API_BASE=http://127.0.0.1:30001/v1
 export TAU2_USER_MODEL=openai/Qwen/Qwen3-4B-Instruct-2507
 ```
 
+To run without external API keys, start the local user simulator and set:
+```bash
+export TAU2_USER_API_BASE=http://127.0.0.1:30001/v1
+export TAU2_USER_MODEL=openai/Qwen/Qwen3-4B-Instruct-2507
+```
+
 ## Train from Scratch (Optional)
 
 We publish the [SFT checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-sft1) and [GRPO checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-grpo-v1) (public; login only needed for uploads). To train from scratch:
