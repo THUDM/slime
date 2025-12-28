@@ -74,7 +74,7 @@ def get_model_provider_func(
 
         Args:
             pre_process (bool, optional): Set to true if you need to compute embedings. Defaults to True.
-            post_process (bool, optional): Set to true if you need to want to compute output logits/loss. Defaults to True.
+            post_process (bool, optional): Set to true if you need to compute output logits/loss. Defaults to True.
 
 
         Returns:
