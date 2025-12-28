@@ -51,7 +51,8 @@ RUN NVCC_APPEND_FLAGS="--threads 4" \
 
 RUN git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
     cd Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
-    pip install -e .
+    pip install -e . && \
+    echo 'export PYTHONPATH="${PYTHONPATH}:/root/Megatron-LM"' >> /root/.bashrc
 
 RUN pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@dc6876905830430b5054325fa4211ff302169c6b --no-cache-dir --force-reinstall
 RUN pip install git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl --no-build-isolation
