@@ -298,7 +298,7 @@ def get_data_iterator(
         dist.all_reduce(num_microbatches, op=dist.ReduceOp.MAX, group=dp_group)
 
         if vpp_size > 1:
-            # vpp requies the number of microbatches to be divisible by vpp_size
+            # vpp requires the number of microbatches to be divisible by vpp_size
             num_microbatches = torch.clamp(
                 num_microbatches // microbatch_group_size_per_vp_stage * microbatch_group_size_per_vp_stage,
                 min=1,
