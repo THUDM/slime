@@ -54,7 +54,7 @@
     <link rel="prev" title="使用文档" href="usage.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2025 年 12 月 27 日"/>
+    <meta name="docbuild:last-update" content="2025 年 12 月 28 日"/>
   </head>
   
   
@@ -449,22 +449,23 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-data-postprocess-path">8. Rollout 数据后处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-loss-function-path">9. 自定义损失函数 (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tis-rs-custom-tis-function-path">10. 自定义 TIS/RS 函数 (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-reward-post-process-path">11. 奖励后处理 (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-convert-samples-to-train-data-path">12. 样本转训练数据 (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">13. 日志函数</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pg-loss-reducer-custom-pg-loss-reducer-function-path">11. 自定义 pg_loss Reducer (<code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-reward-post-process-path">12. 奖励后处理 (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-convert-samples-to-train-data-path">13. 样本转训练数据 (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">14. 日志函数</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-custom-rollout-log-function-path">训练 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-custom-eval-rollout-log-function-path">评估 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-path">14. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-function-path">15. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hook">16. Megatron Hook</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-path">15. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-function-path">16. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hook">17. Megatron Hook</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-custom-megatron-init-path">Megatron 初始化 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#log-prob-hook-custom-megatron-before-log-prob-hook-path">Log Prob 前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#hook-custom-megatron-before-train-step-hook-path">训练步骤前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-slime-router-middleware-paths">17. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-slime-router-middleware-paths">18. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
 </ul>
 </li>
 </ul>
@@ -521,34 +522,37 @@ document.write(`
 <tr class="row-odd"><td class="text-left"><p>--custom-tis-function-path</p></td>
 <td class="text-left"><p>实现用于离策略（off-policy）校正的自定义重要性采样。</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>--custom-reward-post-process-path</p></td>
+<tr class="row-even"><td class="text-left"><p>--custom-pg-loss-reducer-function-path</p></td>
+<td class="text-left"><p>自定义 pg_loss 的归约方式（如 Dr.GRPO）。</p></td>
+</tr>
+<tr class="row-odd"><td class="text-left"><p>--custom-reward-post-process-path</p></td>
 <td class="text-left"><p>在优势计算前对奖励进行自定义后处理。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--custom-convert-samples-to-train-data-path</p></td>
+<tr class="row-even"><td class="text-left"><p>--custom-convert-samples-to-train-data-path</p></td>
 <td class="text-left"><p>覆盖样本到训练数据格式的转换逻辑。</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>--custom-rollout-log-function-path</p></td>
+<tr class="row-odd"><td class="text-left"><p>--custom-rollout-log-function-path</p></td>
 <td class="text-left"><p>训练 rollout 的自定义日志记录。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--custom-eval-rollout-log-function-path</p></td>
+<tr class="row-even"><td class="text-left"><p>--custom-eval-rollout-log-function-path</p></td>
 <td class="text-left"><p>评估 rollout 的自定义日志记录。</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>--data-source-path</p></td>
+<tr class="row-odd"><td class="text-left"><p>--data-source-path</p></td>
 <td class="text-left"><p>覆盖 rollout 提示词的数据源。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--eval-function-path</p></td>
+<tr class="row-even"><td class="text-left"><p>--eval-function-path</p></td>
 <td class="text-left"><p>专门为评估覆盖 rollout 函数。</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>--custom-megatron-init-path</p></td>
+<tr class="row-odd"><td class="text-left"><p>--custom-megatron-init-path</p></td>
 <td class="text-left"><p>Megatron 设置后的自定义初始化。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--custom-megatron-before-log-prob-hook-path</p></td>
+<tr class="row-even"><td class="text-left"><p>--custom-megatron-before-log-prob-hook-path</p></td>
 <td class="text-left"><p>log probability 计算前的自定义逻辑。</p></td>
 </tr>
-<tr class="row-even"><td class="text-left"><p>--custom-megatron-before-train-step-hook-path</p></td>
+<tr class="row-odd"><td class="text-left"><p>--custom-megatron-before-train-step-hook-path</p></td>
 <td class="text-left"><p>每个训练步骤前的自定义逻辑。</p></td>
 </tr>
-<tr class="row-odd"><td class="text-left"><p>--slime-router-middleware-paths</p></td>
+<tr class="row-even"><td class="text-left"><p>--slime-router-middleware-paths</p></td>
 <td class="text-left"><p>向 slime router 添加自定义中间件。</p></td>
 </tr>
 </tbody>
@@ -731,8 +735,29 @@ document.write(`
 <p><strong>示例</strong>: <code class="docutils literal notranslate"><span class="pre">examples/train_infer_mismatch_helper/mis.py:compute_mis_weights_with_cp</span></code></p>
 </section>
 <hr class="docutils" />
+<section id="pg-loss-reducer-custom-pg-loss-reducer-function-path">
+<h3>11. 自定义 pg_loss Reducer (<code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code>)<a class="headerlink" href="#pg-loss-reducer-custom-pg-loss-reducer-function-path" title="Link to this heading">#</a></h3>
+<p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
+<p><strong>用途</strong>: 自定义 pg_loss 的归约方式，其他指标（pg_clipfrac、ppo_kl、entropy_loss 等）仍使用默认的 sum_of_sample_mean。</p>
+<p><strong>函数签名</strong>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">get_pg_loss_reducer</span><span class="p">(</span>
+    <span class="n">total_lengths</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>
+    <span class="n">response_lengths</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">int</span><span class="p">],</span>
+    <span class="n">loss_masks</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span>
+    <span class="n">calculate_per_token_loss</span><span class="p">:</span> <span class="nb">bool</span> <span class="o">=</span> <span class="kc">False</span><span class="p">,</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="n">Callable</span><span class="p">[[</span><span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">],</span> <span class="n">torch</span><span class="o">.</span><span class="n">Tensor</span><span class="p">]</span>
+</pre></div>
+</div>
+<p><strong>使用场景</strong>:</p>
+<ul class="simple">
+<li><p>Dr.GRPO：除以常数而非有效 token 数</p></li>
+<li><p>自定义损失归一化策略</p></li>
+</ul>
+<p><strong>示例</strong>: <code class="docutils literal notranslate"><span class="pre">examples/DrGRPO/custom_reducer.py:get_pg_loss_reducer</span></code></p>
+</section>
+<hr class="docutils" />
 <section id="custom-reward-post-process-path">
-<h3>11. 奖励后处理 (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)<a class="headerlink" href="#custom-reward-post-process-path" title="Link to this heading">#</a></h3>
+<h3>12. 奖励后处理 (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)<a class="headerlink" href="#custom-reward-post-process-path" title="Link to this heading">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（使用默认的 GRPO 归一化）</p>
 <p><strong>用途</strong>: 在优势计算前对奖励进行自定义后处理。</p>
 <p><strong>使用场景</strong>:</p>
@@ -743,7 +768,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="custom-convert-samples-to-train-data-path">
-<h3>12. 样本转训练数据 (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)<a class="headerlink" href="#custom-convert-samples-to-train-data-path" title="Link to this heading">#</a></h3>
+<h3>13. 样本转训练数据 (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)<a class="headerlink" href="#custom-convert-samples-to-train-data-path" title="Link to this heading">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（使用内置转换逻辑）</p>
 <p><strong>用途</strong>: 覆盖样本到训练数据格式的转换逻辑。</p>
 <p><strong>函数签名</strong>:</p>
@@ -780,7 +805,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="id4">
-<h3>13. 日志函数<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<h3>14. 日志函数<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
 <section id="rollout-custom-rollout-log-function-path">
 <h4>训练 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)<a class="headerlink" href="#rollout-custom-rollout-log-function-path" title="Link to this heading">#</a></h4>
 <p><strong>函数签名</strong>:</p>
@@ -800,7 +825,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="data-source-path">
-<h3>14. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)<a class="headerlink" href="#data-source-path" title="Link to this heading">#</a></h3>
+<h3>15. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)<a class="headerlink" href="#data-source-path" title="Link to this heading">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.RolloutDataSourceWithBuffer</span></code></p>
 <p><strong>用途</strong>: 覆盖 rollout 提示词的数据源。</p>
 <p><strong>基类</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.DataSource</span></code></p>
@@ -822,7 +847,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="eval-function-path">
-<h3>15. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)<a class="headerlink" href="#eval-function-path" title="Link to this heading">#</a></h3>
+<h3>16. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)<a class="headerlink" href="#eval-function-path" title="Link to this heading">#</a></h3>
 <p><strong>默认值</strong>: 与 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> 相同</p>
 <p><strong>用途</strong>: 专门为评估覆盖 rollout 函数。</p>
 <p><strong>使用场景</strong>:</p>
@@ -833,7 +858,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="megatron-hook">
-<h3>16. Megatron Hook<a class="headerlink" href="#megatron-hook" title="Link to this heading">#</a></h3>
+<h3>17. Megatron Hook<a class="headerlink" href="#megatron-hook" title="Link to this heading">#</a></h3>
 <section id="megatron-custom-megatron-init-path">
 <h4>Megatron 初始化 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)<a class="headerlink" href="#megatron-custom-megatron-init-path" title="Link to this heading">#</a></h4>
 <p><strong>函数签名</strong>:</p>
@@ -861,7 +886,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="slime-router-slime-router-middleware-paths">
-<h3>17. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)<a class="headerlink" href="#slime-router-slime-router-middleware-paths" title="Link to this heading">#</a></h3>
+<h3>18. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)<a class="headerlink" href="#slime-router-slime-router-middleware-paths" title="Link to this heading">#</a></h3>
 <p><strong>用途</strong>: 向 slime router 添加自定义中间件用于请求处理。</p>
 <p><strong>使用场景</strong>:</p>
 <ul class="simple">
@@ -930,22 +955,23 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-rollout-data-postprocess-path">8. Rollout 数据后处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-loss-function-path">9. 自定义损失函数 (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#tis-rs-custom-tis-function-path">10. 自定义 TIS/RS 函数 (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-reward-post-process-path">11. 奖励后处理 (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-convert-samples-to-train-data-path">12. 样本转训练数据 (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">13. 日志函数</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pg-loss-reducer-custom-pg-loss-reducer-function-path">11. 自定义 pg_loss Reducer (<code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-reward-post-process-path">12. 奖励后处理 (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-convert-samples-to-train-data-path">13. 样本转训练数据 (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">14. 日志函数</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-custom-rollout-log-function-path">训练 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-custom-eval-rollout-log-function-path">评估 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-path">14. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-function-path">15. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hook">16. Megatron Hook</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#data-source-path">15. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#eval-function-path">16. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-hook">17. Megatron Hook</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron-custom-megatron-init-path">Megatron 初始化 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#log-prob-hook-custom-megatron-before-log-prob-hook-path">Log Prob 前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#hook-custom-megatron-before-train-step-hook-path">训练步骤前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)</a></li>
 </ul>
 </li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-slime-router-middleware-paths">17. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-slime-router-middleware-paths">18. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
 </ul>
 </li>
 </ul>
@@ -981,7 +1007,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2025 年 12 月 27 日.
+  最后更新于 2025 年 12 月 28 日.
   <br/>
 </p>
   </div>
