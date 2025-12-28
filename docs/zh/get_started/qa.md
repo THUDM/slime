@@ -66,3 +66,15 @@
 1. **训练出现 grad NaN 或者 Inf 的情况**
 
    可以通过设置 `--no-check-for-nan-in-loss-and-grad` 来尝试跳过对应的训练步。
+
+1. **如何使用 TensorBoard 进行日志记录？**
+
+   slime 支持使用 TensorBoard 进行实验跟踪。要启用 TensorBoard 日志记录，请在训练脚本中添加以下参数：
+
+   ```bash
+   --use-tensorboard \
+   --tb-project-name 你的项目名称 \
+   --tb-experiment-name 你的实验名称
+   ```
+
+   日志默认保存到 `tensorboard_log/{tb_project_name}/{tb_experiment_name}` 目录。或者，你可以设置 `TENSORBOARD_DIR` 环境变量来指定自定义的日志目录。

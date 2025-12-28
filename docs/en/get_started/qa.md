@@ -66,3 +66,15 @@
 13. **Gradient becomes NaN or Inf during training.**
 
     You can try setting the `--no-check-for-nan-in-loss-and-grad` flag to skip the corresponding training steps.
+
+14. **How do I use TensorBoard for logging?**
+
+    slime supports TensorBoard for experiment tracking. To enable TensorBoard logging, add the following arguments to your training script:
+
+    ```bash
+    --use-tensorboard \
+    --tb-project-name your_project_name \
+    --tb-experiment-name your_experiment_name
+    ```
+
+    Logs will be saved to `tensorboard_log/{tb_project_name}/{tb_experiment_name}` by default. Alternatively, you can set the `TENSORBOARD_DIR` environment variable to specify a custom log directory.
