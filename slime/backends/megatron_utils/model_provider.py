@@ -73,7 +73,7 @@ def get_model_provider_func(
         If you set the use_legacy_models to True, it will return the legacy GPT model and if not the mcore GPT model.
 
         Args:
-            pre_process (bool, optional): Set to true if you need to compute embedings. Defaults to True.
+            pre_process (bool, optional): Set to true if you need to compute embeddings. Defaults to True.
             post_process (bool, optional): Set to true if you need to want to compute output logits/loss. Defaults to True.
 
 
