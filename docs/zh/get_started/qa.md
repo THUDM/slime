@@ -66,3 +66,23 @@
 1. **训练出现 grad NaN 或者 Inf 的情况**
 
    可以通过设置 `--no-check-for-nan-in-loss-and-grad` 来尝试跳过对应的训练步。
+
+1. **在 80GB GPU 上因内存碎片化导致 OOM 错误，如何优化内存分配？**
+
+   在使用大显存 GPU（例如 80GB H100/A100）时，可能会遇到由内存碎片化而非实际显存不足导致的 OOM 错误。这是因为 logits 张量（`seq_len × vocab_size`）可能非常大，当 `torch_memory_saver` 禁用 `expandable_segments` 时会导致碎片化。
+
+   要解决这个问题，请在 Ray 运行时环境中设置 `PYTORCH_CUDA_ALLOC_CONF` 环境变量，并指定合适的 `max_split_size_mb` 值：
+
+   ```json
+   "env_vars": {
+     "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:1024"
+   }
+   ```
+
+   计算 `max_split_size_mb` 的推荐公式为：
+
+   ```
+   max_split_size_mb ≈ (seq_len / CP) × vocab_size × 2 字节 / (1024 × 1024)
+   ```
+
+   例如，对于 Qwen3（seq_len=16384, CP=4, vocab_size=151936），计算结果约为 1GB，因此 `max_split_size_mb:1024` 是合适的。设置足够大的值可确保每个 logits 张量占用单个连续内存块，从而实现跨步骤的内存复用。

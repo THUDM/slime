@@ -66,3 +66,23 @@
 13. **Gradient becomes NaN or Inf during training.**
 
     You can try setting the `--no-check-for-nan-in-loss-and-grad` flag to skip the corresponding training steps.
+
+14. **I encounter OOM errors on 80GB GPUs due to memory fragmentation. How can I optimize memory allocation?**
+
+    When using large GPUs (e.g., 80GB H100/A100), you may experience OOM errors caused by memory fragmentation rather than actual memory exhaustion. This happens because the logits tensor (`seq_len × vocab_size`) can be very large and causes fragmentation when `torch_memory_saver` disables `expandable_segments`.
+
+    To fix this, set the `PYTORCH_CUDA_ALLOC_CONF` environment variable with an appropriate `max_split_size_mb` value in your Ray runtime environment:
+
+    ```json
+    "env_vars": {
+      "PYTORCH_CUDA_ALLOC_CONF": "max_split_size_mb:1024"
+    }
+    ```
+
+    The recommended formula for calculating `max_split_size_mb` is:
+
+    ```
+    max_split_size_mb ≈ (seq_len / CP) × vocab_size × 2 bytes / (1024 × 1024)
+    ```
+
+    For example, with Qwen3 (seq_len=16384, CP=4, vocab_size=151936), the calculation yields approximately 1GB, so `max_split_size_mb:1024` is appropriate. Setting this value large enough ensures each logits tensor occupies a single contiguous memory block, enabling memory reuse across steps.
