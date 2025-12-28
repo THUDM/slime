@@ -1292,7 +1292,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             sglang_tp_size = temp_args.rollout_num_gpus_per_engine
             return sglang_tp_size
 
-        # Add custom arguments in front to prevent overwritten some slime arguments.
+        # Add custom arguments in front to prevent overwriting some slime arguments.
         if add_custom_arguments is not None:
             parser = add_custom_arguments(parser)
 
