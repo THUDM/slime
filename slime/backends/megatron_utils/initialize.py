@@ -59,7 +59,7 @@ def init(args):
         logger.info("Enable megatron experimental")
         set_experimental_flag(True)
 
-    # Pytorch distributed.
+    # PyTorch distributed.
     _initialize_distributed(args)
 
     # https://github.com/NVIDIA/Megatron-LM/issues/1563
