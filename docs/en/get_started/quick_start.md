@@ -106,7 +106,7 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_torch_dist_to_hf.py \
   --origin-hf-dir /root/GLM-Z1-9B-0414
 ```
 
-Note that as Megatron will do padding to embedding for better performance, it may happen that the converted embedding is not correct. In that case, please manually set `--vocab-size` during convertion.
+Note that as Megatron will do padding to embedding for better performance, it may happen that the converted embedding is not correct. In that case, please manually set `--vocab-size` during conversion.
 
 For FSDP checkpoints (without `common.pt`), use the dedicated conversion script. Point `--input-dir` to the checkpoint directory (e.g. `iter_xxx` or `iter_xxx/model`) and provide the original Hugging Face directory:
 

@@ -18,7 +18,7 @@ from slime.utils.logging_utils import configure_logger
 from slime.utils.memory_utils import print_memory
 
 
-def add_convertion_args(parser):
+def add_conversion_args(parser):
     """Add conversion arguments to the parser"""
     parser.add_argument("--hf-checkpoint", type=str, required=True, help="HuggingFace model path")
     parser.add_argument(
@@ -35,7 +35,7 @@ def add_convertion_args(parser):
 
 
 def get_args():
-    args = parse_args(add_convertion_args)
+    args = parse_args(add_conversion_args)
     args = set_default_megatron_args(args)
 
     # set to pass megatron validate_args
