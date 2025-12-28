@@ -157,10 +157,9 @@ def compute_score_em(
     solution_str,
     ground_truth,
     method="strict",
-    structure_format_score=0,
+    format_score=0,
     final_format_score=0,
     retrieval_score=0,
-    format_score=0,
     score=1.0,
 ):
     """The scoring function for exact match (EM).
@@ -169,7 +168,9 @@ def compute_score_em(
         solution_str: the solution text
         ground_truth: the ground truth
         method: the method to extract the solution, choices are 'strict' and 'flexible'
-        format_score: the score for the format
+        format_score: the score for valid structure format (e.g., properly balanced tags)
+        final_format_score: the score when format is invalid but some answer exists
+        retrieval_score: the bonus score for correct retrieval
         score: the score for the correct answer
     """
     is_valid_format, _ = is_valid_sequence(solution_str)
@@ -188,21 +189,21 @@ def compute_score_em(
     if answer is None:
         if is_valid_format:
             if retrieval_correct:
-                return structure_format_score + retrieval_score  # 0.3
+                return format_score + retrieval_score
             else:
-                return structure_format_score  # 0.2
+                return format_score
         else:
             return 0
     else:
         if em_check(answer, ground_truth["target"]):
             if is_valid_format:
-                return score  # 1
+                return score
             else:
-                return score - structure_format_score  # 0.8
+                return score - format_score
         elif is_valid_format:
             if retrieval_correct:
-                return structure_format_score + retrieval_score  # 0.3
+                return format_score + retrieval_score
             else:
-                return structure_format_score  # 0.2
+                return format_score
         else:
-            return final_format_score  # 0.1
+            return final_format_score
