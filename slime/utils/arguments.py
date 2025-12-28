@@ -214,7 +214,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help=(
                     "The maximum context size for the inference engine during rollout."
-                    "It should no exceed the `max_position_embeddinds` in Huggingface model's `config.json`"
+                    "It should not exceed the `max_position_embeddings` in Hugging Face model's `config.json`"
                 ),
             )
             parser.add_argument(
