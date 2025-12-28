@@ -195,6 +195,16 @@ class RolloutManager:
             return self.custom_reward_post_process_func(self.args, samples)
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
+
+        # Handle None rewards (e.g., from aborted/failed samples) by replacing with 0.0
+        none_count = sum(1 for r in raw_rewards if r is None)
+        if none_count > 0:
+            logger.warning(
+                f"Found {none_count} samples with None rewards (e.g., aborted/failed samples). "
+                "Replacing with 0.0 for tensor conversion."
+            )
+            raw_rewards = [r if r is not None else 0.0 for r in raw_rewards]
+
         if (
             self.args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
             and self.args.rewards_normalization
