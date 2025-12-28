@@ -26,7 +26,7 @@ def main(
     if not ray.is_initialized():
         ray.init()
 
-    pack = torch.load(rollout_data_path)
+    pack = torch.load(rollout_data_path, weights_only=False)
     samples = [Sample.from_dict(s) for s in pack["samples"]]
     asyncio.run(_main_async(samples=samples, custom_rm_path=custom_rm_path))
 

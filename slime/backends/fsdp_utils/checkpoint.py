@@ -148,7 +148,7 @@ def load(actor: Any) -> dict[str, Any] | None:
     rng_state = None
     rng_path = checkpoint_dir / "rng.pt"
     if rng_path.exists():
-        rng_state = torch.load(rng_path, map_location="cpu")
+        rng_state = torch.load(rng_path, map_location="cpu", weights_only=False)
 
     metadata = _read_checkpoint_metadata(checkpoint_dir / "meta.json")
 

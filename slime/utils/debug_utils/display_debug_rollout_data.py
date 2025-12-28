@@ -36,7 +36,7 @@ def main(
         print(f"{rollout_id=} {path=}")
         print("-" * 80)
 
-        pack = torch.load(path)
+        pack = torch.load(path, weights_only=False)
         sample_dicts = pack["samples"]
 
         if show_metrics:

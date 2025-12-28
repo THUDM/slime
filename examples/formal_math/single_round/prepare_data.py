@@ -113,7 +113,7 @@ class _SolvableByRolloutDumpFilter:
     def _compute_df_samples(paths: str):
         print(f"compute_df_samples {paths=}")
         paths = paths.split(",")
-        df_samples = pl.concat([pl.DataFrame(torch.load(p)["samples"]) for p in paths], how="diagonal_relaxed")
+        df_samples = pl.concat([pl.DataFrame(torch.load(p, weights_only=False)["samples"]) for p in paths], how="diagonal_relaxed")
         print(f"{df_samples=}")
         return df_samples
 
