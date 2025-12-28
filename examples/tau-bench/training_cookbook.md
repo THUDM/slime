@@ -1,8 +1,8 @@
 # Training Multi-Turn Tool-Use Agents: SFT → RFT → GRPO
 
-We trained a 4B parameter model to achieve **57.1% Pass@4** on tau2-bench: **4× better than the base model** and competitive with models 6-60× larger. The model is faster, cheaper to run, and demonstrates that progressive training (SFT → rejection sampling → GRPO) works for complex, multi-turn tool-use tasks.
+We report a 4B parameter model achieving **57.1% Pass@4** on tau2-bench (test split): **4× better than the base model** and competitive with models 6-60× larger. The model is faster, cheaper to run, and demonstrates that progressive training (SFT → rejection sampling → GRPO) works for complex, multi-turn tool-use tasks.
 
-This cookbook shows you how we did it. Everything is open source: [training data](https://huggingface.co/datasets/Jarrodbarnes/tau2-sft-seed-v3), [checkpoints](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-grpo-v1), and [code](https://github.com/THUDM/slime/tree/main/examples/tau-bench).
+This cookbook shows you how we did it. Everything is public and open source: [training data](https://huggingface.co/datasets/Jarrodbarnes/tau2-sft-seed-v3), [checkpoints](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-grpo-v1), and [code](https://github.com/THUDM/slime/tree/main/examples/tau-bench).
 
 ![Tau2 pipeline overview](public/slime-pipeline-tau2.jpeg)
 
@@ -33,7 +33,7 @@ python3 examples/tau-bench/tau2/eval.py \
   --hf-checkpoint Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
   --sglang-url http://127.0.0.1:30000/generate \
   --domains airline,retail,telecom --task-split test --num-samples 4 \
-  --temperature 0.8 --top-p 0.8 --top-k 20 \
+  --temperature 0.8 --top-p 1.0 --top-k 20 \
   --output "${TAU_BENCH_OUT_DIR}/tau2/eval/eval_pass4.json"
 ```
 
@@ -72,11 +72,11 @@ Complete performance comparison (test split; Pass@4 is the headline metric):
 | SFT | 8.57% | 5.0% | 20.0% | 0.0% |
 | SFT1 (RFT) | 27.0% | 20.0% | 50.0% | 7.5% |
 | GRPO (Pass@1, greedy) | 32.9% | 15.0% | 76.0% | 4.0% |
-| GRPO (Pass@4, temp=0.8) | 57.1% | 50.0% | 76.0% | 44.0% |
+| GRPO (Pass@4, temp=0.8, **reported**) | 57.1% | 50.0% | 76.0% | 44.0% |
 | Delta (Pass@4 vs Baseline) | +42.8% | +45.0% | +60.0% | +24.0% |
 
 **What worked:**
-- **Progressive training compounds**: Baseline → SFT+RFT (27%) → GRPO (32.9%) → Pass@4 (57.1%). Each stage builds on the last.
+- **Progressive training compounds**: Baseline → SFT+RFT (27%) → GRPO (32.9%) → Pass@4 (57.1%, reported). Each stage builds on the last.
 - **Pass@K matters for RL**: Multi-sampling at inference (Pass@4) gains +24.2 percentage points over greedy decoding. RL models benefit more from exploration than prompted baselines.
 - **Domain-specific gains**: Retail (76%) and airline (50%) saw massive improvements. Telecom (44%), constrained by dual-control complexity, still improved 2.2× over baseline.
 
@@ -84,7 +84,18 @@ Complete performance comparison (test split; Pass@4 is the headline metric):
 
 ![Tau2 performance comparison](public/performance-chart.jpeg)
 
-*Figure 2: Qwen3-4B with progressive training (57.1% Pass@4) achieves competitive performance against models 6-60× larger. Stacked bar shows contribution from SFT+RFT and GRPO stages.*
+*Figure 2: Qwen3-4B with progressive training (57.1% Pass@4, reported) achieves competitive performance against models 6-60× larger. Stacked bar shows contribution from SFT+RFT and GRPO stages.*
+
+**Local reproduction (Dec 28, 2025)** using the eval command below and full policies (no compressed prompt), with reported sampling settings (`top_p=1.0`):
+
+| Metric | Overall | Airline | Retail | Telecom |
+|--------|---------|---------|--------|---------|
+| Pass@1 | 36.0% | 20.0% | 50.0% | 30.0% |
+| Pass@4 | 57.0% | 30.0% | 82.5% | 45.0% |
+
+Config: `Jarrodbarnes/Qwen3-4B-tau2-grpo-v1`, `tau2-bench` commit `337326e62d8e0ca74c353b004a9c5d748e0ba914`, `TAU2_USE_COMPRESSED_PROMPTS=0`, `TAU2_MAX_STEPS=100`, `TAU2_USER_MODEL=gpt-4.1-mini`, `TAU2_USER_TEMPERATURE=0.7`, `temperature=0.8`, `top_p=1.0`, `top_k=20`, `num_samples=4`.
+
+Reported Pass@4 settings: `TAU2_MAX_STEPS=100`, `TAU2_USER_TEMPERATURE=0.7`, `temperature=0.8`, `top_p=1.0`, `top_k=20`, `num_samples=4`.
 
 ## Before You Start
 
@@ -144,12 +155,12 @@ set -a && source examples/tau-bench/tau2/.env && set +a
 
 ## Resources
 
-**Models** (all on Hugging Face):
+**Models** (public on Hugging Face):
 - [Qwen3-4B-Instruct-2507](https://huggingface.co/Qwen/Qwen3-4B-Instruct-2507) - Base model
 - [Qwen3-4B-tau2-sft1](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-sft1) - After SFT+RFT
 - [Qwen3-4B-tau2-grpo-v1](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-grpo-v1) - Final GRPO checkpoint
 
-**Dataset**: [tau2-sft-seed-v3](https://huggingface.co/datasets/Jarrodbarnes/tau2-sft-seed-v3) - Filtered trajectories from rejection sampling
+**Dataset** (public): [tau2-sft-seed-v3](https://huggingface.co/datasets/Jarrodbarnes/tau2-sft-seed-v3) - Filtered trajectories from rejection sampling
 
 **Training logs**: [WandB project](https://wandb.ai/jbarnes850-near-protocol/tau2-cookbook) - Full metrics, training curves, sample outputs (public; login if you hit access issues)
 
@@ -259,7 +270,7 @@ For tau2-bench specifically, the progression shows:
 - Baseline: 14.3% (no task understanding)
 - SFT+RFT: 27.0% (protocol learned, inconsistent execution)
 - GRPO Pass@1: 32.9% (optimized for single best path)
-- GRPO Pass@4: 57.1% (robust across multiple sampling attempts)
+- GRPO Pass@4: 57.1% (reported; robust across multiple sampling attempts)
 
 The 24.2 percentage point gain from Pass@1 to Pass@4 demonstrates that RL-trained models benefit significantly from inference-time exploration. They've learned multiple viable strategies rather than overfitting to a single path.
 
@@ -294,13 +305,13 @@ python3 examples/tau-bench/tau2/eval.py \
   --hf-checkpoint Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
   --sglang-url http://127.0.0.1:30000/generate \
   --domains airline,retail,telecom --task-split test --num-samples 4 \
-  --temperature 0.8 --top-p 0.8 --top-k 20 \
+  --temperature 0.8 --top-p 1.0 --top-k 20 \
   --output "${TAU_BENCH_OUT_DIR}/tau2/eval/eval_pass4.json"
 ```
 
 This takes ~2 hours on 2×H100. Results: Pass@1 and Pass@4 metrics across all domains.
 
-The script outputs both Pass@1 and Pass@4. Results are stochastic but should match the table above within a few percentage points.
+The script outputs both Pass@1 and Pass@4. Results are stochastic; see the local reproduction table above for a concrete run and config.
 
 To run without external API keys, start the local user simulator and set:
 ```bash
@@ -374,4 +385,5 @@ Training takes ~2 hours on 8×H100s. [Reference logs](https://wandb.ai/jbarnes85
 
 - **SGLang abort/OOM**: reduce `--mem-fraction-static`, reduce `--max-tokens-per-gpu`, reduce `--rollout-batch-size`.
 - **Ray working directory issues**: the provided scripts submit Ray jobs with `working_dir` set to the slime repo root and `PYTHONPATH` set explicitly; avoid running from random directories.
+- **Ray dashboard exposure**: `run_grpo.sh` binds the dashboard to `127.0.0.1` by default. If you override `RAY_DASHBOARD_HOST`, avoid exposing it on shared networks.
 - **Telecom is slow / low Pass@K**: dual-control pushes difficulty into communication. Inspect failures for (a) tool ownership violations, (b) premature `done`, (c) missing follow-up questions after user diagnostics.

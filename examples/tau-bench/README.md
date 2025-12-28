@@ -12,6 +12,8 @@ This folder provides two benchmark entrypoints with parallel conventions. The ca
 - Tau1 README: `examples/tau-bench/tau1/README.md`.
 - Tau2 implementation: `examples/tau-bench/tau2/README.md`
 
+Note: Tau1 includes a small offline stub for debug/CI without external API keys.
+
 ### Outputs
 
 All generated artifacts are written under `TAU_BENCH_OUT_DIR` (default: `examples/tau-bench/outputs`) and are gitignored. The cookbook assumes the `slimerl/slime:latest` container baseline.
