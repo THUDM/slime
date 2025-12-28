@@ -66,3 +66,24 @@
 13. **Gradient becomes NaN or Inf during training.**
 
     You can try setting the `--no-check-for-nan-in-loss-and-grad` flag to skip the corresponding training steps.
+
+14. **How do I use gradient accumulation in training scripts?**
+
+    In SLIME, gradient accumulation is controlled through the combination of `--num-steps-per-rollout` and `--global-batch-size`. The relationship is:
+
+    ```
+    rollout_batch_size × n_samples_per_prompt = global_batch_size × num_steps_per_rollout
+    ```
+
+    For example, if you have:
+    - `--rollout-batch-size 128`
+    - `--n-samples-per-prompt 4`
+    - `--global-batch-size 128`
+
+    Then `num_steps_per_rollout` will be automatically computed as `(128 × 4) / 128 = 4`, meaning 4 gradient accumulation steps per rollout.
+
+    To explicitly control gradient accumulation:
+    1. Set `--num-steps-per-rollout N` where N > 1 for multiple accumulation steps
+    2. The effective micro-batch size is `global_batch_size / (dp_size × num_steps_per_rollout)`
+
+    Note: SLIME defaults to `--num-steps-per-rollout 1` for on-policy training. Increasing this value enables gradient accumulation but makes training more off-policy.

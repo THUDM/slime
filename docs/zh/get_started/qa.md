@@ -66,3 +66,24 @@
 1. **训练出现 grad NaN 或者 Inf 的情况**
 
    可以通过设置 `--no-check-for-nan-in-loss-and-grad` 来尝试跳过对应的训练步。
+
+1. **如何在训练脚本中使用梯度累积？**
+
+   在 SLIME 中，梯度累积通过 `--num-steps-per-rollout` 和 `--global-batch-size` 的组合来控制。它们的关系是：
+
+   ```
+   rollout_batch_size × n_samples_per_prompt = global_batch_size × num_steps_per_rollout
+   ```
+
+   例如，如果你设置了：
+   - `--rollout-batch-size 128`
+   - `--n-samples-per-prompt 4`
+   - `--global-batch-size 128`
+
+   那么 `num_steps_per_rollout` 将自动计算为 `(128 × 4) / 128 = 4`，即每个 rollout 进行 4 次梯度累积步骤。
+
+   要显式控制梯度累积：
+   1. 设置 `--num-steps-per-rollout N`，其中 N > 1 表示多次累积步骤
+   2. 有效的 micro-batch 大小为 `global_batch_size / (dp_size × num_steps_per_rollout)`
+
+   注意：SLIME 默认使用 `--num-steps-per-rollout 1` 进行 on-policy 训练。增加此值可以启用梯度累积，但会使训练更偏向 off-policy。
