@@ -221,6 +221,8 @@ async def generate_and_rm(
     async with state.semaphore:
         if state.aborted:
             sample.status = Sample.Status.ABORTED
+            if sample.reward is None:
+                sample.reward = 0.0
             return sample
 
         if args.custom_generate_function_path is not None:
@@ -237,6 +239,9 @@ async def generate_and_rm(
     if isinstance(sample, list):
         samples = sample
         if any([sample.status == Sample.Status.ABORTED for sample in samples]):
+            for s in samples:
+                if s.reward is None:
+                    s.reward = 0.0
             return samples
 
         # for multi agent system, the reward of some sample is calculated during generation.
@@ -247,6 +252,8 @@ async def generate_and_rm(
         return samples
     else:
         if sample.status == Sample.Status.ABORTED:
+            if sample.reward is None:
+                sample.reward = 0.0
             return sample
         # for multi-turn environment, a reward could be assigned to the agent.
         if sample.reward is None:
@@ -261,6 +268,9 @@ async def generate_and_rm_group(
     state = GenerateState(args)
 
     if state.aborted:
+        for sample in group:
+            if sample.reward is None:
+                sample.reward = 0.0
         return group
 
     tasks = []
