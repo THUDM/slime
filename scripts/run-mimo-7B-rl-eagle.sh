@@ -1,4 +1,3 @@
-
 #!/bin/bash
 
 # for rerun the task
