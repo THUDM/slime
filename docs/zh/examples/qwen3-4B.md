@@ -1,5 +1,21 @@
 # 8xH100 训练 Qwen3-4B
 
+> ⚠️ **重要：GPU 配置**
+>
+> 本指南假设使用 **8 个 GPU**。如果您的 GPU 数量不同（例如 4xH100），**必须**修改 `scripts/run-qwen3-4B.sh` 中的以下参数：
+>
+> 1. `ray start --num-gpus 8` → 将 `8` 改为您的 GPU 数量
+> 2. `--actor-num-gpus-per-node 8` → 将 `8` 改为您的 GPU 数量
+>
+> **4 GPU 示例：**
+> ```bash
+> ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 ...
+> ...
+> --actor-num-gpus-per-node 4 \
+> ```
+>
+> 如果未更新这些值，将导致难以理解的错误（例如 `ModuleNotFoundError: No module named 'vllm'`），这些错误不会指出实际的 GPU 配置不匹配问题。
+
 ## 环境准备
 
 拉取 `slimerl/slime:latest` 镜像后，用如下方式初始化镜像环境：

@@ -1,5 +1,21 @@
 # Qwen3-4B with 8xH100
 
+> ⚠️ **Important: GPU Configuration**
+>
+> This guide assumes **8 GPUs**. If you have a different number of GPUs (e.g., 4xH100), you **must** modify the following parameters in `scripts/run-qwen3-4B.sh`:
+>
+> 1. `ray start --num-gpus 8` → change `8` to your GPU count
+> 2. `--actor-num-gpus-per-node 8` → change `8` to your GPU count
+>
+> **Example for 4 GPUs:**
+> ```bash
+> ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 ...
+> ...
+> --actor-num-gpus-per-node 4 \
+> ```
+>
+> Failing to update these values will cause cryptic errors (e.g., `ModuleNotFoundError: No module named 'vllm'`) that don't indicate the actual GPU mismatch problem.
+
 ## Environment Setup
 
 After pulling the `slimerl/slime:latest` image, initialize the image environment as follows:
