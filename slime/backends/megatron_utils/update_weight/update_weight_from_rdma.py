@@ -49,6 +49,26 @@ class TransferBundle:
 
     def add_remote_session(self, remote_info: RemoteWeightInfo) -> None:
         self.remote_weight_infos.append(remote_info)
+    
+    def execute_each(self, names: Sequence[str]) -> list[int]:
+        # FIXME: Execute transfer for updated weight.
+        batch_ids = []
+        for remote_session in self.remote_weight_infos:
+            session_id, remote_weights_info = remote_session.session_id, remote_session.weights_info
+            source_ptrs, target_ptrs, source_lens = [], [], []
+            for name in names:
+                tensor_register = self.weight_memory_registry[name]
+                data_ptr, numel, ele_size = tensor_register
+                source_ptrs.append(data_ptr)
+                target_ptrs.append(remote_weights_info[name][0])  # remote address
+                source_lens.append(numel * ele_size)
+
+            # Batch transfer weights through RDMA
+            batch_id = self.engine.batch_transfer_async_write(session_id, source_ptrs, target_ptrs, source_lens)
+            batch_ids.append(batch_id)
+            # logger.info(f"[RDMA] Batch transferred {len(weight_memory_registry)} tensors to session {session_id}.")
+        return batch_ids
+       
 
     def execute(self) -> None:
         # Execute transfer for each target session using this replica.
@@ -271,14 +291,23 @@ class UpdateWeightFromRDMA(UpdateWeightFromRemote):
             torch_memory_saver.resume(self.tag)
             self._is_paused = False
         
-        for transfer_bundle in self.engines.values():
-            transfer_bundle.model_replica.load_weights(converted_named_tensors)
+        ret_batch = {}
+        for n, transfer_bundle in enumerate(self.engines.values()):
+            updated_name = transfer_bundle.model_replica.load_weights(converted_named_tensors)
+            ret_batch[n] = transfer_bundle.execute_each(updated_name) # FIXME: Do not wait for finish here.
+
+        # FIXME: Add sync barrier for all transfers to finish.
+        for n, batch_ids in ret_batch.items():
+            result = self.engines[n].engine.get_batch_transfer_status(batch_ids)
+            if result < 0:
+                raise RuntimeError(f"Batch transfer weights via RDMA failed with error code {result}.")
+
         converted_named_tensors.clear()
 
     def finish_transfer_task(self) -> None:
         # Execute transfer for each engine replica.
-        for transfer_bundle in self.engines.values():
-            transfer_bundle.execute()
+        # for transfer_bundle in self.engines.values():
+        #     transfer_bundle.execute()
 
         # Offload model replicas from memory after transfer.
         if not self._is_paused:
