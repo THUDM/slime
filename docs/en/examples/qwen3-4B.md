@@ -1,5 +1,13 @@
 # Qwen3-4B with 8xH100
 
+> **Note on GPU Configuration**: This example assumes 8 GPUs. If you have a different number of GPUs (e.g., 4 GPUs), you must adjust the following parameters:
+> - `ray start --num-gpus <your_gpu_count>`
+> - `--actor-num-gpus-per-node <your_gpu_count>`
+>
+> For 4-GPU setups, you can use the pre-configured script `scripts/run-qwen3-4B_4xgpu.sh` instead.
+>
+> Mismatched GPU configurations will cause the Ray job to hang or produce confusing error messages.
+
 ## Environment Setup
 
 After pulling the `slimerl/slime:latest` image, initialize the image environment as follows:

@@ -1,5 +1,13 @@
 # 8xH100 训练 Qwen3-4B
 
+> **GPU 配置说明**：本示例假设使用 8 块 GPU。如果您的 GPU 数量不同（例如 4 块 GPU），必须调整以下参数：
+> - `ray start --num-gpus <您的GPU数量>`
+> - `--actor-num-gpus-per-node <您的GPU数量>`
+>
+> 对于 4 GPU 配置，可以直接使用预配置的脚本 `scripts/run-qwen3-4B_4xgpu.sh`。
+>
+> GPU 配置不匹配会导致 Ray 任务挂起或产生令人困惑的错误信息。
+
 ## 环境准备
 
 拉取 `slimerl/slime:latest` 镜像后，用如下方式初始化镜像环境：
