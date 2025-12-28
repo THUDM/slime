@@ -157,6 +157,9 @@ class Dataset:
                     add_generation_prompt=True,
                     **(apply_chat_template_kwargs or {}),
                 )
+                # Store original messages for SFT loss mask generation
+                # See: https://github.com/THUDM/slime/issues/289
+                metadata["messages"] = prompt
             else:
                 formatted_prompt = prompt
 

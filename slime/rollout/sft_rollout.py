@@ -43,7 +43,10 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
 
     for i, sample in enumerate(samples):
         (sample,) = sample
-        messages = sample.prompt
+        # Use original messages from metadata if available (when apply_chat_template was used),
+        # otherwise fall back to sample.prompt which should be list[dict]
+        # See: https://github.com/THUDM/slime/issues/289
+        messages = sample.metadata.get("messages", sample.prompt)
         tools = sample.metadata.get("tools", None)
 
         token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
