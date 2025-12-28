@@ -535,6 +535,61 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
 
+            # HuggingFace Datasets Integration
+            parser.add_argument(
+                "--use-hf-datasets",
+                action="store_true",
+                default=False,
+                help=(
+                    "Enable HuggingFace Datasets integration for efficient loading of large-scale datasets (100GB+). "
+                    "Supports both streaming mode (streaming=True) and cached mode (streaming=False). "
+                    "Streaming mode: Zero memory overhead, suitable for 100GB+ datasets. "
+                    "Cached mode: Fast subsequent runs with disk caching."
+                ),
+            )
+            parser.add_argument(
+                "--hf-dataset-streaming",
+                action="store_true",
+                help=(
+                    "Use streaming mode (streaming=True) for HuggingFace Datasets. "
+                    "Default is True. Set --no-hf-dataset-streaming to use cached mode (streaming=False). "
+                    "Streaming mode loads data on-the-fly with zero memory overhead. "
+                    "Cached mode preprocesses and caches the entire dataset to disk for fast subsequent runs."
+                ),
+            )
+            parser.add_argument(
+                "--hf-dataset-buffer-size",
+                type=int,
+                default=1000,
+                help=(
+                    "Base prefetch buffer size for streaming mode. "
+                    "Actual buffer size = base_buffer_size * dp_size. "
+                    "Larger buffer improves training throughput but increases memory usage. "
+                    "Default: 1000."
+                ),
+            )
+            parser.add_argument(
+                "--hf-dataset-shuffle-buffer",
+                type=int,
+                default=10000,
+                help=(
+                    "Shuffle buffer size for HuggingFace Datasets streaming mode. "
+                    "Larger buffer improves shuffle randomness but increases memory usage. "
+                    "Default: 10000 (industry standard for large-scale datasets)."
+                ),
+            )
+            parser.add_argument(
+                "--hf-dataset-num-proc",
+                type=int,
+                default=8,
+                help=(
+                    "Number of parallel workers for preprocessing when using HuggingFace Datasets. "
+                    "Applies to both streaming and cached modes. "
+                    "Increase this value if you have more CPU cores available. "
+                    "Default: 8."
+                ),
+            )
+
             parser.add_argument(
                 "--start-rollout-id",
                 type=int,
