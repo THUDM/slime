@@ -11,7 +11,7 @@ def get_logits_and_tokens_offset_with_cp(
     response_length: int,
 ):
     """
-    All offsets start from the begining of the prompt.
+    All offsets start from the beginning of the prompt.
     """
     cp_rank = mpu.get_context_parallel_rank()
     cp_size = mpu.get_context_parallel_world_size()
