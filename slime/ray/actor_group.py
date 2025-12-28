@@ -107,7 +107,7 @@ class RayTrainGroup:
 
     def async_init(self, args, role, with_ref=False):
         """
-        Allocate GPU resourced and initialize model, optimzier, local ckpt, etc.
+        Allocate GPU resources and initialize model, optimizer, local ckpt, etc.
         """
         self.args = args
         return [actor.init.remote(args, role, with_ref=with_ref) for actor in self._actor_handlers]
