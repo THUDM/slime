@@ -200,10 +200,12 @@ def compute_entropy_from_logits(logits: torch.Tensor, process_group) -> torch.Te
 def get_grpo_returns(
     rewards: torch.Tensor,
     kl: list[torch.Tensor],
+    kl_coef: float = 0.0,
 ):
     returns = []
     for i in range(len(rewards)):
-        returns.append(torch.ones_like(kl[i]) * rewards[i])
+        # Apply KL penalty to returns: reward - kl_coef * kl
+        returns.append(torch.ones_like(kl[i]) * rewards[i] - kl_coef * kl[i])
     return returns
 
 
