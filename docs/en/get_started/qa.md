@@ -55,7 +55,7 @@
 
     Please verify that the model corresponding to `--hf-checkpoint` has its stop tokens configured correctly. If not, you can set them using the `--rollout-stop` or `--rollout-stop-token-ids` arguments.
 
-11. **Sglang shows an `an illegal memory access was encountered` error.**
+11. **SGLang shows an `an illegal memory access was encountered` error.**
 
     According to the sglang documentation ([https://docs.sglang.ai/references/troubleshooting.html](https://docs.sglang.ai/references/troubleshooting.html)), this could be an OOM error. Consider reducing the value of `--sglang-mem-fraction-static`.
 
