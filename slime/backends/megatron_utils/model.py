@@ -207,7 +207,7 @@ def forward_only(
             [
                 "tokens",
                 "loss_masks",
-                "multimodal_inputs",
+                "multimodal_train_inputs",
                 "total_lengths",
                 "response_lengths",
             ],
@@ -225,7 +225,7 @@ def forward_only(
             labels=None,
             packed_seq_params=packed_seq_params,
             loss_mask=batch["full_loss_masks"],
-            **(batch["multimodal_inputs"] if batch["multimodal_inputs"] is not None else {}),
+            **(batch["multimodal_train_inputs"] if batch["multimodal_train_inputs"] is not None else {}),
         )
 
         return output_tensor, partial(
@@ -354,7 +354,7 @@ def train_one_step(
             data_iterator,
             [
                 "tokens",
-                "multimodal_inputs",
+                "multimodal_train_inputs",
                 "packed_seq_params",
                 "total_lengths",
                 "response_lengths",
@@ -392,7 +392,7 @@ def train_one_step(
                 packed_seq_params=batch["packed_seq_params"],
                 loss_mask=batch["full_loss_masks"],
                 mtp_kwargs={"mtp_labels": batch["tokens"]} if args.enable_mtp_training else {},
-                **(batch["multimodal_inputs"] if batch["multimodal_inputs"] is not None else {}),
+                **(batch["multimodal_train_inputs"] if batch["multimodal_train_inputs"] is not None else {}),
             )
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":

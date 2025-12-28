@@ -356,7 +356,7 @@ index a1230568c..1fd52f65a 100644
                      },
                  )
 diff --git a/megatron/core/optimizer/distrib_optimizer.py b/megatron/core/optimizer/distrib_optimizer.py
-index 6e093f96f..c1dfe205b 100644
+index 6e093f96f..eac21a3ea 100644
 --- a/megatron/core/optimizer/distrib_optimizer.py
 +++ b/megatron/core/optimizer/distrib_optimizer.py
 @@ -677,6 +677,8 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
@@ -368,6 +368,15 @@ index 6e093f96f..c1dfe205b 100644
  
          # Grad scaler state.
          if self.grad_scaler:
+@@ -1646,6 +1648,8 @@ class DistributedOptimizer(MixedPrecisionOptimizer):
+                             if key == 'padding':
+                                 tensors[key] = LocalNonpersistentObject(tensors[key])
+                                 continue
++                            if key == 'step':
++                                continue
+                             assert tensors[key].shape == (gbuf_local_end - gbuf_local_start,), (
+                                 tensors[key].shape,
+                                 gbuf_local_start,
 diff --git a/megatron/core/parallel_state.py b/megatron/core/parallel_state.py
 index a273002b9..4f821cfd5 100644
 --- a/megatron/core/parallel_state.py
