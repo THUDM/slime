@@ -97,7 +97,7 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
 
 ### Megatron 格式 转换为 Hugging Face 格式
 
-可以通过这样的方式将训练过程中保存的 Megatron 格式的权重转换回 Huggingface 格式：
+可以通过这样的方式将训练过程中保存的 Megatron 格式的权重转换回 Hugging Face 格式：
 
 ```bash
 PYTHONPATH=/root/Megatron-LM python tools/convert_torch_dist_to_hf.py \
