@@ -23,7 +23,7 @@ set -a && source examples/tau-bench/tau2/.env && set +a
 
 **Evaluate** (uses published checkpoint, ~2h on 2xH100):
 ```bash
-# Terminal 1: Policy server
+# Terminal 1: Policy server (use `--tp 1` on single-GPU)
 CUDA_VISIBLE_DEVICES=0,1 python3 -m sglang.launch_server \
   --model-path Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
   --host 0.0.0.0 --port 30000 --tp 2 --mem-fraction-static 0.70
@@ -292,7 +292,7 @@ User: "Done. Still no data."
 
 Download the [GRPO checkpoint](https://huggingface.co/Jarrodbarnes/Qwen3-4B-tau2-grpo-v1), start the policy server, and run evaluation:
 
-**1. Policy model (port 30000)**:
+**1. Policy model (port 30000)** (use `--tp 1` on single-GPU):
 ```bash
 CUDA_VISIBLE_DEVICES=0,1 python3 -m sglang.launch_server \
   --model-path Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
