@@ -284,7 +284,7 @@ def get_data_iterator(
         data_iterator = _generate_data_iterator(rollout_data, args.micro_batch_size)
     else:
         assert args.max_tokens_per_gpu is not None
-        # calculate the number of mirobatches for each step
+        # calculate the number of microbatches for each step
         samples = rollout_data["total_lengths"]
         assert len(samples) == num_local_samples
         num_microbatches = []
@@ -308,7 +308,7 @@ def get_data_iterator(
 
         # balance the each micro batch
         samples = rollout_data["total_lengths"]
-        # balance the number of mirobatches across steps
+        # balance the number of microbatches across steps
         micro_batch_indices = []
         for i, num_mbs in enumerate(num_microbatches):
             start, end = i * num_local_gbs, (i + 1) * num_local_gbs
