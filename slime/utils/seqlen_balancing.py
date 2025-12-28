@@ -145,7 +145,7 @@ def greedy_partition(seqlen_list: list[int], k_partitions: int, equal_size: bool
 
 def get_seqlen_balanced_partitions(seqlen_list: list[int], k_partitions: int, equal_size: bool):
     """get order of seq lengths to make partitions balanced, this is
-        used in balacing sum of seqlength across dp ranks and microbatches
+        used in balancing sum of seqlength across dp ranks and microbatches
     Parameters:
         seqlen_list (List[int]):
             seq lengths of each items
