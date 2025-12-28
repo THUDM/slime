@@ -80,7 +80,7 @@ Complete performance comparison (test split; Pass@4 is the headline metric):
 - **Pass@K matters for RL**: Multi-sampling at inference (Pass@4) gains +24.2 percentage points over greedy decoding. RL models benefit more from exploration than prompted baselines.
 - **Domain-specific gains**: Retail (76%) and airline (50%) saw massive improvements. Telecom (44%), constrained by dual-control complexity, still improved 2.2× over baseline.
 
-[Full training logs on WandB →](https://wandb.ai/jbarnes850-near-protocol/tau2-cookbook)
+[WandB runs (public): SFT + GRPO v1 →](https://wandb.ai/jbarnes850-near-protocol/tau2-cookbook)
 
 ![Tau2 performance comparison](public/performance-chart.jpeg)
 
@@ -162,7 +162,7 @@ set -a && source examples/tau-bench/tau2/.env && set +a
 
 **Dataset** (public): [tau2-sft-seed-v3](https://huggingface.co/datasets/Jarrodbarnes/tau2-sft-seed-v3) - Filtered trajectories from rejection sampling
 
-**Training logs**: [WandB project](https://wandb.ai/jbarnes850-near-protocol/tau2-cookbook) - Full metrics, training curves, sample outputs (public; login if you hit access issues)
+**Training logs**: [WandB project](https://wandb.ai/jbarnes850-near-protocol/tau2-cookbook) - Public SFT + GRPO v1 runs and metrics
 
 ## Methodology (why this works)
 
@@ -378,7 +378,7 @@ CUDA_VISIBLE_DEVICES=0,1 NUM_GPUS=2 bash examples/tau-bench/tau2/run_grpo.sh
 
 Adjust `GPUS`, `CUDA_VISIBLE_DEVICES`, and `NUM_GPUS` for your machine to avoid overlap.
 
-Training takes ~2 hours on 8×H100s. [Reference logs](https://wandb.ai/jbarnes850-near-protocol/tau2-cookbook).
+Training takes ~2 hours on 8×H100s. [Reference logs (SFT + GRPO v1)](https://wandb.ai/jbarnes850-near-protocol/tau2-cookbook).
 
 ## Smoke tests (documented)
 
