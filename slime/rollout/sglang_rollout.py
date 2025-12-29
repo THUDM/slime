@@ -533,7 +533,7 @@ async def eval_rollout_single_dataset(
 
     data = []
     do_print = True
-    pbar = tqdm(total=len(tasks), desc="Rollout generation", disable=not do_print)
+    pbar = tqdm(total=len(tasks), desc=f"Eval {dataset_cfg.name}", disable=not do_print)
     for coro in asyncio.as_completed(tasks):
         sample = await coro
         if do_print:
