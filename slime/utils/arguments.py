@@ -1646,10 +1646,6 @@ def slime_validate_args(args):
         args.prefill_num_servers is not None and args.rollout_external
     ), "prefill_num_servers cannot be set when rollout_external is set."
 
-    assert args.qkv_format in [
-        "thd",
-        "bshd",
-    ], f"qkv_format {args.qkv_format} is not supported. (only 'thd' and 'bshd' are supported)"
     if args.qkv_format == "bshd":
         assert args.train_backend == "megatron", "bshd format is only supported for megatron backend."
         assert (

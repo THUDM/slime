@@ -575,7 +575,7 @@ def policy_loss_function(
             modified_response_masks,
             args.calculate_per_token_loss,
             args.qkv_format,
-            batch.get("max_seq_lens", None),
+            max_seq_lens,
         )
 
     # Determine pg_loss reducer: use custom if specified, otherwise default
