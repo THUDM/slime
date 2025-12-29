@@ -397,13 +397,13 @@ def train_one_step(
                 "packed_seq_params": batch["packed_seq_params"],
                 "loss_mask": batch["full_loss_masks"],
             }
-            
+
             if args.enable_mtp_training:
                 forward_kwargs["mtp_kwargs"] = {"mtp_labels": batch["tokens"]}
-            
+
             if batch["multimodal_train_inputs"] is not None:
                 forward_kwargs.update(batch["multimodal_train_inputs"])
-            
+
             output_tensor = model(**forward_kwargs)
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
