@@ -2,6 +2,7 @@
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
 
 from argparse import Namespace
+from dataclasses import dataclass
 
 import torch
 import torch.distributed as dist
@@ -51,44 +52,106 @@ def compute_approx_kl(
     return kl
 
 
-def compute_opsm_mask(
-    args: Namespace,
+@dataclass
+class OpsmInputs:
+    seq_kls: list[torch.Tensor]
+    loss_masks: list[torch.Tensor]
+    effective_loss_masks: list[torch.Tensor]
+
+
+def build_opsm_inputs_from_log_probs(
     full_log_probs: list[torch.Tensor],
     full_old_log_probs: list[torch.Tensor],
-    advantages: list[torch.Tensor],
     loss_masks: list[torch.Tensor],
+) -> OpsmInputs:
+    seq_kls = [
+        ((full_old_log_prob - full_log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+        for full_log_prob, full_old_log_prob, loss_mask in zip(
+            full_log_probs, full_old_log_probs, loss_masks, strict=True
+        )
+    ]
+
+    return OpsmInputs(seq_kls=seq_kls, loss_masks=loss_masks, effective_loss_masks=loss_masks)
+
+
+def build_opsm_inputs_from_seq_kls(
+    seq_kls: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    chunked_loss_masks: list[torch.Tensor],
+) -> OpsmInputs:
+    assert len(seq_kls) == len(loss_masks) == len(chunked_loss_masks), (
+        "seq_kls, loss_masks, and chunked_loss_masks must have the same length"
+    )
+    return OpsmInputs(seq_kls=seq_kls, loss_masks=loss_masks, effective_loss_masks=chunked_loss_masks)
+
+
+def compute_opsm_mask(
+    args: Namespace,
+    advantages: list[torch.Tensor],
+    *,
+    opsm_inputs: OpsmInputs,
+    cp_group: dist.ProcessGroup | None = None,
+    cp_size: int = 1,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute Off-Policy Sequence Masking (OPSM) mask.
 
     Args:
         args: Configuration containing `opsm_delta` threshold.
-        full_log_probs: Current policy log-probs per sample.
-        full_old_log_probs: Old policy log-probs per sample.
         advantages: Advantage values per sample.
-        loss_masks: Loss masks per sample.
+        opsm_inputs: Precomputed sequence-level KLs and aligned loss masks.
+        cp_group: Optional context-parallel process group for distributed
+            reductions when ``cp_size > 1``.
+        cp_size: Context-parallel world size.
 
     Returns:
         Tuple of `(opsm_mask, opsm_clipfrac)` where `opsm_mask` is a
         concatenated tensor of per-token masks and
-        `opsm_clipfrac` is the count of masked sequences.
+        `opsm_clipfrac` is the sum of per-sequence masked-token fractions.
     """
-    opsm_mask_list = []
+    if cp_size > 1:
+        assert cp_group is not None, "cp_group is required when cp_size > 1"
+
+    opsm_mask_list: list[torch.Tensor] = []
     device = advantages[0].device
+    opsm_delta = args.opsm_delta
+
+    masked_token_counts: list[torch.Tensor] = []
+    total_token_counts: list[torch.Tensor] = []
+
+    for advantage, full_loss_mask, effective_loss_mask, seq_kl in zip(
+        advantages,
+        opsm_inputs.loss_masks,
+        opsm_inputs.effective_loss_masks,
+        opsm_inputs.seq_kls,
+        strict=True,
+    ):
+        if advantage.numel() != effective_loss_mask.numel():
+            raise ValueError(
+                "OPSM requires `advantages` and `effective_loss_masks` to be aligned. "
+                f"Got {advantage.numel()} vs {effective_loss_mask.numel()}."
+            )
+
+        masked_tokens = ((advantage < 0) & (seq_kl > opsm_delta)).to(dtype=effective_loss_mask.dtype)
+        masked_tokens = masked_tokens * effective_loss_mask
+        opsm_mask_list.append(1 - masked_tokens)
+
+        masked_token_counts.append(masked_tokens.sum())
+        total_token_counts.append(torch.clamp_min(full_loss_mask.sum().to(masked_tokens), 1))
+
+    opsm_mask = torch.cat(opsm_mask_list, dim=0) if opsm_mask_list else torch.tensor([], device=device)
     opsm_clipfrac = torch.tensor(0.0, device=device)
 
-    for full_log_prob, full_old_log_prob, advantage, loss_mask in zip(
-        full_log_probs, full_old_log_probs, advantages, loss_masks, strict=False
-    ):
-        # Calculate sequence-level KL
-        seq_kl = ((full_old_log_prob - full_log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+    if masked_token_counts:
+        masked_tokens = torch.stack(masked_token_counts)
+        total_tokens = torch.stack(total_token_counts)
 
-        # Create mask: 0 if (advantage < 0 and seq_kl > delta), else 1
-        mask = ((advantage < 0) & (seq_kl > args.opsm_delta)).float()
-        opsm_clipfrac += mask.sum() / torch.clamp_min(loss_mask.sum(), 1)
+        if cp_size > 1:
+            dist.all_reduce(masked_tokens, group=cp_group)
 
-        opsm_mask_list.append(1 - mask)
+        opsm_clipfrac = (masked_tokens / total_tokens).sum()
+        if cp_size > 1:
+            opsm_clipfrac = opsm_clipfrac / cp_size
 
-    opsm_mask = torch.cat(opsm_mask_list, dim=0)
     return opsm_mask, opsm_clipfrac
 
 
@@ -113,9 +176,9 @@ def compute_gspo_kl(
     # Compute sequence-level KL and expand to per-token
     ppo_kl = [
         ((old_logprob - log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
-        for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks, strict=False)
+        for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks, strict=True)
     ]
-    ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, local_log_probs, strict=False)]
+    ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, local_log_probs, strict=True)]
     ppo_kl = torch.cat(ppo_kl, dim=0)
 
     return ppo_kl
@@ -300,7 +363,7 @@ def get_reinforce_plus_plus_baseline_advantages(
     # Broadcast to get unwhitened advantages
     unwhitened_advantages = [
         torch.ones_like(kl_tensor) * reward_val - kl_coef * kl_tensor
-        for kl_tensor, reward_val in zip(kl, rewards, strict=False)
+        for kl_tensor, reward_val in zip(kl, rewards, strict=True)
     ]
 
     return unwhitened_advantages
@@ -407,9 +470,7 @@ def get_advantages_and_returns_batch(
             full_values_list = []
             full_rewards_list = []
 
-            for total_len, resp_len, v, r in zip(
-                total_lengths, response_lengths, values_list, rewards_list, strict=False
-            ):
+            for total_len, resp_len, v, r in zip(total_lengths, response_lengths, values_list, rewards_list, strict=True):
                 full_v = all_gather_with_cp(v, total_len, resp_len)
                 full_r = all_gather_with_cp(r, total_len, resp_len)
                 full_values_list.append(full_v)
@@ -453,11 +514,7 @@ def get_advantages_and_returns_batch(
             from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
 
             for total_len, resp_len, adv_row, ret_row in zip(
-                total_lengths,
-                response_lengths,
-                full_advantages,
-                full_returns,
-                strict=False,
+                total_lengths, response_lengths, full_advantages, full_returns, strict=True
             ):
                 adv_full = adv_row  # shape = [resp_len_i padded to max_len]
                 ret_full = ret_row
