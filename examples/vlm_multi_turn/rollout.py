@@ -7,6 +7,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+import torch
 
 # When executed as a module: python -m examples.vlm_multi_turn.rollout
 from slime.rollout.sglang_rollout import GenerateState
@@ -15,11 +16,10 @@ from slime.utils.processing_utils import encode_image_for_rollout_engine
 from slime.utils.types import Sample
 
 
-DEFAULT_ENV_MODULE = "examples.vlm_multi_turn.env_sokoban"
+DEFAULT_ENV_MODULE = "examples.vlm_multi_turn.env_geo3k"
 DEFAULT_ROLLOUT_CONFIG = {
-    "max_turns": 20,
+    "max_turns": 3,
 }
-
 
 def _load_env_module(env_path: str | None):
     """Load the interaction environment module from a module path or a file path."""
@@ -72,69 +72,73 @@ def _format_observation(env_module, observation: dict) -> dict:
     return {"role": "user", "content": content}
 
 
-def _merge_metadata(sample: Sample, updates: dict | None):
-    if not updates:
-        return
-    sample.metadata = sample.metadata or {}
-    for key, value in updates.items():
-        if key in sample.metadata and isinstance(sample.metadata[key], dict) and isinstance(value, dict):
-            sample.metadata[key] = {**sample.metadata[key], **value}
-        else:
-            sample.metadata[key] = value
-
-
-def _handle_reset(env_module, env, observation: dict, sample: Sample, reset_info: dict | None):
-    on_reset = getattr(env_module, "on_reset", None)
-    if callable(on_reset):
-        updates = on_reset(env=env, observation=observation, sample=sample, reset_info=reset_info)
-        _merge_metadata(sample, updates)
-
-
-def _finalize_episode(
-    env_module,
-    env,
-    observation: dict,
-    sample: Sample,
-    responses: list[str],
-) -> dict | None:
-    finalize_fn = getattr(env_module, "finalize_episode", None)
-    if callable(finalize_fn):
-        result = finalize_fn(
-            env=env,
-            observation=observation,
-            sample=sample,
-            responses=responses,
-        )
-        updates = result or {}
-        updates.setdefault("turns", len(responses))
-        return updates
-    return {}
-
-
-def _encode_for_generation(
+def _encode_observation_for_generation(
     tokenizer,
     processor,
-    messages: list[dict],
+    message: dict,
     metadata: dict | None,
     apply_chat_template: bool,
     apply_chat_template_kwargs: dict | None,
 ):
     """
-    Encode the conversation for SGLang generation (with generation prompt) and return payload pieces.
+    Encode a single observation turn that may include images/videos in the content list.
     """
-    from slime.utils.processing_utils import prepare_model_inputs
+    if apply_chat_template:
+        formatted_prompt = tokenizer.apply_chat_template(
+            [message],
+            tools=metadata.get("tools") if metadata else None,
+            tokenize=False,
+            add_generation_prompt=True,
+            **(apply_chat_template_kwargs or {}),
+        )
+    else:
+        formatted_prompt = [message]
 
-    prompt_ids, extra_info = prepare_model_inputs(
-        messages,
-        tokenizer,
-        processor,
-        metadata,
-        apply_chat_template,
-        apply_chat_template_kwargs,
-    )
+    multimodal_inputs = None
+    multimodal_train_inputs = None
+    if processor:
+        # Convert content-embedded images/videos into multimodal inputs for the processor.
+        from qwen_vl_utils import process_vision_info
 
-    image_data = [encode_image_for_rollout_engine(img) for img in extra_info.get("images", [])]
-    return prompt_ids, image_data, extra_info.get("multimodal_inputs")
+        images, videos = process_vision_info([message])
+        multimodal_inputs = {"images": images, "videos": videos}
+        processor_output = processor(text=formatted_prompt, **multimodal_inputs)
+        prompt_ids = processor_output["input_ids"][0]
+        multimodal_train_inputs = {
+            k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]
+        } or None
+    else:
+        prompt_ids = tokenizer.encode(formatted_prompt, add_special_tokens=False)
+
+    image_data = []
+    if multimodal_inputs and multimodal_inputs.get("images"):
+        image_data = [encode_image_for_rollout_engine(img) for img in multimodal_inputs["images"]]
+    return prompt_ids, image_data, multimodal_inputs, multimodal_train_inputs
+
+
+def _merge_multimodal_train_inputs(existing: dict | None, new: dict | None) -> dict | None:
+    """
+    Concatenate per-image tensors to keep a single batched multimodal_train_inputs dict.
+    """
+    if not new:
+        return existing
+    if not existing:
+        return new
+
+    merged = dict(existing)
+    for key, val in new.items():
+        if key not in merged:
+            merged[key] = val
+            continue
+        if isinstance(merged[key], torch.Tensor) and isinstance(val, torch.Tensor):
+            merged[key] = torch.cat([merged[key], val], dim=0)
+        elif isinstance(merged[key], list) and isinstance(val, list):
+            merged[key] = merged[key] + val
+        elif isinstance(merged[key], dict) and isinstance(val, dict):
+            merged[key] = {**merged[key], **val}
+        else:
+            merged[key] = val
+    return merged
 
 
 async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
@@ -154,20 +158,23 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
     max_turns = rollout_config["max_turns"]
     env = _build_env(env_module, sample, args)
     try:
-        observation, reset_info = env.reset()
-        _handle_reset(env_module, env, observation, sample, reset_info)
+        observation, _reset_info = env.reset()
 
-        # Use the preloaded prompt (contains system + first image) as the initial conversation state
-        messages = deepcopy(sample.prompt)
-
-        prompt_ids, image_data, multimodal_inputs = _encode_for_generation(
-            tokenizer,
-            processor,
-            messages,
-            sample.metadata,
-            getattr(args, "apply_chat_template", False),
-            args.apply_chat_template_kwargs,
-        )
+        #prepare generation inputs from sample.prompt and sample.multimodal_inputs
+        if processor:
+            processor_output = processor(text=sample.prompt, **(sample.multimodal_inputs or {}))
+            prompt_ids = processor_output["input_ids"][0]
+            sample.multimodal_train_inputs = {
+                k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]
+            } or None
+        else:
+            prompt_ids = tokenizer.encode(sample.prompt, add_special_tokens=False)
+        image_data = []
+        if sample.multimodal_inputs and sample.multimodal_inputs.get("images"):
+            image_data = [
+                encode_image_for_rollout_engine(img) for img in sample.multimodal_inputs["images"]
+            ]
+        current_image_data = image_data
 
         #sample.rollout_response_length is length of response produced by the actor,
         #excluding initial prompt tokens and env feedback tokens.
@@ -184,15 +191,15 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
             sample.status = Sample.Status.TRUNCATED
             return sample
 
+
         # Initialize token/logprob/loss_mask tracking to be perfectly aligned with model inputs
         if not sample.tokens:
             sample.tokens = list(prompt_ids)
         response_tokens: list[int] = sample.tokens[len(prompt_ids) :] if len(sample.tokens) >= len(prompt_ids) else []
         sample.loss_mask = sample.loss_mask or []
         sample.rollout_log_probs = sample.rollout_log_probs or []
-        sample.multimodal_inputs = multimodal_inputs if sample.multimodal_inputs is None else sample.multimodal_inputs
         sample.response_length = len(response_tokens)
-        current_image_data = image_data
+
 
         generated_responses: list[str] = []
 
@@ -226,7 +233,6 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
             sample.rollout_response_length += len(new_response_tokens)
             sample.response_length = len(response_tokens)
 
-            messages.append({"role": "assistant", "content": response_text})
             generated_responses.append(response_text)
 
             if "max_new_tokens" in sampling_params and sampling_params["max_new_tokens"] is not None:
@@ -238,27 +244,34 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
             if sampling_params["max_new_tokens"] == 0:
                 sample.status = Sample.Status.TRUNCATED
                 return sample
+            
+            finish_type = output["meta_info"]["finish_reason"]["type"]
+            match finish_type:
+                case "length":
+                    sample.status = Sample.Status.TRUNCATED
+                    break
+                case "abort":
+                    sample.status = Sample.Status.ABORTED
+                    break
 
+            #interact with environment to get feedback
             observation, done, step_info = env.step(response_text)
-            step_record = {"turn": turn_idx, "info": step_info}
-            sample.metadata.setdefault("trajectory", []).append(step_record)
-
             if done:
                 sample.status = Sample.Status.COMPLETED
                 break
 
-            # Combine previous action text with the new observation image for the next user turn
             next_user_message = _format_observation(env_module, observation)
-            messages.append(next_user_message)
 
-            # Encode only the new observation turn and append its tokens.
-            obs_prompt_ids, obs_image_data, obs_multimodal_inputs = _encode_for_generation(
-                tokenizer,
-                processor,
-                [next_user_message],
-                sample.metadata,
-                getattr(args, "apply_chat_template", False),
-                args.apply_chat_template_kwargs,
+            # Encode the new observation turn and append its tokens.
+            obs_prompt_ids, obs_image_data, obs_multimodal_inputs, obs_multimodal_train_inputs = (
+                _encode_observation_for_generation(
+                    tokenizer,
+                    processor,
+                    next_user_message,
+                    sample.metadata,
+                    getattr(args, "apply_chat_template", False),
+                    args.apply_chat_template_kwargs,
+                )
             )
 
             # Drop a leading BOS if present to avoid injecting it mid-stream.
@@ -268,7 +281,7 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
 
             sample.tokens.extend(obs_prompt_ids)
             response_tokens.extend(obs_prompt_ids)
-            sample.loss_mask.extend([0] * len(obs_prompt_ids))  # user/obs + next assistant prefix => masked
+            sample.loss_mask.extend([0] * len(obs_prompt_ids))  # user/obs + next assistant prefix => masked as zero
             sample.rollout_log_probs.extend([0.0] * len(obs_prompt_ids))  # keep logprob aligned with loss_mask
             sample.response_length = len(response_tokens)
 
@@ -280,48 +293,30 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                     sample.multimodal_inputs = obs_multimodal_inputs
                 elif isinstance(sample.multimodal_inputs, dict) and isinstance(obs_multimodal_inputs, dict):
                     for key, val in obs_multimodal_inputs.items():
+                        if val is None:
+                            continue
                         if (
                             key in sample.multimodal_inputs
                             and isinstance(sample.multimodal_inputs[key], list)
                             and isinstance(val, list)
                         ):
                             sample.multimodal_inputs[key].extend(val)
-                        elif (
-                            key in sample.multimodal_inputs
-                            and isinstance(sample.multimodal_inputs[key], dict)
-                            and isinstance(val, dict)
-                        ):
-                            sample.multimodal_inputs[key] = {**sample.multimodal_inputs[key], **val}
-                        else:
-                            sample.multimodal_inputs[key] = val
                 else:
                     sample.multimodal_inputs = obs_multimodal_inputs
 
-            
+            if obs_multimodal_train_inputs:
+                # Concatenate per-image tensors (e.g., pixel_values, image_grid_thw) across turns.
+                sample.multimodal_train_inputs = _merge_multimodal_train_inputs(
+                    sample.multimodal_train_inputs, obs_multimodal_train_inputs
+                )
+
             if turn_idx + 1 >= max_turns:
                 sample.status = Sample.Status.COMPLETED
                 break
-            
-            finish_type = output["meta_info"]["finish_reason"]["type"]
-            match finish_type:
-                case "length":
-                    sample.status = Sample.Status.TRUNCATED
-                    break
-                case "abort":
-                    sample.status = Sample.Status.ABORTED
-                    break
-
-        # Decode only the response segment (everything after the initial prompt)
-        metadata_updates = _finalize_episode(
-            env_module,
-            env,
-            observation,
-            sample=sample,
-            responses=generated_responses,
-        )
+   
+        # Decode only the response segment (excluding the initial prompt while including env's feedback tokens)
         sample.response = tokenizer.decode(response_tokens, skip_special_tokens=False)
         sample.response_length = len(response_tokens)
-        _merge_metadata(sample, metadata_updates)
 
         if sample.status is None:
             sample.status = Sample.Status.COMPLETED
