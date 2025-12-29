@@ -114,7 +114,7 @@ def get_batch(
             loss_mask = slice_with_cp(loss_mask, 0, qkv_format, max_seq_len=max_seqlen)
             loss_masks.append(loss_mask)
             loss_masks = torch.stack(loss_masks)
-        elif qkv_format == "thd": 
+        elif qkv_format == "thd":
             loss_mask = slice_with_cp(loss_mask, 0, qkv_format)
             loss_masks.append(loss_mask)
             loss_masks = torch.cat(loss_masks)
