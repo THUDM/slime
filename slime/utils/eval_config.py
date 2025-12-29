@@ -28,6 +28,11 @@ DATASET_RUNTIME_SPECS: dict[str, dict[str, tuple[str, ...]]] = {
         "default_keys": ("top_k",),
         "arg_attrs": ("eval_top_k", "rollout_top_k"),
     },
+    "max_context_len": {
+        "dataset_keys": ("max_context_len",),
+        "default_keys": ("max_context_len",),
+        "arg_attrs": ("eval_max_context_len", "rollout_max_context_len"),
+    },
     "max_response_len": {
         "dataset_keys": ("max_response_len",),
         "default_keys": ("max_response_len",),
@@ -36,6 +41,11 @@ DATASET_RUNTIME_SPECS: dict[str, dict[str, tuple[str, ...]]] = {
 }
 
 DATASET_SAMPLE_SPECS: dict[str, dict[str, tuple[str, ...]]] = {
+    "apply_chat_template": {
+        "dataset_keys": ("apply_chat_template",),
+        "default_keys": ("apply_chat_template",),
+        "arg_attrs": ("apply_chat_template",),
+    },
     "input_key": {
         "dataset_keys": ("input_key",),
         "default_keys": ("input_key",),
@@ -55,6 +65,11 @@ DATASET_SAMPLE_SPECS: dict[str, dict[str, tuple[str, ...]]] = {
         "dataset_keys": ("metadata_key",),
         "default_keys": ("metadata_key",),
         "arg_attrs": ("metadata_key",),
+    },
+    "custom_generate_function_path": {
+        "dataset_keys": ("custom_generate_function_path",),
+        "default_keys": ("custom_generate_function_path",),
+        "arg_attrs": ("custom_generate_function_path",),
     },
 }
 
@@ -98,8 +113,10 @@ class EvalDatasetConfig:
     name: str
     path: str
     rm_type: str | None = None
+    custom_generate_function_path: str | None = None
 
     # Dataset-specific overrides
+    apply_chat_template: bool | None = None
     input_key: str | None = None
     label_key: str | None = None
     tool_key: str | None = None
@@ -110,6 +127,7 @@ class EvalDatasetConfig:
     temperature: float | None = None
     top_p: float | None = None
     top_k: int | None = None
+    max_context_len: int | None = None
     max_response_len: int | None = None
     stop: list[str] | None = None
     stop_token_ids: list[int] | None = None
@@ -126,6 +144,7 @@ class EvalDatasetConfig:
         return (
             self.name,
             self.path,
+            self.apply_chat_template,
             self.input_key,
             self.label_key,
             self.tool_key,
