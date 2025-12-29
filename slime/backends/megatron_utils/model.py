@@ -688,6 +688,43 @@ def save(
         enable_forward_pre_hook(model)
 
 
+def save_hf_model(model: Sequence[DDP]) -> None:
+    """Save Megatron model in HuggingFace format.
+
+    Args:
+        model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
+    """
+    args = get_args()
+
+    if args.save_hf is None:
+        return
+
+    should_log = (
+        mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
+    )
+
+    try:
+        from megatron.bridge import AutoBridge
+        from slime.utils.megatron_bridge_utils import patch_megatron_model
+
+        if should_log:
+            logger.info(f"Saving model in HuggingFace format to {args.save_hf}")
+
+        bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
+
+        with patch_megatron_model(model):
+            bridge.save_hf_pretrained(
+                model,
+                path=args.save_hf,
+            )
+
+        if should_log:
+            logger.info(f"Successfully saved HuggingFace model to {args.save_hf}")
+    except Exception as e:
+        if should_log:
+            logger.error(f"Failed to save HuggingFace format: {e}")
+
+
 def initialize_model_and_optimizer(
     args: Namespace, role: str = "actor"
 ) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
