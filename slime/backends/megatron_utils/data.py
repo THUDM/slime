@@ -113,12 +113,15 @@ def get_batch(
         if qkv_format == "bshd":
             loss_mask = slice_with_cp(loss_mask, 0, qkv_format, max_seq_len=max_seqlen)
             loss_masks.append(loss_mask)
-            loss_masks = torch.stack(loss_masks)
         elif qkv_format == "thd":
             loss_mask = slice_with_cp(loss_mask, 0, qkv_format)
             loss_masks.append(loss_mask)
-            loss_masks = torch.cat(loss_masks)
-            loss_masks = F.pad(loss_masks, (0, pad), value=0).unsqueeze(0)
+
+    if qkv_format == "bshd":
+        loss_masks = torch.stack(loss_masks)
+    elif qkv_format == "thd":
+        loss_masks = torch.cat(loss_masks)
+        loss_masks = F.pad(loss_masks, (0, pad), value=0).unsqueeze(0)
 
     assert loss_masks.shape == tokens.shape, f"loss_masks.shape: {loss_masks.shape}, tokens.shape: {tokens.shape}"
     batch["full_loss_masks"] = loss_masks
