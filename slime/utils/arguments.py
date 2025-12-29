@@ -680,7 +680,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 "--save-hf",
                 type=str,
                 default=None,
-                help=("Path to save the model in HuggingFace format when using Megatron backend. "),
+                help="Path to save the model in HuggingFace format when using Megatron backend.",
             )
             reset_arg(parser, "--seed", type=int, default=1234)
             reset_arg(parser, "--clip-grad", type=float, default=1.0)

@@ -83,13 +83,13 @@ def train(args):
                 actor_model.save_model(
                     rollout_id,
                     force_sync=rollout_id == args.num_rollout - 1,
-                    save_hf=args.save_hf and rollout_id == args.num_rollout - 1,
+                    save_hf=(args.save_hf is not None) and (rollout_id == args.num_rollout - 1),
                 )
             if args.use_critic:
                 critic_model.save_model(
                     rollout_id,
                     force_sync=rollout_id == args.num_rollout - 1,
-                    save_hf=args.save_hf and rollout_id == args.num_rollout - 1,
+                    save_hf=(args.save_hf is not None) and (rollout_id == args.num_rollout - 1),
                 )
             if args.rollout_global_dataset:
                 ray.get(rollout_manager.save.remote(rollout_id))
