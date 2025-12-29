@@ -16,6 +16,18 @@ index ef52bda7f..537d892dc 100644
      def add(self, req: Req, is_retracted: bool = False) -> None:
          """Add a request to the pending queue."""
          if self._check_if_req_exceed_kv_capacity(req):
+diff --git a/python/sglang/srt/disaggregation/decode_schedule_batch_mixin.py b/python/sglang/srt/disaggregation/decode_schedule_batch_mixin.py
+index efa979460..d2d049a20 100644
+--- a/python/sglang/srt/disaggregation/decode_schedule_batch_mixin.py
++++ b/python/sglang/srt/disaggregation/decode_schedule_batch_mixin.py
+@@ -83,6 +83,7 @@ class ScheduleBatchDisaggregationDecodeMixin:
+             seq_lens, dtype=torch.int32, device=self.device
+         )
+         self.out_cache_loc = out_cache_loc
++        self.out_cache_loc_cpu = out_cache_loc.to("cpu", non_blocking=True)
+         self.seq_lens_sum = sum(seq_lens)
+ 
+         if self.return_logprob:
 diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
 index d4414d084..c5fb10155 100644
 --- a/python/sglang/srt/disaggregation/mooncake/conn.py
@@ -1433,7 +1445,7 @@ index b90cf0616..8a5cbdbed 100644
              recv_obj.output_token_logprobs_val[recv_obj_index]
          )
 diff --git a/python/sglang/srt/model_executor/forward_batch_info.py b/python/sglang/srt/model_executor/forward_batch_info.py
-index 3a85e6a7e..d2560e79b 100644
+index 3a85e6a7e..5d74adca6 100644
 --- a/python/sglang/srt/model_executor/forward_batch_info.py
 +++ b/python/sglang/srt/model_executor/forward_batch_info.py
 @@ -51,6 +51,7 @@ from sglang.srt.layers.dp_attention import (
@@ -1486,18 +1498,16 @@ index 3a85e6a7e..d2560e79b 100644
                      # text only
                      mrope_positions = torch.tensor(
                          [
-@@ -823,6 +834,10 @@ class ForwardBatch:
+@@ -823,6 +834,8 @@ class ForwardBatch:
              )
  
          self.out_cache_loc = self._pad_tensor_to_size(self.out_cache_loc, num_tokens)
 +        if self.out_cache_loc_cpu is not None:
-+            self.out_cache_loc_cpu = self._pad_tensor_to_size(
-+                self.out_cache_loc_cpu, num_tokens
-+            )
++            self.out_cache_loc_cpu = self.out_cache_loc.to("cpu", non_blocking=True)
          if self.encoder_lens is not None:
              self.encoder_lens = self._pad_tensor_to_size(self.encoder_lens, bs)
          self.positions = self._pad_tensor_to_size(self.positions, num_tokens)
-@@ -906,6 +921,7 @@ class ForwardBatch:
+@@ -906,6 +919,7 @@ class ForwardBatch:
                  self.spec_info.hidden_states = self.hidden_states_backup
              if hasattr(self, "output_cache_loc_backup"):
                  self.out_cache_loc = self.output_cache_loc_backup
@@ -1506,7 +1516,7 @@ index 3a85e6a7e..d2560e79b 100644
          elif self.forward_mode.is_decode() or self.forward_mode.is_idle():
              logits_output.next_token_logits = logits_output.next_token_logits[:bs]
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index 4d58278b7..5965c481e 100644
+index 4d58278b7..81c6a5c7c 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
 @@ -94,6 +94,11 @@ from sglang.srt.layers.dp_attention import (
@@ -1574,20 +1584,7 @@ index 4d58278b7..5965c481e 100644
      def model_specific_adjustment(self):
          server_args = self.server_args
  
-@@ -792,7 +836,11 @@ class ModelRunner:
-         )
-         with self.memory_saver_adapter.region(
-             GPU_MEMORY_TYPE_WEIGHTS,
--            enable_cpu_backup=enable_cpu_backup,
-+            enable_cpu_backup=(
-+                self.server_args.enable_weights_cpu_backup
-+                if not self.is_draft_worker
-+                else True
-+            ),
-         ):
-             self.model = get_model(
-                 model_config=self.model_config,
-@@ -2645,9 +2693,12 @@ class ModelRunner:
+@@ -2645,9 +2689,12 @@ class ModelRunner:
      ) -> Tuple[Union[LogitsProcessorOutput, PPProxyTensors], bool]:
          self.forward_pass_id += 1
  
@@ -1603,7 +1600,7 @@ index 4d58278b7..5965c481e 100644
          ):
              output = self._forward_raw(
                  forward_batch,
-@@ -2656,6 +2707,14 @@ class ModelRunner:
+@@ -2656,6 +2703,14 @@ class ModelRunner:
                  reinit_attn_backend,
                  split_forward_count,
              )
@@ -2147,10 +2144,18 @@ index 370aec2b6..47666d8f3 100644
              elif processor.__class__.__name__ not in {
                  "Qwen2_5_VLProcessor",
 diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
-index 8e7753dab..323788f39 100644
+index 8e7753dab..15a0823fd 100644
 --- a/python/sglang/srt/server_args.py
 +++ b/python/sglang/srt/server_args.py
-@@ -535,6 +535,7 @@ class ServerArgs:
+@@ -489,6 +489,7 @@ class ServerArgs:
+     cuda_graph_max_bs: Optional[int] = None
+     cuda_graph_bs: Optional[List[int]] = None
+     disable_cuda_graph: bool = False
++    disable_draft_cuda_graph: bool = False
+     disable_cuda_graph_padding: bool = False
+     enable_profile_cuda_graph: bool = False
+     enable_cudagraph_gc: bool = False
+@@ -535,6 +536,7 @@ class ServerArgs:
      disable_fast_image_processor: bool = False
      keep_mm_feature_on_device: bool = False
      enable_return_hidden_states: bool = False
@@ -2158,7 +2163,7 @@ index 8e7753dab..323788f39 100644
      scheduler_recv_interval: int = 1
      numa_node: Optional[List[int]] = None
      enable_deterministic_inference: bool = False
-@@ -1966,6 +1967,9 @@ class ServerArgs:
+@@ -1966,6 +1968,9 @@ class ServerArgs:
                  "Enable deterministic inference because of rl_on_policy_target."
              )
              self.enable_deterministic_inference = True
@@ -2168,7 +2173,19 @@ index 8e7753dab..323788f39 100644
              # TODO remove this environment variable as a whole
              os.environ["SGLANG_ENABLE_DETERMINISTIC_INFERENCE"] = "1"
  
-@@ -3705,6 +3709,11 @@ class ServerArgs:
+@@ -3462,6 +3467,11 @@ class ServerArgs:
+             action="store_true",
+             help="Disable cuda graph.",
+         )
++        parser.add_argument(
++            "--disable-draft-cuda-graph",
++            action="store_true",
++            help="Disable cuda graph for draft model in speculative decoding.",
++        )
+         parser.add_argument(
+             "--disable-cuda-graph-padding",
+             action="store_true",
+@@ -3705,6 +3715,11 @@ class ServerArgs:
              action="store_true",
              help="Enable returning hidden states with responses.",
          )
@@ -2247,3 +2264,16 @@ index b3d72df05..09a1634e0 100644
  
  
  @dataclass
+diff --git a/python/sglang/srt/speculative/eagle_worker.py b/python/sglang/srt/speculative/eagle_worker.py
+index 07e3798f1..dede648ee 100644
+--- a/python/sglang/srt/speculative/eagle_worker.py
++++ b/python/sglang/srt/speculative/eagle_worker.py
+@@ -222,7 +222,7 @@ class EAGLEWorker(TpModelWorker):
+         self.cuda_graph_runner = None
+         self.cuda_graph_runner_for_draft_extend = None
+ 
+-        if self.server_args.disable_cuda_graph:
++        if self.server_args.disable_cuda_graph or self.server_args.disable_draft_cuda_graph:
+             return
+ 
+         Device2DraftCudaGraphRunner = {
