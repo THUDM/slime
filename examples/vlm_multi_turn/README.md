@@ -1,35 +1,44 @@
-# VLM Multi-Turn (FSDP backend, sokoban dataset)
+# VLM Multi-Turn (FSDP backend, geo3k dataset)
+Training VLM with FSDP on [geo3k dataset](https://huggingface.co/datasets/hiyouga/geometry3k) with multi-turn reasoning with interactive environment feedback, using GRPO. For dataset, we used the [processed version](https://huggingface.co/datasets/chenhegu/geo3k_imgurl).
 
-Multi-turn VLM training on Sokoban with custom rollout, pluggable interactive env, and customized reward function.
+The multi-turn rollout is implemented through a custom generate function  `examples.vlm_multi_turn.rollout.generate`, overriding the original generate function.
 
-## How to run the training script
-1) Set basic env (override as needed):
+In terms of the environment interaction, this example initializes a custom interactive environment in `examples/vlm_multi_turn/env_geo3k.py` with the APIs below.
+<details>
+<summary>Environment API (geo3k)</summary>
+
+- `build_env(sample: Sample | None = None, args: Any | None = None, **_) -> Geo3kEnv`: constructs the env.
+- `reset() -> tuple[dict, dict]`: clears internal state.
+- `step(response_text: str) -> tuple[dict, bool, dict]`: parses the actor's response text and update the state. Return new observation, a flag that marks whether the task is done, and step_info.
+- `format_observation(observation: dict) -> dict`: converts an env observation into a chat message.
+</details><br>
+
+
+The reward model is the default math RM. 
+
+![VLM multi-turn geo3k reward](vlm_multi_turn_geo3k_reward.png)
+
+## Reproduce
 ```bash
-export WANDB_API_KEY=...                                  
-export SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-2B-Instruct       
-export SLIME_SCRIPT_NUM_GPUS=4                            
-export SLIME_SCRIPT_SOKOBAN_DATASET_ID=VeraIsHere/sokoban_processed
-export SLIME_SCRIPT_SOKOBAN_DATA_ROOT=/root/datasets/sokoban_processed
-export SLIME_SCRIPT_SOKOBAN_TRAIN_PATH=$SLIME_SCRIPT_SOKOBAN_DATA_ROOT/train.parquet
+# 1) Set environment variable
+export WANDB_API_KEY=...
+export SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-2B-Instruct
+export SLIME_SCRIPT_NUM_GPUS=4
+export SLIME_SCRIPT_TRAIN_BACKEND=fsdp
+
+# 2) Download and process the dataset for multi-turn tool-call setting
+# In order to prompt the rollout actor for tool call, we need to modify the prompt in the original dataset include tool call specification.
+
+hf download --repo-type dataset chenhegu/geo3k_imgurl --local-dir /root/datasets/geo3k_imgurl
+python /root/slime_new/examples/vlm_multi_turn/data_preprocess/prepend_geo3k_prompt.py
+
+# 3) Run the script:
+cd /root/slime
+python examples/vlm_multi_turn/run_geo3k_vlm_multi_turn.py
 ```
-
-2) Run the script (downloads model + dataset, then launches training):
-```bash
-python examples/vlm_multi_turn/run_sokoban_vlm_multi_turn.py
-```
-
-What it does:
-- Downloads the chosen Qwen-VL checkpoint into `/root/models/<MODEL_NAME>` if absent.
-- Downloads the preprocessed Sokoban dataset from `${SLIME_SCRIPT_SOKOBAN_DATASET_ID}` into `${SLIME_SCRIPT_SOKOBAN_DATA_ROOT}`.
-- Launches FSDP training with custom rollout/reward hooks:
-  - `--custom-generate-function-path examples.vlm_multi_turn.rollout.generate`
-  - `--custom-rm-path examples.vlm_multi_turn.reward_sokoban.async_compute_reward`
-  - `--custom-config-path examples/vlm_multi_turn/sokoban_vlm_multi_turn_config.yaml` to pass in max_turn and rollout_interaction_env_path
-
 
 ## What each file does
-- `examples/vlm_multi_turn/run_sokoban_vlm_multi_turn.py`: downloads model + preprocessed dataset, and builds the full training CLI args.
-- `examples/vlm_multi_turn/data_preprocess/preprocess_sokoban.py`: optional tool to regenerate the processed dataset (VeraIsHere/sokoban_processed) from raw dataset (Xiaofeng77/sokoban) if needed.
-- `examples/vlm_multi_turn/rollout.py`: custom multi-turn rollout (with pluggable interactive env) that streams tokens,builds aligned loss masks/log_probs, enforces max_turns, early-stops on max_new_tokens.
-- `examples/vlm_multi_turn/env_sokoban.py`: lightweight Sokoban environment exposing reset/step/format hooks; renders grids to images, tracks metrics, and returns observations per turn.
-- [Temparory]`examples/vlm_multi_turn/reward_sokoban.py`:  reward helper combining avg step rewards, final bonus, and distance shaping; used via `--custom-rm-path`.
+- `examples/vlm_multi_turn/run_geo3k_vlm_multi_turn.py`: downloads model, sets training/rollout args, and launches the run.
+- `examples/vlm_multi_turn/geo3k_vlm_multi_turn_config.yaml`: specifies `max_turns` and `rollout_interaction_env_path` for the multi-turn rollout.
+- `examples/vlm_multi_turn/rollout.py`: custom multi-turn rollout that calls SGLang for token generation, builds loss masks/log_probs, enforces max_turns, and early-stops on max_new_tokens.
+- `examples/vlm_multi_turn/env_geo3k.py`: geo3k tool-calling env that parses <tool_call>{...}</tool_call>, scores math answers, and returns tool feedback per turn.
