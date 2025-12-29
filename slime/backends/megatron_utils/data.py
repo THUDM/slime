@@ -50,6 +50,7 @@ def get_batch(
     batch = data_iterator.get_next(keys)
 
     packed_seq_params = None
+    max_seqlen = None
     tokens = batch["tokens"]
     # use 0 as the pad token id should be fine?
     pad_token_id = 0
@@ -110,12 +111,8 @@ def get_batch(
     ):
         prompt_length = total_length - response_length
         loss_mask = F.pad(loss_mask, (prompt_length - 1, 1), value=0)
-        if qkv_format == "bshd":
-            loss_mask = slice_with_cp(loss_mask, 0, qkv_format, max_seq_len=max_seqlen)
-            loss_masks.append(loss_mask)
-        elif qkv_format == "thd":
-            loss_mask = slice_with_cp(loss_mask, 0, qkv_format)
-            loss_masks.append(loss_mask)
+        loss_mask = slice_with_cp(loss_mask, 0, qkv_format, max_seq_len=max_seqlen)
+        loss_masks.append(loss_mask)
 
     if qkv_format == "bshd":
         loss_masks = torch.stack(loss_masks)
