@@ -1,14 +1,14 @@
 """HuggingFace Datasets integration for Slime.
 
-This module provides streaming and cached dataset adapters using HuggingFace Datasets library,
+This module provides streaming dataset adapter using HuggingFace Datasets library,
 enabling efficient loading of large-scale datasets (100GB+) without exhausting memory.
 
 Key Features:
 - Streaming mode (HFIterableDatasetAdapter): Zero memory overhead, suitable for 100GB+ datasets
-- Cached mode (HFCachedDatasetAdapter): Fast subsequent runs with disk caching
 - Unified interface compatible with legacy Dataset class
 - Reproducible shuffling with epoch-based seeds
 - Checkpoint support for resumable training
+- Prefetch buffer for high throughput
 
 Architecture Note:
 - These adapters are used by RolloutDataSource (single instance)
@@ -18,9 +18,9 @@ Architecture Note:
 
 import json
 import logging
+from collections.abc import Iterator
 from queue import Empty, Queue
 from threading import Event, Thread
-from typing import Any, Iterator, Optional
 
 import numpy as np
 from datasets import IterableDataset, load_dataset
@@ -114,16 +114,16 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
         path: str,
         tokenizer,
         processor,
-        max_length: Optional[int],
+        max_length: int | None,
         *,
         prompt_key: str = "text",
-        label_key: Optional[str] = None,
-        tool_key: Optional[str] = None,
+        label_key: str | None = None,
+        tool_key: str | None = None,
         metadata_key: str = "metadata",
-        multimodal_keys: Optional[dict] = None,
+        multimodal_keys: dict | None = None,
         seed: int = 42,
         apply_chat_template: bool = False,
-        apply_chat_template_kwargs: Optional[dict] = None,
+        apply_chat_template_kwargs: dict | None = None,
         dp_size: int = 1,
         buffer_size: int = 1000,
         shuffle_buffer_size: int = 10000,
@@ -152,10 +152,10 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
         self.global_consumed_count = 0  # Total samples consumed across all epochs
 
         # Prefetch components
-        self._prefetch_queue: Optional[Queue] = None
-        self._prefetch_thread: Optional[Thread] = None
-        self._stop_event: Optional[Event] = None
-        self._current_iterator: Optional[Iterator] = None
+        self._prefetch_queue: Queue | None = None
+        self._prefetch_thread: Thread | None = None
+        self._stop_event: Event | None = None
+        self._current_iterator: Iterator | None = None
 
         # Load base dataset (but don't start prefetch yet)
         # Prefetch will be started on first get_next_batch() call
@@ -190,7 +190,7 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
                     f"Failed to load dataset from {self.path}. "
                     f"Supported formats: .jsonl, .parquet, or HuggingFace dataset name. "
                     f"Error: {e}"
-                )
+                ) from e
 
         # NOTE: We do NOT call .shard(dp_rank) here!
         # Reason: RolloutManager is a single instance without dp_rank
@@ -260,7 +260,7 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
                     try:
                         from qwen_vl_utils import process_vision_info
 
-                        assert isinstance(prompt, list), f"prompt must be a list when processor is not None"
+                        assert isinstance(prompt, list), "prompt must be a list when processor is not None"
                         images, videos = process_vision_info(prompt)
                         multimodal_inputs = {"images": images, "videos": videos}
                     except Exception as e:
@@ -270,7 +270,9 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
                         continue
 
                 # Filter by length
-                if _should_skip_prompt(formatted_prompt, self.tokenizer, self.processor, self.max_length, multimodal_inputs):
+                if _should_skip_prompt(
+                    formatted_prompt, self.tokenizer, self.processor, self.max_length, multimodal_inputs
+                ):
                     is_valid_list.append(False)
                     processed_samples.append(None)
                     continue
@@ -309,16 +311,19 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
 
         # Shuffle with epoch-specific seed for reproducibility
         shuffle_seed = self.seed + self.epoch_id
-        logger.info(f"Epoch {self.epoch_id}: Shuffling with seed {shuffle_seed}, buffer_size={self.shuffle_buffer_size}")
+        logger.info(
+            f"Epoch {self.epoch_id}: Shuffling with seed {shuffle_seed}, buffer_size={self.shuffle_buffer_size}"
+        )
         dataset = dataset.shuffle(seed=shuffle_seed, buffer_size=self.shuffle_buffer_size)
 
         # Apply preprocessing
         # NOTE: For IterableDataset, .map() processes on-the-fly, no pre-computation
+        # NOTE: For IterableDataset, column_names may be None before iteration
+        # We skip remove_columns to avoid issues; the filter() will keep only needed columns
         dataset = dataset.map(
             self._preprocess_function,
             batched=True,
             batch_size=100,  # Process 100 raw samples at a time
-            remove_columns=dataset.column_names,  # Remove original columns
         )
 
         # Filter out invalid samples
@@ -353,20 +358,24 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
         while not self._stop_event.is_set():
             try:
                 # Get next sample from current iterator
-                sample_batch = next(self._current_iterator)
+                # NOTE: After .map(batched=True) + .filter(), iterator yields single records
+                # not batches. Each record has {"samples": single_Sample, "is_valid": bool}
+                sample_data = next(self._current_iterator)
 
-                # Unpack batch (from .map preprocessing)
-                for sample in sample_batch["samples"]:
-                    if sample is None:
-                        continue  # Skip invalid samples
-                    if self._stop_event.is_set():
-                        break
-                    # Block until queue has space
-                    try:
-                        self._prefetch_queue.put(sample, timeout=1.0)
-                    except Exception:
-                        if not self._stop_event.is_set():
-                            raise
+                # Extract the single Sample object (not a list!)
+                sample = sample_data["samples"]
+                if sample is None:
+                    continue  # Skip invalid samples (should be filtered out, but just in case)
+
+                if self._stop_event.is_set():
+                    break
+
+                # Block until queue has space
+                try:
+                    self._prefetch_queue.put(sample, timeout=1.0)
+                except Exception:
+                    if not self._stop_event.is_set():
+                        raise
 
             except StopIteration:
                 # End of epoch, restart iterator
@@ -399,7 +408,9 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
         self._prefetch_thread = Thread(target=self._prefetch_worker, daemon=True, name="HFDatasetPrefetch")
         self._prefetch_thread.start()
 
-        logger.info(f"Started prefetch with buffer size {actual_buffer_size} (base={self.base_buffer_size} * dp_size={self.dp_size})")
+        logger.info(
+            f"Started prefetch with buffer size {actual_buffer_size} (base={self.base_buffer_size} * dp_size={self.dp_size})"
+        )
 
     def stop_prefetch(self):
         """Stop background prefetch thread."""
@@ -529,265 +540,3 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
     def __del__(self):
         """Cleanup: Stop prefetch thread when object is destroyed."""
         self.stop_prefetch()
-
-
-class HFCachedDatasetAdapter(HFDatasetAdapterBase):
-    """Cached mode HF Dataset adapter (streaming=False).
-
-    This adapter loads and preprocesses the entire dataset, caching results to disk.
-    Subsequent runs load from cache, enabling fast startup (< 10 seconds).
-
-    Use cases:
-    - Multiple experiments on same dataset
-    - Debugging and development
-    - Datasets that fit in disk cache
-
-    Args:
-        path: Dataset path (local JSONL/Parquet or HF hub)
-        tokenizer: HuggingFace tokenizer
-        processor: Optional multimodal processor
-        max_length: Max prompt length for filtering
-        prompt_key: Key for prompt in raw data (default: "text")
-        label_key: Key for label in raw data
-        tool_key: Key for tools in raw data
-        metadata_key: Key for metadata (default: "metadata")
-        multimodal_keys: Mapping of multimodal types to keys
-        seed: Random seed for shuffle (default: 42)
-        apply_chat_template: Whether to apply chat template (default: False)
-        apply_chat_template_kwargs: Additional kwargs for chat template
-        dp_size: Data parallel size (NOT used for sharding)
-        num_proc: Number of parallel workers for preprocessing (default: 8)
-    """
-
-    def __init__(
-        self,
-        path: str,
-        tokenizer,
-        processor,
-        max_length: Optional[int],
-        *,
-        prompt_key: str = "text",
-        label_key: Optional[str] = None,
-        tool_key: Optional[str] = None,
-        metadata_key: str = "metadata",
-        multimodal_keys: Optional[dict] = None,
-        seed: int = 42,
-        apply_chat_template: bool = False,
-        apply_chat_template_kwargs: Optional[dict] = None,
-        dp_size: int = 1,
-        num_proc: int = 8,
-    ):
-        self.path = path
-        self.tokenizer = tokenizer
-        self.processor = processor
-        self.max_length = max_length
-        self.prompt_key = prompt_key
-        self.label_key = label_key
-        self.tool_key = tool_key
-        self.metadata_key = metadata_key
-        self.multimodal_keys = multimodal_keys
-        self.seed = seed
-        self.apply_chat_template = apply_chat_template
-        self.apply_chat_template_kwargs = apply_chat_template_kwargs or {}
-        self.dp_size = dp_size
-        self.num_proc = num_proc
-
-        # State tracking
-        self.epoch_id = 0
-        self.consumed_count = 0
-        self.global_consumed_count = 0
-
-        # Iterator for sequential consumption
-        self.iterator = None
-        self.permutation = None  # For shuffle
-
-        # Load and preprocess dataset
-        self.dataset = self._load_and_preprocess_dataset()
-
-        logger.info(
-            f"HFCachedDatasetAdapter initialized: "
-            f"path={path}, num_samples={len(self.dataset)}, "
-            f"num_proc={num_proc}"
-        )
-
-    def _load_and_preprocess_dataset(self):
-        """Load dataset and apply preprocessing with caching.
-
-        Returns:
-            Preprocessed HF Dataset
-        """
-        logger.info(f"Loading dataset from {self.path} (cached mode, this may take time on first run)")
-
-        # Determine file type
-        if self.path.endswith(".jsonl"):
-            dataset = load_dataset("json", data_files=self.path, split="train", streaming=False)
-        elif self.path.endswith(".parquet"):
-            dataset = load_dataset("parquet", data_files=self.path, split="train", streaming=False)
-        else:
-            # Try as HF dataset name
-            try:
-                dataset = load_dataset(self.path, split="train", streaming=False)
-            except Exception as e:
-                raise ValueError(
-                    f"Failed to load dataset from {self.path}. "
-                    f"Supported formats: .jsonl, .parquet, or HuggingFace dataset name. "
-                    f"Error: {e}"
-                )
-
-        logger.info(f"Loaded {len(dataset)} raw samples, applying preprocessing...")
-
-        # Reuse the same preprocessing function as streaming mode
-        # NOTE: Create a temporary streaming adapter just to reuse _preprocess_function
-        # This is a bit hacky but avoids code duplication
-        temp_adapter = HFIterableDatasetAdapter(
-            path=self.path,
-            tokenizer=self.tokenizer,
-            processor=self.processor,
-            max_length=self.max_length,
-            prompt_key=self.prompt_key,
-            label_key=self.label_key,
-            tool_key=self.tool_key,
-            metadata_key=self.metadata_key,
-            multimodal_keys=self.multimodal_keys,
-            seed=self.seed,
-            apply_chat_template=self.apply_chat_template,
-            apply_chat_template_kwargs=self.apply_chat_template_kwargs,
-        )
-
-        # Apply preprocessing (parallel + cached)
-        dataset = dataset.map(
-            temp_adapter._preprocess_function,
-            batched=True,
-            batch_size=100,
-            num_proc=self.num_proc,
-            remove_columns=dataset.column_names,
-            load_from_cache_file=True,  # Cache to HF default directory
-            desc="Preprocessing dataset",
-        )
-
-        # Filter out invalid samples
-        dataset = dataset.filter(lambda x: x["is_valid"], desc="Filtering invalid samples")
-
-        logger.info(f"Preprocessing complete: {len(dataset)} valid samples after filtering")
-
-        return dataset
-
-    def get_next_batch(self, num_samples: int) -> list[Sample]:
-        """Get next batch of samples (sequential consumption).
-
-        Args:
-            num_samples: Number of samples to fetch
-
-        Returns:
-            List of Sample objects
-        """
-        # Lazy initialization of iterator
-        if self.iterator is None:
-            if self.permutation is not None:
-                # Use shuffled order
-                self.iterator = iter([self.dataset[i] for i in self.permutation])
-            else:
-                # Use original order
-                self.iterator = iter(self.dataset)
-
-        samples = []
-        for _ in range(num_samples):
-            try:
-                sample_data = next(self.iterator)
-                # Extract Sample object from processed data
-                # Note: The sample is already a Sample object wrapped in a dict
-                samples.append(sample_data["samples"][0] if isinstance(sample_data["samples"], list) else sample_data["samples"])
-                self.consumed_count += 1
-                self.global_consumed_count += 1
-            except StopIteration:
-                # End of epoch, restart iterator
-                logger.info(f"Epoch {self.epoch_id} completed, restarting iterator")
-                self.epoch_id += 1
-                self.consumed_count = 0
-
-                # Reset iterator
-                if self.permutation is not None:
-                    self.iterator = iter([self.dataset[i] for i in self.permutation])
-                else:
-                    self.iterator = iter(self.dataset)
-
-                # Continue fetching
-                try:
-                    sample_data = next(self.iterator)
-                    samples.append(sample_data["samples"][0] if isinstance(sample_data["samples"], list) else sample_data["samples"])
-                    self.consumed_count += 1
-                    self.global_consumed_count += 1
-                except StopIteration:
-                    logger.error("Dataset is empty, cannot fetch samples")
-                    break
-
-        return samples
-
-    def shuffle(self, new_epoch_id: int):
-        """Shuffle for new epoch.
-
-        Args:
-            new_epoch_id: New epoch ID
-        """
-        if self.epoch_id == new_epoch_id:
-            return
-
-        logger.info(f"Shuffling for epoch {new_epoch_id}")
-
-        # Generate permutation using seed + epoch_id for reproducibility
-        import random
-
-        random.seed(self.seed + new_epoch_id)
-        self.permutation = list(range(len(self.dataset)))
-        random.shuffle(self.permutation)
-
-        # Reset iterator
-        self.iterator = None
-        self.consumed_count = 0
-        self.epoch_id = new_epoch_id
-
-    def get_checkpoint_state(self) -> dict:
-        """Get state for checkpoint.
-
-        Returns:
-            State dictionary
-        """
-        return {
-            "epoch_id": self.epoch_id,
-            "consumed_count": self.consumed_count,
-            "global_consumed_count": self.global_consumed_count,
-        }
-
-    def load_checkpoint_state(self, state: dict):
-        """Load state from checkpoint.
-
-        Args:
-            state: State dictionary
-        """
-        self.epoch_id = state.get("epoch_id", 0)
-        self.consumed_count = state.get("consumed_count", 0)
-        self.global_consumed_count = state.get("global_consumed_count", 0)
-
-        logger.info(
-            f"Loaded checkpoint: epoch={self.epoch_id}, "
-            f"consumed={self.consumed_count}, "
-            f"global_consumed={self.global_consumed_count}"
-        )
-
-        # Need to re-shuffle and skip to correct position
-        if self.epoch_id > 0:
-            self.shuffle(self.epoch_id)
-
-        # Skip already consumed samples
-        if self.consumed_count > 0:
-            logger.info(f"Skipping {self.consumed_count} already consumed samples")
-            # Reset iterator and consume samples
-            self.iterator = iter([self.dataset[i] for i in self.permutation]) if self.permutation else iter(self.dataset)
-            for _ in range(self.consumed_count):
-                try:
-                    next(self.iterator)
-                except StopIteration:
-                    logger.warning("Dataset exhausted while skipping, resetting")
-                    self.iterator = None
-                    self.consumed_count = 0
-                    break

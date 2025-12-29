@@ -542,19 +542,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=False,
                 help=(
                     "Enable HuggingFace Datasets integration for efficient loading of large-scale datasets (100GB+). "
-                    "Supports both streaming mode (streaming=True) and cached mode (streaming=False). "
-                    "Streaming mode: Zero memory overhead, suitable for 100GB+ datasets. "
-                    "Cached mode: Fast subsequent runs with disk caching."
-                ),
-            )
-            parser.add_argument(
-                "--hf-dataset-streaming",
-                action="store_true",
-                help=(
-                    "Use streaming mode (streaming=True) for HuggingFace Datasets. "
-                    "Default is True. Set --no-hf-dataset-streaming to use cached mode (streaming=False). "
-                    "Streaming mode loads data on-the-fly with zero memory overhead. "
-                    "Cached mode preprocesses and caches the entire dataset to disk for fast subsequent runs."
+                    "Uses streaming mode with zero memory overhead and prefetch buffer for high throughput."
                 ),
             )
             parser.add_argument(

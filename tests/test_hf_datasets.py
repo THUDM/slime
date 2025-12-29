@@ -1,7 +1,7 @@
-"""Unit tests for HuggingFace Datasets integration (streaming + cached modes).
+"""Unit tests for HuggingFace Datasets integration (streaming mode).
 
 This test file covers:
-1. HFDatasetAdapters basic functionality (initialization, get_next_batch, shuffle)
+1. HFIterableDatasetAdapter basic functionality (initialization, get_next_batch, shuffle)
 2. RolloutDataSource mixed mode logic (auto-detection via duck typing)
 3. Checkpoint support (save/load/resume across epochs)
 4. Edge cases (dp_size=None, dataset=None, empty dataset, sample_offset overflow)
@@ -13,13 +13,13 @@ Test Strategy:
 """
 
 import json
-import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+
 
 # Test fixtures and utilities
 @pytest.fixture
@@ -72,7 +72,6 @@ def mock_args(test_jsonl_data, temp_dir):
 
     # HF Datasets config
     args.use_hf_datasets = False  # Default to Legacy
-    args.hf_dataset_streaming = True
     args.hf_dataset_buffer_size = 10
     args.hf_dataset_shuffle_buffer = 100
     args.hf_dataset_num_proc = 2
@@ -107,6 +106,7 @@ def mock_processor():
 # Test Class 1: HFDatasetAdapters Basic Functionality
 # ============================================================================
 
+
 class TestHFDatasetAdapters:
     """Test HF adapters' core functionality."""
 
@@ -137,31 +137,6 @@ class TestHFDatasetAdapters:
 
         # Check prefetch not started yet
         assert adapter._prefetch_queue is None
-
-    def test_cached_adapter_initialization(self, test_jsonl_data, mock_tokenizer, mock_processor):
-        """Test HFCachedDatasetAdapter initialization."""
-        from slime.utils.hf_dataset import HFCachedDatasetAdapter
-
-        adapter = HFCachedDatasetAdapter(
-            path=test_jsonl_data,
-            tokenizer=mock_tokenizer,
-            processor=mock_processor,
-            max_length=None,
-            prompt_key="input",
-            label_key="label",
-            metadata_key="metadata",
-            seed=42,
-            dp_size=1,
-            num_proc=2,
-        )
-
-        # Check dataset loaded
-        assert adapter.dataset is not None
-        assert len(adapter.dataset) > 0  # Should have loaded samples
-
-        # Check state tracking
-        assert adapter.epoch_id == 0
-        assert adapter.consumed_count == 0
 
     @pytest.mark.skip(reason="Requires HF datasets library in test environment")
     def test_get_next_batch_sequential(self, test_jsonl_data, mock_tokenizer, mock_processor):
@@ -195,45 +170,6 @@ class TestHFDatasetAdapters:
         assert batch1 != batch2
 
     @pytest.mark.skip(reason="Requires HF datasets library in test environment")
-    def test_shuffle_reproducibility(self, test_jsonl_data, mock_tokenizer, mock_processor):
-        """Test shuffle reproducibility with same seed."""
-        from slime.utils.hf_dataset import HFCachedDatasetAdapter
-
-        # Create two adapters with same seed
-        adapter1 = HFCachedDatasetAdapter(
-            path=test_jsonl_data,
-            tokenizer=mock_tokenizer,
-            processor=mock_processor,
-            max_length=None,
-            prompt_key="input",
-            label_key="label",
-            seed=42,
-            dp_size=1,
-            num_proc=2,
-        )
-        adapter1.shuffle(new_epoch_id=1)
-
-        adapter2 = HFCachedDatasetAdapter(
-            path=test_jsonl_data,
-            tokenizer=mock_tokenizer,
-            processor=mock_processor,
-            max_length=None,
-            prompt_key="input",
-            label_key="label",
-            seed=42,
-            dp_size=1,
-            num_proc=2,
-        )
-        adapter2.shuffle(new_epoch_id=1)
-
-        # Consume same number of samples
-        batch1 = adapter1.get_next_batch(num_samples=10)
-        batch2 = adapter2.get_next_batch(num_samples=10)
-
-        # Should be identical
-        assert [s.prompt for s in batch1] == [s.prompt for s in batch2]
-
-    @pytest.mark.skip(reason="Requires HF datasets library in test environment")
     def test_epoch_switch(self, test_jsonl_data, mock_tokenizer, mock_processor):
         """Test automatic epoch switching when dataset is exhausted."""
         from slime.utils.hf_dataset import HFIterableDatasetAdapter
@@ -264,6 +200,7 @@ class TestHFDatasetAdapters:
 # ============================================================================
 # Test Class 2: RolloutDataSource Mixed Mode Logic
 # ============================================================================
+
 
 class TestRolloutDataSourceMixedMode:
     """Test RolloutDataSource mixed mode logic (duck typing)."""
@@ -322,9 +259,8 @@ class TestRolloutDataSourceMixedMode:
         mock_load_tok.return_value = MagicMock()
         mock_load_proc.return_value = None
 
-        # Enable HF Datasets streaming mode
+        # Enable HF Datasets mode
         mock_args.use_hf_datasets = True
-        mock_args.hf_dataset_streaming = True
 
         data_source = RolloutDataSource(mock_args)
         data_source.set_train_parallel_config({"dp_size": 1})
@@ -340,6 +276,7 @@ class TestRolloutDataSourceMixedMode:
 # ============================================================================
 # Test Class 3: Checkpoint Support
 # ============================================================================
+
 
 class TestCheckpointSupport:
     """Test checkpoint save/load/resume functionality."""
@@ -393,9 +330,8 @@ class TestCheckpointSupport:
         mock_load_tok.return_value = MagicMock()
         mock_load_proc.return_value = None
 
-        # Enable HF Datasets streaming mode
+        # Enable HF Datasets mode
         mock_args.use_hf_datasets = True
-        mock_args.hf_dataset_streaming = True
 
         data_source = RolloutDataSource(mock_args)
         data_source.set_train_parallel_config({"dp_size": 1})
@@ -418,6 +354,7 @@ class TestCheckpointSupport:
 # ============================================================================
 # Test Class 4: Edge Cases
 # ============================================================================
+
 
 class TestEdgeCases:
     """Test edge cases and error handling."""
@@ -490,6 +427,7 @@ class TestEdgeCases:
 # Integration Tests (Optional - require full environment)
 # ============================================================================
 
+
 class TestIntegration:
     """End-to-end integration tests (require HF datasets library)."""
 
@@ -501,4 +439,3 @@ class TestIntegration:
         # 2. Checkpoint save at step N
         # 3. Resume from step N
         # 4. Verify no sample duplication
-        pass

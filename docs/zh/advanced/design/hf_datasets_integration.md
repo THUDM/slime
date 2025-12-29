@@ -21,7 +21,7 @@ Slime 原有的 `Dataset` 类使用全量内存加载数据集，存在以下问
 
 ### 1.3 核心特性
 
-- **双模式支持**：Streaming（流式加载）+ Cached（缓存加速）
+- **流式加载**：零内存开销，适合 100GB+ 数据集
 - **混合模式架构**：通过 duck typing 自动检测数据集类型
 - **延迟初始化**：在 DP 配置可用后才创建数据集
 - **Checkpoint 支持**：保存/恢复训练状态，跨 epoch 续训
@@ -31,21 +31,19 @@ Slime 原有的 `Dataset` 类使用全量内存加载数据集，存在以下问
 
 ## 2. 架构设计
 
-### 2.1 双模式对比
+### 2.1 模式对比
 
-| 维度 | Streaming Mode | Cached Mode | Legacy Dataset |
-|------|---------------|-------------|----------------|
-| **内存占用** | < 1GB | < 2GB | 文件大小 × 1.5 |
-| **启动时间** | < 5 秒 | 首次慢，后续 < 10 秒 | 几分钟到几小时 |
-| **磁盘缓存** | 无需缓存 | Arrow 格式缓存 | 不支持缓存 |
-| **适用场景** | 100GB+ 数据集 | 多次实验同一数据集 | < 10GB 数据集 |
-| **随机访问** | 不支持 `__getitem__` | 不支持 `__getitem__` | 支持 `[idx]` |
-| **数据迭代** | `get_next_batch()` | `get_next_batch()` | `.samples[offset:]` |
-| **Shuffle 机制** | Buffer-based (10K buffer) | Permutation-based | 全量复制 |
+| 维度 | Streaming Mode (HF) | Legacy Dataset |
+|------|---------------------|----------------|
+| **内存占用** | < 1GB | 文件大小 × 1.5 |
+| **启动时间** | < 5 秒 | 几分钟到几小时 |
+| **适用场景** | 100GB+ 数据集 | < 10GB 数据集 |
+| **随机访问** | 不支持 `__getitem__` | 支持 `[idx]` |
+| **数据迭代** | `get_next_batch()` | `.samples[offset:]` |
+| **Shuffle 机制** | Buffer-based (10K buffer) | 全量复制 |
 
 **选择建议**：
-- 数据集 > 50GB 或仅训练一次 → **Streaming Mode**
-- 数据集 < 50GB 且需反复实验 → **Cached Mode**
+- 数据集 > 10GB → **Streaming Mode** (`--use-hf-datasets`)
 - 数据集 < 10GB 且已有代码 → **Legacy Dataset**（保持默认）
 
 ### 2.2 接口设计
@@ -157,12 +155,11 @@ def get_samples(self, num_samples):
 
 ## 3. 使用指南
 
-### 3.1 Streaming Mode（推荐用于大数据集）
+### 3.1 启用 HF Datasets
 
 ```bash
 python train.py \
   --use-hf-datasets \
-  --hf-dataset-streaming \
   --hf-dataset-buffer-size 1000 \
   --hf-dataset-shuffle-buffer 10000 \
   --hf-dataset-num-proc 8 \
@@ -176,38 +173,20 @@ python train.py \
 - **启动极快**：< 5 秒即可开始训练
 - **适用规模**：100GB ~ TB 级数据集
 
-### 3.2 Cached Mode（推荐用于反复实验）
-
-```bash
-python train.py \
-  --use-hf-datasets \
-  --no-hf-dataset-streaming \
-  --hf-dataset-num-proc 8 \
-  --prompt-data /path/to/10GB.jsonl \
-  --rollout-batch-size 32 \
-  --num-rollout 1000
-```
-
-**特点**：
-- **首次运行慢**：需要预处理并缓存到磁盘（Arrow 格式）
-- **后续运行快**：< 10 秒从缓存加载
-- **适用规模**：10GB ~ 50GB 数据集
-
-### 3.3 参数说明
+### 3.2 参数说明
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--use-hf-datasets` | `False` | 启用 HF Datasets 集成 |
-| `--hf-dataset-streaming` | `True` | 使用流式模式（设为 `False` 启用缓存模式） |
 | `--hf-dataset-buffer-size` | `1000` | **基础** prefetch buffer 大小 |
-| `--hf-dataset-shuffle-buffer` | `10000` | Shuffle buffer 大小（流式模式） |
+| `--hf-dataset-shuffle-buffer` | `10000` | Shuffle buffer 大小 |
 | `--hf-dataset-num-proc` | `8` | 并行 worker 数量（预处理） |
 
 **注意**：
 - `actual_buffer_size = base_buffer_size * dp_size`
 - 原因：RolloutManager 需要为所有 DP rank 生成数据
 
-### 3.4 数据格式要求
+### 3.3 数据格式要求
 
 **JSONL 格式**（每行一个 JSON 对象）：
 
@@ -313,7 +292,6 @@ python train.py --use-hf-datasets --num-rollout 100 --load /tmp/ckpt
 
 **恢复机制**：
 - HF Streaming: 重建 iterator → skip 已消费样本
-- HF Cached: 重建 iterator → skip 已消费样本
 - Legacy: 直接使用 `sample_offset` 切片
 
 ---
@@ -380,12 +358,12 @@ dataset = dataset.map(
 
 ### 5.4 性能对比
 
-| 指标 | Legacy Dataset | HF Streaming | HF Cached |
-|------|---------------|-------------|-----------|
-| **初始化时间** | OOM (无法运行) | < 5 秒 | 首次慢，后续 < 10 秒 |
-| **内存占用** | 100GB+ | < 1GB | < 2GB |
-| **训练吞吐** | N/A | GPU 利用率 > 90% | GPU 利用率 > 90% |
-| **首批数据延迟** | 需等待全部加载 | Prefetch buffer 填充后即可 | 缓存加载后即可 |
+| 指标 | Legacy Dataset | HF Streaming |
+|------|---------------|-------------|
+| **初始化时间** | OOM (无法运行) | < 5 秒 |
+| **内存占用** | 100GB+ | < 1GB |
+| **训练吞吐** | N/A | GPU 利用率 > 90% |
+| **首批数据延迟** | 需等待全部加载 | Prefetch buffer 填充后即可 |
 
 ---
 
@@ -596,8 +574,6 @@ pytest tests/test_hf_datasets.py -v
 |------|----------|---------|---------|
 | Legacy Dataset | 18 分钟 | 7.5GB | 120 samples/s |
 | HF Streaming | **4 秒** | **0.8GB** | **125 samples/s** |
-| HF Cached (首次) | 2 分钟 | 1.2GB | 130 samples/s |
-| HF Cached (后续) | **6 秒** | **1.0GB** | **130 samples/s** |
 
 **结论**：
 - HF Streaming 在大数据集上有 **270x 初始化加速**
@@ -616,11 +592,8 @@ pytest tests/test_hf_datasets.py -v
 # 旧命令
 python train.py --prompt-data data.jsonl ...
 
-# 新命令（Streaming Mode）
-python train.py --use-hf-datasets --hf-dataset-streaming --prompt-data data.jsonl ...
-
-# 新命令（Cached Mode）
-python train.py --use-hf-datasets --no-hf-dataset-streaming --prompt-data data.jsonl ...
+# 新命令
+python train.py --use-hf-datasets --prompt-data data.jsonl ...
 ```
 
 **Step 2**: 调整 buffer 大小（可选）

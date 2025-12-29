@@ -91,58 +91,35 @@ class RolloutDataSource(DataSource):
         """Create dataset with DP awareness.
 
         This method selects the appropriate dataset implementation based on args:
-        - HF Datasets (streaming or cached) if --use-hf-datasets is set
+        - HF Datasets (streaming mode) if --use-hf-datasets is set
         - Legacy Dataset otherwise
 
         Note: RolloutManager is a single instance, so we do NOT shard by dp_rank.
         Data sharding happens in RolloutManager._split_train_data_by_dp().
         """
         if self._use_hf_datasets:
-            # Use HuggingFace Datasets implementation
-            from slime.utils.hf_dataset import HFCachedDatasetAdapter, HFIterableDatasetAdapter
+            # Use HuggingFace Datasets streaming mode
+            from slime.utils.hf_dataset import HFIterableDatasetAdapter
 
-            hf_streaming = getattr(self.args, "hf_dataset_streaming", True)
-
-            if hf_streaming:
-                # Streaming mode: Zero memory overhead, suitable for 100GB+ datasets
-                logger.info("Creating HFIterableDatasetAdapter (streaming mode)")
-                self._dataset = HFIterableDatasetAdapter(
-                    path=self.args.prompt_data,
-                    tokenizer=self._tokenizer,
-                    processor=self._processor,
-                    max_length=self.args.rollout_max_prompt_len,
-                    prompt_key=self.args.input_key,
-                    label_key=self.args.label_key,
-                    tool_key=self.args.tool_key,
-                    metadata_key=self.args.metadata_key,
-                    multimodal_keys=self.args.multimodal_keys,
-                    seed=self.args.rollout_seed,
-                    apply_chat_template=self.args.apply_chat_template,
-                    apply_chat_template_kwargs=self.args.apply_chat_template_kwargs,
-                    dp_size=self._dp_size or 1,
-                    buffer_size=getattr(self.args, "hf_dataset_buffer_size", 1000),
-                    shuffle_buffer_size=getattr(self.args, "hf_dataset_shuffle_buffer", 10000),
-                    num_proc=getattr(self.args, "hf_dataset_num_proc", 8),
-                )
-            else:
-                # Cached mode: Fast subsequent runs with disk caching
-                logger.info("Creating HFCachedDatasetAdapter (cached mode)")
-                self._dataset = HFCachedDatasetAdapter(
-                    path=self.args.prompt_data,
-                    tokenizer=self._tokenizer,
-                    processor=self._processor,
-                    max_length=self.args.rollout_max_prompt_len,
-                    prompt_key=self.args.input_key,
-                    label_key=self.args.label_key,
-                    tool_key=self.args.tool_key,
-                    metadata_key=self.args.metadata_key,
-                    multimodal_keys=self.args.multimodal_keys,
-                    seed=self.args.rollout_seed,
-                    apply_chat_template=self.args.apply_chat_template,
-                    apply_chat_template_kwargs=self.args.apply_chat_template_kwargs,
-                    dp_size=self._dp_size or 1,
-                    num_proc=getattr(self.args, "hf_dataset_num_proc", 8),
-                )
+            logger.info("Creating HFIterableDatasetAdapter (streaming mode)")
+            self._dataset = HFIterableDatasetAdapter(
+                path=self.args.prompt_data,
+                tokenizer=self._tokenizer,
+                processor=self._processor,
+                max_length=self.args.rollout_max_prompt_len,
+                prompt_key=self.args.input_key,
+                label_key=self.args.label_key,
+                tool_key=self.args.tool_key,
+                metadata_key=self.args.metadata_key,
+                multimodal_keys=self.args.multimodal_keys,
+                seed=self.args.rollout_seed,
+                apply_chat_template=self.args.apply_chat_template,
+                apply_chat_template_kwargs=self.args.apply_chat_template_kwargs,
+                dp_size=self._dp_size or 1,
+                buffer_size=getattr(self.args, "hf_dataset_buffer_size", 1000),
+                shuffle_buffer_size=getattr(self.args, "hf_dataset_shuffle_buffer", 10000),
+                num_proc=getattr(self.args, "hf_dataset_num_proc", 8),
+            )
 
             # Apply initial shuffle if requested
             if self.args.rollout_shuffle:
@@ -196,6 +173,10 @@ class RolloutDataSource(DataSource):
             # Case 2: HF adapters - use streaming interface
             # Note: HF adapters handle epoch switching internally
             prompt_samples = self.dataset.get_next_batch(num_samples)
+
+            # Sync epoch_id from HF adapter (it handles epoch switching internally)
+            if hasattr(self.dataset, "epoch_id"):
+                self.epoch_id = self.dataset.epoch_id
 
         else:
             # Case 3: Legacy Dataset - use array access
