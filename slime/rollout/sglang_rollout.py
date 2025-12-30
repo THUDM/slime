@@ -4,6 +4,7 @@ import logging
 from argparse import Namespace
 from collections import defaultdict
 from collections.abc import Callable
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -60,7 +61,22 @@ class GenerateState(metaclass=SingletonMeta):
             sampling_seed_base = args.rollout_seed
             self.group_sampling_seeds = [sampling_seed_base + i for i in range(args.n_samples_per_prompt)]
 
+        # dp rank balancing
+        self.dp_counts = [0] * (args.sglang_dp_size or 1)
+        self.dp_rank = 0
+
         self.reset()
+
+    @contextmanager
+    def dp_rank_context(self):
+        dp_rank = self.dp_counts.index(min(self.dp_counts))
+        self.dp_counts[dp_rank] += 1
+        self.dp_rank = dp_rank
+        try:
+            yield dp_rank
+        finally:
+            self.dp_counts[dp_rank] -= 1
+            assert self.dp_counts[dp_rank] >= 0
 
     def reset(self) -> None:
         self.remaining_batch_size = 0
@@ -89,6 +105,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         assert isinstance(sample.prompt, str)
 
     state = GenerateState(args)
+    dp_rank = state.dp_rank
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
     assert (
@@ -117,6 +134,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     # Prepare payload for sglang server
     payload = {
         "sampling_params": sampling_params,
+        "data_parallel_rank": dp_rank,
         "return_logprob": True,
     }
 
@@ -223,11 +241,12 @@ async def generate_and_rm(
             sample.status = Sample.Status.ABORTED
             return sample
 
-        if args.custom_generate_function_path is not None:
-            custom_generate_func = load_function(args.custom_generate_function_path)
-            sample = await custom_generate_func(args, sample, sampling_params)
-        else:
-            sample = await generate(args, sample, sampling_params)
+        with state.dp_rank_context() as _:
+            if args.custom_generate_function_path is not None:
+                custom_generate_func = load_function(args.custom_generate_function_path)
+                sample = await custom_generate_func(args, sample, sampling_params)
+            else:
+                sample = await generate(args, sample, sampling_params)
 
     # for the rm that need the whole group, we will not do the rm here
     if args.group_rm:
