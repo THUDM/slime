@@ -101,9 +101,18 @@ class RolloutDataSource(DataSource):
             # Use HuggingFace Datasets streaming mode
             from slime.utils.hf_dataset import HFIterableDatasetAdapter
 
-            logger.info("Creating HFIterableDatasetAdapter (streaming mode)")
+            # Get dataset size (required for proper epoch tracking)
+            dataset_size = getattr(self.args, "hf_datasets_num_samples", None)
+            if dataset_size is None:
+                raise ValueError(
+                    "--hf-datasets-num-samples is required when using --use-hf-datasets. "
+                    "This specifies the number of samples for proper epoch tracking and __len__() support."
+                )
+
+            logger.info(f"Creating HFIterableDatasetAdapter (streaming mode, dataset_size={dataset_size})")
             self._dataset = HFIterableDatasetAdapter(
                 path=self.args.prompt_data,
+                dataset_size=dataset_size,
                 tokenizer=self._tokenizer,
                 processor=self._processor,
                 max_length=self.args.rollout_max_prompt_len,
@@ -116,14 +125,13 @@ class RolloutDataSource(DataSource):
                 apply_chat_template=self.args.apply_chat_template,
                 apply_chat_template_kwargs=self.args.apply_chat_template_kwargs,
                 dp_size=self._dp_size or 1,
-                buffer_size=getattr(self.args, "hf_dataset_buffer_size", 1000),
+                num_workers=getattr(self.args, "hf_dataset_num_proc", 4),
+                prefetch_factor=2,
                 shuffle_buffer_size=getattr(self.args, "hf_dataset_shuffle_buffer", 10000),
-                num_proc=getattr(self.args, "hf_dataset_num_proc", 8),
+                do_shuffle=self.args.rollout_shuffle,
             )
 
-            # Apply initial shuffle if requested
-            if self.args.rollout_shuffle:
-                self._dataset.shuffle(self.epoch_id)
+            # Note: shuffle is handled by do_shuffle parameter, no need to call shuffle() separately
 
         else:
             # Use legacy Dataset implementation

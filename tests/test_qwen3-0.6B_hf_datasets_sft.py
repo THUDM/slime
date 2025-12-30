@@ -43,6 +43,7 @@ def execute():
         # HF Datasets configuration
         "--prompt-data teknium/OpenHermes-2.5 "  # Direct HF dataset name
         "--use-hf-datasets "  # Enable HF Datasets streaming mode
+        "--hf-datasets-num-samples 1000000 "  # Required for epoch tracking (OpenHermes-2.5 has ~1M samples)
         "--hf-dataset-buffer-size 100 "
         "--hf-dataset-shuffle-buffer 1000 "
         "--hf-dataset-num-proc 4 "
@@ -52,11 +53,11 @@ def execute():
         "--rollout-shuffle "
         # SFT-specific settings
         f"--num-rollout {3000 if U.get_env_enable_infinite_run() else 60} "
-        "--rollout-batch-size 32 "
+        "--rollout-batch-size 128 "
         "--n-samples-per-prompt 1 "  # SFT typically uses 1 sample per prompt
         "--rollout-max-response-len 2048 "
         "--rollout-temperature 1.0 "  # Greedy decoding for SFT
-        "--global-batch-size 256 "
+        "--global-batch-size 128 "
     )
 
     eval_args = (
@@ -64,6 +65,16 @@ def execute():
         "--eval-prompt-data hermes_test teknium/OpenHermes-2.5 "
         "--n-samples-per-eval-prompt 1 "
         "--eval-max-response-len 2048 "
+    )
+
+    # SFT mode: No reward model, no GRPO
+    # Just standard language modeling loss with loss masks
+    sft_args = (
+        "--rollout-function-path slime.rollout.sft_rollout.generate_rollout "
+        "--loss-type sft_loss "
+        "--calculate-per-token-loss "
+        "--disable-compute-advantages-and-returns "
+        "--debug-train-only "
     )
 
     # SFT mode: No reward model, no GRPO
@@ -89,6 +100,7 @@ def execute():
     train_args_phase1 = (
         f"{ckpt_args} "
         f"{rollout_args} "
+        f"{sft_args} "
         f"{optimizer_args} "
         f"{sglang_args} "
         f"{U.get_default_wandb_args(__file__, run_name_prefix='hf-sft-phase1')} "
@@ -136,6 +148,7 @@ def execute():
     train_args_phase2 = (
         f"{ckpt_args_phase2} "
         f"{rollout_args} "
+        f"{sft_args} "
         f"{optimizer_args} "
         f"{sglang_args} "
         f"{U.get_default_wandb_args(__file__, run_name_prefix='hf-sft-phase2')} "

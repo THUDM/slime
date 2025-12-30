@@ -35,6 +35,7 @@ def execute():
     """Execute DAPO RL training with HF Datasets."""
     ckpt_args = (
         f"--hf-checkpoint /root/models/Qwen/{MODEL_NAME} "
+        f"--ref-load /root/models/Qwen/{MODEL_NAME} "  # Reference model for KL metrics
         "--save /root/Qwen3-0.6B_slime/ "
         "--save-interval 30 "  # Save checkpoint at step 30
     )
@@ -43,6 +44,7 @@ def execute():
         # HF Datasets configuration
         "--prompt-data zhuzilin/dapo-math-17k "  # Direct HF dataset name
         "--use-hf-datasets "  # Enable HF Datasets streaming mode
+        "--hf-datasets-num-samples 17000 "  # Required for proper epoch tracking
         "--hf-dataset-buffer-size 100 "
         "--hf-dataset-shuffle-buffer 1000 "
         "--hf-dataset-num-proc 4 "
@@ -60,6 +62,7 @@ def execute():
         "--rollout-temperature 0.8 "
         "--over-sampling-batch-size 64 "
         "--global-batch-size 256 "
+        "--balance-data "  # Balance tokens between DP ranks
     )
 
     eval_args = (
@@ -140,6 +143,7 @@ def execute():
     # Phase 2: Resume from checkpoint and continue to 60 rollouts
     ckpt_args_phase2 = (
         f"--hf-checkpoint /root/models/Qwen/{MODEL_NAME} "
+        f"--ref-load /root/models/Qwen/{MODEL_NAME} "  # Reference model for KL metrics
         "--load /root/Qwen3-0.6B_slime/ "  # Load from previous checkpoint
         "--save /root/Qwen3-0.6B_slime/ "
         "--save-interval 30 "

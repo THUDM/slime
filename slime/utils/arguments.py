@@ -577,6 +577,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Default: 8."
                 ),
             )
+            parser.add_argument(
+                "--hf-datasets-num-samples",
+                type=int,
+                default=None,
+                help=(
+                    "Number of samples in the HuggingFace streaming dataset. "
+                    "Required when using --use-hf-datasets for proper epoch tracking. "
+                    "This enables __len__() support and deterministic epoch boundaries."
+                ),
+            )
 
             parser.add_argument(
                 "--start-rollout-id",

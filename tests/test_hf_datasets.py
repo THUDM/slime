@@ -74,7 +74,8 @@ def mock_args(test_jsonl_data, temp_dir):
     args.use_hf_datasets = False  # Default to Legacy
     args.hf_dataset_buffer_size = 10
     args.hf_dataset_shuffle_buffer = 100
-    args.hf_dataset_num_proc = 2
+    args.hf_dataset_num_proc = 4
+    args.hf_datasets_num_samples = 100  # Required for HF streaming mode
 
     # Checkpoint config
     args.save = str(Path(temp_dir) / "checkpoints")
@@ -136,6 +137,7 @@ class TestHFDatasetAdapters:
 
         adapter = HFIterableDatasetAdapter(
             path=test_jsonl_data,
+            dataset_size=100,  # Required for epoch tracking
             tokenizer=mock_tokenizer,
             processor=mock_processor,
             max_length=None,
@@ -144,9 +146,8 @@ class TestHFDatasetAdapters:
             metadata_key="metadata",
             seed=42,
             dp_size=1,
-            buffer_size=10,
+            num_workers=0,  # Single-process for testing
             shuffle_buffer_size=100,
-            num_proc=2,
         )
 
         # Check state tracking
@@ -154,17 +155,15 @@ class TestHFDatasetAdapters:
         assert adapter.consumed_count == 0
         assert adapter.global_consumed_count == 0
         assert adapter.dp_size == 1
+        assert len(adapter) == 100  # Dataset size
 
-        # Check prefetch not started yet
-        assert adapter._prefetch_queue is None
-
-    @pytest.mark.skip(reason="Requires HF datasets library in test environment")
     def test_get_next_batch_sequential(self, test_jsonl_data, mock_tokenizer, mock_processor):
         """Test sequential consumption via get_next_batch()."""
         from slime.utils.hf_dataset import HFIterableDatasetAdapter
 
         adapter = HFIterableDatasetAdapter(
             path=test_jsonl_data,
+            dataset_size=100,  # Required for epoch tracking
             tokenizer=mock_tokenizer,
             processor=mock_processor,
             max_length=None,
@@ -172,8 +171,7 @@ class TestHFDatasetAdapters:
             label_key="label",
             seed=42,
             dp_size=1,
-            buffer_size=10,
-            num_proc=2,
+            num_workers=0,  # Single-process for testing
         )
 
         # Consume first batch
@@ -189,13 +187,13 @@ class TestHFDatasetAdapters:
         # Check no overlap
         assert batch1 != batch2
 
-    @pytest.mark.skip(reason="Requires HF datasets library in test environment")
     def test_epoch_switch(self, test_jsonl_data, mock_tokenizer, mock_processor):
         """Test automatic epoch switching when dataset is exhausted."""
         from slime.utils.hf_dataset import HFIterableDatasetAdapter
 
         adapter = HFIterableDatasetAdapter(
             path=test_jsonl_data,
+            dataset_size=100,  # Required for epoch tracking
             tokenizer=mock_tokenizer,
             processor=mock_processor,
             max_length=None,
@@ -203,8 +201,7 @@ class TestHFDatasetAdapters:
             label_key="label",
             seed=42,
             dp_size=1,
-            buffer_size=10,
-            num_proc=2,
+            num_workers=0,  # Single-process for testing
         )
 
         # Consume entire dataset
@@ -269,7 +266,6 @@ class TestRolloutDataSourceMixedMode:
         # Verify has .samples attribute (Legacy Dataset)
         assert hasattr(data_source.dataset, "samples")
 
-    @pytest.mark.skip(reason="Requires HF datasets library in test environment")
     @patch("slime.rollout.data_source.load_tokenizer")
     @patch("slime.rollout.data_source.load_processor")
     def test_get_samples_with_hf_streaming(self, mock_load_proc, mock_load_tok, mock_args):
@@ -340,7 +336,6 @@ class TestCheckpointSupport:
         assert data_source2.sample_group_index == data_source.sample_group_index
         assert data_source2.sample_index == data_source.sample_index
 
-    @pytest.mark.skip(reason="Requires HF datasets library in test environment")
     @patch("slime.rollout.data_source.load_tokenizer")
     @patch("slime.rollout.data_source.load_processor")
     def test_save_and_load_hf_streaming(self, mock_load_proc, mock_load_tok, mock_args):
@@ -451,7 +446,6 @@ class TestEdgeCases:
 class TestIntegration:
     """End-to-end integration tests (require HF datasets library)."""
 
-    @pytest.mark.skip(reason="Requires HF datasets library and full environment")
     def test_full_training_loop_simulation(self, temp_dir, test_jsonl_data_with_ids, mock_tokenizer, mock_processor):
         """Simulate full training loop: rollout → train → checkpoint → resume.
 
@@ -482,7 +476,8 @@ class TestIntegration:
         args.use_hf_datasets = True  # Enable HF Datasets mode
         args.hf_dataset_buffer_size = 10
         args.hf_dataset_shuffle_buffer = 100
-        args.hf_dataset_num_proc = 2
+        args.hf_dataset_num_proc = 4
+        args.hf_datasets_num_samples = 100  # Required for epoch tracking
         args.save = str(Path(temp_dir) / "checkpoints")
         args.load = None
         args.hf_checkpoint = None
@@ -571,7 +566,6 @@ class TestIntegration:
                 samples = data_source2.get_samples(num_samples=batch_size)
                 assert len(samples) == batch_size, f"Expected {batch_size} samples after resume"
 
-    @pytest.mark.skip(reason="Requires HF datasets library")
     def test_epoch_boundary_checkpoint(self, temp_dir, test_jsonl_data_with_ids, mock_tokenizer, mock_processor):
         """Test checkpoint save/load at epoch boundary.
 
@@ -598,7 +592,8 @@ class TestIntegration:
         args.use_hf_datasets = True
         args.hf_dataset_buffer_size = 10
         args.hf_dataset_shuffle_buffer = 100
-        args.hf_dataset_num_proc = 2
+        args.hf_dataset_num_proc = 4
+        args.hf_datasets_num_samples = 100  # Required for epoch tracking
         args.save = str(Path(temp_dir) / "checkpoints")
         args.load = None
         args.hf_checkpoint = None
@@ -616,8 +611,13 @@ class TestIntegration:
                 samples = data_source.get_samples(num_samples=25)
                 assert len(samples) == 25
 
+            # Epoch switch happens when we request samples that cross the boundary
+            # Request one more sample to trigger epoch transition
+            samples = data_source.get_samples(num_samples=1)
+            assert len(samples) == 1
+
             # Should have completed epoch 0, now in epoch 1
-            assert data_source.epoch_id >= 1, "Expected epoch transition after 100 samples"
+            assert data_source.epoch_id >= 1, "Expected epoch transition after 100+ samples"
 
             # Save checkpoint at epoch boundary
             data_source.save(rollout_id=4)
