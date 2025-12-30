@@ -472,6 +472,8 @@ def _compute_server_args(
 
     unused_keys = set(kwargs.keys())
     for attr in dataclasses.fields(ServerArgs):
+        if worker_type == "decode" and attr.name == "enable_hierarchical_cache":
+            continue
         if hasattr(args, f"sglang_{attr.name}") and attr.name not in kwargs:
             kwargs[attr.name] = getattr(args, f"sglang_{attr.name}")
         unused_keys.discard(attr.name)
