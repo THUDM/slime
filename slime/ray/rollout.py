@@ -600,11 +600,19 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
         return
 
     log_dict = {**(rollout_extra_metrics or {})}
-    response_lengths = [sample.effective_response_length for sample in samples]
+    response_lengths = [sample.response_length for sample in samples]
     log_dict["perf/rollout_time"] = rollout_time
     if args.rollout_num_gpus:
         log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+
+    response_lengths = [sample.effective_response_length for sample in samples]
+    if args.rollout_num_gpus:
+        log_dict["perf/effective_tokens_per_gpu_per_sec"] = (
+            sum(response_lengths) / rollout_time / args.rollout_num_gpus
+        )
+    log_dict["perf/longest_effective_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+
     log_dict |= dict_add_prefix(compute_metrics_from_samples(args, samples), "rollout/")
     logger.info(f"perf {rollout_id}: {log_dict}")
     step = compute_rollout_step(args, rollout_id)
