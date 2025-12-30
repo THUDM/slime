@@ -64,3 +64,37 @@ Currently, FP8 is far from being a complete feature and still has the following 
 - FP8 weights (`--fp8-param-gather`) can provide memory savings benefits, but currently FP8 weights must be used with TransformerEngine's FusedAdam, which conflicts with the commonly used Adam CPU offload technique in Megatron-LM.
 
 The slime team will continue to collaborate with the NVIDIA team to contribute more complete FP8 training infrastructure to the community.
+
+
+## INT4 training examples
+
+This is an example of INT4 ste training and INT4 inference. Under INT4 inference, it can achieve more efficient inference throughput, resulting in fast training.
+
+### Files
+
+* `run-moonlight-16B-A3B-int4.sh`: example launch script with Moonlight-16B-A3B in INT4 on 4 H200.
+
+### Quick Start
+
+1. Check if your training script is properly configured. 
+
+For training tasks, we need to add these flags:
+```bash
+--int4-params-rollout
+```
+Then ensure the `OPEN_TRAINING_INT4_FAKE_QAT_FLAG` environment variable is enabled.
+
+2. Convert HuggingFace model weights to INT4 format. 
+
+Download ptq dataset in   https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1
+
+You can use `tools/convert_hf_to_hf_int4.py` to convert bf16 weights to int4 format. Ensure that the `--hf-checkpoint` parameter points to a directory where the `config.json` contains the correct `quantization_config`. slime will automatically use INT4 quantization during weight updates. 
+
+```bash
+python tools/convert_hf_to_hf_int4.py \
+  --model_id /path/to/your/models \
+  --output_dir /path/to/your/save/models \
+  --local_data_path /path/to/your/wikitext
+```
+
+3. Start INT4 training.
