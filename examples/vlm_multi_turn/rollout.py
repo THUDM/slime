@@ -18,8 +18,9 @@ from slime.utils.types import Sample
 
 DEFAULT_ENV_MODULE = "examples.vlm_multi_turn.env_geo3k"
 DEFAULT_ROLLOUT_CONFIG = {
-    "max_turns": 3,
+    "max_turns": 5,
 }
+
 
 def _load_env_module(env_path: str | None):
     """Load the interaction environment module from a module path or a file path."""
@@ -176,23 +177,7 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
             ]
         current_image_data = image_data
 
-        #sample.rollout_response_length is length of response produced by the actor,
-        #excluding initial prompt tokens and env feedback tokens.
-        sample.rollout_response_length = sample.rollout_response_length or 0
-        #check for resumed sample
-        if len(sample.response) > 0:
-             if "max_new_tokens" in sampling_params and sampling_params["max_new_tokens"] is not None:
-                sampling_params["max_new_tokens"] -= sample.rollout_response_length
-        
-        assert (
-            sampling_params["max_new_tokens"] >= 0
-        ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
-        if sampling_params["max_new_tokens"] == 0:
-            sample.status = Sample.Status.TRUNCATED
-            return sample
-
-
-        # Initialize token/logprob/loss_mask tracking to be perfectly aligned with model inputs
+        # Initialize token/logprob/loss_mask tracking to be aligned with model inputs
         if not sample.tokens:
             sample.tokens = list(prompt_ids)
         response_tokens: list[int] = sample.tokens[len(prompt_ids) :] if len(sample.tokens) >= len(prompt_ids) else []
@@ -200,10 +185,18 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
         sample.rollout_log_probs = sample.rollout_log_probs or []
         sample.response_length = len(response_tokens)
 
-
-        generated_responses: list[str] = []
+        budget = None
+        if args.rollout_max_context_len is not None:
+            budget = args.rollout_max_context_len - len(sample.tokens)
+        elif sampling_params.get("max_new_tokens") is not None:
+            budget = sampling_params["max_new_tokens"] - len(sample.tokens)
+        if budget is not None and budget <= 0:
+            sample.status = Sample.Status.TRUNCATED
+            return sample
 
         for turn_idx in range(max_turns):
+            if budget is not None:
+                sampling_params["max_new_tokens"] = budget
             cur_sampling_params = sampling_params.copy()
 
             payload = {
@@ -230,21 +223,14 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
             response_tokens.extend(new_response_tokens)
             sample.loss_mask.extend([1] * len(new_response_tokens))
             sample.rollout_log_probs.extend(new_response_log_probs)
-            sample.rollout_response_length += len(new_response_tokens)
             sample.response_length = len(response_tokens)
 
-            generated_responses.append(response_text)
+            if budget is not None:
+                budget -= len(new_response_tokens)
+                if budget <= 0:
+                    sample.status = Sample.Status.TRUNCATED
+                    break
 
-            if "max_new_tokens" in sampling_params and sampling_params["max_new_tokens"] is not None:
-                sampling_params["max_new_tokens"] -= len(new_response_tokens)
-            
-            assert (
-                sampling_params["max_new_tokens"] >= 0
-            ), f"max_new_tokens: {sampling_params['max_new_tokens']} should not be less than 0"
-            if sampling_params["max_new_tokens"] == 0:
-                sample.status = Sample.Status.TRUNCATED
-                return sample
-            
             finish_type = output["meta_info"]["finish_reason"]["type"]
             match finish_type:
                 case "length":
@@ -284,7 +270,7 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
             sample.loss_mask.extend([0] * len(obs_prompt_ids))  # user/obs + next assistant prefix => masked as zero
             sample.rollout_log_probs.extend([0.0] * len(obs_prompt_ids))  # keep logprob aligned with loss_mask
             sample.response_length = len(response_tokens)
-
+                
             if obs_image_data:
                 current_image_data = (current_image_data or []) + obs_image_data
 
@@ -310,9 +296,16 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                     sample.multimodal_train_inputs, obs_multimodal_train_inputs
                 )
 
+            if budget is not None:
+                budget -= len(obs_prompt_ids)
+                if budget <= 0:
+                    sample.status = Sample.Status.TRUNCATED
+                    break
+            
             if turn_idx + 1 >= max_turns:
                 sample.status = Sample.Status.COMPLETED
                 break
+
    
         # Decode only the response segment (excluding the initial prompt while including env's feedback tokens)
         sample.response = tokenizer.decode(response_tokens, skip_special_tokens=False)
