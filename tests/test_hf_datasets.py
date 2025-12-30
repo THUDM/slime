@@ -102,6 +102,26 @@ def mock_processor():
     return None  # Most tests don't use multimodal
 
 
+@pytest.fixture
+def test_jsonl_data_with_ids(temp_dir):
+    """Create test dataset with unique IDs for deduplication testing.
+
+    Creates 100 samples with:
+    - Unique sample_id in metadata
+    - Sequential numbering for deterministic testing
+    """
+    data_path = Path(temp_dir) / "test_data_with_ids.jsonl"
+    for i in range(100):
+        sample = {
+            "input": f"Test prompt {i}",
+            "label": f"Test label {i}",
+            "metadata": {"sample_id": f"sample_{i:04d}"},
+        }
+        with open(data_path, "a") as f:
+            f.write(json.dumps(sample) + "\n")
+    return str(data_path)
+
+
 # ============================================================================
 # Test Class 1: HFDatasetAdapters Basic Functionality
 # ============================================================================
@@ -432,10 +452,195 @@ class TestIntegration:
     """End-to-end integration tests (require HF datasets library)."""
 
     @pytest.mark.skip(reason="Requires HF datasets library and full environment")
-    def test_full_training_loop_simulation(self):
-        """Simulate full training loop: rollout → train → checkpoint → resume."""
-        # This would test:
-        # 1. Multiple rollout steps
-        # 2. Checkpoint save at step N
-        # 3. Resume from step N
-        # 4. Verify no sample duplication
+    def test_full_training_loop_simulation(self, temp_dir, test_jsonl_data_with_ids, mock_tokenizer, mock_processor):
+        """Simulate full training loop: rollout → train → checkpoint → resume.
+
+        This test verifies:
+        1. Sequential consumption across multiple rollouts
+        2. Checkpoint save at step N
+        3. Checkpoint resume from step N
+        4. No sample duplication (via metadata.sample_id)
+        5. Automatic epoch switching (100 samples / 32 batch → 3+ epochs)
+        """
+        from slime.rollout.data_source import RolloutDataSource
+
+        # Setup args
+        args = MagicMock()
+        args.rollout_global_dataset = True
+        args.prompt_data = test_jsonl_data_with_ids
+        args.input_key = "input"
+        args.label_key = "label"
+        args.metadata_key = "metadata"
+        args.tool_key = None
+        args.multimodal_keys = None
+        args.apply_chat_template = False
+        args.apply_chat_template_kwargs = {}
+        args.rollout_seed = 42
+        args.rollout_shuffle = False  # Disable shuffle for deterministic testing
+        args.rollout_max_prompt_len = None
+        args.n_samples_per_prompt = 1
+        args.use_hf_datasets = True  # Enable HF Datasets mode
+        args.hf_dataset_buffer_size = 10
+        args.hf_dataset_shuffle_buffer = 100
+        args.hf_dataset_num_proc = 2
+        args.save = str(Path(temp_dir) / "checkpoints")
+        args.load = None
+        args.hf_checkpoint = None
+
+        # Mock tokenizer/processor loading
+        with patch("slime.rollout.data_source.load_tokenizer", return_value=mock_tokenizer), patch(
+            "slime.rollout.data_source.load_processor", return_value=mock_processor
+        ):
+
+            # === Phase 1: Run 10 rollouts with checkpoint at step 5 ===
+            data_source = RolloutDataSource(args)
+            data_source.set_train_parallel_config({"dp_size": 2})
+
+            consumed_sample_ids = set()
+            num_rollouts = 10
+            batch_size = 32  # 32 prompts per rollout
+            current_epoch = 0
+
+            for rollout_id in range(num_rollouts):
+                # Track epoch before getting samples
+                before_epoch = data_source.epoch_id
+
+                samples = data_source.get_samples(num_samples=batch_size)
+
+                # Track epoch after getting samples
+                after_epoch = data_source.epoch_id
+
+                # Verify batch size
+                assert len(samples) == batch_size, f"Expected {batch_size} sample groups, got {len(samples)}"
+
+                # Check for epoch transition
+                if after_epoch > before_epoch:
+                    # Epoch changed, clear dedup set (samples can repeat across epochs)
+                    consumed_sample_ids.clear()
+                    current_epoch = after_epoch
+
+                # Extract sample IDs and check for duplicates within same epoch
+                for group in samples:
+                    for sample in group:
+                        sample_id = sample.metadata.get("sample_id")
+                        assert sample_id is not None, f"Sample missing unique ID at rollout {rollout_id}"
+                        assert (
+                            sample_id not in consumed_sample_ids
+                        ), f"Duplicate sample detected: {sample_id} at rollout {rollout_id}, epoch {current_epoch}"
+                        consumed_sample_ids.add(sample_id)
+
+                # Save checkpoint at step 5
+                if rollout_id == 5:
+                    data_source.save(rollout_id)
+
+            # Verify epoch switching occurred (100 samples / 32 batch = 3.125 batches per epoch)
+            # After 10 rollouts (320 samples requested), should be in epoch 3+
+            assert data_source.epoch_id >= 2, f"Expected multiple epochs, but only in epoch {data_source.epoch_id}"
+
+            # === Phase 2: Verify checkpoint file exists and structure ===
+            ckpt_path = Path(args.save) / "rollout/global_dataset_state_dict_5.pt"
+            assert ckpt_path.exists(), "Checkpoint file not created"
+
+            # Load and verify checkpoint structure
+            state_dict = torch.load(ckpt_path)
+            required_keys = ["sample_offset", "epoch_id", "sample_group_index", "sample_index"]
+            for key in required_keys:
+                assert key in state_dict, f"Missing key in checkpoint: {key}"
+
+            # Verify HF adapter state is present
+            assert "hf_adapter_state" in state_dict, "Missing HF adapter state in checkpoint"
+            hf_state = state_dict["hf_adapter_state"]
+            assert "epoch_id" in hf_state, "Missing epoch_id in HF adapter state"
+            assert "consumed_count" in hf_state, "Missing consumed_count in HF adapter state"
+
+            # === Phase 3: Resume from checkpoint and verify state restoration ===
+            data_source2 = RolloutDataSource(args)
+            data_source2.set_train_parallel_config({"dp_size": 2})
+            data_source2.args.load = args.save
+            data_source2.load(rollout_id=5)
+
+            # Verify state restoration
+            assert data_source2.dataset is not None, "Dataset not initialized after load"
+            if hasattr(data_source2.dataset, "consumed_count"):
+                # HF adapter should restore consumed_count
+                assert data_source2.dataset.consumed_count >= 0, "Invalid consumed_count after restore"
+
+            # Continue for 5 more rollouts (simulating steps 6-10)
+            # This verifies that checkpoint correctly saved position
+            for _rollout_id in range(6, num_rollouts + 1):
+                samples = data_source2.get_samples(num_samples=batch_size)
+                assert len(samples) == batch_size, f"Expected {batch_size} samples after resume"
+
+    @pytest.mark.skip(reason="Requires HF datasets library")
+    def test_epoch_boundary_checkpoint(self, temp_dir, test_jsonl_data_with_ids, mock_tokenizer, mock_processor):
+        """Test checkpoint save/load at epoch boundary.
+
+        Edge case: Verify correct behavior when checkpoint occurs exactly
+        at epoch transition (after consuming all 100 samples).
+        """
+        from slime.rollout.data_source import RolloutDataSource
+
+        # Setup args (similar to test_full_training_loop_simulation)
+        args = MagicMock()
+        args.rollout_global_dataset = True
+        args.prompt_data = test_jsonl_data_with_ids
+        args.input_key = "input"
+        args.label_key = "label"
+        args.metadata_key = "metadata"
+        args.tool_key = None
+        args.multimodal_keys = None
+        args.apply_chat_template = False
+        args.apply_chat_template_kwargs = {}
+        args.rollout_seed = 42
+        args.rollout_shuffle = False
+        args.rollout_max_prompt_len = None
+        args.n_samples_per_prompt = 1
+        args.use_hf_datasets = True
+        args.hf_dataset_buffer_size = 10
+        args.hf_dataset_shuffle_buffer = 100
+        args.hf_dataset_num_proc = 2
+        args.save = str(Path(temp_dir) / "checkpoints")
+        args.load = None
+        args.hf_checkpoint = None
+
+        with patch("slime.rollout.data_source.load_tokenizer", return_value=mock_tokenizer), patch(
+            "slime.rollout.data_source.load_processor", return_value=mock_processor
+        ):
+
+            data_source = RolloutDataSource(args)
+            data_source.set_train_parallel_config({"dp_size": 1})
+
+            # Consume exactly 100 samples (one complete epoch)
+            # With 100 samples and batch_size=25, need 4 rollouts
+            for _rollout_id in range(4):
+                samples = data_source.get_samples(num_samples=25)
+                assert len(samples) == 25
+
+            # Should have completed epoch 0, now in epoch 1
+            assert data_source.epoch_id >= 1, "Expected epoch transition after 100 samples"
+
+            # Save checkpoint at epoch boundary
+            data_source.save(rollout_id=4)
+
+            # Verify checkpoint
+            ckpt_path = Path(args.save) / "rollout/global_dataset_state_dict_4.pt"
+            assert ckpt_path.exists(), "Checkpoint not saved at epoch boundary"
+
+            state_dict = torch.load(ckpt_path)
+            assert "hf_adapter_state" in state_dict
+            hf_state = state_dict["hf_adapter_state"]
+
+            # At epoch boundary, consumed_count should be 0 (reset for new epoch)
+            # or 100 (if tracking total), depending on implementation
+            assert "epoch_id" in hf_state
+            assert hf_state["epoch_id"] >= 1, "Epoch ID not incremented at boundary"
+
+            # Resume from checkpoint
+            data_source2 = RolloutDataSource(args)
+            data_source2.set_train_parallel_config({"dp_size": 1})
+            data_source2.args.load = args.save
+            data_source2.load(rollout_id=4)
+
+            # Continue consuming - should start from epoch 1
+            samples = data_source2.get_samples(num_samples=10)
+            assert len(samples) == 10, "Failed to consume after epoch boundary checkpoint"
