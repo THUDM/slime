@@ -30,7 +30,7 @@ def execute():
     wandb_args = (
         "--use-wandb "
         "--wandb-project slime-dev "
-        "--wandb-group vlm_multi_turn_geo3k_test_concate "
+        "--wandb-group vlm_multi_turn_geo3k "
         "--wandb-key ${WANDB_API_KEY} "
     )
 
