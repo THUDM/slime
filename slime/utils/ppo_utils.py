@@ -1,6 +1,7 @@
 # Adapt from https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/models/utils.py
 # and https://github.com/OpenRLHF/OpenRLHF/blob/10c733694ed9fbb78a0a2ff6a05efc7401584d46/openrlhf/trainer/ppo_utils/experience_maker.py
-from typing import List, Optional, Tuple
+
+from argparse import Namespace
 
 import torch
 import torch.distributed as dist
@@ -12,6 +13,7 @@ def compute_approx_kl(
     log_probs: torch.Tensor,
     log_probs_base: torch.Tensor,
     kl_loss_type: str,
+    importance_ratio: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """
     Compute the approximate KL divergence between two distributions.
@@ -20,30 +22,103 @@ def compute_approx_kl(
     Args:
         log_probs: Log probabilities of the new distribution.
         log_probs_base: Log probabilities of the base distribution.
-        action_mask: Mask for actions.
+        kl_loss_type: Type of KL estimator (k1, k2, k3, low_var_kl).
+        importance_ratio: Optional IS ratio (π_θ/π_old) for unbiased KL estimation.
     """
-
     log_ratio = log_probs.float() - log_probs_base.float()
 
     if kl_loss_type == "k1":
-        return log_ratio
+        kl = log_ratio
     elif kl_loss_type == "k2":
-        log_ratio = log_probs.float() - log_probs_base.float()
-        log_ratio = log_ratio**2 / 2.0
-        return log_ratio
-    elif kl_loss_type == "k3":
+        kl = log_ratio**2 / 2.0
+    elif kl_loss_type in ["k3", "low_var_kl"]:
         # The non negative kl approximation in
         # http://joschu.net/blog/kl-approx.html
         # Besides non negative, it is also unbiased and have lower variance.
         log_ratio = -log_ratio
-        log_ratio = log_ratio.exp() - 1 - log_ratio
-        return log_ratio
-    elif kl_loss_type == "low_var_kl":
-        log_ratio = -log_ratio
-        log_ratio = log_ratio.exp() - 1 - log_ratio
-        return torch.clamp(log_ratio, min=-10, max=10)
+        kl = log_ratio.exp() - 1 - log_ratio
     else:
         raise ValueError(f"Unknown kl_loss_type: {kl_loss_type}")
+
+    # Apply IS ratio for unbiased KL estimation (DeepSeek-V3.2)
+    if importance_ratio is not None:
+        kl = importance_ratio * kl
+
+    # Clamp only for low_var_kl for numerical stability
+    if kl_loss_type == "low_var_kl":
+        kl = torch.clamp(kl, min=-10, max=10)
+
+    return kl
+
+
+def compute_opsm_mask(
+    args: Namespace,
+    full_log_probs: list[torch.Tensor],
+    full_old_log_probs: list[torch.Tensor],
+    advantages: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Compute Off-Policy Sequence Masking (OPSM) mask.
+
+    Args:
+        args: Configuration containing `opsm_delta` threshold.
+        full_log_probs: Current policy log-probs per sample.
+        full_old_log_probs: Old policy log-probs per sample.
+        advantages: Advantage values per sample.
+        loss_masks: Loss masks per sample.
+
+    Returns:
+        Tuple of `(opsm_mask, opsm_clipfrac)` where `opsm_mask` is a
+        concatenated tensor of per-token masks and
+        `opsm_clipfrac` is the count of masked sequences.
+    """
+    opsm_mask_list = []
+    device = advantages[0].device
+    opsm_clipfrac = torch.tensor(0.0, device=device)
+
+    for full_log_prob, full_old_log_prob, advantage, loss_mask in zip(
+        full_log_probs, full_old_log_probs, advantages, loss_masks, strict=False
+    ):
+        # Calculate sequence-level KL
+        seq_kl = ((full_old_log_prob - full_log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+
+        # Create mask: 0 if (advantage < 0 and seq_kl > delta), else 1
+        mask = ((advantage < 0) & (seq_kl > args.opsm_delta)).float()
+        opsm_clipfrac += mask.sum() / torch.clamp_min(loss_mask.sum(), 1)
+
+        opsm_mask_list.append(1 - mask)
+
+    opsm_mask = torch.cat(opsm_mask_list, dim=0)
+    return opsm_mask, opsm_clipfrac
+
+
+def compute_gspo_kl(
+    full_log_probs: list[torch.Tensor],
+    full_old_log_probs: list[torch.Tensor],
+    local_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+) -> torch.Tensor:
+    """Compute GSPO-style per-sequence KL divergence.
+
+    Args:
+        full_log_probs: Current policy log-probs per sample (full or CP-local).
+        full_old_log_probs: Old policy log-probs per sample (full or CP-local).
+        local_log_probs: Local (CP-local) log-probs for expansion shape reference.
+        loss_masks: Loss masks per sample.
+
+    Returns:
+        Concatenated tensor of per-token KL values where each token in a
+        sequence has the same KL value (the sequence-level KL).
+    """
+    # Compute sequence-level KL and expand to per-token
+    ppo_kl = [
+        ((old_logprob - log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
+        for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks, strict=False)
+    ]
+    ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, local_log_probs, strict=False)]
+    ppo_kl = torch.cat(ppo_kl, dim=0)
+
+    return ppo_kl
 
 
 @torch.compile(dynamic=True)
@@ -52,7 +127,7 @@ def compute_policy_loss(
     advantages: torch.Tensor,
     eps_clip: float,
     eps_clip_high: float,
-    eps_clip_c: Optional[float] = None,
+    eps_clip_c: float | None = None,
 ):
     ratio = (-ppo_kl).exp()
     pg_losses1 = -ratio * advantages
@@ -73,7 +148,7 @@ def compute_policy_loss(
     return pg_losses, clipfrac
 
 
-def compute_log_probs(logits: torch.Tensor, tokens: torch.Tensor, process_group: Optional[dist.ProcessGroup]):
+def compute_log_probs(logits: torch.Tensor, tokens: torch.Tensor, process_group: dist.ProcessGroup | None):
     from megatron.core.fusions.fused_cross_entropy import fused_vocab_parallel_cross_entropy
 
     # convert to [seq_len, batch_size, vocab_size] as expected by fused_vocab_parallel_cross_entropy
@@ -134,13 +209,13 @@ def get_grpo_returns(
 
 def get_reinforce_plus_plus_returns(
     rewards: torch.Tensor,
-    kl: List[torch.Tensor],
-    loss_masks: List[torch.Tensor],
-    response_lengths: List[int],
-    total_lengths: List[int],
+    kl: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    response_lengths: list[int],
+    total_lengths: list[int],
     kl_coef: float,
     gamma: float,
-) -> List[torch.Tensor]:
+) -> list[torch.Tensor]:
     """
     Calculates discounted returns for REINFORCE++ (https://arxiv.org/pdf/2501.03262)
 
@@ -160,7 +235,6 @@ def get_reinforce_plus_plus_returns(
     from megatron.core import mpu
 
     cp_size = mpu.get_context_parallel_world_size()
-    cp_rank = mpu.get_context_parallel_rank()
 
     final_returns_chunks = []
     for i in range(len(rewards)):
@@ -204,10 +278,10 @@ def get_reinforce_plus_plus_returns(
 
 def get_reinforce_plus_plus_baseline_advantages(
     rewards: torch.Tensor,
-    kl: List[torch.Tensor],
-    loss_masks: List[torch.Tensor],
+    kl: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
     kl_coef: float,
-) -> List[torch.Tensor]:
+) -> list[torch.Tensor]:
     """
     Calculates the unwhitened advantages for the REINFORCE++-baseline algorithm.
     Broadcasting the scalar (reward - group_baseline) to each token.
@@ -225,7 +299,8 @@ def get_reinforce_plus_plus_baseline_advantages(
     """
     # Broadcast to get unwhitened advantages
     unwhitened_advantages = [
-        torch.ones_like(kl_tensor) * reward_val - kl_coef * kl_tensor for kl_tensor, reward_val in zip(kl, rewards)
+        torch.ones_like(kl_tensor) * reward_val - kl_coef * kl_tensor
+        for kl_tensor, reward_val in zip(kl, rewards, strict=False)
     ]
 
     return unwhitened_advantages
@@ -238,7 +313,7 @@ def get_advantages_and_returns(
     rewards: torch.Tensor,
     gamma: float,
     lambd: float,
-) -> Tuple[torch.Tensor, torch.Tensor]:
+) -> tuple[torch.Tensor, torch.Tensor]:
     """Function that computes advantages and returns from rewards and values.
     Calculated as in the original PPO paper: https://arxiv.org/abs/1707.06347
     Note that rewards may include a KL divergence loss term.
@@ -332,7 +407,9 @@ def get_advantages_and_returns_batch(
             full_values_list = []
             full_rewards_list = []
 
-            for total_len, resp_len, v, r in zip(total_lengths, response_lengths, values_list, rewards_list):
+            for total_len, resp_len, v, r in zip(
+                total_lengths, response_lengths, values_list, rewards_list, strict=False
+            ):
                 full_v = all_gather_with_cp(v, total_len, resp_len)
                 full_r = all_gather_with_cp(r, total_len, resp_len)
                 full_values_list.append(full_v)
@@ -380,6 +457,7 @@ def get_advantages_and_returns_batch(
                 response_lengths,
                 full_advantages,
                 full_returns,
+                strict=False,
             ):
                 adv_full = adv_row  # shape = [resp_len_i padded to max_len]
                 ret_full = ret_row
@@ -566,21 +644,72 @@ def chunked_gae(
     return advantages, returns
 
 
-def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool = False):
+def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool = False, chunk_size: int = -1):
     logits = logits.contiguous()
     # TODO: not sure why we need to clone the logits here.
     # Without the clone, the backward will trigger inplace edit error.
     # It seems that the function with tp will modify the logits inplace.
+    entropy = None
     if logits.size(0) != 0:
-        log_prob = compute_log_probs(logits.clone(), tokens, tp_group)
+        if chunk_size > 0:
+            num_chunks = (logits.size(0) - 1) // chunk_size + 1
+            tokens_chunks = tokens.chunk(num_chunks, dim=0)
+            logits_chunks = logits.chunk(num_chunks, dim=0)
+            log_probs = []
+            for tokens_chunk, logits_chunk in zip(tokens_chunks, logits_chunks, strict=True):
+                log_prob = compute_log_probs(logits_chunk.clone(), tokens_chunk, tp_group)
+                log_probs.append(log_prob)
+            log_prob = torch.cat(log_probs, dim=0)
+            if with_entropy:
+                entropys = []
+                for _, logits_chunk in zip(tokens_chunks, logits_chunks, strict=True):
+                    entropy = compute_entropy_from_logits(logits_chunk.clone(), tp_group)
+                    entropys.append(entropy)
+                entropy = torch.cat(entropys, dim=0)
+        else:
+            log_prob = compute_log_probs(logits.clone(), tokens, tp_group)
+            if with_entropy:
+                entropy = compute_entropy_from_logits(logits.clone(), tp_group)
     else:
         log_prob = logits.new_zeros((0,))
-
-    if with_entropy:
-        if logits.size(0) != 0:
-            entropy = compute_entropy_from_logits(logits.clone(), tp_group)
-        else:
+        if with_entropy:
             entropy = logits.new_zeros((0,))
-    else:
-        entropy = None
+
     return log_prob, entropy
+
+
+def vanilla_tis_function(
+    args,
+    *,
+    pg_loss: torch.Tensor,
+    train_log_probs: list[torch.Tensor],
+    rollout_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    **kwargs,
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
+    """Apply TIS off-policy correction using importance sampling.
+
+    Parameters:
+        args: Arguments containing TIS settings.
+        pg_loss: Policy gradient loss tensor of shape [total_seq_len - 1].
+        train_log_probs: List of tensors containing training log-probabilities
+            for each sequence.
+        rollout_log_probs: List of tensors containing rollout log-probabilities
+            for each sequence.
+        loss_masks: List of tensors containing loss masks for each sequence.
+    """
+    rollout_log_probs = torch.cat(rollout_log_probs, dim=0)
+    old_log_probs = torch.cat(train_log_probs, dim=0)
+    tis = torch.exp(old_log_probs - rollout_log_probs)
+    tis_abs = (tis - 1).abs()
+    tis_clip_low = args.tis_clip_low if args.tis_clip_low is not None else 0.1
+    tis_clip_high = args.tis_clip if args.tis_clip is not None else 2.0
+    tis_weights = torch.clamp(tis, min=tis_clip_low, max=tis_clip_high)
+    tis_clipfrac = (tis_weights != tis).float()
+    metrics = {
+        "tis": tis.clone().detach(),
+        "tis_clipfrac": tis_clipfrac.clone().detach(),
+        "tis_abs": tis_abs.clone().detach(),
+    }
+    pg_loss = pg_loss * tis_weights
+    return pg_loss, loss_masks, metrics

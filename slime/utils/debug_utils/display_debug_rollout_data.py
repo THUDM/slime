@@ -1,12 +1,12 @@
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Annotated, List
+from typing import Annotated
 
 import torch
 import typer
 
-from slime.ray.rollout import _compute_metrics_from_samples
+from slime.ray.rollout import compute_metrics_from_samples
 from slime.utils.types import Sample
 
 _WHITELIST_KEYS = [
@@ -27,8 +27,10 @@ def main(
     load_debug_rollout_data: Annotated[str, typer.Option()],
     show_metrics: bool = True,
     show_samples: bool = True,
-    category: List[str] = ["train", "eval"],
+    category: list[str] = None,
 ):
+    if category is None:
+        category = ["train", "eval"]
     for rollout_id, path in _get_rollout_dump_paths(load_debug_rollout_data, category):
         print("-" * 80)
         print(f"{rollout_id=} {path=}")
@@ -45,8 +47,7 @@ def main(
                 log_reward_category=None,
             )
             sample_objects = [Sample.from_dict(s) for s in sample_dicts]
-            # TODO make the function public
-            metrics = _compute_metrics_from_samples(args, sample_objects)
+            metrics = compute_metrics_from_samples(args, sample_objects)
             print("metrics", metrics)
 
         if show_samples:
@@ -54,7 +55,7 @@ def main(
                 print(json.dumps({k: v for k, v in sample.items() if k in _WHITELIST_KEYS}))
 
 
-def _get_rollout_dump_paths(load_debug_rollout_data: str, categories: List[str]):
+def _get_rollout_dump_paths(load_debug_rollout_data: str, categories: list[str]):
     # may improve later
     for rollout_id in range(1000):
         for category in categories:

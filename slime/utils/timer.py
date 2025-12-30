@@ -20,7 +20,7 @@ class Timer(metaclass=SingletonMeta):
     def start(self, name):
         assert name not in self.start_time, f"Timer {name} already started."
         self.start_time[name] = time()
-        if torch.distributed.get_rank() == 0:
+        if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
             logger.info(f"Timer {name} start")
 
     def end(self, name):
@@ -28,7 +28,7 @@ class Timer(metaclass=SingletonMeta):
         elapsed_time = time() - self.start_time[name]
         self.add(name, elapsed_time)
         del self.start_time[name]
-        if torch.distributed.get_rank() == 0:
+        if torch.distributed.is_initialized() and torch.distributed.get_rank() == 0:
             logger.info(f"Timer {name} end (elapsed: {elapsed_time:.1f}s)")
 
     def reset(self, name=None):

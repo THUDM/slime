@@ -1,0 +1,2053 @@
+diff --git a/python/sglang/srt/disaggregation/decode.py b/python/sglang/srt/disaggregation/decode.py
+index ef52bda7f..537d892dc 100644
+--- a/python/sglang/srt/disaggregation/decode.py
++++ b/python/sglang/srt/disaggregation/decode.py
+@@ -296,6 +296,13 @@ class DecodePreallocQueue:
+         )
+         return kv_manager
+ 
++    def release_memory_occupation(self):
++        if hasattr(self.kv_manager, "close"):
++            self.kv_manager.close()
++
++    def resume_memory_occupation(self):
++        self.kv_manager = self._init_kv_manager()
++
+     def add(self, req: Req, is_retracted: bool = False) -> None:
+         """Add a request to the pending queue."""
+         if self._check_if_req_exceed_kv_capacity(req):
+diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
+index d4414d084..c5fb10155 100644
+--- a/python/sglang/srt/disaggregation/mooncake/conn.py
++++ b/python/sglang/srt/disaggregation/mooncake/conn.py
+@@ -1074,6 +1074,19 @@ class MooncakeKVManager(CommonKVManager):
+             f"Losing connection with prefill instance (bootstrap_addr: {failed_bootstrap_addr}), {len(affected_rooms)} requests affected"
+         )
+ 
++    def close(self):
++        # Batch deregister KV data buffers
++        if self.kv_args.kv_data_ptrs:
++            self.engine.batch_deregister(self.kv_args.kv_data_ptrs)
++
++        # Batch deregister auxiliary data buffers
++        if self.kv_args.aux_data_ptrs:
++            self.engine.batch_deregister(self.kv_args.aux_data_ptrs)
++
++        # Batch deregister state/extra pool data buffers
++        if self.kv_args.state_data_ptrs:
++            self.engine.batch_deregister(self.kv_args.state_data_ptrs)
++
+ 
+ class MooncakeKVSender(CommonKVSender):
+ 
+diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
+index 952374ed5..239ac2571 100644
+--- a/python/sglang/srt/disaggregation/prefill.py
++++ b/python/sglang/srt/disaggregation/prefill.py
+@@ -305,6 +305,13 @@ class PrefillBootstrapQueue:
+         else:
+             return bootstrapped_reqs, failed_reqs
+ 
++    def release_memory_occupation(self):
++        if hasattr(self.kv_manager, "close"):
++            self.kv_manager.close()
++
++    def resume_memory_occupation(self):
++        self.kv_manager = self._init_kv_manager()
++
+ 
+ class SchedulerDisaggregationPrefillMixin:
+     """
+diff --git a/python/sglang/srt/distributed/device_communicators/pynccl.py b/python/sglang/srt/distributed/device_communicators/pynccl.py
+index 86c53f26b..52acf95b9 100644
+--- a/python/sglang/srt/distributed/device_communicators/pynccl.py
++++ b/python/sglang/srt/distributed/device_communicators/pynccl.py
+@@ -380,3 +380,9 @@ class PyNcclCommunicator:
+ 
+         self.disabled = old_disable
+         self.stream = old_stream
++
++    def nccl_pause(self):
++        self.nccl.ncclPause(self.comm)
++
++    def nccl_resume(self):
++        self.nccl.ncclResume(self.comm)
+diff --git a/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py b/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
+index 6b12f2922..7028a4e46 100644
+--- a/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
++++ b/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
+@@ -304,6 +304,17 @@ class NCCLLibrary:
+         Function("ncclGroupEnd", ncclResult_t, []),
+     ]
+ 
++    if os.environ.get("AMEM_ENABLE", "0") == "1":
++        exported_functions.extend(
++            [
++                # ncclResult_t ncclPause(ncclComm_t comm);
++                Function("ncclPause", ncclResult_t, [ncclComm_t]),
++                # ncclResult_t ncclResume(ncclComm_t comm);
++                Function("ncclResume", ncclResult_t, [ncclComm_t]),
++                Function("ncclSetGroupID", ncclResult_t, [ctypes.c_int]),
++            ]
++        )
++
+     exported_functions_symm_mem = [
+         # ncclResult_t ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags);
+         Function(
+@@ -551,6 +562,12 @@ class NCCLLibrary:
+     def ncclGroupEnd(self) -> None:
+         self.NCCL_CHECK(self._funcs["ncclGroupEnd"]())
+ 
++    def ncclPause(self, comm: ncclComm_t) -> None:
++        self.NCCL_CHECK(self._funcs["ncclPause"](comm))
++
++    def ncclResume(self, comm: ncclComm_t) -> None:
++        self.NCCL_CHECK(self._funcs["ncclResume"](comm))
++
+ 
+ __all__ = [
+     "NCCLLibrary",
+diff --git a/python/sglang/srt/distributed/parallel_state.py b/python/sglang/srt/distributed/parallel_state.py
+index cf90f6fe0..11d26df81 100644
+--- a/python/sglang/srt/distributed/parallel_state.py
++++ b/python/sglang/srt/distributed/parallel_state.py
+@@ -1780,7 +1780,10 @@ def get_tensor_model_parallel_world_size():
+ 
+ def get_tensor_model_parallel_rank():
+     """Return my rank for the tensor model parallel group."""
+-    return get_tp_group().rank_in_group
++    try:
++        return get_tp_group().rank_in_group
++    except Exception:
++        return 0
+ 
+ 
+ def get_pipeline_model_parallel_world_size():
+diff --git a/python/sglang/srt/entrypoints/engine.py b/python/sglang/srt/entrypoints/engine.py
+index 67a082ea6..390365864 100644
+--- a/python/sglang/srt/entrypoints/engine.py
++++ b/python/sglang/srt/entrypoints/engine.py
+@@ -183,6 +183,7 @@ class Engine(EngineBase):
+         lora_path: Optional[List[Optional[str]]] = None,
+         custom_logit_processor: Optional[Union[List[str], str]] = None,
+         return_hidden_states: bool = False,
++        return_routed_experts: bool = False,
+         stream: bool = False,
+         bootstrap_host: Optional[Union[List[str], str]] = None,
+         bootstrap_port: Optional[Union[List[int], int]] = None,
+@@ -218,6 +219,7 @@ class Engine(EngineBase):
+             lora_path=lora_path,
+             custom_logit_processor=custom_logit_processor,
+             return_hidden_states=return_hidden_states,
++            return_routed_experts=return_routed_experts,
+             stream=stream,
+             bootstrap_host=bootstrap_host,
+             bootstrap_port=bootstrap_port,
+diff --git a/python/sglang/srt/layers/attention/vision.py b/python/sglang/srt/layers/attention/vision.py
+index 9f556a885..992843285 100644
+--- a/python/sglang/srt/layers/attention/vision.py
++++ b/python/sglang/srt/layers/attention/vision.py
+@@ -518,11 +518,25 @@ class VisionAttention(nn.Module):
+         self.dummy_dim = (num_dummy_heads + num_heads) * self.head_size
+ 
+         if self.qk_normalization:
++            norm_kwargs = (
++                dict(
++                    weight_dtype=torch.float32,
++                    cast_x_before_out_mul=True,
++                )
++                if get_global_server_args().rl_on_policy_target is not None
++                else {}
++            )
+             self.q_norm = RMSNorm(
+-                self.dummy_dim, eps=layer_norm_eps, var_hidden_size=embed_dim
++                self.dummy_dim,
++                eps=layer_norm_eps,
++                var_hidden_size=embed_dim,
++                **norm_kwargs,
+             )
+             self.k_norm = RMSNorm(
+-                self.dummy_dim, eps=layer_norm_eps, var_hidden_size=embed_dim
++                self.dummy_dim,
++                eps=layer_norm_eps,
++                var_hidden_size=embed_dim,
++                **norm_kwargs,
+             )
+ 
+         # Select attention backend via a unified method
+@@ -648,6 +662,15 @@ class VisionAttention(nn.Module):
+         if x.dim() == 2:
+             x = x.unsqueeze(0)
+         assert x.dim() == 3, x.shape
++        if (
++            get_global_server_args().rl_on_policy_target is not None
++            and position_embeddings is not None
++        ):
++            assert isinstance(position_embeddings, tuple), (
++                "expected position_embeddings to be a tuple of two tensors,\n"
++                f"but got {type(position_embeddings)}, change if needed"
++            )
++            position_embeddings = tuple(p.to(x.dtype) for p in position_embeddings)
+         x_shape = x.shape
+         bsz, s, _ = x_shape
+         head = self.num_attention_heads_per_partition
+diff --git a/python/sglang/srt/layers/communicator.py b/python/sglang/srt/layers/communicator.py
+index 932f52aeb..79c6b664f 100644
+--- a/python/sglang/srt/layers/communicator.py
++++ b/python/sglang/srt/layers/communicator.py
+@@ -372,6 +372,7 @@ class LayerCommunicator:
+         residual: torch.Tensor,
+         forward_batch: ForwardBatch,
+         quant_format: str = "",
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ):
+         if get_attn_tp_context().input_scattered:
+             hidden_states, residual = self._tp_reduce_scatter(
+@@ -453,7 +454,9 @@ class LayerCommunicator:
+                         )
+                     else:
+                         hidden_states, residual = self.input_layernorm(
+-                            hidden_states, residual
++                            hidden_states,
++                            residual,
++                            post_residual_addition,
+                         )
+ 
+         hidden_states = self._communicate_simple_fn(
+diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
+index 3293a8a59..a075b71ce 100644
+--- a/python/sglang/srt/layers/layernorm.py
++++ b/python/sglang/srt/layers/layernorm.py
+@@ -84,15 +84,12 @@ class RMSNorm(CustomOp):
+         eps: float = 1e-6,
+         var_hidden_size: Optional[int] = None,
+         cast_x_before_out_mul: bool = False,
+-        fp32_residual: bool = False,
+-        weight_dtype: Optional = None,
+-        override_orig_dtype: Optional = None,
++        fp32_residual: bool = True,
+     ) -> None:
+         super().__init__()
+         self.cast_x_before_out_mul = cast_x_before_out_mul
+         self.fp32_residual = fp32_residual
+-        self.override_orig_dtype = override_orig_dtype
+-        self.weight = nn.Parameter(torch.ones(hidden_size, dtype=weight_dtype))
++        self.weight = nn.Parameter(torch.ones(hidden_size))
+         self.variance_epsilon = eps
+         self.hidden_size = hidden_size
+         self.variance_size_override = (
+@@ -105,21 +102,26 @@ class RMSNorm(CustomOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if self.variance_size_override is not None:
+-            return self.forward_native(x, residual)
++            return self.forward_native(x, residual, post_residual_addition)
+         if is_batch_invariant_mode_enabled():
+             if (
+                 residual is not None
+                 or get_global_server_args().rl_on_policy_target == "fsdp"
+             ):
+-                return self.forward_native(x, residual)
++                return self.forward_native(x, residual, post_residual_addition)
+             return rms_norm_batch_invariant(
+                 x,
+                 self.weight.data,
+                 self.variance_epsilon,
+             )
+         if residual is not None:
++            # TODO: Ideally we want to have (a+b)+c. but right now we can only have a+(b+c).
++            # (a+b)+c != a+(b+c), we probably need to add another parameter to fused_add_rmsnorm
++            if post_residual_addition is not None:
++                residual = residual + post_residual_addition
+             fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
+             return x, residual
+         out = rmsnorm(x, self.weight.data, self.variance_epsilon)
+@@ -179,17 +181,35 @@ class RMSNorm(CustomOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if not x.is_contiguous():
+             x = x.contiguous()
+-        orig_dtype = self.override_orig_dtype or x.dtype
++        orig_dtype = x.dtype
++
++        if residual is not None and not self.fp32_residual:
++            x = (
++                x
++                + residual
++                + (
++                    post_residual_addition
++                    if post_residual_addition is not None
++                    else 0.0
++                )
++            )
++            residual = x.clone()
+         x = x.to(torch.float32)
+-        if residual is not None:
+-            x = x + residual.to(torch.float32)
+-            if self.fp32_residual:
+-                residual = x.clone()
+-            else:
+-                residual = x.to(orig_dtype)
++        if residual is not None and self.fp32_residual:
++            x = (
++                x
++                + residual.to(torch.float32)
++                + (
++                    post_residual_addition.to(torch.float32)
++                    if post_residual_addition is not None
++                    else 0.0
++                )
++            )
++            residual = x.to(orig_dtype)
+ 
+         hidden_size = x.shape[-1]
+         if hidden_size != self.hidden_size:
+diff --git a/python/sglang/srt/layers/logits_processor.py b/python/sglang/srt/layers/logits_processor.py
+index 522865765..733bad5f2 100644
+--- a/python/sglang/srt/layers/logits_processor.py
++++ b/python/sglang/srt/layers/logits_processor.py
+@@ -841,11 +841,6 @@ class LogitsProcessor(nn.Module):
+                     None,  # bias
+                     True,  # is_vnni
+                 )
+-            elif get_global_server_args().rl_on_policy_target is not None:
+-                # Due to tie-weight, we may not be able to change lm_head's weight dtype
+-                logits = torch.matmul(
+-                    hidden_states.bfloat16(), lm_head.weight.T.bfloat16()
+-                )
+             else:
+                 logits = torch.matmul(
+                     hidden_states.to(lm_head.weight.dtype), lm_head.weight.T
+diff --git a/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py b/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py
+index e7d5a67cc..639e47163 100644
+--- a/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py
++++ b/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py
+@@ -14,6 +14,7 @@ import torch.nn.functional as F
+ import triton.language as tl
+ 
+ from sglang.srt.layers.moe.moe_runner import MoeRunnerConfig
++from sglang.srt.server_args import get_global_server_args
+ from sglang.srt.utils import (
+     cpu_has_amx_support,
+     direct_register_custom_op,
+@@ -626,7 +627,10 @@ def fused_experts_impl(
+                 ).squeeze(dim=1)
+             else:
+                 # According to micro benchmark results, torch.compile can get better performance for small token.
+-                if tokens_in_chunk <= 32:
++                if (
++                    not get_global_server_args().enable_deterministic_inference
++                    and tokens_in_chunk <= 32
++                ):
+                     moe_sum_reduce_torch_compile(
+                         intermediate_cache3.view(*intermediate_cache3.shape),
+                         out_hidden_states[begin_chunk_idx:end_chunk_idx],
+diff --git a/python/sglang/srt/layers/moe/routed_experts_capturer.py b/python/sglang/srt/layers/moe/routed_experts_capturer.py
+new file mode 100644
+index 000000000..e16817f1f
+--- /dev/null
++++ b/python/sglang/srt/layers/moe/routed_experts_capturer.py
+@@ -0,0 +1,279 @@
++import logging
++from abc import ABC
++from contextlib import contextmanager
++from typing import Optional
++
++import numpy as np
++import torch
++
++from sglang.srt.configs.model_config import ModelConfig
++from sglang.srt.layers.dp_attention import (
++    get_attention_dp_rank,
++    get_dp_local_info,
++    is_dp_attention_enabled,
++)
++from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
++from sglang.srt.server_args import get_global_server_args
++
++logger = logging.getLogger(__name__)
++
++_GB = 1024 * 1024 * 1024
++_MB = 1024 * 1024
++
++
++def get_tensor_size_bytes(t: torch.Tensor):
++    return np.prod(t.shape) * t.dtype.itemsize
++
++
++class _RoutedExpertsDeviceCache:
++    def __init__(
++        self,
++        max_running_requests: int,
++        num_hidden_layers: int,
++        num_experts_per_tok: int,
++        num_fused_shared_experts: int,
++        device: str,
++    ) -> None:
++        self.buffer = torch.zeros(
++            (
++                max(
++                    get_global_server_args().chunked_prefill_size
++                    * get_global_server_args().dp_size,
++                    max_running_requests,
++                ),
++                num_hidden_layers,
++                num_experts_per_tok + num_fused_shared_experts,
++            ),
++            dtype=torch.int32,
++            device=device,
++        )
++        self._finalize_allocation_log()
++
++    def get_buffer_size_bytes(self):
++        assert hasattr(self, "buffer")
++        return get_tensor_size_bytes(self.buffer)
++
++    def capture_fwd_routed_experts(self, layer_id: int, topk_ids: torch.Tensor):
++        assert layer_id is not None, "capturing routing experts but get layer_id None"
++        batch, _ = topk_ids.shape
++        self.buffer[:batch, layer_id, :] = topk_ids
++
++    def _finalize_allocation_log(self):
++        """Common logging and memory usage computation for captured experts buffers."""
++        buffer_size_MB = self.get_buffer_size_bytes() / _MB
++        logger.info(
++            f"Routing experts device buffer allocated. #shape: {tuple(self.buffer.shape)}, size: {buffer_size_MB:.2f} MB"
++        )
++
++
++class _RoutedExpertsHostCache:
++    def __init__(
++        self,
++        num_tokens: int,
++        num_hidden_layers: int,
++        num_experts_per_tok: int,
++    ) -> None:
++        self.num_tokens = num_tokens
++        self.buffer = torch.zeros(
++            (
++                num_tokens,
++                num_hidden_layers,
++                num_experts_per_tok,
++            ),
++            dtype=torch.int32,
++            device="cpu",
++            pin_memory=True,
++        )
++        self._finalize_allocation_log()
++
++    def get_buffer_size_bytes(self):
++        assert hasattr(self, "buffer")
++        return get_tensor_size_bytes(self.buffer)
++
++    def set_experts_buffer(self, layer_id: int, loc: torch.Tensor, top_k: torch.Tensor):
++        self.buffer[layer_id, loc, :] = top_k.to(device="cpu", non_blocking=True)
++
++    def _finalize_allocation_log(self):
++        """Common logging and memory usage computation for captured experts buffers."""
++        buffer_size_GB = self.get_buffer_size_bytes() / _GB
++        logger.info(
++            f"Routing experts host buffer allocated. #tokens: {self.num_tokens}, size: {buffer_size_GB:.2f} GB"
++        )
++
++
++class RoutedExpertsCapturer(ABC):
++    @staticmethod
++    def create(
++        enable: bool,
++        model_config: ModelConfig,
++        num_fused_shared_experts: int,
++        num_tokens: int,
++        max_running_requests: int,
++        device: str,
++    ):
++        if enable:
++            return _RoutedExpertsCapturerReal(
++                model_config,
++                num_tokens=num_tokens,
++                max_running_requests=max_running_requests,
++                num_fused_shared_experts=num_fused_shared_experts,
++                device=device,
++            )
++        else:
++            return _RoutedExpertsCapturerNoop()
++
++    def capture(self, layer_id: int, topk_ids: torch.Tensor):
++        raise NotImplementedError
++
++    def get_routed_experts(
++        self,
++        req_pool_idx: int,
++        seqlen: int,
++        req_to_token_pool: ReqToTokenPool,
++    ):
++        raise NotImplementedError
++
++    def sync_fwd_experts_buffer_DtoH(
++        self,
++        device_loc: torch.Tensor,
++        cpu_loc: torch.Tensor,
++        can_run_graph: bool,
++        cuda_graph_batch: int,
++    ):
++        raise NotImplementedError
++
++    @contextmanager
++    def with_forward(self, forward_batch):
++        yield
++
++    def get_host_cache(self):
++        raise NotImplementedError
++
++    def get_device_cache(self):
++        raise NotImplementedError
++
++
++class _RoutedExpertsCapturerReal(RoutedExpertsCapturer):
++    """Capturer for routed experts with host buffer"""
++
++    def __init__(
++        self,
++        model_config: ModelConfig,
++        num_tokens: int,
++        max_running_requests: int,
++        num_fused_shared_experts: int,
++        device: str,
++    ):
++        self.forward_batch = None
++        self.num_fused_shared_experts = num_fused_shared_experts
++        self.num_hidden_layers = model_config.hf_text_config.num_hidden_layers
++        self.num_experts_per_tok = model_config.hf_text_config.num_experts_per_tok
++
++        self.host_cache = _RoutedExpertsHostCache(
++            num_tokens=num_tokens,
++            num_hidden_layers=self.num_hidden_layers,
++            num_experts_per_tok=self.num_experts_per_tok,
++        )
++
++        self.device_cache = _RoutedExpertsDeviceCache(
++            max_running_requests=max_running_requests,
++            num_hidden_layers=self.num_hidden_layers,
++            num_experts_per_tok=self.num_experts_per_tok,
++            num_fused_shared_experts=self.num_fused_shared_experts,
++            device=device,
++        )
++
++    def capture(self, layer_id: int, topk_ids: torch.Tensor):
++        self.device_cache.capture_fwd_routed_experts(layer_id, topk_ids)
++
++    def sync_fwd_experts_buffer_DtoH(
++        self,
++        device_loc: torch.Tensor,
++        cpu_loc: torch.Tensor,
++        can_run_graph: bool,
++        cuda_graph_batch: int,
++    ):
++        if is_dp_attention_enabled():
++            local_start_pos, local_num_tokens = get_dp_local_info(self.forward_batch)
++            # handle with cuda graph padding
++            if can_run_graph:
++                local_start_pos = get_attention_dp_rank() * cuda_graph_batch
++                local_end_pos = local_start_pos + local_num_tokens
++            else:
++                local_end_pos = local_start_pos + local_num_tokens
++        else:
++            local_start_pos = 0
++            local_end_pos = device_loc.shape[0]
++
++        self.host_cache.buffer[cpu_loc] = self.device_cache.buffer[
++            local_start_pos:local_end_pos, :, : self.num_experts_per_tok
++        ].cpu()
++
++    def get_routed_experts(
++        self,
++        req_pool_idx: int,
++        seqlen: int,
++        req_to_token_pool: ReqToTokenPool,
++    ):
++        cache_pool_idx = (
++            req_to_token_pool.req_to_token[req_pool_idx][: seqlen - 1].cpu().clone()
++        )
++        return self.get_host_cache().buffer[cache_pool_idx]
++
++    @contextmanager
++    def with_forward(self, forward_batch):
++        self.forward_batch = forward_batch
++        yield
++
++    def get_host_cache(self):
++        return self.host_cache
++
++    def get_device_cache(self):
++        return self.device_cache
++
++
++class _RoutedExpertsCapturerNoop(RoutedExpertsCapturer):
++    def __init__(self):
++        pass
++
++    def capture(self, layer_id: int, topk_ids: torch.Tensor):
++        pass
++
++    def get_routed_experts(
++        self,
++        req_pool_idx: int,
++        seqlen: int,
++        req_to_token_pool: ReqToTokenPool,
++    ):
++        pass
++
++    def sync_fwd_experts_buffer_DtoH(
++        self,
++        device_loc: torch.Tensor,
++        cpu_loc: torch.Tensor,
++        can_run_graph: bool,
++        cuda_graph_batch: int,
++    ):
++        pass
++
++    @contextmanager
++    def with_forward(self, forward_batch):
++        yield
++
++    def get_host_cache(self):
++        pass
++
++    def get_device_cache(self):
++        pass
++
++
++_global_expert_capturer: Optional[RoutedExpertsCapturer] = _RoutedExpertsCapturerNoop()
++
++
++def get_global_experts_capturer():
++    return _global_expert_capturer
++
++
++def set_global_experts_capturer(capturer: RoutedExpertsCapturer):
++    global _global_expert_capturer
++    _global_expert_capturer = capturer
+\ No newline at end of file
+diff --git a/python/sglang/srt/layers/moe/topk.py b/python/sglang/srt/layers/moe/topk.py
+index a802647e8..0fd550c0c 100644
+--- a/python/sglang/srt/layers/moe/topk.py
++++ b/python/sglang/srt/layers/moe/topk.py
+@@ -48,6 +48,7 @@ from sglang.srt.eplb.expert_location_dispatch import (
+ )
+ from sglang.srt.layers.dp_attention import is_allocation_symmetric
+ from sglang.srt.layers.moe import get_moe_runner_backend
++from sglang.srt.layers.moe.routed_experts_capturer import get_global_experts_capturer
+ from sglang.srt.utils import (
+     cpu_has_amx_support,
+     get_bool_env_var,
+@@ -212,6 +213,7 @@ class TopK(CustomOp):
+         self,
+         top_k: int,
+         *,
++        layer_id: Optional[int] = None,
+         use_grouped_topk: bool = False,
+         topk_group: Optional[int] = None,
+         num_expert_group: Optional[int] = None,
+@@ -233,6 +235,7 @@ class TopK(CustomOp):
+         if use_grouped_topk:
+             assert num_expert_group is not None and topk_group is not None
+ 
++        self.layer_id = layer_id
+         self.topk_config = TopKConfig(
+             top_k=top_k,
+             use_grouped_topk=use_grouped_topk,
+@@ -260,6 +263,7 @@ class TopK(CustomOp):
+         self.topk_config.torch_native = True
+         return select_experts(
+             hidden_states=hidden_states,
++            layer_id=self.layer_id,
+             router_logits=router_logits,
+             topk_config=self.topk_config,
+             num_token_non_padded=num_token_non_padded,
+@@ -309,6 +313,7 @@ class TopK(CustomOp):
+             ):
+                 topk_output = select_experts(
+                     hidden_states=hidden_states,
++                    layer_id=self.layer_id,
+                     router_logits=router_logits,
+                     topk_config=self.topk_config,
+                     num_token_non_padded=num_token_non_padded,
+@@ -326,6 +331,7 @@ class TopK(CustomOp):
+     ) -> TopKOutput:
+         return select_experts(
+             hidden_states=hidden_states,
++            layer_id=self.layer_id,
+             router_logits=router_logits,
+             topk_config=self.topk_config,
+             num_token_non_padded=num_token_non_padded,
+@@ -856,6 +862,7 @@ def select_experts(
+     router_logits: torch.Tensor,
+     topk_config: TopKConfig,
+     *,
++    layer_id: Optional[int] = None,
+     num_token_non_padded: Optional[torch.Tensor] = None,
+     expert_location_dispatch_info: Optional[ExpertLocationDispatchInfo] = None,
+ ) -> StandardTopKOutput:
+@@ -983,7 +990,10 @@ def select_experts(
+         )
+ 
+     get_global_expert_distribution_recorder().on_select_experts(topk_ids=topk_ids)
+-
++    get_global_experts_capturer().capture(
++        layer_id=layer_id,
++        topk_ids=topk_ids,
++    )
+     return StandardTopKOutput(topk_weights, topk_ids, router_logits)
+ 
+ 
+diff --git a/python/sglang/srt/layers/moe/utils.py b/python/sglang/srt/layers/moe/utils.py
+index 70466bb20..cd85fc2f2 100644
+--- a/python/sglang/srt/layers/moe/utils.py
++++ b/python/sglang/srt/layers/moe/utils.py
+@@ -284,7 +284,7 @@ def speculative_moe_a2a_backend_context():
+     global MOE_A2A_BACKEND
+     original_backend = MOE_A2A_BACKEND
+     try:
+-        MOE_A2A_BACKEND = MoeA2ABackend.NONE
++        MOE_A2A_BACKEND = get_speculative_moe_a2a_backend()
+         yield
+     finally:
+         MOE_A2A_BACKEND = original_backend
+diff --git a/python/sglang/srt/layers/rotary_embedding.py b/python/sglang/srt/layers/rotary_embedding.py
+index 0cdb7e1ae..df8860409 100644
+--- a/python/sglang/srt/layers/rotary_embedding.py
++++ b/python/sglang/srt/layers/rotary_embedding.py
+@@ -15,7 +15,6 @@ from sglang.srt.server_args import get_global_server_args
+ from sglang.srt.utils import (
+     cpu_has_amx_support,
+     get_bool_env_var,
+-    get_compiler_backend,
+     is_cpu,
+     is_cuda,
+     is_hip,
+@@ -132,9 +131,7 @@ class RotaryEmbedding(CustomOp):
+ 
+         if get_global_server_args().rl_on_policy_target is not None:
+             self._forward_method = self.forward_native
+-            self._apply_rotary_emb_wrapped = torch.compile(dynamic=True)(
+-                self._apply_rotary_emb_wrapped
+-            )
++
+         self.position_cos, self.position_sin = None, None
+ 
+     def _compute_inv_freq(self, base: Union[int, float]) -> torch.Tensor:
+@@ -1423,6 +1420,9 @@ class MRotaryEmbedding(RotaryEmbedding):
+                     f"Corrected mrope_section: {self.mrope_section} (sum={sum(self.mrope_section)})"
+                 )
+ 
++        if get_global_server_args().rl_on_policy_target is not None:
++            self._forward_method = self.forward_native
++
+     def _match_cos_sin_cache_dtype(self, query: torch.Tensor) -> None:
+         # __setattr__ in nn.Module (called by `self.cos_sin_cache = ...`)
+         # is expensive, so avoid calling it if possible
+@@ -1432,8 +1432,7 @@ class MRotaryEmbedding(RotaryEmbedding):
+         ):
+             self.cos_sin_cache = self.cos_sin_cache.to(query.device, dtype=query.dtype)
+ 
+-    @torch.compile(dynamic=True, backend=get_compiler_backend())
+-    def _forward_native(
++    def forward_native(
+         self,
+         positions: torch.Tensor,
+         query: torch.Tensor,
+@@ -1490,7 +1489,7 @@ class MRotaryEmbedding(RotaryEmbedding):
+         key = torch.cat((key_rot, key_pass), dim=-1).reshape(key_shape)
+         return query, key
+ 
+-    def forward(
++    def forward_cuda(
+         self,
+         positions: torch.Tensor,
+         query: torch.Tensor,
+@@ -1507,14 +1506,12 @@ class MRotaryEmbedding(RotaryEmbedding):
+         """
+         assert positions.ndim == 1 or positions.ndim == 2
+ 
+-        if positions.ndim == 2 and self.mrope_section and _is_cuda:
+-            return self._forward_triton(positions, query, key)
+-        elif _is_npu:
+-            return self._forward_npu(positions, query, key)
+-        else:
+-            return self._forward_native(positions, query, key)
++        # Use Triton kernel for multimodal (2D positions) with mrope
++        if positions.ndim == 2 and self.mrope_section:
++            return self.forward_triton(positions, query, key)
++        return self.forward_native(positions, query, key, fused_set_kv_buffer_arg)
+ 
+-    def _forward_triton(
++    def forward_triton(
+         self,
+         positions: torch.Tensor,
+         query: torch.Tensor,
+@@ -1563,15 +1560,19 @@ class MRotaryEmbedding(RotaryEmbedding):
+         key = torch.cat((key_rot, key_pass), dim=-1).reshape(key_shape)
+         return query, key
+ 
+-    def _forward_npu(
++    def forward_npu(
+         self,
+         positions: torch.Tensor,
+         query: torch.Tensor,
+         key: torch.Tensor,
++        fused_set_kv_buffer_arg: Optional[FusedSetKVBufferArg] = None,
+     ) -> Tuple[torch.Tensor, torch.Tensor]:
++        assert (
++            fused_set_kv_buffer_arg is None
++        ), "fused_set_kv_buffer_arg is not supported for npu implementation"
+         # TODO: remove this when npu_mrope supports QNumHeads * QHeadSize > 4096
+         if query.shape[1] > 4096:
+-            return self._forward_native(positions, query, key)
++            return self.forward_native(positions, query, key, fused_set_kv_buffer_arg)
+         rotary_mode = "half"
+         if self.is_neox_style:
+             rotary_mode = "half"
+diff --git a/python/sglang/srt/layers/sampler.py b/python/sglang/srt/layers/sampler.py
+index 7f6f6a010..c4a673145 100644
+--- a/python/sglang/srt/layers/sampler.py
++++ b/python/sglang/srt/layers/sampler.py
+@@ -105,16 +105,11 @@ class Sampler(nn.Module):
+             if return_logprob and SGLANG_RETURN_ORIGINAL_LOGPROB:
+                 probs_without_temp_scaling = torch.softmax(logits, dim=-1)
+ 
+-            if get_global_server_args().rl_on_policy_target is not None:
+-                logits_div_temperature = (
+-                    logits.bfloat16().div(sampling_info.temperatures).bfloat16()
+-                )
+-                logprobs_via_logsoftmax_kernel = torch.log_softmax(
+-                    logits_div_temperature, dim=-1
+-                )
+-
+             # Post process logits
+             logits.div_(sampling_info.temperatures)
++            if get_global_server_args().rl_on_policy_target is not None:
++                logprobs_via_logsoftmax_kernel = torch.log_softmax(logits, dim=-1)
++
+             # For ascend backend, softmax is not needed before sampling
+             if not get_global_server_args().sampling_backend == "ascend" or (
+                 return_logprob and not SGLANG_RETURN_ORIGINAL_LOGPROB
+diff --git a/python/sglang/srt/managers/detokenizer_manager.py b/python/sglang/srt/managers/detokenizer_manager.py
+index 87922077e..8cb6bad8d 100644
+--- a/python/sglang/srt/managers/detokenizer_manager.py
++++ b/python/sglang/srt/managers/detokenizer_manager.py
+@@ -247,6 +247,16 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
+             s.sent_offset = len(output_str)
+             output_strs.append(incremental_output)
+ 
++        output_routed_experts = []
++        if recv_obj.output_routed_experts is not None:
++            output_routed_experts = [
++                (
++                    output_routed_experts.tolist()
++                    if output_routed_experts is not None
++                    else []
++                )
++                for output_routed_experts in recv_obj.output_routed_experts
++            ]
+         return BatchStrOutput(
+             rids=recv_obj.rids,
+             http_worker_ipcs=recv_obj.http_worker_ipcs,
+@@ -272,6 +282,7 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
+             output_token_ids_logprobs_idx=recv_obj.output_token_ids_logprobs_idx,
+             output_token_entropy_val=recv_obj.output_token_entropy_val,
+             output_hidden_states=recv_obj.output_hidden_states,
++            output_routed_experts=output_routed_experts,
+             placeholder_tokens_idx=None,
+             placeholder_tokens_val=None,
+             retraction_counts=recv_obj.retraction_counts,
+diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
+index e34736cc4..5e5997a1a 100644
+--- a/python/sglang/srt/managers/io_struct.py
++++ b/python/sglang/srt/managers/io_struct.py
+@@ -23,6 +23,8 @@ from dataclasses import dataclass, field
+ from enum import Enum
+ from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Union
+ 
++import torch
++
+ from sglang.srt.lora.lora_registry import LoRARef
+ from sglang.srt.managers.schedule_batch import BaseFinishReason
+ from sglang.srt.multimodal.mm_utils import has_valid_data
+@@ -175,6 +177,8 @@ class GenerateReqInput(BaseReq):
+     log_metrics: bool = True
+     # Whether to return hidden states
+     return_hidden_states: Union[List[bool], bool] = False
++    # Whether to return captured routed experts
++    return_routed_experts: bool = False
+ 
+     # The modalities of the image data [image, multi-images, video]
+     modalities: Optional[List[str]] = None
+@@ -592,6 +596,7 @@ class GenerateReqInput(BaseReq):
+                 if isinstance(self.return_hidden_states, list)
+                 else self.return_hidden_states
+             ),
++            return_routed_experts=self.return_routed_experts,
+             modalities=self.modalities[i] if self.modalities else None,
+             session_params=self.session_params,
+             lora_path=self.lora_path[i] if self.lora_path is not None else None,
+@@ -655,6 +660,9 @@ class TokenizedGenerateReqInput(BaseReq):
+     # Whether to return hidden states
+     return_hidden_states: bool = False
+ 
++    # Whether to return captured routed experts
++    return_routed_experts: bool = False
++
+     # The input embeds
+     input_embeds: Optional[Union[List[List[List[float]]], List[List[float]]]] = None
+ 
+@@ -910,6 +918,9 @@ class BatchTokenIDOutput(
+     # Hidden states
+     output_hidden_states: List[List[float]]
+ 
++    # The routed experts for each output token
++    output_routed_experts: List[torch.Tensor]
++
+     # The information of placeholder tokens (e.g., image token)
+     # idx is the index of the token in the prompt after expansion.
+     # val is the length of padded tokens after expansion.
+@@ -989,6 +1000,9 @@ class BatchStrOutput(
+     # Hidden states
+     output_hidden_states: List[List[float]]
+ 
++    # The routed experts for each output token
++    output_routed_experts: List[List[int]]
++
+     # The information of placeholder tokens (e.g., image token)
+     # idx is the index of the token in the prompt after expansion.
+     # val is the length of padded tokens after expansion.
+diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
+index c4c5a9ebb..1450c5fd8 100644
+--- a/python/sglang/srt/managers/schedule_batch.py
++++ b/python/sglang/srt/managers/schedule_batch.py
+@@ -450,6 +450,7 @@ class Req:
+         session_id: Optional[str] = None,
+         custom_logit_processor: Optional[str] = None,
+         return_hidden_states: bool = False,
++        return_routed_experts: bool = False,
+         eos_token_ids: Optional[Set[int]] = None,
+         bootstrap_host: Optional[str] = None,
+         bootstrap_port: Optional[int] = None,
+@@ -629,6 +630,12 @@ class Req:
+         self.output_topk_p = None
+         self.output_topk_index = None
+ 
++        # capture routed experts
++        self.return_routed_experts = return_routed_experts
++        self.routed_experts: Optional[torch.Tensor] = (
++            None  # cpu tensor: shape (seqlen, topk)
++        )
++
+         # Embedding (return values)
+         self.embedding = None
+ 
+@@ -992,6 +999,7 @@ class Req:
+         self.retraction_count += 1
+ 
+         self.prefix_indices = torch.empty((0,), dtype=torch.int64)
++        self.routed_experts = []
+         self.last_node = None
+         self.swa_uuid_for_lock = None
+         self.extend_input_len = 0
+@@ -1159,6 +1167,9 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+     # Whether to return hidden states
+     return_hidden_states: bool = False
+ 
++    # Whether to return captured experts
++    return_routed_experts: bool = False
++
+     # Whether this batch is prefill-only (no token generation needed)
+     is_prefill_only: bool = False
+ 
+@@ -1206,6 +1217,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+             device=req_to_token_pool.device,
+             spec_algorithm=spec_algorithm,
+             return_hidden_states=any(req.return_hidden_states for req in reqs),
++            return_routed_experts=any(req.return_routed_experts for req in reqs),
+             is_prefill_only=all(req.is_prefill_only for req in reqs),
+             chunked_req=chunked_req,
+             dllm_config=dllm_config,
+@@ -1457,6 +1469,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+         self.req_pool_indices = req_pool_indices_tensor
+         self.orig_seq_lens = orig_seq_lens_tensor
+         self.out_cache_loc = out_cache_loc
++        self.out_cache_loc_cpu = out_cache_loc.cpu()
+         self.input_embeds = (
+             torch.tensor(input_embeds).to(self.device, non_blocking=True)
+             if input_embeds
+@@ -1508,10 +1521,14 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+ 
+         input_ids = torch.cat([self.input_ids, running_batch.input_ids])
+         out_cache_loc = torch.cat([self.out_cache_loc, running_batch.out_cache_loc])
++        out_cache_loc_cpu = torch.cat(
++            [self.out_cache_loc_cpu, running_batch.out_cache_loc_cpu]
++        )
+ 
+         self.merge_batch(running_batch)
+         self.input_ids = input_ids
+         self.out_cache_loc = out_cache_loc
++        self.out_cache_loc_cpu = out_cache_loc_cpu
+ 
+         # For overlap scheduler, the output_ids has one step delay
+         delta = 0 if self.enable_overlap else -1
+@@ -1677,6 +1694,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+         self.seq_lens_cpu = torch.empty(0, dtype=torch.int64)
+         self.orig_seq_lens = torch.empty(0, dtype=torch.int32, device=self.device)
+         self.out_cache_loc = torch.empty(0, dtype=torch.int64, device=self.device)
++        self.out_cache_loc_cpu = torch.empty(0, dtype=torch.int64, device="cpu")
+         self.req_pool_indices = torch.empty(0, dtype=torch.int32, device=self.device)
+         self.seq_lens_sum = 0
+         self.extend_num_tokens = 0
+@@ -1736,6 +1754,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+ 
+         # Allocate memory
+         self.out_cache_loc = alloc_for_decode(self, token_per_req=1)
++        self.out_cache_loc_cpu = self.out_cache_loc.to("cpu", non_blocking=True)
+ 
+         # Update req-level memory management fields
+         for req in self.reqs:
+@@ -1807,6 +1826,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+         self.seq_lens_cpu = self.seq_lens_cpu[keep_indices]
+         self.orig_seq_lens = self.orig_seq_lens[keep_indices_device]
+         self.out_cache_loc = None
++        self.out_cache_loc_cpu = None
+         self.seq_lens_sum = self.seq_lens.sum().item()
+         self.output_ids = self.output_ids[keep_indices_device]
+         self.return_logprob = any(req.return_logprob for req in self.reqs)
+@@ -1852,6 +1872,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+         self.seq_lens_cpu = torch.cat([self.seq_lens_cpu, other.seq_lens_cpu])
+         self.orig_seq_lens = torch.cat([self.orig_seq_lens, other.orig_seq_lens])
+         self.out_cache_loc = None
++        self.out_cache_loc_cpu = None
+         self.seq_lens_sum += other.seq_lens_sum
+         if self.output_ids is not None:
+             self.output_ids = torch.cat([self.output_ids, other.output_ids])
+@@ -1903,6 +1924,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+             seq_lens=self.seq_lens,
+             orig_seq_lens=self.orig_seq_lens,
+             out_cache_loc=self.out_cache_loc,
++            out_cache_loc_cpu=self.out_cache_loc_cpu,
+             seq_lens_cpu=seq_lens_cpu,
+             seq_lens_sum=self.seq_lens_sum,
+             return_logprob=self.return_logprob,
+@@ -1983,7 +2005,8 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+     def __str__(self):
+         return (
+             f"ScheduleBatch(forward_mode={self.forward_mode.name if self.forward_mode else 'None'}, "
+-            f"#req={(len(self.reqs))})"
++            f"#req={(len(self.reqs))}), "
++            f"#out_cache_loc={self.out_cache_loc})"
+         )
+ 
+ 
+@@ -2038,6 +2061,9 @@ class ModelWorkerBatch:
+     # Sampling info
+     sampling_info: SamplingBatchInfo
+ 
++    # cpu copy of out_cache_loc
++    out_cache_loc_cpu: Optional[torch.Tensor] = None
++
+     # The original sequence lengths, Qwen-1M related
+     orig_seq_lens: Optional[torch.Tensor] = None
+ 
+diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
+index b801fd8f8..9e27cc825 100644
+--- a/python/sglang/srt/managers/scheduler.py
++++ b/python/sglang/srt/managers/scheduler.py
+@@ -1305,6 +1305,7 @@ class Scheduler(
+                 input_embeds=recv_req.input_embeds,
+                 custom_logit_processor=recv_req.custom_logit_processor,
+                 return_hidden_states=recv_req.return_hidden_states,
++                return_routed_experts=recv_req.return_routed_experts,
+                 eos_token_ids=self.model_config.hf_eos_token_id,
+                 bootstrap_host=recv_req.bootstrap_host,
+                 bootstrap_port=recv_req.bootstrap_port,
+diff --git a/python/sglang/srt/managers/scheduler_output_processor_mixin.py b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
+index c48f5f893..a9796c25f 100644
+--- a/python/sglang/srt/managers/scheduler_output_processor_mixin.py
++++ b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
+@@ -9,6 +9,7 @@ import torch
+ from sglang.srt.disaggregation.utils import DisaggregationMode
+ from sglang.srt.environ import envs
+ from sglang.srt.layers.logits_processor import LogitsProcessorOutput
++from sglang.srt.layers.moe.routed_experts_capturer import get_global_experts_capturer
+ from sglang.srt.managers.io_struct import (
+     AbortReq,
+     BatchEmbeddingOutput,
+@@ -112,6 +113,14 @@ class SchedulerOutputProcessorMixin:
+                     req.check_finished()
+ 
+                     if req.finished():
++                        req.routed_experts = (
++                            get_global_experts_capturer().get_routed_experts(
++                                req_pool_idx=req.req_pool_idx,
++                                seqlen=req.seqlen,
++                                req_to_token_pool=self.req_to_token_pool,
++                            )
++                        )
++
+                         release_kv_cache(req, self.tree_cache)
+                         req.time_stats.completion_time = time.perf_counter()
+                     elif not batch.decoding_reqs or req not in batch.decoding_reqs:
+@@ -362,6 +371,12 @@ class SchedulerOutputProcessorMixin:
+             req.check_finished(new_accepted_len)
+ 
+             if req.finished():
++                req.routed_experts = get_global_experts_capturer().get_routed_experts(
++                    req_pool_idx=req.req_pool_idx,
++                    seqlen=req.seqlen,
++                    req_to_token_pool=self.req_to_token_pool,
++                )
++
+                 if self.server_args.disaggregation_decode_enable_offload_kvcache:
+                     # Asynchronously offload KV cache; release_kv_cache will be called after Device->Host transfer completes
+                     if not self.decode_offload_manager.offload_kv_cache(req):
+@@ -756,6 +771,7 @@ class SchedulerOutputProcessorMixin:
+         spec_accepted_tokens = []
+         retraction_counts = []
+         output_hidden_states = None
++        output_routed_experts = None
+ 
+         queue_times = []
+         forward_entry_times = []
+@@ -946,6 +962,10 @@ class SchedulerOutputProcessorMixin:
+                     if output_hidden_states is None:
+                         output_hidden_states = []
+                     output_hidden_states.append(req.hidden_states)
++                if req.return_routed_experts:
++                    if output_routed_experts is None:
++                        output_routed_experts = []
++                    output_routed_experts.append(req.routed_experts)
+ 
+             if (
+                 req.finished()
+@@ -994,6 +1014,7 @@ class SchedulerOutputProcessorMixin:
+                     output_token_ids_logprobs_idx=output_token_ids_logprobs_idx,
+                     output_token_entropy_val=None,
+                     output_hidden_states=output_hidden_states,
++                    output_routed_experts=output_routed_experts,
+                     placeholder_tokens_idx=None,
+                     placeholder_tokens_val=None,
+                     retraction_counts=retraction_counts,
+diff --git a/python/sglang/srt/managers/scheduler_update_weights_mixin.py b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
+index f8ebfc1f4..a05449fac 100644
+--- a/python/sglang/srt/managers/scheduler_update_weights_mixin.py
++++ b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+ import logging
++import os
+ import traceback
+ from typing import TYPE_CHECKING, Tuple
+ 
+@@ -12,6 +13,9 @@ from sglang.srt.constants import (
+     GPU_MEMORY_TYPE_KV_CACHE,
+     GPU_MEMORY_TYPE_WEIGHTS,
+ )
++from sglang.srt.disaggregation.utils import DisaggregationMode
++from sglang.srt.distributed import get_moe_ep_group, get_moe_tp_group, get_tp_group
++from sglang.srt.layers.dp_attention import get_attention_tp_group
+ from sglang.srt.managers.io_struct import (
+     CheckWeightsReqInput,
+     CheckWeightsReqOutput,
+@@ -127,6 +131,13 @@ class SchedulerUpdateWeightsMixin:
+             self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_KV_CACHE)
+             self.flush_cache()
+ 
++            if self.disaggregation_mode == DisaggregationMode.DECODE:
++                if hasattr(self, "disagg_decode_prealloc_queue"):
++                    self.disagg_decode_prealloc_queue.release_memory_occupation()
++            elif self.disaggregation_mode == DisaggregationMode.PREFILL:
++                if hasattr(self, "disagg_prefill_bootstrap_queue"):
++                    self.disagg_prefill_bootstrap_queue.release_memory_occupation()
++
+         if GPU_MEMORY_TYPE_WEIGHTS in tags:
+             self.stashed_model_static_state = _export_static_state(
+                 self.tp_worker.model_runner.model
+@@ -137,6 +148,20 @@ class SchedulerUpdateWeightsMixin:
+         if GPU_MEMORY_TYPE_CUDA_GRAPH in tags:
+             self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_CUDA_GRAPH)
+ 
++            if os.environ.get("AMEM_ENABLE", "0") == "1":
++                tp_group = get_tp_group()
++                if tp_group is not None and tp_group.pynccl_comm is not None:
++                    tp_group.pynccl_comm.nccl_pause()
++                attn_tp_group = get_attention_tp_group()
++                if attn_tp_group is not None and attn_tp_group.pynccl_comm is not None:
++                    attn_tp_group.pynccl_comm.nccl_pause()
++                moe_ep_group = get_moe_ep_group()
++                if moe_ep_group is not None and moe_ep_group.pynccl_comm is not None:
++                    moe_ep_group.pynccl_comm.nccl_pause()
++                moe_tp_group = get_moe_tp_group()
++                if moe_tp_group is not None and moe_tp_group.pynccl_comm is not None:
++                    moe_tp_group.pynccl_comm.nccl_pause()
++
+         torch.get_device_module().synchronize()
+ 
+         return ReleaseMemoryOccupationReqOutput()
+@@ -155,6 +180,20 @@ class SchedulerUpdateWeightsMixin:
+         if GPU_MEMORY_TYPE_CUDA_GRAPH in tags:
+             self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_CUDA_GRAPH)
+ 
++            if os.environ.get("AMEM_ENABLE", "0") == "1":
++                tp_group = get_tp_group()
++                if tp_group is not None and tp_group.pynccl_comm is not None:
++                    tp_group.pynccl_comm.nccl_resume()
++                attn_tp_group = get_attention_tp_group()
++                if attn_tp_group is not None and attn_tp_group.pynccl_comm is not None:
++                    attn_tp_group.pynccl_comm.nccl_resume()
++                moe_ep_group = get_moe_ep_group()
++                if moe_ep_group is not None and moe_ep_group.pynccl_comm is not None:
++                    moe_ep_group.pynccl_comm.nccl_resume()
++                moe_tp_group = get_moe_tp_group()
++                if moe_tp_group is not None and moe_tp_group.pynccl_comm is not None:
++                    moe_tp_group.pynccl_comm.nccl_resume()
++
+         if GPU_MEMORY_TYPE_WEIGHTS in tags:
+             self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_WEIGHTS)
+             torch.distributed.barrier(self.tp_cpu_group)
+@@ -167,6 +206,13 @@ class SchedulerUpdateWeightsMixin:
+         if GPU_MEMORY_TYPE_KV_CACHE in tags:
+             self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_KV_CACHE)
+ 
++            if self.disaggregation_mode == DisaggregationMode.DECODE:
++                if hasattr(self, "disagg_decode_prealloc_queue"):
++                    self.disagg_decode_prealloc_queue.resume_memory_occupation()
++            elif self.disaggregation_mode == DisaggregationMode.PREFILL:
++                if hasattr(self, "disagg_prefill_bootstrap_queue"):
++                    self.disagg_prefill_bootstrap_queue.resume_memory_occupation()
++
+         return ResumeMemoryOccupationReqOutput()
+ 
+     def check_weights(self: Scheduler, recv_req: CheckWeightsReqInput):
+diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
+index b90cf0616..98d71d896 100644
+--- a/python/sglang/srt/managers/tokenizer_manager.py
++++ b/python/sglang/srt/managers/tokenizer_manager.py
+@@ -888,6 +888,7 @@ class TokenizerManager(TokenizerCommunicatorMixin):
+                 session_params=session_params,
+                 custom_logit_processor=obj.custom_logit_processor,
+                 return_hidden_states=obj.return_hidden_states,
++                return_routed_experts=obj.return_routed_experts,
+                 data_parallel_rank=obj.data_parallel_rank,
+                 priority=obj.priority,
+                 extra_key=obj.extra_key,
+@@ -1621,6 +1622,9 @@ class TokenizerManager(TokenizerCommunicatorMixin):
+             if getattr(recv_obj, "output_hidden_states", None):
+                 meta_info["hidden_states"] = recv_obj.output_hidden_states[i]
+ 
++            if getattr(recv_obj, "output_routed_experts", None):
++                meta_info["routed_experts"] = recv_obj.output_routed_experts[i]
++
+             if isinstance(recv_obj, BatchStrOutput):
+                 state.text += recv_obj.output_strs[i]
+                 if self.server_args.stream_output and state.obj.stream:
+@@ -1747,12 +1751,13 @@ class TokenizerManager(TokenizerCommunicatorMixin):
+             return
+ 
+         if len(recv_obj.input_token_logprobs_val) > 0:
+-            state.input_token_logprobs_val.extend(
+-                recv_obj.input_token_logprobs_val[recv_obj_index]
+-            )
+-            state.input_token_logprobs_idx.extend(
+-                recv_obj.input_token_logprobs_idx[recv_obj_index]
+-            )
++            if recv_obj.input_token_logprobs_val[recv_obj_index]:
++                state.input_token_logprobs_val.extend(
++                    recv_obj.input_token_logprobs_val[recv_obj_index]
++                )
++                state.input_token_logprobs_idx.extend(
++                    recv_obj.input_token_logprobs_idx[recv_obj_index]
++                )
+         state.output_token_logprobs_val.extend(
+             recv_obj.output_token_logprobs_val[recv_obj_index]
+         )
+diff --git a/python/sglang/srt/model_executor/forward_batch_info.py b/python/sglang/srt/model_executor/forward_batch_info.py
+index 3a85e6a7e..2859dafa1 100644
+--- a/python/sglang/srt/model_executor/forward_batch_info.py
++++ b/python/sglang/srt/model_executor/forward_batch_info.py
+@@ -51,6 +51,7 @@ from sglang.srt.layers.dp_attention import (
+     set_dp_buffer_len,
+     set_is_extend_in_batch,
+ )
++from sglang.srt.server_args import get_global_server_args
+ from sglang.srt.utils import get_compiler_backend, is_npu, support_triton
+ from sglang.srt.utils.common import ceil_align
+ 
+@@ -214,6 +215,9 @@ class ForwardBatch:
+     # The sum of all sequence lengths
+     seq_lens_sum: int
+ 
++    # cpu copy of out_cache_loc
++    out_cache_loc_cpu: Optional[torch.Tensor] = None
++
+     # The original sequence length without being chunked. Qwen-1M related.
+     orig_seq_lens: Optional[torch.Tensor] = None
+ 
+@@ -368,6 +372,7 @@ class ForwardBatch:
+             req_pool_indices=batch.req_pool_indices,
+             seq_lens=batch.seq_lens,
+             out_cache_loc=batch.out_cache_loc,
++            out_cache_loc_cpu=batch.out_cache_loc_cpu,
+             mm_inputs=batch.multimodal_inputs,
+             encoder_cached=batch.encoder_cached,
+             encoder_lens=batch.encoder_lens,
+@@ -623,7 +628,10 @@ class ForwardBatch:
+             mm_input = batch.multimodal_inputs[batch_idx]
+             if self.forward_mode.is_decode():
+                 # 3 * N
+-                if mm_input is None:
++                if (
++                    mm_input is None
++                    or get_global_server_args().rl_on_policy_target is not None
++                ):
+                     mrope_positions_list[batch_idx] = torch.full(
+                         (3, 1),
+                         self.seq_lens[batch_idx] - 1,
+@@ -640,7 +648,10 @@ class ForwardBatch:
+                     batch.extend_seq_lens[batch_idx],
+                     batch.extend_prefix_lens[batch_idx],
+                 )
+-                if mm_input is None:
++                if (
++                    mm_input is None
++                    or get_global_server_args().rl_on_policy_target is not None
++                ):
+                     # text only
+                     mrope_positions = torch.tensor(
+                         [
+@@ -823,6 +834,10 @@ class ForwardBatch:
+             )
+ 
+         self.out_cache_loc = self._pad_tensor_to_size(self.out_cache_loc, num_tokens)
++        if self.out_cache_loc_cpu is not None:
++            self.out_cache_loc_cpu = self._pad_tensor_to_size(
++                self.out_cache_loc_cpu, num_tokens
++            )
+         if self.encoder_lens is not None:
+             self.encoder_lens = self._pad_tensor_to_size(self.encoder_lens, bs)
+         self.positions = self._pad_tensor_to_size(self.positions, num_tokens)
+diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
+index 4d58278b7..8f50dc430 100644
+--- a/python/sglang/srt/model_executor/model_runner.py
++++ b/python/sglang/srt/model_executor/model_runner.py
+@@ -94,6 +94,11 @@ from sglang.srt.layers.dp_attention import (
+     set_is_extend_in_batch,
+ )
+ from sglang.srt.layers.logits_processor import LogitsProcessorOutput
++from sglang.srt.layers.moe.routed_experts_capturer import (
++    RoutedExpertsCapturer,
++    get_global_experts_capturer,
++    set_global_experts_capturer,
++)
+ from sglang.srt.layers.pooler import EmbeddingPoolerOutput
+ from sglang.srt.layers.sampler import Sampler
+ from sglang.srt.layers.torchao_utils import apply_torchao_config_to_model
+@@ -502,6 +507,10 @@ class ModelRunner:
+             server_args.max_running_requests,
+             server_args.max_total_tokens,
+         )
++
++        # Init routed experts capturer
++        self.init_routed_experts_capturer()
++
+         if self.device == "cuda":
+             self.init_cublas()
+             self.init_attention_backend()
+@@ -545,6 +554,40 @@ class ModelRunner:
+         # Initialize piecewise CUDA graph
+         self.init_piecewise_cuda_graphs()
+ 
++    def init_routed_experts_capturer(self):
++        # TODO: the redundant logic with TpModelWorker
++        max_running_requests = min(
++            (
++                self.max_total_num_tokens // 2
++                if self.server_args.max_running_requests is None
++                else self.server_args.max_running_requests
++                // (
++                    self.server_args.dp_size
++                    if self.server_args.enable_dp_attention
++                    else 1
++                )
++            ),
++            self.req_to_token_pool.size,
++        )
++
++        if not self.server_args.disable_shared_experts_fusion and hasattr(
++            self.model, "num_fused_shared_experts"
++        ):
++            num_fused_shared_experts = self.model.num_fused_shared_experts
++        else:
++            num_fused_shared_experts = 0
++
++        set_global_experts_capturer(
++            RoutedExpertsCapturer.create(
++                enable=get_global_server_args().enable_return_routed_experts,
++                model_config=self.model_config,
++                num_fused_shared_experts=num_fused_shared_experts,
++                num_tokens=self.max_total_num_tokens + self.page_size,
++                max_running_requests=max_running_requests,
++                device=self.device,
++            )
++        )
++
+     def model_specific_adjustment(self):
+         server_args = self.server_args
+ 
+@@ -792,7 +835,11 @@ class ModelRunner:
+         )
+         with self.memory_saver_adapter.region(
+             GPU_MEMORY_TYPE_WEIGHTS,
+-            enable_cpu_backup=enable_cpu_backup,
++            enable_cpu_backup=(
++                self.server_args.enable_weights_cpu_backup
++                if not self.is_draft_worker
++                else True
++            ),
+         ):
+             self.model = get_model(
+                 model_config=self.model_config,
+@@ -2645,9 +2692,12 @@ class ModelRunner:
+     ) -> Tuple[Union[LogitsProcessorOutput, PPProxyTensors], bool]:
+         self.forward_pass_id += 1
+ 
+-        with get_global_expert_distribution_recorder().with_forward_pass(
+-            self.forward_pass_id,
+-            forward_batch,
++        with (
++            get_global_expert_distribution_recorder().with_forward_pass(
++                self.forward_pass_id,
++                forward_batch,
++            ),
++            get_global_experts_capturer().with_forward(forward_batch),
+         ):
+             output = self._forward_raw(
+                 forward_batch,
+@@ -2656,6 +2706,13 @@ class ModelRunner:
+                 reinit_attn_backend,
+                 split_forward_count,
+             )
++            # Copy cached routing experts' buffers back to CPU cache
++            get_global_experts_capturer().sync_fwd_experts_buffer_DtoH(
++                device_loc=forward_batch.out_cache_loc,
++                cpu_loc=forward_batch.out_cache_loc_cpu,
++                can_run_graph=output[1],
++                cuda_graph_batch=getattr(self.graph_runner, "bs", None),
++            )
+ 
+         if self.eplb_manager is not None:
+             self.eplb_manager.on_forward_pass_end()
+diff --git a/python/sglang/srt/models/deepseek_v2.py b/python/sglang/srt/models/deepseek_v2.py
+index dc30b4f0a..f29dc4b71 100644
+--- a/python/sglang/srt/models/deepseek_v2.py
++++ b/python/sglang/srt/models/deepseek_v2.py
+@@ -667,6 +667,7 @@ class DeepseekV2MoE(nn.Module):
+ 
+         self.topk = TopK(
+             top_k=config.num_experts_per_tok + self.num_fused_shared_experts,
++            layer_id=self.layer_id,
+             renormalize=config.norm_topk_prob,
+             use_grouped_topk=True,
+             num_expert_group=config.n_group,
+diff --git a/python/sglang/srt/models/ernie4.py b/python/sglang/srt/models/ernie4.py
+index ab1b6576b..dffd8f09a 100644
+--- a/python/sglang/srt/models/ernie4.py
++++ b/python/sglang/srt/models/ernie4.py
+@@ -87,6 +87,7 @@ class Ernie4Moe(nn.Module):
+ 
+         self.topk = TopK(
+             top_k=config.moe_k,
++            layer_id=layer_id,
+             renormalize=True,
+             use_grouped_topk=False,
+             correction_bias=self.gate.e_score_correction_bias,
+diff --git a/python/sglang/srt/models/glm4_moe.py b/python/sglang/srt/models/glm4_moe.py
+index a9689b8f2..bc8538da8 100644
+--- a/python/sglang/srt/models/glm4_moe.py
++++ b/python/sglang/srt/models/glm4_moe.py
+@@ -379,6 +379,17 @@ class Glm4MoeSparseMoeBlock(nn.Module):
+ 
+         self.gate = Glm4MoeGate(config=config, prefix=add_prefix("gate", prefix))
+ 
++        self.topk = TopK(
++            top_k=self.top_k,
++            layer_id=self.layer_id,
++            renormalize=config.norm_topk_prob,
++            use_grouped_topk=True,
++            num_expert_group=config.n_group,
++            topk_group=config.topk_group,
++            correction_bias=self.gate.e_score_correction_bias,
++            routed_scaling_factor=self.routed_scaling_factor,
++        )
++
+         self.experts = get_moe_impl_class(quant_config)(
+             num_experts=config.n_routed_experts + self.num_fused_shared_experts,
+             num_fused_shared_experts=self.num_fused_shared_experts,
+diff --git a/python/sglang/srt/models/gpt_oss.py b/python/sglang/srt/models/gpt_oss.py
+index 9474700c4..398d622ff 100644
+--- a/python/sglang/srt/models/gpt_oss.py
++++ b/python/sglang/srt/models/gpt_oss.py
+@@ -113,6 +113,7 @@ class GptOssSparseMoeBlock(nn.Module):
+         self.topk = TopK(
+             top_k=config.num_experts_per_tok,
+             renormalize=True,
++            layer_id=layer_id,
+         )
+ 
+         self.top_k = config.num_experts_per_tok
+diff --git a/python/sglang/srt/models/grok.py b/python/sglang/srt/models/grok.py
+index fd513060a..a089475b7 100644
+--- a/python/sglang/srt/models/grok.py
++++ b/python/sglang/srt/models/grok.py
+@@ -142,6 +142,7 @@ class Grok1MoE(nn.Module):
+         self.topk = TopK(
+             top_k=top_k,
+             renormalize=False,
++            layer_id=layer_id,
+             custom_routing_function=custom_routing_function,
+         )
+ 
+diff --git a/python/sglang/srt/models/hunyuan.py b/python/sglang/srt/models/hunyuan.py
+index 7c6fd9e48..b20d28544 100644
+--- a/python/sglang/srt/models/hunyuan.py
++++ b/python/sglang/srt/models/hunyuan.py
+@@ -150,6 +150,7 @@ class HunYuanSparseMoeBlock(nn.Module):
+ 
+         self.topk = TopK(
+             top_k=top_k,
++            layer_id=layer_id,
+             renormalize=True if top_k > 1 else False,
+         )
+ 
+diff --git a/python/sglang/srt/models/longcat_flash.py b/python/sglang/srt/models/longcat_flash.py
+index 3530609ba..01c89e893 100644
+--- a/python/sglang/srt/models/longcat_flash.py
++++ b/python/sglang/srt/models/longcat_flash.py
+@@ -245,6 +245,7 @@ class LongcatFlashMoE(nn.Module):
+             renormalize=False,
+             use_grouped_topk=False,
+             correction_bias=self.router.e_score_correction_bias.data,
++            layer_id=layer_id,
+         )
+         self.topk.forward = self.topk.forward_native
+ 
+diff --git a/python/sglang/srt/models/qwen2.py b/python/sglang/srt/models/qwen2.py
+index a7dbadec6..c83a41338 100644
+--- a/python/sglang/srt/models/qwen2.py
++++ b/python/sglang/srt/models/qwen2.py
+@@ -90,9 +90,6 @@ class Qwen2MLP(nn.Module):
+         self.act_fn = SiluAndMul()
+ 
+     def forward(self, x):
+-        if get_global_server_args().rl_on_policy_target is not None:
+-            x = x.bfloat16()
+-
+         gate_up, _ = self.gate_up_proj(x)
+         x = self.act_fn(gate_up)
+         x, _ = self.down_proj(x)
+@@ -279,11 +276,6 @@ class Qwen2Model(nn.Module):
+                 quant_config=quant_config,
+                 enable_tp=not is_dp_attention_enabled(),
+                 prefix=add_prefix("embed_tokens", prefix),
+-                params_dtype=(
+-                    torch.float32
+-                    if get_global_server_args().rl_on_policy_target is not None
+-                    else None
+-                ),
+             )
+         else:
+             self.embed_tokens = PPMissingLayer()
+@@ -306,10 +298,8 @@ class Qwen2Model(nn.Module):
+         if self.pp_group.is_last_rank:
+             norm_kwargs = (
+                 dict(
+-                    weight_dtype=torch.float32,
+                     cast_x_before_out_mul=True,
+-                    override_orig_dtype=torch.float32,
+-                    fp32_residual=True,
++                    fp32_residual=False,
+                 )
+                 if get_global_server_args().rl_on_policy_target is not None
+                 else {}
+diff --git a/python/sglang/srt/models/qwen2_moe.py b/python/sglang/srt/models/qwen2_moe.py
+index ea33e81ef..561934dce 100644
+--- a/python/sglang/srt/models/qwen2_moe.py
++++ b/python/sglang/srt/models/qwen2_moe.py
+@@ -161,6 +161,7 @@ class Qwen2MoeSparseMoeBlock(nn.Module):
+         self.topk = TopK(
+             top_k=config.num_experts_per_tok,
+             renormalize=config.norm_topk_prob,
++            layer_id=layer_id,
+         )
+ 
+         self.experts = get_moe_impl_class(quant_config)(
+@@ -581,7 +582,17 @@ class Qwen2MoeModel(nn.Module):
+             prefix=add_prefix("layers", prefix),
+         )
+         if self.pp_group.is_last_rank:
+-            self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
++            norm_kwargs = (
++                dict(
++                    cast_x_before_out_mul=True,
++                    fp32_residual=False,
++                )
++                if get_global_server_args().rl_on_policy_target is not None
++                else {}
++            )
++            self.norm = RMSNorm(
++                config.hidden_size, eps=config.rms_norm_eps, **norm_kwargs
++            )
+         else:
+             self.norm = PPMissingLayer(return_tuple=True)
+ 
+diff --git a/python/sglang/srt/models/qwen3.py b/python/sglang/srt/models/qwen3.py
+index 30b92acbd..a0d14895f 100644
+--- a/python/sglang/srt/models/qwen3.py
++++ b/python/sglang/srt/models/qwen3.py
+@@ -90,8 +90,8 @@ class Qwen3Attention(nn.Module):
+ 
+         norm_kwargs = (
+             dict(
+-                weight_dtype=torch.float32,
+                 cast_x_before_out_mul=True,
++                fp32_residual=False,
+             )
+             if get_global_server_args().rl_on_policy_target is not None
+             else {}
+@@ -256,10 +256,8 @@ class Qwen3DecoderLayer(nn.Module):
+ 
+         norm_kwargs = (
+             dict(
+-                weight_dtype=torch.float32,
+                 cast_x_before_out_mul=True,
+-                override_orig_dtype=torch.float32,
+-                fp32_residual=True,
++                fp32_residual=False,
+             )
+             if get_global_server_args().rl_on_policy_target is not None
+             else {}
+@@ -289,10 +287,14 @@ class Qwen3DecoderLayer(nn.Module):
+         hidden_states: torch.Tensor,
+         forward_batch: ForwardBatch,
+         residual: Optional[torch.Tensor],
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Tuple[torch.Tensor, torch.Tensor]:
+         # Self Attention
+         hidden_states, residual = self.layer_communicator.prepare_attn(
+-            hidden_states, residual, forward_batch
++            hidden_states,
++            residual,
++            forward_batch,
++            post_residual_addition=post_residual_addition,
+         )
+         if hidden_states.shape[0] != 0:
+             hidden_states = self.self_attn(
+diff --git a/python/sglang/srt/models/qwen3_moe.py b/python/sglang/srt/models/qwen3_moe.py
+index 9737ac719..09c756918 100644
+--- a/python/sglang/srt/models/qwen3_moe.py
++++ b/python/sglang/srt/models/qwen3_moe.py
+@@ -22,6 +22,7 @@ import math
+ from typing import Any, Dict, Iterable, List, Optional, Tuple, TypeVar
+ 
+ import torch
++import torch.nn.functional as F
+ from torch import nn
+ from transformers import PretrainedConfig
+ 
+@@ -50,7 +51,7 @@ from sglang.srt.layers.moe import (
+ )
+ from sglang.srt.layers.moe.ep_moe.layer import get_moe_impl_class
+ from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
+-from sglang.srt.layers.moe.topk import TopK
++from sglang.srt.layers.moe.topk import StandardTopKOutput, TopK
+ from sglang.srt.layers.moe.utils import RoutingMethodType
+ from sglang.srt.layers.quantization.base_config import QuantizationConfig
+ from sglang.srt.layers.radix_attention import RadixAttention
+@@ -227,7 +228,9 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
+             top_k=config.num_experts_per_tok,
+             renormalize=config.norm_topk_prob,
+             use_grouped_topk=False,
++            layer_id=layer_id,
+         )
++        self.top_k = config.num_experts_per_tok
+ 
+         self.experts = get_moe_impl_class(quant_config)(
+             num_experts=config.num_experts
+@@ -293,7 +296,22 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
+ 
+         # router_logits: (num_tokens, n_experts)
+         router_logits, _ = self.gate(hidden_states)
+-        topk_output = self.topk(hidden_states, router_logits)
++
++        if get_global_server_args().rl_on_policy_target is not None:
++            routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
++            routing_weights, selected_experts = torch.topk(
++                routing_weights, self.top_k, dim=-1
++            )
++            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
++            routing_weights = routing_weights.to(hidden_states.dtype)
++            topk_output = StandardTopKOutput(
++                topk_weights=routing_weights,
++                topk_ids=selected_experts,
++                router_logits=router_logits,
++            )
++        else:
++            topk_output = self.topk(hidden_states, router_logits)
++
+         final_hidden_states = self.experts(hidden_states, topk_output)
+         if (
+             self.tp_size > 1
+@@ -474,13 +492,14 @@ class Qwen3MoeAttention(nn.Module):
+         )
+         self.compatible_with_fused_kv_buffer = (
+             False if isinstance(self.rotary_emb, MRotaryEmbedding) else True
+-        )
++        ) and (get_global_server_args().rl_on_policy_target is None)
+         self.compatible_with_fused_qk_norm_rope = (
+             not isinstance(self.rotary_emb, MRotaryEmbedding)
+         ) and self.head_dim in (64, 128, 256)
+         self.use_fused_qk_norm_rope = (
+             get_global_server_args().enable_fused_qk_norm_rope
+             and self.compatible_with_fused_qk_norm_rope
++            and (get_global_server_args().rl_on_policy_target is None)
+         )
+         self._used_fused_qk_norm_rope_last_call = False
+ 
+@@ -493,8 +512,16 @@ class Qwen3MoeAttention(nn.Module):
+             prefix=add_prefix("attn", prefix),
+         )
+ 
+-        self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
+-        self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps)
++        norm_kwargs = (
++            dict(
++                cast_x_before_out_mul=True,
++                fp32_residual=False,
++            )
++            if get_global_server_args().rl_on_policy_target is not None
++            else {}
++        )
++        self.q_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, **norm_kwargs)
++        self.k_norm = RMSNorm(self.head_dim, eps=rms_norm_eps, **norm_kwargs)
+         self.alt_stream = alt_stream
+ 
+     def _apply_qk_norm(
+@@ -751,9 +778,19 @@ class Qwen3MoeDecoderLayer(nn.Module):
+                 quant_config=quant_config,
+                 prefix=add_prefix("mlp", prefix),
+             )
+-        self.input_layernorm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
++        norm_kwargs = (
++            dict(
++                cast_x_before_out_mul=True,
++                fp32_residual=False,
++            )
++            if get_global_server_args().rl_on_policy_target is not None
++            else {}
++        )
++        self.input_layernorm = RMSNorm(
++            config.hidden_size, eps=config.rms_norm_eps, **norm_kwargs
++        )
+         self.post_attention_layernorm = RMSNorm(
+-            config.hidden_size, eps=config.rms_norm_eps
++            config.hidden_size, eps=config.rms_norm_eps, **norm_kwargs
+         )
+ 
+         self.layer_communicator = LayerCommunicator(
+diff --git a/python/sglang/srt/models/qwen3_vl.py b/python/sglang/srt/models/qwen3_vl.py
+index ed52f7ff4..8ce9fab9d 100644
+--- a/python/sglang/srt/models/qwen3_vl.py
++++ b/python/sglang/srt/models/qwen3_vl.py
+@@ -18,7 +18,6 @@ import re
+ from functools import lru_cache, partial
+ from typing import Callable, Iterable, List, Optional, Tuple, Union
+ 
+-import numpy as np
+ import torch
+ import torch.nn as nn
+ from einops import rearrange
+@@ -349,83 +348,65 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
+         return rotary_pos_emb
+ 
+     def fast_pos_embed_interpolate(self, grid_thw):
++        grid_ts, grid_hs, grid_ws = grid_thw[:, 0], grid_thw[:, 1], grid_thw[:, 2]
+         num_grid_per_side = int(self.num_position_embeddings**0.5)
++        device = self.pos_embed.weight.device
+ 
+         idx_list = [[] for _ in range(4)]
+         weight_list = [[] for _ in range(4)]
+ 
+-        # TODO: use torch instand of np
+-        for t, h, w in grid_thw:
+-            h_idxs = np.linspace(0, num_grid_per_side - 1, h)
+-            w_idxs = np.linspace(0, num_grid_per_side - 1, w)
++        for t, h, w in zip(grid_ts, grid_hs, grid_ws):
++            h_idxs = torch.linspace(0, num_grid_per_side - 1, h)
++            w_idxs = torch.linspace(0, num_grid_per_side - 1, w)
+ 
+-            h_idxs_floor = h_idxs.astype(int)
+-            w_idxs_floor = w_idxs.astype(int)
+-            h_idxs_ceil = (h_idxs.astype(int) + 1).clip(max=num_grid_per_side - 1)
+-            w_idxs_ceil = (w_idxs.astype(int) + 1).clip(max=num_grid_per_side - 1)
++            h_idxs_floor = h_idxs.int()
++            w_idxs_floor = w_idxs.int()
++            h_idxs_ceil = (h_idxs.int() + 1).clip(max=num_grid_per_side - 1)
++            w_idxs_ceil = (w_idxs.int() + 1).clip(max=num_grid_per_side - 1)
+ 
+             dh = h_idxs - h_idxs_floor
+             dw = w_idxs - w_idxs_floor
+ 
+-            idx_list[0].extend(
+-                ((h_idxs_floor * num_grid_per_side)[None].T + w_idxs_floor[None])
+-                .flatten()
+-                .tolist()
+-                * t
+-            )
+-            idx_list[1].extend(
+-                ((h_idxs_floor * num_grid_per_side)[None].T + w_idxs_ceil[None])
+-                .flatten()
+-                .tolist()
+-                * t
+-            )
+-            idx_list[2].extend(
+-                ((h_idxs_ceil * num_grid_per_side)[None].T + w_idxs_floor[None])
+-                .flatten()
+-                .tolist()
+-                * t
+-            )
+-            idx_list[3].extend(
+-                ((h_idxs_ceil * num_grid_per_side)[None].T + w_idxs_ceil[None])
+-                .flatten()
+-                .tolist()
+-                * t
+-            )
++            base_h = h_idxs_floor * num_grid_per_side
++            base_h_ceil = h_idxs_ceil * num_grid_per_side
+ 
+-            weight_list[0].extend(
+-                ((1 - dh)[None].T * (1 - dw)[None]).flatten().tolist() * t
+-            )
+-            weight_list[1].extend(((1 - dh)[None].T * dw[None]).flatten().tolist() * t)
+-            weight_list[2].extend((dh[None].T * (1 - dw)[None]).flatten().tolist() * t)
+-            weight_list[3].extend((dh[None].T * dw[None]).flatten().tolist() * t)
++            indices = [
++                (base_h[None].T + w_idxs_floor[None]).flatten(),
++                (base_h[None].T + w_idxs_ceil[None]).flatten(),
++                (base_h_ceil[None].T + w_idxs_floor[None]).flatten(),
++                (base_h_ceil[None].T + w_idxs_ceil[None]).flatten(),
++            ]
+ 
+-        device = self.pos_embed.weight.device
+-        dtype = self.pos_embed.weight.dtype
++            weights = [
++                ((1 - dh)[None].T * (1 - dw)[None]).flatten(),
++                ((1 - dh)[None].T * dw[None]).flatten(),
++                (dh[None].T * (1 - dw)[None]).flatten(),
++                (dh[None].T * dw[None]).flatten(),
++            ]
+ 
+-        p0 = (
+-            self.pos_embed(torch.tensor(idx_list[0], dtype=torch.long, device=device))
+-            * torch.tensor(weight_list[0], dtype=dtype, device=device)[:, None]
+-        )
+-        p1 = (
+-            self.pos_embed(torch.tensor(idx_list[1], dtype=torch.long, device=device))
+-            * torch.tensor(weight_list[1], dtype=dtype, device=device)[:, None]
+-        )
+-        p2 = (
+-            self.pos_embed(torch.tensor(idx_list[2], dtype=torch.long, device=device))
+-            * torch.tensor(weight_list[2], dtype=dtype, device=device)[:, None]
++            for i in range(4):
++                idx_list[i].extend(indices[i].tolist())
++                weight_list[i].extend(weights[i].tolist())
++
++        idx_tensor = torch.tensor(idx_list, dtype=torch.long, device=device)
++        weight_tensor = torch.tensor(
++            weight_list, dtype=self.pos_embed.weight.dtype, device=device
+         )
+-        p3 = (
+-            self.pos_embed(torch.tensor(idx_list[3], dtype=torch.long, device=device))
+-            * torch.tensor(weight_list[3], dtype=dtype, device=device)[:, None]
++        pos_embeds = self.pos_embed(idx_tensor).to(device) * weight_tensor[:, :, None]
++        patch_pos_embeds = pos_embeds[0] + pos_embeds[1] + pos_embeds[2] + pos_embeds[3]
++
++        patch_pos_embeds = patch_pos_embeds.split(
++            [h * w for h, w in zip(grid_hs, grid_ws)]
+         )
+ 
+-        patch_pos_embeds = p0 + p1 + p2 + p3
+-        patch_pos_embeds = patch_pos_embeds.split([t * h * w for t, h, w in grid_thw])
+         patch_pos_embeds_permute = []
+-        m_size = self.spatial_merge_size
+-        for pos_embed, (t, h, w) in zip(patch_pos_embeds, grid_thw):
++        merge_size = self.spatial_merge_size
++        for pos_embed, t, h, w in zip(patch_pos_embeds, grid_ts, grid_hs, grid_ws):
++            pos_embed = pos_embed.repeat(t, 1)
+             pos_embed = (
+-                pos_embed.view(t, h // m_size, m_size, w // m_size, m_size, -1)
++                pos_embed.view(
++                    t, h // merge_size, merge_size, w // merge_size, merge_size, -1
++                )
+                 .permute(0, 1, 3, 2, 4, 5)
+                 .flatten(0, 4)
+             )
+@@ -555,21 +536,27 @@ class Qwen3LLMModel(Qwen3Model):
+                     hidden_states + residual if residual is not None else hidden_states
+                 )
+ 
++            deepstack_embeds = None
++            if input_deepstack_embeds is not None:
++                prev_layer_idx = layer_idx - 1
++                if prev_layer_idx in self.deepstack_embed_to_decoder_layer:
++                    sep = self.hidden_size * prev_layer_idx
++                    deepstack_embeds = input_deepstack_embeds[
++                        :, sep : sep + self.hidden_size
++                    ]
++
++            # SGLang applies residual at the START of the next layer, not at the END like HuggingFace.
++            # See: https://github.com/huggingface/transformers/blob/v5.0.0rc0/src/transformers/models/qwen3_vl/modeling_qwen3_vl.py#L549
++            # To match HF behavior, deepstack must be added AFTER residual: (hidden_states + residual) + deepstack
++            # The order matters because addition with different tensors is not associative in practice.
+             hidden_states, residual = layer(
+                 positions,
+                 hidden_states,
+                 forward_batch,
+                 residual,
++                post_residual_addition=deepstack_embeds,
+             )
+ 
+-            # process deepstack
+-            if (
+-                input_deepstack_embeds is not None
+-                and layer_idx in self.deepstack_embed_to_decoder_layer
+-            ):
+-                sep = self.hidden_size * layer_idx
+-                hidden_states += input_deepstack_embeds[:, sep : sep + self.hidden_size]
+-
+         if not self.pp_group.is_last_rank:
+             return PPProxyTensors(
+                 {
+diff --git a/python/sglang/srt/models/step3_vl.py b/python/sglang/srt/models/step3_vl.py
+index 4474f62d5..0e537c398 100644
+--- a/python/sglang/srt/models/step3_vl.py
++++ b/python/sglang/srt/models/step3_vl.py
+@@ -129,6 +129,7 @@ class Step3TextMoEMLP(nn.Module):
+             top_k=config.moe_top_k,
+             renormalize=config.norm_expert_weight,
+             use_grouped_topk=False,
++            layer_id=layer_id,
+         )
+ 
+         self.experts = get_moe_impl_class(quant_config)(
+diff --git a/python/sglang/srt/multimodal/processors/base_processor.py b/python/sglang/srt/multimodal/processors/base_processor.py
+index 370aec2b6..47666d8f3 100644
+--- a/python/sglang/srt/multimodal/processors/base_processor.py
++++ b/python/sglang/srt/multimodal/processors/base_processor.py
+@@ -13,6 +13,7 @@ from PIL import Image
+ from transformers import BaseImageProcessorFast
+ 
+ from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
++from sglang.srt.server_args import get_global_server_args
+ from sglang.srt.utils import (
+     get_bool_env_var,
+     is_npu,
+@@ -260,7 +261,9 @@ class BaseMultimodalProcessor(ABC):
+             and isinstance(processor.image_processor, BaseImageProcessorFast)
+             and not self.server_args.disable_fast_image_processor
+         ):
+-            if not _is_npu:
++            if get_global_server_args().rl_on_policy_target is not None:
++                kwargs["device"] = "cpu"
++            elif not _is_npu:
+                 kwargs["device"] = "cuda"
+             elif processor.__class__.__name__ not in {
+                 "Qwen2_5_VLProcessor",
+diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
+index 8e7753dab..323788f39 100644
+--- a/python/sglang/srt/server_args.py
++++ b/python/sglang/srt/server_args.py
+@@ -535,6 +535,7 @@ class ServerArgs:
+     disable_fast_image_processor: bool = False
+     keep_mm_feature_on_device: bool = False
+     enable_return_hidden_states: bool = False
++    enable_return_routed_experts: bool = False
+     scheduler_recv_interval: int = 1
+     numa_node: Optional[List[int]] = None
+     enable_deterministic_inference: bool = False
+@@ -1966,6 +1967,9 @@ class ServerArgs:
+                 "Enable deterministic inference because of rl_on_policy_target."
+             )
+             self.enable_deterministic_inference = True
++
++            # For VLM
++            os.environ["SGLANG_VLM_CACHE_SIZE_MB"] = "0"
+             # TODO remove this environment variable as a whole
+             os.environ["SGLANG_ENABLE_DETERMINISTIC_INFERENCE"] = "1"
+ 
+@@ -3705,6 +3709,11 @@ class ServerArgs:
+             action="store_true",
+             help="Enable returning hidden states with responses.",
+         )
++        parser.add_argument(
++            "--enable-return-routed-experts",
++            action="store_true",
++            help="Enable returning routed experts of each layer with responses.",
++        )
+         parser.add_argument(
+             "--scheduler-recv-interval",
+             type=int,
+diff --git a/python/sglang/srt/speculative/eagle_info.py b/python/sglang/srt/speculative/eagle_info.py
+index b3d72df05..ddfe0b178 100644
+--- a/python/sglang/srt/speculative/eagle_info.py
++++ b/python/sglang/srt/speculative/eagle_info.py
+@@ -746,6 +746,10 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
+             self.topk_index = self.topk_index[: len(new_indices)]
+             self.hidden_states = self.hidden_states[: len(new_indices)]
+             self.verified_id = self.verified_id[: len(new_indices)]
++            if self.accept_length is not None:
++                self.accept_length = self.accept_length[: len(new_indices)]
++            if self.accept_length_cpu is not None:
++                self.accept_length_cpu = self.accept_length_cpu[: len(new_indices)]
+         else:
+             # in some cases(e.g draft_extend), we have not filtered the batch by `unfinished_index`
+             self.topk_p = self.topk_p[new_indices]
+@@ -777,6 +781,27 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
+         self.verified_id = torch.cat([self.verified_id, spec_info.verified_id], axis=0)
+         self.topk_p = torch.cat([self.topk_p, spec_info.topk_p])
+         self.topk_index = torch.cat([self.topk_index, spec_info.topk_index])
++        if self.accept_length is not None and spec_info.accept_length is not None:
++            self.accept_length = torch.cat(
++                [self.accept_length, spec_info.accept_length]
++            )
++            self.accept_length_cpu = self.accept_length.tolist()
++        elif self.accept_length is not None:
++            zeros = torch.zeros(
++                [spec_info.verified_id.shape[0]],
++                dtype=self.accept_length.dtype,
++                device=self.accept_length.device,
++            )
++            self.accept_length = torch.cat([self.accept_length, zeros])
++            self.accept_length_cpu = self.accept_length.tolist()
++        elif spec_info.accept_length is not None:
++            zeros = torch.zeros(
++                [self.verified_id.shape[0]],
++                dtype=self.accept_length.dtype,
++                device=self.accept_length.device,
++            )
++            self.accept_length = torch.cat([zeros, spec_info.accept_length])
++            self.accept_length_cpu = self.accept_length.tolist()
+ 
+ 
+ @dataclass

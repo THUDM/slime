@@ -9,7 +9,6 @@ import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from slime.utils.misc import exec_command
 from slime.utils.typer_utils import dataclass_cli
@@ -26,7 +25,10 @@ def convert_checkpoint(
     multinode: bool = False,
     extra_args: str = "",
     dir_dst: str = "/root",
+    hf_checkpoint: str | None = None,
 ):
+    hf_checkpoint = hf_checkpoint or f"/root/models/{model_name}"
+
     # TODO shall we make it in host-mapped folder and thus can cache it to speedup CI
     path_dst = f"{dir_dst}/{model_name}_torch_dist"
     if Path(path_dst).exists():
@@ -55,7 +57,7 @@ def convert_checkpoint(
         f"{multinode_args}"
         f"tools/convert_hf_to_torch_dist.py "
         "${MODEL_ARGS[@]} "
-        f"--hf-checkpoint /root/models/{model_name} "
+        f"--hf-checkpoint {hf_checkpoint} "
         f"--save {path_dst}"
         f"{extra_args}"
     )
@@ -70,6 +72,16 @@ def hf_download_dataset(full_name: str):
     exec_command(f"hf download --repo-type dataset {full_name} --local-dir /root/datasets/{partial_name}")
 
 
+def fp8_cast_bf16(path_src, path_dst):
+    if Path(path_dst).exists():
+        print(f"fp8_cast_bf16 skip {path_dst} since exists")
+        return
+
+    exec_command(
+        "python tools/fp8_cast_bf16.py " f"--input-fp8-hf-path {path_src} " f"--output-bf16-hf-path {path_dst} "
+    )
+
+
 # This class can be extended by concrete scripts
 @dataclass
 class ExecuteTrainConfig:
@@ -81,12 +93,16 @@ class ExecuteTrainConfig:
 def execute_train(
     train_args: str,
     num_gpus_per_node: int,
-    megatron_model_type: Optional[str],
+    megatron_model_type: str | None,
     train_script: str = "train.py",
     before_ray_job_submit=None,
-    extra_env_vars={},
-    config: ExecuteTrainConfig = ExecuteTrainConfig(),
+    extra_env_vars=None,
+    config: ExecuteTrainConfig | None = None,
 ):
+    if extra_env_vars is None:
+        extra_env_vars = {}
+    if config is None:
+        config = ExecuteTrainConfig()
     external_ray = get_bool_env_var("SLIME_SCRIPT_EXTERNAL_RAY")
     master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
 
@@ -141,7 +157,7 @@ def execute_train(
                         "CUDA_ENABLE_COREDUMP_ON_EXCEPTION": "1",
                         "CUDA_COREDUMP_SHOW_PROGRESS": "1",
                         "CUDA_COREDUMP_GENERATION_FLAGS": "skip_nonrelocated_elf_images,skip_global_memory,skip_shared_memory,skip_local_memory,skip_constbank_memory",
-                        "CUDA_COREDUMP_FILE": "/tmp/cuda_coredump_%h.%p.%t",
+                        "CUDA_COREDUMP_FILE": "/root/shared_data/cuda_coredump_%h.%p.%t",
                     }
                     if config.cuda_core_dump
                     else {}
@@ -181,7 +197,7 @@ def check_has_nvlink():
     return int(output) > 0
 
 
-def get_default_wandb_args(test_file: str, run_name_prefix: Optional[str] = None, run_id: Optional[str] = None):
+def get_default_wandb_args(test_file: str, run_name_prefix: str | None = None, run_id: str | None = None):
     if not os.environ.get("WANDB_API_KEY"):
         print("Skip wandb configuration since WANDB_API_KEY is not found")
         return ""
@@ -243,5 +259,12 @@ def save_to_temp_file(text: str, ext: str):
 
 NUM_GPUS_OF_HARDWARE = {
     "H100": 8,
+    "GB200": 4,
     "GB300": 4,
+}
+
+GENERATION_HARDWARE = {
+    "H100": "Hopper",
+    "GB200": "Blackwell",
+    "GB300": "Blackwell",
 }

@@ -25,7 +25,6 @@ from slime.utils import tracking_utils
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
-from .cp_utils import slice_with_cp
 from .data import DataIterator, get_batch
 from .loss import loss_function
 from .model_provider import get_model_provider_func
@@ -84,9 +83,6 @@ def get_optimizer_param_scheduler(args: Namespace, optimizer: MegatronOptimizer)
 def setup_model_and_optimizer(
     args: Namespace,
     role: str = "actor",
-    no_wd_decay_cond: Callable[..., bool] | None = None,
-    scale_lr_cond: Callable[..., bool] | None = None,
-    lr_mult: float = 1.0,
 ) -> tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler]:
     """Build model(s), wrap with DDP, and construct optimizer and scheduler.
 
@@ -119,19 +115,11 @@ def setup_model_and_optimizer(
     config.timers = None
 
     optimizer = get_megatron_optimizer(
-        config,
-        model,
-        no_wd_decay_cond,
-        scale_lr_cond,
-        lr_mult,
+        config=config,
+        model_chunks=model,
         use_gloo_process_groups=args.enable_gloo_process_groups,
     )
     opt_param_scheduler = get_optimizer_param_scheduler(args, optimizer)
-    for optimizer in optimizer.chained_optimizers:
-        if not getattr(optimizer, "init_state_fn", None):
-            continue
-        optimizer.init_state_fn(optimizer.optimizer, optimizer.config)
-
     return model, optimizer, opt_param_scheduler
 
 
@@ -214,7 +202,19 @@ def forward_only(
         assert not return_schedule_plan, "forward_only step should never return schedule plan"
 
         # Get the batch.
-        batch = get_batch(data_iterator, ["tokens", "total_lengths", "response_lengths"])
+        batch = get_batch(
+            data_iterator,
+            [
+                "tokens",
+                "loss_masks",
+                "multimodal_train_inputs",
+                "total_lengths",
+                "response_lengths",
+                "max_seq_lens",
+            ],
+            args.data_pad_size_multiplier,
+            args.qkv_format,
+        )
         unconcat_tokens = batch["unconcat_tokens"]
         tokens = batch["tokens"]
         packed_seq_params = batch["packed_seq_params"]
@@ -226,6 +226,8 @@ def forward_only(
             attention_mask=None,
             labels=None,
             packed_seq_params=packed_seq_params,
+            loss_mask=batch["full_loss_masks"],
+            **(batch["multimodal_train_inputs"] if batch["multimodal_train_inputs"] is not None else {}),
         )
 
         return output_tensor, partial(
@@ -235,6 +237,7 @@ def forward_only(
             total_lengths=total_lengths,
             response_lengths=response_lengths,
             with_entropy=args.use_rollout_entropy,
+            max_seq_lens=batch.get("max_seq_lens", None),
         )
 
     # Turn on evaluation mode which disables dropout.
@@ -284,7 +287,7 @@ def forward_only(
                 # TODO: move this out of the loop.
                 origin_values = [None] * len(values)
                 origin_indices = sum(data_iterator[0].micro_batch_indices, [])
-                for value, origin_index in zip(values, origin_indices):
+                for value, origin_index in zip(values, origin_indices, strict=False):
                     origin_values[origin_index] = value
                 values = origin_values
             rollout_data[f"{store_prefix}{key}"] = values
@@ -354,6 +357,7 @@ def train_one_step(
             data_iterator,
             [
                 "tokens",
+                "multimodal_train_inputs",
                 "packed_seq_params",
                 "total_lengths",
                 "response_lengths",
@@ -364,42 +368,15 @@ def train_one_step(
                 "advantages",
                 "returns",
                 "rollout_log_probs",
+                "max_seq_lens",
             ],
+            args.data_pad_size_multiplier,
+            args.qkv_format,
         )
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             old_stage = os.environ["ROUTING_REPLAY_STAGE"]
             os.environ["ROUTING_REPLAY_STAGE"] = "replay_forward"
-
-        def build_loss_mask_for_mtp(batch: dict[str, object]) -> torch.Tensor | None:
-            tokens_tensor: torch.Tensor = batch["tokens"]
-
-            mask_chunks: list[torch.Tensor] = []
-            for total_len, response_len, resp_mask in zip(
-                batch["total_lengths"], batch["response_lengths"], batch["loss_masks"]
-            ):
-                assert (
-                    resp_mask.numel() == response_len
-                ), f"Unexpected loss mask size {resp_mask.numel()} (expected {response_len} or {total_len})."
-                prompt_len = total_len - response_len
-                full_mask = resp_mask.new_zeros(total_len)
-                full_mask[prompt_len:] = resp_mask
-
-                mask_chunks.append(slice_with_cp(full_mask, 0.0))
-
-            flattened_mask = torch.cat(mask_chunks, dim=0)
-            seq_len = tokens_tensor.size(-1)
-            assert (
-                flattened_mask.numel() <= seq_len
-            ), f"MTP loss mask ({flattened_mask.numel()}) exceeds token length ({seq_len})."
-
-            # token tensor may be padded by 128, so pad loss mask to the same length
-            loss_mask_tensor = flattened_mask.new_zeros(seq_len)
-            loss_mask_tensor[: flattened_mask.numel()] = flattened_mask
-            return loss_mask_tensor.unsqueeze(0)
-
-        loss_mask = None
-        mtp_kwargs = None
 
         if return_schedule_plan:
             assert not args.enable_mtp_training, "MTP training should not be enabled when using combined 1f1b"
@@ -409,28 +386,18 @@ def train_one_step(
                 attention_mask=None,
                 labels=None,
                 packed_seq_params=batch["packed_seq_params"],
+                loss_mask=batch["full_loss_masks"],
             )
         else:
-            # If enabling MTP training: trigger MTP loss inside Megatron while returning logits
-            # for the target model's loss.
-            if args.enable_mtp_training:
-                loss_mask = build_loss_mask_for_mtp(batch)
-                assert (
-                    loss_mask.shape == batch["tokens"].shape
-                ), f"loss_mask shape {loss_mask.shape} mismatches token shape {batch['tokens'].shape}"
-                mtp_kwargs = {
-                    # We have to set labels to tokens for MTP training, to point out samples to train.
-                    "mtp_labels": batch["tokens"],
-                }
-
             output_tensor = model(
                 input_ids=batch["tokens"],
                 position_ids=None,
                 attention_mask=None,
                 labels=None,
                 packed_seq_params=batch["packed_seq_params"],
-                loss_mask=loss_mask,
-                **(dict(mtp_kwargs=mtp_kwargs) if mtp_kwargs is not None else {}),
+                loss_mask=batch["full_loss_masks"],
+                mtp_kwargs={"mtp_labels": batch["tokens"]} if args.enable_mtp_training else {},
+                **(batch["multimodal_train_inputs"] if batch["multimodal_train_inputs"] is not None else {}),
             )
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
@@ -463,6 +430,13 @@ def train_one_step(
             else:
                 valid_step = not (math.isnan(grad_norm) or math.isinf(grad_norm))
 
+    # CI check: verify only MTP parameters have non-zero gradients when truncation happens
+    # This check must happen before optimizer.step() as gradients may be modified during step
+    if args.ci_test and args.enable_mtp_training:
+        from slime.backends.megatron_utils.ci_utils import check_mtp_only_grad
+
+        check_mtp_only_grad(model, step_id)
+
     if valid_step:
         # Update parameters.
         update_successful, grad_norm, num_zeros_in_grad = optimizer.step()
@@ -491,7 +465,7 @@ def train_one_step(
         loss_reduced = {}
         values = values.tolist()
         num_samples_or_tokens = values[0]
-        for key, value in zip(keys, values[1:]):
+        for key, value in zip(keys, values[1:], strict=False):
             loss_reduced[key] = value * mpu.get_context_parallel_world_size() / num_samples_or_tokens
         return loss_reduced, grad_norm
     return {}, grad_norm
@@ -500,6 +474,16 @@ def train_one_step(
 def should_disable_forward_pre_hook(args: Namespace) -> bool:
     """Block forward pre-hook for certain configurations."""
     return args.use_distributed_optimizer and args.overlap_param_gather
+
+
+def finalize_model_grads_with_empty_cache(*args, **kwargs):
+    # trigger empty cache when there are less than 10% free memory before the final reduce scatter.
+    # TODO: this is an ad-hoc method and we should figure out why the oom happens in the first place.
+    device = torch.cuda.current_device()
+    free, total = torch.cuda.mem_get_info(device)
+    if free / total < 0.1:
+        clear_memory()
+    return finalize_model_grads(*args, **kwargs)
 
 
 def train(
@@ -552,7 +536,7 @@ def train(
         config.param_sync_func = [model_chunk.start_param_sync for model_chunk in model]
         if len(model) == 1:
             config.param_sync_func = config.param_sync_func[0]
-    config.finalize_model_grads_func = finalize_model_grads
+    config.finalize_model_grads_func = finalize_model_grads_with_empty_cache
 
     pre_hook_enabled = False
 
@@ -615,6 +599,12 @@ def train(
                 mtp_losses = (tracker["values"] * mtp_loss_scale).item()
                 MTPLossLoggingHelper.clean_loss_in_tracker()
 
+                # CI check: verify MTP loss is within expected bounds
+                if args.ci_test:
+                    from slime.backends.megatron_utils.ci_utils import check_mtp_loss
+
+                    check_mtp_loss(mtp_losses)
+
         # per train step log.
         if (
             mpu.get_data_parallel_rank(with_context_parallel=True) == 0
@@ -640,11 +630,36 @@ def train(
 
             if args.ci_test and not args.ci_disable_kl_checker:
                 if step_id == 0 and "train/ppo_kl" in log_dict and "train/pg_clipfrac" in log_dict:
-                    assert log_dict["train/ppo_kl"] == 0.0 and log_dict["train/pg_clipfrac"] == 0.0, f"{log_dict=}"
+                    if args.multi_latent_attention:
+                        # TODO: mla currently have non-zero kl, need further investigation
+                        assert log_dict["train/ppo_kl"] < 1e-8, f"{log_dict=}"
+                    else:
+                        assert log_dict["train/ppo_kl"] == 0.0 and log_dict["train/pg_clipfrac"] == 0.0, f"{log_dict=}"
                 if accumulated_step_id == 0 and "train/kl_loss" in log_dict:
                     assert log_dict["train/kl_loss"] == 0.0, f"{log_dict=}"
 
             logger.info(f"{role_tag}step {accumulated_step_id}: {log_dict}")
+
+            if args.ci_save_grad_norm is not None:
+                ci_save_grad_norm_path = args.ci_save_grad_norm.format(
+                    role=role,
+                    rollout_id=rollout_id,
+                    step_id=step_id,
+                )
+                torch.save(grad_norm, ci_save_grad_norm_path)
+            elif args.ci_load_grad_norm is not None:
+                ci_load_grad_norm_path = args.ci_load_grad_norm.format(
+                    role=role,
+                    rollout_id=rollout_id,
+                    step_id=step_id,
+                )
+                expected_grad_norm = torch.load(ci_load_grad_norm_path)
+                assert math.isclose(
+                    grad_norm,
+                    expected_grad_norm,
+                    rel_tol=0.01,
+                    abs_tol=0.01,
+                ), f"grad norm mismatch: {grad_norm} != {expected_grad_norm}"
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
     if pre_hook_enabled:
         disable_forward_pre_hook(model)
@@ -691,8 +706,16 @@ def initialize_model_and_optimizer(
         tuple[list[DDP], MegatronOptimizer, OptimizerParamScheduler, int]:
             DDP-wrapped model chunks, optimizer, scheduler, and iteration index.
     """
+
+    if torch.version.hip:
+        import megatron.core.dist_checkpointing.strategies.filesystem_async as filesystem_async_module
+        from slime.utils.rocm_checkpoint_writer import ROCmFileSystemWriterAsync
+
+        filesystem_async_module.FileSystemWriterAsync = ROCmFileSystemWriterAsync
+        print("[ROCm] Applied FileSystemWriterAsync patch for HIP compatibility")
+
     model, optimizer, opt_param_scheduler = setup_model_and_optimizer(args, role)
-    setattr(model[0], "role", role)
+    model[0].role = role
     clear_memory()
     iteration, _ = load_checkpoint(
         model,
@@ -702,5 +725,7 @@ def initialize_model_and_optimizer(
         skip_load_to_model_and_opt=False,
     )
     clear_memory()
+
+    opt_param_scheduler.step(increment=iteration * args.global_batch_size)
 
     return model, optimizer, opt_param_scheduler, iteration

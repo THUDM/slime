@@ -9,6 +9,7 @@ except ImportError:
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.logging_utils import configure_logger
+from slime.utils.misc import should_run_periodic_action
 from slime.utils.tracking_utils import init_tracking
 
 
@@ -28,12 +29,11 @@ def train(args):
     if args.offload_rollout:
         ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
 
-    if args.offload_train and not args.enable_weights_backuper:
-        actor_model.onload()
     # always update weight first so that sglang has the loaded weights from training.
     actor_model.update_weights()
-    if args.offload_train and not args.enable_weights_backuper:
-        actor_model.offload()
+
+    if args.check_weight_update_equal:
+        ray.get(rollout_manager.check_weights.remote(action="compare"))
 
     if args.offload_rollout:
         if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
@@ -62,8 +62,7 @@ def train(args):
     # train loop.
     # note that for async training, one can change the position of the sync operation(ray.get).
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
-        # TODO extract the duplicated eval logic
-        if args.eval_interval is not None and rollout_id == 0:
+        if args.eval_interval is not None and rollout_id == 0 and not args.skip_eval_before_train:
             ray.get(rollout_manager.eval.remote(rollout_id))
 
         rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
@@ -79,36 +78,24 @@ def train(args):
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
-        if args.save_interval is not None and (
-            (rollout_id + 1) % args.save_interval == 0
-            or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
-        ):
+        if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
             if (not args.use_critic) or (rollout_id >= args.num_critic_only_steps):
-                actor_model.save_model(rollout_id)
+                actor_model.save_model(rollout_id, force_sync=rollout_id == args.num_rollout - 1)
             if args.use_critic:
-                critic_model.save_model(rollout_id)
+                critic_model.save_model(rollout_id, force_sync=rollout_id == args.num_rollout - 1)
             if args.rollout_global_dataset:
                 ray.get(rollout_manager.save.remote(rollout_id))
 
-        if args.enable_weights_backuper:
-            offload_train()
-            onload_rollout()
-            actor_model.update_weights()
-        else:
-            actor_model.clear_memory()
-            onload_rollout()
-            actor_model.update_weights()
-            offload_train()
+        offload_train()
+        onload_rollout()
+        actor_model.update_weights()
 
         if args.offload_rollout:
             if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
                 ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
             ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
 
-        if args.eval_interval is not None and (
-            (rollout_id + 1) % args.eval_interval == 0
-            or (num_rollout_per_epoch is not None and (rollout_id + 1) % num_rollout_per_epoch == 0)
-        ):
+        if should_run_periodic_action(rollout_id, args.eval_interval, num_rollout_per_epoch):
             ray.get(rollout_manager.eval.remote(rollout_id))
 
     ray.get(rollout_manager.dispose.remote())

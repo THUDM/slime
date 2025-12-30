@@ -20,23 +20,23 @@ try:
 except ImportError:
     logging.warning("deep_ep is not installed, some functionalities may be limited.")
 
+try:
+    from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.text_model import (
+        Qwen3VLMoETextRotaryEmbedding,
+        Qwen3VLTextRotaryEmbedding,
+    )
 
-from .actor import MegatronTrainRayActor
-from .arguments import parse_args, set_default_megatron_args, validate_args
-from .checkpoint import load_checkpoint, save_checkpoint
-from .initialize import init
-from .model import initialize_model_and_optimizer
+    def patch_rotary_embedding(cls):
+        _original_forward = cls.forward
+
+        def _patched_forward(self, *args, packed_seq_params=None, **kwargs):
+            return _original_forward(self, *args, **kwargs)
+
+        cls.forward = _patched_forward
+
+    patch_rotary_embedding(Qwen3VLTextRotaryEmbedding)
+    patch_rotary_embedding(Qwen3VLMoETextRotaryEmbedding)
+except ImportError:
+    pass
 
 logging.getLogger().setLevel(logging.WARNING)
-
-
-__all__ = [
-    "parse_args",
-    "validate_args",
-    "load_checkpoint",
-    "save_checkpoint",
-    "set_default_megatron_args",
-    "MegatronTrainRayActor",
-    "init",
-    "initialize_model_and_optimizer",
-]

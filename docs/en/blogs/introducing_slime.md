@@ -36,7 +36,7 @@ It wasn’t always like this: no one forks PyTorch just for a new dataloader. We
 
 slime views the data sampling in RL differently. We manage all SGLang servers within slime with [sgl-router](https://github.com/sgl-project/sglang/tree/main/sgl-router) and provide an interface for the data generation component, **allowing users to inject custom logic and freely interact with SGLang servers**. Unleash their creativity.
 
-![slime architecture](/images/blog/slime/slime-arch.png)
+![slime architecture](/imgs/arch.png)
 
 With the sgl-router, users only need to send HTTP requests to a single endpoint. By exposing this endpoint, complex agent environments can directly interact with slime through an OpenAI-compatible API — no need to modify the environment, and training-deployment consistency is preserved.
 

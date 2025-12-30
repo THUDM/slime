@@ -7,7 +7,6 @@ from datetime import timedelta
 import ray
 import torch
 import torch.distributed as dist
-from torch_memory_saver import torch_memory_saver
 
 import slime.utils.eval_config
 from slime.ray.ray_actor import RayActor
@@ -53,11 +52,6 @@ class TrainRayActor(RayActor):
         self.role = role
         self.with_ref = with_ref
 
-        if (x := args.train_memory_margin_bytes) > 0:
-            logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
-            assert args.offload_train
-            torch_memory_saver.memory_margin_bytes = x
-
         torch.serialization.add_safe_globals([slime.utils.eval_config.EvalDatasetConfig])
 
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
@@ -81,7 +75,7 @@ class TrainRayActor(RayActor):
 
         try:
             if torch.version.hip is not None:
-                logger.info(f"Detected ROCm/HIP environment, skipping NUMA affinity setup")
+                logger.info("Detected ROCm/HIP environment, skipping NUMA affinity setup")
                 # will find the coresponding API to implement ROCm version as below
             else:
                 import pynvml
@@ -97,7 +91,7 @@ class TrainRayActor(RayActor):
                 pynvml.nvmlShutdown()
 
         except ImportError:
-            logger.info(f"Warning: pynvml not available, skipping NUMA affinity setup")
+            logger.info("Warning: pynvml not available, skipping NUMA affinity setup")
         except Exception as e:
             logger.info(f"Warning: Failed to set NUMA affinity: {e}")
 
@@ -119,7 +113,7 @@ class TrainRayActor(RayActor):
         raise NotImplementedError
 
     @abc.abstractmethod
-    def save_model(self, iteration):
+    def save_model(self, rollout_id, force_sync=False):
         raise NotImplementedError
 
     @abc.abstractmethod
@@ -130,5 +124,11 @@ class TrainRayActor(RayActor):
     def connect_actor_critic(self, critic_group):
         raise NotImplementedError
 
+    @abc.abstractmethod
+    def _get_parallel_config(self):
+        raise NotImplementedError
+
     def set_rollout_manager(self, rollout_manager):
         self.rollout_manager = rollout_manager
+        if self.args.rank == 0:
+            ray.get(self.rollout_manager.set_train_parallel_config.remote(self.train_parallel_config))

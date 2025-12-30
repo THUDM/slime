@@ -6,7 +6,8 @@ from slime.utils.types import Sample
 
 async def reward_func(args, sample, **kwargs):
     payload = {
-        "text": sample.prompt + sample.response,
+        # "text": sample.prompt + sample.response,
+        "input_ids": sample.tokens,
         "sampling_params": {
             "temperature": 0,
             "max_new_tokens": 0,
@@ -30,10 +31,11 @@ def post_process_rewards(args, samples: list[Sample], **kwargs):
         for reward in rewards
     ]
     teacher_log_probs = [
-        t_log_prob[-response_length:] for t_log_prob, response_length in zip(teacher_log_probs, response_lengths)
+        t_log_prob[-response_length:]
+        for t_log_prob, response_length in zip(teacher_log_probs, response_lengths, strict=False)
     ]
 
-    for sample, t_log_probs in zip(samples, teacher_log_probs):
+    for sample, t_log_probs in zip(samples, teacher_log_probs, strict=False):
         sample.teacher_log_probs = t_log_probs
 
     return teacher_log_probs, teacher_log_probs

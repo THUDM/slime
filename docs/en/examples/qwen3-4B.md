@@ -15,14 +15,14 @@ Download the model and data:
 
 ```bash
 # hf checkpoint
-huggingface-cli download Qwen/Qwen3-4B --local-dir /root/Qwen3-4B
+hf download Qwen/Qwen3-4B --local-dir /root/Qwen3-4B
 
 # train data
-huggingface-cli download --repo-type dataset zhuzilin/dapo-math-17k \
+hf download --repo-type dataset zhuzilin/dapo-math-17k \
   --local-dir /root/dapo-math-17k
 
 # eval data
-huggingface-cli download --repo-type dataset zhuzilin/aime-2024 \
+hf download --repo-type dataset zhuzilin/aime-2024 \
   --local-dir /root/aime-2024
 ```
 
@@ -49,7 +49,7 @@ bash scripts/run-qwen3-4B.sh
 
 ### Parameter Introduction
 
-Here, we will briefly introduce the various components of the [run-qwen3-4B.sh](../../../scripts/run-qwen3-4B.sh) script:
+Here, we will briefly introduce the various components of the [run-qwen3-4B.sh](https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B.sh) script:
 
 #### MODEL\_ARGS
 
@@ -58,7 +58,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/qwen3-4B.sh"
 ```
 
-This reads the model's configuration from [scripts/models/qwen3-4B.sh](../../../scripts/models/qwen3-4B.sh). These are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in [scripts/models](../../../scripts/models/).
+This reads the model's configuration from [scripts/models/qwen3-4B.sh](https://github.com/THUDM/slime/blob/main/scripts/models/qwen3-4B.sh). These are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in [scripts/models](https://github.com/THUDM/slime/tree/main/scripts/models/).
 
 ⚠️  Ensure that settings such as `--rotary-base` in the model configuration file match the settings of the model you are currently training. This is because different models, even with the same architecture, might use different values. If needed, you can override these parameters in your script after loading the model weights. For instance:
 
@@ -249,25 +249,6 @@ def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) ->
 This means that each time, the data corresponding to the first `num_samples` prompts is retrieved, totaling `num_samples * n_samples_per_prompt` items.
 
 ⚠️ The `sample.metadata` of each partial rollout sample stores the rollout ID from its initial generation, which can be used for data filtering.
-
-### BF16 Training with FP8 Inference
-
-slime also supports BF16 training with FP8 inference. For the Qwen3-4B model, you just need to download the following model:
-
-```bash
-huggingface-cli download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
-```
-
-And replace `--hf-checkpoint` with:
-
-```bash
-#--hf-checkpoint /root/Qwen3-4B
---hf-checkpoint /root/Qwen3-4B-FP8
-```
-
-This will trigger FP8 inference. Currently, we directly cast the BF16 weights to FP8. In the future, we will gradually add more sophisticated quantization schemes that have less impact on precision.
-
-⚠️ The Megatron checkpoint for training still needs to be the one that was originally converted from the BF16 Hugging Face model.
 
 ### Decoupled Training and Inference
 

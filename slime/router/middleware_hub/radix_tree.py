@@ -8,7 +8,7 @@ Optimized for string prefixes with corresponding token IDs.
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 
 @dataclass
@@ -16,11 +16,11 @@ class MatchResult:
     """Result of prefix matching operation."""
 
     matched_prefix: str
-    token_ids: List[int]
-    logp: List[float]
-    loss_mask: List[int]  # Added loss mask for model generation parts
+    token_ids: list[int]
+    logp: list[float]
+    loss_mask: list[int]  # Added loss mask for model generation parts
     remaining_string: str
-    last_node: "StringTreeNode"
+    last_node: StringTreeNode
 
 
 class StringTreeNode:
@@ -28,16 +28,16 @@ class StringTreeNode:
 
     counter = 0
 
-    def __init__(self, node_id: Optional[int] = None):
+    def __init__(self, node_id: int | None = None):
         # Core tree structure
-        self.children: List[StringTreeNode] = []  # Use list to store children
-        self.parent: Optional[StringTreeNode] = None
+        self.children: list[StringTreeNode] = []  # Use list to store children
+        self.parent: StringTreeNode | None = None
 
         # Node data
         self.string_key: str = ""  # The string fragment this node represents
-        self.token_ids: Optional[List[int]] = None  # Token IDs for this node only (not cumulative)
-        self.logp: Optional[List[float]] = None  # Log probabilities for this node's tokens
-        self.loss_mask: Optional[List[int]] = None  # Loss mask for model generation parts
+        self.token_ids: list[int] | None = None  # Token IDs for this node only (not cumulative)
+        self.logp: list[float] | None = None  # Log probabilities for this node's tokens
+        self.loss_mask: list[int] | None = None  # Loss mask for model generation parts
 
         # Access tracking
         self.last_access_time = time.monotonic()
@@ -47,7 +47,7 @@ class StringTreeNode:
         self.ref_count = 0
 
         # Weight version tracking
-        self.weight_version: Optional[int] = None  # Weight version for this node
+        self.weight_version: int | None = None  # Weight version for this node
 
         # Node identification
         self.id = StringTreeNode.counter if node_id is None else node_id
@@ -201,10 +201,10 @@ class StringRadixTrie:
     def insert(
         self,
         text: str,
-        token_ids: List[int],
-        logp: Optional[List[float]] = None,
-        loss_mask: Optional[List[int]] = None,
-        weight_version: Optional[int] = None,
+        token_ids: list[int],
+        logp: list[float] | None = None,
+        loss_mask: list[int] | None = None,
+        weight_version: int | None = None,
     ) -> bool:
         """
         Insert a string and its corresponding token IDs, log probabilities, and loss mask into the trie.
@@ -276,10 +276,10 @@ class StringRadixTrie:
     def _insert(
         self,
         text: str,
-        token_ids: List[int],
-        logp: List[float],
-        loss_mask: List[int],
-        weight_version: Optional[int] = None,
+        token_ids: list[int],
+        logp: list[float],
+        loss_mask: list[int],
+        weight_version: int | None = None,
     ) -> bool:
         """Insert tokens - skip tokens for existing nodes just like we skip text."""
 
@@ -371,7 +371,7 @@ class StringRadixTrie:
                 return removed_count > 0
             return False
 
-    def _find_node_by_text(self, text: str) -> Optional[StringTreeNode]:
+    def _find_node_by_text(self, text: str) -> StringTreeNode | None:
         """
         Find node by exact text match.
         Args:
@@ -436,7 +436,7 @@ class StringRadixTrie:
             return True
         return False
 
-    def gc_by_weight_version(self, current_weight_version: Optional[int] = None) -> int:
+    def gc_by_weight_version(self, current_weight_version: int | None = None) -> int:
         """
         Perform garbage collection based on weight version.
         Remove nodes with weight_version < (current_weight_version - gc_threshold_k).
@@ -470,7 +470,7 @@ class StringRadixTrie:
 
             return removed_count
 
-    def _find_outdated_nodes(self, gc_threshold: int) -> List[StringTreeNode]:
+    def _find_outdated_nodes(self, gc_threshold: int) -> list[StringTreeNode]:
         """
         Find nodes that should be removed based on weight version threshold.
         Uses layer-by-layer traversal - if parent is outdated, children are not checked.
@@ -521,7 +521,7 @@ class StringRadixTrie:
         # Start validation from the node itself
         validate_recursive(node, node.weight_version)
 
-    def get_stats(self) -> Dict[str, Any]:
+    def get_stats(self) -> dict[str, Any]:
         """Get cache statistics."""
         with self._lock:
             total_requests = self.cache_hits + self.cache_misses

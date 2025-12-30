@@ -3,7 +3,6 @@ import re
 import time
 import traceback
 from copy import deepcopy
-from typing import List
 
 from slime.rollout.rm_hub import batched_async_rm
 from slime.utils.http_utils import post
@@ -21,11 +20,21 @@ async def generate_response(args, prompt, key):
 
         url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
-        prompt_token_ids = tokenizer.encode(prompt, add_special_tokens=False)
+        if args.apply_chat_template:
+            assert isinstance(prompt, list), "prompt should be a list when apply_chat_template is True"
+            prompt_text = tokenizer.apply_chat_template(
+                prompt,
+                tokenize=False,
+                add_generation_prompt=True,  # Add generation prompt for the assistant
+                **(args.apply_chat_template_kwargs or {}),
+            )
+            sample.prompt = prompt_text
+        else:
+            assert isinstance(prompt, str), "prompt should be a string when apply_chat_template is False"
+            sample.prompt = prompt
+        prompt_token_ids = tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
         sample.tokens = prompt_token_ids
-        sample.prompt = prompt
-        input_token_ids = prompt_token_ids
-        prompt_length = len(input_token_ids)
+        prompt_length = len(prompt_token_ids)
         current_sampling_params = deepcopy(sampling_params)
         current_sampling_params["max_new_tokens"] = min(
             sampling_params["max_new_tokens"], max_context_length - prompt_length
@@ -34,7 +43,7 @@ async def generate_response(args, prompt, key):
         if current_sampling_params["max_new_tokens"] <= 0:
             return None
 
-        payload = {"input_ids": input_token_ids, "sampling_params": current_sampling_params, "return_logprob": True}
+        payload = {"input_ids": prompt_token_ids, "sampling_params": current_sampling_params, "return_logprob": True}
 
         output = await post(url, payload)
 
@@ -85,7 +94,7 @@ class Agent:
 
     async def run(self, args, prompt, max_retries: int = 1, key: str = None) -> str:
         """Runs the agent by sending a prompt to the LLM."""
-        for i in range(max_retries):
+        for _i in range(max_retries):
             try:
                 response = await generate_response(args, prompt, key=key)
                 return response
@@ -114,7 +123,7 @@ class RewriterAgent(Agent):
     def __init__(self):
         super().__init__()
 
-    async def rewrite(self, args, problem_statement, previous_solutions: List[str]) -> str:
+    async def rewrite(self, args, problem_statement, previous_solutions: list[str]) -> str:
         """Generates the rewrited solution."""
 
         # 动态生成模板
@@ -135,7 +144,7 @@ class SelectorAgent(Agent):
     def __init__(self):
         super().__init__()
 
-    async def select(self, args, problem_statement, candidate_solutions: List[str]) -> str:
+    async def select(self, args, problem_statement, candidate_solutions: list[str]) -> str:
         """Generates the rewrited solution."""
 
         # 动态生成模板
@@ -149,7 +158,7 @@ class SelectorAgent(Agent):
         prompt = template.format(**format_params)
         return await self.run(args, prompt, max_retries=10, key="selector")
 
-    def extract_selected_solution_idx(self, response: str, candidate_solutions: List[str]) -> int:
+    def extract_selected_solution_idx(self, response: str, candidate_solutions: list[str]) -> int:
         """Extracts the selected solution ID from the response."""
         PATTERN = re.compile("Judgment:\s*(\d+)")
         matched = PATTERN.findall(response)
@@ -200,7 +209,7 @@ async def run_agent_system(args, sample):
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     rewards = await batched_async_rm(args, args.results_dict["solver"])
-    for sample, reward in zip(args.results_dict["solver"], rewards):
+    for sample, reward in zip(args.results_dict["solver"], rewards, strict=False):
         sample.reward = reward
 
     previous_solutions = [item for item in results if isinstance(item, str)]
@@ -223,12 +232,12 @@ async def run_agent_system(args, sample):
 
     # 处理异常结果
     rewrited_solutions = []
-    for i, result in enumerate(rewrited_solutions_raw):
+    for _i, result in enumerate(rewrited_solutions_raw):
         if isinstance(result, str):
             rewrited_solutions.append(result)
 
     rewards = await batched_async_rm(args, args.results_dict["rewriter"])
-    for sample, reward in zip(args.results_dict["rewriter"], rewards):
+    for sample, reward in zip(args.results_dict["rewriter"], rewards, strict=False):
         sample.reward = reward
 
     if len(rewrited_solutions) == 0:

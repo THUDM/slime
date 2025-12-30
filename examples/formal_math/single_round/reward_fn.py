@@ -2,7 +2,6 @@ import asyncio
 import logging
 import re
 from types import SimpleNamespace
-from typing import Optional, Tuple
 
 from kimina_client import SnippetStatus
 
@@ -47,7 +46,7 @@ def _single(arr):
     return arr[0]
 
 
-def _assemble_code(prompt: str, response: str) -> Tuple[Optional[str], Optional[str]]:
+def _assemble_code(prompt: str, response: str) -> tuple[str | None, str | None]:
     prompt_code_block = _extract_last_full_code_block(prompt)
     assert prompt_code_block is not None
 
@@ -76,7 +75,7 @@ def _extract_last_full_code_block(text):
     return matches[-1] if matches else None
 
 
-_REWARD_FN: Optional[RewardFn] = None
+_REWARD_FN: RewardFn | None = None
 
 
 async def reward_fn(*args, **kwargs):

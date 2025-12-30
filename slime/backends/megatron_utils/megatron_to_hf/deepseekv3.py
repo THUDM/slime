@@ -1,8 +1,6 @@
 import re
 
-import sglang
 import torch
-from packaging.version import parse
 
 
 def convert_deepseekv3_to_hf(args, name, param):
@@ -15,7 +13,7 @@ def convert_deepseekv3_to_hf(args, name, param):
 
     try:
         head_dim = args.kv_channels if args.kv_channels is not None else args.hidden_size // args.num_attention_heads
-    except:
+    except AttributeError:
         head_dim = args.hidden_size // args.num_attention_heads
     value_num_per_group = args.num_attention_heads // args.num_query_groups
 
@@ -40,17 +38,6 @@ def convert_deepseekv3_to_hf(args, name, param):
                 outputs = [
                     (f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.weight", param),
                 ]
-                if parse(sglang.__version__) < parse("0.4.9.post5") and args.sglang_enable_ep_moe:
-                    outputs += [
-                        (
-                            f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.input_scale",
-                            torch.tensor(1.0, dtype=torch.float32, device=param.device),
-                        ),
-                        (
-                            f"model.layers.{layer_idx}.mlp.experts.{expert_idx}.down_proj.weight_scale",
-                            torch.tensor(1.0, dtype=torch.float32, device=param.device),
-                        ),
-                    ]
                 return outputs
             else:
                 raise ValueError(f"Unknown expert parameter name: {name}")
@@ -120,5 +107,23 @@ def convert_deepseekv3_to_hf(args, name, param):
             return [(f"model.layers.{layer_idx}.mlp.gate.weight", param)]
         elif rest == "mlp.router.expert_bias":
             return [(f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias", param)]
+
+    mtp_layer_pattern = r"module\.module\.mtp\.layers\.(\d+)\.(.+)"
+    match = re.match(mtp_layer_pattern, name)
+    if match:
+        layer_idx, rest = match.groups()
+        layer_idx = int(layer_idx) + args.num_layers
+        if rest == "eh_proj.weight":
+            return [(f"model.layers.{layer_idx}.eh_proj.weight", param)]
+        elif rest == "enorm.weight":
+            return [(f"model.layers.{layer_idx}.enorm.weight", param)]
+        elif rest == "hnorm.weight":
+            return [(f"model.layers.{layer_idx}.hnorm.weight", param)]
+        elif rest == "final_layernorm.weight":
+            return [(f"model.layers.{layer_idx}.shared_head.norm.weight", param)]
+        else:
+            name = f"module.module.decoder.layers.{layer_idx}.{rest}"
+            name = name.replace("transformer_layer.", "")
+            return convert_deepseekv3_to_hf(args, name, param)
 
     raise ValueError(f"Unknown parameter name: {name}")

@@ -15,14 +15,14 @@ pip install -e .
 
 ```bash
 # hf checkpoint
-huggingface-cli download Qwen/Qwen3-4B --local-dir /root/Qwen3-4B
+hf download Qwen/Qwen3-4B --local-dir /root/Qwen3-4B
 
 # train data
-huggingface-cli download --repo-type dataset zhuzilin/dapo-math-17k \
+hf download --repo-type dataset zhuzilin/dapo-math-17k \
   --local-dir /root/dapo-math-17k
 
 # eval data
-huggingface-cli download --repo-type dataset zhuzilin/aime-2024 \
+hf download --repo-type dataset zhuzilin/aime-2024 \
   --local-dir /root/aime-2024
 ```
 
@@ -49,7 +49,7 @@ bash scripts/run-qwen3-4B.sh
 
 ### 参数简介
 
-这里我们简单介绍一下脚本 [run-qwen3-4B.sh](../../../scripts/run-qwen3-4B.sh) 中的各个组成部分：
+这里我们简单介绍一下脚本 [run-qwen3-4B.sh](https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B.sh) 中的各个组成部分：
 
 #### MODEL_ARGS
 
@@ -58,7 +58,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/qwen3-4B.sh"
 ```
 
-从 [scripts/models/qwen3-4B.sh](../../../scripts/models/qwen3-4B.sh) 读取模型的 config。这些 config 都是 megatron 的参数。在使用 megatron 进行训练的时候，megatron 无法从 ckpt 中读取模型 config，需要我们自行配置。我们在 [scripts/models](../../../scripts/models/) 中提供了一些样例。
+从 [scripts/models/qwen3-4B.sh](https://github.com/THUDM/slime/blob/main/scripts/models/qwen3-4B.sh) 读取模型的 config。这些 config 都是 megatron 的参数。在使用 megatron 进行训练的时候，megatron 无法从 ckpt 中读取模型 config，需要我们自行配置。我们在 [scripts/models](https://github.com/THUDM/slime/tree/main/scripts/models/) 中提供了一些样例。
 
 ⚠️  注意检查模型文件中的 `--rotary-base` 等配置是否对应你当前训练模型的配置，因为同一个模型结构的不同模型可能有不同的取值。在这种情况下，你可以在导入模型参数后在脚本里进行覆盖，例如：
 
@@ -249,25 +249,6 @@ def pop_first(args, rollout_id, buffer: list[list[Sample]], num_samples: int) ->
 即每次取出前 `num_samples` 个 prompt 对应的 `num_samples * n_samples_per_prompt` 条数据。
 
 ⚠️  每条 partial rollout sample 的 `sample.metadata` 中存储了第一次进行生成的 rollout id，可以用于数据过滤。
-
-### bf16 训练 fp8 推理
-
-slime 还支持 bf16 训练，fp8 推理。对于 Qwen3-4B 模型，只需要下载如下模型：
-
-```bash
-huggingface-cli download Qwen/Qwen3-4B-FP8 --local-dir /root/Qwen3-4B-FP8
-```
-
-并将 `--hf-checkpoint` 替换为：
-
-```bash
-#--hf-checkpoint /root/Qwen3-4B
---hf-checkpoint /root/Qwen3-4B-FP8
-```
-
-即可触发 fp8 训练。目前我们会将 bf16 权重直接 cast 为 fp8，后续会逐渐添加对精度影响更小的量化方案。
-
-⚠️  训练的 megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的。
 
 ### 训推分离
 

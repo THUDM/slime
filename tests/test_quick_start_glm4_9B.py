@@ -1,3 +1,4 @@
+import os
 import slime.utils.external_utils.command_utils as U
 
 ENABLE_EVAL = U.get_bool_env_var("SLIME_TEST_ENABLE_EVAL", "1")
@@ -30,7 +31,7 @@ def execute():
         "--num-rollout 3 "
         "--rollout-batch-size 8 "
         "--n-samples-per-prompt 8 "
-        f"--rollout-max-response-len 8192 "
+        "--rollout-max-response-len 8192 "
         "--rollout-temperature 0.8 "
         "--global-batch-size 32 "
         "--balance-data "
@@ -120,4 +121,8 @@ def execute():
 if __name__ == "__main__":
     # TODO also use typer
     prepare()
+    os.environ.pop("http_proxy")
+    os.environ.pop("https_proxy")
+    os.environ.pop("HTTP_PROXY")
+    os.environ.pop("HTTPS_PROXY")
     execute()

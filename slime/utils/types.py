@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Optional, Union
+from typing import Any
 
 import torch
 
@@ -9,32 +9,39 @@ import torch
 class Sample:
     """The sample generated"""
 
-    group_index: Optional[int] = None
-    index: Optional[int] = None
+    group_index: int | None = None
+    index: int | None = None
     # prompt
-    prompt: Union[str, list[dict[str, str]]] = ""
+    prompt: str | list[dict[str, str]] = ""
     tokens: list[int] = field(default_factory=list)
+    multimodal_inputs: dict[str, Any] = None  # raw multimodal data, e.g. images, videos, etc.
+    multimodal_train_inputs: dict[str, Any] = None  # processed multimodal data, e.g. pixel_values, etc.
     # response
     response: str = ""
     response_length: int = 0
-    label: Optional[str] = None
-    reward: Optional[Union[float, dict[str, Any]]] = None
-    loss_mask: Optional[list[int]] = None
+    label: str | None = None
+    reward: float | dict[str, Any] | None = None
+    loss_mask: list[int] | None = None
     weight_versions: list[str] = field(default_factory=list)
-    rollout_log_probs: Optional[list[float]] = None  # Log probabilities from rollout engine
-    rollout_routed_experts: Optional[list[list[int]]] = None  # Routed experts from rollout engine
+    rollout_log_probs: list[float] | None = None  # Log probabilities from rollout engine
+    rollout_routed_experts: list[list[int]] | None = None  # Routed experts from rollout engine
+    remove_sample: bool = False
 
     class Status(Enum):
         PENDING = "pending"
         COMPLETED = "completed"
         TRUNCATED = "truncated"
         ABORTED = "aborted"
+        # Indicates a recoverable or non-critical failure during generation (e.g., tool call failure,
+        # external API error, parsing error). Unlike ABORTED, FAILED samples may still contain partial
+        # valid output and can be retried or handled gracefully.
+        FAILED = "failed"
 
     status: Status = Status.PENDING
 
     metadata: dict = field(default_factory=dict)
     # metadata used during training, e.g., what loss to use for this sample.
-    train_metadata: Optional[dict] = None
+    train_metadata: dict | None = None
 
     class SpecInfo:
         spec_accept_token_num: int = 0
@@ -95,7 +102,7 @@ class Sample:
         return sum(self.loss_mask) if self.loss_mask is not None else self.response_length
 
 
-@dataclass
+@dataclass(frozen=True)
 class ParamInfo:
     name: str
     dtype: torch.dtype
@@ -109,3 +116,23 @@ class ParamInfo:
 # In Megatron backend, several fields are converted to torch.Tensor lists on GPU
 # before being consumed by data iterators (see megatron_utils.actor._get_rollout_data).
 RolloutBatch = dict[str, list[torch.Tensor] | list[int] | list[float] | list[str]]
+
+
+@dataclass
+class MultimodalType:
+    name: str  # Type identifier used in message content (e.g., "image")
+    placeholder: str  # Placeholder token in conversation messages (e.g., "<image>")
+
+
+class MultimodalTypes:
+    IMAGE = MultimodalType(name="image", placeholder="<image>")
+    VIDEO = MultimodalType(name="video", placeholder="<video>")
+    AUDIO = MultimodalType(name="audio", placeholder="<audio>")
+
+    @classmethod
+    def all(cls) -> list[MultimodalType]:
+        return [cls.IMAGE, cls.VIDEO, cls.AUDIO]
+
+    @classmethod
+    def get(cls, name: str) -> MultimodalType | None:
+        return next((m for m in cls.all() if m.name == name), None)

@@ -78,7 +78,7 @@ def is_valid_sequence(text):
     state = "start"  # start -> think -> search -> information -> think -> ... -> answer -> end
 
     # 3. Check each part
-    for i, part in enumerate(parts):
+    for _i, part in enumerate(parts):
         # Skip empty parts
         if not part.strip():
             continue
@@ -180,7 +180,7 @@ def compute_score_em(
     do_print = random.randint(1, 64) == 1
 
     if do_print:
-        print(f"--------------------------------")
+        print("--------------------------------")
         print(f"Golden answers: {ground_truth['target']}")
         print(f"Extracted answer: {answer}")
         print(f"Solution string: {solution_str}")

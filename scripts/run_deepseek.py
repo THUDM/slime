@@ -4,7 +4,6 @@ This file is in preview, and will be further refined and optimized.
 
 import re
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Literal
 
 import typer
@@ -46,18 +45,10 @@ def prepare_single(args: ScriptArgs):
             U.hf_download_dataset("zhuzilin/aime-2024")
         case "gsm8k":
             U.hf_download_dataset("zhuzilin/gsm8k")
-    _fp8_cast_bf16(args)
 
-
-def _fp8_cast_bf16(args: ScriptArgs):
-    path_bf16_hf = f"/root/models/{args.model_name}-bf16/"
-    if Path(path_bf16_hf).exists():
-        return
-
-    U.exec_command(
-        "python tools/fp8_cast_bf16.py "
-        f"--input-fp8-hf-path /root/models/{args.model_name} "
-        f"--output-bf16-hf-path {path_bf16_hf} "
+    U.fp8_cast_bf16(
+        path_src=f"/root/models/{args.model_name}",
+        path_dst=f"/root/models/{args.model_name}-bf16/",
     )
 
 
@@ -83,6 +74,7 @@ def prepare_spmd(args: ScriptArgs):
 
     U.convert_checkpoint(
         model_name=args.model_name,
+        hf_checkpoint=f"/root/models/{args.model_name}-bf16",
         megatron_model_type=args.megatron_model_type,
         num_gpus_per_node=args.num_gpus_per_node,
         multinode=True,
@@ -94,18 +86,29 @@ def prepare_spmd(args: ScriptArgs):
 @app.command()
 @U.dataclass_cli
 def prepare_cp(args: ScriptArgs):
+    _prepare_cp(args)
+
+
+def _prepare_cp(args: ScriptArgs):
     U.rsync_simple(
         path_src=f"/root/models/{args.model_name}_torch_dist",
         path_dst=f"/root/local_data/{args.model_name}_torch_dist",
+    )
+    U.rsync_simple(
+        path_src=f"/root/models/{args.model_name}",
+        path_dst=f"/root/local_data/{args.model_name}",
     )
 
 
 @app.command()
 @U.dataclass_cli
 def train(args: ScriptArgs):
+    # ensure files are there is it was not synced before
+    _prepare_cp(args)
+
     load_save_path = f"/root/shared_data/{args.run_id}/checkpoints"
     ckpt_args = (
-        f"--hf-checkpoint /root/models/{args.model_name} "
+        f"--hf-checkpoint /root/local_data/{args.model_name} "
         f"--ref-load /root/local_data/{args.model_name}_torch_dist "
         f"--load {load_save_path} "
         f"--save {load_save_path} "
@@ -155,7 +158,7 @@ def train(args: ScriptArgs):
                 "--prompt-data /root/datasets/gsm8k/train.parquet "
                 "--input-key messages "
                 # Deliberately make it very short for this easy task
-                f"--rollout-max-response-len 256 "
+                "--rollout-max-response-len 256 "
             )
             eval_args += (
                 "--eval-prompt-data gsm8k /root/datasets/gsm8k/test.parquet "
@@ -244,7 +247,6 @@ def train(args: ScriptArgs):
         f"--sglang-dp-size {sglang_attn_dp_size} "
         "--sglang-moe-dense-tp-size 1 "
         "--sglang-enable-dp-lm-head "
-        "--sglang-disable-radix-cache "
         # enable deepep for sglang
         "--sglang-moe-a2a-backend deepep "
         "--sglang-deepep-mode low_latency "

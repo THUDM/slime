@@ -4,13 +4,14 @@ Speculative decoding is a key optimization for speeding up rollouts. Instead of 
 
 ## Accelerating Inference with Speculative Decoding
 
-For models with MTP layers (e.g., GLM-4.6, DeepSeek-V3/R1), simply add:
+For models with MTP layers (e.g., GLM-4.7, DeepSeek-V3/R1), simply add:
 
 ```bash
 --sglang-speculative-algorithm EAGLE
 --sglang-speculative-num-steps 3
 --sglang-speculative-eagle-topk 1
 --sglang-speculative-num-draft-tokens 4
+--sglang-enable-draft-weights-cpu-backup
 ```
 
 If you want to use a separately trained draft model (e.g., one trained with [SpecForge](https://docs.sglang.ai/SpecForge/)), also set:

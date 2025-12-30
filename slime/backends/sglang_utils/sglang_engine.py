@@ -3,12 +3,11 @@ import ipaddress
 import logging
 import multiprocessing
 import time
-from typing import List, Optional
+from urllib.parse import quote
 
 import requests
 import sglang_router
 from packaging.version import parse
-from sglang.srt.entrypoints.http_server import launch_server
 from sglang.srt.server_args import ServerArgs
 from sglang.srt.utils import kill_process_tree
 from urllib3.exceptions import NewConnectionError
@@ -33,6 +32,9 @@ def get_base_gpu_id(args, rank):
 
 
 def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
+    from sglang.srt.entrypoints.http_server import launch_server
+
+    multiprocessing.set_start_method("spawn", force=True)
     server_args.host = server_args.host.strip("[]")
     p = multiprocessing.Process(target=launch_server, args=(server_args,))
     p.start()
@@ -86,11 +88,12 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
 
 
 class SGLangEngine(RayActor):
-    def __init__(self, args, rank: int):
+    def __init__(self, args, rank: int, worker_type: str = "regular"):
         self.args = args
         self.rank = rank
+        self.worker_type = worker_type
 
-    def init(self, dist_init_addr, port, nccl_port, host=None):
+    def init(self, dist_init_addr, port, nccl_port, host=None, disaggregation_bootstrap_port=None):
         self.router_ip = self.args.sglang_router_ip
         self.router_port = self.args.sglang_router_port
 
@@ -111,7 +114,14 @@ class SGLangEngine(RayActor):
         dist_init_addr = f"{_format_v6_uri(ip_part)}:{port_part}"
 
         server_args_dict, external_engine_need_check_fields = _compute_server_args(
-            self.args, self.rank, dist_init_addr, nccl_port, host, port
+            self.args,
+            self.rank,
+            dist_init_addr,
+            nccl_port,
+            host,
+            port,
+            self.worker_type,
+            disaggregation_bootstrap_port,
         )
 
         self.node_rank = server_args_dict["node_rank"]
@@ -150,19 +160,29 @@ class SGLangEngine(RayActor):
     def _init_normal(self, server_args_dict):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
         self.process = launch_server_process(ServerArgs(**server_args_dict))
+
         if self.node_rank == 0 and self.router_ip and self.router_port:
             if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
+                assert (
+                    self.worker_type == "regular"
+                ), "pd disaggregation is not supported in old router or slime router."
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}"
                 )
             else:
+                payload = {
+                    "url": f"http://{self.server_host}:{self.server_port}",
+                    "worker_type": self.worker_type,
+                }
+                if self.worker_type == "prefill":
+                    payload["bootstrap_port"] = server_args_dict["disaggregation_bootstrap_port"]
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/workers",
-                    json={"url": f"http://{self.server_host}:{self.server_port}"},
+                    json=payload,
                 )
             response.raise_for_status()
 
-    def _make_request(self, endpoint: str, payload: Optional[dict] = None):
+    def _make_request(self, endpoint: str, payload: dict | None = None):
         """Make a POST request to the specified endpoint with the given payload.
 
         Args:
@@ -177,7 +197,11 @@ class SGLangEngine(RayActor):
 
         url = f"http://{self.server_host}:{self.server_port}/{endpoint}"
         response = requests.post(url, json=payload or {})
-        response.raise_for_status()
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError as e:
+            e.add_note(f"{response.text=}")
+            raise
         return response.json()
 
     def health_generate(self, timeout: float = 5.0) -> bool:
@@ -204,10 +228,10 @@ class SGLangEngine(RayActor):
 
     def update_weights_from_tensor(
         self,
-        serialized_named_tensors: List[str],
-        load_format: Optional[str] = None,
+        serialized_named_tensors: list[str],
+        load_format: str | None = None,
         flush_cache: bool = False,
-        weight_version: Optional[str] = None,
+        weight_version: str | None = None,
     ):
         """
         Update model weights from tensor data. The HTTP server will only post meta data, and the real weights will be copied directly from GPUs.
@@ -253,13 +277,31 @@ class SGLangEngine(RayActor):
         logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
         if self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
+            response = None
             if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
                 )
-            else:
+            elif parse(sglang_router.__version__) < parse("0.3.0"):
+                worker_url = quote(worker_url, safe="")
                 response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}")
-            response.raise_for_status()
+            else:
+                try:
+                    all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
+                    for worker in all_workers:
+                        if worker["url"] == worker_url:
+                            worker_id = worker["id"]
+                            response = requests.delete(
+                                f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}"
+                            )
+                            break
+                    else:
+                        logger.warning(f"Worker {worker_url} not found in router during shutdown.")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch workers list or remove worker: {e}")
+
+            if response is not None:
+                response.raise_for_status()
         kill_process_tree(self.process.pid)
 
     def get_weight_version(self):
@@ -274,7 +316,7 @@ class SGLangEngine(RayActor):
         self.flush_cache()
         return self._make_request("release_memory_occupation")
 
-    def resume_memory_occupation(self, tags: List[str] = None):
+    def resume_memory_occupation(self, tags: list[str] = None):
         """
         Available tags for multi-stage resume: weights, kv_cache
         """
@@ -282,6 +324,9 @@ class SGLangEngine(RayActor):
             "resume_memory_occupation",
             {"tags": tags},
         )
+
+    def check_weights(self, action: str):
+        return self._make_request("weights_checker", {"action": action})
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
         return self._make_request(
@@ -304,12 +349,12 @@ class SGLangEngine(RayActor):
                     "group_name": group_name,
                 },
             )
-        except:
+        except requests.exceptions.RequestException:
             # catch the case there the engine is just created and does not have the group.
             pass
 
     def update_weights_from_distributed(
-        self, names, dtypes, shapes, group_name, flush_cache=False, weight_version: Optional[str] = None
+        self, names, dtypes, shapes, group_name, flush_cache=False, weight_version: str | None = None
     ):
         payload = {
             "names": names,
@@ -338,16 +383,16 @@ class SGLangEngine(RayActor):
     def start_profile(
         self,
         # The output directory
-        output_dir: Optional[str] = None,
+        output_dir: str | None = None,
         # If set, it profile as many as this number of steps.
         # If it is set, profiling is automatically stopped after this step, and
         # the caller doesn't need to run stop_profile.
-        start_step: Optional[int] = None,
-        num_steps: Optional[int] = None,
-        activities: Optional[List[str]] = None,
+        start_step: int | None = None,
+        num_steps: int | None = None,
+        activities: list[str] | None = None,
         profile_by_stage: bool = False,
-        with_stack: Optional[bool] = None,
-        record_shapes: Optional[bool] = None,
+        with_stack: bool | None = None,
+        record_shapes: bool | None = None,
     ):
         response = requests.post(
             f"http://{self.server_host}:{self.server_port}/start_profile",
@@ -370,7 +415,16 @@ class SGLangEngine(RayActor):
         return response
 
 
-def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
+def _compute_server_args(
+    args,
+    rank,
+    dist_init_addr,
+    nccl_port,
+    host,
+    port,
+    worker_type: str = "regular",
+    disaggregation_bootstrap_port: int | None = None,
+):
     nnodes = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
     node_rank = rank % nnodes
     kwargs = {
@@ -395,12 +449,25 @@ def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port):
         "ep_size": args.sglang_ep_size,
         # always skip warmup to prevent warmup timeout.
         "skip_server_warmup": True,
+        # always enable draft weights cpu backup so that we run training without mtp weights.
+        "enable_draft_weights_cpu_backup": True,
     }
+
+    if worker_type == "prefill":
+        kwargs["disaggregation_mode"] = "prefill"
+        kwargs["load_balance_method"] = "round_robin"
+        assert (
+            disaggregation_bootstrap_port is not None
+        ), "disaggregation_bootstrap_port must be set for prefill worker"
+        kwargs["disaggregation_bootstrap_port"] = disaggregation_bootstrap_port
+    elif worker_type == "decode":
+        kwargs["disaggregation_mode"] = "decode"
+        kwargs["prefill_round_robin_balance"] = True
+
     if args.use_rollout_routing_replay:
         kwargs["enable_return_routed_experts"] = True
     if args.fp16:
         kwargs["dtype"] = "float16"
-
     external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
 
     unused_keys = set(kwargs.keys())
