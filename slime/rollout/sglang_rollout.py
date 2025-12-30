@@ -69,7 +69,8 @@ class GenerateState(metaclass=SingletonMeta):
 
     @contextmanager
     def dp_rank_context(self):
-        dp_rank = self.dp_counts.index(min(self.dp_counts))
+        candidates = [i for i, count in enumerate(self.dp_counts) if count == min(self.dp_counts)]
+        dp_rank = int(np.random.choice(candidates))
         self.dp_counts[dp_rank] += 1
         self.dp_rank = dp_rank
         try:
@@ -105,7 +106,6 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         assert isinstance(sample.prompt, str)
 
     state = GenerateState(args)
-    dp_rank = state.dp_rank
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
     assert (
@@ -134,7 +134,6 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     # Prepare payload for sglang server
     payload = {
         "sampling_params": sampling_params,
-        "data_parallel_rank": dp_rank,
         "return_logprob": True,
     }
 
