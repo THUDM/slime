@@ -1,4 +1,5 @@
 import dataclasses
+import ipaddress
 import logging
 import multiprocessing
 import time
@@ -98,15 +99,19 @@ class SGLangEngine(RayActor):
 
         host = host or get_host_info()[1]
 
-        # support ipv6 address
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
+        def _format_v6_uri(addr):
+            if not addr or addr.startswith("["):
+                return addr
+            try:
+                if ipaddress.ip_address(addr).version == 6:
+                    return f"[{addr}]"
+            except ValueError:
+                pass
+            return addr
 
-        # dist_init_addr may be 2605:...:10163, should split port
-        *addr_parts, port_str = dist_init_addr.split(":")
-        ipv6_addr = ":".join(addr_parts)
-        if ":" in ipv6_addr and not ipv6_addr.startswith("["):
-            dist_init_addr = f"[{ipv6_addr}]:{port_str}"
+        host = _format_v6_uri(host)
+        ip_part, port_part = dist_init_addr.rsplit(":", 1)
+        dist_init_addr = f"{_format_v6_uri(ip_part)}:{port_part}"
 
         server_args_dict, external_engine_need_check_fields = _compute_server_args(
             self.args,
@@ -120,7 +125,7 @@ class SGLangEngine(RayActor):
         )
 
         self.node_rank = server_args_dict["node_rank"]
-        self.server_host = server_args_dict["host"]
+        self.server_host = server_args_dict["host"]  # with [] if ipv6
         self.server_port = server_args_dict["port"]
 
         if self.args.rollout_external:
