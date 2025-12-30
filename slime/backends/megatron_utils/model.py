@@ -210,8 +210,10 @@ def forward_only(
                 "multimodal_train_inputs",
                 "total_lengths",
                 "response_lengths",
+                "max_seq_lens",
             ],
             args.data_pad_size_multiplier,
+            args.qkv_format,
         )
         unconcat_tokens = batch["unconcat_tokens"]
         tokens = batch["tokens"]
@@ -235,6 +237,7 @@ def forward_only(
             total_lengths=total_lengths,
             response_lengths=response_lengths,
             with_entropy=args.use_rollout_entropy,
+            max_seq_lens=batch.get("max_seq_lens", None),
         )
 
     # Turn on evaluation mode which disables dropout.
@@ -365,8 +368,10 @@ def train_one_step(
                 "advantages",
                 "returns",
                 "rollout_log_probs",
+                "max_seq_lens",
             ],
             args.data_pad_size_multiplier,
+            args.qkv_format,
         )
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
@@ -384,16 +389,22 @@ def train_one_step(
                 loss_mask=batch["full_loss_masks"],
             )
         else:
-            output_tensor = model(
-                input_ids=batch["tokens"],
-                position_ids=None,
-                attention_mask=None,
-                labels=None,
-                packed_seq_params=batch["packed_seq_params"],
-                loss_mask=batch["full_loss_masks"],
-                mtp_kwargs={"mtp_labels": batch["tokens"]} if args.enable_mtp_training else {},
-                **(batch["multimodal_train_inputs"] if batch["multimodal_train_inputs"] is not None else {}),
-            )
+            forward_kwargs = {
+                "input_ids": batch["tokens"],
+                "position_ids": None,
+                "attention_mask": None,
+                "labels": None,
+                "packed_seq_params": batch["packed_seq_params"],
+                "loss_mask": batch["full_loss_masks"],
+            }
+
+            if args.enable_mtp_training:
+                forward_kwargs["mtp_kwargs"] = {"mtp_labels": batch["tokens"]}
+
+            if batch["multimodal_train_inputs"] is not None:
+                forward_kwargs.update(batch["multimodal_train_inputs"])
+
+            output_tensor = model(**forward_kwargs)
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             os.environ["ROUTING_REPLAY_STAGE"] = old_stage
