@@ -215,7 +215,10 @@ class MegatronTrainRayActor(TrainRayActor):
                     dtype=torch.float32,
                 )
                 for log_prob, total_length, response_length in zip(
-                    rollout_data["teacher_log_probs"], rollout_data["total_lengths"], rollout_data["response_lengths"]
+                    rollout_data["teacher_log_probs"], 
+                    rollout_data["total_lengths"], 
+                    rollout_data["response_lengths"],
+                    strict=False,
                 )
             ]
         if "rollout_routed_experts" in rollout_data:
