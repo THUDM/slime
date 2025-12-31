@@ -18,7 +18,7 @@ from slime.utils.types import Sample
 
 DEFAULT_ENV_MODULE = "examples.vlm_multi_turn.env_geo3k"
 DEFAULT_ROLLOUT_CONFIG = {
-    "max_turns": 5,
+    "max_turns": 3,
 }
 
 
