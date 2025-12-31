@@ -161,14 +161,12 @@ class Dataset:
                 formatted_prompt = prompt
 
             if processor:
-                # temporary solution, will write image utils for slime later
-                from qwen_vl_utils import process_vision_info
+                from slime.utils.processing_utils import process_vision_info
 
                 assert isinstance(
                     prompt, list
                 ), f"prompt must be a list when processor is not None, got {type(prompt)} instead"
-                images, videos = process_vision_info(prompt)
-                multimodal_inputs = {"images": images, "videos": videos}
+                multimodal_inputs = process_vision_info(prompt, processor)
             else:
                 multimodal_inputs = None
 

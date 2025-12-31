@@ -165,11 +165,11 @@ def get_seqlen_balanced_partitions(seqlen_list: list[int], k_partitions: int, eq
         assert len(partitions) == k_partitions, f"{len(partitions)} != {k_partitions}"
         seen_idx = set()
         sorted_partitions = [None] * k_partitions
-        for _i, partition in enumerate(partitions):
-            assert len(partition) > 0, f"the {_i}-th partition is empty"
+        for i, partition in enumerate(partitions):
+            assert len(partition) > 0, f"the {i}-th partition is empty"
             for idx in partition:
                 seen_idx.add(idx)
-            sorted_partitions[_i] = sorted(partition)
+            sorted_partitions[i] = sorted(partition)
         assert seen_idx == set(range(len(seqlen_list)))
         return sorted_partitions
 

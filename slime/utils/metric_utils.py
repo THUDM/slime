@@ -105,7 +105,7 @@ def compression_ratio(
     return ratio, savings_pct
 
 
-def has_repetition(text: str = None):
+def has_repetition(text: str):
     if len(text) > 10000 and compression_ratio(text[-10000:])[0] > 10:
         return True
     else:
