@@ -587,6 +587,17 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This enables __len__() support and deterministic epoch boundaries."
                 ),
             )
+            parser.add_argument(
+                "--hf-dataset-split",
+                type=str,
+                default="train",
+                help=(
+                    "Split name to use when loading HuggingFace datasets. "
+                    "For HF Hub datasets, specifies which split to load (e.g., 'train', 'test'). "
+                    "Some datasets like 'nvidia/Nemotron-Agentic-v1' have custom splits "
+                    "like 'interactive_agent' or 'tool_calling'. Default: 'train'."
+                ),
+            )
 
             parser.add_argument(
                 "--start-rollout-id",

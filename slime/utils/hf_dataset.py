@@ -222,6 +222,7 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
         prefetch_factor: int = 2,
         shuffle_buffer_size: int = 10000,
         do_shuffle: bool = True,
+        split: str = "train",
     ):
         self.path = path
         self.dataset_size = dataset_size
@@ -241,6 +242,7 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
         self.prefetch_factor = prefetch_factor
         self.shuffle_buffer_size = shuffle_buffer_size
         self.do_shuffle = do_shuffle
+        self.split = split
 
         # State tracking
         self.epoch_id = 0
@@ -277,20 +279,20 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
         Returns:
             Processed HF IterableDataset ready for iteration
         """
-        logger.info(f"Loading dataset from {self.path} (streaming mode)")
+        logger.info(f"Loading dataset from {self.path} (streaming mode, split={self.split})")
 
         # Determine file type and load
         if self.path.endswith(".jsonl"):
-            dataset = load_dataset("json", data_files=self.path, split="train", streaming=True)
+            dataset = load_dataset("json", data_files=self.path, split=self.split, streaming=True)
         elif self.path.endswith(".parquet"):
-            dataset = load_dataset("parquet", data_files=self.path, split="train", streaming=True)
+            dataset = load_dataset("parquet", data_files=self.path, split=self.split, streaming=True)
         else:
             # Try as HF dataset name
             try:
-                dataset = load_dataset(self.path, split="train", streaming=True)
+                dataset = load_dataset(self.path, split=self.split, streaming=True)
             except Exception as e:
                 raise ValueError(
-                    f"Failed to load dataset from {self.path}. "
+                    f"Failed to load dataset from {self.path} with split '{self.split}'. "
                     f"Supported formats: .jsonl, .parquet, or HuggingFace dataset name. "
                     f"Error: {e}"
                 ) from e

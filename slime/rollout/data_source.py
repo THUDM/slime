@@ -129,6 +129,7 @@ class RolloutDataSource(DataSource):
                 prefetch_factor=2,
                 shuffle_buffer_size=getattr(self.args, "hf_dataset_shuffle_buffer", 10000),
                 do_shuffle=self.args.rollout_shuffle,
+                split=getattr(self.args, "hf_dataset_split", "train"),
             )
 
             # Note: shuffle is handled by do_shuffle parameter, no need to call shuffle() separately

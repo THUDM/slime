@@ -2,9 +2,9 @@
 
 This test verifies:
 1. HF Datasets streaming mode works with SFT training
-2. Dataset: teknium/OpenHermes-2.5 (loaded directly via load_dataset)
+2. Dataset: nvidia/Nemotron-Agentic-v1 (loaded directly via load_dataset)
 3. Checkpoint save/restore includes HF adapter state
-4. SFT mode correctly handles conversations field
+4. SFT mode correctly handles messages and tools fields
 """
 
 import os
@@ -41,15 +41,16 @@ def execute():
 
     rollout_args = (
         # HF Datasets configuration
-        "--prompt-data teknium/OpenHermes-2.5 "  # Direct HF dataset name
+        "--prompt-data nvidia/Nemotron-Agentic-v1 "  # Direct HF dataset name
+        "--hf-dataset-split interactive_agent "  # Specify the correct split for this dataset
         "--use-hf-datasets "  # Enable HF Datasets streaming mode
-        "--hf-datasets-num-samples 1000000 "  # Required for epoch tracking (OpenHermes-2.5 has ~1M samples)
+        "--hf-datasets-num-samples 335122 "  # Required for epoch tracking
         "--hf-dataset-buffer-size 100 "
         "--hf-dataset-shuffle-buffer 1000 "
         "--hf-dataset-num-proc 4 "
-        # Data keys (specific to OpenHermes-2.5)
-        "--input-key conversations "  # OpenHermes uses conversations field
-        "--apply-chat-template "
+        # Data keys (Nemotron-Agentic-v1 uses standard messages/tools format)
+        "--input-key messages "
+        "--tool-key tools "
         "--rollout-shuffle "
         # SFT-specific settings
         f"--num-rollout {3000 if U.get_env_enable_infinite_run() else 60} "
@@ -62,7 +63,7 @@ def execute():
 
     eval_args = (
         "--eval-interval 30 "  # Align with save-interval
-        "--eval-prompt-data hermes_test teknium/OpenHermes-2.5 "
+        "--eval-prompt-data nemotron_test nvidia/Nemotron-Agentic-v1 "
         "--n-samples-per-eval-prompt 1 "
         "--eval-max-response-len 2048 "
     )
@@ -88,8 +89,6 @@ def execute():
         "--adam-beta2 0.999 "
     )
 
-    sglang_args = "--rollout-num-gpus-per-engine 2 " "--sglang-decode-log-interval 1000 " "--sglang-enable-metrics "
-
     fsdp_args = "--update-weight-buffer-size 536870912 "  # 512MB
 
     ci_args = "--ci-test " "--ci-disable-kl-checker "
@@ -102,7 +101,6 @@ def execute():
         f"{rollout_args} "
         f"{sft_args} "
         f"{optimizer_args} "
-        f"{sglang_args} "
         f"{U.get_default_wandb_args(__file__, run_name_prefix='hf-sft-phase1')} "
         f"{eval_args} "
         f"{fsdp_args} "
@@ -150,7 +148,6 @@ def execute():
         f"{rollout_args} "
         f"{sft_args} "
         f"{optimizer_args} "
-        f"{sglang_args} "
         f"{U.get_default_wandb_args(__file__, run_name_prefix='hf-sft-phase2')} "
         f"{eval_args} "
         f"{fsdp_args} "
@@ -171,8 +168,8 @@ def execute():
     print("\n" + "=" * 80)
     print("E2E SFT test completed successfully!")
     print("Verified:")
-    print("  ✓ HF Datasets streaming mode with OpenHermes-2.5")
-    print("  ✓ Conversations field parsing")
+    print("  ✓ HF Datasets streaming mode with Nemotron-Agentic-v1")
+    print("  ✓ Messages and tools field parsing")
     print("  ✓ Checkpoint save with HF adapter state")
     print("  ✓ Checkpoint resume and continuation")
     print("=" * 80 + "\n")
