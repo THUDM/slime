@@ -56,7 +56,6 @@ class EvalRequestPayload:
     n_concurrent: int | None = None
     dataset_path: str | None = None
     task_ids: list[str] | None = None
-    task_id: str | None = None
     n_attempts: int | None = None
     metric_prefix: str | None = None
 
@@ -124,7 +123,7 @@ class TerminalBenchEvaluator:
         self._jobs_lock = threading.Lock()
         self._jobs: dict[str, JobRecord] = {}
         self._config.output_root.mkdir(parents=True, exist_ok=True)
-        self._log_root = REPO_ROOT / "tb_eval_logs"
+        self._log_root = REPO_ROOT.parent / "tb_eval_logs"
         self._log_root.mkdir(parents=True, exist_ok=True)
 
     def evaluate(self, payload: EvalRequestPayload) -> dict[str, Any]:
@@ -237,20 +236,17 @@ class TerminalBenchEvaluator:
         # 3. Add Agent kwargs (Use api_base exactly like the CLI command)
         if payload.api_base:
             cmd.extend(["--agent-kwarg", f"api_base={payload.api_base}"])
-
-        # 4. Add n_tasks if present
-        task_ids = []
-        if payload.task_ids:
-            task_ids.extend([str(item) for item in payload.task_ids if item])
-        if payload.task_id:
-            task_ids.append(str(payload.task_id))
-
+        
         if payload.dataset_path:
             cmd.extend(["--dataset-path", payload.dataset_path])
         
         if payload.n_attempts is not None:
             cmd.extend(["--n-attempts", str(payload.n_attempts)])
 
+        # 4. Add n_tasks if present
+        task_ids = []
+        if payload.task_ids:
+            task_ids.extend([str(item) for item in payload.task_ids if item])
         if task_ids:
             for task_id in task_ids:
                 cmd.extend(["--task-id", task_id])
@@ -404,7 +400,6 @@ def build_app(evaluator: TerminalBenchEvaluator) -> Flask:
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
-
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run the Terminal Bench evaluation HTTP server.")

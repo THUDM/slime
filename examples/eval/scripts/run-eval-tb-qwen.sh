@@ -16,8 +16,9 @@ pkill -9 python
 set -ex
 
 export PYTHONBUFFERED=16
+export SLIME_HOST_IP=${SLIME_HOST_IP:-"127.0.0.1"}
 
-MODEL_DIR="${MODEL_DIR:-/mnt/data/xinyu}"
+MODEL_DIR="${MODEL_DIR:-/root/.cache}"
 export MODEL_DIR
 
 NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
@@ -33,10 +34,10 @@ REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." &>/dev/null && pwd)"
 source "${REPO_ROOT}/scripts/models/qwen3-8B.sh"
 
 # Store eval/delegate settings in a YAML config similar to examples/eval_multi_task.
-EVAL_CONFIG_PATH=${TB_EVAL_CONFIG_PATH:-"${REPO_ROOT}/examples/eval/scripts/eval_tb_smoke.yaml"}
+EVAL_CONFIG_PATH=${TB_EVAL_CONFIG_PATH:-"${REPO_ROOT}/examples/eval/scripts/eval_tb_example.yaml"}
 
 CKPT_ARGS=(
-   --hf-checkpoint ${MODEL_DIR}/OpenThinker-Agent-v1
+   --hf-checkpoint ${MODEL_DIR}/OpenThinker-Agent-v1 # huggingface-cli download open-thoughts/OpenThinker-Agent-v1
    --ref-load ${MODEL_DIR}/OpenThinker-Agent-v1_torch_dist
    # --load ${MODEL_DIR}/OpenThinker-Agent-v1_slime/
    --save ${MODEL_DIR}/OpenThinker-Agent-v1_slime/
@@ -50,8 +51,8 @@ ROLLOUT_ARGS=(
    --apply-chat-template
    --rollout-shuffle
    --rm-type deepscaler
-   # --num-rollout 3000
-   --num-rollout 1
+   --num-rollout 3000
+   # --num-rollout 1
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 8192
@@ -61,8 +62,8 @@ ROLLOUT_ARGS=(
 )
 
 EVAL_ARGS=(
-   # --eval-interval 5
-   --eval-interval 1
+   --eval-interval 5
+   # --eval-interval 1
    --eval-config "${EVAL_CONFIG_PATH}"
    --eval-function-path examples.eval.eval_delegate_rollout.generate_rollout
 )
@@ -123,7 +124,7 @@ MISC_ARGS=(
 )
 
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-export CUDA_VISIBLE_DEVICES=6,7
+export CUDA_VISIBLE_DEVICES=0,1
 
 ray start --head --node-ip-address ${MASTER_ADDR} --port 6380 --num-gpus 2 \
             --disable-usage-stats \
