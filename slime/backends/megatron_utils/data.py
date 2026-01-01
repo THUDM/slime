@@ -23,9 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_batch(
-    data_iterator: "DataIterator",
-    keys: Sequence[str],
-    pad_multiplier: int = 128,
+    data_iterator: "DataIterator", keys: Sequence[str], pad_multiplier: int = 128, qkv_format: str = "thd"
 ) -> dict[str, torch.Tensor | PackedSeqParams | list[torch.Tensor] | None]:
     """
     Generate a CP-ready micro-batch with packed sequence parameters.
@@ -55,39 +53,50 @@ def get_batch(
     tokens = batch["tokens"]
     # use 0 as the pad token id should be fine?
     pad_token_id = 0
+    pad_size = mpu.get_tensor_model_parallel_world_size() * pad_multiplier
 
     # for cp, we need all tokens to calculate logprob
     batch["unconcat_tokens"] = tokens
 
     cp_size = mpu.get_context_parallel_world_size()
-    tokens = [slice_with_cp(t, pad_token_id) for t in tokens]
 
-    cu_seqlens = [0]
-    for t in tokens:
-        cu_seqlens.append(cu_seqlens[-1] + t.size(0))
+    if qkv_format == "bshd":
+        max_seqlen = batch["max_seq_lens"][0]
+        assert max([t.size(0) for t in tokens]) <= max_seqlen
+        tokens = [slice_with_cp(t, pad_token_id, qkv_format, max_seqlen) for t in tokens]
+        tokens = torch.stack(tokens)
 
-    tokens = torch.cat(tokens)
+    elif qkv_format == "thd":
+        tokens = [slice_with_cp(t, pad_token_id, qkv_format) for t in tokens]
 
-    # Always pad to reduce memory fragmentation and maybe make the computation faster
-    pad_size = mpu.get_tensor_model_parallel_world_size() * pad_multiplier
-    pad = (pad_size - tokens.size(0) % pad_size) % pad_size
-    if pad != 0:
-        tokens = F.pad(tokens, (0, pad), value=pad_token_id)
-        cu_seqlens.append(cu_seqlens[-1] + pad)
+        cu_seqlens = [0]
+        for t in tokens:
+            cu_seqlens.append(cu_seqlens[-1] + t.size(0))
 
-    # thd requires the cu_seqlens to be of the origin length
-    cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int).cuda() * cp_size
-    max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+        tokens = torch.cat(tokens)
 
-    packed_seq_params = PackedSeqParams(
-        cu_seqlens_q=cu_seqlens,
-        cu_seqlens_kv=cu_seqlens,
-        max_seqlen_q=max_seqlen,
-        max_seqlen_kv=max_seqlen,
-        qkv_format="thd",
-    )
+        # Always pad to reduce memory fragmentation and maybe make the computation faster
+        pad = (pad_size - tokens.size(0) % pad_size) % pad_size
+        if pad != 0:
+            tokens = F.pad(tokens, (0, pad), value=pad_token_id)
+            cu_seqlens.append(cu_seqlens[-1] + pad)
 
-    tokens = tokens.unsqueeze(0)
+        # thd requires the cu_seqlens to be of the origin length
+        cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int).cuda() * cp_size
+        max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+
+        packed_seq_params = PackedSeqParams(
+            cu_seqlens_q=cu_seqlens,
+            cu_seqlens_kv=cu_seqlens,
+            max_seqlen_q=max_seqlen,
+            max_seqlen_kv=max_seqlen,
+            qkv_format="thd",
+        )
+
+        tokens = tokens.unsqueeze(0)
+    else:
+        raise ValueError(f"Unsupported qkv_format: {qkv_format}")
+
     batch["tokens"] = tokens
     batch["packed_seq_params"] = packed_seq_params
     return batch
@@ -311,6 +320,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
         response_lengths = rollout_data["response_lengths"]
         loss_masks = rollout_data["loss_masks"]
         total_lengths = rollout_data["total_lengths"]
+        max_seq_lens = rollout_data.get("max_seq_lens", None)
 
         for key, val in rollout_data.items():
             if key in [
@@ -318,6 +328,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                 "loss_masks",
                 "sample_indices",
                 "rollout_routed_experts",
+                "max_seq_lens",
             ]:
                 continue
             # Upload per sample mean for each rollout value
@@ -329,7 +340,13 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                     # modified in place and will cause problem for the next rollout.
                     val = torch.cat(val).clone().detach()
                     if key in ["log_probs", "ref_log_probs", "rollout_log_probs", "returns", "advantages", "values"]:
-                        sum_of_sample_mean = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks)
+                        sum_of_sample_mean = get_sum_of_sample_mean(
+                            total_lengths,
+                            response_lengths,
+                            loss_masks,
+                            qkv_format=args.qkv_format,
+                            max_seq_lens=max_seq_lens,
+                        )
                         val = cp_size * sum_of_sample_mean(val) / len(loss_masks)
                     else:
                         val = val.mean() * cp_size

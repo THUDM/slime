@@ -119,6 +119,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="The backend for training.",
             )
             parser.add_argument(
+                "--qkv-format",
+                type=str,
+                choices=["thd", "bshd"],
+                default="thd",
+                help="The qkv layout for Megatron backend.",
+            )
+            parser.add_argument(
                 "--true-on-policy-mode",
                 action="store_true",
                 default=False,
@@ -1584,6 +1591,16 @@ def slime_validate_args(args):
 
     if args.prefill_num_servers is not None:
         assert not args.use_fault_tolerance, "fault tolerance is not supported when prefill_num_servers is set."
+
+    assert args.qkv_format in [
+        "thd",
+        "bshd",
+    ], f"qkv_format {args.qkv_format} is not supported. (only 'thd' and 'bshd' are supported)"
+    if args.qkv_format == "bshd":
+        assert args.train_backend == "megatron", "bshd format is only supported for megatron backend."
+        assert (
+            args.use_dynamic_batch_size is False
+        ), "Dynamic batch size is not supported for bshd format. Please specify --micro-batch-size instead."
 
 
 def hf_validate_args(args, hf_config):
