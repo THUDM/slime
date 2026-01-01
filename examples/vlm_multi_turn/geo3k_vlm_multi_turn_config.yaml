@@ -1,2 +1,0 @@
-max_turns: 3
-rollout_interaction_env_path: examples.vlm_multi_turn.env_geo3k

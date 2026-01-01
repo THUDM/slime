@@ -11,23 +11,24 @@ EXTERNAL_RAY = int(os.environ.get("SLIME_SCRIPT_EXTERNAL_RAY", "0"))
 TRAIN_BACKEND = os.environ.get("SLIME_SCRIPT_TRAIN_BACKEND", "fsdp").lower()
 assert TRAIN_BACKEND in {"fsdp", "megatron"}
 
-DATA_ROOT = "/root/datasets/geo3k_imgurl"
-TRAIN_DATA_PATH = "/root/datasets/geo3k_imgurl/train.parquet"
-CHECKPOINT_DIR = "/root/checkpoints/2Bi-lr6e7"
+DATASET_NAME = "VeraIsHere/geo3k_imgurl_processed"
+DATA_ROOT = "/root/datasets/geo3k_imgurl_processed"
+TRAIN_DATA_PATH = os.path.join(DATA_ROOT, "train.parquet")
 
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"mkdir -p {CHECKPOINT_DIR}")
     U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
-    if not os.path.exists(DATA_ROOT):
+    data_missing = not os.path.exists(TRAIN_DATA_PATH)
+    if data_missing:
         U.exec_command(f"hf download --repo-type dataset {DATASET_NAME} --local-dir {DATA_ROOT}")
     if not os.path.exists(TRAIN_DATA_PATH):
-        raise FileNotFoundError(f"Expected local dataset at {TRAIN_DATA_PATH}; set SLIME_SCRIPT_GEO3K_DATA_ROOT to override.")
+        raise FileNotFoundError(f"Dataset not found. Expected local dataset at {TRAIN_DATA_PATH}; ")
 
 
 def execute():
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} --save {CHECKPOINT_DIR} --save-interval 20 "
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} "
 
     wandb_args = (
         "--use-wandb "
@@ -75,7 +76,7 @@ def execute():
 
     optimizer_args = (
         "--optimizer adam "
-        "--lr 6e-7 "
+        "--lr 1e-6 "
         "--lr-decay-style constant "
         "--weight-decay 0.1 "
         "--adam-beta1 0.9 "

@@ -1,5 +1,5 @@
 # VLM Multi-Turn (FSDP backend, geo3k dataset)
-Training VLM with FSDP on [geo3k dataset](https://huggingface.co/datasets/hiyouga/geometry3k) with multi-turn reasoning with interactive environment feedback, using GRPO. For dataset, we used the [processed version](https://huggingface.co/datasets/chenhegu/geo3k_imgurl).
+Training VLM with FSDP on [geo3k dataset](https://huggingface.co/datasets/hiyouga/geometry3k) with multi-turn reasoning with interactive environment feedback, using GRPO. For dataset, we used the [processed version](https://huggingface.co/datasets/VeraIsHere/geo3k_imgurl_processed).
 
 The multi-turn rollout is implemented through a custom generate function  `examples.geo3k_vlm_multi_turn.rollout.generate`, overriding the original generate function.
 
@@ -26,11 +26,8 @@ export SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-2B-Instruct
 export SLIME_SCRIPT_NUM_GPUS=4
 export SLIME_SCRIPT_TRAIN_BACKEND=fsdp
 
-# 2) Download and process the dataset for multi-turn tool-call setting
-# In order to prompt the rollout actor for tool call, we need to modify the prompt in the original dataset include tool call specification.
-
-hf download --repo-type dataset chenhegu/geo3k_imgurl --local-dir /root/datasets/geo3k_imgurl
-python /root/slime_new/examples/geo3k_vlm_multi_turn/data_preprocess/prepend_geo3k_prompt.py
+# 2) Download the dataset
+hf download --repo-type dataset VeraIsHere/geo3k_imgurl_processed --local-dir /root/datasets/geo3k_imgurl_processed
 
 # 3) Run the script:
 cd /root/slime
