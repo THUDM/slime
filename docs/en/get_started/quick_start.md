@@ -200,7 +200,7 @@ ROLLOUT_ARGS=(
 
    # Rollout sampling parameters
    --rollout-max-response-len 8192
-   --rollout-temperature 0.8
+   --rollout-temperature 1
 
    # Load balancing for data collected in rollout phase. It ensures that the computational workload allocated to each training process (DP rank) is roughly equal, which may be beneficial for training speed
    --balance-data
@@ -222,7 +222,7 @@ EVAL_ARGS=(
    # Maximum response length during evaluation
    --eval-max-response-len 16384
    # Sampling parameters during evaluation
-   --eval-top-p 0.7
+   --eval-top-p 1
 )
 ```
 
