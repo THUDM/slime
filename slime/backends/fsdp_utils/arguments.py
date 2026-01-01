@@ -60,13 +60,6 @@ class FSDPArgs:
     # YAML bookkeeping
     config: str | None = None
 
-    # LoRA configuration
-    lora_rank: int = 0
-    lora_alpha: int = 16
-    target_modules: str = "all-linear"
-    exclude_modules: str | None = None
-    lora_adapter_path: str | None = None
-
 
 def parse_fsdp_cli(extra_args_provider=None):
     parser = argparse.ArgumentParser("FSDP SFT Training (slime)")

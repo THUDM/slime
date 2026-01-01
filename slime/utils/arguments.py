@@ -104,17 +104,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "This will always be true when --colocate is set."
                 ),
             )
-            parser.add_argument(
-                "--offload-rollout-level",
-                type=str,
-                nargs="+",
-                default=["kv_cache", "weight"],
-                help=(
-                    "Specifies what to offload during rollout when offload-rollout is set. "
-                    "Possible values: 'kv_cache', 'weight'. Default: both 'kv_cache' and 'weight'. "
-                    "Example: --offload-rollout-level kv_cache weight"
-                ),
-            )
 
             reset_arg(parser, "--distributed-backend", type=str, default="nccl")
             reset_arg(parser, "--distributed-timeout-minutes", type=int, default=10)
@@ -1425,27 +1414,6 @@ def slime_validate_args(args):
 
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."
-
-    if args.lora_rank > 0:
-        assert args.save is not None, "'--save' is required when LoRA is enabled."
-        assert args.target_modules is not None, "'--target-modules' is required when LoRA is enabled."
-
-        if args.target_modules == "all-linear":
-            modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
-        elif "," in args.target_modules:
-            modules = [m.strip() for m in args.target_modules.split(",")]
-        else:
-            modules = [args.target_modules]
-
-        if args.exclude_modules:
-            exclude_set = (
-                set(m.strip() for m in args.exclude_modules.split(","))
-                if "," in args.exclude_modules
-                else {args.exclude_modules}
-            )
-            modules = [m for m in modules if m not in exclude_set]
-
-        args.target_modules = modules
 
     assert not (args.kl_coef != 0 and args.kl_loss_coef != 0), "Only one of kl_coef and kl_loss_coef can be set"
 
