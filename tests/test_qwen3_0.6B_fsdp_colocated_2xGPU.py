@@ -1,4 +1,3 @@
-import os
 import slime.utils.external_utils.command_utils as U
 
 MODEL_NAME = "Qwen3-0.6B"
@@ -61,6 +60,8 @@ def execute():
     sglang_args = "--rollout-num-gpus-per-engine 2 " "--sglang-decode-log-interval 1000 " "--sglang-enable-metrics "
 
     fsdp_args = (
+        # Set to true for FULL_STATE_DICT mode, false for SHARDED_STATE_DICT mode (default)
+        # "--fsdp-full-params "  # Uncomment this line to enable full params mode
         # Set the bucket size for weight update
         "--update-weight-buffer-size 536870912 "  # 512MB
     )
@@ -96,8 +97,4 @@ def execute():
 
 if __name__ == "__main__":
     prepare()
-    os.environ.pop("http_proxy")
-    os.environ.pop("https_proxy")
-    os.environ.pop("HTTP_PROXY")
-    os.environ.pop("HTTPS_PROXY")
     execute()

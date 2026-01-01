@@ -571,5 +571,5 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 slime has been deeply optimized for distributed training of large-scale Mixture of Experts (MoE) models. We provide some end-to-end training cases for reference:
 
-- [Example: 64xH100 Training GLM-4.5](models/glm4.5-355B-A32B.md)
-- [Example: 128xH100 Training DeepSeek-R1](models/deepseek-r1.md)
+- [Example: 64xH100 Training GLM-4.5](../examples/glm4.5-355B-A32B.md)
+- [Example: 128xH100 Training DeepSeek-R1](../examples/deepseek-r1.md)
