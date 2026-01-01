@@ -17,8 +17,6 @@ export PYTHONBUFFERED=16
 
 export CUDA_VISIBLE_DEVICES=0,1,2,3
 
-WANDB_KEY=8920a59faeab83c97b55c3cbe78618f11d0a1821
-
 NVLINK_COUNT=$(nvidia-smi | grep -o "NVLink" | wc -l)
 if [ "$NVLINK_COUNT" -gt 0 ]; then
     HAS_NVLINK=1
