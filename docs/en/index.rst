@@ -6,7 +6,7 @@ slime is an LLM post-training framework for RL scaling, providing two core capab
 - High-Performance Training: Supports efficient training in various modes by connecting Megatron with SGLang;
 - Flexible Data Generation: Enables arbitrary training data generation workflows through custom data generation interfaces and server-based engines.
 
-slime is the RL-framework behind GLM-4.5 and GLM-4.6. Apart from models from Z.ai, we also supports the following models:
+slime is the RL-framework behind GLM-4.7, GLM-4.6 and GLM-4.5. Apart from models from Z.ai, we also supports the following models:
 
 - Qwen3 series (Qwen3Next, Qwen3MoE, Qwen3), Qwen2.5 series;
 - DeepSeek V3 series (DeepSeek V3, V3.1, DeepSeek R1);
@@ -18,6 +18,7 @@ slime is the RL-framework behind GLM-4.5 and GLM-4.6. Apart from models from Z.a
 
    get_started/quick_start.md
    get_started/usage.md
+   get_started/customization.md
    get_started/qa.md
 
 .. toctree::
@@ -43,6 +44,7 @@ slime is the RL-framework behind GLM-4.5 and GLM-4.6. Apart from models from Z.a
    advanced/speculative-decoding.md
    advanced/fault-tolerance.md
    advanced/arch-support-beyond-megatron.md
+   advanced/pd-disaggregation.md
 
 .. toctree::
    :maxdepth: 1
@@ -52,7 +54,8 @@ slime is the RL-framework behind GLM-4.5 and GLM-4.6. Apart from models from Z.a
    _examples_synced/search-r1/README.md
    _examples_synced/fully_async/README.md
    _examples_synced/retool/README.md
-   _examples_synced/multi_agent/README.md   
+   _examples_synced/multi_agent/README.md
+   _examples_synced/on_policy_distillation/README.md   
 
 .. toctree::
    :maxdepth: 1

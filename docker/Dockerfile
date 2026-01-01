@@ -4,7 +4,7 @@ FROM lmsysorg/sglang:${SGLANG_IMAGE_TAG} AS sglang
 # ======================================== Arguments =============================================
 
 ARG PATCH_VERSION=latest
-ARG MEGATRON_COMMIT=core_v0.14.0
+ARG MEGATRON_COMMIT=3714d81d418c9f1bca4594fc35f9e8289f652862
 
 ARG ENABLE_CUDA_13=0
 
@@ -71,25 +71,14 @@ RUN if [ "$ENABLE_CUDA_13" = "1" ]; then \
     python3 -m pip install https://github.com/sgl-project/whl/releases/download/v${SGL_KERNEL_VERSION}/sgl_kernel-${SGL_KERNEL_VERSION}+cu130-cp310-abi3-manylinux2014_$(uname -m).whl --force-reinstall --no-deps; \
   fi
 
-# AMEM
-# we need to create a fake libcuda.so.1 to make the linker happy when building AMEM
-ENV CUDA_DIR=/usr/local/cuda
-ENV CUDA_STUBS=${CUDA_DIR}/lib64/stubs
-RUN ln -s ${CUDA_STUBS}/libcuda.so ${CUDA_STUBS}/libcuda.so.1 && \
-    echo "${CUDA_STUBS}" > /etc/ld.so.conf.d/z-cuda-stubs.conf && \
-    ldconfig
-RUN git clone https://github.com/inclusionAI/asystem-amem.git && \
-    cd asystem-amem && git checkout 6483bb17c9a98b51c3a94b7048467d5b50fbad4b && \
-    git submodule init && git submodule update && \
-    MPI_HOME=/usr/lib/x86_64-linux-gnu/openmpi/ ./build.sh && \
-    mv /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libnccl.so.2 /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libnccl.so.2.bak && \
-    cp -r third_party/nccl/build/lib/* /usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/
-
 # https://github.com/pytorch/pytorch/issues/168167
 RUN pip install nvidia-cudnn-cu12==9.16.0.29
 
+# reinstall numpy 1.x for megatron
+RUN pip install "numpy<2"
+
 RUN rm /root/.tmux.conf
-RUN rm -rf /root/.cache/pip /root/asystem-amem /root/flash-attention
+RUN rm -rf /root/.cache/pip /root/flash-attention
 
 # ====================================== Patches ============================================
 

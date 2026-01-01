@@ -108,4 +108,22 @@ def convert_deepseekv3_to_hf(args, name, param):
         elif rest == "mlp.router.expert_bias":
             return [(f"model.layers.{layer_idx}.mlp.gate.e_score_correction_bias", param)]
 
+    mtp_layer_pattern = r"module\.module\.mtp\.layers\.(\d+)\.(.+)"
+    match = re.match(mtp_layer_pattern, name)
+    if match:
+        layer_idx, rest = match.groups()
+        layer_idx = int(layer_idx) + args.num_layers
+        if rest == "eh_proj.weight":
+            return [(f"model.layers.{layer_idx}.eh_proj.weight", param)]
+        elif rest == "enorm.weight":
+            return [(f"model.layers.{layer_idx}.enorm.weight", param)]
+        elif rest == "hnorm.weight":
+            return [(f"model.layers.{layer_idx}.hnorm.weight", param)]
+        elif rest == "final_layernorm.weight":
+            return [(f"model.layers.{layer_idx}.shared_head.norm.weight", param)]
+        else:
+            name = f"module.module.decoder.layers.{layer_idx}.{rest}"
+            name = name.replace("transformer_layer.", "")
+            return convert_deepseekv3_to_hf(args, name, param)
+
     raise ValueError(f"Unknown parameter name: {name}")

@@ -1,6 +1,6 @@
 # slime Documentation
 
-We recommend new contributors start from writing documentation, which helps you quickly understand SGLang codebase.
+We recommend new contributors start from writing documentation, which helps you quickly understand slime codebase.
 Most documentation files are located under the `docs/` folder.
 
 ## Docs Workflow

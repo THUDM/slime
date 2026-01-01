@@ -11,7 +11,7 @@ from megatron.training.training import get_model
 
 import slime_plugins.mbridge  # noqa: F401
 from mbridge import AutoBridge
-from slime.backends.megatron_utils import set_default_megatron_args
+from slime.backends.megatron_utils.arguments import set_default_megatron_args
 from slime.backends.megatron_utils.initialize import init
 from slime.backends.megatron_utils.model_provider import get_model_provider_func
 from slime.utils.logging_utils import configure_logger
@@ -21,6 +21,12 @@ from slime.utils.memory_utils import print_memory
 def add_convertion_args(parser):
     """Add conversion arguments to the parser"""
     parser.add_argument("--hf-checkpoint", type=str, required=True, help="HuggingFace model path")
+    parser.add_argument(
+        "--megatron-to-hf-mode",
+        choices=["raw", "bridge"],
+        default="raw",
+        help="The method to convert megatron weights to hugging face weights for SGLang.",
+    )
     try:
         parser.add_argument("--padded-vocab-size", type=int, default=None)
     except Exception:
