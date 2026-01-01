@@ -1,4 +1,4 @@
-# Terminal Bench Eval (Slime)
+# Terminal Bench Eval
 
 This folder wires Terminal Bench (TB) into Slime as an eval delegate. The TB run happens on the host via the `tb` CLI, and Slime reads back aggregated metrics such as `accuracy`, `n_resolved`, `n_unresolved`, `pass_at_k/*`, and token stats like `total_input_tokens_mean/median` and `total_output_tokens_mean/median`.
 
@@ -9,20 +9,11 @@ This folder wires Terminal Bench (TB) into Slime as an eval delegate. The TB run
 - The TB delegate server (`tb_server.py`) runs `tb run ...` on the host.
 - The server reads the latest TB JSON results and returns metrics to Slime.
 
-## Prereqs
-
-1) Docker with GPU access.
-2) `uv` installed on the host.
-3) Terminal Bench installed and its `tb` CLI available on the machine that runs
-   `tb_server.py`.
-4) The Slime repo available on the machine that runs `tb_server.py`.
-5) A Slime eval config file that includes `eval.datasets`.
-   - Slime requires at least one dataset under `eval.datasets`.
-   - You can reuse your existing eval config; just add the delegate section.
-
 ## 1) Get the code (host)
 
 ```bash
+mkdir slime-tb
+cd slime-tb
 git clone https://github.com/THUDM/slime.git
 git clone https://github.com/laude-institute/terminal-bench
 ```
@@ -40,9 +31,8 @@ docker run \
   --ulimit memlock=-1 \
   --ulimit stack=67108864 \
   --ulimit nofile=65536:65536 \
-  -v ~/.cache:/root/.cache \
-  -v $(pwd)/slime:/opt/slime \
-  -v $(pwd)/terminal-bench:/opt/terminal-bench \
+  -v /mnt/data/.cache:/root/.cache \
+  -v $(pwd):/shared/slime-tb \
   --name <slime container name> \
   slimerl/slime:latest \
   /bin/bash
@@ -59,6 +49,7 @@ docker exec -it <slime container name> /bin/bash
 Run on the machine that will host `tb_server.py` (where you cloned both repos):
 
 ```bash
+# Host machine terminal (outside Docker)
 uv venv --python 3.13 .venv
 source .venv/bin/activate
 
@@ -102,10 +93,12 @@ huggingface-cli download open-thoughts/OpenThinker-Agent-v1 \
 After downloading, convert the HuggingFace checkpoint to Slime's torch distributed format. From the Slime root directory, run:
 
 ```bash
-cd /opt/slime
+cd /shared/slime-tb/slime
 source scripts/models/qwen3-8B.sh
 
-PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
+export PYTHONPATH=/root/Megatron-LM:/shared/slime-tb/slime
+
+python tools/convert_hf_to_torch_dist.py \
   ${MODEL_ARGS[@]} \
   --hf-checkpoint /root/.cache/OpenThinker-Agent-v1 \
   --save /root/.cache/OpenThinker-Agent-v1_torch_dist
@@ -127,8 +120,10 @@ In some cases, this manifests as Ray failing to start or reporting Redis- or ses
 
 In more severe cases, Ray job submission may fail with errors indicating that no available agent can accept jobs. This typically happens when the dashboard agent or runtime environment agent ports are also in conflict. In such situations, explicitly specifying the agent-related ports (e.g. `--dashboard-agent-listen-port`, `--dashboard-agent-grpc-port`, and `--runtime-env-agent-port`) when starting Ray can resolve the issue.
 
-If the TB server cannot connect to the Slime server through the sglang router, check which address is actually listening on the router port (e.g. 30005 in this example) and update the `api_base` in `eval_tb_example.yaml` accordingly:
+If the TB server cannot connect to the Slime server through the sglang router (`InternalServerError`), check which address is actually listening on the router port (e.g. 30005 in this example) and update the `api_base` in `eval_tb_example.yaml` accordingly:
 
 ```bash
 ss -lntp | grep 30005
 ```
+
+You may see `Parser warnings`, `Context length exceeded`, `Command 1 should end with newline`, `Harness execution failed` in `tb_server.py` logs. They are warnings from Terminal Bench and can be ignored if runs proceed normally.

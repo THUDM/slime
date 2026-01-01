@@ -1,1 +1,1 @@
-"""NeMo Skills evaluation helpers."""
+"""Terminal Bench evaluation helpers."""

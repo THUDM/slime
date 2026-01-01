@@ -52,7 +52,6 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    --rm-type deepscaler
    --num-rollout 3000
-   # --num-rollout 1
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 8192
@@ -63,14 +62,13 @@ ROLLOUT_ARGS=(
 
 EVAL_ARGS=(
    --eval-interval 5
-   # --eval-interval 1
    --eval-config "${EVAL_CONFIG_PATH}"
    --eval-function-path examples.eval.eval_delegate_rollout.generate_rollout
 )
 
 PERF_ARGS=(
    --tensor-model-parallel-size 1
-      --pipeline-model-parallel-size 1
+   --pipeline-model-parallel-size 1
    --context-parallel-size 1
    --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
@@ -106,7 +104,7 @@ WANDB_ARGS=(
    --use-wandb
    --wandb-project slime-eval
    --wandb-group qwen3-8b-eval
-   --wandb-key ${WANDB_KEY}
+   --wandb-key ${WANDB_KEY}   # export WANDB_KEY="your_key"
 )
 
 SGLANG_ARGS=(
