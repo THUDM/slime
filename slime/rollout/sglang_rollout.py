@@ -11,7 +11,6 @@ import sglang_router
 from packaging.version import parse
 from tqdm import tqdm
 
-from slime.backends.fsdp_utils.lora_utils import LORA_ADAPTER_NAME
 from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from slime.rollout.filter_hub.base_types import DynamicFilterOutput
 from slime.utils.async_utils import run
@@ -124,10 +123,6 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         "sampling_params": sampling_params,
         "return_logprob": True,
     }
-
-    # Use LoRA adapter when LoRA is enabled
-    if args.lora_rank > 0 or args.lora_adapter_path is not None:
-        payload["lora_path"] = LORA_ADAPTER_NAME
 
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
