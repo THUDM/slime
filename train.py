@@ -56,7 +56,7 @@ def train(args):
             actor_model.clear_memory()
 
     def onload_rollout():
-        if args.offload_rollout:
+        if args.offload_rollout and args.offload_rollout_level == 2:
             ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
 
     # train loop.
@@ -68,7 +68,16 @@ def train(args):
         rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
 
         if args.offload_rollout:
-            ray.get(rollout_manager.offload.remote())
+            # level 1: offload kv cache only, level 2: offload weights + kv cache
+            ray.get(
+                rollout_manager.offload.remote(
+                    tags=(
+                        [GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH]
+                        if args.offload_rollout_level == 1
+                        else [GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS, GPU_MEMORY_TYPE_CUDA_GRAPH]
+                    )
+                )
+            )
 
         if args.use_critic:
             critic_train_handle = critic_model.async_train(rollout_id, rollout_data_ref)

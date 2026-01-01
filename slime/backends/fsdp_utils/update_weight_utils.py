@@ -1,5 +1,6 @@
 import abc
 import logging
+import os
 import socket
 from argparse import Namespace
 from collections.abc import Sequence
@@ -25,6 +26,7 @@ try:
 except ImportError:
     from sglang.srt.model_executor.model_runner import FlattenedTensorBucket  # type: ignore[import]
 
+from .lora_utils import LORA_ADAPTER_NAME, LORA_SUBDIR, delete_lora_from_disk, is_lora_model, save_lora_to_disk
 
 logger = logging.getLogger(__name__)
 
@@ -33,6 +35,9 @@ class UpdateWeight(abc.ABC):
     def __init__(self, args: Namespace, model: torch.nn.Module) -> None:
         self.args = args
         self.model = model
+        self.weight_version = 0
+        self._lora_loaded = False
+        self._base_synced = False
 
     @abc.abstractmethod
     def connect_rollout_engines(
@@ -43,38 +48,85 @@ class UpdateWeight(abc.ABC):
         pass
 
     def update_weights(self) -> None:
-        bucket = []
-        bucket_size = 0
-        for name, param in self.model.state_dict().items():
-            param_size = param.numel() * param.element_size()
-            if bucket and bucket_size + param_size >= self.args.update_weight_buffer_size:
-                self.wait_and_update_bucket_weights(bucket)
-                del bucket
-                bucket = []
-                bucket_size = 0
+        self.weight_version += 1
 
-            param = param.cuda()
-            if isinstance(param, DTensor):
-                # async version of param.full_tensor
-                param = param.redistribute(
-                    placements=[Replicate()] * param.device_mesh.ndim,
-                    async_op=True,
-                ).to_local()
-            bucket.append((name, param))
-            bucket_size += param_size
-
-        if bucket:
-            self.wait_and_update_bucket_weights(bucket)
-            del bucket
+        # Update base model if needed
+        # Level 1: only sync base once for LoRA models, then just LoRA
+        # Level 2: always sync base + LoRA
+        if not (is_lora_model(self.model) and self._base_synced and self.args.offload_rollout_level == 1):
             bucket = []
             bucket_size = 0
+            for name, param in self.model.state_dict().items():
+                if any(x in name for x in ["_flat_param", "lora_"]):
+                    continue
+                name = name.replace("base_model.model.", "").replace(".base_layer", "")
+                param_size = param.numel() * param.element_size()
+                if bucket and bucket_size + param_size >= self.args.update_weight_buffer_size:
+                    self.wait_and_update_bucket_weights(bucket)
+                    del bucket
+                    bucket = []
+                    bucket_size = 0
+
+                param = param.cuda()
+                if isinstance(param, DTensor):
+                    # async version of param.full_tensor
+                    param = param.redistribute(
+                        placements=[Replicate()] * param.device_mesh.ndim,
+                        async_op=True,
+                    ).to_local()
+                bucket.append((name, param))
+                bucket_size += param_size
+
+            if bucket:
+                self.wait_and_update_bucket_weights(bucket)
+                del bucket
+
+            self._base_synced = True
+
+        # Update lora weights if needed
+        if is_lora_model(self.model):
+            self._update_lora_via_file()
+
+    def _update_lora_via_file(self) -> None:
+        """Push LoRA weights to rollout engines using disk files."""
+        self._lora_save_dir = os.path.join(self.args.save, LORA_SUBDIR)
+        if dist.get_rank() == 0:
+            if os.path.exists(self._lora_save_dir):
+                delete_lora_from_disk(self._lora_save_dir)
+
+        dist.barrier()
+
+        save_lora_to_disk(self.model, self._lora_save_dir)
+
+        dist.barrier()
+
+        if dist.get_rank() == 0:
+            if self._lora_loaded:
+                refs = [engine.unload_lora_adapter.remote(LORA_ADAPTER_NAME) for engine in self.rollout_engines]
+                ray.get(refs)
+
+            refs = [engine.flush_cache.remote() for engine in self.rollout_engines]
+            ray.get(refs)
+
+            refs = [
+                engine.load_lora_adapter.remote(LORA_ADAPTER_NAME, self._lora_save_dir)
+                for engine in self.rollout_engines
+            ]
+            ray.get(refs)
+
+            refs = [engine.flush_cache.remote() for engine in self.rollout_engines]
+            ray.get(refs)
+
+            self._lora_loaded = True
+
+        dist.barrier()
 
     def wait_and_update_bucket_weights(self, bucket):
         bucket = [(name, param.wait()) if hasattr(param, "wait") else (name, param) for name, param in bucket]
-        self.update_bucket_weights(bucket)
+        self.update_bucket_weights(bucket, weight_version=self.weight_version)
 
     @abc.abstractmethod
-    def update_bucket_weights(self, named_tensors) -> None:
+    def update_bucket_weights(self, named_tensors, weight_version=None) -> None:
         pass
 
 
@@ -114,7 +166,7 @@ class UpdateWeightFromTensor(UpdateWeight):
                 # Calculate TP rank within this SGLang engine group
                 self.tp_rank = dist.get_rank() - start_rank
 
-    def update_bucket_weights(self, named_tensors) -> None:
+    def update_bucket_weights(self, named_tensors, weight_version=None) -> None:
         monkey_patch_torch_reductions()
         # Use flattened bucket approach similar to Megatron
         logger.info("Using flattened tensor bucket")
@@ -162,6 +214,7 @@ class UpdateWeightFromTensor(UpdateWeight):
                     "serialized_named_tensors": [tensors[i] for tensors in gathered_serialized_batches],
                     "load_format": "flattened_bucket",
                     "flush_cache": False,
+                    "weight_version": str(weight_version),
                 }
                 ref = self._ipc_engine.update_weights_from_tensor.remote(**kwargs)
                 ray.get(ref)
@@ -173,10 +226,6 @@ class UpdateWeightFromTensor(UpdateWeight):
 
 class UpdateWeightFromDistributed(UpdateWeight):
     """Broadcast weights via a temporary NCCL group to rollout engines."""
-
-    def __init__(self, args: Namespace, model: torch.nn.Module) -> None:
-        self.args = args
-        self.model = model
 
     def connect_rollout_engines(
         self,
@@ -220,7 +269,7 @@ class UpdateWeightFromDistributed(UpdateWeight):
             )
             ray.get(refs)
 
-    def update_bucket_weights(self, named_tensors) -> None:
+    def update_bucket_weights(self, named_tensors, weight_version=None) -> None:
         """Send names/dtypes/shapes metadata to engines, then broadcast tensors.
 
         Ensures tensors are contiguous; when `world_size == 1`, converts DTensors
@@ -235,6 +284,7 @@ class UpdateWeightFromDistributed(UpdateWeight):
                 dtypes=[param.dtype for _, param in named_tensors],
                 shapes=[param.shape for _, param in named_tensors],
                 group_name=self._group_name,
+                weight_version=str(weight_version),
             )
             for engine in self.rollout_engines
         ]
