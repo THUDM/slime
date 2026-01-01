@@ -1426,7 +1426,7 @@ def slime_validate_args(args):
     if args.save_interval is not None:
         assert args.save is not None, "'--save' is required when save_interval is set."
 
-    if getattr(args, "lora_rank", 0) > 0:
+    if args.lora_rank > 0:
         assert args.save is not None, "'--save' is required when LoRA is enabled."
         assert args.target_modules is not None, "'--target-modules' is required when LoRA is enabled."
 
