@@ -203,8 +203,7 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                 new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
                 new_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
             else:
-                new_response_tokens = tokenizer(response_text, add_special_tokens=False)["input_ids"]
-                new_response_log_probs = [0.0] * len(new_response_tokens)
+                new_response_tokens, new_response_log_probs = [], []
 
             # Append assistant response tokens/logprobs/masks
             sample.tokens.extend(new_response_tokens)
@@ -256,7 +255,7 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
             sample.tokens.extend(obs_prompt_ids)
             response_tokens.extend(obs_prompt_ids)
             sample.loss_mask.extend([0] * len(obs_prompt_ids))  # user/obs + next assistant prefix => masked as zero
-            sample.rollout_log_probs.extend([0.0] * len(obs_prompt_ids))  # keep logprob aligned with loss_mask
+            sample.rollout_log_probs.extend([float("-inf")] * len(obs_prompt_ids))  # keep logprob aligned with loss_mask
             sample.response_length = len(response_tokens)
                 
             if obs_image_data:
