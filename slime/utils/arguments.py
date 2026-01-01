@@ -577,12 +577,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "and should be set to a larger value than `max_tokens_per_gpu` if you want better performance. "
                 ),
             )
-            parser.add_argument(
-                "--num-proc",
-                type=int,
-                default=8,
-                help="Number of processes for dataset initialization and filtering.",
-            )
             return parser
 
         def add_eval_arguments(parser):
