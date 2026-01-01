@@ -169,6 +169,7 @@ class Dataset:
     ):
         self.origin_samples = []
         for data in read_file(path):
+            # Both chat templates and multimodal inputs require conversation format (list of message dicts)
             as_conversation = apply_chat_template or (multimodal_keys is not None)
             prompt = _build_messages(data, prompt_key, as_conversation, multimodal_keys)
 
