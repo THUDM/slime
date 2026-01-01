@@ -59,7 +59,7 @@ def get_model_provider_func(
     if getattr(args, "custom_model_provider_path", None):
 
         def wrapped_model_provider(
-            pre_process: bool = True, post_process: bool = True, vp_stage: , Optional[int] = None
+            pre_process: bool = True, post_process: bool = True, vp_stage: Optional[int] = None
         ) -> GPTModel:
             custom_model_provider = load_function(args.custom_model_provider_path)
             # Check if the custom provider supports vp_stage parameter
