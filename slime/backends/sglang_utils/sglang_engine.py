@@ -278,9 +278,15 @@ class SGLangEngine(RayActor):
         response.raise_for_status()
         return response.json()["weight_version"]
 
-    def release_memory_occupation(self):
+    def release_memory_occupation(self, tags: list[str] = None):
+        """
+        Available tags for multi-stage resume: weights, kv_cache
+        """
         self.flush_cache()
-        return self._make_request("release_memory_occupation")
+        return self._make_request(
+            "release_memory_occupation",
+            {"tags": tags},
+        )
 
     def resume_memory_occupation(self, tags: list[str] = None):
         """
@@ -334,6 +340,18 @@ class SGLangEngine(RayActor):
         return self._make_request(
             "update_weights_from_distributed",
             payload,
+        )
+
+    def load_lora_adapter(self, lora_name: str, lora_path: str):
+        return self._make_request(
+            "load_lora_adapter",
+            {"lora_name": lora_name, "lora_path": lora_path},
+        )
+
+    def unload_lora_adapter(self, lora_name: str):
+        return self._make_request(
+            "unload_lora_adapter",
+            {"lora_name": lora_name},
         )
 
     def pause_generation(self):
@@ -419,6 +437,10 @@ def _compute_server_args(args, rank, dist_init_addr, nccl_port, host, port, work
         kwargs["enable_return_routed_experts"] = True
     if args.fp16:
         kwargs["dtype"] = "float16"
+    if args.lora_rank > 0 or args.lora_adapter_path is not None:
+        kwargs["enable_lora"] = True
+        kwargs["max_lora_rank"] = args.lora_rank
+        kwargs["lora_target_modules"] = args.target_modules
 
     external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
 

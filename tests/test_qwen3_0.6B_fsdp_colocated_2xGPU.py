@@ -1,16 +1,28 @@
 import slime.utils.external_utils.command_utils as U
 
 MODEL_NAME = "Qwen3-0.6B"
+ENABLE_LORA = U.get_bool_env_var("ENABLE_LORA", "0")
 
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"huggingface-cli download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     U.hf_download_dataset("zhuzilin/gsm8k")
 
 
 def execute():
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} "
+
+    lora_args = (
+        (
+            "--lora-rank 32 "
+            "--lora-alpha 32 "
+            "--target-modules all-linear "
+            f"--save /root/models/{MODEL_NAME}-lora-ckpt "
+        )
+        if ENABLE_LORA
+        else ""
+    )
 
     rollout_args = (
         "--prompt-data /root/datasets/gsm8k/train.parquet "
@@ -50,7 +62,7 @@ def execute():
 
     optimizer_args = (
         "--optimizer adam "
-        "--lr 1e-6 "
+        f"--lr {'2e-5' if ENABLE_LORA else '1e-6'} "
         "--lr-decay-style constant "
         "--weight-decay 0.1 "
         "--adam-beta1 0.9 "
@@ -73,10 +85,17 @@ def execute():
         "--ci-metric-checker-threshold 0.71 "  # loose threshold at 60 step
     )
 
-    misc_args = "--actor-num-nodes 1 " "--actor-num-gpus-per-node 2 " "--colocate " "--train-backend fsdp "
+    misc_args = (
+        "--actor-num-nodes 1 "
+        "--actor-num-gpus-per-node 2 "
+        "--colocate "
+        "--offload-rollout-level kv_cache weight "
+        "--train-backend fsdp "
+    )
 
     train_args = (
         f"{ckpt_args} "
+        f"{lora_args} "
         f"{rollout_args} "
         f"{optimizer_args} "
         f"{grpo_args} "

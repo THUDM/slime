@@ -14,7 +14,6 @@ except ImportError as err:
 
 logger = logging.getLogger(__name__)
 
-LORA_READY_MARKER = ".lora_ready"
 LORA_ADAPTER_NAME = "slime_lora"
 LORA_SUBDIR = "tmp_lora"
 
