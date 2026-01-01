@@ -71,15 +71,33 @@ def _encode_observation_for_generation(
 ):
     """
     Encode a single observation turn that may include images/videos in the content list.
+    Trim out the system/tool preamble added by the chat template so only the observation tokens remain.
     """
+    tools = metadata.get("tools") if metadata else None
+    apply_kwargs = apply_chat_template_kwargs or {}
+
+    trim_length = 0
+    dummy_messages = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "I am a user."},
+    ]
+
     if apply_chat_template:
+        dummy_prompt = tokenizer.apply_chat_template(
+            dummy_messages,
+            tools=tools,
+            tokenize=False,
+            add_generation_prompt=False,
+            **apply_kwargs,
+        )
         formatted_prompt = tokenizer.apply_chat_template(
-            [message],
-            tools=metadata.get("tools") if metadata else None,
+            dummy_messages + [message],
+            tools=tools,
             tokenize=False,
             add_generation_prompt=True,
-            **(apply_chat_template_kwargs or {}),
+            **apply_kwargs,
         )
+        trim_length = len(tokenizer.encode(dummy_prompt, add_special_tokens=False))
     else:
         formatted_prompt = [message]
 
@@ -98,6 +116,9 @@ def _encode_observation_for_generation(
         } or None
     else:
         prompt_ids = tokenizer.encode(formatted_prompt, add_special_tokens=False)
+
+    if trim_length:
+        prompt_ids = prompt_ids[trim_length:]
 
     image_data = []
     if multimodal_inputs and multimodal_inputs.get("images"):
