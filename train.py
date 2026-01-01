@@ -62,7 +62,7 @@ def train(args):
     # train loop.
     # note that for async training, one can change the position of the sync operation(ray.get).
     for rollout_id in range(args.start_rollout_id, args.num_rollout):
-        if args.eval_interval is not None and rollout_id == 0:
+        if args.eval_interval is not None and rollout_id == 0 and not args.skip_eval_before_train:
             ray.get(rollout_manager.eval.remote(rollout_id))
 
         rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
@@ -78,11 +78,11 @@ def train(args):
         else:
             ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
-        if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch):
+        if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
             if (not args.use_critic) or (rollout_id >= args.num_critic_only_steps):
-                actor_model.save_model(rollout_id)
+                actor_model.save_model(rollout_id, force_sync=rollout_id == args.num_rollout - 1)
             if args.use_critic:
-                critic_model.save_model(rollout_id)
+                critic_model.save_model(rollout_id, force_sync=rollout_id == args.num_rollout - 1)
             if args.rollout_global_dataset:
                 ray.get(rollout_manager.save.remote(rollout_id))
 

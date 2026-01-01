@@ -220,7 +220,7 @@ def _str_is_int(x: str) -> bool:
         return False
 
 
-def _str_to_int(x: str) -> bool:
+def _str_to_int(x: str) -> int:
     x = x.replace(",", "")
     x = float(x)
     return int(x)

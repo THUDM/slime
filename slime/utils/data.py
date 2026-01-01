@@ -1,3 +1,4 @@
+import itertools
 import json
 import logging
 import os
@@ -5,8 +6,12 @@ import random
 import re
 
 import numpy as np
-import pandas as pd
 import ray
+
+try:
+    import pyarrow.parquet as pq
+except ImportError:
+    pq = None
 
 from slime.utils.types import MultimodalTypes, Sample
 
@@ -17,26 +22,50 @@ __all__ = ["Dataset"]
 logger = logging.getLogger(__name__)
 
 
-# TODO: don't read the whole file into memory.
 def read_file(path):
     path, row_slice = _parse_generalized_path(path)
+    reader = None
 
     if not os.path.exists(path):
         raise FileNotFoundError(f"Prompt dataset path '{path}' does not exist.")
 
     if path.endswith(".jsonl"):
-        df = pd.read_json(path, lines=True, dtype={"label": str})
+
+        def jsonl_reader(p):
+            with open(p, encoding="utf-8") as f:
+                for line_num, line in enumerate(f):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        yield json.loads(line)
+                    except json.JSONDecodeError as e:
+                        print(f"JSON decode error at line {line_num}: {e}")
+                        continue
+
+        reader = jsonl_reader(path)
+
     elif path.endswith(".parquet"):
-        df = pd.read_parquet(path, dtype_backend="pyarrow")
+        if pq is None:
+            raise ImportError("pyarrow is required for parquet support")
+
+        def parquet_reader(p):
+            pf = pq.ParquetFile(p)
+
+            for batch in pf.iter_batches():
+                yield from batch.to_pylist()
+
+        reader = parquet_reader(path)
+
     else:
         raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
 
     if row_slice is not None:
-        logger.info(f"read_file path={path} slice {len(df)=} rows into {row_slice=}")
-        df = df.iloc[row_slice]
 
-    for _, row in df.iterrows():
-        yield row.to_dict()
+        logger.info("read_file path=%s applying slice row_slice=%s", path, row_slice)
+        reader = itertools.islice(reader, row_slice.start, row_slice.stop, row_slice.step)
+
+    yield from reader
 
 
 def _parse_generalized_path(s: str):
@@ -49,23 +78,31 @@ def _parse_generalized_path(s: str):
     return s, None
 
 
-def _should_skip_prompt(prompt, tokenizer, processor, max_length, apply_chat_template_kwargs):
+def _should_skip_prompt(formatted_prompt: str, tokenizer, processor, max_length, multimodal_inputs=None):
     if max_length is None:
         return False
 
-    from slime.utils.processing_utils import prepare_model_inputs
+    if processor:
+        processor_output = processor(text=formatted_prompt, **multimodal_inputs)
+        input_ids = processor_output["input_ids"][0]
+    else:
+        input_ids = tokenizer.encode(formatted_prompt, add_special_tokens=False)
 
-    input_ids, _ = prepare_model_inputs(prompt, tokenizer, processor, None, apply_chat_template_kwargs)
     return len(input_ids) > max_length
 
 
-def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
-    messages = data.get(prompt_key)
+def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimodal_keys: dict = None):
+    prompt = data.get(prompt_key)
 
-    if isinstance(messages, str):
-        messages = [{"role": "user", "content": messages}]
+    if isinstance(prompt, str):
+        # If prompt is a string and we don't apply chat template, return the prompt as is.
+        if not as_conversation:
+            return prompt
+        else:
+            prompt = [{"role": "user", "content": prompt}]
 
     if multimodal_keys:
+        assert as_conversation, "as_conversation must be True when multimodal_keys is not None"
         # Build mapping: placeholder -> (MultimodalType, content_list)
         multimodals = {}
         for type_name, data_key in multimodal_keys.items():
@@ -75,7 +112,7 @@ def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
 
         pattern = "(" + "|".join(re.escape(p) for p in multimodals.keys()) + ")"
 
-        for message in messages:
+        for message in prompt:
             if isinstance(message["content"], str):
                 content_list = []
                 for segment in re.split(pattern, message["content"]):
@@ -105,7 +142,7 @@ def _build_messages(data: dict, prompt_key: str, multimodal_keys: dict = None):
                     f"Unsupported content type: {type(message['content'])}, expected str or list of dicts"
                 )
 
-    return messages
+    return prompt
 
 
 class Dataset:
@@ -127,9 +164,11 @@ class Dataset:
     ):
         self.origin_samples = []
         for data in read_file(path):
-            prompt = _build_messages(data, prompt_key, multimodal_keys)
+            as_conversation = apply_chat_template
+            prompt = _build_messages(data, prompt_key, as_conversation, multimodal_keys)
 
             metadata = data.get(metadata_key) or {}
+            tools = None
             if tool_key is not None and tool_key in data:
                 tools = data[tool_key]
                 if isinstance(tools, str):
@@ -139,15 +178,37 @@ class Dataset:
                 assert isinstance(tools, list), f"tools must be a list, got {type(tools)} instead"
                 metadata["tools"] = tools
 
+            if apply_chat_template:
+                formatted_prompt = tokenizer.apply_chat_template(
+                    prompt,
+                    tools=tools,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    **(apply_chat_template_kwargs or {}),
+                )
+            else:
+                formatted_prompt = prompt
+
+            if processor:
+                from slime.utils.processing_utils import process_vision_info
+
+                assert isinstance(
+                    prompt, list
+                ), f"prompt must be a list when processor is not None, got {type(prompt)} instead"
+                multimodal_inputs = process_vision_info(prompt, processor)
+            else:
+                multimodal_inputs = None
+
             # TODO: this is slow.
-            if _should_skip_prompt(prompt, tokenizer, processor, max_length, apply_chat_template_kwargs):
+            if _should_skip_prompt(formatted_prompt, tokenizer, processor, max_length, multimodal_inputs):
                 continue
 
             self.origin_samples.append(
                 Sample(
-                    prompt=prompt,
+                    prompt=formatted_prompt,
                     label=data[label_key] if label_key is not None else None,
                     metadata=metadata,
+                    multimodal_inputs=multimodal_inputs,
                 )
             )
 

@@ -16,6 +16,18 @@ index ef52bda7f..537d892dc 100644
      def add(self, req: Req, is_retracted: bool = False) -> None:
          """Add a request to the pending queue."""
          if self._check_if_req_exceed_kv_capacity(req):
+diff --git a/python/sglang/srt/disaggregation/decode_schedule_batch_mixin.py b/python/sglang/srt/disaggregation/decode_schedule_batch_mixin.py
+index efa979460..d2d049a20 100644
+--- a/python/sglang/srt/disaggregation/decode_schedule_batch_mixin.py
++++ b/python/sglang/srt/disaggregation/decode_schedule_batch_mixin.py
+@@ -83,6 +83,7 @@ class ScheduleBatchDisaggregationDecodeMixin:
+             seq_lens, dtype=torch.int32, device=self.device
+         )
+         self.out_cache_loc = out_cache_loc
++        self.out_cache_loc_cpu = out_cache_loc.to("cpu", non_blocking=True)
+         self.seq_lens_sum = sum(seq_lens)
+ 
+         if self.return_logprob:
 diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
 index d4414d084..c5fb10155 100644
 --- a/python/sglang/srt/disaggregation/mooncake/conn.py
@@ -58,55 +70,6 @@ index 952374ed5..239ac2571 100644
  
  class SchedulerDisaggregationPrefillMixin:
      """
-diff --git a/python/sglang/srt/distributed/device_communicators/pynccl.py b/python/sglang/srt/distributed/device_communicators/pynccl.py
-index 86c53f26b..52acf95b9 100644
---- a/python/sglang/srt/distributed/device_communicators/pynccl.py
-+++ b/python/sglang/srt/distributed/device_communicators/pynccl.py
-@@ -380,3 +380,9 @@ class PyNcclCommunicator:
- 
-         self.disabled = old_disable
-         self.stream = old_stream
-+
-+    def nccl_pause(self):
-+        self.nccl.ncclPause(self.comm)
-+
-+    def nccl_resume(self):
-+        self.nccl.ncclResume(self.comm)
-diff --git a/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py b/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
-index 6b12f2922..7028a4e46 100644
---- a/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
-+++ b/python/sglang/srt/distributed/device_communicators/pynccl_wrapper.py
-@@ -304,6 +304,17 @@ class NCCLLibrary:
-         Function("ncclGroupEnd", ncclResult_t, []),
-     ]
- 
-+    if os.environ.get("AMEM_ENABLE", "0") == "1":
-+        exported_functions.extend(
-+            [
-+                # ncclResult_t ncclPause(ncclComm_t comm);
-+                Function("ncclPause", ncclResult_t, [ncclComm_t]),
-+                # ncclResult_t ncclResume(ncclComm_t comm);
-+                Function("ncclResume", ncclResult_t, [ncclComm_t]),
-+                Function("ncclSetGroupID", ncclResult_t, [ctypes.c_int]),
-+            ]
-+        )
-+
-     exported_functions_symm_mem = [
-         # ncclResult_t ncclCommWindowRegister(ncclComm_t comm, void* buff, size_t size, ncclWindow_t* win, int winFlags);
-         Function(
-@@ -551,6 +562,12 @@ class NCCLLibrary:
-     def ncclGroupEnd(self) -> None:
-         self.NCCL_CHECK(self._funcs["ncclGroupEnd"]())
- 
-+    def ncclPause(self, comm: ncclComm_t) -> None:
-+        self.NCCL_CHECK(self._funcs["ncclPause"](comm))
-+
-+    def ncclResume(self, comm: ncclComm_t) -> None:
-+        self.NCCL_CHECK(self._funcs["ncclResume"](comm))
-+
- 
- __all__ = [
-     "NCCLLibrary",
 diff --git a/python/sglang/srt/distributed/parallel_state.py b/python/sglang/srt/distributed/parallel_state.py
 index cf90f6fe0..11d26df81 100644
 --- a/python/sglang/srt/distributed/parallel_state.py
@@ -192,17 +155,26 @@ index 9f556a885..992843285 100644
          bsz, s, _ = x_shape
          head = self.num_attention_heads_per_partition
 diff --git a/python/sglang/srt/layers/communicator.py b/python/sglang/srt/layers/communicator.py
-index 932f52aeb..79c6b664f 100644
+index 932f52aeb..ee52f4c94 100644
 --- a/python/sglang/srt/layers/communicator.py
 +++ b/python/sglang/srt/layers/communicator.py
 @@ -372,6 +372,7 @@ class LayerCommunicator:
          residual: torch.Tensor,
          forward_batch: ForwardBatch,
          quant_format: str = "",
-+        post_residual_addition: Optional[torch.Tensor] = None,
++        **kwargs,
      ):
          if get_attn_tp_context().input_scattered:
              hidden_states, residual = self._tp_reduce_scatter(
+@@ -421,7 +422,7 @@ class LayerCommunicator:
+                         )
+ 
+                     else:
+-                        hidden_states = self.input_layernorm(hidden_states)
++                        hidden_states = self.input_layernorm(hidden_states, **kwargs)
+                 else:
+ 
+                     if _use_aiter and _is_gfx95_supported and ("mxfp4" in quant_format):
 @@ -453,7 +454,9 @@ class LayerCommunicator:
                          )
                      else:
@@ -210,12 +182,12 @@ index 932f52aeb..79c6b664f 100644
 -                            hidden_states, residual
 +                            hidden_states,
 +                            residual,
-+                            post_residual_addition,
++                            **kwargs,
                          )
  
          hidden_states = self._communicate_simple_fn(
 diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
-index 3293a8a59..a075b71ce 100644
+index 3293a8a59..1dac03e4c 100644
 --- a/python/sglang/srt/layers/layernorm.py
 +++ b/python/sglang/srt/layers/layernorm.py
 @@ -84,15 +84,12 @@ class RMSNorm(CustomOp):
@@ -236,45 +208,73 @@ index 3293a8a59..a075b71ce 100644
          self.variance_epsilon = eps
          self.hidden_size = hidden_size
          self.variance_size_override = (
-@@ -105,21 +102,26 @@ class RMSNorm(CustomOp):
+@@ -105,21 +102,29 @@ class RMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
-+        post_residual_addition: Optional[torch.Tensor] = None,
++        **kwargs,
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          if self.variance_size_override is not None:
 -            return self.forward_native(x, residual)
-+            return self.forward_native(x, residual, post_residual_addition)
++            return self.forward_native(x, residual, **kwargs)
          if is_batch_invariant_mode_enabled():
              if (
                  residual is not None
                  or get_global_server_args().rl_on_policy_target == "fsdp"
              ):
 -                return self.forward_native(x, residual)
-+                return self.forward_native(x, residual, post_residual_addition)
++                return self.forward_native(x, residual, **kwargs)
              return rms_norm_batch_invariant(
                  x,
                  self.weight.data,
                  self.variance_epsilon,
              )
          if residual is not None:
-+            # TODO: Ideally we want to have (a+b)+c. but right now we can only have a+(b+c).
-+            # (a+b)+c != a+(b+c), we probably need to add another parameter to fused_add_rmsnorm
++            # TODO: Ideally we want to have (hidden_states+residual)+post_residual_addition.
++            # but right now we can only have hidden_states+(residual+post_residual_addition).
++            # (hidden_states+residual)+post_residual_addition != hidden_states+(residual+post_residual_addition),
++            # we probably need to add another parameter to fused_add_rmsnorm
++            post_residual_addition = kwargs.get("post_residual_addition")
 +            if post_residual_addition is not None:
 +                residual = residual + post_residual_addition
              fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
              return x, residual
          out = rmsnorm(x, self.weight.data, self.variance_epsilon)
-@@ -179,17 +181,35 @@ class RMSNorm(CustomOp):
+@@ -129,6 +134,7 @@ class RMSNorm(CustomOp):
          self,
          x: torch.Tensor,
          residual: Optional[torch.Tensor] = None,
-+        post_residual_addition: Optional[torch.Tensor] = None,
++        **kwargs,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if residual is not None:
+             out, _, residual_out = torch_npu.npu_add_rms_norm(
+@@ -141,6 +147,7 @@ class RMSNorm(CustomOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
++        **kwargs,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if residual is not None:
+             residual_out = torch.empty_like(x)
+@@ -160,6 +167,7 @@ class RMSNorm(CustomOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
++        **kwargs,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if not x.is_contiguous():
+             # NOTE: Remove this if aiter kernel supports discontinuous input
+@@ -179,17 +187,36 @@ class RMSNorm(CustomOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
++        **kwargs,
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          if not x.is_contiguous():
              x = x.contiguous()
 -        orig_dtype = self.override_orig_dtype or x.dtype
 +        orig_dtype = x.dtype
++        post_residual_addition = kwargs.get("post_residual_addition")
 +
 +        if residual is not None and not self.fp32_residual:
 +            x = (
@@ -308,6 +308,148 @@ index 3293a8a59..a075b71ce 100644
  
          hidden_size = x.shape[-1]
          if hidden_size != self.hidden_size:
+@@ -226,6 +253,7 @@ class RMSNorm(CustomOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
++        **kwargs,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if _is_cpu_amx_available:
+             if residual is not None:
+@@ -237,15 +265,16 @@ class RMSNorm(CustomOp):
+                 x, self.weight.data, self.variance_epsilon
+             )
+         else:
+-            return self.forward_native(x, residual)
++            return self.forward_native(x, residual, **kwargs)
+ 
+     def forward_xpu(
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
++        **kwargs,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if self.variance_size_override is not None:
+-            return self.forward_native(x, residual)
++            return self.forward_native(x, residual, **kwargs)
+         if residual is not None:
+             fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
+             return x, residual
+@@ -307,6 +336,7 @@ class LayerNorm(CustomOp):
+     def forward_cuda(
+         self,
+         x: torch.Tensor,
++        **kwargs,
+     ) -> torch.Tensor:
+         if (
+             _flashinfer_layernorm_available
+@@ -315,11 +345,12 @@ class LayerNorm(CustomOp):
+         ):
+             return layernorm(x, self.weight, self.bias, self.variance_epsilon)
+         else:
+-            return self.forward_native(x)
++            return self.forward_native(x, **kwargs)
+ 
+     def forward_native(
+         self,
+         x: torch.Tensor,
++        **kwargs,
+     ) -> torch.Tensor:
+         weight = self.weight if self.elementwise_affine else None
+         bias = self.bias if self.use_bias else None
+@@ -336,12 +367,14 @@ class LayerNorm(CustomOp):
+     def forward_hip(
+         self,
+         x: torch.Tensor,
++        **kwargs,
+     ) -> torch.Tensor:
+-        return self.forward_native(x)
++        return self.forward_native(x, **kwargs)
+ 
+     def forward_npu(
+         self,
+         x: torch.Tensor,
++        **kwargs,
+     ) -> torch.Tensor:
+         orig_dtype = x.dtype
+         x = x.to(self.dtype)
+@@ -360,8 +393,9 @@ class LayerNorm(CustomOp):
+     def forward_cpu(
+         self,
+         x: torch.Tensor,
++        **kwargs,
+     ) -> torch.Tensor:
+-        return self.forward_native(x)
++        return self.forward_native(x, **kwargs)
+ 
+ 
+ class GemmaRMSNorm(CustomOp):
+@@ -382,6 +416,7 @@ class GemmaRMSNorm(CustomOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
++        **kwargs,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if residual is not None:
+             gemma_fused_add_rmsnorm(
+@@ -395,6 +430,7 @@ class GemmaRMSNorm(CustomOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
++        **kwargs,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         orig_dtype = x.dtype
+         if residual is not None:
+@@ -412,13 +448,15 @@ class GemmaRMSNorm(CustomOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
++        **kwargs,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+-        return self._forward_impl(x, residual)
++        return self._forward_impl(x, residual, **kwargs)
+ 
+     def forward_npu(
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
++        **kwargs,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if residual is not None:
+             x = x + residual
+@@ -431,8 +469,9 @@ class GemmaRMSNorm(CustomOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
++        **kwargs,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+-        return self._forward_impl(x, residual)
++        return self._forward_impl(x, residual, **kwargs)
+ 
+ 
+ class Gemma3RMSNorm(CustomOp):
+@@ -445,17 +484,17 @@ class Gemma3RMSNorm(CustomOp):
+     def _norm(self, x):
+         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+ 
+-    def forward_native(self, x):
++    def forward_native(self, x, **kwargs):
+         output = self._norm(x.float())
+         # Llama does x.to(float16) * w whilst Gemma3 is (x * w).to(float16)
+         # See https://github.com/huggingface/transformers/pull/29402
+         output = output * (1.0 + self.weight.float())
+         return output.type_as(x)
+ 
+-    def forward_cuda(self, x):
+-        return self.forward_native(x)
++    def forward_cuda(self, x, **kwargs):
++        return self.forward_native(x, **kwargs)
+ 
+-    def forward_npu(self, x):
++    def forward_npu(self, x, **kwargs):
+         output, _ = torch_npu.npu_gemma_rms_norm(x, self.weight, self.eps)
+         return output
+ 
 diff --git a/python/sglang/srt/layers/logits_processor.py b/python/sglang/srt/layers/logits_processor.py
 index 522865765..733bad5f2 100644
 --- a/python/sglang/srt/layers/logits_processor.py
@@ -350,10 +492,10 @@ index e7d5a67cc..639e47163 100644
                          out_hidden_states[begin_chunk_idx:end_chunk_idx],
 diff --git a/python/sglang/srt/layers/moe/routed_experts_capturer.py b/python/sglang/srt/layers/moe/routed_experts_capturer.py
 new file mode 100644
-index 000000000..e16817f1f
+index 000000000..11adcaa77
 --- /dev/null
 +++ b/python/sglang/srt/layers/moe/routed_experts_capturer.py
-@@ -0,0 +1,279 @@
+@@ -0,0 +1,305 @@
 +import logging
 +from abc import ABC
 +from contextlib import contextmanager
@@ -364,12 +506,17 @@ index 000000000..e16817f1f
 +
 +from sglang.srt.configs.model_config import ModelConfig
 +from sglang.srt.layers.dp_attention import (
++    attn_tp_all_gather_into_tensor,
 +    get_attention_dp_rank,
++    get_attention_tp_size,
 +    get_dp_local_info,
 +    is_dp_attention_enabled,
 +)
 +from sglang.srt.mem_cache.memory_pool import ReqToTokenPool
 +from sglang.srt.server_args import get_global_server_args
++from sglang.srt.layers.moe import (
++    get_moe_a2a_backend,
++)
 +
 +logger = logging.getLogger(__name__)
 +
@@ -445,9 +592,6 @@ index 000000000..e16817f1f
 +    def get_buffer_size_bytes(self):
 +        assert hasattr(self, "buffer")
 +        return get_tensor_size_bytes(self.buffer)
-+
-+    def set_experts_buffer(self, layer_id: int, loc: torch.Tensor, top_k: torch.Tensor):
-+        self.buffer[layer_id, loc, :] = top_k.to(device="cpu", non_blocking=True)
 +
 +    def _finalize_allocation_log(self):
 +        """Common logging and memory usage computation for captured experts buffers."""
@@ -539,7 +683,24 @@ index 000000000..e16817f1f
 +            device=device,
 +        )
 +
++        if get_moe_a2a_backend().is_deepep():
++            attn_tp_size = get_attention_tp_size() if is_dp_attention_enabled() else 1
++            self.gather_buffer = torch.empty(
++                (
++                    self.device_cache.buffer.shape[0] * attn_tp_size,
++                    self.device_cache.buffer.shape[2],
++                ),
++                dtype=torch.int32,
++                device=device,
++            )
++
 +    def capture(self, layer_id: int, topk_ids: torch.Tensor):
++        if get_moe_a2a_backend().is_deepep():
++            local_topk_ids = topk_ids
++            topk_ids = self.gather_buffer[
++                : local_topk_ids.size(0) * get_attention_tp_size()
++            ]
++            attn_tp_all_gather_into_tensor(topk_ids, local_topk_ids)
 +        self.device_cache.capture_fwd_routed_experts(layer_id, topk_ids)
 +
 +    def sync_fwd_experts_buffer_DtoH(
@@ -549,7 +710,9 @@ index 000000000..e16817f1f
 +        can_run_graph: bool,
 +        cuda_graph_batch: int,
 +    ):
-+        if is_dp_attention_enabled():
++        # When DeepEP is enabled, capture() already does all_gather, so device_cache.buffer
++        # contains data from all DP ranks. We should not slice by DP rank in this case.
++        if is_dp_attention_enabled() and not get_moe_a2a_backend().is_deepep():
 +            local_start_pos, local_num_tokens = get_dp_local_info(self.forward_batch)
 +            # handle with cuda graph padding
 +            if can_run_graph:
@@ -560,6 +723,11 @@ index 000000000..e16817f1f
 +        else:
 +            local_start_pos = 0
 +            local_end_pos = device_loc.shape[0]
++
++        if self.forward_batch.num_token_non_padded is not None:
++            assert local_end_pos - local_start_pos >= self.forward_batch.num_token_non_padded
++            local_end_pos = local_start_pos + self.forward_batch.num_token_non_padded
++            cpu_loc = cpu_loc[: self.forward_batch.num_token_non_padded]
 +
 +        self.host_cache.buffer[cpu_loc] = self.device_cache.buffer[
 +            local_start_pos:local_end_pos, :, : self.num_experts_per_tok
@@ -838,27 +1006,23 @@ index 7f6f6a010..c4a673145 100644
              if not get_global_server_args().sampling_backend == "ascend" or (
                  return_logprob and not SGLANG_RETURN_ORIGINAL_LOGPROB
 diff --git a/python/sglang/srt/managers/detokenizer_manager.py b/python/sglang/srt/managers/detokenizer_manager.py
-index 87922077e..8cb6bad8d 100644
+index 87922077e..6507d8bf5 100644
 --- a/python/sglang/srt/managers/detokenizer_manager.py
 +++ b/python/sglang/srt/managers/detokenizer_manager.py
-@@ -247,6 +247,16 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
+@@ -247,6 +247,12 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
              s.sent_offset = len(output_str)
              output_strs.append(incremental_output)
  
 +        output_routed_experts = []
 +        if recv_obj.output_routed_experts is not None:
 +            output_routed_experts = [
-+                (
-+                    output_routed_experts.tolist()
-+                    if output_routed_experts is not None
-+                    else []
-+                )
++                output_routed_experts
 +                for output_routed_experts in recv_obj.output_routed_experts
 +            ]
          return BatchStrOutput(
              rids=recv_obj.rids,
              http_worker_ipcs=recv_obj.http_worker_ipcs,
-@@ -272,6 +282,7 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
+@@ -272,6 +278,7 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
              output_token_ids_logprobs_idx=recv_obj.output_token_ids_logprobs_idx,
              output_token_entropy_val=recv_obj.output_token_entropy_val,
              output_hidden_states=recv_obj.output_hidden_states,
@@ -927,7 +1091,7 @@ index e34736cc4..5e5997a1a 100644
      # idx is the index of the token in the prompt after expansion.
      # val is the length of padded tokens after expansion.
 diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
-index c4c5a9ebb..1450c5fd8 100644
+index c4c5a9ebb..3650ba881 100644
 --- a/python/sglang/srt/managers/schedule_batch.py
 +++ b/python/sglang/srt/managers/schedule_batch.py
 @@ -450,6 +450,7 @@ class Req:
@@ -977,7 +1141,15 @@ index c4c5a9ebb..1450c5fd8 100644
              is_prefill_only=all(req.is_prefill_only for req in reqs),
              chunked_req=chunked_req,
              dllm_config=dllm_config,
-@@ -1457,6 +1469,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+@@ -1282,6 +1294,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+             )
+         else:
+             self.out_cache_loc = torch.cat(decoder_out_cache_loc)
++        self.out_cache_loc_cpu = self.out_cache_loc.to("cpu", non_blocking=True)
+ 
+         if not encoder_out_cache_loc:
+             self.encoder_out_cache_loc = torch.zeros(0, dtype=torch.int64).to(
+@@ -1457,6 +1470,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
          self.req_pool_indices = req_pool_indices_tensor
          self.orig_seq_lens = orig_seq_lens_tensor
          self.out_cache_loc = out_cache_loc
@@ -985,7 +1157,7 @@ index c4c5a9ebb..1450c5fd8 100644
          self.input_embeds = (
              torch.tensor(input_embeds).to(self.device, non_blocking=True)
              if input_embeds
-@@ -1508,10 +1521,14 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+@@ -1508,10 +1522,14 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
  
          input_ids = torch.cat([self.input_ids, running_batch.input_ids])
          out_cache_loc = torch.cat([self.out_cache_loc, running_batch.out_cache_loc])
@@ -1000,7 +1172,7 @@ index c4c5a9ebb..1450c5fd8 100644
  
          # For overlap scheduler, the output_ids has one step delay
          delta = 0 if self.enable_overlap else -1
-@@ -1677,6 +1694,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+@@ -1677,6 +1695,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
          self.seq_lens_cpu = torch.empty(0, dtype=torch.int64)
          self.orig_seq_lens = torch.empty(0, dtype=torch.int32, device=self.device)
          self.out_cache_loc = torch.empty(0, dtype=torch.int64, device=self.device)
@@ -1008,7 +1180,7 @@ index c4c5a9ebb..1450c5fd8 100644
          self.req_pool_indices = torch.empty(0, dtype=torch.int32, device=self.device)
          self.seq_lens_sum = 0
          self.extend_num_tokens = 0
-@@ -1736,6 +1754,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+@@ -1736,6 +1755,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
  
          # Allocate memory
          self.out_cache_loc = alloc_for_decode(self, token_per_req=1)
@@ -1016,7 +1188,7 @@ index c4c5a9ebb..1450c5fd8 100644
  
          # Update req-level memory management fields
          for req in self.reqs:
-@@ -1807,6 +1826,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+@@ -1807,6 +1827,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
          self.seq_lens_cpu = self.seq_lens_cpu[keep_indices]
          self.orig_seq_lens = self.orig_seq_lens[keep_indices_device]
          self.out_cache_loc = None
@@ -1024,7 +1196,7 @@ index c4c5a9ebb..1450c5fd8 100644
          self.seq_lens_sum = self.seq_lens.sum().item()
          self.output_ids = self.output_ids[keep_indices_device]
          self.return_logprob = any(req.return_logprob for req in self.reqs)
-@@ -1852,6 +1872,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+@@ -1852,6 +1873,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
          self.seq_lens_cpu = torch.cat([self.seq_lens_cpu, other.seq_lens_cpu])
          self.orig_seq_lens = torch.cat([self.orig_seq_lens, other.orig_seq_lens])
          self.out_cache_loc = None
@@ -1032,7 +1204,7 @@ index c4c5a9ebb..1450c5fd8 100644
          self.seq_lens_sum += other.seq_lens_sum
          if self.output_ids is not None:
              self.output_ids = torch.cat([self.output_ids, other.output_ids])
-@@ -1903,6 +1924,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+@@ -1903,6 +1925,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
              seq_lens=self.seq_lens,
              orig_seq_lens=self.orig_seq_lens,
              out_cache_loc=self.out_cache_loc,
@@ -1040,7 +1212,7 @@ index c4c5a9ebb..1450c5fd8 100644
              seq_lens_cpu=seq_lens_cpu,
              seq_lens_sum=self.seq_lens_sum,
              return_logprob=self.return_logprob,
-@@ -1983,7 +2005,8 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+@@ -1983,7 +2006,8 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
      def __str__(self):
          return (
              f"ScheduleBatch(forward_mode={self.forward_mode.name if self.forward_mode else 'None'}, "
@@ -1050,7 +1222,7 @@ index c4c5a9ebb..1450c5fd8 100644
          )
  
  
-@@ -2038,6 +2061,9 @@ class ModelWorkerBatch:
+@@ -2038,6 +2062,9 @@ class ModelWorkerBatch:
      # Sampling info
      sampling_info: SamplingBatchInfo
  
@@ -1140,7 +1312,7 @@ index c48f5f893..a9796c25f 100644
                      placeholder_tokens_val=None,
                      retraction_counts=retraction_counts,
 diff --git a/python/sglang/srt/managers/scheduler_update_weights_mixin.py b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
-index f8ebfc1f4..a05449fac 100644
+index f8ebfc1f4..48b9a1a3b 100644
 --- a/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 @@ -1,6 +1,7 @@
@@ -1175,49 +1347,7 @@ index f8ebfc1f4..a05449fac 100644
          if GPU_MEMORY_TYPE_WEIGHTS in tags:
              self.stashed_model_static_state = _export_static_state(
                  self.tp_worker.model_runner.model
-@@ -137,6 +148,20 @@ class SchedulerUpdateWeightsMixin:
-         if GPU_MEMORY_TYPE_CUDA_GRAPH in tags:
-             self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_CUDA_GRAPH)
- 
-+            if os.environ.get("AMEM_ENABLE", "0") == "1":
-+                tp_group = get_tp_group()
-+                if tp_group is not None and tp_group.pynccl_comm is not None:
-+                    tp_group.pynccl_comm.nccl_pause()
-+                attn_tp_group = get_attention_tp_group()
-+                if attn_tp_group is not None and attn_tp_group.pynccl_comm is not None:
-+                    attn_tp_group.pynccl_comm.nccl_pause()
-+                moe_ep_group = get_moe_ep_group()
-+                if moe_ep_group is not None and moe_ep_group.pynccl_comm is not None:
-+                    moe_ep_group.pynccl_comm.nccl_pause()
-+                moe_tp_group = get_moe_tp_group()
-+                if moe_tp_group is not None and moe_tp_group.pynccl_comm is not None:
-+                    moe_tp_group.pynccl_comm.nccl_pause()
-+
-         torch.get_device_module().synchronize()
- 
-         return ReleaseMemoryOccupationReqOutput()
-@@ -155,6 +180,20 @@ class SchedulerUpdateWeightsMixin:
-         if GPU_MEMORY_TYPE_CUDA_GRAPH in tags:
-             self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_CUDA_GRAPH)
- 
-+            if os.environ.get("AMEM_ENABLE", "0") == "1":
-+                tp_group = get_tp_group()
-+                if tp_group is not None and tp_group.pynccl_comm is not None:
-+                    tp_group.pynccl_comm.nccl_resume()
-+                attn_tp_group = get_attention_tp_group()
-+                if attn_tp_group is not None and attn_tp_group.pynccl_comm is not None:
-+                    attn_tp_group.pynccl_comm.nccl_resume()
-+                moe_ep_group = get_moe_ep_group()
-+                if moe_ep_group is not None and moe_ep_group.pynccl_comm is not None:
-+                    moe_ep_group.pynccl_comm.nccl_resume()
-+                moe_tp_group = get_moe_tp_group()
-+                if moe_tp_group is not None and moe_tp_group.pynccl_comm is not None:
-+                    moe_tp_group.pynccl_comm.nccl_resume()
-+
-         if GPU_MEMORY_TYPE_WEIGHTS in tags:
-             self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_WEIGHTS)
-             torch.distributed.barrier(self.tp_cpu_group)
-@@ -167,6 +206,13 @@ class SchedulerUpdateWeightsMixin:
+@@ -167,6 +178,13 @@ class SchedulerUpdateWeightsMixin:
          if GPU_MEMORY_TYPE_KV_CACHE in tags:
              self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_KV_CACHE)
  
@@ -1231,11 +1361,47 @@ index f8ebfc1f4..a05449fac 100644
          return ResumeMemoryOccupationReqOutput()
  
      def check_weights(self: Scheduler, recv_req: CheckWeightsReqInput):
+diff --git a/python/sglang/srt/managers/tokenizer_communicator_mixin.py b/python/sglang/srt/managers/tokenizer_communicator_mixin.py
+index edbc52526..2cdc42755 100644
+--- a/python/sglang/srt/managers/tokenizer_communicator_mixin.py
++++ b/python/sglang/srt/managers/tokenizer_communicator_mixin.py
+@@ -421,6 +421,11 @@ class TokenizerCommunicatorMixin:
+                 result = (await self.update_weights_from_distributed_communicator(obj))[
+                     0
+                 ]
++                if result.success and obj.weight_version is not None:
++                    self._update_weight_version_if_provided(obj.weight_version)
++                    result.message += (
++                        f" Weight version updated to {obj.weight_version}."
++                    )
+                 return result.success, result.message
+ 
+         # This means that weight sync
+@@ -480,6 +485,11 @@ class TokenizerCommunicatorMixin:
+         async with self.is_pause_cond:
+             if self.is_pause:
+                 result = (await self.update_weights_from_tensor_communicator(obj))[0]
++                if result.success and obj.weight_version is not None:
++                    self._update_weight_version_if_provided(obj.weight_version)
++                    result.message += (
++                        f" Weight version updated to {obj.weight_version}."
++                    )
+                 return result.success, result.message
+ 
+         # This means that weight sync
 diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
-index b90cf0616..98d71d896 100644
+index b90cf0616..8a5cbdbed 100644
 --- a/python/sglang/srt/managers/tokenizer_manager.py
 +++ b/python/sglang/srt/managers/tokenizer_manager.py
-@@ -888,6 +888,7 @@ class TokenizerManager(TokenizerCommunicatorMixin):
+@@ -20,6 +20,7 @@ import logging
+ import math
+ import os
+ import pickle
++import pybase64
+ import signal
+ import sys
+ import threading
+@@ -888,6 +889,7 @@ class TokenizerManager(TokenizerCommunicatorMixin):
                  session_params=session_params,
                  custom_logit_processor=obj.custom_logit_processor,
                  return_hidden_states=obj.return_hidden_states,
@@ -1243,17 +1409,22 @@ index b90cf0616..98d71d896 100644
                  data_parallel_rank=obj.data_parallel_rank,
                  priority=obj.priority,
                  extra_key=obj.extra_key,
-@@ -1621,6 +1622,9 @@ class TokenizerManager(TokenizerCommunicatorMixin):
+@@ -1621,6 +1623,14 @@ class TokenizerManager(TokenizerCommunicatorMixin):
              if getattr(recv_obj, "output_hidden_states", None):
                  meta_info["hidden_states"] = recv_obj.output_hidden_states[i]
  
 +            if getattr(recv_obj, "output_routed_experts", None):
-+                meta_info["routed_experts"] = recv_obj.output_routed_experts[i]
++                if recv_obj.output_routed_experts[i] is not None:
++                    meta_info["routed_experts"] = pybase64.b64encode(
++                        recv_obj.output_routed_experts[i].contiguous().numpy().tobytes(order="C")
++                    ).decode("ascii")
++                else:
++                    meta_info["routed_experts"] = None
 +
              if isinstance(recv_obj, BatchStrOutput):
                  state.text += recv_obj.output_strs[i]
                  if self.server_args.stream_output and state.obj.stream:
-@@ -1747,12 +1751,13 @@ class TokenizerManager(TokenizerCommunicatorMixin):
+@@ -1747,12 +1757,13 @@ class TokenizerManager(TokenizerCommunicatorMixin):
              return
  
          if len(recv_obj.input_token_logprobs_val) > 0:
@@ -1274,7 +1445,7 @@ index b90cf0616..98d71d896 100644
              recv_obj.output_token_logprobs_val[recv_obj_index]
          )
 diff --git a/python/sglang/srt/model_executor/forward_batch_info.py b/python/sglang/srt/model_executor/forward_batch_info.py
-index 3a85e6a7e..2859dafa1 100644
+index 3a85e6a7e..5d74adca6 100644
 --- a/python/sglang/srt/model_executor/forward_batch_info.py
 +++ b/python/sglang/srt/model_executor/forward_batch_info.py
 @@ -51,6 +51,7 @@ from sglang.srt.layers.dp_attention import (
@@ -1327,19 +1498,25 @@ index 3a85e6a7e..2859dafa1 100644
                      # text only
                      mrope_positions = torch.tensor(
                          [
-@@ -823,6 +834,10 @@ class ForwardBatch:
+@@ -823,6 +834,8 @@ class ForwardBatch:
              )
  
          self.out_cache_loc = self._pad_tensor_to_size(self.out_cache_loc, num_tokens)
 +        if self.out_cache_loc_cpu is not None:
-+            self.out_cache_loc_cpu = self._pad_tensor_to_size(
-+                self.out_cache_loc_cpu, num_tokens
-+            )
++            self.out_cache_loc_cpu = self.out_cache_loc.to("cpu", non_blocking=True)
          if self.encoder_lens is not None:
              self.encoder_lens = self._pad_tensor_to_size(self.encoder_lens, bs)
          self.positions = self._pad_tensor_to_size(self.positions, num_tokens)
+@@ -906,6 +919,7 @@ class ForwardBatch:
+                 self.spec_info.hidden_states = self.hidden_states_backup
+             if hasattr(self, "output_cache_loc_backup"):
+                 self.out_cache_loc = self.output_cache_loc_backup
++                self.out_cache_loc_cpu = self.out_cache_loc.to("cpu", non_blocking=True)
+ 
+         elif self.forward_mode.is_decode() or self.forward_mode.is_idle():
+             logits_output.next_token_logits = logits_output.next_token_logits[:bs]
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index 4d58278b7..8f50dc430 100644
+index 4d58278b7..81c6a5c7c 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
 @@ -94,6 +94,11 @@ from sglang.srt.layers.dp_attention import (
@@ -1354,18 +1531,19 @@ index 4d58278b7..8f50dc430 100644
  from sglang.srt.layers.pooler import EmbeddingPoolerOutput
  from sglang.srt.layers.sampler import Sampler
  from sglang.srt.layers.torchao_utils import apply_torchao_config_to_model
-@@ -502,6 +507,10 @@ class ModelRunner:
+@@ -502,6 +507,11 @@ class ModelRunner:
              server_args.max_running_requests,
              server_args.max_total_tokens,
          )
 +
 +        # Init routed experts capturer
-+        self.init_routed_experts_capturer()
++        if not self.is_draft_worker:
++            self.init_routed_experts_capturer()
 +
          if self.device == "cuda":
              self.init_cublas()
              self.init_attention_backend()
-@@ -545,6 +554,40 @@ class ModelRunner:
+@@ -545,6 +555,40 @@ class ModelRunner:
          # Initialize piecewise CUDA graph
          self.init_piecewise_cuda_graphs()
  
@@ -1406,20 +1584,7 @@ index 4d58278b7..8f50dc430 100644
      def model_specific_adjustment(self):
          server_args = self.server_args
  
-@@ -792,7 +835,11 @@ class ModelRunner:
-         )
-         with self.memory_saver_adapter.region(
-             GPU_MEMORY_TYPE_WEIGHTS,
--            enable_cpu_backup=enable_cpu_backup,
-+            enable_cpu_backup=(
-+                self.server_args.enable_weights_cpu_backup
-+                if not self.is_draft_worker
-+                else True
-+            ),
-         ):
-             self.model = get_model(
-                 model_config=self.model_config,
-@@ -2645,9 +2692,12 @@ class ModelRunner:
+@@ -2645,9 +2689,12 @@ class ModelRunner:
      ) -> Tuple[Union[LogitsProcessorOutput, PPProxyTensors], bool]:
          self.forward_pass_id += 1
  
@@ -1435,22 +1600,23 @@ index 4d58278b7..8f50dc430 100644
          ):
              output = self._forward_raw(
                  forward_batch,
-@@ -2656,6 +2706,13 @@ class ModelRunner:
+@@ -2656,6 +2703,14 @@ class ModelRunner:
                  reinit_attn_backend,
                  split_forward_count,
              )
 +            # Copy cached routing experts' buffers back to CPU cache
-+            get_global_experts_capturer().sync_fwd_experts_buffer_DtoH(
-+                device_loc=forward_batch.out_cache_loc,
-+                cpu_loc=forward_batch.out_cache_loc_cpu,
-+                can_run_graph=output[1],
-+                cuda_graph_batch=getattr(self.graph_runner, "bs", None),
-+            )
++            if not self.is_draft_worker:
++                get_global_experts_capturer().sync_fwd_experts_buffer_DtoH(
++                    device_loc=forward_batch.out_cache_loc,
++                    cpu_loc=forward_batch.out_cache_loc_cpu,
++                    can_run_graph=output[1],
++                    cuda_graph_batch=getattr(self.graph_runner, "bs", None),
++                )
  
          if self.eplb_manager is not None:
              self.eplb_manager.on_forward_pass_end()
 diff --git a/python/sglang/srt/models/deepseek_v2.py b/python/sglang/srt/models/deepseek_v2.py
-index dc30b4f0a..f29dc4b71 100644
+index dc30b4f0a..57625cdeb 100644
 --- a/python/sglang/srt/models/deepseek_v2.py
 +++ b/python/sglang/srt/models/deepseek_v2.py
 @@ -667,6 +667,7 @@ class DeepseekV2MoE(nn.Module):
@@ -1461,6 +1627,19 @@ index dc30b4f0a..f29dc4b71 100644
              renormalize=config.norm_topk_prob,
              use_grouped_topk=True,
              num_expert_group=config.n_group,
+@@ -2641,7 +2642,11 @@ class DeepseekV2AttentionMLA(nn.Module):
+         ):
+             k = k_nope.new_empty(*k_shape)
+             concat_mla_k(k=k, k_nope=k_nope, k_rope=k_pe)
+-        elif _is_cuda:
++        elif _is_cuda and all(
++            # (i.bit_count() == 1) == (is_power_of_two(i))
++            i.bit_count() == 1
++            for i in (k_shape[1], k_nope.shape[-1], k_pe.shape[-1])
++        ):
+             # fa3 mha support fp8 inputs
+             if (
+                 self.current_attention_backend == "fa3"
 diff --git a/python/sglang/srt/models/ernie4.py b/python/sglang/srt/models/ernie4.py
 index ab1b6576b..dffd8f09a 100644
 --- a/python/sglang/srt/models/ernie4.py
@@ -1474,27 +1653,17 @@ index ab1b6576b..dffd8f09a 100644
              use_grouped_topk=False,
              correction_bias=self.gate.e_score_correction_bias,
 diff --git a/python/sglang/srt/models/glm4_moe.py b/python/sglang/srt/models/glm4_moe.py
-index a9689b8f2..bc8538da8 100644
+index a9689b8f2..0a6c467b1 100644
 --- a/python/sglang/srt/models/glm4_moe.py
 +++ b/python/sglang/srt/models/glm4_moe.py
-@@ -379,6 +379,17 @@ class Glm4MoeSparseMoeBlock(nn.Module):
+@@ -393,6 +393,7 @@ class Glm4MoeSparseMoeBlock(nn.Module):
  
-         self.gate = Glm4MoeGate(config=config, prefix=add_prefix("gate", prefix))
- 
-+        self.topk = TopK(
-+            top_k=self.top_k,
+         self.topk = TopK(
+             top_k=self.top_k + self.num_fused_shared_experts,
 +            layer_id=self.layer_id,
-+            renormalize=config.norm_topk_prob,
-+            use_grouped_topk=True,
-+            num_expert_group=config.n_group,
-+            topk_group=config.topk_group,
-+            correction_bias=self.gate.e_score_correction_bias,
-+            routed_scaling_factor=self.routed_scaling_factor,
-+        )
-+
-         self.experts = get_moe_impl_class(quant_config)(
-             num_experts=config.n_routed_experts + self.num_fused_shared_experts,
-             num_fused_shared_experts=self.num_fused_shared_experts,
+             renormalize=config.norm_topk_prob,
+             use_grouped_topk=True,
+             num_expert_group=config.n_group,
 diff --git a/python/sglang/srt/models/gpt_oss.py b/python/sglang/srt/models/gpt_oss.py
 index 9474700c4..398d622ff 100644
 --- a/python/sglang/srt/models/gpt_oss.py
@@ -1613,7 +1782,7 @@ index ea33e81ef..561934dce 100644
              self.norm = PPMissingLayer(return_tuple=True)
  
 diff --git a/python/sglang/srt/models/qwen3.py b/python/sglang/srt/models/qwen3.py
-index 30b92acbd..a0d14895f 100644
+index 30b92acbd..0d28e0f2b 100644
 --- a/python/sglang/srt/models/qwen3.py
 +++ b/python/sglang/srt/models/qwen3.py
 @@ -90,8 +90,8 @@ class Qwen3Attention(nn.Module):
@@ -1642,7 +1811,7 @@ index 30b92acbd..a0d14895f 100644
          hidden_states: torch.Tensor,
          forward_batch: ForwardBatch,
          residual: Optional[torch.Tensor],
-+        post_residual_addition: Optional[torch.Tensor] = None,
++        **kwargs,
      ) -> Tuple[torch.Tensor, torch.Tensor]:
          # Self Attention
          hidden_states, residual = self.layer_communicator.prepare_attn(
@@ -1650,7 +1819,7 @@ index 30b92acbd..a0d14895f 100644
 +            hidden_states,
 +            residual,
 +            forward_batch,
-+            post_residual_addition=post_residual_addition,
++            **kwargs,
          )
          if hidden_states.shape[0] != 0:
              hidden_states = self.self_attn(
@@ -1975,10 +2144,18 @@ index 370aec2b6..47666d8f3 100644
              elif processor.__class__.__name__ not in {
                  "Qwen2_5_VLProcessor",
 diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
-index 8e7753dab..323788f39 100644
+index 8e7753dab..15a0823fd 100644
 --- a/python/sglang/srt/server_args.py
 +++ b/python/sglang/srt/server_args.py
-@@ -535,6 +535,7 @@ class ServerArgs:
+@@ -489,6 +489,7 @@ class ServerArgs:
+     cuda_graph_max_bs: Optional[int] = None
+     cuda_graph_bs: Optional[List[int]] = None
+     disable_cuda_graph: bool = False
++    disable_draft_cuda_graph: bool = False
+     disable_cuda_graph_padding: bool = False
+     enable_profile_cuda_graph: bool = False
+     enable_cudagraph_gc: bool = False
+@@ -535,6 +536,7 @@ class ServerArgs:
      disable_fast_image_processor: bool = False
      keep_mm_feature_on_device: bool = False
      enable_return_hidden_states: bool = False
@@ -1986,7 +2163,7 @@ index 8e7753dab..323788f39 100644
      scheduler_recv_interval: int = 1
      numa_node: Optional[List[int]] = None
      enable_deterministic_inference: bool = False
-@@ -1966,6 +1967,9 @@ class ServerArgs:
+@@ -1966,6 +1968,9 @@ class ServerArgs:
                  "Enable deterministic inference because of rl_on_policy_target."
              )
              self.enable_deterministic_inference = True
@@ -1996,7 +2173,19 @@ index 8e7753dab..323788f39 100644
              # TODO remove this environment variable as a whole
              os.environ["SGLANG_ENABLE_DETERMINISTIC_INFERENCE"] = "1"
  
-@@ -3705,6 +3709,11 @@ class ServerArgs:
+@@ -3462,6 +3467,11 @@ class ServerArgs:
+             action="store_true",
+             help="Disable cuda graph.",
+         )
++        parser.add_argument(
++            "--disable-draft-cuda-graph",
++            action="store_true",
++            help="Disable cuda graph for draft model in speculative decoding.",
++        )
+         parser.add_argument(
+             "--disable-cuda-graph-padding",
+             action="store_true",
+@@ -3705,6 +3715,11 @@ class ServerArgs:
              action="store_true",
              help="Enable returning hidden states with responses.",
          )
@@ -2009,10 +2198,34 @@ index 8e7753dab..323788f39 100644
              "--scheduler-recv-interval",
              type=int,
 diff --git a/python/sglang/srt/speculative/eagle_info.py b/python/sglang/srt/speculative/eagle_info.py
-index b3d72df05..ddfe0b178 100644
+index b3d72df05..09a1634e0 100644
 --- a/python/sglang/srt/speculative/eagle_info.py
 +++ b/python/sglang/srt/speculative/eagle_info.py
-@@ -746,6 +746,10 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
+@@ -135,6 +135,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
+                 len(batch.input_ids),
+             )
+             self.last_loc = last_loc
++        batch.out_cache_loc_cpu = batch.out_cache_loc.to("cpu", non_blocking=True)
+ 
+         bs = batch.batch_size()
+         assign_req_to_token_pool_func(
+@@ -492,6 +493,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
+                 batch.out_cache_loc = tgt_cache_loc
+             batch.seq_lens.add_(accept_length + 1)
+             batch.seq_lens_cpu.add_(accept_length_cpu + 1)
++            batch.out_cache_loc_cpu = batch.out_cache_loc.to("cpu", non_blocking=True)
+ 
+             draft_input = EagleDraftInput(
+                 hidden_states=batch.spec_info.hidden_states[accept_index],
+@@ -575,6 +577,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
+                     topk=self.topk,
+                     capture_hidden_mode=CaptureHiddenMode.LAST,
+                 )
++            batch.out_cache_loc_cpu = batch.out_cache_loc.to("cpu", non_blocking=True)
+ 
+             return EagleVerifyOutput(
+                 draft_input=draft_input,
+@@ -746,6 +749,10 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
              self.topk_index = self.topk_index[: len(new_indices)]
              self.hidden_states = self.hidden_states[: len(new_indices)]
              self.verified_id = self.verified_id[: len(new_indices)]
@@ -2023,7 +2236,7 @@ index b3d72df05..ddfe0b178 100644
          else:
              # in some cases(e.g draft_extend), we have not filtered the batch by `unfinished_index`
              self.topk_p = self.topk_p[new_indices]
-@@ -777,6 +781,27 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
+@@ -777,6 +784,27 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
          self.verified_id = torch.cat([self.verified_id, spec_info.verified_id], axis=0)
          self.topk_p = torch.cat([self.topk_p, spec_info.topk_p])
          self.topk_index = torch.cat([self.topk_index, spec_info.topk_index])
@@ -2051,3 +2264,16 @@ index b3d72df05..ddfe0b178 100644
  
  
  @dataclass
+diff --git a/python/sglang/srt/speculative/eagle_worker.py b/python/sglang/srt/speculative/eagle_worker.py
+index 07e3798f1..dede648ee 100644
+--- a/python/sglang/srt/speculative/eagle_worker.py
++++ b/python/sglang/srt/speculative/eagle_worker.py
+@@ -222,7 +222,7 @@ class EAGLEWorker(TpModelWorker):
+         self.cuda_graph_runner = None
+         self.cuda_graph_runner_for_draft_extend = None
+ 
+-        if self.server_args.disable_cuda_graph:
++        if self.server_args.disable_cuda_graph or self.server_args.disable_draft_cuda_graph:
+             return
+ 
+         Device2DraftCudaGraphRunner = {

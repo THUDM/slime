@@ -2,7 +2,7 @@
 import argparse
 import inspect
 from contextlib import nullcontext
-from typing import Literal
+from typing import Literal, Optional
 
 import torch
 from megatron.core import tensor_parallel
@@ -15,6 +15,8 @@ from megatron.core.models.gpt.gpt_layer_specs import (
 from megatron.core.transformer.spec_utils import import_module
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.training.arguments import core_transformer_config_from_args
+
+from slime.utils.misc import load_function
 
 
 # Adapt from https://github.com/volcengine/verl/blob/c3b20575d2bc815fcccd84bddb4c0401fc4b632b/verl/models/llama/megatron/layers/parallel_linear.py#L82
@@ -53,6 +55,42 @@ def get_model_provider_func(
     args: argparse.Namespace,
     role: Literal["actor", "critic"] = "actor",
 ):
+    # Support custom model provider path (similar to --custom-rm-path for reward models)
+    if getattr(args, "custom_model_provider_path", None):
+
+        def wrapped_model_provider(
+            pre_process: bool = True, post_process: bool = True, vp_stage: Optional[int] = None
+        ) -> GPTModel:
+            custom_model_provider = load_function(args.custom_model_provider_path)
+            # Check if the custom provider supports vp_stage parameter
+            has_vp_stage = "vp_stage" in inspect.signature(custom_model_provider).parameters
+            if has_vp_stage:
+                model = custom_model_provider(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
+            else:
+                model = custom_model_provider(pre_process=pre_process, post_process=post_process)
+            # Apply critic output layer if needed
+            if post_process and role == "critic":
+                model.output_layer = LinearForLastLayer(
+                    input_size=model.config.hidden_size, output_size=1, config=model.config
+                )
+            return model
+
+        return wrapped_model_provider
+
+    if args.megatron_to_hf_mode == "bridge":
+        from megatron.bridge import AutoBridge
+
+        bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        provider = bridge.to_megatron_provider(load_weights=False)
+        # TODO: we should not manually set this...
+        provider.tensor_model_parallel_size = args.tensor_model_parallel_size
+        provider.pipeline_model_parallel_size = args.pipeline_model_parallel_size
+        provider.expert_model_parallel_size = args.expert_model_parallel_size
+        provider.expert_tensor_parallel_size = args.expert_tensor_parallel_size
+        provider.sequence_parallel = args.sequence_parallel
+        provider.finalize()
+        return provider.provide
+
     def model_provider(pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None) -> GPTModel:
         """Builds the model.
 

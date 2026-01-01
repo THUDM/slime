@@ -82,7 +82,7 @@ RUN pip install setuptools==75.8.0
 
 
 ###########################################
-############build sgalng###################
+############build sglang###################
 ###########################################
 # Set environment variables
 ENV BASE_DIR=/workspace

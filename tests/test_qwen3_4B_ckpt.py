@@ -1,4 +1,5 @@
 import os
+from argparse import ArgumentParser
 
 import slime.utils.external_utils.command_utils as U
 
@@ -9,6 +10,10 @@ TIGHT_HOST_MEMORY = bool(int(os.environ.get("SLIME_TEST_TIGHT_HOST_MEMORY", "1")
 MODEL_NAME = "Qwen3-4B"
 MODEL_TYPE = "qwen3-4B"
 NUM_GPUS = 8
+
+
+parser = ArgumentParser()
+parser.add_argument("--async-save", action="store_true", help="Whether to test async save/load.")
 
 
 def prepare():
@@ -28,8 +33,13 @@ def execute(mode: str = ""):
     if mode == "save":
         ckpt_args += f"--save /root/models/{MODEL_NAME}_slime "
         ckpt_args += "--save-interval 2 "
+    elif mode == "async_save":
+        ckpt_args += f"--save /root/models/{MODEL_NAME}_slime "
+        ckpt_args += "--save-interval 2 "
+        ckpt_args += "--async-save "
     elif mode == "load":
         ckpt_args += f"--load /root/models/{MODEL_NAME}_slime "
+        ckpt_args += "--ckpt-step 1 "
 
     rollout_args = (
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
@@ -39,9 +49,9 @@ def execute(mode: str = ""):
         "--rollout-shuffle "
         "--rm-type deepscaler "
         "--num-rollout 3 "
-        "--rollout-batch-size 8 "
+        "--rollout-batch-size 4 "
         "--n-samples-per-prompt 8 "
-        "--rollout-max-response-len 8192 "
+        "--rollout-max-response-len 1024 "
         "--rollout-temperature 0.8 "
         "--global-batch-size 32 "
         "--balance-data "
@@ -80,7 +90,7 @@ def execute(mode: str = ""):
         "--use-precision-aware-optimizer "
     )
 
-    sglang_args = "--rollout-num-gpus-per-engine 2 " "--sglang-mem-fraction-static 0.8 "
+    sglang_args = "--rollout-num-gpus-per-engine 2 --sglang-mem-fraction-static 0.8 --sglang-cuda-graph-bs 1 2 4 8 16 "
 
     ci_args = "--ci-test "
 
@@ -115,19 +125,15 @@ def execute(mode: str = ""):
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=MODEL_TYPE,
     )
-    U.execute_train(
-        train_args=train_args,
-        num_gpus_per_node=NUM_GPUS,
-        megatron_model_type=MODEL_TYPE,
-    )
 
 
 if __name__ == "__main__":
+    args = parser.parse_args()
     # TODO also use typer
     prepare()
     os.environ.pop("http_proxy")
     os.environ.pop("https_proxy")
     os.environ.pop("HTTP_PROXY")
     os.environ.pop("HTTPS_PROXY")
-    execute("save")
+    execute("save" if not args.async_save else "async_save")
     execute("load")

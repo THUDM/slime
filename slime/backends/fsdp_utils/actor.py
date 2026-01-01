@@ -1,5 +1,6 @@
 import logging
 import os
+import random
 from argparse import Namespace
 from itertools import accumulate
 
@@ -18,7 +19,14 @@ from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_d
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.metric_utils import compute_rollout_step
-from slime.utils.ppo_utils import compute_approx_kl, compute_gspo_kl, compute_opsm_mask, compute_policy_loss
+from slime.utils.misc import load_function
+from slime.utils.ppo_utils import (
+    compute_approx_kl,
+    compute_gspo_kl,
+    compute_opsm_mask,
+    compute_policy_loss,
+    vanilla_tis_function,
+)
 from slime.utils.processing_utils import load_processor, load_tokenizer
 from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, inverse_timer, timer
@@ -317,12 +325,13 @@ class FSDPTrainRayActor(TrainRayActor):
         dist.barrier(group=get_gloo_group())
         print_memory("after wake_up model")
 
-    def save_model(self, iteration: int) -> None:
+    def save_model(self, rollout_id: int, force_sync: bool = False) -> None:
         """Delegate checkpoint saving to the shared checkpoint utilities."""
         if self.args.debug_rollout_only or self.args.save is None:
             return
 
-        checkpoint.save(self, iteration)
+        assert not self.args.async_save, "FSDPTrainRayActor does not support async_save yet."
+        checkpoint.save(self, rollout_id)
 
     def _compute_log_prob(
         self,
@@ -454,8 +463,10 @@ class FSDPTrainRayActor(TrainRayActor):
                     rollout_log_probs=(
                         rollout_data["rollout_log_probs"][start:end] if "rollout_log_probs" in rollout_data else None
                     ),
-                    multimodal_inputs=(
-                        rollout_data["multimodal_inputs"][start:end] if "multimodal_inputs" in rollout_data else None
+                    multimodal_train_inputs=(
+                        rollout_data["multimodal_train_inputs"][start:end]
+                        if "multimodal_train_inputs" in rollout_data
+                        else None
                     ),
                     num_packs=mbs_size,
                 )
@@ -654,26 +665,41 @@ class FSDPTrainRayActor(TrainRayActor):
             else None
         )
 
-        # Apply TIS before sample mean calculation
+        # Apply off-policy correction using importance sampling if enabled
         if self.args.use_tis:
-            # Apply TIS off-policy correction using importance sampling
             assert (
                 has_rollout_log_probs and rollout_log_probs is not None
-            ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS"
+            ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS/MIS"
 
-            tis = torch.exp(old_log_probs - rollout_log_probs)
+            train_log_probs_list = list(log_probs.split(response_lengths, dim=0))
+            rollout_log_probs_list = list(rollout_log_probs.split(response_lengths, dim=0))
             ois = (-ppo_kl).exp()
-            tis_clip = torch.clamp(
-                tis, min=getattr(self.args, "tis_clip_low", 0.1), max=getattr(self.args, "tis_clip", 2.0)
-            )
-            tis_clipfrac = tis_clip != tis
+            tis_kwargs = {
+                "args": self.args,
+                "pg_loss": pg_loss,
+                "train_log_probs": train_log_probs_list,
+                "rollout_log_probs": rollout_log_probs_list,
+                "loss_masks": loss_masks,
+                "response_lengths": response_lengths,
+                "cp_rank": self.cp_rank,
+                "cp_size": self.cp_size,
+                "cp_group": self.cp_group,
+            }
 
-            pg_loss = pg_loss * tis_clip
+            if self.args.custom_tis_function_path is not None:
+                tis_func = load_function(self.args.custom_tis_function_path)
+            else:
+                tis_func = vanilla_tis_function
+            pg_loss, loss_masks, tis_metrics = tis_func(**tis_kwargs)
 
-        assert not self.args.calculate_per_token_loss, "calculate_per_token_loss not yet implemented"
-        pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
-        pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
-        ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
+        if self.args.calculate_per_token_loss:
+            pg_loss = sum_of_token(pg_loss, response_lengths, loss_masks)
+            pg_clipfrac = sum_of_token(pg_clipfrac, response_lengths, loss_masks)
+            ppo_kl = sum_of_token(ppo_kl.abs(), response_lengths, loss_masks)
+        else:
+            pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
+            pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
+            ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
 
         # Only compare rollout vs. train log probs when they originate from different stages.
         train_rollout_logprob_abs_diff = None
@@ -720,10 +746,13 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.use_opsm:
             reported["opsm_clipfrac"] = opsm_clipfrac
 
-        if self.args.use_tis and tis is not None:
-            reported["tis"] = sum_of_sample_mean(tis, response_lengths, loss_masks).detach()
+        if self.args.use_tis and tis_metrics:
             reported["ois"] = sum_of_sample_mean(ois, response_lengths, loss_masks).detach()
-            reported["tis_clipfrac"] = sum_of_sample_mean(tis_clipfrac.float(), response_lengths, loss_masks).detach()
+            for k, v in tis_metrics.items():
+                if self.args.calculate_per_token_loss:
+                    reported[k] = sum_of_token(v, response_lengths, loss_masks).detach()
+                else:
+                    reported[k] = sum_of_sample_mean(v, response_lengths, loss_masks).detach()
 
         # Scale loss for gradient accumulation
         loss = loss * self.dp_size / self.args.global_batch_size
@@ -791,6 +820,15 @@ class FSDPTrainRayActor(TrainRayActor):
             dist.barrier(group=get_gloo_group())
 
         self.weight_updater.update_weights()
+
+        if self.args.ci_test and len(rollout_engines) > 0:
+            engine = random.choice(rollout_engines)
+            engine_version = ray.get(engine.get_weight_version.remote())
+            if str(engine_version) != str(self.weight_updater.weight_version):
+                raise RuntimeError(
+                    f"Weight version mismatch! Engine: {engine_version}, Updater: {self.weight_updater.weight_version}"
+                )
+
         clear_memory()
 
     def _create_ref_model(self, ref_load_path: str | None):
@@ -854,8 +892,8 @@ class FSDPTrainRayActor(TrainRayActor):
             "position_ids": position_ids,
             "attention_mask": None,
         }
-        if packed_sequence.get("multimodal_inputs"):
-            model_args.update(packed_sequence["multimodal_inputs"])
+        if packed_sequence.get("multimodal_train_inputs"):
+            model_args.update(packed_sequence["multimodal_train_inputs"])
         return model_args
 
 
@@ -1093,3 +1131,12 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False, args=None):
     fully_shard(model, **fsdp_kwargs)
 
     return model
+
+
+def sum_of_token(x: torch.Tensor, response_lengths: list[int], loss_masks: list[torch.Tensor]) -> torch.Tensor:
+    return sum(
+        [
+            (x_i * loss_mask_i).sum()
+            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
+        ]
+    )

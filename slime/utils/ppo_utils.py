@@ -644,21 +644,72 @@ def chunked_gae(
     return advantages, returns
 
 
-def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool = False):
+def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool = False, chunk_size: int = -1):
     logits = logits.contiguous()
     # TODO: not sure why we need to clone the logits here.
     # Without the clone, the backward will trigger inplace edit error.
     # It seems that the function with tp will modify the logits inplace.
+    entropy = None
     if logits.size(0) != 0:
-        log_prob = compute_log_probs(logits.clone(), tokens, tp_group)
+        if chunk_size > 0:
+            num_chunks = (logits.size(0) - 1) // chunk_size + 1
+            tokens_chunks = tokens.chunk(num_chunks, dim=0)
+            logits_chunks = logits.chunk(num_chunks, dim=0)
+            log_probs = []
+            for tokens_chunk, logits_chunk in zip(tokens_chunks, logits_chunks, strict=True):
+                log_prob = compute_log_probs(logits_chunk.clone(), tokens_chunk, tp_group)
+                log_probs.append(log_prob)
+            log_prob = torch.cat(log_probs, dim=0)
+            if with_entropy:
+                entropys = []
+                for _, logits_chunk in zip(tokens_chunks, logits_chunks, strict=True):
+                    entropy = compute_entropy_from_logits(logits_chunk.clone(), tp_group)
+                    entropys.append(entropy)
+                entropy = torch.cat(entropys, dim=0)
+        else:
+            log_prob = compute_log_probs(logits.clone(), tokens, tp_group)
+            if with_entropy:
+                entropy = compute_entropy_from_logits(logits.clone(), tp_group)
     else:
         log_prob = logits.new_zeros((0,))
-
-    if with_entropy:
-        if logits.size(0) != 0:
-            entropy = compute_entropy_from_logits(logits.clone(), tp_group)
-        else:
+        if with_entropy:
             entropy = logits.new_zeros((0,))
-    else:
-        entropy = None
+
     return log_prob, entropy
+
+
+def vanilla_tis_function(
+    args,
+    *,
+    pg_loss: torch.Tensor,
+    train_log_probs: list[torch.Tensor],
+    rollout_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    **kwargs,
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
+    """Apply TIS off-policy correction using importance sampling.
+
+    Parameters:
+        args: Arguments containing TIS settings.
+        pg_loss: Policy gradient loss tensor of shape [total_seq_len - 1].
+        train_log_probs: List of tensors containing training log-probabilities
+            for each sequence.
+        rollout_log_probs: List of tensors containing rollout log-probabilities
+            for each sequence.
+        loss_masks: List of tensors containing loss masks for each sequence.
+    """
+    rollout_log_probs = torch.cat(rollout_log_probs, dim=0)
+    old_log_probs = torch.cat(train_log_probs, dim=0)
+    tis = torch.exp(old_log_probs - rollout_log_probs)
+    tis_abs = (tis - 1).abs()
+    tis_clip_low = args.tis_clip_low if args.tis_clip_low is not None else 0.1
+    tis_clip_high = args.tis_clip if args.tis_clip is not None else 2.0
+    tis_weights = torch.clamp(tis, min=tis_clip_low, max=tis_clip_high)
+    tis_clipfrac = (tis_weights != tis).float()
+    metrics = {
+        "tis": tis.clone().detach(),
+        "tis_clipfrac": tis_clipfrac.clone().detach(),
+        "tis_abs": tis_abs.clone().detach(),
+    }
+    pg_loss = pg_loss * tis_weights
+    return pg_loss, loss_masks, metrics

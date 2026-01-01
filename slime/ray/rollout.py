@@ -1,9 +1,7 @@
 import logging
 import multiprocessing
-import os
 import random
 import time
-from glob import glob
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +56,11 @@ class RolloutManager:
         self.custom_reward_post_process_func = None
         if self.args.custom_reward_post_process_path is not None:
             self.custom_reward_post_process_func = load_function(self.args.custom_reward_post_process_path)
+        self.custom_convert_samples_to_train_data_func = None
+        if self.args.custom_convert_samples_to_train_data_path is not None:
+            self.custom_convert_samples_to_train_data_func = load_function(
+                self.args.custom_convert_samples_to_train_data_path
+            )
         logger.info(f"import {self.args.rollout_function_path} as generate_rollout function.")
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
@@ -218,6 +221,9 @@ class RolloutManager:
         """
         Convert inference generated samples to training data.
         """
+        if self.custom_convert_samples_to_train_data_func is not None:
+            return self.custom_convert_samples_to_train_data_func(self.args, samples)
+
         raw_rewards, rewards = self._post_process_rewards(samples)
 
         assert len(raw_rewards) == len(samples)
@@ -268,8 +274,8 @@ class RolloutManager:
         if samples[0].train_metadata is not None:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
 
-        if samples[0].multimodal_inputs is not None:
-            train_data["multimodal_inputs"] = [sample.multimodal_inputs for sample in samples]
+        if samples[0].multimodal_train_inputs is not None:
+            train_data["multimodal_train_inputs"] = [sample.multimodal_train_inputs for sample in samples]
 
         if "teacher_log_probs" in samples[0].__dict__:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
@@ -302,7 +308,7 @@ class RolloutManager:
             rollout_data["partition"] = partition
             for key in [
                 "tokens",
-                "multimodal_inputs",
+                "multimodal_train_inputs",
                 "response_lengths",
                 "rewards",
                 "truncated",
@@ -332,7 +338,7 @@ class RolloutManager:
 
 def init_rollout_engines(args, pg, all_rollout_engines):
     if args.debug_train_only:
-        return 0, None
+        return 0
 
     num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
     num_engines = args.rollout_num_gpus // num_gpu_per_engine
@@ -369,26 +375,8 @@ def init_rollout_engines(args, pg, all_rollout_engines):
             "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
             "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
             "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
+            "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
         }
-
-        # TODO: currently the amem position is hardcoded, change to a better way later.
-        # note that amem does not work with update weights from distributed.
-        if (
-            args.offload_rollout
-            and args.actor_num_nodes * args.actor_num_gpus_per_node >= args.rollout_num_gpus
-            and len(glob("/usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib/libamem_nccl.so*")) > 0
-        ):
-            logger.info("Enable AMEM for rollout engine.")
-            ld_library_path = (
-                os.environ.get("LD_LIBRARY_PATH", "") + ":/usr/local/lib/python3.12/dist-packages/nvidia/nccl/lib"
-            )
-            env_vars |= {
-                "LD_LIBRARY_PATH": ld_library_path,
-                "NCCL_CUMEM_ENABLE": "1",
-                "AMEM_ENABLE": "1",
-                "AMEM_GROUPID": "0",
-                "GMM_LOG": "2",
-            }
 
         worker_type = "regular"
         if args.prefill_num_servers is not None:
@@ -412,7 +400,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
     num_new_engines = len(rollout_engines)
 
     if num_new_engines == 0:
-        return num_new_engines, None
+        return num_new_engines
 
     if args.rollout_external:
         addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(args=args, rollout_engines=rollout_engines)
@@ -456,6 +444,12 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
     )
     addr_and_ports = [{} for _ in range(num_engines)]
 
+    # Calculate prefill limit to identify prefill engines
+    prefill_limit = 0
+    if args.prefill_num_servers is not None:
+        num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
+        prefill_limit = args.prefill_num_servers * args.rollout_num_gpus_per_engine // num_gpu_per_engine
+
     visited_nodes = set()
     for rank, engine in rollout_engines:
         if rank // num_engines_per_node in visited_nodes:
@@ -490,20 +484,24 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
         get_addr, get_port = get_addr_and_ports(engine)
 
         for i in range(num_engines_on_this_node):
-            addr_and_ports[rank + i]["host"] = get_addr()
-            addr_and_ports[rank + i]["port"] = get_port()
-            addr_and_ports[rank + i]["nccl_port"] = get_port()
+            current_rank = rank + i
+            addr_and_ports[current_rank]["host"] = get_addr()
+            addr_and_ports[current_rank]["port"] = get_port()
+            addr_and_ports[current_rank]["nccl_port"] = get_port()
+
+            if args.prefill_num_servers is not None and current_rank < prefill_limit:
+                addr_and_ports[current_rank]["disaggregation_bootstrap_port"] = get_port()
 
         if args.rollout_num_gpus_per_engine > args.num_gpus_per_node:
             num_node_per_engine = args.rollout_num_gpus_per_engine // args.num_gpus_per_node
             if rank % num_node_per_engine == 0:
                 # this is the first node in the engine, we need to allocate the dist_init_addr port
-                dist_init_addr = f"{get_addr()}:{get_port(6 + args.sglang_dp_size)}"
+                dist_init_addr = f"{get_addr()}:{get_port(30 + args.sglang_dp_size)}"
                 for i in range(num_node_per_engine):
                     addr_and_ports[rank + i]["dist_init_addr"] = dist_init_addr
         else:
             for i in range(num_engines_on_this_node):
-                addr_and_ports[rank + i]["dist_init_addr"] = f"{get_addr()}:{get_port(6 + args.sglang_dp_size)}"
+                addr_and_ports[rank + i]["dist_init_addr"] = f"{get_addr()}:{get_port(30 + args.sglang_dp_size)}"
 
     for i, _ in rollout_engines:
         for key in ["port", "nccl_port", "dist_init_addr"]:
@@ -513,7 +511,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
     return addr_and_ports
 
 
-def _start_router(args, prefill_and_decode_urls=None):
+def _start_router(args):
     """start sgl router and slime router"""
     if args.sglang_router_ip is not None:
         return
@@ -560,6 +558,11 @@ def _start_router(args, prefill_and_decode_urls=None):
 
 
 def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any] | None = None):
+    if args.custom_eval_rollout_log_function_path is not None:
+        custom_log_func = load_function(args.custom_eval_rollout_log_function_path)
+        if custom_log_func(rollout_id, args, data, extra_metrics):
+            return
+
     log_dict = extra_metrics or {}
     for key in data.keys():
         rewards = data[key]["rewards"]
@@ -588,15 +591,28 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
 
 
 def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
+    if args.custom_rollout_log_function_path is not None:
+        custom_log_func = load_function(args.custom_rollout_log_function_path)
+        if custom_log_func(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
+            return
+
     if args.load_debug_rollout_data:
         return
 
     log_dict = {**(rollout_extra_metrics or {})}
-    response_lengths = [sample.effective_response_length for sample in samples]
+    response_lengths = [sample.response_length for sample in samples]
     log_dict["perf/rollout_time"] = rollout_time
     if args.rollout_num_gpus:
         log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
     log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+
+    response_lengths = [sample.effective_response_length for sample in samples]
+    if args.rollout_num_gpus:
+        log_dict["perf/effective_tokens_per_gpu_per_sec"] = (
+            sum(response_lengths) / rollout_time / args.rollout_num_gpus
+        )
+    log_dict["perf/longest_effective_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+
     log_dict |= dict_add_prefix(compute_metrics_from_samples(args, samples), "rollout/")
     logger.info(f"perf {rollout_id}: {log_dict}")
     step = compute_rollout_step(args, rollout_id)

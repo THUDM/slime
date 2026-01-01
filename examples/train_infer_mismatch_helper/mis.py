@@ -2,7 +2,11 @@ from typing import Any
 
 import torch
 
-from slime.backends.megatron_utils.cp_utils import all_gather_with_cp, slice_log_prob_with_cp
+# NOTE:
+# - `compute_mis_weights` is a lightweight, standalone function that is useful to unit-test on CPU.
+# - `compute_mis_weights_with_cp` depends on Megatron context-parallel utilities, which are heavy and may not be
+#   available in minimal environments.
+# To keep `mis.py` importable for unit tests, we lazily import CP utilities inside `compute_mis_weights_with_cp`.
 
 
 def masked_sum(x: torch.Tensor, loss_mask: torch.Tensor, expand: bool = False) -> torch.Tensor:
@@ -12,6 +16,26 @@ def masked_sum(x: torch.Tensor, loss_mask: torch.Tensor, expand: bool = False) -
 
 def masked_mean(x: torch.Tensor, loss_mask: torch.Tensor, expand: bool = False) -> torch.Tensor:
     result = masked_sum(x, loss_mask) / torch.clamp_min(loss_mask.sum(), 1)
+    return result.expand_as(x) if expand else result
+
+
+def masked_min(x: torch.Tensor, loss_mask: torch.Tensor, expand: bool = False) -> torch.Tensor:
+    """Masked min over valid tokens (loss_mask == 1). Returns 0 when mask is empty."""
+    mask = loss_mask.bool()
+    if mask.any():
+        result = x[mask].min()
+    else:
+        result = torch.tensor(0.0, device=x.device, dtype=x.dtype)
+    return result.expand_as(x) if expand else result
+
+
+def masked_max(x: torch.Tensor, loss_mask: torch.Tensor, expand: bool = False) -> torch.Tensor:
+    """Masked max over valid tokens (loss_mask == 1). Returns 0 when mask is empty."""
+    mask = loss_mask.bool()
+    if mask.any():
+        result = x[mask].max()
+    else:
+        result = torch.tensor(0.0, device=x.device, dtype=x.dtype)
     return result.expand_as(x) if expand else result
 
 
@@ -60,6 +84,8 @@ def calculate_veto_mask(
     loss_mask: torch.Tensor,
     veto_threshold: float | None,
     metrics: dict[str, list[torch.Tensor]],
+    *,
+    metric_prefix: str = "",
 ) -> torch.Tensor:
     if veto_threshold is None:
         return torch.ones_like(log_ratio)
@@ -69,16 +95,21 @@ def calculate_veto_mask(
     has_catastrophic = catastrophic_tokens.any()
     veto_mask = (~has_catastrophic).float().expand_as(log_ratio)
 
-    metrics_append(metrics, "catastrophic_token_fraction", catastrophic_tokens.int())
-    metrics_append(metrics, "catastrophic_seq_fraction", has_catastrophic.int().expand_as(loss_mask))
+    metrics_append(metrics, f"{metric_prefix}catastrophic_token_fraction", catastrophic_tokens.int())
+    metrics_append(metrics, f"{metric_prefix}catastrophic_seq_fraction", has_catastrophic.int().expand_as(loss_mask))
     return veto_mask
 
 
 def truncate(
-    weights: torch.Tensor, loss_mask: torch.Tensor, metrics: dict[str, list[torch.Tensor]], upper_bound: float
+    weights: torch.Tensor,
+    loss_mask: torch.Tensor,
+    metrics: dict[str, list[torch.Tensor]],
+    upper_bound: float,
+    *,
+    metric_prefix: str = "",
 ) -> torch.Tensor:
     assert upper_bound is not None
-    metrics_append(metrics, "truncate_fraction", (weights > upper_bound).int())
+    metrics_append(metrics, f"{metric_prefix}truncate_fraction", (weights > upper_bound).int())
     return weights.clamp(0, upper_bound) * loss_mask
 
 
@@ -88,10 +119,12 @@ def clip(
     metrics: dict[str, list[torch.Tensor]],
     lower_bound: float,
     upper_bound: float,
+    *,
+    metric_prefix: str = "",
 ) -> torch.Tensor:
     assert lower_bound is not None and upper_bound is not None and lower_bound < upper_bound
-    metrics_append(metrics, "clip_fraction_low", (weights < lower_bound).int())
-    metrics_append(metrics, "clip_fraction_high", (weights > upper_bound).int())
+    metrics_append(metrics, f"{metric_prefix}clip_fraction_low", (weights < lower_bound).int())
+    metrics_append(metrics, f"{metric_prefix}clip_fraction_high", (weights > upper_bound).int())
     return weights.clamp(lower_bound, upper_bound) * loss_mask
 
 
@@ -101,10 +134,12 @@ def mask(
     metrics: dict[str, list[torch.Tensor]],
     lower_bound: float,
     upper_bound: float,
+    *,
+    metric_prefix: str = "",
 ) -> tuple[torch.Tensor, torch.Tensor]:
     assert lower_bound is not None and upper_bound is not None and lower_bound < upper_bound
-    metrics_append(metrics, "mask_fraction_low", (weights < lower_bound).int())
-    metrics_append(metrics, "mask_fraction_high", (weights > upper_bound).int())
+    metrics_append(metrics, f"{metric_prefix}mask_fraction_low", (weights < lower_bound).int())
+    metrics_append(metrics, f"{metric_prefix}mask_fraction_high", (weights > upper_bound).int())
     in_range = (weights >= lower_bound) & (weights <= upper_bound)
     modified_mask = loss_mask * in_range.float()
     # Zero out padding in weights but preserve values at non-rejected positions
@@ -189,11 +224,15 @@ def compute_mis_weights(
             metrics_append(metrics, "tis_weight_before_bound", weights)
 
             if args.tis_mode == "truncate":
-                weights = truncate(weights, loss_mask, metrics, args.tis_upper_bound)
+                weights = truncate(weights, loss_mask, metrics, args.tis_upper_bound, metric_prefix="tis_")
             elif args.tis_mode == "clip":
-                weights = clip(weights, loss_mask, metrics, tis_lower_bound, args.tis_upper_bound)
+                weights = clip(
+                    weights, loss_mask, metrics, tis_lower_bound, args.tis_upper_bound, metric_prefix="tis_"
+                )
             elif args.tis_mode == "mask":
-                weights, modified_mask = mask(weights, loss_mask, metrics, tis_lower_bound, args.tis_upper_bound)
+                weights, modified_mask = mask(
+                    weights, loss_mask, metrics, tis_lower_bound, args.tis_upper_bound, metric_prefix="tis_"
+                )
             else:
                 raise ValueError(f"Unsupported tis_mode: {args.tis_mode}")
 
@@ -212,14 +251,18 @@ def compute_mis_weights(
             rs_weights = torch.exp(log_ratio_safe_rs)
 
             # Apply mask-based rejection sampling
-            _, modified_mask = mask(rs_weights, modified_mask, metrics, rs_lower_bound, rs_upper_bound)
+            _, modified_mask = mask(
+                rs_weights, modified_mask, metrics, rs_lower_bound, rs_upper_bound, metric_prefix="rs_"
+            )
 
             # Veto on raw per-token ratios (sequence-wise rejection)
             if args.rs_veto_threshold is not None:
-                veto_mask = calculate_veto_mask(raw_log_ratio_diff, loss_mask, args.rs_veto_threshold, metrics)
+                veto_mask = calculate_veto_mask(
+                    raw_log_ratio_diff, loss_mask, args.rs_veto_threshold, metrics, metric_prefix="rs_"
+                )
                 modified_mask = modified_mask * veto_mask
 
-        metrics_append(metrics, "ratio_mean_after_tis", weights)
+        metrics_append(metrics, "is_ratio_mean_after_tis_rs", weights)
 
         weights = weights.detach()
         modified_mask = modified_mask.detach()
@@ -253,6 +296,14 @@ def compute_mis_weights(
             for w in all_weights:
                 metrics_append(metrics, "batch_norm_factor", torch.ones_like(w))
 
+    # Final weight stats (after optional batch normalization).
+    # NOTE: These are expanded to token-shape so that the existing mean-reducer can aggregate them.
+    for w, m in zip(all_weights, loss_masks, strict=False):
+        m = m.float()
+        metrics_append(metrics, "is_ratio_mean_final", masked_mean(w, m, expand=True))
+        metrics_append(metrics, "is_ratio_min_final", masked_min(w, m, expand=True))
+        metrics_append(metrics, "is_ratio_max_final", masked_max(w, m, expand=True))
+
     return all_weights, all_modified_masks, metrics
 
 
@@ -280,6 +331,9 @@ def compute_mis_weights_with_cp(
         modified_masks: List of modified response masks with rejection applied (one per sequence).
         is_metrics: The metrics for the importance sampling weights, a dict of flattened tensors.
     """
+    # Lazy import to avoid importing Megatron dependencies when only `compute_mis_weights` is used.
+    from slime.backends.megatron_utils.cp_utils import all_gather_with_cp, slice_log_prob_with_cp
+
     # Gather cp slice from other cp ranks
     full_rollout_log_probs = [
         all_gather_with_cp(log_prob, total_length, response_length)
@@ -395,3 +449,45 @@ def add_ppl_metrics(
     rho_squared_seq = torch.exp(2.0 * log_ratio_sum_safe)  # (Π ρ_t)²
     chi2_seq = rho_squared_seq - 1.0
     metrics_append(metrics, "chi2_seq", chi2_seq)
+
+
+def compute_mis_weights_fsdp(
+    args,
+    *,
+    pg_loss: torch.Tensor,
+    train_log_probs: list[torch.Tensor],
+    rollout_log_probs: list[torch.Tensor],
+    loss_masks: list[torch.Tensor],
+    **kwargs: Any,
+) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
+    """Compute masked importance sampling weights for FSDP. No context parallelism.
+
+    Args:
+        args: Arguments containing MIS settings (use_tis, tis_mode, etc.)
+        pg_loss: Policy gradient loss, flattened tensor [total_tokens]
+        train_log_probs: Training log probs, list of 1D tensors per sequence
+        rollout_log_probs: Rollout log probs, list of 1D tensors per sequence
+        loss_masks: Loss masks, list of 1D tensors per sequence
+        **kwargs: Additional arguments (cp_rank, cp_size, etc.) for compatibility
+
+    Returns:
+        pg_loss: Policy gradient loss with IS weights applied
+        modified_masks: Modified loss masks after rejection sampling
+        mis_metrics: Metrics dict with flattened tensors
+    """
+    is_weights, modified_masks, is_metrics = compute_mis_weights(
+        args=args,
+        train_log_probs=train_log_probs,
+        rollout_log_probs=rollout_log_probs,
+        loss_masks=loss_masks,
+    )
+
+    result_metrics = {}
+    if is_weights is not None:
+        is_weights_flat = torch.cat(is_weights, dim=0)
+        pg_loss = pg_loss * is_weights_flat
+
+    for key, values in is_metrics.items():
+        result_metrics[f"mis_{key}"] = torch.cat(values, dim=0)
+
+    return pg_loss, modified_masks, result_metrics

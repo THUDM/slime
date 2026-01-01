@@ -29,8 +29,8 @@ class Qwen3NextBridge(Qwen2MoEBridge):
             ]
         }
         | {
-            "self_attention.linear_qgkv.layer_norm_weight": ["model.layers.{layer_number}.input_layernorm.weight"],
-            "self_attention.linear_qgkv.weight": [
+            "self_attention.linear_qkv.layer_norm_weight": ["model.layers.{layer_number}.input_layernorm.weight"],
+            "self_attention.linear_qkv.weight": [
                 "model.layers.{layer_number}.self_attn.q_proj.weight",
                 "model.layers.{layer_number}.self_attn.k_proj.weight",
                 "model.layers.{layer_number}.self_attn.v_proj.weight",
@@ -41,7 +41,7 @@ class Qwen3NextBridge(Qwen2MoEBridge):
     def _weight_to_mcore_format(
         self, mcore_weights_name: str, hf_weights: list[torch.Tensor]
     ) -> tuple[list[str], list[torch.Tensor]]:
-        if "self_attention.linear_qgkv." in mcore_weights_name and "layer_norm" not in mcore_weights_name:
+        if "self_attention.linear_qkv." in mcore_weights_name and "layer_norm" not in mcore_weights_name:
             # merge qkv
             assert len(hf_weights) == 3
             num_key_value_heads = self.hf_config.num_key_value_heads
@@ -96,5 +96,6 @@ class Qwen3NextBridge(Qwen2MoEBridge):
             moe_router_pre_softmax=False,
             qk_layernorm=True,
             # Qwen3 Next specific
-            use_gated_attention=True,
+            attention_output_gate=True,
+            moe_shared_expert_gate=True,
         )
