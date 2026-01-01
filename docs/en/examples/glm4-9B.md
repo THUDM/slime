@@ -15,14 +15,14 @@ Download the model and data:
 
 ```bash
 # hf checkpoint
-huggingface-cli download zai-org/GLM-Z1-9B-0414 --local-dir /root/GLM-Z1-9B-0414
+hf download zai-org/GLM-Z1-9B-0414 --local-dir /root/GLM-Z1-9B-0414
 
 # train data
-huggingface-cli download --repo-type dataset zhuzilin/dapo-math-17k \
+hf download --repo-type dataset zhuzilin/dapo-math-17k \
   --local-dir /root/dapo-math-17k
 
 # eval data
-huggingface-cli download --repo-type dataset zhuzilin/aime-2024 \
+hf download --repo-type dataset zhuzilin/aime-2024 \
   --local-dir /root/aime-2024
 ```
 

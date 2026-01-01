@@ -79,7 +79,7 @@ Here, we will briefly introduce the MoE-related parts in the [run-qwen3-30B-A3B.
 slime also supports BF16 training with FP8 inference. For the Qwen3-30B-A3B model, you just need to download the following model:
 
 ```bash
-huggingface-cli download Qwen/Qwen3-30B-A3B-FP8 --local-dir /root/Qwen3-30B-A3B-FP8
+hf download Qwen/Qwen3-30B-A3B-FP8 --local-dir /root/Qwen3-30B-A3B-FP8
 ```
 
 And replace `--hf-checkpoint` with:
