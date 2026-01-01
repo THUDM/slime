@@ -210,7 +210,10 @@ def forward_only(
 
         # Get the batch.
         batch = get_batch(
-            data_iterator, ["tokens", "total_lengths", "response_lengths"], args.data_pad_size_multiplier
+            data_iterator,
+            ["tokens", "total_lengths", "response_lengths", "max_seq_lens"],
+            args.data_pad_size_multiplier,
+            args.qkv_format,
         )
         unconcat_tokens = batch["unconcat_tokens"]
         tokens = batch["tokens"]
@@ -232,6 +235,7 @@ def forward_only(
             total_lengths=total_lengths,
             response_lengths=response_lengths,
             with_entropy=args.use_rollout_entropy,
+            max_seq_lens=batch.get("max_seq_lens", None),
         )
 
     # Turn on evaluation mode which disables dropout.
@@ -361,8 +365,10 @@ def train_one_step(
                 "advantages",
                 "returns",
                 "rollout_log_probs",
+                "max_seq_lens",
             ],
             args.data_pad_size_multiplier,
+            args.qkv_format,
         )
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
