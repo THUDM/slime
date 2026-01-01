@@ -19,13 +19,6 @@ TOOL_CALL_JSON_ANCHOR_RE = re.compile(r"\{[^{}]*\"name\"\s*:\s*")
 # Accept either name; verl uses `calc_geo3k_reward` while the instruction refers to `calc_score`.
 SUPPORTED_TOOL_NAMES = {"calc_score", "calc_geo3k_reward"}
 
-# Keep rollout limits modest; override via args if needed.
-DEFAULT_ROLLOUT_CONFIG: dict[str, Any] = {
-    "max_turns": 3,
-    "max_total_tokens": 4096,
-    "stop_on_max_tokens": True,
-}
-
 
 class Geo3kEnv:
     """
@@ -42,7 +35,7 @@ class Geo3kEnv:
         self.tool_calls: list[dict[str, Any]] = []
         self.last_tool_score: float | None = None
         self.turn = 0
-        self.max_turns = max_turns if max_turns is not None else DEFAULT_ROLLOUT_CONFIG.get("max_turns")
+        self.max_turns = max_turns
 
     def reset(self):
         self.tool_calls.clear()
@@ -275,9 +268,9 @@ def build_env(sample: Sample | None = None, args: Any | None = None, **_: Any) -
     Construct a Geo3kEnv. Ground truth is pulled from sample.label or metadata.
     """
     ground_truth = _extract_ground_truth(sample)
-    max_turns = getattr(args, "max_turns", None) if args is not None else None
+    max_turns = getattr(args, "max_turns", None) 
     if max_turns is None:
-        max_turns = DEFAULT_ROLLOUT_CONFIG.get("max_turns")
+        raise ValueError("max_turns must be set via --custom-config-path in the custom config file.")
     if ground_truth is None:
         logger.warning("Ground truth answer missing; calc_score tool will always return 0.")
     return Geo3kEnv(ground_truth=ground_truth, max_turns=max_turns)

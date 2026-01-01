@@ -3,7 +3,6 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import sys
-from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -17,9 +16,6 @@ from slime.utils.types import Sample
 
 
 DEFAULT_ENV_MODULE = "examples.vlm_multi_turn.env_geo3k"
-DEFAULT_ROLLOUT_CONFIG = {
-    "max_turns": 5,
-}
 
 
 def _load_env_module(env_path: str | None):
@@ -35,14 +31,6 @@ def _load_env_module(env_path: str | None):
         spec.loader.exec_module(module)
         return module
     return importlib.import_module(target)
-
-
-def _resolve_rollout_config(args: Any, env_module) -> dict[str, Any]:
-    """Combine rollout defaults with optional overrides from args."""
-    cfg = deepcopy(getattr(env_module, "DEFAULT_ROLLOUT_CONFIG", DEFAULT_ROLLOUT_CONFIG))
-    if getattr(args, "max_turns", None) is not None:
-        cfg["max_turns"] = args.max_turns
-    return cfg
 
 
 def _build_env(env_module, sample: Sample, args: Any):
@@ -116,7 +104,6 @@ def _encode_observation_for_generation(
         image_data = [encode_image_for_rollout_engine(img) for img in multimodal_inputs["images"]]
     return prompt_ids, image_data, multimodal_inputs, multimodal_train_inputs
 
-
 def _merge_multimodal_train_inputs(existing: dict | None, new: dict | None) -> dict | None:
     """
     Concatenate per-image tensors to keep a single batched multimodal_train_inputs dict.
@@ -147,7 +134,9 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
     assert not args.partial_rollout, "Partial rollout is not supported for interaction rollouts."
 
     env_module = _load_env_module(getattr(args, "rollout_interaction_env_path", None))
-    rollout_config = _resolve_rollout_config(args, env_module)
+    max_turns = getattr(args, "max_turns", None)
+    if max_turns is None:
+        raise ValueError("max_turns must be set via --custom-config-path in the custom config file.")
 
     state = GenerateState(args)
     tokenizer = state.tokenizer
@@ -156,7 +145,6 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
     sampling_params = sampling_params.copy()
 
     sample.metadata = sample.metadata or {}
-    max_turns = rollout_config["max_turns"]
     env = _build_env(env_module, sample, args)
     try:
         observation, _reset_info = env.reset()
