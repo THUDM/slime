@@ -24,7 +24,7 @@ def execute():
         "--rollout-batch-size 32 "
         "--n-samples-per-prompt 8 "
         "--rollout-max-response-len 1024 "
-        "--rollout-temperature 0.8 "
+        "--rollout-temperature 1 "
         "--over-sampling-batch-size 64 "
         "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "
         "--global-batch-size 256 "
@@ -61,6 +61,8 @@ def execute():
     sglang_args = "--rollout-num-gpus-per-engine 2 " "--sglang-decode-log-interval 1000 " "--sglang-enable-metrics "
 
     fsdp_args = (
+        # Set to true for FULL_STATE_DICT mode, false for SHARDED_STATE_DICT mode (default)
+        # "--fsdp-full-params "  # Uncomment this line to enable full params mode
         # Set the bucket size for weight update
         "--update-weight-buffer-size 536870912 "  # 512MB
     )

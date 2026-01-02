@@ -39,13 +39,12 @@ docker run --rm --gpus all --ipc=host --shm-size=16g \
 
 ### Install slime
 
-After entering the Docker container, please follow these steps to clone the slime repository and install it:
+slime is already installed in the docker image. To update to the latest version, please execute the following command:
 
 ```bash
 # Path can be adjusted according to actual situation
-cd /root/
-git clone https://github.com/THUDM/slime.git
-cd slime
+cd /root/slime
+git pull
 pip install -e .
 ```
 
@@ -54,8 +53,6 @@ pip install -e .
 You can download required models and datasets from platforms like Hugging Face, ModelScope, etc. Here are the commands to download example resources using `huggingface_hub`:
 
 ```bash
-pip install -U huggingface_hub
-
 # Download model weights (GLM-Z1-9B)
 hf download zai-org/GLM-Z1-9B-0414 --local-dir /root/GLM-Z1-9B-0414
 
@@ -211,7 +208,7 @@ ROLLOUT_ARGS=(
 
    # Rollout sampling parameters
    --rollout-max-response-len 8192
-   --rollout-temperature 0.8
+   --rollout-temperature 1
 
    # Load balancing for data collected in rollout phase. It ensures that the computational workload allocated to each training process (DP rank) is roughly equal, which may be beneficial for training speed
    --balance-data
@@ -233,7 +230,7 @@ EVAL_ARGS=(
    # Maximum response length during evaluation
    --eval-max-response-len 16384
    # Sampling parameters during evaluation
-   --eval-top-p 0.7
+   --eval-top-p 1
 )
 ```
 
@@ -577,7 +574,17 @@ ray job submit --address="http://127.0.0.1:8265" \
    --... # Other Megatron/SGLang/slime arguments
 ```
 
+Optionally, the following environment variables may be needed based on your environment. For example, when there are multiple IPs and the wrong one is chosen in a Docker or SLURM envionment. We provide an example used in a SLURM + enroot multi-node system as follows:
+
+```
+export SLIME_HOST_IP=$(hostname -I | awk '{print $1}')
+export GLOO_SOCKET_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\\./ {print $2}')
+export NCCL_SOCKET_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\\./ {print $2}')
+export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\./ {print $2}')
+```
+
 slime has been deeply optimized for distributed training of large-scale Mixture of Experts (MoE) models. We provide some end-to-end training cases for reference:
 
 - [Example: 64xH100 Training GLM-4.5](../examples/glm4.5-355B-A32B.md)
 - [Example: 128xH100 Training DeepSeek-R1](../examples/deepseek-r1.md)
+- The scripts such as `scripts/run_qwen3_30b_a3b.py`, `scripts/run_glm45_355b_a32b.py` also support multi-node training, though there are little documentations about it currently.
