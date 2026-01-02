@@ -31,7 +31,7 @@ class RayTrainGroup:
         args,
         num_nodes,
         num_gpus_per_node,
-        pg: tuple[PlacementGroup, list[int]],
+        pg: tuple[PlacementGroup, list[int], list[int]],
         num_gpus_per_actor: float = 1,
         role: str = "actor",
     ) -> None:
@@ -48,7 +48,7 @@ class RayTrainGroup:
 
         # Use placement group to lock resources for models of same type
         assert pg is not None
-        pg, reordered_bundle_indices = pg
+        pg, reordered_bundle_indices, _reordered_gpu_ids = pg
 
         env_vars = {
             # because sglang will always set NCCL_CUMEM_ENABLE to 0
