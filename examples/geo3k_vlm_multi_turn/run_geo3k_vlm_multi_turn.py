@@ -16,9 +16,14 @@ DATA_ROOT = "/root/datasets/geo3k_imgurl_processed"
 TRAIN_DATA_PATH = os.path.join(DATA_ROOT, "train.parquet")
 
 
+def get_megatron_model_type(model_name: str) -> str:
+    model_type = model_name.replace("-Instruct", "").replace("-Thinking", "")
+    model_type = model_type.replace("Qwen3-VL-", "qwen3-")
+    return model_type.replace("-2B", "-1.7B")
+
+
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"mkdir -p {CHECKPOINT_DIR}")
     U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     data_missing = not os.path.exists(TRAIN_DATA_PATH)
     if data_missing:
@@ -28,7 +33,9 @@ def prepare():
 
 
 def execute():
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} "
+    ckpt_args = (
+        f"--hf-checkpoint /root/models/{MODEL_NAME} "
+    )
 
     wandb_args = (
         "--use-wandb "
@@ -97,6 +104,27 @@ def execute():
         "--update-weight-buffer-size 536870912 "
     )
 
+    megatron_args = (
+        "--train-backend megatron "
+        f"--load /root/models/{MODEL_NAME} "
+        "--tensor-model-parallel-size 4 "
+        "--sequence-parallel "
+        "--pipeline-model-parallel-size 1 "
+        "--context-parallel-size 1 "
+        "--expert-model-parallel-size 1 "
+        "--expert-tensor-parallel-size 1 "
+        "--recompute-granularity full "
+        "--recompute-method uniform "
+        "--recompute-num-layers 1 "
+        "--use-dynamic-batch-size "
+        "--max-tokens-per-gpu 4096 "
+        "--attention-dropout 0.0 "
+        "--hidden-dropout 0.0 "
+        "--accumulate-allreduce-grads-in-fp32 "
+        "--attention-softmax-in-fp32 "
+        "--attention-backend flash "
+        "--megatron-to-hf-mode bridge "
+    )
 
     misc_args = (
         "--actor-num-nodes 1 "
@@ -105,9 +133,13 @@ def execute():
         "--colocate "
     )
 
-    backend_args = fsdp_args 
-
-
+    if TRAIN_BACKEND == "megatron":
+        backend_args = megatron_args
+        megatron_model_type = get_megatron_model_type(MODEL_NAME)
+        os.environ["MODEL_ARGS_ROTARY_BASE"] = "5000000"
+    else:
+        backend_args = fsdp_args
+        megatron_model_type = None
 
 
     train_args = (
@@ -125,7 +157,7 @@ def execute():
     execute_train(
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
-        megatron_model_type=None,
+        megatron_model_type=megatron_model_type,
         extra_env_vars=(
             {"WANDB_API_KEY": os.environ["WANDB_API_KEY"]}
             if os.environ.get("WANDB_API_KEY")
