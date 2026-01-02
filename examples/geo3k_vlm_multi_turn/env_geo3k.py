@@ -10,7 +10,7 @@ try:
     import orjson  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
     orjson = None
-from base_env import BaseInteractionEnv
+from examples.geo3k_vlm_multi_turn.base_env import BaseInteractionEnv
 
 from slime.rollout.rm_hub import grade_answer_verl
 from slime.rollout.rm_hub.math_utils import extract_answer as extract_boxed_answer
@@ -177,15 +177,6 @@ class Geo3kEnv(BaseInteractionEnv):
                 f"calc_score result: {score}. Parsed answer '{parsed_answer}' does not match the reference. "
                 "Your answer is wrong. You may need to reason in a different way. Don't repeat your answer unless necessary."
             )
-
-    def format_observation(self, observation: dict) -> dict:
-        """
-        Convert an observation payload into a chat message. Tool feedback is emitted as
-        a `tool` role message so templates can wrap it in <tool_response> tags.
-        """
-        role = observation.get("role", "tool")
-        content = observation.get("obs_str", "")
-        return {"role": role, "content": content}
 
     # Called during rollout after receiving a model response
     def step(self, response_text: str):

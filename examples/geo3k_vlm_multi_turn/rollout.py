@@ -207,12 +207,12 @@ async def _run_inference_step(url: str, tokens: list[int], sampling_params: dict
     return response_text, new_tokens, new_log_probs, finish_type
 
 
-def _process_env_step(env, env_module, response_text: str, tokenizer, processor, args, sample_metadata):
+def _process_env_step(env, response_text: str, tokenizer, processor, args, sample_metadata):
     observation, done, _ = env.step(response_text)
     if done:
         return None, None, None, None, True
 
-    next_user_message = env._format_observation(env_module, observation)
+    next_user_message = env.format_observation(observation)
     obs_prompt_ids, obs_image_data, obs_multimodal_inputs, obs_multimodal_train_inputs = (
         _encode_observation_for_generation(
             tokenizer,
@@ -337,9 +337,7 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                 break
 
             obs_prompt_ids, obs_image_data, obs_multimodal_inputs, obs_multimodal_train_inputs, done = (
-                _process_env_step(
-                    env, env_module, response_text, state.tokenizer, state.processor, args, sample.metadata
-                )
+                _process_env_step(env, response_text, state.tokenizer, state.processor, args, sample.metadata)
             )
             if done:
                 sample.status = Sample.Status.COMPLETED
