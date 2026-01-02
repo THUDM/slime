@@ -7,13 +7,13 @@ from pathlib import Path
 from typing import Any
 
 import torch
+from examples.geo3k_vlm_multi_turn.base_env import BaseInteractionEnv
 
 # When executed as a module: python -m examples.vlm_multi_turn.rollout
 from slime.rollout.sglang_rollout import GenerateState
 from slime.utils.http_utils import post
 from slime.utils.processing_utils import encode_image_for_rollout_engine
 from slime.utils.types import Sample
-
 
 DEFAULT_ENV_MODULE = "examples.vlm_multi_turn.env_geo3k"
 
@@ -207,7 +207,7 @@ async def _run_inference_step(url: str, tokens: list[int], sampling_params: dict
     return response_text, new_tokens, new_log_probs, finish_type
 
 
-def _process_env_step(env, response_text: str, tokenizer, processor, args, sample_metadata):
+def _process_env_step(env: BaseInteractionEnv, response_text: str, tokenizer, processor, args, sample_metadata):
     observation, done, _ = env.step(response_text)
     if done:
         return None, None, None, None, True
