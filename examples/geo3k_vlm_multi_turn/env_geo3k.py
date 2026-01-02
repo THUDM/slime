@@ -6,6 +6,10 @@ import re
 from copy import deepcopy
 from typing import Any
 
+try:
+    import orjson  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    orjson = None
 from slime.rollout.rm_hub import grade_answer_verl
 from slime.rollout.rm_hub.math_utils import extract_answer as extract_boxed_answer
 from slime.utils.types import Sample
@@ -14,8 +18,6 @@ logger = logging.getLogger(__name__)
 
 # Matches the JSON payload emitted between <tool_call> ... </tool_call> tags.
 TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
-# Fallback matcher for a bare JSON object with a name/arguments schema (no <tool_call> tags).
-TOOL_CALL_JSON_ANCHOR_RE = re.compile(r"\{[^{}]*\"name\"\s*:\s*")
 # Accept either name; verl uses `calc_geo3k_reward` while the instruction refers to `calc_score`.
 SUPPORTED_TOOL_NAMES = {"calc_score", "calc_geo3k_reward"}
 
@@ -54,33 +56,19 @@ class Geo3kEnv:
         """
         Parse the latest tool call payload from the assistant response.
         Supports the <tool_call>{...}</tool_call> convention used in the
-        SGLang multi-turn templates, and also tolerates bare JSON objects
-        like {"name": "...", "arguments": {...}} when tags are missing.
+        SGLang multi-turn templates. Tool tags are mandatory.
         """
         matches = list(TOOL_CALL_RE.finditer(text))
         raw_json = None
         if matches:
-            raw_json = matches[-1].group(1)
-        else:
-            # Fallback: try to locate the last bare JSON object containing "name": ...
-            anchor = list(TOOL_CALL_JSON_ANCHOR_RE.finditer(text))
-            if anchor:
-                start = anchor[-1].start()
-                raw_json = self._extract_balanced_json(text, start)
+            raw_json = matches[-1].group(1).strip()
 
         if raw_json is None:
             return None
 
-        try:
-            payload = json.loads(raw_json)
-        except json.JSONDecodeError:
-            # Try a best-effort cleanup for trailing commas or newlines inside strings.
-            cleaned = raw_json.replace("\n", "\\n")
-            try:
-                payload = json.loads(cleaned)
-            except Exception as exc:  # pragma: no cover - defensive
-                logger.warning("Failed to decode tool call payload: %s", exc)
-                return None
+        payload = self._parse_tool_payload(raw_json)
+        if payload is None:
+            return None
 
         name = payload.get("name") or payload.get("function", {}).get("name")
         arguments = payload.get("arguments") or payload.get("function", {}).get("arguments") or {}
@@ -88,8 +76,8 @@ class Geo3kEnv:
             try:
                 arguments = json.loads(arguments)
             except json.JSONDecodeError:
-                # Leave string as-is; downstream will coerce to str.
-                pass
+                logger.warning("Tool call arguments are not valid JSON; rejecting tool call.")
+                return None
 
         if not name:
             return None
@@ -248,6 +236,15 @@ class Geo3kEnv:
         }
 
         return obs, is_final_turn, info
+
+    def _parse_tool_payload(self, raw_json: str) -> dict[str, Any] | None:
+        """Parse tool payload strictly as JSON. Malformed payloads are rejected."""
+        loader = orjson.loads if orjson is not None else json.loads
+        try:
+            return loader(raw_json)
+        except Exception as exc:
+            logger.warning("Failed to decode tool call payload: %s", exc)
+            return None
 
 
 def _extract_ground_truth(sample: Sample | None) -> str | None:
