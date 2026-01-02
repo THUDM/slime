@@ -125,28 +125,25 @@ def _encode_observation_for_generation(
         image_data = [encode_image_for_rollout_engine(img) for img in multimodal_inputs["images"]]
     return prompt_ids, image_data, multimodal_inputs, multimodal_train_inputs
 
-def _merge_multimodal_train_inputs(existing: dict | None, new: dict | None) -> dict | None:
+def _merge_multimodal_train_inputs(chunks: list[dict | None]) -> dict | None:
     """
-    Concatenate per-image tensors to keep a single batched multimodal_train_inputs dict.
+    Merge per-turn multimodal_train_inputs with a single concat per key.
     """
-    if not new:
-        return existing
-    if not existing:
-        return new
+    if not chunks:
+        return None
 
-    merged = dict(existing)
-    for key, val in new.items():
-        if key not in merged:
-            merged[key] = val
-            continue
-        if isinstance(merged[key], torch.Tensor) and isinstance(val, torch.Tensor):
-            merged[key] = torch.cat([merged[key], val], dim=0)
-        elif isinstance(merged[key], list) and isinstance(val, list):
-            merged[key] = merged[key] + val
-        elif isinstance(merged[key], dict) and isinstance(val, dict):
-            merged[key] = {**merged[key], **val}
-        else:
-            merged[key] = val
+    values_by_key = {}
+    for chunk in chunks:
+        for key, val in chunk.items():
+            if val is None:
+                continue
+            values_by_key.setdefault(key, []).append(val)
+
+    merged = {}
+    for key, values in values_by_key.items():
+        if all(isinstance(v, torch.Tensor) for v in values):
+            merged[key] = torch.cat(values, dim=0)
+
     return merged
 
 
@@ -185,6 +182,9 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                 encode_image_for_rollout_engine(img) for img in sample.multimodal_inputs["images"]
             ]
         current_image_data = image_data
+        multimodal_train_inputs_buffer=[]
+        if sample.multimodal_train_inputs:
+            multimodal_train_inputs_buffer.append(sample.multimodal_train_inputs)
 
         # Initialize token/logprob/loss_mask tracking to be aligned with model inputs
         if not sample.tokens:
@@ -299,10 +299,8 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                     sample.multimodal_inputs = obs_multimodal_inputs
 
             if obs_multimodal_train_inputs:
-                # Concatenate per-image tensors (e.g., pixel_values, image_grid_thw) across turns.
-                sample.multimodal_train_inputs = _merge_multimodal_train_inputs(
-                    sample.multimodal_train_inputs, obs_multimodal_train_inputs
-                )
+                # Defer concat until after the loop to avoid repeated allocations.
+                multimodal_train_inputs_buffer.append(obs_multimodal_train_inputs)
 
             if budget is not None:
                 budget -= len(obs_prompt_ids)
@@ -314,7 +312,8 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                 sample.status = Sample.Status.COMPLETED
                 break
 
-   
+        sample.multimodal_train_inputs = _merge_multimodal_train_inputs(multimodal_train_inputs_buffer)
+
         # Decode only the response segment (excluding the initial prompt while including env's feedback tokens)
         sample.response = tokenizer.decode(response_tokens, skip_special_tokens=False)
         sample.response_length = len(response_tokens)
