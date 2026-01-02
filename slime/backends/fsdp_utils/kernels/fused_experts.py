@@ -379,4 +379,3 @@ class MoeSumReduceFunction(torch.autograd.Function):
     def backward(ctx, grad_output):
         (intermediate_cache3,) = ctx.saved_tensors
         return grad_output.unsqueeze(1).expand_as(intermediate_cache3), None
-
