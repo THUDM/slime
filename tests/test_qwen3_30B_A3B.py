@@ -5,6 +5,8 @@ import slime.utils.external_utils.command_utils as U
 
 ENABLE_EVAL = bool(int(os.environ.get("SLIME_TEST_ENABLE_EVAL", "1")))
 TIGHT_HOST_MEMORY = bool(int(os.environ.get("SLIME_TEST_TIGHT_HOST_MEMORY", "1")))
+USE_DEEPEP = bool(int(os.environ.get("SLIME_TEST_USE_DEEPEP", "1")))
+USE_FP8_ROLLOUT = bool(int(os.environ.get("SLIME_TEST_USE_FP8_ROLLOUT", "1")))
 
 MODEL_NAME = "Qwen3-30B-A3B"
 MODEL_TYPE = "qwen3-30B-A3B"
@@ -22,6 +24,10 @@ def prepare():
 
 
 def execute():
+    if USE_FP8_ROLLOUT:
+        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}-FP8 " f"--ref-load /root/{MODEL_NAME}_torch_dist "
+    else:
+        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} " f"--ref-load /root/{MODEL_NAME}_torch_dist "
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}-FP8 " f"--ref-load /root/{MODEL_NAME}_torch_dist "
 
     rollout_args = (
