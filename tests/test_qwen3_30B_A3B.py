@@ -28,7 +28,6 @@ def execute():
         ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}-FP8 " f"--ref-load /root/{MODEL_NAME}_torch_dist "
     else:
         ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} " f"--ref-load /root/{MODEL_NAME}_torch_dist "
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}-FP8 " f"--ref-load /root/{MODEL_NAME}_torch_dist "
 
     rollout_args = (
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
@@ -95,12 +94,12 @@ def execute():
     sglang_args = (
         "--rollout-num-gpus-per-engine 8 "
         "--sglang-mem-fraction-static 0.8 "
-        "--sglang-moe-a2a-backend deepep "
-        "--sglang-deepep-mode auto "
         "--sglang-max-running-requests 512 "
-        "--sglang-disable-radix-cache "
         "--sglang-enable-metrics "
     )
+
+    if USE_DEEPEP:
+        sglang_args += "--sglang-moe-a2a-backend deepep --sglang-deepep-mode auto "
 
     ci_args = "--ci-test "
 
@@ -113,12 +112,15 @@ def execute():
         "--attention-softmax-in-fp32 "
         # need to comment this when using model with MLA
         "--attention-backend flash "
-        "--moe-token-dispatcher-type flex "
-        "--moe-enable-deepep "
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 8 "
         "--colocate "
     )
+
+    if USE_DEEPEP:
+        misc_args += "--moe-token-dispatcher-type flex --moe-enable-deepep "
+    else:
+        misc_args += "--moe-token-dispatcher-type alltoall "
 
     train_args = (
         f"{ckpt_args} "
