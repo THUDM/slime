@@ -54,7 +54,7 @@
     <link rel="prev" title="slime Documentation" href="../index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Dec 28, 2025"/>
+    <meta name="docbuild:last-update" content="Jan 02, 2026"/>
   </head>
   
   
@@ -531,11 +531,10 @@ docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </
 </section>
 <section id="install-slime">
 <h3>Install slime<a class="headerlink" href="#install-slime" title="Link to this heading">#</a></h3>
-<p>After entering the Docker container, please follow these steps to clone the slime repository and install it:</p>
+<p>slime is already installed in the docker image. To update to the latest version, please execute the following command:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Path can be adjusted according to actual situation</span>
-<span class="nb">cd</span><span class="w"> </span>/root/
-git<span class="w"> </span>clone<span class="w"> </span>https://github.com/THUDM/slime.git
-<span class="nb">cd</span><span class="w"> </span>slime
+<span class="nb">cd</span><span class="w"> </span>/root/slime
+git<span class="w"> </span>pull
 pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
 </pre></div>
 </div>
@@ -544,9 +543,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <section id="model-and-dataset-download">
 <h2>Model and Dataset Download<a class="headerlink" href="#model-and-dataset-download" title="Link to this heading">#</a></h2>
 <p>You can download required models and datasets from platforms like Hugging Face, ModelScope, etc. Here are the commands to download example resources using <code class="docutils literal notranslate"><span class="pre">huggingface_hub</span></code>:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span>huggingface_hub
-
-<span class="c1"># Download model weights (GLM-Z1-9B)</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Download model weights (GLM-Z1-9B)</span>
 hf<span class="w"> </span>download<span class="w"> </span>zai-org/GLM-Z1-9B-0414<span class="w"> </span>--local-dir<span class="w"> </span>/root/GLM-Z1-9B-0414
 
 <span class="c1"># Download training dataset (dapo-math-17k)</span>
@@ -697,7 +694,7 @@ Please make sure to check whether the parameters in the model configuration file
 
 <span class="w">   </span><span class="c1"># Rollout sampling parameters</span>
 <span class="w">   </span>--rollout-max-response-len<span class="w"> </span><span class="m">8192</span>
-<span class="w">   </span>--rollout-temperature<span class="w"> </span><span class="m">0</span>.8
+<span class="w">   </span>--rollout-temperature<span class="w"> </span><span class="m">1</span>
 
 <span class="w">   </span><span class="c1"># Load balancing for data collected in rollout phase. It ensures that the computational workload allocated to each training process (DP rank) is roughly equal, which may be beneficial for training speed</span>
 <span class="w">   </span>--balance-data
@@ -718,7 +715,7 @@ Please make sure to check whether the parameters in the model configuration file
 <span class="w">   </span><span class="c1"># Maximum response length during evaluation</span>
 <span class="w">   </span>--eval-max-response-len<span class="w"> </span><span class="m">16384</span>
 <span class="w">   </span><span class="c1"># Sampling parameters during evaluation</span>
-<span class="w">   </span>--eval-top-p<span class="w"> </span><span class="m">0</span>.7
+<span class="w">   </span>--eval-top-p<span class="w"> </span><span class="m">1</span>
 <span class="o">)</span>
 </pre></div>
 </div>
@@ -1066,10 +1063,18 @@ ray<span class="w"> </span>start<span class="w"> </span>--address<span class="o"
 <span class="w">   </span>--...<span class="w"> </span><span class="c1"># Other Megatron/SGLang/slime arguments</span>
 </pre></div>
 </div>
+<p>Optionally, the following environment variables may be needed based on your environment. For example, when there are multiple IPs and the wrong one is chosen in a Docker or SLURM envionment. We provide an example used in a SLURM + enroot multi-node system as follows:</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>export SLIME_HOST_IP=$(hostname -I | awk &#39;{print $1}&#39;)
+export GLOO_SOCKET_IFNAME=$(ip -o -4 addr show | awk &#39;$4 ~ /^10\\./ {print $2}&#39;)
+export NCCL_SOCKET_IFNAME=$(ip -o -4 addr show | awk &#39;$4 ~ /^10\\./ {print $2}&#39;)
+export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=$(ip -o -4 addr show | awk &#39;$4 ~ /^10\./ {print $2}&#39;)
+</pre></div>
+</div>
 <p>slime has been deeply optimized for distributed training of large-scale Mixture of Experts (MoE) models. We provide some end-to-end training cases for reference:</p>
 <ul class="simple">
 <li><p><a class="reference internal" href="../examples/glm4.5-355B-A32B.html"><span class="std std-doc">Example: 64xH100 Training GLM-4.5</span></a></p></li>
 <li><p><a class="reference internal" href="../examples/deepseek-r1.html"><span class="std std-doc">Example: 128xH100 Training DeepSeek-R1</span></a></p></li>
+<li><p>The scripts such as <code class="docutils literal notranslate"><span class="pre">scripts/run_qwen3_30b_a3b.py</span></code>, <code class="docutils literal notranslate"><span class="pre">scripts/run_glm45_355b_a32b.py</span></code> also support multi-node training, though there are little documentations about it currently.</p></li>
 </ul>
 </section>
 </section>
@@ -1184,7 +1189,7 @@ By slime Team
 
   <p class="copyright">
     
-      © Copyright 2025-2025, slime.
+      © Copyright 2025-2026, slime.
       <br/>
     
   </p>
@@ -1193,7 +1198,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Dec 28, 2025.
+  Last updated on Jan 02, 2026.
   <br/>
 </p>
   </div>
