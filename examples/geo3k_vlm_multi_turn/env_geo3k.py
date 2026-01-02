@@ -10,6 +10,8 @@ try:
     import orjson  # type: ignore
 except Exception:  # pragma: no cover - optional dependency
     orjson = None
+from base_env import BaseInteractionEnv
+
 from slime.rollout.rm_hub import grade_answer_verl
 from slime.rollout.rm_hub.math_utils import extract_answer as extract_boxed_answer
 from slime.utils.types import Sample
@@ -22,7 +24,7 @@ TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
 SUPPORTED_TOOL_NAMES = {"calc_score", "calc_geo3k_reward"}
 
 
-class Geo3kEnv:
+class Geo3kEnv(BaseInteractionEnv):
     """
     Minimal interaction environment for multi-turn geo3k with a scoring tool.
 
@@ -175,12 +177,19 @@ class Geo3kEnv:
                 f"calc_score result: {score}. Parsed answer '{parsed_answer}' does not match the reference. "
                 "Your answer is wrong. You may need to reason in a different way. Don't repeat your answer unless necessary."
             )
-        
+
+    def format_observation(self, observation: dict) -> dict:
+        """
+        Convert an observation payload into a chat message. Tool feedback is emitted as
+        a `tool` role message so templates can wrap it in <tool_response> tags.
+        """
+        role = observation.get("role", "tool")
+        content = observation.get("obs_str", "")
+        return {"role": role, "content": content}
 
     # Called during rollout after receiving a model response
     def step(self, response_text: str):
         self.turn += 1
-        turn_idx = self.turn - 1  # zero-based turn index
         is_final_turn = self.max_turns is not None and self.turn >= self.max_turns
         tool_call = self._extract_tool_call(response_text)
         info: dict[str, Any] = {"tool_call": deepcopy(tool_call)}
@@ -199,7 +208,7 @@ class Geo3kEnv:
             obs = {
                 "obs_str": (
                     f"Tool `{name}` is not supported. "
-                    "Call `calc_score` (or `calc_geo3k_reward`) via <tool_call>{\"name\": \"calc_score\", \"arguments\": {\"answer\": \"<digits>\"}}</tool_call> (format must be <tool_call>(JSON)</tool_call>)"
+                    'Call `calc_score` (or `calc_geo3k_reward`) via <tool_call>{"name": "calc_score", "arguments": {"answer": "<digits>"}}</tool_call> (format must be <tool_call>(JSON)</tool_call>)'
                     "to check your solution."
                 ),
                 "role": "tool",
@@ -213,7 +222,7 @@ class Geo3kEnv:
             obs = {
                 "obs_str": (
                     "Tool call detected but no `answer` was provided. "
-                    "Call `calc_score` (or `calc_geo3k_reward`) via <tool_call>{\"name\": \"calc_score\", \"arguments\": {\"answer\": \"<digits>\"}}</tool_call> "
+                    'Call `calc_score` (or `calc_geo3k_reward`) via <tool_call>{"name": "calc_score", "arguments": {"answer": "<digits>"}}</tool_call> '
                     "to check your solution."
                 ),
                 "role": "tool",
@@ -271,13 +280,3 @@ def build_env(sample: Sample | None = None, args: Any | None = None, **_: Any) -
     if ground_truth is None:
         logger.warning("Ground truth answer missing; calc_score tool will always return 0.")
     return Geo3kEnv(ground_truth=ground_truth, max_turns=max_turns)
-
-
-def format_observation(observation: dict) -> dict:
-    """
-    Convert an observation payload into a chat message. Tool feedback is emitted as
-    a `tool` role message so templates can wrap it in <tool_response> tags.
-    """
-    role = observation.get("role", "tool")
-    content = observation.get("obs_str", "")
-    return {"role": role, "content": content}

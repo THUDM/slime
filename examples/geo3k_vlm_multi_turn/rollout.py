@@ -35,7 +35,7 @@ def _load_env_module(env_path: str | None):
 
 def _build_env(env_module, sample: Sample, args: Any):
     """Instantiate the interaction environment using the provided module."""
-    build_fn = env_module.build_env 
+    build_fn = env_module.build_env
     if not callable(build_fn):
         raise ValueError("Environment module must expose a callable `build_env(sample, args)`.")
     try:
@@ -43,22 +43,6 @@ def _build_env(env_module, sample: Sample, args: Any):
     except TypeError:
         # Fallback to positional signature
         return build_fn(sample, args)
-
-
-def _format_observation(env_module, observation: dict) -> dict:
-    """Convert an environment observation into a chat message."""
-    formatter = getattr(env_module, "format_observation", None)
-    if callable(formatter):
-        return formatter(observation)
-
-    observation = observation or {}
-    content = []
-    multimodal = observation.get("multi_modal_data") or {}
-    for _, images in multimodal.items():
-        for image in images:
-            content.append({"type": "image", "image": image})
-    content.append({"type": "text", "text": observation.get("obs_str", "")})
-    return {"role": "user", "content": content}
 
 
 def _encode_observation_for_generation(
@@ -124,6 +108,7 @@ def _encode_observation_for_generation(
     if multimodal_inputs and multimodal_inputs.get("images"):
         image_data = [encode_image_for_rollout_engine(img) for img in multimodal_inputs["images"]]
     return prompt_ids, image_data, multimodal_inputs, multimodal_train_inputs
+
 
 def _merge_multimodal_train_inputs(chunks: list[dict | None]) -> dict | None:
     """
@@ -223,11 +208,11 @@ async def _run_inference_step(url: str, tokens: list[int], sampling_params: dict
 
 
 def _process_env_step(env, env_module, response_text: str, tokenizer, processor, args, sample_metadata):
-    observation, done, step_info = env.step(response_text)
+    observation, done, _ = env.step(response_text)
     if done:
         return None, None, None, None, True
 
-    next_user_message = _format_observation(env_module, observation)
+    next_user_message = env._format_observation(env_module, observation)
     obs_prompt_ids, obs_image_data, obs_multimodal_inputs, obs_multimodal_train_inputs = (
         _encode_observation_for_generation(
             tokenizer,
@@ -351,8 +336,10 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                 sample.status = Sample.Status.TRUNCATED
                 break
 
-            obs_prompt_ids, obs_image_data, obs_multimodal_inputs, obs_multimodal_train_inputs, done = _process_env_step(
-                env, env_module, response_text, state.tokenizer, state.processor, args, sample.metadata
+            obs_prompt_ids, obs_image_data, obs_multimodal_inputs, obs_multimodal_train_inputs, done = (
+                _process_env_step(
+                    env, env_module, response_text, state.tokenizer, state.processor, args, sample.metadata
+                )
             )
             if done:
                 sample.status = Sample.Status.COMPLETED
@@ -363,7 +350,12 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
             budget = _update_budget(budget, len(obs_prompt_ids))
 
             current_image_data = _update_multimodal_state(
-                sample, current_image_data, obs_image_data, obs_multimodal_inputs, obs_multimodal_train_inputs, multimodal_train_inputs_buffer
+                sample,
+                current_image_data,
+                obs_image_data,
+                obs_multimodal_inputs,
+                obs_multimodal_train_inputs,
+                multimodal_train_inputs_buffer,
             )
 
             if budget is not None and budget <= 0:

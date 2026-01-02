@@ -1,10 +1,17 @@
 import os
 
 import slime.utils.misc as U
-from slime.utils.external_utils.command_utils import execute_train, get_default_wandb_args
+from slime.utils.external_utils.command_utils import execute_train
 
 MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")
-assert MODEL_NAME in {"Qwen3-VL-2B-Instruct", "Qwen3-VL-4B-Instruct", "Qwen3-VL-8B-Instruct","Qwen3-VL-2B-Thinking","Qwen3-VL-4B-Thinking","Qwen3-VL-8B-Thinking"}
+assert MODEL_NAME in {
+    "Qwen3-VL-2B-Instruct",
+    "Qwen3-VL-4B-Instruct",
+    "Qwen3-VL-8B-Instruct",
+    "Qwen3-VL-2B-Thinking",
+    "Qwen3-VL-4B-Thinking",
+    "Qwen3-VL-8B-Thinking",
+}
 
 NUM_GPUS = int(os.environ.get("SLIME_SCRIPT_NUM_GPUS", "4"))
 EXTERNAL_RAY = int(os.environ.get("SLIME_SCRIPT_EXTERNAL_RAY", "0"))
@@ -33,9 +40,7 @@ def prepare():
 
 
 def execute():
-    ckpt_args = (
-        f"--hf-checkpoint /root/models/{MODEL_NAME} "
-    )
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} "
 
     wandb_args = (
         "--use-wandb "
@@ -48,7 +53,7 @@ def execute():
         f"--prompt-data {TRAIN_DATA_PATH} "
         "--input-key problem "
         "--label-key answer "
-        "--multimodal-keys \'{\"image\": \"images\"}\' "
+        '--multimodal-keys \'{"image": "images"}\' '
         "--rm-type math "
         "--apply-chat-template "
         "--custom-generate-function-path examples.geo3k_vlm_multi_turn.rollout.generate "
@@ -79,7 +84,6 @@ def execute():
         "--eps-clip 0.2 "
         "--eps-clip-high 0.28 "
     )
-
 
     optimizer_args = (
         "--optimizer adam "
@@ -127,10 +131,7 @@ def execute():
     )
 
     misc_args = (
-        "--actor-num-nodes 1 "
-        f"--actor-num-gpus-per-node {NUM_GPUS} "
-        f"--rollout-num-gpus {NUM_GPUS} "
-        "--colocate "
+        "--actor-num-nodes 1 " f"--actor-num-gpus-per-node {NUM_GPUS} " f"--rollout-num-gpus {NUM_GPUS} " "--colocate "
     )
 
     if TRAIN_BACKEND == "megatron":
@@ -140,7 +141,6 @@ def execute():
     else:
         backend_args = fsdp_args
         megatron_model_type = None
-
 
     train_args = (
         f"{ckpt_args} "
@@ -158,11 +158,7 @@ def execute():
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=megatron_model_type,
-        extra_env_vars=(
-            {"WANDB_API_KEY": os.environ["WANDB_API_KEY"]}
-            if os.environ.get("WANDB_API_KEY")
-            else {}
-        ),
+        extra_env_vars=({"WANDB_API_KEY": os.environ["WANDB_API_KEY"]} if os.environ.get("WANDB_API_KEY") else {}),
     )
 
 
