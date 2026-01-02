@@ -1,3 +1,4 @@
+import os
 import slime.utils.external_utils.command_utils as U
 
 
@@ -124,4 +125,8 @@ def execute():
 
 if __name__ == "__main__":
     prepare()
+    os.environ.pop("http_proxy")
+    os.environ.pop("https_proxy")
+    os.environ.pop("HTTP_PROXY")
+    os.environ.pop("HTTPS_PROXY")
     execute()
