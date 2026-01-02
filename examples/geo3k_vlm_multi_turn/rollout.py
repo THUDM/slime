@@ -35,7 +35,7 @@ def _load_env_module(env_path: str | None):
 
 def _build_env(env_module, sample: Sample, args: Any):
     """Instantiate the interaction environment using the provided module."""
-    build_fn = getattr(env_module, "build_env", None) or getattr(env_module, "create_env", None)
+    build_fn = env_module.build_env 
     if not callable(build_fn):
         raise ValueError("Environment module must expose a callable `build_env(sample, args)`.")
     try:
@@ -154,8 +154,8 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
     """Custom multi-turn rollout that interacts with a pluggable environment."""
     assert not args.partial_rollout, "Partial rollout is not supported for interaction rollouts."
 
-    env_module = _load_env_module(getattr(args, "rollout_interaction_env_path", None))
-    max_turns = getattr(args, "max_turns", None)
+    env_module = _load_env_module(args.rollout_interaction_env_path)
+    max_turns = args.max_turns
     if max_turns is None:
         raise ValueError("max_turns must be set via --custom-config-path in the custom config file.")
 
@@ -263,13 +263,13 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                     processor,
                     next_user_message,
                     sample.metadata,
-                    getattr(args, "apply_chat_template", False),
+                    args.apply_chat_template,
                     args.apply_chat_template_kwargs,
                 )
             )
 
             # Drop a leading BOS if present to avoid injecting it mid-stream.
-            bos_id = getattr(tokenizer, "bos_token_id", None)
+            bos_id = tokenizer.bos_token_id
             if bos_id is not None and obs_prompt_ids and obs_prompt_ids[0] == bos_id:
                 obs_prompt_ids = obs_prompt_ids[1:]
 

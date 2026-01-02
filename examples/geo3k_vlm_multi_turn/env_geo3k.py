@@ -254,12 +254,12 @@ def _extract_ground_truth(sample: Sample | None) -> str | None:
     """Resolve the ground-truth answer from label or metadata."""
     if sample is None:
         return None
-    if getattr(sample, "label", None) is not None:
+    if sample.label is not None:
         return str(sample.label)
-    metadata = getattr(sample, "metadata", {}) or {}
-    for key in ("answer", "ground_truth", "label"):
-        if key in metadata and metadata[key] is not None:
-            return str(metadata[key])
+    # metadata = sample.metadata
+    # for key in ("answer", "ground_truth", "label"):
+    #     if key in metadata and metadata[key] is not None:
+    #         return str(metadata[key])
     return None
 
 
@@ -268,7 +268,7 @@ def build_env(sample: Sample | None = None, args: Any | None = None, **_: Any) -
     Construct a Geo3kEnv. Ground truth is pulled from sample.label or metadata.
     """
     ground_truth = _extract_ground_truth(sample)
-    max_turns = getattr(args, "max_turns", None) 
+    max_turns = args.max_turns
     if max_turns is None:
         raise ValueError("max_turns must be set via --custom-config-path in the custom config file.")
     if ground_truth is None:
