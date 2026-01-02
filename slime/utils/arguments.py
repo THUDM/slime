@@ -1212,6 +1212,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--rollout-all-samples-process-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to the rollout all samples process function that "
+                    "can process all samples including filtered ones."
+                ),
+            )
+            parser.add_argument(
                 "--disable-rollout-trim-samples",
                 action="store_true",
                 default=False,
@@ -1654,6 +1663,7 @@ def slime_validate_args(args):
         assert (
             args.use_dynamic_batch_size is False
         ), "Dynamic batch size is not supported for bshd format. Please specify --micro-batch-size instead."
+
 
 def hf_validate_args(args, hf_config):
     def equal(x, y):
