@@ -5,12 +5,9 @@ import slime.utils.external_utils.command_utils as U
 FEW_GPU = U.get_bool_env_var("SLIME_TEST_FEW_GPU", "1")
 TIGHT_DEVICE_MEMORY = U.get_bool_env_var("SLIME_TEST_TIGHT_DEVICE_MEMORY", "1")
 
-MODEL_NAME = "Qwen3-4B"
-MODEL_TYPE = "qwen3-4B"
+MODEL_NAME = "Qwen2.5-0.5B-Instruct"
+MODEL_TYPE = "qwen2.5-0.5B"
 NUM_GPUS = 2 if FEW_GPU else 4
-
-WANDB_API_KEY = "a37f4796e6205800c4212556a38e1319b5f144b7"
-os.environ["WANDB_API_KEY"] = WANDB_API_KEY
 
 
 def prepare():
@@ -22,37 +19,30 @@ def prepare():
 def execute():
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
-    wandb_args = (
-        "--use-wandb "
-        "--wandb-project slime-dev "
-        "--wandb-group qwen3-4B-gsm8k-sft "
-        f"--wandb-key {WANDB_API_KEY} "
-    )
-
     rollout_args = (
-        "--prompt-data /root/datasets/gsm8k/train_with_answers.parquet "
+        "--prompt-data /root/datasets/gsm8k/train.parquet "
         "--input-key messages "
-        # "--label-key label "
+        "--label-key label "
         "--apply-chat-template "
         "--rollout-shuffle "
         "--rm-type math "
         f"--num-rollout {3000 if U.get_env_enable_infinite_run() else 250} "
         "--rollout-batch-size 32 "
-        # "--n-samples-per-prompt 8 "
+        "--n-samples-per-prompt 8 "
         "--rollout-max-response-len 1024 "
         "--rollout-temperature 1 "
         "--over-sampling-batch-size 64 "
         "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "
-        "--global-batch-size 32 "
+        "--global-batch-size 256 "
     )
 
-    # eval_args = (
-    #     "--eval-interval 20 "
-    #     "--eval-prompt-data gsm8k /root/openhermes2_5.parquet "
-    #     "--n-samples-per-eval-prompt 1 "
-    #     "--eval-max-response-len 1024 "
-    #     "--eval-top-k 1 "
-    # )
+    eval_args = (
+        "--eval-interval 20 "
+        "--eval-prompt-data gsm8k /root/datasets/gsm8k/test.parquet "
+        "--n-samples-per-eval-prompt 1 "
+        "--eval-max-response-len 1024 "
+        "--eval-top-k 1 "
+    )
 
     perf_args = (
         "--tensor-model-parallel-size 1 "
@@ -111,11 +101,6 @@ def execute():
         f"--actor-num-gpus-per-node {2 if FEW_GPU else 4} "
         "--colocate "
         "--megatron-to-hf-mode bridge "
-        "--rollout-function-path slime.rollout.sft_rollout.generate_rollout "
-        "--loss-type sft_loss "
-        "--calculate-per-token-loss "
-        "--disable-compute-advantages-and-returns "
-        "--debug-train-only "
     )
 
     train_args = (
@@ -123,9 +108,9 @@ def execute():
         f"{rollout_args} "
         f"{optimizer_args} "
         f"{grpo_args} "
-        f"{wandb_args} "
+        f"{U.get_default_wandb_args(__file__)} "
         f"{perf_args} "
-        # f"{eval_args} "
+        f"{eval_args} "
         f"{sglang_args} "
         f"{ci_args} "
         f"{misc_args} "
@@ -140,8 +125,8 @@ def execute():
 
 if __name__ == "__main__":
     prepare()
-    # os.environ.pop("http_proxy")
-    # os.environ.pop("https_proxy")
-    # os.environ.pop("HTTP_PROXY")
-    # os.environ.pop("HTTPS_PROXY")
+    os.environ.pop("http_proxy")
+    os.environ.pop("https_proxy")
+    os.environ.pop("HTTP_PROXY")
+    os.environ.pop("HTTPS_PROXY")
     execute()
