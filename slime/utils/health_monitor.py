@@ -1,16 +1,93 @@
 import logging
 import threading
+from urllib.parse import urlparse
 
 import ray
+import requests
+import sglang_router
+from packaging.version import parse
+from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+
+from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 
 
 logger = logging.getLogger(__name__)
+
+
+def get_active_seed_instance(args, exclude_urls: list[str] | None = None):
+    """Get an active seed instance from the router for fault tolerance restart.
+
+    When restarting failed engines, this function queries the router to find active workers
+    and returns the connection info for one of them to be used as a seed instance for
+    remote weight loading.
+
+    Args:
+        args: The global arguments containing router IP and port.
+        exclude_urls: A list of worker URLs to exclude (e.g., the URLs of killed engines).
+
+    Returns:
+        A dict with 'ip' and 'port' keys for the seed instance, or None if no active
+        workers are found.
+    """
+    router_ip = args.sglang_router_ip
+    router_port = args.sglang_router_port
+    exclude_urls = exclude_urls or []
+
+    if not router_ip or not router_port:
+        logger.warning("Router IP or port not set, cannot get active seed instance.")
+        return None
+
+    try:
+        # Query the router to get active workers
+        if parse(sglang_router.__version__) <= parse("0.2.1") or args.use_slime_router:
+            response = requests.get(f"http://{router_ip}:{router_port}/list_workers", timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            worker_urls = data.get("urls", [])
+        else:
+            response = requests.get(f"http://{router_ip}:{router_port}/workers", timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            workers = data.get("workers", [])
+            worker_urls = [w["url"] for w in workers]
+
+        if not worker_urls:
+            logger.warning("No active workers found in router.")
+            return None
+
+        # Filter out excluded URLs (normalize for comparison)
+        def normalize_url(url):
+            """Normalize URL for comparison (remove trailing slash, etc.)"""
+            return url.rstrip("/").lower()
+
+        exclude_urls_normalized = {normalize_url(u) for u in exclude_urls}
+        available_urls = [u for u in worker_urls if normalize_url(u) not in exclude_urls_normalized]
+
+        if not available_urls:
+            logger.warning(f"No active workers found after excluding {exclude_urls}. All workers: {worker_urls}")
+            return None
+
+        # Parse the first available worker's URL to get IP and port
+        seed_url = available_urls[0]
+        parsed = urlparse(seed_url)
+
+        # Handle IPv6 addresses (may be wrapped in [])
+        host = parsed.hostname or parsed.netloc.rsplit(":", 1)[0]
+        port = parsed.port or 30000
+
+        logger.info(f"Found active seed instance for fault tolerance: {host}:{port} (excluded: {exclude_urls})")
+        return {"ip": host, "port": port}
+
+    except Exception as e:
+        logger.warning(f"Failed to get active seed instance from router: {e}")
+        return None
 
 
 class RolloutHealthMonitor:
     def __init__(self, rollout_manager, args):
         # TODO may remove this dependency after refactoring
         self._rollout_manager = rollout_manager
+        self._args = args
 
         self._thread = None
         self._stop_event = None
@@ -81,16 +158,35 @@ class RolloutHealthMonitor:
             logger.error(
                 f"Health check failed for rollout engine {rollout_engine_id} (ray timeout or error). Killing actor. Exception: {e}"
             )
-            self._kill_engine(rollout_engine_id=rollout_engine_id)
+            self._kill_and_restart_engine(rollout_engine_id=rollout_engine_id)
 
-    def _kill_engine(self, rollout_engine_id: int):
-        logger.info(f"Killing engine group {rollout_engine_id}...")
+    def _kill_and_restart_engine(self, rollout_engine_id: int):
+        """Kill a failed engine and immediately restart it with remote weight loading."""
+        logger.info(f"Killing and restarting engine group {rollout_engine_id}...")
+
+        args = self._rollout_manager.args
+        nodes_per_engine = self._rollout_manager.nodes_per_engine
+
+        # Collect URLs of engines being killed (to exclude from seed instance selection)
+        killed_engine_urls = []
+
+        # Kill the failed engine(s)
         for i in range(
-            rollout_engine_id * self._rollout_manager.nodes_per_engine,
-            (rollout_engine_id + 1) * self._rollout_manager.nodes_per_engine,
+            rollout_engine_id * nodes_per_engine,
+            (rollout_engine_id + 1) * nodes_per_engine,
         ):
             engine = self._rollout_manager.all_rollout_engines[i]
             if engine:
+                # Try to get the engine's URL before killing
+                try:
+                    server_host = ray.get(engine.get_server_host.remote())
+                    server_port = ray.get(engine.get_server_port.remote())
+                    killed_url = f"http://{server_host}:{server_port}"
+                    killed_engine_urls.append(killed_url)
+                    logger.info(f"Engine at index {i} has URL: {killed_url}")
+                except Exception as e:
+                    logger.warning(f"Could not get URL for engine at index {i}: {e}")
+
                 logger.info(f"Shutting down and killing engine at index {i}")
                 try:
                     ray.get(engine.shutdown.remote())
@@ -101,3 +197,158 @@ class RolloutHealthMonitor:
             else:
                 logger.info(f"Engine at index {i} is already None")
             self._rollout_manager.all_rollout_engines[i] = None
+
+        # Get active seed instance for remote weight loading (excluding killed engines)
+        logger.info(f"Looking for seed instance, excluding URLs: {killed_engine_urls}")
+        remote_seed_instance = get_active_seed_instance(args, exclude_urls=killed_engine_urls)
+        if remote_seed_instance is None:
+            logger.error(f"Cannot restart engine {rollout_engine_id}: no active seed instance found.")
+            return
+
+        logger.info(
+            f"Restarting engine {rollout_engine_id} with remote weight loading from "
+            f"{remote_seed_instance['ip']}:{remote_seed_instance['port']}"
+        )
+
+        # Restart the engine(s)
+        try:
+            self._restart_engine_group(rollout_engine_id, remote_seed_instance)
+            logger.info(f"Successfully restarted engine group {rollout_engine_id}")
+        except Exception as e:
+            logger.error(f"Failed to restart engine group {rollout_engine_id}: {e}")
+
+    def _restart_engine_group(self, rollout_engine_id: int, remote_seed_instance: dict):
+        """Restart a single engine group with remote weight loading."""
+        from slime.ray.rollout import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
+
+        args = self._rollout_manager.args
+        pg, reordered_bundle_indices = self._rollout_manager.pg
+        nodes_per_engine = self._rollout_manager.nodes_per_engine
+
+        num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
+        # num_engines = args.rollout_num_gpus // num_gpu_per_engine
+        num_engines_per_node = max(
+            1, min(args.num_gpus_per_node, args.rollout_num_gpus) // args.rollout_num_gpus_per_engine
+        )
+
+        # Calculate prefill limit
+        prefill_limit = 0
+        if args.prefill_num_servers is not None:
+            prefill_limit = args.prefill_num_servers * args.rollout_num_gpus_per_engine // num_gpu_per_engine
+
+        RolloutRayActor = ray.remote(SGLangEngine)
+
+        # Restart all nodes for this engine
+        new_engines = []
+        for node_offset in range(nodes_per_engine):
+            i = rollout_engine_id * nodes_per_engine + node_offset
+
+            num_gpus = 0.2
+            num_cpus = num_gpus
+
+            scheduling_strategy = PlacementGroupSchedulingStrategy(
+                placement_group=pg,
+                placement_group_capture_child_tasks=True,
+                placement_group_bundle_index=reordered_bundle_indices[i * num_gpu_per_engine],
+            )
+
+            env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST} | {
+                "SGL_JIT_DEEPGEMM_PRECOMPILE": "false",
+                "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
+                "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
+                "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
+                "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
+                "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
+            }
+
+            worker_type = "regular"
+            if args.prefill_num_servers is not None:
+                if i < prefill_limit:
+                    worker_type = "prefill"
+                else:
+                    worker_type = "decode"
+
+            rollout_engine = RolloutRayActor.options(
+                num_cpus=num_cpus,
+                num_gpus=num_gpus,
+                scheduling_strategy=scheduling_strategy,
+                runtime_env={
+                    "env_vars": env_vars,
+                },
+            ).remote(args, rank=i, worker_type=worker_type)
+
+            new_engines.append((i, rollout_engine))
+            self._rollout_manager.all_rollout_engines[i] = rollout_engine
+
+        # Allocate ports for the new engine(s)
+        addr_and_ports = self._allocate_ports_for_engine_group(
+            rollout_engine_id, new_engines, num_engines_per_node, prefill_limit
+        )
+
+        # Add remote_seed_instance to addr_and_ports
+        for rank, _ in new_engines:
+            addr_and_ports[rank]["remote_seed_instance"] = remote_seed_instance
+
+        # Initialize the new engine(s)
+        init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in new_engines]
+        ray.get(init_handles)
+
+    def _allocate_ports_for_engine_group(
+        self, rollout_engine_id: int, new_engines: list, num_engines_per_node: int, prefill_limit: int
+    ) -> dict:
+        """Allocate ports for a single engine group being restarted."""
+        args = self._rollout_manager.args
+        nodes_per_engine = self._rollout_manager.nodes_per_engine
+        num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
+        num_engines = args.rollout_num_gpus // num_gpu_per_engine
+
+        addr_and_ports = [{} for _ in range(num_engines)]
+
+        # Get the first engine to allocate ports
+        first_rank, first_engine = new_engines[0]
+
+        def get_addr_and_ports(engine):
+            start_port = 15000
+
+            def port(consecutive=1):
+                nonlocal start_port
+                _, p = ray.get(
+                    engine._get_current_node_ip_and_free_port.remote(
+                        start_port=start_port,
+                        consecutive=consecutive,
+                    )
+                )
+                start_port = p + consecutive
+                return p
+
+            def addr():
+                a, _ = ray.get(engine._get_current_node_ip_and_free_port.remote())
+                return a
+
+            return addr, port
+
+        get_addr, get_port = get_addr_and_ports(first_engine)
+
+        for rank, _engine in new_engines:
+            addr_and_ports[rank]["host"] = get_addr()
+            addr_and_ports[rank]["port"] = get_port()
+            addr_and_ports[rank]["nccl_port"] = get_port()
+
+            if args.prefill_num_servers is not None and rank < prefill_limit:
+                addr_and_ports[rank]["disaggregation_bootstrap_port"] = get_port()
+
+        # Handle multi-node engine case
+        if args.rollout_num_gpus_per_engine > args.num_gpus_per_node:
+            num_node_per_engine = args.rollout_num_gpus_per_engine // args.num_gpus_per_node
+            base_rank = rollout_engine_id * nodes_per_engine
+            if base_rank % num_node_per_engine == 0:
+                dist_init_addr = f"{get_addr()}:{get_port(30 + args.sglang_dp_size)}"
+                for rank, _ in new_engines:
+                    addr_and_ports[rank]["dist_init_addr"] = dist_init_addr
+        else:
+            for rank, _ in new_engines:
+                addr_and_ports[rank]["dist_init_addr"] = f"{get_addr()}:{get_port(30 + args.sglang_dp_size)}"
+
+        return addr_and_ports

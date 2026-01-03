@@ -13,7 +13,7 @@ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import tracking_utils
-from slime.utils.health_monitor import RolloutHealthMonitor
+from slime.utils.health_monitor import RolloutHealthMonitor, get_active_seed_instance
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.iter_utils import group_by
 from slime.utils.logging_utils import configure_logger
@@ -336,6 +336,34 @@ class RolloutManager:
         return rollout_data_refs
 
 
+def _get_active_seed_instance_for_init(args, all_rollout_engines):
+    """Get an active seed instance from the router for fault tolerance restart during init.
+
+    This is called during init_rollout_engines to check if we need remote weight loading.
+    It's different from the health monitor's get_active_seed_instance because it also checks
+    if there are existing engines (meaning this is a restart scenario).
+
+    Args:
+        args: The global arguments containing router IP and port.
+        all_rollout_engines: List of all rollout engines (some may be None if failed).
+
+    Returns:
+        A dict with 'ip' and 'port' keys for the seed instance, or None if no active
+        workers are found or fault tolerance is disabled or this is initial startup.
+    """
+    if not args.use_fault_tolerance:
+        return None
+
+    # Check if there are any existing engines (not all are new/failed)
+    has_existing_engines = any(engine is not None for engine in all_rollout_engines)
+    if not has_existing_engines:
+        # All engines are new, no need for remote instance loading
+        logger.info("All engines are new, no need for remote instance loading.")
+        return None
+
+    return get_active_seed_instance(args)
+
+
 def init_rollout_engines(args, pg, all_rollout_engines):
     if args.debug_train_only:
         return 0
@@ -408,6 +436,17 @@ def init_rollout_engines(args, pg, all_rollout_engines):
         addr_and_ports = _allocate_rollout_engine_addr_and_ports_normal(
             args=args, num_engines=num_engines, rollout_engines=rollout_engines
         )
+
+    # Get active seed instance for fault tolerance restart (if applicable)
+    remote_seed_instance = _get_active_seed_instance_for_init(args, all_rollout_engines)
+    if remote_seed_instance:
+        logger.info(
+            f"Fault tolerance: {num_new_engines} engine(s) will load weights from seed instance "
+            f"{remote_seed_instance['ip']}:{remote_seed_instance['port']}"
+        )
+        # Add remote_seed_instance to all addr_and_ports for new engines
+        for rank, _ in rollout_engines:
+            addr_and_ports[rank]["remote_seed_instance"] = remote_seed_instance
 
     # TODO: don't ray.get here to overlap train actor init with rollout engine init.
     # somehow if we don't sync here, the --debug-rollout-only mode will crash.
