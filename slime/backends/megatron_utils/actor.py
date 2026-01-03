@@ -480,7 +480,7 @@ class MegatronTrainRayActor(TrainRayActor):
         if save_hf:
             from slime.backends.megatron_utils.model import save_hf_model
 
-            save_hf_model(self.model)
+            save_hf_model(self.model, rollout_id=rollout_id)
 
         if self.args.offload_train:
             destroy_process_groups()
