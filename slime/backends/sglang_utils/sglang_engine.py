@@ -132,7 +132,22 @@ class SGLangEngine(RayActor):
         disaggregation_bootstrap_port=None,
         router_ip=None,
         router_port=None,
+        remote_seed_instance=None,
     ):
+        """Initialize the SGLang engine.
+
+        Args:
+            dist_init_addr: The distributed init address.
+            port: The server port.
+            nccl_port: The NCCL port.
+            host: The host address.
+            disaggregation_bootstrap_port: The disaggregation bootstrap port for prefill workers.
+            router_ip: The router IP address.
+            router_port: The router port.
+            remote_seed_instance: A dict containing remote seed instance info for fault tolerance restart.
+                Expected keys: "ip" (str), "port" (int). If provided, the engine will load weights
+                from the remote seed instance using transfer_engine backend.
+        """
         self.router_ip = router_ip if router_ip is not None else self.args.sglang_router_ip
         self.router_port = router_port if router_port is not None else self.args.sglang_router_port
 
@@ -164,6 +179,7 @@ class SGLangEngine(RayActor):
             base_gpu_id=self.base_gpu_id,
             sglang_overrides=self.sglang_overrides,
             num_gpus_per_engine=self.num_gpus_per_engine,
+            remote_seed_instance=remote_seed_instance,
         )
 
         self.node_rank = server_args_dict["node_rank"]
@@ -174,6 +190,14 @@ class SGLangEngine(RayActor):
             self._init_external(server_args_dict, external_engine_need_check_fields=external_engine_need_check_fields)
         else:
             self._init_normal(server_args_dict)
+
+    def get_server_host(self):
+        """Get the server host address."""
+        return self.server_host
+
+    def get_server_port(self):
+        """Get the server port."""
+        return self.server_port
 
     def _init_external(self, expect_server_args, external_engine_need_check_fields):
         logger.info(f"Use external SGLang engine (rank={self.rank}, expect_server_args={expect_server_args})")
@@ -499,7 +523,25 @@ def _compute_server_args(
     base_gpu_id: int | None = None,
     sglang_overrides: dict | None = None,
     num_gpus_per_engine: int | None = None,
+    remote_seed_instance: dict | None = None,
 ):
+    """Compute server arguments for SGLang engine.
+
+    Args:
+        args: The global arguments.
+        rank: The rank of the engine.
+        dist_init_addr: The distributed init address.
+        nccl_port: The NCCL port.
+        host: The host address.
+        port: The server port.
+        worker_type: The worker type ("regular", "prefill", or "decode").
+        disaggregation_bootstrap_port: The disaggregation bootstrap port for prefill workers.
+        sglang_overrides: Optional dict of SGLang server argument overrides.
+        num_gpus_per_engine: Optional number of GPUs per engine.
+        remote_seed_instance: A dict containing remote seed instance info for fault tolerance restart.
+            Expected keys: "ip" (str), "port" (int). If provided, the engine will load weights
+            from the remote seed instance using transfer_engine backend.
+    """
     _gpus_per_engine = num_gpus_per_engine or args.rollout_num_gpus_per_engine
     nnodes = max(1, _gpus_per_engine // args.num_gpus_per_node)
     node_rank = rank % nnodes
@@ -546,6 +588,20 @@ def _compute_server_args(
         kwargs["enable_return_routed_experts"] = True
     if args.fp16:
         kwargs["dtype"] = "float16"
+    if args.use_fault_tolerance:
+        kwargs["remote_instance_weight_loader_start_seed_via_transfer_engine"] = True
+
+    # Remote instance weight loader for fault tolerance restart
+    if remote_seed_instance is not None:
+        kwargs["load_format"] = "remote_instance"
+        kwargs["remote_instance_weight_loader_backend"] = "transfer_engine"
+        kwargs["remote_instance_weight_loader_seed_instance_ip"] = remote_seed_instance["ip"]
+        kwargs["remote_instance_weight_loader_seed_instance_service_port"] = remote_seed_instance["port"]
+        logger.info(
+            f"Engine {rank} will load weights from remote seed instance at "
+            f"{remote_seed_instance['ip']}:{remote_seed_instance['port']}"
+        )
+
     external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
 
     unused_keys = set(kwargs.keys())

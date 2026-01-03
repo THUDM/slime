@@ -17,8 +17,8 @@ from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
-from slime.utils import logging_utils
-from slime.utils.health_monitor import RolloutHealthMonitor
+from slime.utils import logging_utils, tracking_utils
+from slime.utils.health_monitor import RolloutHealthMonitor, get_active_seed_instance
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
@@ -855,6 +855,128 @@ class RolloutManager:
             rollout_data_refs.append(Box(ray.put(rollout_data)))
         return rollout_data_refs
 
+
+def _get_active_seed_instance_for_init(args, all_rollout_engines):
+    """Get an active seed instance from the router for fault tolerance restart during init.
+
+    This is called during init_rollout_engines to check if we need remote weight loading.
+    It's different from the health monitor's get_active_seed_instance because it also checks
+    if there are existing engines (meaning this is a restart scenario).
+
+    Args:
+        args: The global arguments containing router IP and port.
+        all_rollout_engines: List of all rollout engines (some may be None if failed).
+
+    Returns:
+        A dict with 'ip' and 'port' keys for the seed instance, or None if no active
+        workers are found or fault tolerance is disabled or this is initial startup.
+    """
+    if not args.use_fault_tolerance:
+        return None
+
+    # Check if there are any existing engines (not all are new/failed)
+    has_existing_engines = any(engine is not None for engine in all_rollout_engines)
+    if not has_existing_engines:
+        # All engines are new, no need for remote instance loading
+        logger.info("All engines are new, no need for remote instance loading.")
+        return None
+
+    return get_active_seed_instance(args)
+
+
+def init_rollout_engines(args, pg, all_rollout_engines):
+    if args.debug_train_only:
+        return 0
+
+    num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
+    num_engines = args.rollout_num_gpus // num_gpu_per_engine
+    assert len(all_rollout_engines) == num_engines
+    if args.prefill_num_servers is not None:
+        prefill_num_servers = args.prefill_num_servers * args.rollout_num_gpus_per_engine // num_gpu_per_engine
+        assert (
+            num_engines > prefill_num_servers
+        ), f"num_engines {num_engines} should be larger than prefill_num_servers {prefill_num_servers}"
+
+    pg, reordered_bundle_indices, reordered_gpu_ids = pg
+
+    RolloutRayActor = ray.remote(SGLangEngine)
+
+    rollout_engines = []
+    for i in range(num_engines):
+        if all_rollout_engines[i] is not None:
+            continue
+
+        num_gpus = 0.2
+        num_cpus = num_gpus
+
+        # Get the base GPU ID from placement group
+        base_gpu_id = int(reordered_gpu_ids[i * num_gpu_per_engine])
+
+        scheduling_strategy = PlacementGroupSchedulingStrategy(
+            placement_group=pg,
+            placement_group_capture_child_tasks=True,
+            placement_group_bundle_index=reordered_bundle_indices[i * num_gpu_per_engine],
+        )
+
+        env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST} | {
+            "SGL_JIT_DEEPGEMM_PRECOMPILE": "false",
+            "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
+            "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+            "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+            "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
+            "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
+            "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
+            "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
+        }
+
+        worker_type = "regular"
+        if args.prefill_num_servers is not None:
+            if i < prefill_num_servers:
+                worker_type = "prefill"
+            else:
+                worker_type = "decode"
+
+        rollout_engine = RolloutRayActor.options(
+            num_cpus=num_cpus,
+            num_gpus=num_gpus,
+            scheduling_strategy=scheduling_strategy,
+            runtime_env={
+                "env_vars": env_vars,
+            },
+        ).remote(args, rank=i, worker_type=worker_type, base_gpu_id=base_gpu_id)
+
+        rollout_engines.append((i, rollout_engine))
+        all_rollout_engines[i] = rollout_engine
+
+    num_new_engines = len(rollout_engines)
+
+    if num_new_engines == 0:
+        return num_new_engines
+
+    if args.rollout_external:
+        addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(args=args, rollout_engines=rollout_engines)
+    else:
+        addr_and_ports = _allocate_rollout_engine_addr_and_ports_normal(
+            args=args, num_engines=num_engines, rollout_engines=rollout_engines
+        )
+
+    # Get active seed instance for fault tolerance restart (if applicable)
+    remote_seed_instance = _get_active_seed_instance_for_init(args, all_rollout_engines)
+    if remote_seed_instance:
+        logger.info(
+            f"Fault tolerance: {num_new_engines} engine(s) will load weights from seed instance "
+            f"{remote_seed_instance['ip']}:{remote_seed_instance['port']}"
+        )
+        # Add remote_seed_instance to all addr_and_ports for new engines
+        for rank, _ in rollout_engines:
+            addr_and_ports[rank]["remote_seed_instance"] = remote_seed_instance
+
+    # TODO: don't ray.get here to overlap train actor init with rollout engine init.
+    # somehow if we don't sync here, the --debug-rollout-only mode will crash.
+    init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in rollout_engines]
+    ray.get(init_handles)
+
+    return num_new_engines
 
 def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
     addr_and_ports = {}
