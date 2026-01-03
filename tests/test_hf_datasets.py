@@ -76,6 +76,7 @@ def mock_args(test_jsonl_data, temp_dir):
     args.hf_dataset_shuffle_buffer = 100
     args.hf_dataset_num_proc = 4
     args.hf_datasets_num_samples = 100  # Required for HF streaming mode
+    args.hf_dataset_split = "train"  # Default split name
 
     # Checkpoint config
     args.save = str(Path(temp_dir) / "checkpoints")
@@ -478,6 +479,7 @@ class TestIntegration:
         args.hf_dataset_shuffle_buffer = 100
         args.hf_dataset_num_proc = 4
         args.hf_datasets_num_samples = 100  # Required for epoch tracking
+        args.hf_dataset_split = "train"  # Dataset split name
         args.save = str(Path(temp_dir) / "checkpoints")
         args.load = None
         args.hf_checkpoint = None
@@ -594,6 +596,7 @@ class TestIntegration:
         args.hf_dataset_shuffle_buffer = 100
         args.hf_dataset_num_proc = 4
         args.hf_datasets_num_samples = 100  # Required for epoch tracking
+        args.hf_dataset_split = "train"  # Dataset split name
         args.save = str(Path(temp_dir) / "checkpoints")
         args.load = None
         args.hf_checkpoint = None
