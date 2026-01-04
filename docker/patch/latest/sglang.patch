@@ -2197,6 +2197,32 @@ index 8e7753dab..15a0823fd 100644
          parser.add_argument(
              "--scheduler-recv-interval",
              type=int,
+diff --git a/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py b/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
+index cd9d171fe..71e2f7063 100644
+--- a/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
++++ b/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
+@@ -335,6 +335,10 @@ class EAGLEDraftCudaGraphRunner:
+             self.seq_lens.fill_(self.seq_len_fill_value)
+             self.out_cache_loc.zero_()
+             self.positions.zero_()
++            self.topk_p.zero_()
++            self.topk_index.zero_()
++            self.hidden_states.zero_()
++            self.req_pool_indices.zero_()
+ 
+         num_tokens = bs * self.num_tokens_per_bs
+ 
+@@ -344,8 +348,8 @@ class EAGLEDraftCudaGraphRunner:
+             forward_batch.out_cache_loc
+         )
+         self.positions[:raw_num_token].copy_(forward_batch.positions)
+-        self.topk_p[:raw_bs].copy_(forward_batch.spec_info.topk_p)
+-        self.topk_index[:raw_bs].copy_(forward_batch.spec_info.topk_index)
++        self.topk_p[:raw_bs].copy_(forward_batch.spec_info.topk_p.clamp(0, 1))
++        self.topk_index[:raw_bs].copy_(forward_batch.spec_info.topk_index.clamp(0, self.model_runner.model_config.vocab_size - 1))
+         self.hidden_states[:raw_bs].copy_(forward_batch.spec_info.hidden_states)
+         self.req_pool_indices[:raw_bs].copy_(forward_batch.req_pool_indices)
+ 
 diff --git a/python/sglang/srt/speculative/eagle_info.py b/python/sglang/srt/speculative/eagle_info.py
 index b3d72df05..09a1634e0 100644
 --- a/python/sglang/srt/speculative/eagle_info.py

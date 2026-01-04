@@ -88,10 +88,11 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
 
 
 class SGLangEngine(RayActor):
-    def __init__(self, args, rank: int, worker_type: str = "regular"):
+    def __init__(self, args, rank: int, worker_type: str = "regular", base_gpu_id: int | None = None):
         self.args = args
         self.rank = rank
         self.worker_type = worker_type
+        self.base_gpu_id = base_gpu_id
 
     def init(self, dist_init_addr, port, nccl_port, host=None, disaggregation_bootstrap_port=None):
         self.router_ip = self.args.sglang_router_ip
@@ -122,6 +123,7 @@ class SGLangEngine(RayActor):
             port,
             self.worker_type,
             disaggregation_bootstrap_port,
+            base_gpu_id=self.base_gpu_id,
         )
 
         self.node_rank = server_args_dict["node_rank"]
@@ -424,6 +426,7 @@ def _compute_server_args(
     port,
     worker_type: str = "regular",
     disaggregation_bootstrap_port: int | None = None,
+    base_gpu_id: int | None = None,
 ):
     nnodes = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
     node_rank = rank % nnodes
@@ -441,7 +444,7 @@ def _compute_server_args(
         "node_rank": node_rank,
         "dist_init_addr": dist_init_addr,
         "gpu_id_step": 1,
-        "base_gpu_id": get_base_gpu_id(args, rank),
+        "base_gpu_id": base_gpu_id if base_gpu_id is not None else get_base_gpu_id(args, rank),
         # parallel
         "tp_size": args.rollout_num_gpus_per_engine,
         "dp_size": args.sglang_dp_size,

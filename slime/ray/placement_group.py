@@ -60,7 +60,11 @@ def _create_placement_group(num_gpus):
         ray.kill(actor)
 
     bundle_infos = [(i, gpu_ids[i][0], gpu_ids[i][1]) for i in range(num_bundles)]
-    pg_reordered_bundle_indices = [bundle_info[0] for bundle_info in sorted(bundle_infos, key=sort_key)]
+    sorted_bundle_infos = sorted(bundle_infos, key=sort_key)
+    pg_reordered_bundle_indices = [info[0] for info in sorted_bundle_infos]
+    # Map from logical index -> physical GPU ID
+    pg_reordered_gpu_ids = [gpu_ids[info[0]][1] for info in sorted_bundle_infos]
+
     for i in range(num_bundles):
         actual_bundle_index = pg_reordered_bundle_indices[i]
         logger.info(
@@ -68,7 +72,7 @@ def _create_placement_group(num_gpus):
             f"node: {gpu_ids[actual_bundle_index][0]}, gpu: {gpu_ids[actual_bundle_index][1]}"
         )
 
-    return pg, pg_reordered_bundle_indices
+    return pg, pg_reordered_bundle_indices, pg_reordered_gpu_ids
 
 
 def create_placement_groups(args):
@@ -99,16 +103,18 @@ def create_placement_groups(args):
             rollout_offset += args.critic_num_nodes * args.critic_num_gpus_per_node
 
     logger.info(f"Creating placement group with {num_gpus} GPUs...")
-    pg, actor_pg_reordered_bundle_indices = _create_placement_group(num_gpus)
+    pg, actor_pg_reordered_bundle_indices, actor_pg_reordered_gpu_ids = _create_placement_group(num_gpus)
 
     rollout_pg_reordered_bundle_indices = actor_pg_reordered_bundle_indices[rollout_offset:]
+    rollout_pg_reordered_gpu_ids = actor_pg_reordered_gpu_ids[rollout_offset:]
     if args.use_critic:
         critic_pg_reordered_bundle_indices = actor_pg_reordered_bundle_indices[critic_offset:]
+        critic_pg_reordered_gpu_ids = actor_pg_reordered_gpu_ids[critic_offset:]
 
     return {
-        "actor": (pg, actor_pg_reordered_bundle_indices),
-        "critic": (pg, critic_pg_reordered_bundle_indices) if args.use_critic else None,
-        "rollout": (pg, rollout_pg_reordered_bundle_indices),
+        "actor": (pg, actor_pg_reordered_bundle_indices, actor_pg_reordered_gpu_ids),
+        "critic": (pg, critic_pg_reordered_bundle_indices, critic_pg_reordered_gpu_ids) if args.use_critic else None,
+        "rollout": (pg, rollout_pg_reordered_bundle_indices, rollout_pg_reordered_gpu_ids),
     }
 
 

@@ -78,15 +78,21 @@ def _parse_generalized_path(s: str):
     return s, None
 
 
-def _should_skip_prompt(formatted_prompt: str, tokenizer, processor, max_length, multimodal_inputs=None):
+def _should_skip_prompt(output_prompt: str | list, tokenizer, processor, max_length, multimodal_inputs=None):
     if max_length is None:
         return False
 
+    if isinstance(output_prompt, list):
+        logger.warning(
+            "Skipping max_length check for list prompt. Set apply_chat_template=True to enable length filtering."
+        )
+        return False
+
     if processor:
-        processor_output = processor(text=formatted_prompt, **multimodal_inputs)
+        processor_output = processor(text=output_prompt, **multimodal_inputs)
         input_ids = processor_output["input_ids"][0]
     else:
-        input_ids = tokenizer.encode(formatted_prompt, add_special_tokens=False)
+        input_ids = tokenizer.encode(output_prompt, add_special_tokens=False)
 
     return len(input_ids) > max_length
 
@@ -102,7 +108,6 @@ def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimod
             prompt = [{"role": "user", "content": prompt}]
 
     if multimodal_keys:
-        assert as_conversation, "as_conversation must be True when multimodal_keys is not None"
         # Build mapping: placeholder -> (MultimodalType, content_list)
         multimodals = {}
         for type_name, data_key in multimodal_keys.items():
@@ -164,7 +169,8 @@ class Dataset:
     ):
         self.origin_samples = []
         for data in read_file(path):
-            as_conversation = apply_chat_template
+            # Both chat templates and multimodal inputs require conversation format (list of message dicts)
+            as_conversation = apply_chat_template or (multimodal_keys is not None)
             prompt = _build_messages(data, prompt_key, as_conversation, multimodal_keys)
 
             metadata = data.get(metadata_key) or {}
@@ -179,7 +185,7 @@ class Dataset:
                 metadata["tools"] = tools
 
             if apply_chat_template:
-                formatted_prompt = tokenizer.apply_chat_template(
+                output_prompt = tokenizer.apply_chat_template(
                     prompt,
                     tools=tools,
                     tokenize=False,
@@ -187,7 +193,7 @@ class Dataset:
                     **(apply_chat_template_kwargs or {}),
                 )
             else:
-                formatted_prompt = prompt
+                output_prompt = prompt
 
             if processor:
                 from slime.utils.processing_utils import process_vision_info
@@ -200,12 +206,12 @@ class Dataset:
                 multimodal_inputs = None
 
             # TODO: this is slow.
-            if _should_skip_prompt(formatted_prompt, tokenizer, processor, max_length, multimodal_inputs):
+            if _should_skip_prompt(output_prompt, tokenizer, processor, max_length, multimodal_inputs):
                 continue
 
             self.origin_samples.append(
                 Sample(
-                    prompt=formatted_prompt,
+                    prompt=output_prompt,
                     label=data[label_key] if label_key is not None else None,
                     metadata=metadata,
                     multimodal_inputs=multimodal_inputs,
