@@ -6,6 +6,11 @@ from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase, 
 
 logger = logging.getLogger(__name__)
 
+# Default image patch size for vision-language models
+# Note: Qwen3-VL uses 16, Qwen2.5-VL uses 14
+# Reference: https://github.com/QwenLM/Qwen3-VL/blob/main/qwen-vl-utils/README.md
+DEFAULT_PATCH_SIZE = 14
+
 
 def load_tokenizer(name_or_path: str, **kwargs):
     return AutoTokenizer.from_pretrained(name_or_path, **kwargs)
@@ -23,6 +28,20 @@ def load_processor(name_or_path: str, **kwargs):
         proc = None
 
     return proc
+
+
+def process_vision_info(prompt, processor):
+    # temporary solution, will write image utils for slime later
+    from qwen_vl_utils import process_vision_info
+
+    if hasattr(processor.image_processor, "patch_size"):
+        image_patch_size = processor.image_processor.patch_size
+    else:
+        logger.info(f"Using default patch size: {DEFAULT_PATCH_SIZE}")
+        image_patch_size = DEFAULT_PATCH_SIZE
+    images, videos = process_vision_info(prompt, image_patch_size=image_patch_size)
+    multimodal_inputs = {"images": images, "videos": videos}
+    return multimodal_inputs
 
 
 def encode_image_for_rollout_engine(image) -> str:

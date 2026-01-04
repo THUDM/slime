@@ -42,7 +42,7 @@ ROLLOUT_ARGS=(
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 1024
-   --rollout-temperature 0.8
+   --rollout-temperature 1
    --global-batch-size 256
    --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
    --balance-data

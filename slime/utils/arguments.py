@@ -118,6 +118,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="The backend for training.",
             )
             parser.add_argument(
+                "--qkv-format",
+                type=str,
+                choices=["thd", "bshd"],
+                default="thd",
+                help="The qkv layout for Megatron backend.",
+            )
+            parser.add_argument(
                 "--true-on-policy-mode",
                 action="store_true",
                 default=False,
@@ -146,6 +153,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 choices=["raw", "bridge"],
                 default="raw",
                 help="The method to convert megatron weights to hugging face weights for SGLang.",
+            )
+            parser.add_argument(
+                "--custom-model-provider-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to a custom model provider function. "
+                    "If set, we will use this function instead of the default model provider. "
+                    "The function should have the signature "
+                    "`def custom_model_provider(pre_process: bool, post_process: bool, vp_stage: int | None = None) -> GPTModel`. "
+                    "Example: 'my_module.my_model_provider'."
+                ),
             )
             parser.add_argument(
                 "--recompute-loss-function",
@@ -1647,6 +1666,12 @@ def slime_validate_args(args):
     assert not (
         args.prefill_num_servers is not None and args.rollout_external
     ), "prefill_num_servers cannot be set when rollout_external is set."
+
+    if args.qkv_format == "bshd":
+        assert args.train_backend == "megatron", "bshd format is only supported for megatron backend."
+        assert (
+            args.use_dynamic_batch_size is False
+        ), "Dynamic batch size is not supported for bshd format. Please specify --micro-batch-size instead."
 
 
 def hf_validate_args(args, hf_config):
