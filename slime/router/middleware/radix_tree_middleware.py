@@ -7,7 +7,7 @@ from starlette.requests import Request
 from starlette.responses import Response
 from transformers import AutoTokenizer
 
-from .radix_tree import StringRadixTrie
+from slime.router.core.radix_tree import StringRadixTrie
 
 # Hop-by-hop headers that should not be forwarded
 HOP_BY_HOP = {
@@ -59,6 +59,12 @@ class RadixTreeMiddleware(BaseHTTPMiddleware):
         self.args = router.args
         self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
         self.radix_tree = StringRadixTrie(max_cache_size=10000, tokenizer=self.tokenizer, verbose=False)
+
+        # Register components in the component registry
+        self.router.component_registry.register("tokenizer", self.tokenizer)
+        self.router.component_registry.register("radix_tree", self.radix_tree)
+
+        # Keep backward compatibility: also set as direct attribute
         self.router.radix_tree = self.radix_tree
 
     async def dispatch(self, request: Request, call_next):
@@ -72,6 +78,9 @@ class RadixTreeMiddleware(BaseHTTPMiddleware):
         if "text" in request_json:
             input_text = request_json.pop("text", "")
         elif "input_ids" in request_json:
+            # TODO: Add support for batch format input_ids (list of lists)
+            # Currently only handles single sequence format: [id1, id2, ...]
+            # Batch format [[id1, id2, ...], [...]] is not yet supported
             input_text = self.tokenizer.decode(request_json["input_ids"])
         else:
             input_text = None
@@ -116,6 +125,16 @@ class RadixTreeMiddleware(BaseHTTPMiddleware):
             full_text = input_text + generated_text
             if full_text:
                 try:
+                    # Normalize weight_version to int (sglang may return it as str).
+                    weight_version = None
+                    try:
+                        weight_version = response_data.get("meta_info", {}).get("weight_version", None)
+                        if isinstance(weight_version, str):
+                            # Best-effort parse (e.g., "12" -> 12). If not parseable, disable weight_version-based GC.
+                            weight_version = int(weight_version)
+                    except Exception:
+                        weight_version = None
+
                     if "output_token_logprobs" in response_data.get("meta_info", {}):
                         generated_token_logprobs = [
                             item[0] for item in response_data["meta_info"]["output_token_logprobs"]
@@ -129,7 +148,7 @@ class RadixTreeMiddleware(BaseHTTPMiddleware):
                             full_token_ids,
                             full_logprobs,
                             full_loss_mask,
-                            weight_version=response_data["meta_info"]["weight_version"],
+                            weight_version=weight_version,
                         )
                     else:
                         generated_token_ids = self.tokenizer(generated_text, add_special_tokens=False)["input_ids"]
@@ -140,7 +159,7 @@ class RadixTreeMiddleware(BaseHTTPMiddleware):
                             full_token_ids,
                             None,
                             full_loss_mask,
-                            weight_version=response_data["meta_info"]["weight_version"],
+                            weight_version=weight_version,
                         )
 
                     if getattr(self.router, "verbose", False):
