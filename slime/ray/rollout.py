@@ -285,6 +285,11 @@ class RolloutManager:
     def set_train_parallel_config(self, config: dict):
         self.train_parallel_config = config
 
+        # Propagate DP config to data source for delayed dataset initialization
+        if hasattr(self.data_source, "set_train_parallel_config"):
+            logger.info(f"Propagating train_parallel_config to data_source: dp_size={config.get('dp_size', 1)}")
+            self.data_source.set_train_parallel_config(config)
+
     def _split_train_data_by_dp(self, data, dp_size):
         """Split the train data by data parallel size."""
         rollout_data = {}
