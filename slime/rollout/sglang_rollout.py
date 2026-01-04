@@ -1,5 +1,6 @@
 import asyncio
 import copy
+import inspect
 import logging
 from argparse import Namespace
 from collections.abc import Callable
@@ -152,7 +153,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     output = await post(url, payload)
 
     # Extract new response tokens
-    extracted_meta_info = sample.extract_from_meta_info(args, output["meta_info"])
+    extracted_meta_info = sample.update_and_extract_from_meta_info(args, output["meta_info"])
 
     if args.use_slime_router and "RadixTreeMiddleware" in args.slime_router_middleware_paths:
         from slime.router.middleware_hub.radix_tree_middleware import postprocess_sample_with_radix_tree
@@ -205,7 +206,11 @@ async def generate_and_rm(
         with state.dp_rank_context() as _:
             if args.custom_generate_function_path is not None:
                 custom_generate_func = load_function(args.custom_generate_function_path)
-                sample = await custom_generate_func(args, sample, sampling_params)
+                # if signature has evaluation, pass evaluation
+                if "evaluation" in inspect.signature(custom_generate_func).parameters:
+                    sample = await custom_generate_func(args, sample, sampling_params, evaluation=evaluation)
+                else:
+                    sample = await custom_generate_func(args, sample, sampling_params)
             else:
                 sample = await generate(args, sample, sampling_params)
 
