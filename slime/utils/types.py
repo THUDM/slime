@@ -43,6 +43,8 @@ class Sample:
     # metadata used during training, e.g., what loss to use for this sample.
     train_metadata: dict | None = None
 
+    non_generation_time: float = 0.0  # time spent in non-generation steps
+
     @dataclass
     class SpecInfo:
         spec_accept_token_num: int = 0
@@ -59,9 +61,9 @@ class Sample:
             return self.completion_token_num / self.spec_verify_ct if self.spec_verify_ct > 0 else 0.0
 
         def add(self, meta_info: dict):
-            self.spec_accept_token_num += meta_info["spec_accept_token_num"]
-            self.spec_draft_token_num += meta_info["spec_draft_token_num"]
-            self.spec_verify_ct += meta_info["spec_verify_ct"]
+            self.spec_accept_token_num += meta_info.get("spec_accept_token_num", 0)
+            self.spec_draft_token_num += meta_info.get("spec_draft_token_num", 0)
+            self.spec_verify_ct += meta_info.get("spec_verify_ct", 0)
             self.completion_token_num += meta_info.get("completion_tokens", 0)
 
         def to_dict(self):

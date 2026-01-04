@@ -624,21 +624,34 @@ def compute_metrics_from_samples(args, samples):
 
 
 def compute_perf_metrics_from_samples(args, samples, rollout_time):
-    response_lengths = [sample.response_length for sample in samples]
+    non_generation_time = [sample.non_generation_time for sample in samples]
 
     log_dict = {}
     log_dict["rollout_time"] = rollout_time
-    if args.rollout_num_gpus:
-        log_dict["tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
-    log_dict["longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+    if max(non_generation_time) > 0:
+        log_dict |= dict_add_prefix(compute_statistics(non_generation_time), "non_generation_time/")
 
-    response_lengths = [sample.effective_response_length for sample in samples]
-    if args.rollout_num_gpus:
-        log_dict["effective_tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
-    log_dict["longest_effective_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+    def token_perf(response_lengths, non_generation_time, key=""):
+        max_response_length = max(response_lengths)
+        if args.rollout_num_gpus:
+            log_dict[f"{key}tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
+        log_dict[f"longest_{key}sample_tokens_per_sec"] = max_response_length / rollout_time
 
-    log_dict |= _compute_spec_metrics(args, samples)
-    log_dict |= _compute_prefix_cache_metrics(args, samples)
+        if max(non_generation_time) == 0:
+            return
+
+        non_generation_time = [
+            t for t, length in zip(non_generation_time, response_lengths, strict=True) if length == max_response_length
+        ]
+        mean_non_generation_time = sum(non_generation_time) / len(non_generation_time)
+
+        log_dict[f"longest_{key}sample_non_generation_time"] = mean_non_generation_time
+        log_dict[f"longest_{key}sample_tokens_per_sec_without_non_generation"] = max_response_length / (
+            rollout_time - mean_non_generation_time
+        )
+
+    token_perf([sample.response_length for sample in samples], non_generation_time, key="")
+    token_perf([sample.effective_response_length for sample in samples], non_generation_time, key="effective_")
 
     return log_dict
 
