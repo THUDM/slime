@@ -1,8 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
-import numpy as np
-import pybase64
 
 import torch
 
@@ -149,17 +147,6 @@ class Sample:
 
         if "weight_version" in meta_info:
             self.weight_versions.append(meta_info["weight_version"])
-
-        if "routed_experts" in meta_info:
-            # always set the latest routed experts to the sample as the returned experts contains all prompt info.
-            self.rollout_routed_experts = np.frombuffer(
-                pybase64.b64decode(meta_info["routed_experts"].encode("ascii")),
-                dtype=np.int32,
-            ).reshape(
-                -1,
-                args.num_layers,
-                args.moe_router_topk,
-            )
 
         match meta_info["finish_reason"]["type"]:
             case "length":

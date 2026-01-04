@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
+import pybase64
 import sglang_router
 from packaging.version import parse
 from tqdm import tqdm
@@ -152,9 +153,6 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
     output = await post(url, payload)
 
-    # Extract new response tokens
-    sample.update_from_meta_info(args, output["meta_info"])
-
     if args.use_slime_router and "RadixTreeMiddleware" in args.slime_router_middleware_paths:
         from slime.router.middleware_hub.radix_tree_middleware import postprocess_sample_with_radix_tree
 
@@ -166,9 +164,6 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         else:
             new_response_tokens, new_response_log_probs = [], []
 
-        new_response_tokens = output["meta_info"]["response_tokens"]
-        new_response_log_probs = output["meta_info"]["response_log_probs"]
-
         # Update sample with tokens directly - avoiding re-tokenization
         sample.tokens = sample.tokens + new_response_tokens
         sample.response_length += len(new_response_tokens)
@@ -178,8 +173,17 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
             sample.rollout_log_probs = []
         sample.rollout_log_probs += new_response_log_probs
 
-        if sample.rollout_routed_experts is not None:
-            assert sample.rollout_routed_experts.shape[0] == len(sample.tokens) - 1
+    if "routed_experts" in output["meta_info"]:
+        sample.rollout_routed_experts = np.frombuffer(
+            pybase64.b64decode(output["meta_info"]["routed_experts"].encode("ascii")),
+            dtype=np.int32,
+        ).reshape(
+            len(sample.tokens) - 1,
+            args.num_layers,
+            args.moe_router_topk,
+        )
+
+    sample.update_from_meta_info(args, output["meta_info"])
 
     return sample
 
