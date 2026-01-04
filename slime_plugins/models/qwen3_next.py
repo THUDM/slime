@@ -4,7 +4,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from megatron.core.models.gpt.gpt_layer_specs import get_gpt_decoder_block_spec
-from megatron.core.process_groups_config import ProcessGroupCollection
 from megatron.core.transformer.spec_utils import ModuleSpec
 from megatron.core.transformer.transformer_block import get_num_layers_to_build
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
@@ -170,7 +169,7 @@ class Attention(HuggingfaceAttention):
         config,
         layer_number: int,
         cp_comm_type: str = "p2p",
-        pg_collection: ProcessGroupCollection = None,
+        pg_collection=None,
     ):
         super().__init__(
             args,

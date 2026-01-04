@@ -57,7 +57,7 @@ def execute():
         "--rollout-batch-size 32 "
         "--n-samples-per-prompt 8 "
         "--rollout-max-response-len 8192 "
-        "--rollout-temperature 0.8 "
+        "--rollout-temperature 1 "
         "--global-batch-size 256 "
         "--balance-data "
     )
@@ -77,7 +77,7 @@ def execute():
         "--eval-interval 20 "
         "--n-samples-per-eval-prompt 1 "
         f"--eval-max-response-len {eval_max_response_len or 16384} "
-        "--eval-top-p 0.7 "
+        "--eval-top-p 1 "
     )
 
     if mode == "eval_flc":

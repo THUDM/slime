@@ -4,6 +4,7 @@ import logging
 from argparse import Namespace
 from collections import defaultdict
 from collections.abc import Callable
+from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -20,12 +21,7 @@ from slime.utils.eval_config import EvalDatasetConfig
 from slime.utils.http_utils import get, post
 from slime.utils.mask_utils import get_response_lengths
 from slime.utils.misc import SingletonMeta, load_function
-from slime.utils.processing_utils import (
-    encode_image_for_rollout_engine,
-    load_processor,
-    load_tokenizer,
-    prepare_model_inputs,
-)
+from slime.utils.processing_utils import encode_image_for_rollout_engine, load_processor, load_tokenizer
 from slime.utils.types import Sample
 
 from .rm_hub import async_rm, batched_async_rm
@@ -65,7 +61,23 @@ class GenerateState(metaclass=SingletonMeta):
             sampling_seed_base = args.rollout_seed
             self.group_sampling_seeds = [sampling_seed_base + i for i in range(args.n_samples_per_prompt)]
 
+        # dp rank balancing
+        self.dp_counts = [0] * (args.sglang_dp_size or 1)
+        self.dp_rank = 0
+
         self.reset()
+
+    @contextmanager
+    def dp_rank_context(self):
+        candidates = [i for i, count in enumerate(self.dp_counts) if count == min(self.dp_counts)]
+        dp_rank = int(np.random.choice(candidates))
+        self.dp_counts[dp_rank] += 1
+        self.dp_rank = dp_rank
+        try:
+            yield dp_rank
+        finally:
+            self.dp_counts[dp_rank] -= 1
+            assert self.dp_counts[dp_rank] >= 0
 
     def reset(self) -> None:
         self.remaining_batch_size = 0
@@ -90,6 +102,9 @@ class GenerateState(metaclass=SingletonMeta):
 
 async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, Any]) -> Sample:
     """Generate using traditional SGLang router with token-based workflow"""
+    if args.ci_test:
+        assert isinstance(sample.prompt, str)
+
     state = GenerateState(args)
     url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
@@ -97,19 +112,14 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
     ), f"Sample status is {sample.status}"
 
-    prompt_ids, extra_info = prepare_model_inputs(
-        sample.prompt,
-        state.tokenizer,
-        state.processor,
-        sample.metadata,
-        args.apply_chat_template,
-        args.apply_chat_template_kwargs,
-    )
-
-    sample.prompt = extra_info.get("formatted_prompt", sample.prompt)
-    image_data = extra_info.get("images", [])
-    video_data = extra_info.get("videos", [])
-    multimodal_inputs = extra_info.get("multimodal_inputs", None)
+    if state.processor:
+        processor_output = state.processor(text=sample.prompt, **sample.multimodal_inputs)
+        prompt_ids = processor_output["input_ids"][0]
+        sample.multimodal_train_inputs = {
+            k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]
+        } or None
+    else:
+        prompt_ids = state.tokenizer.encode(sample.prompt, add_special_tokens=False)
 
     if len(sample.response) > 0:
         sampling_params["max_new_tokens"] -= len(sample.tokens) - len(prompt_ids)
@@ -130,12 +140,9 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
 
-    if image_data:
+    if sample.multimodal_inputs and sample.multimodal_inputs["images"]:
+        image_data = sample.multimodal_inputs["images"]
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
-        sample.multimodal_inputs = multimodal_inputs
-
-    if video_data:
-        raise NotImplementedError("Video data is not supported yet")
 
     # Use existing tokens for multi-turn or tokenize the new prompt
     if len(sample.response) > 0:
@@ -214,6 +221,10 @@ async def generate_and_rm(
     sampling_params: dict[str, Any],
     evaluation: bool = False,
 ) -> Sample | list[Sample]:
+    # mask previous off-policy generation for partial rollout
+    if args.partial_rollout and args.mask_offpolicy_in_partial_rollout and sample.response_length > 0:
+        sample.loss_mask = [0] * sample.response_length
+
     # For samples with existing response, check if they're complete
     if sample.status == Sample.Status.COMPLETED or sample.status == Sample.Status.TRUNCATED:
         assert sample.response is not None
@@ -229,11 +240,12 @@ async def generate_and_rm(
             sample.status = Sample.Status.ABORTED
             return sample
 
-        if args.custom_generate_function_path is not None:
-            custom_generate_func = load_function(args.custom_generate_function_path)
-            sample = await custom_generate_func(args, sample, sampling_params)
-        else:
-            sample = await generate(args, sample, sampling_params)
+        with state.dp_rank_context() as _:
+            if args.custom_generate_function_path is not None:
+                custom_generate_func = load_function(args.custom_generate_function_path)
+                sample = await custom_generate_func(args, sample, sampling_params)
+            else:
+                sample = await generate(args, sample, sampling_params)
 
     # for the rm that need the whole group, we will not do the rm here
     if args.group_rm:
@@ -275,7 +287,9 @@ async def generate_and_rm_group(
         if getattr(args, "sglang_enable_deterministic_inference", False):
             seed = state.group_sampling_seeds[idx]
             current_sampling_params["sampling_seed"] = seed
-        tasks.append(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
+        tasks.append(
+            asyncio.create_task(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
+        )
 
     group = await asyncio.gather(*tasks)
 
@@ -525,17 +539,19 @@ async def eval_rollout_single_dataset(
                 sampling_params = base_sampling_params.copy()
                 sampling_params["sampling_seed"] = args.rollout_seed + j
             tasks.append(
-                generate_and_rm(
-                    args,
-                    sample,
-                    sampling_params=sampling_params,
-                    evaluation=True,
+                asyncio.create_task(
+                    generate_and_rm(
+                        args,
+                        sample,
+                        sampling_params=sampling_params,
+                        evaluation=True,
+                    )
                 )
             )
 
     data = []
     do_print = True
-    pbar = tqdm(total=len(tasks), desc="Rollout generation", disable=not do_print)
+    pbar = tqdm(total=len(tasks), desc=f"Eval {dataset_cfg.name}", disable=not do_print)
     for coro in asyncio.as_completed(tasks):
         sample = await coro
         if do_print:

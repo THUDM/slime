@@ -33,7 +33,7 @@ rollout_args = (
     "--rollout-batch-size 32 "
     "--n-samples-per-prompt 8 "
     "--rollout-max-response-len 8192 "
-    "--rollout-temperature 0.8 "
+    "--rollout-temperature 1 "
     "--global-batch-size 256 "
     "--balance-data "
     "--num-rollout 3000 "
@@ -43,7 +43,7 @@ eval_args = (
     "--eval-interval 20 "
     "--n-samples-per-eval-prompt 1 "
     "--eval-max-response-len 16384 "
-    "--eval-top-p 0.7 "
+    "--eval-top-p 1 "
     "--eval-prompt-data "
     "minif2f /root/datasets/formal_math_single_round/minimal_demo/minif2f_test.jsonl "
 )

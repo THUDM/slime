@@ -22,7 +22,7 @@ def main(
     Minimally send prompts to SGLang using OpenAI endpoints with arguments in the same format as main Slime.
 
     Example usage:
-    python -m slime.utils.debug_utils.send_to_sglang --prompt-data /root/datasets/aime-2024/aime-2024.jsonl --input-key prompt --n-samples-per-prompt 16 --rollout-max-response-len 32768 --rollout-temperature 0.8 --rollout-top-p 0.7
+    python -m slime.utils.debug_utils.send_to_sglang --prompt-data /root/datasets/aime-2024/aime-2024.jsonl --input-key prompt --n-samples-per-prompt 16 --rollout-max-response-len 32768 --rollout-temperature 1 --rollout-top-p 1
     """
 
     async def _main_async():

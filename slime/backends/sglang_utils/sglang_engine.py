@@ -1,7 +1,9 @@
 import dataclasses
+import ipaddress
 import logging
 import multiprocessing
 import time
+from urllib.parse import quote
 
 import requests
 import sglang_router
@@ -97,15 +99,19 @@ class SGLangEngine(RayActor):
 
         host = host or get_host_info()[1]
 
-        # support ipv6 address
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
+        def _format_v6_uri(addr):
+            if not addr or addr.startswith("["):
+                return addr
+            try:
+                if ipaddress.ip_address(addr).version == 6:
+                    return f"[{addr}]"
+            except ValueError:
+                pass
+            return addr
 
-        # dist_init_addr may be 2605:...:10163, should split port
-        *addr_parts, port_str = dist_init_addr.split(":")
-        ipv6_addr = ":".join(addr_parts)
-        if ":" in ipv6_addr and not ipv6_addr.startswith("["):
-            dist_init_addr = f"[{ipv6_addr}]:{port_str}"
+        host = _format_v6_uri(host)
+        ip_part, port_part = dist_init_addr.rsplit(":", 1)
+        dist_init_addr = f"{_format_v6_uri(ip_part)}:{port_part}"
 
         server_args_dict, external_engine_need_check_fields = _compute_server_args(
             self.args,
@@ -119,7 +125,7 @@ class SGLangEngine(RayActor):
         )
 
         self.node_rank = server_args_dict["node_rank"]
-        self.server_host = server_args_dict["host"]
+        self.server_host = server_args_dict["host"]  # with [] if ipv6
         self.server_port = server_args_dict["port"]
 
         if self.args.rollout_external:
@@ -271,13 +277,31 @@ class SGLangEngine(RayActor):
         logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
         if self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
+            response = None
             if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
                 )
-            else:
+            elif parse(sglang_router.__version__) < parse("0.3.0"):
+                worker_url = quote(worker_url, safe="")
                 response = requests.delete(f"http://{self.router_ip}:{self.router_port}/workers/{worker_url}")
-            response.raise_for_status()
+            else:
+                try:
+                    all_workers = requests.get(f"http://{self.router_ip}:{self.router_port}/workers").json()["workers"]
+                    for worker in all_workers:
+                        if worker["url"] == worker_url:
+                            worker_id = worker["id"]
+                            response = requests.delete(
+                                f"http://{self.router_ip}:{self.router_port}/workers/{worker_id}"
+                            )
+                            break
+                    else:
+                        logger.warning(f"Worker {worker_url} not found in router during shutdown.")
+                except Exception as e:
+                    logger.warning(f"Failed to fetch workers list or remove worker: {e}")
+
+            if response is not None:
+                response.raise_for_status()
         kill_process_tree(self.process.pid)
 
     def get_weight_version(self):
@@ -302,7 +326,7 @@ class SGLangEngine(RayActor):
         )
 
     def check_weights(self, action: str):
-        return self._make_request("check_weights", {"action": action})
+        return self._make_request("weights_checker", {"action": action})
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
         return self._make_request(
@@ -425,6 +449,8 @@ def _compute_server_args(
         "ep_size": args.sglang_ep_size,
         # always skip warmup to prevent warmup timeout.
         "skip_server_warmup": True,
+        # always enable draft weights cpu backup so that we run training without mtp weights.
+        "enable_draft_weights_cpu_backup": True,
     }
 
     if worker_type == "prefill":
@@ -446,6 +472,8 @@ def _compute_server_args(
 
     unused_keys = set(kwargs.keys())
     for attr in dataclasses.fields(ServerArgs):
+        if worker_type == "decode" and attr.name == "enable_hierarchical_cache":
+            continue
         if hasattr(args, f"sglang_{attr.name}") and attr.name not in kwargs:
             kwargs[attr.name] = getattr(args, f"sglang_{attr.name}")
         unused_keys.discard(attr.name)

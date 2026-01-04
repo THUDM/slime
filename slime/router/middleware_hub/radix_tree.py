@@ -621,11 +621,6 @@ if __name__ == "__main__":
     # Create trie instance for testing
     trie = StringRadixTrie(max_cache_size=100, verbose=True)
 
-    # Test token retrieval
-    print("\nTesting token retrieval:")
-    test_tokens = trie.retrieve_from_text("Hello world")
-    print(f"Tokens for 'Hello world': {test_tokens}")
-
     # Example usage with simplified insert
     test_cases = [
         ("Hello world", [1, 2, 3], [-0.1, -0.2, -0.3]),
