@@ -116,6 +116,20 @@ class UpdateWeightFromDistributed:
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
+        # int4/fp4 post_process
+        if self.args.int4_params_rollout:
+            ray.get(self.post_process_weights(self.rollout_engines))
+            dist.barrier(group=get_gloo_group())
+
+    def post_process_weights(
+        self,
+        rollout_engines: Sequence[ActorHandle], ):
+        refs = [
+           engine.post_process_weights.remote(enable_quant_post_process=True)
+           for engine in rollout_engines
+        ]
+        return refs
+
     def _update_weight_from_distributed(
         self,
         name: str,
