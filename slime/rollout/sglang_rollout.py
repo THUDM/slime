@@ -153,15 +153,21 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     output = await post(url, payload)
 
     # Extract new response tokens
-    extracted_meta_info = sample.update_and_extract_from_meta_info(args, output["meta_info"])
+    sample.update_from_meta_info(args, output["meta_info"])
 
     if args.use_slime_router and "RadixTreeMiddleware" in args.slime_router_middleware_paths:
         from slime.router.middleware_hub.radix_tree_middleware import postprocess_sample_with_radix_tree
 
         sample = await postprocess_sample_with_radix_tree(args, sample, output)
     else:
-        new_response_tokens = extracted_meta_info["response_tokens"]
-        new_response_log_probs = extracted_meta_info["response_log_probs"]
+        if "output_token_logprobs" in output["meta_info"]:
+            new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
+            new_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
+        else:
+            new_response_tokens, new_response_log_probs = [], []
+
+        new_response_tokens = output["meta_info"]["response_tokens"]
+        new_response_log_probs = output["meta_info"]["response_log_probs"]
 
         # Update sample with tokens directly - avoiding re-tokenization
         sample.tokens = sample.tokens + new_response_tokens

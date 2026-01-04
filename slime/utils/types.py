@@ -135,21 +135,11 @@ class Sample:
     def effective_response_length(self):
         return sum(self.loss_mask) if self.loss_mask is not None else self.response_length
 
-    def update_and_extract_from_meta_info(self, args, meta_info: dict):
+    def update_from_meta_info(self, args, meta_info: dict):
         """
         Update the sample with new information from meta_info returned by the rollout engine.
         And extract
         """
-        if "output_token_logprobs" in meta_info:
-            response_tokens = [item[1] for item in meta_info["output_token_logprobs"]]
-            response_log_probs = [item[0] for item in meta_info["output_token_logprobs"]]
-        else:
-            response_tokens, response_log_probs = [], []
-        extracted_meta_info = {
-            "response_tokens": response_tokens,
-            "response_log_probs": response_log_probs,
-        }
-
         if args.sglang_speculative_algorithm:
             # cannot directly use spec info from sglang because of partial rollout.
             self.spec_info.add(meta_info=meta_info)
@@ -178,8 +168,6 @@ class Sample:
                 self.status = Sample.Status.ABORTED
             case "stop":
                 self.status = Sample.Status.COMPLETED
-
-        return extracted_meta_info
 
 
 @dataclass(frozen=True)
