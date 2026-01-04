@@ -75,17 +75,44 @@ class RolloutManager:
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
 
         self._metric_checker = MetricChecker.maybe_create(args)
+        self._health_monitor = None
         if self.args.use_fault_tolerance:
             self._health_monitor = RolloutHealthMonitor(self, args)
+            self._health_monitor.start()  # Start the monitor thread (in paused state)
+            self._ci_fault_injection_pending = self.args.ci_test  # Flag for CI fault injection
+
+    def _try_ci_fault_injection(self):
+        """Try to inject fault during generate (when health monitor is running)."""
+        if not self._ci_fault_injection_pending:
+            return
+
+        # Only inject fault once
+        self._ci_fault_injection_pending = False
+
+        if self.all_rollout_engines and self.all_rollout_engines[0]:
+            logger.info("CI Fault Injection: Simulating crash on engine 0 during generate")
+            try:
+                # This will cause the ray actor to exit
+                self.all_rollout_engines[0].simulate_crash.remote()
+                # Wait for health monitor to detect the crash and mark engine as None
+                # health_check_interval + health_check_timeout + buffer
+                wait_time = self.args.rollout_health_check_interval + self.args.rollout_health_check_timeout + 5
+                logger.info(f"CI Fault Injection: Waiting {wait_time}s for health monitor to detect crash")
+                time.sleep(wait_time)
+            except Exception as e:
+                logger.warning(f"CI Fault Injection failed: {e}")
 
     def dispose(self):
         if self._metric_checker is not None:
             self._metric_checker.dispose()
+        if self._health_monitor is not None:
+            self._health_monitor.stop()
 
     # TODO maybe rename "rollout_engines" and "all_rollout_engines" later
     @property
     def rollout_engines(self):
         # when doing multi-node serving, we will only send request to node-0 for each engine.
+        # Filter out None engines (killed by health monitor but not yet restarted)
         return self.all_rollout_engines[:: self.nodes_per_engine]
 
     def get_rollout_engines_and_lock(self):
@@ -96,20 +123,21 @@ class RolloutManager:
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
     def generate(self, rollout_id):
-        monitor_started = self.args.use_fault_tolerance and self._health_monitor.start()
         start_time = time.time()
+        if self.args.use_fault_tolerance:
+            self._health_monitor.resume()
+            if self.args.ci_test and rollout_id >= 2:
+                self._try_ci_fault_injection()
         try:
             data, metrics = self._get_rollout_data(rollout_id=rollout_id)
             self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
             _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
             data = self._convert_samples_to_train_data(data)
-            return self._split_train_data_by_dp(data, self.train_parallel_config["dp_size"])
         finally:
-            if monitor_started:
-                self._health_monitor.stop()
+            if self.args.use_fault_tolerance and self.args.colocate:
+                self._health_monitor.pause()
                 self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
-            else:
-                self.num_new_engines = 0
+        return self._split_train_data_by_dp(data, self.train_parallel_config["dp_size"])
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
@@ -131,10 +159,30 @@ class RolloutManager:
         self.data_source.load(rollout_id)
 
     def offload(self):
-        return ray.get([engine.release_memory_occupation.remote() for engine in self.rollout_engines])
+        return ray.get(
+            [engine.release_memory_occupation.remote() for engine in self.rollout_engines if engine is not None]
+        )
 
-    def onload(self, tags: list[str] = None):
-        return ray.get([engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines])
+    def onload(self, tags: list[str] | None = None):
+        return ray.get(
+            [
+                engine.resume_memory_occupation.remote(tags=tags)
+                for engine in self.rollout_engines
+                if engine is not None
+            ]
+        )
+
+    def recover_rollout_engines(self):
+        """Restart any dead rollout engines and update num_new_engines for update_weights detection."""
+        self._health_monitor.pause()
+        logger.info(f"Engine list {self.all_rollout_engines}")
+        self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
+        logger.info(f"Recovered {self.num_new_engines} dead rollout engines")
+        return self.num_new_engines
+
+    def health_monitoring_resume(self) -> None:
+        if self._health_monitor is not None:
+            self._health_monitor.resume()
 
     def check_weights(self, action: str):
         return ray.get([engine.check_weights.remote(action=action) for engine in self.rollout_engines])

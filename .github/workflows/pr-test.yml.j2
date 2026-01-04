@@ -11,6 +11,12 @@
         {'test_file': 'test_qwen3_vl_4B_fsdp.py', 'num_gpus': 8},
       ],
     },
+    'e2e-test-fault-tolerance': {
+      'label': 'run-ci-fault-tolerance',
+      'tests': [
+        {'test_file': 'test_qwen2.5_0.5B_gsm8k_async_short.py', 'num_gpus': 4},
+      ],
+    },
     'e2e-test-long': {
       'label': 'run-ci-long',
       'tests': [
