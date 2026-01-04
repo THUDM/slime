@@ -39,7 +39,7 @@ docker run --rm --gpus all --ipc=host --shm-size=16g \
 
 ### Install slime
 
-slime is already installed in the docker image. To update to the latest version, please execute the following command:
+slime is already installed in the docker image. To update to the latest verison, please execute the following command:
 
 ```bash
 # Path can be adjusted according to actual situation

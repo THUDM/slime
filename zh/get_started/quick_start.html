@@ -54,7 +54,7 @@
     <link rel="prev" title="slime 文档" href="../index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 02 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 04 日"/>
   </head>
   
   
@@ -527,11 +527,10 @@ docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </
 </section>
 <section id="slime">
 <h3>安装 slime<a class="headerlink" href="#slime" title="Link to this heading">#</a></h3>
-<p>进入 Docker 容器后，请按照以下步骤克隆 slime 仓库并进行安装：</p>
+<p>slime 已经安装在该 Docker 镜像中。如需更新到最新版本，请在 Docker 容器中执行以下命令：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 路径可根据实际情况调整</span>
-<span class="nb">cd</span><span class="w"> </span>/root/
-git<span class="w"> </span>clone<span class="w"> </span>https://github.com/THUDM/slime.git
-<span class="nb">cd</span><span class="w"> </span>slime
+<span class="nb">cd</span><span class="w"> </span>/root/slime
+git<span class="w"> </span>pull
 pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
 </pre></div>
 </div>
@@ -540,9 +539,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <section id="id4">
 <h2>模型与数据集下载<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
 <p>可以从 Hugging Face、ModelScope 等平台下载所需的模型和数据集。以下是使用 <code class="docutils literal notranslate"><span class="pre">huggingface_hub</span></code> 下载示例资源的命令：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span>huggingface_hub
-
-<span class="c1"># 下载模型权重 (GLM-Z1-9B)</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 下载模型权重 (GLM-Z1-9B)</span>
 hf<span class="w"> </span>download<span class="w"> </span>zai-org/GLM-Z1-9B-0414<span class="w"> </span>--local-dir<span class="w"> </span>/root/GLM-Z1-9B-0414
 
 <span class="c1"># 下载训练数据集 (dapo-math-17k)</span>
@@ -1191,7 +1188,7 @@ ray<span class="w"> </span>start<span class="w"> </span>--address<span class="o"
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 02 日.
+  最后更新于 2026 年 01 月 04 日.
   <br/>
 </p>
   </div>
