@@ -38,13 +38,12 @@ docker run --rm --gpus all --ipc=host --shm-size=16g \
 
 ### 安装 slime
 
-进入 Docker 容器后，请按照以下步骤克隆 slime 仓库并进行安装：
+slime 已经安装在该 Docker 镜像中。如需更新到最新版本，请在 Docker 容器中执行以下命令：
 
 ```bash
 # 路径可根据实际情况调整
-cd /root/
-git clone https://github.com/THUDM/slime.git
-cd slime
+cd /root/slime
+git pull
 pip install -e .
 ```
 
@@ -53,9 +52,6 @@ pip install -e .
 可以从 Hugging Face、ModelScope 等平台下载所需的模型和数据集。以下是使用 `huggingface_hub` 下载示例资源的命令：
 
 ```bash
-
-pip install -U huggingface_hub
-
 # 下载模型权重 (GLM-Z1-9B)
 hf download zai-org/GLM-Z1-9B-0414 --local-dir /root/GLM-Z1-9B-0414
 

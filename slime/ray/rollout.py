@@ -142,7 +142,7 @@ class RolloutManager:
     def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
             data = torch.load(
-                open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
+                self.args.load_debug_rollout_data.format(rollout_id=rollout_id),
                 weights_only=False,
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
@@ -349,7 +349,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
             num_engines > prefill_num_servers
         ), f"num_engines {num_engines} should be larger than prefill_num_servers {prefill_num_servers}"
 
-    pg, reordered_bundle_indices = pg
+    pg, reordered_bundle_indices, reordered_gpu_ids = pg
 
     RolloutRayActor = ray.remote(SGLangEngine)
 
@@ -360,6 +360,9 @@ def init_rollout_engines(args, pg, all_rollout_engines):
 
         num_gpus = 0.2
         num_cpus = num_gpus
+
+        # Get the base GPU ID from placement group
+        base_gpu_id = int(reordered_gpu_ids[i * num_gpu_per_engine])
 
         scheduling_strategy = PlacementGroupSchedulingStrategy(
             placement_group=pg,
@@ -392,7 +395,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
             runtime_env={
                 "env_vars": env_vars,
             },
-        ).remote(args, rank=i, worker_type=worker_type)
+        ).remote(args, rank=i, worker_type=worker_type, base_gpu_id=base_gpu_id)
 
         rollout_engines.append((i, rollout_engine))
         all_rollout_engines[i] = rollout_engine
