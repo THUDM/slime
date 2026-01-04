@@ -1,3 +1,4 @@
+import itertools
 import logging
 import multiprocessing
 import random
@@ -160,7 +161,7 @@ class RolloutManager:
             data = data.samples
             # flatten the data if it is a list of lists
             while isinstance(data[0], list):
-                data = sum(data, [])
+                data = list(itertools.chain.from_iterable(data))
 
             if self.args.disable_rollout_trim_samples:
                 logger.info(f"Collectd {len(data)} samples from rollout to train")
