@@ -2,6 +2,7 @@ import dataclasses
 import ipaddress
 import logging
 import multiprocessing
+import os
 import time
 from urllib.parse import quote
 
@@ -29,6 +30,24 @@ def get_base_gpu_id(args, rank):
             num_critic_gpus = args.critic_num_gpus_per_node * args.critic_num_nodes
             start_index = (num_actor_gpus + num_critic_gpus + rank * num_gpus) % args.num_gpus_per_node
     return start_index
+
+
+def _to_local_gpu_id(physical_gpu_id: int) -> int:
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+    if not cvd:
+        return physical_gpu_id  # no remapping
+    # CUDA_VISIBLE_DEVICES can be like "4,5,6,7"
+    visible = [int(x) for x in cvd.split(",") if x.strip() != ""]
+    # In a remapped process, valid torch device indices are 0..len(visible)-1
+    if physical_gpu_id in visible:
+        return visible.index(physical_gpu_id)
+    # If we're already getting local IDs, allow them
+    if 0 <= physical_gpu_id < len(visible):
+        return physical_gpu_id
+    raise RuntimeError(
+        f"GPU id {physical_gpu_id} is not valid under CUDA_VISIBLE_DEVICES={cvd}. "
+        f"Expected one of {visible} (physical) or 0..{len(visible)-1} (local)."
+    )
 
 
 def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
@@ -430,6 +449,8 @@ def _compute_server_args(
 ):
     nnodes = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
     node_rank = rank % nnodes
+    base = base_gpu_id if base_gpu_id is not None else get_base_gpu_id(args, rank)
+    base = _to_local_gpu_id(base)
     kwargs = {
         "model_path": args.hf_checkpoint,
         "trust_remote_code": True,
@@ -444,7 +465,7 @@ def _compute_server_args(
         "node_rank": node_rank,
         "dist_init_addr": dist_init_addr,
         "gpu_id_step": 1,
-        "base_gpu_id": base_gpu_id if base_gpu_id is not None else get_base_gpu_id(args, rank),
+        "base_gpu_id": base,
         # parallel
         "tp_size": args.rollout_num_gpus_per_engine,
         "dp_size": args.sglang_dp_size,
