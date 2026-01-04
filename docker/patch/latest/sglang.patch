@@ -16,18 +16,6 @@ index 199885244..742ad0639 100644
      def add(self, req: Req, is_retracted: bool = False) -> None:
          """Add a request to the pending queue."""
          if self._check_if_req_exceed_kv_capacity(req):
-diff --git a/python/sglang/srt/disaggregation/decode_schedule_batch_mixin.py b/python/sglang/srt/disaggregation/decode_schedule_batch_mixin.py
-index 81bdb722a..1c83db296 100644
---- a/python/sglang/srt/disaggregation/decode_schedule_batch_mixin.py
-+++ b/python/sglang/srt/disaggregation/decode_schedule_batch_mixin.py
-@@ -83,6 +83,7 @@ class ScheduleBatchDisaggregationDecodeMixin:
-             seq_lens, dtype=torch.int32, device=self.device
-         )
-         self.out_cache_loc = out_cache_loc
-+        self.out_cache_loc_cpu = out_cache_loc.to("cpu", non_blocking=True)
-         self.seq_lens_sum = sum(seq_lens)
- 
-         if self.return_logprob:
 diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
 index 32e8c0b69..df913da7b 100644
 --- a/python/sglang/srt/disaggregation/mooncake/conn.py
@@ -306,81 +294,10 @@ index 55bef5652..35ad68b1c 100644
              if not get_global_server_args().sampling_backend == "ascend" or (
                  return_logprob and not SGLANG_RETURN_ORIGINAL_LOGPROB
 diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
-index 468d8fb8a..87d3096e1 100644
+index 468d8fb8a..229a9a2dc 100644
 --- a/python/sglang/srt/managers/schedule_batch.py
 +++ b/python/sglang/srt/managers/schedule_batch.py
-@@ -1390,6 +1390,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
-             )
-         else:
-             self.out_cache_loc = torch.cat(decoder_out_cache_loc)
-+        self.out_cache_loc_cpu = self.out_cache_loc.to("cpu", non_blocking=True)
- 
-         if not encoder_out_cache_loc:
-             self.encoder_out_cache_loc = torch.zeros(0, dtype=torch.int64).to(
-@@ -1554,6 +1555,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
-         self.req_pool_indices = req_pool_indices_tensor
-         self.orig_seq_lens = orig_seq_lens_tensor
-         self.out_cache_loc = out_cache_loc
-+        self.out_cache_loc_cpu = out_cache_loc.cpu()
-         self.input_embeds = (
-             torch.tensor(input_embeds).to(self.device, non_blocking=True)
-             if input_embeds
-@@ -1676,10 +1678,14 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
- 
-         input_ids = torch.cat([self.input_ids, running_batch.input_ids])
-         out_cache_loc = torch.cat([self.out_cache_loc, running_batch.out_cache_loc])
-+        out_cache_loc_cpu = torch.cat(
-+            [self.out_cache_loc_cpu, running_batch.out_cache_loc_cpu]
-+        )
- 
-         self.merge_batch(running_batch)
-         self.input_ids = input_ids
-         self.out_cache_loc = out_cache_loc
-+        self.out_cache_loc_cpu = out_cache_loc_cpu
- 
-         # For overlap scheduler, the output_ids has one step delay
-         delta = 0 if self.enable_overlap else -1
-@@ -1836,6 +1842,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
-         self.seq_lens_cpu = torch.empty(0, dtype=torch.int64)
-         self.orig_seq_lens = torch.empty(0, dtype=torch.int32, device=self.device)
-         self.out_cache_loc = torch.empty(0, dtype=torch.int64, device=self.device)
-+        self.out_cache_loc_cpu = torch.empty(0, dtype=torch.int64, device="cpu")
-         self.req_pool_indices = torch.empty(0, dtype=torch.int32, device=self.device)
-         self.seq_lens_sum = 0
-         self.extend_num_tokens = 0
-@@ -1897,6 +1904,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
- 
-         # Allocate memory
-         self.out_cache_loc = alloc_for_decode(self, token_per_req=1)
-+        self.out_cache_loc_cpu = self.out_cache_loc.to("cpu", non_blocking=True)
- 
-         # Update req-level memory management fields
-         for req in self.reqs:
-@@ -1988,6 +1996,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
-         self.seq_lens_cpu = self.seq_lens_cpu[keep_indices]
-         self.orig_seq_lens = self.orig_seq_lens[keep_indices_device]
-         self.out_cache_loc = None
-+        self.out_cache_loc_cpu = None
-         self.seq_lens_sum = self.seq_lens.sum().item()
- 
-         if self.output_ids is not None:
-@@ -2040,6 +2049,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
-         self.seq_lens_cpu = torch.cat([self.seq_lens_cpu, other.seq_lens_cpu])
-         self.orig_seq_lens = torch.cat([self.orig_seq_lens, other.orig_seq_lens])
-         self.out_cache_loc = None
-+        self.out_cache_loc_cpu = None
-         self.seq_lens_sum += other.seq_lens_sum
-         if self.output_ids is not None:
-             self.output_ids = torch.cat([self.output_ids, other.output_ids])
-@@ -2094,6 +2104,7 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
-             seq_lens=self.seq_lens,
-             orig_seq_lens=self.orig_seq_lens,
-             out_cache_loc=self.out_cache_loc,
-+            out_cache_loc_cpu=self.out_cache_loc_cpu,
-             seq_lens_cpu=seq_lens_cpu,
-             seq_lens_sum=self.seq_lens_sum,
-             return_logprob=self.return_logprob,
-@@ -2181,7 +2192,8 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+@@ -2181,7 +2181,8 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
      def __str__(self):
          return (
              f"ScheduleBatch(forward_mode={self.forward_mode.name if self.forward_mode else 'None'}, "
@@ -389,16 +306,6 @@ index 468d8fb8a..87d3096e1 100644
 +            f"#out_cache_loc={self.out_cache_loc})"
          )
  
- 
-@@ -2236,6 +2248,9 @@ class ModelWorkerBatch:
-     # Sampling info
-     sampling_info: SamplingBatchInfo
- 
-+    # cpu copy of out_cache_loc
-+    out_cache_loc_cpu: Optional[torch.Tensor] = None
-+
-     # The original sequence lengths, Qwen-1M related
-     orig_seq_lens: Optional[torch.Tensor] = None
  
 diff --git a/python/sglang/srt/managers/scheduler_output_processor_mixin.py b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
 index e40586c24..32d98aee4 100644
@@ -486,45 +393,6 @@ index f4fc29e29..5ef12cca6 100644
          state.output_token_logprobs_val.extend(
              recv_obj.output_token_logprobs_val[recv_obj_index]
          )
-diff --git a/python/sglang/srt/model_executor/forward_batch_info.py b/python/sglang/srt/model_executor/forward_batch_info.py
-index b1b6b66ec..1edd0b546 100644
---- a/python/sglang/srt/model_executor/forward_batch_info.py
-+++ b/python/sglang/srt/model_executor/forward_batch_info.py
-@@ -248,6 +248,9 @@ class ForwardBatch:
-     # The sum of all sequence lengths
-     seq_lens_sum: int
- 
-+    # cpu copy of out_cache_loc
-+    out_cache_loc_cpu: Optional[torch.Tensor] = None
-+
-     # The original sequence length without being chunked. Qwen-1M related.
-     orig_seq_lens: Optional[torch.Tensor] = None
- 
-@@ -416,6 +419,7 @@ class ForwardBatch:
-             mamba_track_indices=batch.mamba_track_indices,
-             mamba_track_mask=batch.mamba_track_mask,
-             mamba_track_seqlens=batch.mamba_track_seqlens,
-+            out_cache_loc_cpu=batch.out_cache_loc_cpu,
-             mm_inputs=batch.multimodal_inputs,
-             encoder_cached=batch.encoder_cached,
-             encoder_lens=batch.encoder_lens,
-@@ -905,6 +909,8 @@ class ForwardBatch:
-             )
- 
-         self.out_cache_loc = self._pad_tensor_to_size(self.out_cache_loc, num_tokens)
-+        if self.out_cache_loc_cpu is not None:
-+            self.out_cache_loc_cpu = self.out_cache_loc.to("cpu", non_blocking=True)
-         if self.encoder_lens is not None:
-             self.encoder_lens = self._pad_tensor_to_size(self.encoder_lens, bs)
-         self.positions = self._pad_tensor_to_size(self.positions, num_tokens)
-@@ -998,6 +1004,7 @@ class ForwardBatch:
-                 self.spec_info.hidden_states = self.hidden_states_backup
-             if hasattr(self, "output_cache_loc_backup"):
-                 self.out_cache_loc = self.output_cache_loc_backup
-+                self.out_cache_loc_cpu = self.out_cache_loc.to("cpu", non_blocking=True)
- 
-         elif self.forward_mode.is_decode() or self.forward_mode.is_idle():
-             logits_output.next_token_logits = logits_output.next_token_logits[:bs]
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
 index 1d69c0582..9027374be 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
@@ -911,35 +779,38 @@ index 54d4e415a..de7620c20 100644
          parser.add_argument(
              "--disable-cuda-graph-padding",
              action="store_true",
+diff --git a/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py b/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
+index 5fe45086c..c95fbd0f6 100644
+--- a/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
++++ b/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
+@@ -341,7 +341,10 @@ class EAGLEDraftCudaGraphRunner:
+             self.seq_lens.fill_(self.seq_len_fill_value)
+             self.out_cache_loc.zero_()
+             self.positions.zero_()
+-
++            self.topk_p.zero_()
++            self.topk_index.zero_()
++            self.hidden_states.zero_()
++            self.req_pool_indices.zero_()
+         num_tokens = bs * self.num_tokens_per_bs
+ 
+         # Common inputs
+@@ -350,8 +353,8 @@ class EAGLEDraftCudaGraphRunner:
+             forward_batch.out_cache_loc
+         )
+         self.positions[:raw_num_token].copy_(forward_batch.positions)
+-        self.topk_p[:raw_bs].copy_(forward_batch.spec_info.topk_p)
+-        self.topk_index[:raw_bs].copy_(forward_batch.spec_info.topk_index)
++        self.topk_p[:raw_bs].copy_(forward_batch.spec_info.topk_p.clamp(0, 1))
++        self.topk_index[:raw_bs].copy_(forward_batch.spec_info.topk_index.clamp(0, self.model_runner.model_config.vocab_size - 1))
+         self.hidden_states[:raw_bs].copy_(forward_batch.spec_info.hidden_states)
+         self.req_pool_indices[:raw_bs].copy_(forward_batch.req_pool_indices)
+ 
 diff --git a/python/sglang/srt/speculative/eagle_info.py b/python/sglang/srt/speculative/eagle_info.py
-index 1bf3816e9..51425c65d 100644
+index 1bf3816e9..b5b41dba4 100644
 --- a/python/sglang/srt/speculative/eagle_info.py
 +++ b/python/sglang/srt/speculative/eagle_info.py
-@@ -134,6 +134,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
-                 len(batch.input_ids),
-             )
-             self.last_loc = last_loc
-+        batch.out_cache_loc_cpu = batch.out_cache_loc.to("cpu", non_blocking=True)
- 
-         bs = batch.batch_size()
-         assign_req_to_token_pool_func(
-@@ -520,6 +521,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
-                 batch.out_cache_loc = tgt_cache_loc
-             batch.seq_lens.add_(accept_length + 1)
-             batch.seq_lens_cpu.add_(accept_length_cpu + 1)
-+            batch.out_cache_loc_cpu = batch.out_cache_loc.to("cpu", non_blocking=True)
- 
-             draft_input = EagleDraftInput(
-                 hidden_states=batch.spec_info.hidden_states[accept_index],
-@@ -603,6 +605,7 @@ class EagleVerifyInput(SpecInput, EagleVerifyInputV2Mixin):
-                     topk=self.topk,
-                     capture_hidden_mode=CaptureHiddenMode.LAST,
-                 )
-+            batch.out_cache_loc_cpu = batch.out_cache_loc.to("cpu", non_blocking=True)
- 
-             return EagleVerifyOutput(
-                 draft_input=draft_input,
-@@ -778,6 +781,10 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
+@@ -778,6 +778,10 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
              self.topk_index = self.topk_index[: len(new_indices)]
              self.hidden_states = self.hidden_states[: len(new_indices)]
              self.verified_id = self.verified_id[: len(new_indices)]
@@ -950,7 +821,7 @@ index 1bf3816e9..51425c65d 100644
          else:
              # in some cases(e.g draft_extend), we have not filtered the batch by `unfinished_index`
              self.topk_p = self.topk_p[new_indices]
-@@ -809,6 +816,27 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
+@@ -809,6 +813,27 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
          self.verified_id = torch.cat([self.verified_id, spec_info.verified_id], axis=0)
          self.topk_p = torch.cat([self.topk_p, spec_info.topk_p])
          self.topk_index = torch.cat([self.topk_index, spec_info.topk_index])
