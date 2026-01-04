@@ -712,7 +712,22 @@ class FSDPTrainRayActor(TrainRayActor):
         entropy = torch.cat([batch["entropy"] for batch in unpacked_batches], dim=0)
         entropy_loss = sum_of_sample_mean(entropy, response_lengths, loss_masks)
 
-        loss = pg_loss - self.args.entropy_coef * entropy_loss
+        # Compute loss based on loss_type
+        if self.args.loss_type == "sft_loss":
+            # SFT loss: simple negative log-likelihood
+            sft_loss = -log_probs
+            if self.args.calculate_per_token_loss:
+                sft_loss = sum_of_token(sft_loss, response_lengths, loss_masks)
+            else:
+                sft_loss = sum_of_sample_mean(sft_loss, response_lengths, loss_masks)
+            loss = sft_loss
+            # For SFT, pg_loss and pg_clipfrac are not meaningful but we still report them as 0
+            pg_loss = torch.tensor(0.0, device=loss.device)
+            pg_clipfrac = torch.tensor(0.0, device=loss.device)
+            ppo_kl = torch.tensor(0.0, device=loss.device)
+        else:
+            # Policy gradient loss (default)
+            loss = pg_loss - self.args.entropy_coef * entropy_loss
 
         if self.args.use_kl_loss:
             ref_log_probs = torch.cat([batch["ref_log_probs"] for batch in unpacked_batches], dim=0)
