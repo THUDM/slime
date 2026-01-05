@@ -1,8 +1,8 @@
 import asyncio
 import copy
+import inspect
 import logging
 from argparse import Namespace
-from collections import defaultdict
 from collections.abc import Callable
 from contextlib import contextmanager
 from typing import Any
@@ -14,12 +14,11 @@ from packaging.version import parse
 from tqdm import tqdm
 
 from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
-from slime.rollout.filter_hub.base_types import DynamicFilterOutput
+from slime.rollout.filter_hub.base_types import MetricGatherer, call_dynamic_filter
 from slime.utils.async_utils import run
 from slime.utils.data import Dataset
 from slime.utils.eval_config import EvalDatasetConfig
 from slime.utils.http_utils import get, post
-from slime.utils.mask_utils import get_response_lengths
 from slime.utils.misc import SingletonMeta, load_function
 from slime.utils.processing_utils import encode_image_for_rollout_engine, load_processor, load_tokenizer
 from slime.utils.types import Sample
@@ -154,20 +153,10 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
     output = await post(url, payload)
 
-    # Extract new response tokens
-
     if args.use_slime_router and "RadixTreeMiddleware" in args.slime_router_middleware_paths:
-        assert not args.partial_rollout, "Currently partial rollout is not supported when using slime router"
-        retrieve_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/retrieve_from_text"
-        retrieve_payload = {"text": sample.prompt + output["text"], "return_logp": True}
-        retrieve_output = await post(retrieve_url, retrieve_payload)
-        sample.tokens = retrieve_output["tokens"]
-        sample.response += output["text"]
-        sample.loss_mask = retrieve_output["loss_mask"]
-        sample.response_length = get_response_lengths([sample.loss_mask])[0]
-        sample.loss_mask = sample.loss_mask[-sample.response_length :]
-        sample.rollout_log_probs = retrieve_output["rollout_logp"][-sample.response_length :]
-        # Notice: currently cannot get the spec info from radix router output.
+        from slime.router.middleware_hub.radix_tree_middleware import postprocess_sample_with_radix_tree
+
+        sample = await postprocess_sample_with_radix_tree(args, sample, output)
     else:
         if "output_token_logprobs" in output["meta_info"]:
             new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
@@ -184,16 +173,6 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
             sample.rollout_log_probs = []
         sample.rollout_log_probs += new_response_log_probs
 
-        if args.sglang_speculative_algorithm:
-            # cannot directly use spec info from sglang because of partial rollout.
-            sample.spec_info.add(
-                meta_info=output["meta_info"],
-                response_length=sample.response_length,
-            )
-
-    if "weight_version" in output["meta_info"]:
-        sample.weight_versions.append(output["meta_info"]["weight_version"])
-
     if "routed_experts" in output["meta_info"]:
         sample.rollout_routed_experts = np.frombuffer(
             pybase64.b64decode(output["meta_info"]["routed_experts"].encode("ascii")),
@@ -204,13 +183,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
             args.moe_router_topk,
         )
 
-    match output["meta_info"]["finish_reason"]["type"]:
-        case "length":
-            sample.status = Sample.Status.TRUNCATED
-        case "abort":
-            sample.status = Sample.Status.ABORTED
-        case "stop":
-            sample.status = Sample.Status.COMPLETED
+    sample.update_from_meta_info(args, output["meta_info"])
 
     return sample
 
@@ -243,7 +216,11 @@ async def generate_and_rm(
         with state.dp_rank_context() as _:
             if args.custom_generate_function_path is not None:
                 custom_generate_func = load_function(args.custom_generate_function_path)
-                sample = await custom_generate_func(args, sample, sampling_params)
+                # if signature has evaluation, pass evaluation
+                if "evaluation" in inspect.signature(custom_generate_func).parameters:
+                    sample = await custom_generate_func(args, sample, sampling_params, evaluation=evaluation)
+                else:
+                    sample = await custom_generate_func(args, sample, sampling_params)
             else:
                 sample = await generate(args, sample, sampling_params)
 
@@ -366,7 +343,7 @@ async def generate_rollout_async(
         load_function(args.dynamic_sampling_filter_path) if args.dynamic_sampling_filter_path is not None else None
     )
 
-    metric_gatherer = _MetricGatherer()
+    metric_gatherer = MetricGatherer()
 
     # target_data_size is the total number of valid samples to get
     target_data_size = args.rollout_batch_size
@@ -395,7 +372,7 @@ async def generate_rollout_async(
 
             assert len(group) == args.n_samples_per_prompt
             all_data.append(group)
-            dynamic_filter_output = _call_dynamic_filter(dynamic_filter, args, group)
+            dynamic_filter_output = call_dynamic_filter(dynamic_filter, args, group)
             if not dynamic_filter_output.keep:
                 metric_gatherer.on_dynamic_filter_drop(reason=dynamic_filter_output.reason)
                 state.remaining_batch_size -= 1
@@ -432,35 +409,6 @@ async def generate_rollout_async(
         process_func(args, all_samples, data_source)
 
     return RolloutFnTrainOutput(samples=data, metrics=metric_gatherer.collect()), aborted_samples
-
-
-def _call_dynamic_filter(fn, *args, **kwargs):
-    if fn is None:
-        return DynamicFilterOutput(keep=True)
-
-    output = fn(*args, **kwargs)
-
-    # compatibility for legacy version
-    if not isinstance(output, DynamicFilterOutput):
-        output = DynamicFilterOutput(keep=output)
-
-    return output
-
-
-class _MetricGatherer:
-    def __init__(self):
-        self._dynamic_filter_drop_reason_count = defaultdict(lambda: 0)
-
-    def on_dynamic_filter_drop(self, reason: str | None):
-        if not reason:
-            return
-        self._dynamic_filter_drop_reason_count[reason] += 1
-
-    def collect(self):
-        return {
-            f"rollout/dynamic_filter/drop_{reason}": count
-            for reason, count in self._dynamic_filter_drop_reason_count.items()
-        }
 
 
 EVAL_PROMPT_DATASET = {}
@@ -580,9 +528,8 @@ async def eval_rollout_single_dataset(
     }
 
 
-# TODO remove this temp function
 def generate_rollout(
-    args: Namespace, rollout_id: int, data_buffer: Any, evaluation: bool = False
+    args: Namespace, rollout_id: int, data_source: Any, evaluation: bool = False
 ) -> RolloutFnTrainOutput | RolloutFnEvalOutput:
     """An example to implement the generate_rollout function for an rule based rm rollout generation.
 
@@ -595,20 +542,11 @@ def generate_rollout(
     Returns:
         list[list[Sample]]: a list of list of samples generated by the rollout
     """
-    output, aborted_samples = generate_abortable_samples(
-        args, rollout_id, data_buffer.get_samples, evaluation=evaluation
-    )
-    data_buffer.add_samples(aborted_samples)
-    return output
-
-
-def generate_abortable_samples(
-    args: Namespace,
-    rollout_id: int,
-    data_source: Callable[[int], list[list[Sample]]],
-    evaluation: bool = False,
-) -> tuple[Any, list[list[Sample]]]:
     assert args.rollout_global_dataset
     if evaluation:
-        return run(eval_rollout(args, rollout_id))
-    return run(generate_rollout_async(args, rollout_id, data_source))
+        output, _ = run(eval_rollout(args, rollout_id))
+        return output
+
+    output, aborted_samples = run(generate_rollout_async(args, rollout_id, data_source.get_samples))
+    data_source.add_samples(aborted_samples)
+    return output

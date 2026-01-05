@@ -92,6 +92,10 @@ def execute():
         "--rollout-num-gpus 8 "
         "--sglang-mem-fraction-static 0.8 "
         "--sglang-enable-metrics "
+        "--sglang-speculative-algorithm EAGLE "
+        "--sglang-speculative-num-steps 2 "
+        "--sglang-speculative-eagle-topk 1 "
+        "--sglang-speculative-num-draft-tokens 3 "
     )
 
     # Enable MTP training with loss scaling

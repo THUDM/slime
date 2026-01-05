@@ -7,6 +7,10 @@ from starlette.requests import Request
 from starlette.responses import Response
 from transformers import AutoTokenizer
 
+from slime.utils.http_utils import post
+from slime.utils.mask_utils import get_response_lengths
+from slime.utils.types import Sample
+
 from .radix_tree import StringRadixTrie
 
 # Hop-by-hop headers that should not be forwarded
@@ -149,3 +153,17 @@ class RadixTreeMiddleware(BaseHTTPMiddleware):
                     if getattr(self.router, "verbose", False):
                         print(f"[slime-router] Warning: Failed to cache trajectory: {e}")
         return response
+
+
+async def postprocess_sample_with_radix_tree(args, sample: Sample, output: dict):
+    assert not args.partial_rollout, "Currently partial rollout is not supported when using slime router"
+    retrieve_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/retrieve_from_text"
+    retrieve_payload = {"text": sample.prompt + output["text"], "return_logp": True}
+    retrieve_output = await post(retrieve_url, retrieve_payload)
+    sample.tokens = retrieve_output["tokens"]
+    sample.response += output["text"]
+    sample.loss_mask = retrieve_output["loss_mask"]
+    sample.response_length = get_response_lengths([sample.loss_mask])[0]
+    sample.loss_mask = sample.loss_mask[-sample.response_length :]
+    sample.rollout_log_probs = retrieve_output["rollout_logp"][-sample.response_length :]
+    return sample
