@@ -919,6 +919,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
                 help="Max connections for SlimeRouter HTTP client.",
             )
+            parser.add_argument(
+                "--slime-router-health-check-failure-threshold",
+                type=int,
+                default=3,
+                help="Number of consecutive failures before marking a worker as unhealthy.",
+            )
             RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
             return parser
 
