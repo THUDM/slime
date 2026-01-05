@@ -221,7 +221,7 @@ def save(actor: Any, iteration: int) -> None:
         optim_state_dict = {"optim_state": optimizer_state}
         dcp.save(optim_state_dict, checkpoint_id=str(optimizer_dir))
 
-    # Save LR scheduler state (skip if --no-save-optimizer-state is set)
+    # Save LR scheduler state (skip if --no-save-optim is set)
     if save_optimizer_state and hasattr(actor, "lr_scheduler") and actor.lr_scheduler is not None:
         lr_scheduler_state = LRSchedulerState(actor.lr_scheduler)
         lr_scheduler_state_dict = {"lr_scheduler_state": lr_scheduler_state}
