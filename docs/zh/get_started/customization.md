@@ -18,15 +18,17 @@ slime 通过函数路径参数提供了广泛的自定义能力。这些参数�
 | [`--rollout-data-postprocess-path`](#8-rollout-数据后处理---rollout-data-postprocess-path) | 在计算 log probabilities 后对 rollout 数据进行后处理。 |
 | [`--custom-loss-function-path`](#9-自定义损失函数---custom-loss-function-path) | 实现自定义训练损失计算。 |
 | [`--custom-tis-function-path`](#10-自定义-tisrs-函数---custom-tis-function-path) | 实现用于离策略（off-policy）校正的自定义重要性采样。 |
-| [`--custom-reward-post-process-path`](#11-奖励后处理---custom-reward-post-process-path) | 在优势计算前对奖励进行自定义后处理。 |
-| [`--custom-rollout-log-function-path`](#12-日志函数) | 训练 rollout 的自定义日志记录。 |
-| [`--custom-eval-rollout-log-function-path`](#12-日志函数) | 评估 rollout 的自定义日志记录。 |
-| [`--data-source-path`](#13-数据源---data-source-path) | 覆盖 rollout 提示词的数据源。 |
-| [`--eval-function-path`](#14-评估函数---eval-function-path) | 专门为评估覆盖 rollout 函数。 |
-| [`--custom-megatron-init-path`](#15-megatron-Hook) | Megatron 设置后的自定义初始化。 |
-| [`--custom-megatron-before-log-prob-hook-path`](#15-megatron-Hook) | log probability 计算前的自定义逻辑。 |
-| [`--custom-megatron-before-train-step-hook-path`](#15-megatron-Hook) | 每个训练步骤前的自定义逻辑。 |
-| [`--slime-router-middleware-paths`](#16-slime-router-中间件---slime-router-middleware-paths) | 向 slime router 添加自定义中间件。 |
+| [`--custom-pg-loss-reducer-function-path`](#11-自定义-pg-loss-reducer---custom-pg-loss-reducer-function-path) | 自定义 pg_loss 的归约方式（如 Dr.GRPO）。 |
+| [`--custom-reward-post-process-path`](#12-奖励后处理---custom-reward-post-process-path) | 在优势计算前对奖励进行自定义后处理。 |
+| [`--custom-convert-samples-to-train-data-path`](#13-样本转训练数据---custom-convert-samples-to-train-data-path) | 覆盖样本到训练数据格式的转换逻辑。 |
+| [`--custom-rollout-log-function-path`](#14-日志函数) | 训练 rollout 的自定义日志记录。 |
+| [`--custom-eval-rollout-log-function-path`](#14-日志函数) | 评估 rollout 的自定义日志记录。 |
+| [`--data-source-path`](#15-数据源---data-source-path) | 覆盖 rollout 提示词的数据源。 |
+| [`--eval-function-path`](#16-评估函数---eval-function-path) | 专门为评估覆盖 rollout 函数。 |
+| [`--custom-megatron-init-path`](#17-megatron-hook) | Megatron 设置后的自定义初始化。 |
+| [`--custom-megatron-before-log-prob-hook-path`](#17-megatron-hook) | log probability 计算前的自定义逻辑。 |
+| [`--custom-megatron-before-train-step-hook-path`](#17-megatron-hook) | 每个训练步骤前的自定义逻辑。 |
+| [`--slime-router-middleware-paths`](#18-slime-router-中间件---slime-router-middleware-paths) | 向 slime router 添加自定义中间件。 |
 
 ## 详细接口参考
 
@@ -228,7 +230,31 @@ def postprocess_function(args, samples: list[list[Sample]]) -> None
 
 ---
 
-### 11. 奖励后处理 (`--custom-reward-post-process-path`)
+### 11. 自定义 pg_loss Reducer (`--custom-pg-loss-reducer-function-path`)
+
+**默认值**: `None`
+
+**用途**: 自定义 pg_loss 的归约方式，其他指标（pg_clipfrac、ppo_kl、entropy_loss 等）仍使用默认的 sum_of_sample_mean。
+
+**函数签名**:
+```python
+def get_pg_loss_reducer(
+    total_lengths: list[int],
+    response_lengths: list[int],
+    loss_masks: list[torch.Tensor],
+    calculate_per_token_loss: bool = False,
+) -> Callable[[torch.Tensor], torch.Tensor]
+```
+
+**使用场景**:
+- Dr.GRPO：除以常数而非有效 token 数
+- 自定义损失归一化策略
+
+**示例**: `examples/DrGRPO/custom_reducer.py:get_pg_loss_reducer`
+
+---
+
+### 12. 奖励后处理 (`--custom-reward-post-process-path`)
 
 **默认值**: `None`（使用默认的 GRPO 归一化）
 
@@ -240,7 +266,47 @@ def postprocess_function(args, samples: list[list[Sample]]) -> None
 
 ---
 
-### 12. 日志函数
+### 13. 样本转训练数据 (`--custom-convert-samples-to-train-data-path`)
+
+**默认值**: `None`（使用内置转换逻辑）
+
+**用途**: 覆盖样本到训练数据格式的转换逻辑。
+
+**函数签名**:
+```python
+def convert_samples_to_train_data(
+    args,
+    samples: list[Sample] | list[list[Sample]],
+) -> dict
+```
+
+**返回类型**:
+```python
+dict: {
+    "tokens": list[list[int]],           # 每个样本的 token ID
+    "response_lengths": list[int],        # 响应长度
+    "rewards": list[float],               # 归一化后的奖励
+    "raw_reward": list[float],            # 原始奖励
+    "truncated": list[int],               # 截断标志（0 或 1）
+    "sample_indices": list[int],          # 样本索引
+    "loss_masks": list[list[int]],        # 每个样本的损失掩码
+    # 可选字段：
+    "round_number": list[int],            # 轮次编号（用于 rollout buffer）
+    "rollout_log_probs": list,            # log 概率（用于离策略校正）
+    "rollout_routed_experts": list,       # 路由专家（用于 MoE）
+    "metadata": list,                     # 训练元数据
+    "multimodal_train_inputs": list,      # 多模态张量（用于 VLM）
+    "teacher_log_probs": list,            # 教师 log 概率（用于蒸馏）
+}
+```
+
+**使用场景**:
+- 处理 `list[list[Sample]]` 输入
+- 自定义训练数据格式需求
+  
+---
+
+### 14. 日志函数
 
 #### 训练 Rollout 日志 (`--custom-rollout-log-function-path`)
 
@@ -262,7 +328,7 @@ def log_eval_rollout_data(rollout_id, args, data, extra_metrics) -> bool
 
 ---
 
-### 13. 数据源 (`--data-source-path`)
+### 15. 数据源 (`--data-source-path`)
 
 **默认值**: `slime.rollout.data_source.RolloutDataSourceWithBuffer`
 
@@ -288,7 +354,7 @@ class CustomDataSource(DataSource):
 
 ---
 
-### 14. 评估函数 (`--eval-function-path`)
+### 16. 评估函数 (`--eval-function-path`)
 
 **默认值**: 与 `--rollout-function-path` 相同
 
@@ -300,7 +366,7 @@ class CustomDataSource(DataSource):
 
 ---
 
-### 15. Megatron Hook
+### 17. Megatron Hook
 
 #### Megatron 初始化 (`--custom-megatron-init-path`)
 
@@ -331,7 +397,7 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 
 ---
 
-### 16. slime Router 中间件 (`--slime-router-middleware-paths`)
+### 18. slime Router 中间件 (`--slime-router-middleware-paths`)
 
 **用途**: 向 slime router 添加自定义中间件用于请求处理。
 

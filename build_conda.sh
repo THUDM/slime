@@ -46,10 +46,6 @@ NVCC_APPEND_FLAGS="--threads 4" \
   --no-build-isolation \
   --config-settings "--build-option=--cpp_ext --cuda_ext --parallel 8" git+https://github.com/NVIDIA/apex.git@10417aceddd7d5d05d7cbf7b0fc2daad1105f8b4
 
-git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
-    cd Megatron-LM && git checkout ${MEGATRON_COMMIT} && \
-    pip install -e .
-
 pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@dc6876905830430b5054325fa4211ff302169c6b --no-cache-dir --force-reinstall
 pip install git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl --no-build-isolation
 pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation

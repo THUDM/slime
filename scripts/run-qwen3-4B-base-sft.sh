@@ -38,7 +38,7 @@ SFT_ARGS=(
    --rollout-function-path slime.rollout.sft_rollout.generate_rollout
    --prompt-data /root/openhermes2_5.parquet
    --input-key messages
-   --apply-chat-template
+   # --apply-chat-template
    --rollout-shuffle
    --num-epoch 3
    --rollout-batch-size 128

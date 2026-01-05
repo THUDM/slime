@@ -8,6 +8,7 @@
         {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_fsdp_true_on_policy.py', 'num_gpus': 2},
         {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_vl_4B_fsdp.py', 'num_gpus': 8},
       ],
     },
     'e2e-test-long': {
@@ -94,7 +95,7 @@ jobs:
 
       - name: Install
         shell: bash
-        run: cd $GITHUB_WORKSPACE && pip install -e . --break-system-packages
+        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
 
       - name: Execute
         shell: bash

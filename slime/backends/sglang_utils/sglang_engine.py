@@ -1,4 +1,5 @@
 import dataclasses
+import ipaddress
 import logging
 import multiprocessing
 import time
@@ -87,10 +88,11 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
 
 
 class SGLangEngine(RayActor):
-    def __init__(self, args, rank: int, worker_type: str = "regular"):
+    def __init__(self, args, rank: int, worker_type: str = "regular", base_gpu_id: int | None = None):
         self.args = args
         self.rank = rank
         self.worker_type = worker_type
+        self.base_gpu_id = base_gpu_id
 
     def init(self, dist_init_addr, port, nccl_port, host=None, disaggregation_bootstrap_port=None):
         self.router_ip = self.args.sglang_router_ip
@@ -98,15 +100,19 @@ class SGLangEngine(RayActor):
 
         host = host or get_host_info()[1]
 
-        # support ipv6 address
-        if ":" in host and not host.startswith("["):
-            host = f"[{host}]"
+        def _format_v6_uri(addr):
+            if not addr or addr.startswith("["):
+                return addr
+            try:
+                if ipaddress.ip_address(addr).version == 6:
+                    return f"[{addr}]"
+            except ValueError:
+                pass
+            return addr
 
-        # dist_init_addr may be 2605:...:10163, should split port
-        *addr_parts, port_str = dist_init_addr.split(":")
-        ipv6_addr = ":".join(addr_parts)
-        if ":" in ipv6_addr and not ipv6_addr.startswith("["):
-            dist_init_addr = f"[{ipv6_addr}]:{port_str}"
+        host = _format_v6_uri(host)
+        ip_part, port_part = dist_init_addr.rsplit(":", 1)
+        dist_init_addr = f"{_format_v6_uri(ip_part)}:{port_part}"
 
         server_args_dict, external_engine_need_check_fields = _compute_server_args(
             self.args,
@@ -117,10 +123,11 @@ class SGLangEngine(RayActor):
             port,
             self.worker_type,
             disaggregation_bootstrap_port,
+            base_gpu_id=self.base_gpu_id,
         )
 
         self.node_rank = server_args_dict["node_rank"]
-        self.server_host = server_args_dict["host"]
+        self.server_host = server_args_dict["host"]  # with [] if ipv6
         self.server_port = server_args_dict["port"]
 
         if self.args.rollout_external:
@@ -419,6 +426,7 @@ def _compute_server_args(
     port,
     worker_type: str = "regular",
     disaggregation_bootstrap_port: int | None = None,
+    base_gpu_id: int | None = None,
 ):
     nnodes = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
     node_rank = rank % nnodes
@@ -436,7 +444,7 @@ def _compute_server_args(
         "node_rank": node_rank,
         "dist_init_addr": dist_init_addr,
         "gpu_id_step": 1,
-        "base_gpu_id": get_base_gpu_id(args, rank),
+        "base_gpu_id": base_gpu_id if base_gpu_id is not None else get_base_gpu_id(args, rank),
         # parallel
         "tp_size": args.rollout_num_gpus_per_engine,
         "dp_size": args.sglang_dp_size,
@@ -444,6 +452,8 @@ def _compute_server_args(
         "ep_size": args.sglang_ep_size,
         # always skip warmup to prevent warmup timeout.
         "skip_server_warmup": True,
+        # always enable draft weights cpu backup so that we run training without mtp weights.
+        "enable_draft_weights_cpu_backup": True,
     }
 
     if worker_type == "prefill":
@@ -465,6 +475,8 @@ def _compute_server_args(
 
     unused_keys = set(kwargs.keys())
     for attr in dataclasses.fields(ServerArgs):
+        if worker_type == "decode" and attr.name == "enable_hierarchical_cache":
+            continue
         if hasattr(args, f"sglang_{attr.name}") and attr.name not in kwargs:
             kwargs[attr.name] = getattr(args, f"sglang_{attr.name}")
         unused_keys.discard(attr.name)

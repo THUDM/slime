@@ -18,15 +18,17 @@ Below is a summary of all available customization interfaces and their purposes.
 | [`--rollout-data-postprocess-path`](#8-rollout-data-postprocess---rollout-data-postprocess-path) | Post-process rollout data after log probs are computed. |
 | [`--custom-loss-function-path`](#9-custom-loss-function---custom-loss-function-path) | Implement custom training loss computation. |
 | [`--custom-tis-function-path`](#10-custom-tisrs-function---custom-tis-function-path) | Implement custom importance sampling for off-policy correction. |
-| [`--custom-reward-post-process-path`](#11-reward-post-processing---custom-reward-post-process-path) | Custom post-processing of rewards before advantage computation. |
-| [`--custom-rollout-log-function-path`](#12-logging-functions) | Custom logging for training rollouts. |
-| [`--custom-eval-rollout-log-function-path`](#12-logging-functions) | Custom logging for evaluation rollouts. |
-| [`--data-source-path`](#13-data-source---data-source-path) | Override the data source for rollout prompts. |
-| [`--eval-function-path`](#14-evaluation-function---eval-function-path) | Override the rollout function specifically for evaluation. |
-| [`--custom-megatron-init-path`](#15-megatron-hooks) | Custom initialization after Megatron setup. |
-| [`--custom-megatron-before-log-prob-hook-path`](#15-megatron-hooks) | Custom logic before log probability computation. |
-| [`--custom-megatron-before-train-step-hook-path`](#15-megatron-hooks) | Custom logic before each training step. |
-| [`--slime-router-middleware-paths`](#16-slime-router-middleware---slime-router-middleware-paths) | Add custom middleware to slime router. |
+| [`--custom-pg-loss-reducer-function-path`](#11-custom-pg-loss-reducer---custom-pg-loss-reducer-function-path) | Customize pg_loss reduction (e.g., for Dr.GRPO). |
+| [`--custom-reward-post-process-path`](#12-reward-post-processing---custom-reward-post-process-path) | Custom post-processing of rewards before advantage computation. |
+| [`--custom-convert-samples-to-train-data-path`](#13-samples-to-train-data-conversion---custom-convert-samples-to-train-data-path) | Override the conversion of samples to training data format. |
+| [`--custom-rollout-log-function-path`](#14-logging-functions) | Custom logging for training rollouts. |
+| [`--custom-eval-rollout-log-function-path`](#14-logging-functions) | Custom logging for evaluation rollouts. |
+| [`--data-source-path`](#15-data-source---data-source-path) | Override the data source for rollout prompts. |
+| [`--eval-function-path`](#16-evaluation-function---eval-function-path) | Override the rollout function specifically for evaluation. |
+| [`--custom-megatron-init-path`](#17-megatron-hooks) | Custom initialization after Megatron setup. |
+| [`--custom-megatron-before-log-prob-hook-path`](#17-megatron-hooks) | Custom logic before log probability computation. |
+| [`--custom-megatron-before-train-step-hook-path`](#17-megatron-hooks) | Custom logic before each training step. |
+| [`--slime-router-middleware-paths`](#18-slime-router-middleware---slime-router-middleware-paths) | Add custom middleware to slime router. |
 
 ## Detailed Interface Reference
 
@@ -228,7 +230,31 @@ def postprocess_function(args, samples: list[list[Sample]]) -> None
 
 ---
 
-### 11. Reward Post-Processing (`--custom-reward-post-process-path`)
+### 11. Custom pg_loss Reducer (`--custom-pg-loss-reducer-function-path`)
+
+**Default**: `None`
+
+**Purpose**: Customize the reduction of pg_loss while other metrics (pg_clipfrac, ppo_kl, entropy_loss, etc.) still use the default sum_of_sample_mean.
+
+**Signature**:
+```python
+def get_pg_loss_reducer(
+    total_lengths: list[int],
+    response_lengths: list[int],
+    loss_masks: list[torch.Tensor],
+    calculate_per_token_loss: bool = False,
+) -> Callable[[torch.Tensor], torch.Tensor]
+```
+
+**Use Cases**:
+- Dr.GRPO: Divide by a constant instead of effective token count
+- Custom loss normalization strategies
+
+**Example**: `examples/DrGRPO/custom_reducer.py:get_pg_loss_reducer`
+
+---
+
+### 12. Reward Post-Processing (`--custom-reward-post-process-path`)
 
 **Default**: `None` (uses default GRPO normalization)
 
@@ -240,7 +266,47 @@ def postprocess_function(args, samples: list[list[Sample]]) -> None
 
 ---
 
-### 12. Logging Functions
+### 13. Samples to Train Data Conversion (`--custom-convert-samples-to-train-data-path`)
+
+**Default**: `None` (uses built-in conversion logic)
+
+**Purpose**: Override the conversion of samples to training data format.
+
+**Signature**:
+```python
+def convert_samples_to_train_data(
+    args,
+    samples: list[Sample] | list[list[Sample]],
+) -> dict
+```
+
+**Return Type**:
+```python
+dict: {
+    "tokens": list[list[int]],           # Token IDs for each sample
+    "response_lengths": list[int],        # Response lengths
+    "rewards": list[float],               # Normalized rewards
+    "raw_reward": list[float],            # Raw rewards
+    "truncated": list[int],               # Truncation flags (0 or 1)
+    "sample_indices": list[int],          # Sample indices
+    "loss_masks": list[list[int]],        # Loss masks for each sample
+    # Optional fields:
+    "round_number": list[int],            # Round numbers (for rollout buffer)
+    "rollout_log_probs": list,            # Log probs (for off-policy correction)
+    "rollout_routed_experts": list,       # Routed experts (for MoE)
+    "metadata": list,                     # Train metadata
+    "multimodal_train_inputs": list,      # Multimodal tensors (for VLM)
+    "teacher_log_probs": list,            # Teacher log probs (for distillation)
+}
+```
+
+**Use Cases**:
+- Handling `list[list[Sample]]` inputs
+- Custom data format requirements for training
+
+---
+
+### 14. Logging Functions
 
 #### Training Rollout Logging (`--custom-rollout-log-function-path`)
 
@@ -262,7 +328,7 @@ def log_eval_rollout_data(rollout_id, args, data, extra_metrics) -> bool
 
 ---
 
-### 13. Data Source (`--data-source-path`)
+### 15. Data Source (`--data-source-path`)
 
 **Default**: `slime.rollout.data_source.RolloutDataSourceWithBuffer`
 
@@ -288,7 +354,7 @@ class CustomDataSource(DataSource):
 
 ---
 
-### 14. Evaluation Function (`--eval-function-path`)
+### 16. Evaluation Function (`--eval-function-path`)
 
 **Default**: Same as `--rollout-function-path`
 
@@ -300,7 +366,7 @@ class CustomDataSource(DataSource):
 
 ---
 
-### 15. Megatron Hooks
+### 17. Megatron Hooks
 
 #### Megatron Initialization (`--custom-megatron-init-path`)
 
@@ -331,7 +397,7 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 
 ---
 
-### 16. slime Router Middleware (`--slime-router-middleware-paths`)
+### 18. slime Router Middleware (`--slime-router-middleware-paths`)
 
 **Purpose**: Add custom middleware to the slime router for request processing.
 

@@ -142,7 +142,7 @@ class RolloutManager:
     def _get_rollout_data(self, rollout_id):
         if self.args.load_debug_rollout_data:
             data = torch.load(
-                open(self.args.load_debug_rollout_data.format(rollout_id=rollout_id), "rb"),
+                self.args.load_debug_rollout_data.format(rollout_id=rollout_id),
                 weights_only=False,
             )["samples"]
             data = [Sample.from_dict(sample) for sample in data]
@@ -274,8 +274,8 @@ class RolloutManager:
         if samples[0].train_metadata is not None:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
 
-        if samples[0].multimodal_inputs is not None:
-            train_data["multimodal_inputs"] = [sample.multimodal_inputs for sample in samples]
+        if samples[0].multimodal_train_inputs is not None:
+            train_data["multimodal_train_inputs"] = [sample.multimodal_train_inputs for sample in samples]
 
         if "teacher_log_probs" in samples[0].__dict__:
             train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
@@ -308,7 +308,7 @@ class RolloutManager:
             rollout_data["partition"] = partition
             for key in [
                 "tokens",
-                "multimodal_inputs",
+                "multimodal_train_inputs",
                 "response_lengths",
                 "rewards",
                 "truncated",
@@ -349,7 +349,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
             num_engines > prefill_num_servers
         ), f"num_engines {num_engines} should be larger than prefill_num_servers {prefill_num_servers}"
 
-    pg, reordered_bundle_indices = pg
+    pg, reordered_bundle_indices, reordered_gpu_ids = pg
 
     RolloutRayActor = ray.remote(SGLangEngine)
 
@@ -360,6 +360,9 @@ def init_rollout_engines(args, pg, all_rollout_engines):
 
         num_gpus = 0.2
         num_cpus = num_gpus
+
+        # Get the base GPU ID from placement group
+        base_gpu_id = int(reordered_gpu_ids[i * num_gpu_per_engine])
 
         scheduling_strategy = PlacementGroupSchedulingStrategy(
             placement_group=pg,
@@ -375,6 +378,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
             "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
             "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
             "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
+            "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
         }
 
         worker_type = "regular"
@@ -391,7 +395,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
             runtime_env={
                 "env_vars": env_vars,
             },
-        ).remote(args, rank=i, worker_type=worker_type)
+        ).remote(args, rank=i, worker_type=worker_type, base_gpu_id=base_gpu_id)
 
         rollout_engines.append((i, rollout_engine))
         all_rollout_engines[i] = rollout_engine
@@ -599,12 +603,8 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
         return
 
     log_dict = {**(rollout_extra_metrics or {})}
-    response_lengths = [sample.effective_response_length for sample in samples]
-    log_dict["perf/rollout_time"] = rollout_time
-    if args.rollout_num_gpus:
-        log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
-    log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
     log_dict |= dict_add_prefix(compute_metrics_from_samples(args, samples), "rollout/")
+    log_dict |= dict_add_prefix(compute_perf_metrics_from_samples(args, samples, rollout_time), "perf/")
     logger.info(f"perf {rollout_id}: {log_dict}")
     step = compute_rollout_step(args, rollout_id)
     log_dict["rollout/step"] = step
@@ -617,10 +617,42 @@ def compute_metrics_from_samples(args, samples):
     log_dict = {}
     log_dict |= dict_add_prefix(compute_statistics(response_lengths), "response_len/")
     log_dict |= _compute_zero_std_metrics(args, samples)
-    log_dict |= _compute_spec_metrics(args, samples)
     log_dict |= _compute_reward_cat_metrics(args, samples)
     log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
     log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
+    return log_dict
+
+
+def compute_perf_metrics_from_samples(args, samples, rollout_time):
+    non_generation_time = [sample.non_generation_time for sample in samples]
+
+    log_dict = {}
+    log_dict["rollout_time"] = rollout_time
+    if max(non_generation_time) > 0:
+        log_dict |= dict_add_prefix(compute_statistics(non_generation_time), "non_generation_time/")
+
+    def token_perf(response_lengths, non_generation_time, key=""):
+        max_response_length = max(response_lengths)
+        if args.rollout_num_gpus:
+            log_dict[f"{key}tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
+        log_dict[f"longest_{key}sample_tokens_per_sec"] = max_response_length / rollout_time
+
+        if max(non_generation_time) == 0:
+            return
+
+        non_generation_time = [
+            t for t, length in zip(non_generation_time, response_lengths, strict=True) if length == max_response_length
+        ]
+        mean_non_generation_time = sum(non_generation_time) / len(non_generation_time)
+
+        log_dict[f"longest_{key}sample_non_generation_time"] = mean_non_generation_time
+        log_dict[f"longest_{key}sample_tokens_per_sec_without_non_generation"] = max_response_length / (
+            rollout_time - mean_non_generation_time
+        )
+
+    token_perf([sample.response_length for sample in samples], non_generation_time, key="")
+    token_perf([sample.effective_response_length for sample in samples], non_generation_time, key="effective_")
+
     return log_dict
 
 
@@ -646,12 +678,19 @@ def _compute_spec_metrics(args, all_samples: list[Sample]):
         return {}
     num_samples = len(all_samples)
     metrics = {}
-    metrics["rollout/spec_accept_rate"] = (
-        sum(sample.spec_info.spec_accept_rate for sample in all_samples) / num_samples
-    )
-    metrics["rollout/spec_accept_length"] = (
-        sum(sample.spec_info.spec_accept_length for sample in all_samples) / num_samples
-    )
+    metrics["spec_accept_rate"] = sum(sample.spec_info.spec_accept_rate for sample in all_samples) / num_samples
+    metrics["spec_accept_length"] = sum(sample.spec_info.spec_accept_length for sample in all_samples) / num_samples
+    return metrics
+
+
+def _compute_prefix_cache_metrics(args, all_samples: list[Sample]):
+    num_samples = len(all_samples)
+    metrics = {}
+    total_cached_tokens = sum(sample.prefix_cache_info.cached_tokens for sample in all_samples)
+    total_prompt_tokens = sum(sample.prefix_cache_info.total_prompt_tokens for sample in all_samples)
+
+    metrics["prefix_cache_hit_rate"] = total_cached_tokens / total_prompt_tokens if total_prompt_tokens > 0 else 0.0
+    metrics["avg_cached_tokens_per_sample"] = total_cached_tokens / num_samples
     return metrics
 
 

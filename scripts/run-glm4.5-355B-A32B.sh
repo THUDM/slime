@@ -42,7 +42,7 @@ ROLLOUT_ARGS=(
    --rollout-batch-size 128
    --n-samples-per-prompt 8
    --rollout-max-response-len 32768
-   --rollout-temperature 0.8
+   --rollout-temperature 1
 
    --over-sampling-batch-size 256
    --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
@@ -57,7 +57,7 @@ EVAL_ARGS=(
    --eval-prompt-data aime $BASE_DIR/rl_data/aime-2024.jsonl
    --n-samples-per-eval-prompt 8
    --eval-max-response-len 32768
-   --eval-top-p 0.7
+   --eval-top-p 1
 )
 
 PERF_ARGS=(
