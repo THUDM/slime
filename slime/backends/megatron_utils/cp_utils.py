@@ -65,9 +65,7 @@ def get_chunked_loss_masks(
 
     chunked_loss_masks: list[torch.Tensor] = []
     chunk_lengths: list[int] = []
-    for i, (total_length, response_length, loss_mask) in enumerate(
-        zip(total_lengths, response_lengths, loss_masks, strict=True)
-    ):
+    for i, (total_length, response_length, loss_mask) in enumerate(zip(total_lengths, response_lengths, loss_masks, strict=True)):
         max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
         prompt_length = total_length - response_length
         _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(
@@ -110,29 +108,20 @@ def get_sum_of_sample_mean(
         total_lengths,
         response_lengths,
         loss_masks,
-        qkv_format=qkv_format,
-        max_seq_lens=max_seq_lens,
+        qkv_format,
+        max_seq_lens,
     )
 
     if cp_size == 1:
 
         def sum_of_sample_mean(x: torch.Tensor) -> torch.Tensor:
-            return sum(
-                [
-                    (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)
-                    for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=True)
-                ]
-            )
+            return sum([(x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1) for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=True)])
 
         def sum_of_token(x: torch.Tensor) -> torch.Tensor:
-            return sum(
-                [
-                    (x_i * loss_mask_i).sum()
-                    for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=True)
-                ]
-            )
+            return sum([(x_i * loss_mask_i).sum() for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=True)])
 
     else:
+
         def sum_of_sample_mean(x: torch.Tensor) -> torch.Tensor:
             return sum(
                 [
@@ -147,12 +136,7 @@ def get_sum_of_sample_mean(
             )
 
         def sum_of_token(x: torch.Tensor) -> torch.Tensor:
-            return sum(
-                [
-                    (x_i * chunked_loss_mask).sum()
-                    for x_i, chunked_loss_mask in zip(x.split(chunk_lengths, dim=0), chunked_loss_masks, strict=True)
-                ]
-            )
+            return sum([(x_i * chunked_loss_mask).sum() for x_i, chunked_loss_mask in zip(x.split(chunk_lengths, dim=0), chunked_loss_masks, strict=True)])
 
     return sum_of_sample_mean if not calculate_per_token_loss else sum_of_token
 
