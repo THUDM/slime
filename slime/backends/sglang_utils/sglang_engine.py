@@ -192,11 +192,11 @@ class SGLangEngine(RayActor):
             self._init_normal(server_args_dict)
 
     def get_server_host(self):
-        """Get the server host address."""
+        """Get the server host address. Required for Ray actor access."""
         return self.server_host
 
     def get_server_port(self):
-        """Get the server port."""
+        """Get the server port. Required for Ray actor access."""
         return self.server_port
 
     def _init_external(self, expect_server_args, external_engine_need_check_fields):
