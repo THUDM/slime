@@ -11,17 +11,12 @@ def get_logits_and_tokens_offset_with_cp(
     response_length: int,
     qkv_format: str = "thd",
     max_seq_len: int | None = None,
-    *,
-    cp_rank: int | None = None,
-    cp_size: int | None = None,
 ):
     """
     All offsets start from the begining of the prompt.
     """
-    if cp_rank is None:
-        cp_rank = mpu.get_context_parallel_rank()
-    if cp_size is None:
-        cp_size = mpu.get_context_parallel_world_size()
+    cp_rank = mpu.get_context_parallel_rank()
+    cp_size = mpu.get_context_parallel_world_size()
     assert cp_size > 1
 
     prompt_length = total_length - response_length
@@ -59,21 +54,14 @@ def get_chunked_loss_masks(
     total_lengths: list[int],
     response_lengths: list[int],
     loss_masks: list[torch.Tensor],
-    *,
-    cp_rank: int | None = None,
-    cp_size: int | None = None,
     qkv_format: str = "thd",
     max_seq_lens: list[int] | None = None,
 ) -> tuple[list[torch.Tensor], list[int]]:
     """Slice loss masks to the local CP segments and return chunk lengths."""
 
-    if cp_size is None:
-        cp_size = mpu.get_context_parallel_world_size()
+    cp_size = mpu.get_context_parallel_world_size()
     if cp_size == 1:
         return loss_masks, response_lengths
-
-    if cp_rank is None:
-        cp_rank = mpu.get_context_parallel_rank()
 
     chunked_loss_masks: list[torch.Tensor] = []
     chunk_lengths: list[int] = []
@@ -87,8 +75,6 @@ def get_chunked_loss_masks(
             response_length,
             qkv_format,
             max_seq_len,
-            cp_rank=cp_rank,
-            cp_size=cp_size,
         )
 
         local_chunks: list[torch.Tensor] = []
@@ -120,13 +106,10 @@ def get_sum_of_sample_mean(
     Calculate correct sample mean for CP
     """
     cp_size = mpu.get_context_parallel_world_size()
-    cp_rank = mpu.get_context_parallel_rank() if cp_size > 1 else None
     chunked_loss_masks, chunk_lengths = get_chunked_loss_masks(
         total_lengths,
         response_lengths,
         loss_masks,
-        cp_rank=cp_rank,
-        cp_size=cp_size,
         qkv_format=qkv_format,
         max_seq_lens=max_seq_lens,
     )
@@ -181,17 +164,11 @@ def all_gather_with_cp(tensor: torch.Tensor, total_length: int, response_length:
     """
     cp_group = mpu.get_context_parallel_group()
     cp_size = mpu.get_context_parallel_world_size()
-    cp_rank = mpu.get_context_parallel_rank()
 
     if cp_size == 1:
         return tensor
 
-    _, _, logits_offset, _ = get_logits_and_tokens_offset_with_cp(
-        total_length,
-        response_length,
-        cp_rank=cp_rank,
-        cp_size=cp_size,
-    )
+    _, _, logits_offset, _ = get_logits_and_tokens_offset_with_cp(total_length, response_length)
 
     prompt_length = total_length - response_length
 
@@ -286,7 +263,6 @@ def slice_log_prob_with_cp(
     assert len(log_prob) == response_length
 
     cp_size = mpu.get_context_parallel_world_size()
-    cp_rank = mpu.get_context_parallel_rank()
 
     if cp_size == 1:
         return log_prob
@@ -297,8 +273,6 @@ def slice_log_prob_with_cp(
         response_length,
         qkv_format,
         max_token_len,
-        cp_rank=cp_rank,
-        cp_size=cp_size,
     )
 
     chunk_1 = log_prob[logits_offset[0][0] - (prompt_length - 1) : logits_offset[0][1] - (prompt_length - 1)]

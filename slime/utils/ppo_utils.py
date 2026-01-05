@@ -91,7 +91,6 @@ def compute_opsm_mask(
     *,
     opsm_inputs: OpsmInputs,
     cp_group: dist.ProcessGroup | None = None,
-    cp_size: int = 1,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute Off-Policy Sequence Masking (OPSM) mask.
 
@@ -100,16 +99,14 @@ def compute_opsm_mask(
         advantages: Advantage values per sample.
         opsm_inputs: Precomputed sequence-level KLs and aligned loss masks.
         cp_group: Optional context-parallel process group for distributed
-            reductions when ``cp_size > 1``.
-        cp_size: Context-parallel world size.
+            reductions when context parallelism is enabled.
 
     Returns:
         Tuple of `(opsm_mask, opsm_clipfrac)` where `opsm_mask` is a
         concatenated tensor of per-token masks and
         `opsm_clipfrac` is the sum of per-sequence masked-token fractions.
     """
-    if cp_size > 1:
-        assert cp_group is not None, "cp_group is required when cp_size > 1"
+    cp_size = dist.get_world_size(cp_group) if cp_group is not None else 1
 
     opsm_mask_list: list[torch.Tensor] = []
     device = advantages[0].device

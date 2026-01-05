@@ -75,7 +75,6 @@ def get_responses(
     logits = logits.div(args.rollout_temperature)
 
     cp_size = mpu.get_context_parallel_world_size()
-    cp_rank = mpu.get_context_parallel_rank() if cp_size > 1 else None
     end = 0
     for i, (tokens, total_length, response_length) in enumerate(
         zip(unconcat_tokens, total_lengths, response_lengths, strict=True)
@@ -98,8 +97,6 @@ def get_responses(
                 response_length,
                 qkv_format,
                 max_seq_len,
-                cp_rank=cp_rank,
-                cp_size=cp_size,
             )
 
             logits_0, logits_1 = logits[end : end + chunk_size], logits[end + chunk_size : end + 2 * chunk_size]
@@ -238,8 +235,6 @@ def _compute_seq_kls_with_cp(
     response_lengths: list[int],
     *,
     cp_group: dist.ProcessGroup,
-    cp_rank: int,
-    cp_size: int,
     track_grad: bool,
     qkv_format: str = "thd",
     max_seq_lens: list[int] | None = None,
@@ -255,8 +250,6 @@ def _compute_seq_kls_with_cp(
         total_lengths,
         response_lengths,
         loss_masks,
-        cp_rank=cp_rank,
-        cp_size=cp_size,
         qkv_format=qkv_format,
         max_seq_lens=max_seq_lens,
     )
@@ -410,8 +403,6 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
                 total_lengths,
                 response_lengths,
                 loss_masks,
-                cp_rank=cp_rank,
-                cp_size=cp_size,
                 qkv_format=args.qkv_format,
                 max_seq_lens=max_seq_lens,
             )
@@ -545,12 +536,11 @@ def policy_loss_function(
     chunked_loss_masks: list[torch.Tensor] | None = None
     opsm_inputs: OpsmInputs | None = None
     cp_size = mpu.get_context_parallel_world_size()
-    cp_rank = mpu.get_context_parallel_rank() if cp_size > 1 else None
     cp_group = mpu.get_context_parallel_group() if cp_size > 1 else None
     if need_full_log_probs:
         with timer("cp_seq_kl_prep"):
             if cp_size > 1:
-                assert cp_rank is not None and cp_group is not None
+                assert cp_group is not None
                 seq_kls, chunked_loss_masks = _compute_seq_kls_with_cp(
                     log_probs,
                     old_log_probs,
@@ -558,8 +548,6 @@ def policy_loss_function(
                     total_lengths,
                     response_lengths,
                     cp_group=cp_group,
-                    cp_rank=cp_rank,
-                    cp_size=cp_size,
                     track_grad=args.advantage_estimator == "gspo",
                     qkv_format=args.qkv_format,
                     max_seq_lens=max_seq_lens,
@@ -591,7 +579,6 @@ def policy_loss_function(
             advantages=batch["advantages"],
             opsm_inputs=opsm_inputs,
             cp_group=cp_group,
-            cp_size=cp_size,
         )
 
     # Compute KL divergence (GSPO uses sequence-level KL, others use per-token KL)
