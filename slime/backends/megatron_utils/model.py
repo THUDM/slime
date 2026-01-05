@@ -703,7 +703,6 @@ def save(
     args = get_args()
     if should_disable_forward_pre_hook(args):
         disable_forward_pre_hook(model)
-
     save_checkpoint(
         iteration,
         model,
