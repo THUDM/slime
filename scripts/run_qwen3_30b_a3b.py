@@ -77,7 +77,7 @@ def execute(args: ScriptArgs):
         "--rollout-batch-size 32 "
         "--n-samples-per-prompt 8 "
         f"--rollout-max-response-len {100 if args.mode == 'debug_minimal' else 8192} "
-        "--rollout-temperature 0.8 "
+        "--rollout-temperature 1 "
         "--global-batch-size 256 "
         "--balance-data "
     )
@@ -89,7 +89,7 @@ def execute(args: ScriptArgs):
             "--eval-prompt-data aime /root/datasets/aime-2024/aime-2024.jsonl "
             "--n-samples-per-eval-prompt 16 "
             "--eval-max-response-len 16384 "
-            "--eval-top-p 0.7 "
+            "--eval-top-p 1 "
         )
 
     perf_args = (

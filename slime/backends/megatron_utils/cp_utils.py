@@ -9,6 +9,8 @@ from megatron.core import mpu
 def get_logits_and_tokens_offset_with_cp(
     total_length: int,
     response_length: int,
+    qkv_format: str = "thd",
+    max_seq_len: int | None = None,
     *,
     cp_rank: int | None = None,
     cp_size: int | None = None,
@@ -23,7 +25,11 @@ def get_logits_and_tokens_offset_with_cp(
     assert cp_size > 1
 
     prompt_length = total_length - response_length
-    chunk_size = (total_length + 2 * cp_size - 1) // (2 * cp_size)
+    if qkv_format == "thd":
+        chunk_size = (total_length + 2 * cp_size - 1) // (2 * cp_size)
+    else:
+        assert max_seq_len is not None, "max_seq_len must be provided for qkv_format=bshd"
+        chunk_size = (max_seq_len + 2 * cp_size - 1) // (2 * cp_size)
 
     # the offset of 2 chunks
     chunk_0 = (cp_rank * chunk_size, (cp_rank + 1) * chunk_size)
@@ -56,6 +62,8 @@ def get_chunked_loss_masks(
     *,
     cp_rank: int | None = None,
     cp_size: int | None = None,
+    qkv_format: str = "thd",
+    max_seq_lens: list[int] | None = None,
 ) -> tuple[list[torch.Tensor], list[int]]:
     """Slice loss masks to the local CP segments and return chunk lengths."""
 
@@ -69,11 +77,16 @@ def get_chunked_loss_masks(
 
     chunked_loss_masks: list[torch.Tensor] = []
     chunk_lengths: list[int] = []
-    for total_length, response_length, loss_mask in zip(total_lengths, response_lengths, loss_masks, strict=True):
+    for i, (total_length, response_length, loss_mask) in enumerate(
+        zip(total_lengths, response_lengths, loss_masks, strict=True)
+    ):
+        max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
         prompt_length = total_length - response_length
         _, _, _, tokens_offset = get_logits_and_tokens_offset_with_cp(
             total_length,
             response_length,
+            qkv_format,
+            max_seq_len,
             cp_rank=cp_rank,
             cp_size=cp_size,
         )
@@ -100,6 +113,8 @@ def get_sum_of_sample_mean(
     response_lengths: list[int],
     loss_masks: list[torch.Tensor],
     calculate_per_token_loss: bool = False,
+    qkv_format: str = "thd",
+    max_seq_lens: list[int] | None = None,
 ) -> Callable[[torch.Tensor], torch.Tensor]:
     """
     Calculate correct sample mean for CP
@@ -112,6 +127,8 @@ def get_sum_of_sample_mean(
         loss_masks,
         cp_rank=cp_rank,
         cp_size=cp_size,
+        qkv_format=qkv_format,
+        max_seq_lens=max_seq_lens,
     )
 
     if cp_size == 1:
@@ -133,7 +150,6 @@ def get_sum_of_sample_mean(
             )
 
     else:
-
         def sum_of_sample_mean(x: torch.Tensor) -> torch.Tensor:
             return sum(
                 [
@@ -216,23 +232,44 @@ def all_gather_with_cp(tensor: torch.Tensor, total_length: int, response_length:
     return full_tensor
 
 
-def slice_with_cp(tokens: torch.Tensor, pad_value: tuple[int, float, Callable]) -> torch.Tensor:
+def slice_with_cp(
+    tokens: torch.Tensor,
+    pad_value: tuple[int, float, Callable],
+    qkv_format: str = "thd",
+    max_seq_len: int | None = None,
+) -> torch.Tensor:
     cp_rank = mpu.get_context_parallel_rank()
     cp_size = mpu.get_context_parallel_world_size()
 
-    if cp_size == 1:
+    if qkv_format == "bshd":
+        assert max_seq_len is not None
+
+    def pad_tokens(tokens, pad):
+        if isinstance(pad_value, Callable):
+            pad_func = pad_value
+            tokens = pad_func(tokens, pad)
+        else:
+            # pad on the first dimension
+            pad_tuple = (0, 0) * (tokens.dim() - 1) + (0, pad)
+            tokens = F.pad(tokens, pad_tuple, value=pad_value)
         return tokens
 
-    # pad
-    chunk_size = (len(tokens) + 2 * cp_size - 1) // (2 * cp_size)
-    pad = 2 * cp_size * chunk_size - len(tokens)
-    if isinstance(pad_value, Callable):
-        pad_func = pad_value
-        tokens = pad_func(tokens, pad)
+    if cp_size == 1:
+        if qkv_format == "bshd":
+            pad = max_seq_len - tokens.size(0)
+            tokens = pad_tokens(tokens, pad)
+        return tokens
+
+    token_len = len(tokens)
+    if qkv_format == "thd":
+        chunk_size = (token_len + 2 * cp_size - 1) // (2 * cp_size)
     else:
-        # pad on the first dimension
-        pad_tuple = (0, 0) * (tokens.dim() - 1) + (0, pad)
-        tokens = F.pad(tokens, pad_tuple, value=pad_value)
+        chunk_size = (max_seq_len + 2 * cp_size - 1) // (2 * cp_size)
+
+    # pad
+    pad = 2 * cp_size * chunk_size - token_len
+    tokens = pad_tokens(tokens, pad)
+
     # get 2 chunk for thd cp
     start_1, end_1 = chunk_size * cp_rank, chunk_size * (cp_rank + 1)
     start_2, end_2 = chunk_size * (2 * cp_size - cp_rank - 1), chunk_size * (2 * cp_size - cp_rank)
@@ -243,6 +280,8 @@ def slice_log_prob_with_cp(
     log_prob: list[float] | torch.Tensor,
     total_length: int,
     response_length: int,
+    qkv_format: str = "thd",
+    max_token_len: int | None = None,
 ) -> list[float] | torch.Tensor:
     assert len(log_prob) == response_length
 
@@ -256,6 +295,8 @@ def slice_log_prob_with_cp(
     _, _, logits_offset, _ = get_logits_and_tokens_offset_with_cp(
         total_length,
         response_length,
+        qkv_format,
+        max_token_len,
         cp_rank=cp_rank,
         cp_size=cp_size,
     )

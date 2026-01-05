@@ -2,7 +2,7 @@
 
 ## Configure GitHub secrets
 
-https://github.com/slimerl/slime/settings/secrets/actions
+https://github.com/THUDM/slime/settings/secrets/actions
 
 * `WANDB_API_KEY`: get from https://wandb.ai/authorize
 
@@ -11,7 +11,7 @@ https://github.com/slimerl/slime/settings/secrets/actions
 ### Step 1: Env
 
 Write `.env` mimicking `.env.example`.
-The token can be found at https://github.com/slimerl/slime/settings/actions/runners/new?arch=x64&os=linux.
+The token can be found at https://github.com/THUDM/slime/settings/actions/runners/new?arch=x64&os=linux.
 
 WARN: The `GITHUB_RUNNER_TOKEN` changes after a while.
 

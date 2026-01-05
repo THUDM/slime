@@ -17,7 +17,7 @@ def pack_sequences(
     advantages: list[float],
     returns: list[float],
     rollout_log_probs: list[list[float]] | None = None,
-    multimodal_inputs: list[dict] | None = None,
+    multimodal_train_inputs: list[dict] | None = None,
     max_tokens_per_gpu: int | None = None,
     num_packs: int | None = None,
 ) -> list[dict]:
@@ -33,7 +33,7 @@ def pack_sequences(
         advantages: List of advantages per sequence
         returns: List of returns per sequence
         rollout_log_probs: List of rollout log probabilities per sequence
-        multimodal_inputs: List of dict of multimodal tokens per sequence
+        multimodal_train_inputs: List of dict of multimodal tensors for training per sequence
         max_tokens_per_gpu: Maximum tokens per GPU pack
         num_packs: Explicit number of packs to create
 
@@ -100,19 +100,19 @@ def pack_sequences(
             ),
         }
 
-        # Collect and add multimodal inputs for this partition
-        if multimodal_inputs:
+        # Collect and add multimodal training tensors for this partition
+        if multimodal_train_inputs:
             multimodal_data = {}  # key -> concatenated tensor
             multimodal_num_items = {}  # key -> list of item counts per sequence
             for i in indices:
-                for key, mm_tensor in multimodal_inputs[i].items():
+                for key, mm_tensor in multimodal_train_inputs[i].items():
                     if key not in multimodal_data:
                         multimodal_data[key] = mm_tensor
                         multimodal_num_items[key] = [mm_tensor.size(0)]
                     else:
                         multimodal_data[key] = torch.cat([multimodal_data[key], mm_tensor], dim=0)
                         multimodal_num_items[key].append(mm_tensor.size(0))
-            packed_batch["multimodal_inputs"] = multimodal_data
+            packed_batch["multimodal_train_inputs"] = multimodal_data
             packed_batch["multimodal_num_items"] = multimodal_num_items
 
         result.append(packed_batch)
@@ -157,8 +157,8 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
                 # Skip multimodal_num_items - it's metadata
                 if key == "multimodal_num_items":
                     continue
-                # Handle multimodal_inputs dict: split each tensor using multimodal_num_items
-                elif key == "multimodal_inputs" and isinstance(value, dict):
+                # Handle multimodal_train_inputs dict: split each tensor using multimodal_num_items
+                elif key == "multimodal_train_inputs" and isinstance(value, dict):
                     instance[key] = {}
                     for mm_key, mm_tensor in value.items():
                         if mm_key in multimodal_num_items:

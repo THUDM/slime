@@ -15,13 +15,13 @@ set -euxo pipefail
 
 
 ### AMD Support ###
-SLIME_DIR="${SLIME_DIR:-/home/yushensu/projects/slime}" # Default path if not set in environment
+SLIME_DIR="${SLIME_DIR:-/root}" # Default path if not set in environment
 export SLIME_DIR
 
-MODEL_DIR="${MODEL_DIR:-/home/yushensu/projects/model}" # Default path if not set in environment
+MODEL_DIR="${MODEL_DIR:-/root}" # Default path if not set in environment
 export MODEL_DIR
 
-DATA_DIR="${DATA_DIR:-/home/yushensu/projects/data}"  # Default path if not set in environment
+DATA_DIR="${DATA_DIR:-/root}"  # Default path if not set in environment
 export DATA_DIR
 
 # For AMD GPU
@@ -55,7 +55,7 @@ ROLLOUT_ARGS=(
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 8192
-   --rollout-temperature 0.8
+   --rollout-temperature 1
 
    --global-batch-size 256
    --balance-data
@@ -66,7 +66,7 @@ EVAL_ARGS=(
    --eval-prompt-data aime ${DATA_DIR}/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 16
    --eval-max-response-len 16384
-   --eval-top-p 0.7
+   --eval-top-p 1
 )
 
 PERF_ARGS=(
@@ -153,6 +153,8 @@ ray job submit --address="http://127.0.0.1:8265" \
    --actor-num-nodes 1 \
    --actor-num-gpus-per-node 8 \
    --colocate \
+   --no-offload-train \
+   --no-offload-rollout \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \

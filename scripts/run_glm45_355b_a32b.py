@@ -134,7 +134,7 @@ def train(args: ScriptArgs):
         # TODO enlarge
         "--rollout-batch-size 32 "
         "--n-samples-per-prompt 8 "
-        "--rollout-temperature 0.8 "
+        "--rollout-temperature 1 "
         # ------------
         # TODO enlarge
         "--num-steps-per-rollout 1 "
@@ -151,7 +151,7 @@ def train(args: ScriptArgs):
     # sometimes disable eval to speed up debugging
     eval_args = ""
     if (args.mode != "debug_minimal") and args.enable_eval:
-        eval_args += "--eval-interval 20 " "--eval-top-p 0.7 "
+        eval_args += "--eval-interval 20 " "--eval-top-p 1 "
 
     match args.task:
         case "dapo_aime":

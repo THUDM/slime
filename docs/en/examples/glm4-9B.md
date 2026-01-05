@@ -110,7 +110,7 @@ ROLLOUT_ARGS=(
    --n-samples-per-prompt 8
    # Rollout sampling parameters
    --rollout-max-response-len 8192
-   --rollout-temperature 0.8
+   --rollout-temperature 1
 
    # Number of training steps corresponding to one rollout
    --num-steps-per-rollout 1
@@ -129,7 +129,7 @@ EVAL_ARGS=(
    --eval-prompt-data /root/aime-2024/aime-2024.jsonl
    --n-samples-per-eval-prompt 16
    --eval-max-response-len 16384
-   --eval-top-p 0.7
+   --eval-top-p 1
 )
 ```
 
