@@ -471,6 +471,8 @@ def _compute_server_args(
         kwargs["enable_return_routed_experts"] = True
     if args.fp16:
         kwargs["dtype"] = "float16"
+    elif args.bf16:
+        kwargs["dtype"] = "bfloat16"
     external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
 
     unused_keys = set(kwargs.keys())
@@ -497,4 +499,6 @@ _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS = [
     "nccl_port",
     "dist_init_addr",
     "skip_server_warmup",
+    "enable_draft_weights_cpu_backup",
+    "mem_fraction_static",
 ]

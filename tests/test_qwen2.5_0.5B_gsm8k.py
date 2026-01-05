@@ -125,8 +125,6 @@ def execute():
 
 if __name__ == "__main__":
     prepare()
-    os.environ.pop("http_proxy")
-    os.environ.pop("https_proxy")
-    os.environ.pop("HTTP_PROXY")
-    os.environ.pop("HTTPS_PROXY")
+    for proxy_var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+        os.environ.pop(proxy_var, None)
     execute()
