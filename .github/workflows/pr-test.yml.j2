@@ -33,6 +33,22 @@
         {'test_file': 'test_qwen3_4B_ckpt.py --async-save', 'num_gpus': 8},
       ],
     },
+    'e2e-test-image': {
+      'label': 'run-ci-image',
+      'image': 'slimerl/slime-test:latest',
+      'tests': [
+        {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8},
+        {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_fsdp_true_on_policy.py', 'num_gpus': 2},
+        {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_vl_4B_fsdp.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_4B_ckpt.py --async-save', 'num_gpus': 8},
+      ],
+    },
 } %>
 name: PR Test
 
@@ -61,7 +77,7 @@ jobs:
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, '<< config.label >>'))
     runs-on: self-hosted
     container:
-      image: slimerl/slime:latest
+      image: << config.image if config.image else 'slimerl/slime:latest' >>
       options: >
         --gpus all
         --ipc=host
