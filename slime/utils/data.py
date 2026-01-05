@@ -78,23 +78,38 @@ def _parse_generalized_path(s: str):
     return s, None
 
 
-def _should_skip_prompt(output_prompt: str | list, tokenizer, processor, max_length, multimodal_inputs=None):
+def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_length: int | None) -> list[Sample]:
     if max_length is None:
         return False
 
-    if isinstance(output_prompt, list):
+    if not isinstance(origin_samples[0].prompt, str):
         logger.warning(
             "Skipping max_length check for list prompt. Set apply_chat_template=True to enable length filtering."
         )
         return False
 
     if processor:
-        processor_output = processor(text=output_prompt, **multimodal_inputs)
-        input_ids = processor_output["input_ids"][0]
-    else:
-        input_ids = tokenizer.encode(output_prompt, add_special_tokens=False)
+        filtered_samples = []
+        for sample in origin_samples:
+            from slime.utils.processing_utils import process_vision_info
 
-    return len(input_ids) > max_length
+            multimodal_inputs = process_vision_info(sample.prompt, processor)
+            processor_output = processor(text=sample.prompt, **multimodal_inputs)
+            input_ids = processor_output["input_ids"][0]
+            if len(input_ids) <= max_length:
+                filtered_samples.append(sample)
+    else:
+        prompts = [sample.prompt for sample in origin_samples]
+        input_ids_list = tokenizer(prompts, add_special_tokens=False)["input_ids"]
+        filtered_samples = [
+            sample
+            for sample, input_ids in zip(origin_samples, input_ids_list, strict=True)
+            if len(input_ids) <= max_length
+        ]
+
+    logger.info(f"Filtered {len(origin_samples) - len(filtered_samples)} samples longer than max_length={max_length}.")
+
+    return filtered_samples
 
 
 def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimodal_keys: dict = None):
@@ -167,7 +182,7 @@ class Dataset:
         apply_chat_template=False,
         apply_chat_template_kwargs=None,
     ):
-        self.origin_samples = []
+        origin_samples = []
         for data in read_file(path):
             # Both chat templates and multimodal inputs require conversation format (list of message dicts)
             as_conversation = apply_chat_template or (multimodal_keys is not None)
@@ -205,11 +220,7 @@ class Dataset:
             else:
                 multimodal_inputs = None
 
-            # TODO: this is slow.
-            if _should_skip_prompt(output_prompt, tokenizer, processor, max_length, multimodal_inputs):
-                continue
-
-            self.origin_samples.append(
+            origin_samples.append(
                 Sample(
                     prompt=output_prompt,
                     label=data[label_key] if label_key is not None else None,
@@ -217,6 +228,11 @@ class Dataset:
                     multimodal_inputs=multimodal_inputs,
                 )
             )
+
+        if max_length is not None:
+            self.origin_samples = filter_long_prompt(origin_samples, tokenizer, processor, max_length)
+        else:
+            self.origin_samples = origin_samples
 
         self.epoch_id = -1
         self.seed = seed
