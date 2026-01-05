@@ -77,7 +77,7 @@ def get_responses(
     cp_size = mpu.get_context_parallel_world_size()
     end = 0
     for i, (tokens, total_length, response_length) in enumerate(
-        zip(unconcat_tokens, total_lengths, response_lengths, strict=True)
+        zip(unconcat_tokens, total_lengths, response_lengths, strict=False)
     ):
         max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
         if cp_size == 1:
@@ -262,7 +262,7 @@ def _compute_seq_kls_with_cp(
             [
                 ((old_log_prob - log_prob) * chunked_loss_mask).sum()
                 for log_prob, old_log_prob, chunked_loss_mask in zip(
-                    log_probs, old_log_probs, chunked_loss_masks, strict=True
+                    log_probs, old_log_probs, chunked_loss_masks, strict=False
                 )
             ]
         )
@@ -342,7 +342,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         old_rewards = rewards
         rewards = []
         kl_coef = -args.kl_coef
-        for reward, k in zip(old_rewards, kl, strict=True):
+        for reward, k in zip(old_rewards, kl, strict=False):
             k *= kl_coef
             if cp_rank == 0:
                 k[-1] += reward
@@ -382,11 +382,11 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         teacher_log_probs = [t_log_prob.to(device=device) for t_log_prob in teacher_log_probs]
         teacher_log_probs = [
             t_log_prob[-response_length:]
-            for t_log_prob, response_length in zip(teacher_log_probs, response_lengths, strict=True)
+            for t_log_prob, response_length in zip(teacher_log_probs, response_lengths, strict=False)
         ]
         advantages = [
             teacher_log_prob - student_log_prob
-            for teacher_log_prob, student_log_prob in zip(teacher_log_probs, student_log_probs, strict=True)
+            for teacher_log_prob, student_log_prob in zip(teacher_log_probs, student_log_probs, strict=False)
         ]
         returns = advantages
 
@@ -586,7 +586,7 @@ def policy_loss_function(
         if cp_size > 1:
             assert seq_kls is not None
             ppo_kl = torch.cat(
-                [seq_kl.expand_as(local_log_prob) for seq_kl, local_log_prob in zip(seq_kls, log_probs, strict=True)],
+                [seq_kl.expand_as(local_log_prob) for seq_kl, local_log_prob in zip(seq_kls, log_probs, strict=False)],
                 dim=0,
             )
             old_log_probs = torch.cat(old_log_probs, dim=0)

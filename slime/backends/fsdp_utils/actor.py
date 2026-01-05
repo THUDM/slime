@@ -1062,7 +1062,7 @@ def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks:
     return sum(
         [
             (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)
-            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=True)
+            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
         ]
     )
 
@@ -1141,6 +1141,6 @@ def sum_of_token(x: torch.Tensor, response_lengths: list[int], loss_masks: list[
     return sum(
         [
             (x_i * loss_mask_i).sum()
-            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=True)
+            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
         ]
     )

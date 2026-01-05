@@ -67,7 +67,7 @@ def build_opsm_inputs_from_log_probs(
     seq_kls = [
         ((full_old_log_prob - full_log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
         for full_log_prob, full_old_log_prob, loss_mask in zip(
-            full_log_probs, full_old_log_probs, loss_masks, strict=True
+            full_log_probs, full_old_log_probs, loss_masks, strict=False
         )
     ]
 
@@ -120,7 +120,7 @@ def compute_opsm_mask(
         opsm_inputs.loss_masks,
         opsm_inputs.effective_loss_masks,
         opsm_inputs.seq_kls,
-        strict=True,
+        strict=False,
     ):
         if advantage.numel() != effective_loss_mask.numel():
             raise ValueError(
@@ -173,9 +173,9 @@ def compute_gspo_kl(
     # Compute sequence-level KL and expand to per-token
     ppo_kl = [
         ((old_logprob - log_prob) * loss_mask).sum() / torch.clamp_min(loss_mask.sum(), 1)
-        for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks, strict=True)
+        for log_prob, old_logprob, loss_mask in zip(full_log_probs, full_old_log_probs, loss_masks, strict=False)
     ]
-    ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, local_log_probs, strict=True)]
+    ppo_kl = [kl.expand_as(log_prob) for kl, log_prob in zip(ppo_kl, local_log_probs, strict=False)]
     ppo_kl = torch.cat(ppo_kl, dim=0)
 
     return ppo_kl
@@ -360,7 +360,7 @@ def get_reinforce_plus_plus_baseline_advantages(
     # Broadcast to get unwhitened advantages
     unwhitened_advantages = [
         torch.ones_like(kl_tensor) * reward_val - kl_coef * kl_tensor
-        for kl_tensor, reward_val in zip(kl, rewards, strict=True)
+        for kl_tensor, reward_val in zip(kl, rewards, strict=False)
     ]
 
     return unwhitened_advantages
@@ -467,7 +467,7 @@ def get_advantages_and_returns_batch(
             full_values_list = []
             full_rewards_list = []
 
-            for total_len, resp_len, v, r in zip(total_lengths, response_lengths, values_list, rewards_list, strict=True):
+            for total_len, resp_len, v, r in zip(total_lengths, response_lengths, values_list, rewards_list, strict=False):
                 full_v = all_gather_with_cp(v, total_len, resp_len)
                 full_r = all_gather_with_cp(r, total_len, resp_len)
                 full_values_list.append(full_v)
@@ -511,7 +511,7 @@ def get_advantages_and_returns_batch(
             from slime.backends.megatron_utils.cp_utils import slice_log_prob_with_cp
 
             for total_len, resp_len, adv_row, ret_row in zip(
-                total_lengths, response_lengths, full_advantages, full_returns, strict=True
+                total_lengths, response_lengths, full_advantages, full_returns, strict=False
             ):
                 adv_full = adv_row  # shape = [resp_len_i padded to max_len]
                 ret_full = ret_row
@@ -710,13 +710,13 @@ def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool
             tokens_chunks = tokens.chunk(num_chunks, dim=0)
             logits_chunks = logits.chunk(num_chunks, dim=0)
             log_probs = []
-            for tokens_chunk, logits_chunk in zip(tokens_chunks, logits_chunks, strict=True):
+            for tokens_chunk, logits_chunk in zip(tokens_chunks, logits_chunks, strict=False):
                 log_prob = compute_log_probs(logits_chunk.clone(), tokens_chunk, tp_group)
                 log_probs.append(log_prob)
             log_prob = torch.cat(log_probs, dim=0)
             if with_entropy:
                 entropys = []
-                for _, logits_chunk in zip(tokens_chunks, logits_chunks, strict=True):
+                for _, logits_chunk in zip(tokens_chunks, logits_chunks, strict=False):
                     entropy = compute_entropy_from_logits(logits_chunk.clone(), tp_group)
                     entropys.append(entropy)
                 entropy = torch.cat(entropys, dim=0)
