@@ -80,9 +80,15 @@ def train(args):
 
         if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
             if (not args.use_critic) or (rollout_id >= args.num_critic_only_steps):
-                actor_model.save_model(rollout_id, force_sync=rollout_id == args.num_rollout - 1)
+                actor_model.save_model(
+                    rollout_id,
+                    force_sync=rollout_id == args.num_rollout - 1,
+                )
             if args.use_critic:
-                critic_model.save_model(rollout_id, force_sync=rollout_id == args.num_rollout - 1)
+                critic_model.save_model(
+                    rollout_id,
+                    force_sync=rollout_id == args.num_rollout - 1,
+                )
             if args.rollout_global_dataset:
                 ray.get(rollout_manager.save.remote(rollout_id))
 

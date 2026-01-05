@@ -17,7 +17,7 @@ def test_loss_mask_qwen3_simple(model_name: str = "Qwen/Qwen3-8B"):
     assert len(selected_texts) == 1, f"Expected 1 text, got {len(selected_texts)}"
 
     print(f"==== Single Turn Test {model_name} ====")
-    print(f"text = ", [tokenizer.decode(all_token_ids)])
+    print("text = ", [tokenizer.decode(all_token_ids)])
     print("token_ids = ", all_token_ids)
     print("loss_mask = ", all_loss_masks)
     print("selected_texts = ", selected_texts)
@@ -88,7 +88,7 @@ def test_loss_mask_qwen3_tools(model_name: str = "Qwen/Qwen3-8B"):
     assert len(selected_texts) == 2, f"Expected 2 texts, got {len(selected_texts)}"
 
     print(f"==== Multi-turn with Tools Test {model_name} ====")
-    print(f"text = ", [tokenizer.decode(all_token_ids)])
+    print("text = ", [tokenizer.decode(all_token_ids)])
     print("token_ids = ", all_token_ids)
     print("loss_mask = ", all_loss_masks)
     print("selected_texts = ", selected_texts)

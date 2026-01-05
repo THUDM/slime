@@ -6,6 +6,7 @@ import os
 from argparse import Namespace
 from collections.abc import Callable, Sequence
 from functools import partial
+from pathlib import Path
 
 import torch
 from megatron.core import mpu
@@ -207,11 +208,13 @@ def forward_only(
             [
                 "tokens",
                 "loss_masks",
-                "multimodal_inputs",
+                "multimodal_train_inputs",
                 "total_lengths",
                 "response_lengths",
+                "max_seq_lens",
             ],
             args.data_pad_size_multiplier,
+            args.qkv_format,
         )
         unconcat_tokens = batch["unconcat_tokens"]
         tokens = batch["tokens"]
@@ -225,7 +228,7 @@ def forward_only(
             labels=None,
             packed_seq_params=packed_seq_params,
             loss_mask=batch["full_loss_masks"],
-            **(batch["multimodal_inputs"] if batch["multimodal_inputs"] is not None else {}),
+            **(batch["multimodal_train_inputs"] if batch["multimodal_train_inputs"] is not None else {}),
         )
 
         return output_tensor, partial(
@@ -235,6 +238,7 @@ def forward_only(
             total_lengths=total_lengths,
             response_lengths=response_lengths,
             with_entropy=args.use_rollout_entropy,
+            max_seq_lens=batch.get("max_seq_lens", None),
         )
 
     # Turn on evaluation mode which disables dropout.
@@ -354,7 +358,7 @@ def train_one_step(
             data_iterator,
             [
                 "tokens",
-                "multimodal_inputs",
+                "multimodal_train_inputs",
                 "packed_seq_params",
                 "total_lengths",
                 "response_lengths",
@@ -365,8 +369,10 @@ def train_one_step(
                 "advantages",
                 "returns",
                 "rollout_log_probs",
+                "max_seq_lens",
             ],
             args.data_pad_size_multiplier,
+            args.qkv_format,
         )
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
@@ -384,16 +390,22 @@ def train_one_step(
                 loss_mask=batch["full_loss_masks"],
             )
         else:
-            output_tensor = model(
-                input_ids=batch["tokens"],
-                position_ids=None,
-                attention_mask=None,
-                labels=None,
-                packed_seq_params=batch["packed_seq_params"],
-                loss_mask=batch["full_loss_masks"],
-                mtp_kwargs={"mtp_labels": batch["tokens"]} if args.enable_mtp_training else {},
-                **(batch["multimodal_inputs"] if batch["multimodal_inputs"] is not None else {}),
-            )
+            forward_kwargs = {
+                "input_ids": batch["tokens"],
+                "position_ids": None,
+                "attention_mask": None,
+                "labels": None,
+                "packed_seq_params": batch["packed_seq_params"],
+                "loss_mask": batch["full_loss_masks"],
+            }
+
+            if args.enable_mtp_training:
+                forward_kwargs["mtp_kwargs"] = {"mtp_labels": batch["tokens"]}
+
+            if batch["multimodal_train_inputs"] is not None:
+                forward_kwargs.update(batch["multimodal_train_inputs"])
+
+            output_tensor = model(**forward_kwargs)
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             os.environ["ROUTING_REPLAY_STAGE"] = old_stage
@@ -424,6 +436,13 @@ def train_one_step(
                 valid_step = not (torch.isnan(grad_norm) or torch.isinf(grad_norm))
             else:
                 valid_step = not (math.isnan(grad_norm) or math.isinf(grad_norm))
+
+    # CI check: verify only MTP parameters have non-zero gradients when truncation happens
+    # This check must happen before optimizer.step() as gradients may be modified during step
+    if args.ci_test and args.enable_mtp_training:
+        from slime.backends.megatron_utils.ci_utils import check_mtp_only_grad
+
+        check_mtp_only_grad(model, step_id)
 
     if valid_step:
         # Update parameters.
@@ -528,6 +547,23 @@ def train(
 
     pre_hook_enabled = False
 
+    if args.reset_optimizer_states:
+        if (
+            mpu.get_data_parallel_rank(with_context_parallel=True) == 0
+            and mpu.get_tensor_model_parallel_rank() == 0
+            and mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1
+        ):
+            print("Reset optimizer states")
+        for chained_optimizer in optimizer.chained_optimizers:
+            for group in chained_optimizer.optimizer.param_groups:
+                if "step" in group:
+                    group["step"] = 0
+            for state in chained_optimizer.optimizer.state.values():
+                if "exp_avg" in state:
+                    state["exp_avg"].zero_()
+                if "exp_avg_sq" in state:
+                    state["exp_avg_sq"].zero_()
+
     if args.manual_gc:
         # Disable the default garbage collector and perform the collection manually.
         # This is to align the timing of garbage collection across ranks.
@@ -586,6 +622,12 @@ def train(
                 # here we assume only one mtp layer
                 mtp_losses = (tracker["values"] * mtp_loss_scale).item()
                 MTPLossLoggingHelper.clean_loss_in_tracker()
+
+                # CI check: verify MTP loss is within expected bounds
+                if args.ci_test:
+                    from slime.backends.megatron_utils.ci_utils import check_mtp_loss
+
+                    check_mtp_loss(mtp_losses)
 
         # per train step log.
         if (
@@ -673,6 +715,43 @@ def save(
     )
     if should_disable_forward_pre_hook(args):
         enable_forward_pre_hook(model)
+
+
+def save_hf_model(args, rollout_id: int, model: Sequence[DDP]) -> None:
+    """Save Megatron model in HuggingFace format.
+
+    Args:
+        model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
+        rollout_id (int): Rollout ID for path formatting.
+    """
+    should_log = (
+        mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
+    )
+
+    try:
+        from megatron.bridge import AutoBridge
+        from slime.utils.megatron_bridge_utils import patch_megatron_model
+
+        path = Path(args.save_hf.format(rollout_id=rollout_id))
+
+        if should_log:
+            logger.info(f"Saving model in HuggingFace format to {path}")
+
+        bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
+
+        path.mkdir(parents=True, exist_ok=True)
+
+        with patch_megatron_model(model):
+            bridge.save_hf_pretrained(
+                model,
+                path=path,
+            )
+
+        if should_log:
+            logger.info(f"Successfully saved HuggingFace model to {path}")
+    except Exception as e:
+        if should_log:
+            logger.error(f"Failed to save HuggingFace format: {e}")
 
 
 def initialize_model_and_optimizer(

@@ -16,6 +16,8 @@ def set_default_megatron_args(args):
     # placeholders
     args.seq_length = 4096
     args.max_position_embeddings = args.seq_length
+    # megatron(dev) optimizer-cpu-offload save ckpt bugs
+    args.dist_ckpt_save_pre_mcore_014 = True
     # compatible for megatron
     if hasattr(args, "rope_type") and args.rope_type is None:
         args.rope_type = "yarn" if args.multi_latent_attention else "rope"

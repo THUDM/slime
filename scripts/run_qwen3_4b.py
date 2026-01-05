@@ -95,7 +95,7 @@ def execute(args: ScriptArgs):
         "--rollout-batch-size 32 "
         "--n-samples-per-prompt 8 "
         f"--rollout-max-response-len {100 if args.mode == 'debug_minimal' else 8192} "
-        "--rollout-temperature 0.8 "
+        "--rollout-temperature 1 "
         "--global-batch-size 256 "
         "--balance-data "
     )
@@ -137,7 +137,7 @@ eval:
                 "--eval-prompt-data aime /root/datasets/aime-2024/aime-2024.jsonl "
                 "--n-samples-per-eval-prompt 16 "
                 f"--eval-max-response-len {eval_max_response_len} "
-                "--eval-top-p 0.7 "
+                "--eval-top-p 1 "
             )
 
     grpo_args = (

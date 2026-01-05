@@ -32,7 +32,7 @@ def execute():
         f"--rollout-batch-size {1 if MODE == 'debug_one_sample' else 32} "
         f"--n-samples-per-prompt {1 if MODE == 'debug_one_sample' else 8} "
         f"--rollout-max-response-len {2 if MODE == 'debug_one_sample' else 1024} "
-        "--rollout-temperature 0.8 "
+        "--rollout-temperature 1 "
         # temp remove this to make test easier
         # "--over-sampling-batch-size 64 "
         # "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "

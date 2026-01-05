@@ -16,6 +16,8 @@ from megatron.core.transformer.spec_utils import import_module
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.training.arguments import core_transformer_config_from_args
 
+from slime.utils.misc import load_function
+
 
 # Adapt from https://github.com/volcengine/verl/blob/c3b20575d2bc815fcccd84bddb4c0401fc4b632b/verl/models/llama/megatron/layers/parallel_linear.py#L82
 class LinearForLastLayer(torch.nn.Linear):
@@ -53,6 +55,28 @@ def get_model_provider_func(
     args: argparse.Namespace,
     role: Literal["actor", "critic"] = "actor",
 ):
+    # Support custom model provider path (similar to --custom-rm-path for reward models)
+    if getattr(args, "custom_model_provider_path", None):
+
+        def wrapped_model_provider(
+            pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None
+        ) -> GPTModel:
+            custom_model_provider = load_function(args.custom_model_provider_path)
+            # Check if the custom provider supports vp_stage parameter
+            has_vp_stage = "vp_stage" in inspect.signature(custom_model_provider).parameters
+            if has_vp_stage:
+                model = custom_model_provider(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
+            else:
+                model = custom_model_provider(pre_process=pre_process, post_process=post_process)
+            # Apply critic output layer if needed
+            if post_process and role == "critic":
+                model.output_layer = LinearForLastLayer(
+                    input_size=model.config.hidden_size, output_size=1, config=model.config
+                )
+            return model
+
+        return wrapped_model_provider
+
     if args.megatron_to_hf_mode == "bridge":
         from megatron.bridge import AutoBridge
 
