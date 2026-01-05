@@ -591,16 +591,16 @@ def _compute_server_args(
     if args.use_fault_tolerance:
         kwargs["remote_instance_weight_loader_start_seed_via_transfer_engine"] = True
 
-    # Remote instance weight loader for fault tolerance restart
-    if remote_seed_instance is not None:
-        kwargs["load_format"] = "remote_instance"
-        kwargs["remote_instance_weight_loader_backend"] = "transfer_engine"
-        kwargs["remote_instance_weight_loader_seed_instance_ip"] = remote_seed_instance["ip"]
-        kwargs["remote_instance_weight_loader_seed_instance_service_port"] = remote_seed_instance["port"]
-        logger.info(
-            f"Engine {rank} will load weights from remote seed instance at "
-            f"{remote_seed_instance['ip']}:{remote_seed_instance['port']}"
-        )
+        # Remote instance weight loader for fault tolerance restart
+        if remote_seed_instance is not None:
+            kwargs["load_format"] = "remote_instance"
+            kwargs["remote_instance_weight_loader_backend"] = "transfer_engine"
+            kwargs["remote_instance_weight_loader_seed_instance_ip"] = remote_seed_instance["ip"]
+            kwargs["remote_instance_weight_loader_seed_instance_service_port"] = remote_seed_instance["port"]
+            logger.info(
+                f"Engine {rank} will load weights from remote seed instance at "
+                f"{remote_seed_instance['ip']}:{remote_seed_instance['port']}"
+            )
 
     external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
 
