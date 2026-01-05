@@ -582,12 +582,10 @@ def _start_router(args):
         router_args.port = args.sglang_router_port
         router_args.prometheus_port = find_available_port(random.randint(4000, 5000))
         router_args.log_level = "warn"
+        router_args.request_timeout_secs = args.sglang_router_request_timeout_secs
 
         if args.prefill_num_servers is not None:
             router_args.pd_disaggregation = True
-
-        if hasattr(router_args, "request_timeout_secs"):
-            router_args.request_timeout_secs = args.sglang_router_request_timeout_secs
 
         logger.info(f"Launch router with args: {router_args}")
 
