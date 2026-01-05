@@ -828,6 +828,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Whether to calculate the mismatch metrics.",
             )
             parser.add_argument(
+                "--reset-optimizer-states",
+                action="store_true",
+                default=False,
+                help=(
+                    "Whether to reset optimizer states after each rollout. "
+                    "If enabled, the optimizer's history will be cleared at the end of each rollout, which can sometimes help with training stability or fulfill specific experiment requirements."
+                ),
+            )
+            parser.add_argument(
                 "--use-rollout-logprobs",
                 action="store_true",
                 default=False,
@@ -1226,6 +1235,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=False,
                 help="disable trim samples in rollout buffer when converting samples to train data",
             )
+            parser.add_argument(
+                "--use-dynamic-global-batch-size",
+                action="store_true",
+                default=False,
+                help="enable dynamic global batch size, disable trim samples in rollout buffer when converting samples to train data",
+            )
             return parser
 
         def add_custom_megatron_plugins_arguments(parser):
@@ -1592,11 +1607,6 @@ def slime_validate_args(args):
                 f"// num_steps_per_rollout {args.num_steps_per_rollout}"
             )
         args.global_batch_size = global_batch_size
-
-    assert args.rollout_batch_size * args.n_samples_per_prompt % args.global_batch_size == 0, (
-        f"rollout_batch_size {args.rollout_batch_size} * n_samples_per_prompt {args.n_samples_per_prompt} "
-        f"is not a multiple of global_batch_size {args.global_batch_size}"
-    )
 
     if args.n_samples_per_prompt == 1:
         args.grpo_std_normalization = False

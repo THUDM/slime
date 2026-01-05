@@ -49,8 +49,9 @@ def get_batch(
     assert "tokens" in keys
     batch = data_iterator.get_next(keys)
 
-    packed_seq_params = None
-    max_seqlen = None
+    if "dynamic_global_batch_size" in data_iterator.rollout_data:
+        batch["dynamic_global_batch_size"] = data_iterator.rollout_data["dynamic_global_batch_size"]
+
     tokens = batch["tokens"]
     # use 0 as the pad token id should be fine?
     pad_token_id = 0
@@ -286,8 +287,15 @@ def get_data_iterator(
     cp_size = mpu.get_context_parallel_world_size()
 
     num_local_samples = len(rollout_data["total_lengths"])
-    num_local_gbs = args.global_batch_size // dp_size
+    global_batch_size = rollout_data.get("dynamic_global_batch_size", args.global_batch_size)
+    num_local_gbs = global_batch_size // dp_size
     num_steps_per_rollout = num_local_samples // num_local_gbs
+
+    if global_batch_size != args.global_batch_size:
+        logger.info(
+            f"Using dynamic global_batch_size={global_batch_size} (original={args.global_batch_size}), "
+            f"num_local_samples={num_local_samples}, num_steps_per_rollout={num_steps_per_rollout}"
+        )
 
     def _generate_data_iterator(rollout_data, micro_batch_size, micro_batch_indices=None):
         data_iterator = []
@@ -371,6 +379,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                 "sample_indices",
                 "rollout_routed_experts",
                 "max_seq_lens",
+                "dynamic_global_batch_size",
             ]:
                 continue
             # Upload per sample mean for each rollout value

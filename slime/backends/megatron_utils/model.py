@@ -546,6 +546,23 @@ def train(
 
     pre_hook_enabled = False
 
+    if args.reset_optimizer_states:
+        if (
+            mpu.get_data_parallel_rank(with_context_parallel=True) == 0
+            and mpu.get_tensor_model_parallel_rank() == 0
+            and mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1
+        ):
+            print("Reset optimizer states")
+        for chained_optimizer in optimizer.chained_optimizers:
+            for group in chained_optimizer.optimizer.param_groups:
+                if "step" in group:
+                    group["step"] = 0
+            for state in chained_optimizer.optimizer.state.values():
+                if "exp_avg" in state:
+                    state["exp_avg"].zero_()
+                if "exp_avg_sq" in state:
+                    state["exp_avg_sq"].zero_()
+
     if args.manual_gc:
         # Disable the default garbage collector and perform the collection manually.
         # This is to align the timing of garbage collection across ranks.
