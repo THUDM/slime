@@ -214,8 +214,8 @@ def save(actor: Any, iteration: int) -> None:
     state_dict = {"model_state": model_state}
     dcp.save(state_dict, checkpoint_id=str(model_dir))
 
-    # Save optimizer state (skip if --no-save-optimizer-state is set)
-    save_optimizer_state = not getattr(actor.args, "no_save_optimizer_state", False)
+    # Save optimizer state (skip if --no-save-optim is set)
+    save_optimizer_state = not getattr(actor.args, "no_save_optim", False)
     if save_optimizer_state and hasattr(actor, "optimizer") and actor.optimizer is not None:
         optimizer_state = OptimizerState(actor.model, actor.optimizer)
         optim_state_dict = {"optim_state": optimizer_state}

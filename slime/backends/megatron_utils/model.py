@@ -704,19 +704,11 @@ def save(
     if should_disable_forward_pre_hook(args):
         disable_forward_pre_hook(model)
 
-    # If --no-save-optimizer-state is set, pass None for optimizer and scheduler
-    # to skip saving optimizer state, reducing checkpoint size
-    save_optimizer = optimizer
-    save_opt_param_scheduler = opt_param_scheduler
-    if getattr(args, "no_save_optimizer_state", False):
-        save_optimizer = None
-        save_opt_param_scheduler = None
-
     save_checkpoint(
         iteration,
         model,
-        save_optimizer,
-        save_opt_param_scheduler,
+        optimizer,
+        opt_param_scheduler,
         num_floating_point_operations_so_far=0,
         checkpointing_context=None,
         train_data_iterator=None,

@@ -695,8 +695,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             reset_arg(parser, "--save", type=str, default=None)
             reset_arg(parser, "--save-interval", type=int, default=None)
             reset_arg(parser, "--async-save", action="store_true")
-            parser.add_argument(
-                "--no-save-optimizer-state",
+            reset_arg(
+                parser,
+                "--no-save-optim",
                 action="store_true",
                 default=False,
                 help=(
