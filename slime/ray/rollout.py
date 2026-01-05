@@ -572,7 +572,7 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
         rewards = data[key]["rewards"]
         log_dict[f"eval/{key}"] = sum(rewards) / len(rewards)
         if (samples := data[key].get("samples")) is not None:
-            log_dict |= dict_add_prefix(compute_metrics_from_samples(args, samples), f"eval/{key}/")
+            log_dict |= dict_add_prefix(compute_perf_metrics_from_samples(args, samples), f"eval/{key}/")
         if "truncated" in data[key]:
             truncated = data[key]["truncated"]
             log_dict[f"eval/{key}-truncated_ratio"] = sum(truncated) / len(truncated)
@@ -604,30 +604,36 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
         return
 
     log_dict = {**(rollout_extra_metrics or {})}
-    response_lengths = [sample.response_length for sample in samples]
-    log_dict["perf/rollout_time"] = rollout_time
-    if args.rollout_num_gpus:
-        log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
-    log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+    metrics = compute_perf_metrics_from_samples(args, samples, rollout_time)
+    for k, v in metrics.items():
+        if k.startswith("perf/"):
+            log_dict[k] = v
+        else:
+            log_dict[f"rollout/{k}"] = v
 
-    response_lengths = [sample.effective_response_length for sample in samples]
-    if args.rollout_num_gpus:
-        log_dict["perf/effective_tokens_per_gpu_per_sec"] = (
-            sum(response_lengths) / rollout_time / args.rollout_num_gpus
-        )
-    log_dict["perf/longest_effective_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
-
-    log_dict |= dict_add_prefix(compute_metrics_from_samples(args, samples), "rollout/")
     logger.info(f"perf {rollout_id}: {log_dict}")
     step = compute_rollout_step(args, rollout_id)
     log_dict["rollout/step"] = step
     tracking_utils.log(args, log_dict, step_key="rollout/step")
 
 
-def compute_metrics_from_samples(args, samples):
-    response_lengths = [sample.effective_response_length for sample in samples]
-
+def compute_perf_metrics_from_samples(args, samples, rollout_time=None):
     log_dict = {}
+    if rollout_time:
+        response_lengths = [sample.response_length for sample in samples]
+        log_dict["perf/rollout_time"] = rollout_time
+        if args.rollout_num_gpus:
+            log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
+        log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+
+        effective_response_lengths = [sample.effective_response_length for sample in samples]
+        if args.rollout_num_gpus:
+            log_dict["perf/effective_tokens_per_gpu_per_sec"] = (
+                sum(effective_response_lengths) / rollout_time / args.rollout_num_gpus
+            )
+        log_dict["perf/longest_effective_sample_tokens_per_sec"] = max(effective_response_lengths) / rollout_time
+
+    response_lengths = [sample.effective_response_length for sample in samples]
     log_dict |= dict_add_prefix(compute_statistics(response_lengths), "response_len/")
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_spec_metrics(args, samples)
@@ -659,12 +665,8 @@ def _compute_spec_metrics(args, all_samples: list[Sample]):
         return {}
     num_samples = len(all_samples)
     metrics = {}
-    metrics["rollout/spec_accept_rate"] = (
-        sum(sample.spec_info.spec_accept_rate for sample in all_samples) / num_samples
-    )
-    metrics["rollout/spec_accept_length"] = (
-        sum(sample.spec_info.spec_accept_length for sample in all_samples) / num_samples
-    )
+    metrics["spec_accept_rate"] = sum(sample.spec_info.spec_accept_rate for sample in all_samples) / num_samples
+    metrics["spec_accept_length"] = sum(sample.spec_info.spec_accept_length for sample in all_samples) / num_samples
     return metrics
 
 

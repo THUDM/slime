@@ -35,7 +35,6 @@ class FSDPArgs:
     # Precision
     gradient_checkpointing: bool = False
     fp16: bool = False
-    bf16: bool = False
 
     # FSDP configuration
     fsdp_state_dict_cpu_offload: bool = True  # If True, offload full state dict to CPU during collection.
