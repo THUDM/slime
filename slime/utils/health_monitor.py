@@ -229,16 +229,6 @@ class RolloutHealthMonitor:
         ):
             engine = self._engine_group.all_engines[i]
             if engine:
-                # Try to get the engine's URL before killing
-                try:
-                    server_host = ray.get(engine.get_server_host.remote())
-                    server_port = ray.get(engine.get_server_port.remote())
-                    killed_url = f"http://{server_host}:{server_port}"
-                    logger.info(f"Engine at index {i} has URL: {killed_url}")
-                except Exception as e:
-                    logger.warning(f"Could not get URL for engine at index {i}: {e}")
-
-                logger.info(f"Shutting down and killing engine at index {i}")
                 try:
                     ray.get(engine.shutdown.remote())
                     ray.kill(engine)
