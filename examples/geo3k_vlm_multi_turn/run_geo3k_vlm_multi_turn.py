@@ -43,10 +43,14 @@ def execute():
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} "
 
     wandb_args = (
-        "--use-wandb "
-        "--wandb-project slime-dev "
-        "--wandb-group geo3k_vlm_multi_turn "
-        "--wandb-key ${WANDB_API_KEY} "
+        (
+            "--use-wandb "
+            "--wandb-project slime-dev "
+            "--wandb-group geo3k_vlm_multi_turn "
+            f"--wandb-key '{wandb_api_key}' "
+        )
+        if (wandb_api_key := os.environ.get("WANDB_API_KEY"))
+        else ""
     )
 
     rollout_args = (

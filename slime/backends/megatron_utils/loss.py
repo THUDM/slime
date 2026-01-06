@@ -822,12 +822,10 @@ def loss_function(
         loss, log = func(args, batch, logits, sum_of_sample_mean)
 
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
+    global_batch_size = batch.get("dynamic_global_batch_size", args.global_batch_size)
     if not args.calculate_per_token_loss:
         loss = (
-            loss
-            * num_microbatches
-            / args.global_batch_size
-            * mpu.get_data_parallel_world_size(with_context_parallel=True)
+            loss * num_microbatches / global_batch_size * mpu.get_data_parallel_world_size(with_context_parallel=True)
         )
     else:
         loss = loss * mpu.get_context_parallel_world_size()

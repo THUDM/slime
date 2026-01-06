@@ -6,6 +6,7 @@ import os
 from argparse import Namespace
 from collections.abc import Callable, Sequence
 from functools import partial
+from pathlib import Path
 
 import torch
 from megatron.core import mpu
@@ -546,6 +547,23 @@ def train(
 
     pre_hook_enabled = False
 
+    if args.reset_optimizer_states:
+        if (
+            mpu.get_data_parallel_rank(with_context_parallel=True) == 0
+            and mpu.get_tensor_model_parallel_rank() == 0
+            and mpu.get_pipeline_model_parallel_rank() == mpu.get_pipeline_model_parallel_world_size() - 1
+        ):
+            print("Reset optimizer states")
+        for chained_optimizer in optimizer.chained_optimizers:
+            for group in chained_optimizer.optimizer.param_groups:
+                if "step" in group:
+                    group["step"] = 0
+            for state in chained_optimizer.optimizer.state.values():
+                if "exp_avg" in state:
+                    state["exp_avg"].zero_()
+                if "exp_avg_sq" in state:
+                    state["exp_avg_sq"].zero_()
+
     if args.manual_gc:
         # Disable the default garbage collector and perform the collection manually.
         # This is to align the timing of garbage collection across ranks.
@@ -697,6 +715,43 @@ def save(
     )
     if should_disable_forward_pre_hook(args):
         enable_forward_pre_hook(model)
+
+
+def save_hf_model(args, rollout_id: int, model: Sequence[DDP]) -> None:
+    """Save Megatron model in HuggingFace format.
+
+    Args:
+        model (Sequence[DDP]): Sequence of DDP-wrapped model chunks.
+        rollout_id (int): Rollout ID for path formatting.
+    """
+    should_log = (
+        mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0
+    )
+
+    try:
+        from megatron.bridge import AutoBridge
+        from slime.utils.megatron_bridge_utils import patch_megatron_model
+
+        path = Path(args.save_hf.format(rollout_id=rollout_id))
+
+        if should_log:
+            logger.info(f"Saving model in HuggingFace format to {path}")
+
+        bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
+
+        path.mkdir(parents=True, exist_ok=True)
+
+        with patch_megatron_model(model):
+            bridge.save_hf_pretrained(
+                model,
+                path=path,
+            )
+
+        if should_log:
+            logger.info(f"Successfully saved HuggingFace model to {path}")
+    except Exception as e:
+        if should_log:
+            logger.error(f"Failed to save HuggingFace format: {e}")
 
 
 def initialize_model_and_optimizer(

@@ -496,6 +496,11 @@ class MegatronTrainRayActor(TrainRayActor):
         if force_sync and self.args.async_save:
             maybe_finalize_async_save(blocking=True)
 
+        if self.args.save_hf is not None and self.role == "actor":
+            from slime.backends.megatron_utils.model import save_hf_model
+
+            save_hf_model(self.args, rollout_id, self.model)
+
         if self.args.offload_train:
             destroy_process_groups()
 
@@ -504,12 +509,18 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
-        if self.args.offload_train:
-            reload_process_groups()
+        if self.args.use_fault_tolerance:
+            if dist.get_rank() == 0:
+                ray.get(self.rollout_manager.recover_rollout_engines.remote())
+            dist.barrier(group=get_gloo_group())
 
         rollout_engines, rollout_engine_lock, num_new_engines = ray.get(
             self.rollout_manager.get_rollout_engines_and_lock.remote()
         )
+
+        if self.args.offload_train:
+            reload_process_groups()
+
         if num_new_engines > 0:
             self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())

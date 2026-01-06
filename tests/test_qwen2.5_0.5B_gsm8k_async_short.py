@@ -1,12 +1,11 @@
 import os
 import slime.utils.external_utils.command_utils as U
 
-FEW_GPU = U.get_bool_env_var("SLIME_TEST_FEW_GPU", "1")
 TIGHT_DEVICE_MEMORY = U.get_bool_env_var("SLIME_TEST_TIGHT_DEVICE_MEMORY", "1")
 
 MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
-NUM_GPUS = 2 if FEW_GPU else 4
+NUM_GPUS = 4
 
 
 def prepare():
@@ -25,18 +24,18 @@ def execute():
         "--apply-chat-template "
         "--rollout-shuffle "
         "--rm-type math "
-        f"--num-rollout {3000 if U.get_env_enable_infinite_run() else 250} "
-        "--rollout-batch-size 32 "
-        "--n-samples-per-prompt 8 "
+        "--num-rollout 3 "
+        "--rollout-batch-size 8 "
+        "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 1024 "
-        "--rollout-temperature 1 "
-        "--over-sampling-batch-size 64 "
+        "--rollout-temperature 0.8 "
+        "--over-sampling-batch-size 16 "
         "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "
-        "--global-batch-size 256 "
+        "--global-batch-size 32 "
     )
 
     eval_args = (
-        "--eval-interval 20 "
+        "--eval-interval 8 "
         "--eval-prompt-data gsm8k /root/datasets/gsm8k/test.parquet "
         "--n-samples-per-eval-prompt 1 "
         "--eval-max-response-len 1024 "
@@ -50,7 +49,6 @@ def execute():
         "--context-parallel-size 1 "
         "--expert-model-parallel-size 1 "
         "--expert-tensor-parallel-size 1 "
-        # "--micro-batch-size 1 "
         "--use-dynamic-batch-size "
         "--max-tokens-per-gpu 9216 "
     )
@@ -76,29 +74,28 @@ def execute():
 
     sglang_args = (
         "--rollout-num-gpus-per-engine 1 "
-        f"--sglang-mem-fraction-static {0.6 if TIGHT_DEVICE_MEMORY else 0.7} "
+        f"--sglang-mem-fraction-static {0.55 if TIGHT_DEVICE_MEMORY else 0.65} "
         "--sglang-enable-metrics "
     )
 
-    ci_args = (
-        "--ci-test "
-        "--ci-disable-kl-checker "
-        "--ci-metric-checker-key eval/gsm8k "
-        "--ci-metric-checker-threshold 0.55 "  # loose threshold at 250 step
+    ci_args = "--ci-test "
+
+    fault_tolerance_args = (
+        "--use-fault-tolerance "
+        "--rollout-health-check-interval 5 "
+        "--rollout-health-check-timeout 10 "
+        "--rollout-health-check-first-wait 0 "
     )
 
     misc_args = (
-        # default dropout in megatron is 0.1
         "--attention-dropout 0.0 "
         "--hidden-dropout 0.0 "
-        # should be good for model performance
         "--accumulate-allreduce-grads-in-fp32 "
         "--attention-softmax-in-fp32 "
-        # need to comment this when using model with MLA
         "--attention-backend flash "
         "--actor-num-nodes 1 "
-        f"--actor-num-gpus-per-node {1 if FEW_GPU else 2} "
-        f"--rollout-num-gpus {1 if FEW_GPU else 2} "
+        "--actor-num-gpus-per-node 1 "
+        "--rollout-num-gpus 3 "
         "--megatron-to-hf-mode bridge "
     )
 
@@ -112,6 +109,7 @@ def execute():
         f"{eval_args} "
         f"{sglang_args} "
         f"{ci_args} "
+        f"{fault_tolerance_args} "
         f"{misc_args} "
     )
 
@@ -125,6 +123,8 @@ def execute():
 
 if __name__ == "__main__":
     prepare()
-    for proxy_var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-        os.environ.pop(proxy_var, None)
+    os.environ.pop("http_proxy")
+    os.environ.pop("https_proxy")
+    os.environ.pop("HTTP_PROXY")
+    os.environ.pop("HTTPS_PROXY")
     execute()

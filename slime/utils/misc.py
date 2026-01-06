@@ -30,6 +30,9 @@ class SingletonMeta(type):
             cls._instances[cls] = instance
         return cls._instances[cls]
 
+    def clear_instances(cls):
+        cls._instances = {}
+
 
 def exec_command(cmd: str, capture_output: bool = False) -> str | None:
     print(f"EXEC: {cmd}", flush=True)

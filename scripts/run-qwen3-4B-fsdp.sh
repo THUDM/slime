@@ -75,12 +75,16 @@ OPTIMIZER_ARGS=(
    --adam-beta2 0.98
 )
 
-WANDB_ARGS=(
-   --use-wandb
-   --wandb-project slime-dev-mcore-fsdp
-   --wandb-group qwen3-4B-fsdp-1130-ref
-   --wandb-key ${WANDB_API_KEY}
-)
+if [ -z "${WANDB_API_KEY}" ]; then
+   WANDB_ARGS=()
+else
+   WANDB_ARGS=(
+      --use-wandb
+      --wandb-project slime-dev-mcore-fsdp
+      --wandb-group qwen3-4B-fsdp-1130-ref
+      --wandb-key "${WANDB_API_KEY}"
+   )
+fi
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
@@ -128,15 +132,15 @@ RUNTIME_ENV_JSON="{
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
-   ${CKPT_ARGS[@]} \
-   ${ROLLOUT_ARGS[@]} \
-   ${OPTIMIZER_ARGS[@]} \
-   ${GRPO_ARGS[@]} \
-   ${WANDB_ARGS[@]} \
-   ${SGLANG_ARGS[@]} \
-   ${TRAIN_BACKEND_ARGS[@]} \
-   ${PERF_ARGS[@]} \
-   ${MISC_ARGS[@]}
+   "${CKPT_ARGS[@]}" \
+   "${ROLLOUT_ARGS[@]}" \
+   "${OPTIMIZER_ARGS[@]}" \
+   "${GRPO_ARGS[@]}" \
+   "${WANDB_ARGS[@]}" \
+   "${SGLANG_ARGS[@]}" \
+   "${TRAIN_BACKEND_ARGS[@]}" \
+   "${PERF_ARGS[@]}" \
+   "${MISC_ARGS[@]}"
 
 
 
