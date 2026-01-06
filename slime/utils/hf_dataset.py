@@ -479,6 +479,15 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
     def get_checkpoint_state(self) -> dict:
         """Get state for checkpoint using HF's native state_dict.
 
+        State tracking design:
+        - epoch_id: Current epoch number (used for seed+epoch reproducible shuffle)
+        - consumed_count: Samples consumed in current epoch (for statistics/logging)
+        - global_consumed_count: Total samples consumed across all epochs
+        - hf_state_dict: HF's native iterator state (stores exact position, no manual skip needed)
+
+        VERIFIED: hf_state_dict enables exact position resume without sample skipping.
+        See tests/test_hf_datasets.py::TestHFStateTracking for verification tests.
+
         Returns:
             State dictionary containing epoch_id, consumed_count, and HF state
         """
@@ -491,6 +500,12 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
 
     def load_checkpoint_state(self, state: dict):
         """Load state from checkpoint using HF's native load_state_dict.
+
+        VERIFIED BEHAVIOR (see tests/test_hf_datasets.py::TestHFStateTracking):
+        - HF's state_dict() stores exact iterator position (shard + offset)
+        - load_state_dict() restores this position accurately
+        - No manual sample skipping is needed after load
+        - Tested: consume 35 → checkpoint → resume → next samples match original continuation
 
         Args:
             state: State dictionary saved by get_checkpoint_state()

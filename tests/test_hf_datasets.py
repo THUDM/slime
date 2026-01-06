@@ -647,3 +647,242 @@ class TestIntegration:
             # Continue consuming - should start from epoch 1
             samples = data_source2.get_samples(num_samples=10)
             assert len(samples) == 10, "Failed to consume after epoch boundary checkpoint"
+
+
+# ============================================================================
+# Test Class 5: HF State Tracking Verification
+# ============================================================================
+
+
+class TestHFStateTracking:
+    """Test HF state tracking and checkpoint resume accuracy.
+
+    These tests verify whether HF's state_dict()/load_state_dict() can
+    accurately restore iterator position without manual sample skipping.
+
+    VERIFICATION RESULTS (all tests passed):
+    1. test_hf_state_dict_exact_resume: HF state_dict() stores exact iterator position
+    2. test_consumed_count_consistency: consumed_count tracking is accurate
+    3. test_shuffle_reproducibility_same_seed_epoch: Same seed+epoch = same shuffle
+    4. test_epoch_boundary_exact_resume: Resume works correctly across epoch boundaries
+
+    CONCLUSION: No additional offset is needed beyond seed + epoch + hf_state_dict.
+    HF's native checkpoint mechanism handles exact position resume without manual skipping.
+    """
+
+    def test_hf_state_dict_exact_resume(self, test_jsonl_data_with_ids, mock_tokenizer, mock_processor):
+        """Verify HF state_dict() restores exact iterator position.
+
+        Golden truth: Use the SAME adapter's continued consumption as expected result.
+        This tests whether we need additional offset tracking beyond seed + epoch.
+        """
+        from slime.utils.hf_dataset import HFIterableDatasetAdapter
+
+        # Create adapter with NO shuffle for deterministic testing
+        adapter1 = HFIterableDatasetAdapter(
+            path=test_jsonl_data_with_ids,
+            dataset_size=100,
+            tokenizer=mock_tokenizer,
+            processor=mock_processor,
+            max_length=None,
+            prompt_key="input",
+            label_key="label",
+            metadata_key="metadata",
+            seed=42,
+            dp_size=1,
+            num_workers=0,
+            do_shuffle=False,  # Disable shuffle for deterministic test
+        )
+
+        # Step 1: Consume 35 samples
+        _ = adapter1.get_next_batch(35)
+        assert adapter1.consumed_count == 35
+
+        # Step 2: Save checkpoint state at position 35
+        checkpoint_state = adapter1.get_checkpoint_state()
+        assert checkpoint_state["consumed_count"] == 35
+
+        # Step 3: Continue consuming 10 more samples → GOLDEN EXPECTED
+        golden_samples = adapter1.get_next_batch(10)
+        golden_ids = [s.metadata.get("sample_id") for s in golden_samples]
+
+        # Step 4: Create new adapter and load checkpoint
+        adapter2 = HFIterableDatasetAdapter(
+            path=test_jsonl_data_with_ids,
+            dataset_size=100,
+            tokenizer=mock_tokenizer,
+            processor=mock_processor,
+            max_length=None,
+            prompt_key="input",
+            label_key="label",
+            metadata_key="metadata",
+            seed=42,
+            dp_size=1,
+            num_workers=0,
+            do_shuffle=False,
+        )
+
+        adapter2.load_checkpoint_state(checkpoint_state)
+        assert adapter2.consumed_count == 35  # State restored
+
+        # Step 5: Get next 10 samples from resumed adapter
+        resumed_samples = adapter2.get_next_batch(10)
+        resumed_ids = [s.metadata.get("sample_id") for s in resumed_samples]
+
+        # CRITICAL VERIFICATION:
+        # resumed_ids should match golden_ids (from same checkpoint position)
+        assert resumed_ids == golden_ids, (
+            f"HF state_dict did not restore exact position!\n"
+            f"Golden (from adapter1 after checkpoint): {golden_ids}\n"
+            f"Resumed (from adapter2 after load): {resumed_ids}\n"
+            f"If these differ, HF state_dict is NOT working and we need manual skipping."
+        )
+
+        # Additional check: consumed_count should update correctly after resume
+        assert adapter2.consumed_count == 45  # 35 + 10
+
+    def test_consumed_count_consistency(self, test_jsonl_data_with_ids, mock_tokenizer, mock_processor):
+        """Verify consumed_count matches actual consumption."""
+        from slime.utils.hf_dataset import HFIterableDatasetAdapter
+
+        adapter = HFIterableDatasetAdapter(
+            path=test_jsonl_data_with_ids,
+            dataset_size=100,
+            tokenizer=mock_tokenizer,
+            processor=mock_processor,
+            max_length=None,
+            prompt_key="input",
+            label_key="label",
+            metadata_key="metadata",
+            seed=42,
+            dp_size=1,
+            num_workers=0,
+            do_shuffle=False,
+        )
+
+        # Initial state
+        assert adapter.consumed_count == 0
+        assert adapter.global_consumed_count == 0
+
+        # Consume batches and verify counting
+        adapter.get_next_batch(10)
+        assert adapter.consumed_count == 10
+        assert adapter.global_consumed_count == 10
+
+        adapter.get_next_batch(25)
+        assert adapter.consumed_count == 35
+        assert adapter.global_consumed_count == 35
+
+        # Checkpoint should preserve counts
+        state = adapter.get_checkpoint_state()
+        assert state["consumed_count"] == 35
+        assert state["global_consumed_count"] == 35
+
+    def test_shuffle_reproducibility_same_seed_epoch(self, test_jsonl_data_with_ids, mock_tokenizer, mock_processor):
+        """Verify same seed+epoch produces same shuffle order."""
+        from slime.utils.hf_dataset import HFIterableDatasetAdapter
+
+        # Create two adapters with same seed
+        adapter1 = HFIterableDatasetAdapter(
+            path=test_jsonl_data_with_ids,
+            dataset_size=100,
+            tokenizer=mock_tokenizer,
+            processor=mock_processor,
+            max_length=None,
+            prompt_key="input",
+            seed=42,
+            dp_size=1,
+            num_workers=0,
+            do_shuffle=True,
+            shuffle_buffer_size=100,  # Full buffer for exact shuffle
+        )
+
+        adapter2 = HFIterableDatasetAdapter(
+            path=test_jsonl_data_with_ids,
+            dataset_size=100,
+            tokenizer=mock_tokenizer,
+            processor=mock_processor,
+            max_length=None,
+            prompt_key="input",
+            seed=42,
+            dp_size=1,
+            num_workers=0,
+            do_shuffle=True,
+            shuffle_buffer_size=100,
+        )
+
+        # Get first 20 samples from each
+        samples1 = adapter1.get_next_batch(20)
+        samples2 = adapter2.get_next_batch(20)
+
+        ids1 = [s.metadata.get("sample_id") for s in samples1]
+        ids2 = [s.metadata.get("sample_id") for s in samples2]
+
+        # Same seed+epoch should produce same shuffle
+        assert ids1 == ids2, (
+            f"Same seed+epoch produced different shuffle!\n"
+            f"Adapter1: {ids1[:5]}...\n"
+            f"Adapter2: {ids2[:5]}..."
+        )
+
+    def test_epoch_boundary_exact_resume(self, test_jsonl_data_with_ids, mock_tokenizer, mock_processor):
+        """Verify checkpoint/resume at epoch boundary works correctly."""
+        from slime.utils.hf_dataset import HFIterableDatasetAdapter
+
+        adapter1 = HFIterableDatasetAdapter(
+            path=test_jsonl_data_with_ids,
+            dataset_size=100,
+            tokenizer=mock_tokenizer,
+            processor=mock_processor,
+            max_length=None,
+            prompt_key="input",
+            label_key="label",
+            metadata_key="metadata",
+            seed=42,
+            dp_size=1,
+            num_workers=0,
+            do_shuffle=False,
+        )
+
+        # Consume 95 samples (near epoch boundary)
+        _ = adapter1.get_next_batch(95)
+        assert adapter1.consumed_count == 95
+        assert adapter1.epoch_id == 0
+
+        # Save checkpoint
+        checkpoint_state = adapter1.get_checkpoint_state()
+
+        # Continue consuming - this will cross epoch boundary
+        golden_samples = adapter1.get_next_batch(10)
+        golden_ids = [s.metadata.get("sample_id") for s in golden_samples]
+        # After crossing boundary: epoch_id should be 1, consumed_count reset
+        assert adapter1.epoch_id >= 1, "Should have crossed epoch boundary"
+
+        # Create new adapter and load checkpoint (at position 95)
+        adapter2 = HFIterableDatasetAdapter(
+            path=test_jsonl_data_with_ids,
+            dataset_size=100,
+            tokenizer=mock_tokenizer,
+            processor=mock_processor,
+            max_length=None,
+            prompt_key="input",
+            label_key="label",
+            metadata_key="metadata",
+            seed=42,
+            dp_size=1,
+            num_workers=0,
+            do_shuffle=False,
+        )
+
+        adapter2.load_checkpoint_state(checkpoint_state)
+
+        # Resume and cross boundary
+        resumed_samples = adapter2.get_next_batch(10)
+        resumed_ids = [s.metadata.get("sample_id") for s in resumed_samples]
+
+        # Verify samples match across epoch boundary
+        assert resumed_ids == golden_ids, (
+            f"Epoch boundary resume failed!\n"
+            f"Golden: {golden_ids}\n"
+            f"Resumed: {resumed_ids}"
+        )
