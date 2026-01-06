@@ -10,7 +10,7 @@ import numpy as np
 import ray
 import torch
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-from sglang.srt.constants import GPU_MEMORY_TYPE_WEIGHTS
+from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
@@ -170,6 +170,12 @@ class RolloutManager:
             ]
         )
 
+    def onload_weights(self):
+        self.onload(tags=[GPU_MEMORY_TYPE_WEIGHTS])
+
+    def onload_kv(self):
+        self.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH])
+
     def recover_rollout_engines(self):
         """Restart any dead rollout engines and update num_new_engines for update_weights detection."""
         self.health_monitoring_pause()
@@ -186,6 +192,10 @@ class RolloutManager:
             ray.get([engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]) for engine in new_engines])
 
         return self.rollout_engines, self.rollout_engine_lock, self.num_new_engines
+
+    def clear_num_new_engines(self):
+        # when fault tolerance is not enabled, we need to manually clear num_new_engines after update_weights
+        self.num_new_engines = 0
 
     def health_monitoring_pause(self) -> None:
         if self._health_monitor is not None:
