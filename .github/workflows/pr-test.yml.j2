@@ -2,29 +2,27 @@
     'e2e-test-short': {
       'label': 'run-ci-short',
       'tests': [
+        {'test_file': 'test_qwen2.5_0.5B_gsm8k_async_short.py', 'num_gpus': 4},
+        {'test_file': 'test_qwen2.5_0.5B_gsm8k_short.py', 'num_gpus': 4},
+        {'test_file': 'test_qwen3_0.6B_fsdp_colocated_2xGPU.py', 'num_gpus': 2},
+      ],
+    },
+    'e2e-test-fsdp': {
+      'label': 'run-ci-fsdp',
+      'tests': [
+        {'test_file': 'test_qwen3_4B_fsdp_true_on_policy.py', 'num_gpus': 2},
+        {'test_file': 'test_qwen3_vl_4B_fsdp.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_0.6B_fsdp_distributed.py', 'num_gpus': 2},
+      ],
+    },
+    'e2e-test-megatron': {
+      'label': 'run-ci-megatron',
+      'tests': [
         {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8},
         {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_fsdp_true_on_policy.py', 'num_gpus': 2},
         {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_vl_4B_fsdp.py', 'num_gpus': 8},
-      ],
-    },
-    'e2e-test-fault-tolerance': {
-      'label': 'run-ci-fault-tolerance',
-      'tests': [
-        {'test_file': 'test_qwen2.5_0.5B_gsm8k_async_short.py', 'num_gpus': 4},
-        {'test_file': 'test_qwen2.5_0.5B_gsm8k_short.py', 'num_gpus': 4},
-      ],
-    },
-    'e2e-test-long': {
-      'label': 'run-ci-long',
-      'tests': [
-        {'test_file': 'test_qwen2.5_0.5B_gsm8k.py', 'num_gpus': 2},
-        {'test_file': 'test_qwen2.5_0.5B_gsm8k_async.py', 'num_gpus': 2},
-        {'test_file': 'test_qwen3_0.6B_fsdp_colocated_2xGPU.py', 'num_gpus': 2},
-        {'test_file': 'test_qwen3_0.6B_fsdp_distributed.py', 'num_gpus': 2},
       ],
     },
     'e2e-test-precision': {
@@ -40,20 +38,33 @@
         {'test_file': 'test_qwen3_4B_ckpt.py --async-save', 'num_gpus': 8},
       ],
     },
+    'e2e-test-long': {
+      'label': 'run-ci-long',
+      'tests': [
+        {'test_file': 'test_qwen2.5_0.5B_gsm8k.py', 'num_gpus': 2},
+        {'test_file': 'test_qwen2.5_0.5B_gsm8k_async.py', 'num_gpus': 2},
+      ],
+    },
     'e2e-test-image': {
       'label': 'run-ci-image',
       'image': 'slimerl/slime-test:latest',
       'tests': [
+        {'test_file': 'test_qwen2.5_0.5B_gsm8k_async_short.py', 'num_gpus': 4},
+        {'test_file': 'test_qwen2.5_0.5B_gsm8k_short.py', 'num_gpus': 4},
+        {'test_file': 'test_qwen3_0.6B_fsdp_colocated_2xGPU.py', 'num_gpus': 2},
+        {'test_file': 'test_qwen3_4B_fsdp_true_on_policy.py', 'num_gpus': 2},
+        {'test_file': 'test_qwen3_vl_4B_fsdp.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_0.6B_fsdp_distributed.py', 'num_gpus': 2},
         {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8},
         {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_4B_fsdp_true_on_policy.py', 'num_gpus': 2},
         {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_vl_4B_fsdp.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ckpt.py --async-save', 'num_gpus': 8},
+        {'test_file': 'test_qwen2.5_0.5B_gsm8k.py', 'num_gpus': 2},
+        {'test_file': 'test_qwen2.5_0.5B_gsm8k_async.py', 'num_gpus': 2},
       ],
     },
 } %>
