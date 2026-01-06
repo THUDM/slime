@@ -11,7 +11,7 @@
 | 数据集 > 10GB | **HF Datasets**（流式加载，内存 < 1GB） |
 | 数据集 < 10GB | Legacy Dataset（默认，全量加载） |
 
-### 基本用法
+### 基本用法（RL 训练）
 
 ```bash
 python train.py \
@@ -20,6 +20,24 @@ python train.py \
   --prompt-data zhuzilin/dapo-math-17k \
   --rollout-batch-size 32 \
   --num-rollout 100
+```
+
+### SFT 训练用法
+
+```bash
+python train.py \
+  --use-hf-datasets \
+  --hf-datasets-num-samples 335122 \
+  --prompt-data nvidia/Nemotron-Agentic-v1 \
+  --hf-dataset-split interactive_agent \
+  --input-key messages \
+  --tool-key tools \
+  --rollout-function-path slime.rollout.sft_rollout.generate_rollout \
+  --loss-type sft_loss \
+  --calculate-per-token-loss \
+  --disable-compute-advantages-and-returns \
+  --rollout-batch-size 128 \
+  --num-rollout 60
 ```
 
 **必需参数**：
@@ -31,6 +49,7 @@ python train.py \
 | 格式 | 示例 |
 |------|------|
 | HuggingFace Hub | `zhuzilin/dapo-math-17k` |
+| HuggingFace Hub (指定 split) | `nvidia/Nemotron-Agentic-v1` + `--hf-dataset-split interactive_agent` |
 | 本地 JSONL | `/path/to/data.jsonl` |
 | 本地 Parquet | `/path/to/data.parquet` |
 
@@ -38,12 +57,27 @@ python train.py \
 
 ## 2. 参数详解
 
+### 基础参数
+
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
 | `--use-hf-datasets` | `False` | 启用 HF Datasets 流式模式 |
 | `--hf-datasets-num-samples` | **必需** | 数据集样本数（用于 epoch 边界计算） |
+| `--hf-dataset-split` | `train` | 数据集 split 名称（如 `train`、`interactive_agent`） |
 | `--hf-dataset-shuffle-buffer` | `10000` | Shuffle buffer 大小 |
+| `--hf-dataset-buffer-size` | `100` | 预取 buffer 大小 |
 | `--hf-dataset-num-proc` | `8` | DataLoader worker 数量 |
+
+### SFT 相关参数
+
+| 参数 | 默认值 | 说明 |
+|------|--------|------|
+| `--rollout-function-path` | - | SFT 使用 `slime.rollout.sft_rollout.generate_rollout` |
+| `--loss-type` | `policy_loss` | 损失类型，SFT 使用 `sft_loss` |
+| `--calculate-per-token-loss` | `False` | 按 token 计算损失（推荐 SFT 开启） |
+| `--disable-compute-advantages-and-returns` | `False` | 禁用 advantage 计算（SFT 必须开启） |
+| `--input-key` | `input` | 输入字段名（多轮对话使用 `messages`） |
+| `--tool-key` | - | 工具定义字段名（如 `tools`） |
 
 ### 数据格式
 
@@ -63,6 +97,26 @@ python train.py \
 ```json
 {"input": [{"role": "user", "content": "问题"}], "label": "答案"}
 ```
+
+**多轮对话格式**（SFT 模式，配合 `--input-key messages`）：
+
+```json
+{
+  "messages": [
+    {"role": "system", "content": "你是一个助手"},
+    {"role": "user", "content": "你好"},
+    {"role": "assistant", "content": "你好！有什么可以帮助你的？"},
+    {"role": "user", "content": "请解释一下 Python"},
+    {"role": "assistant", "content": "Python 是一种高级编程语言..."}
+  ],
+  "tools": [{"type": "function", "function": {"name": "search", "description": "搜索信息"}}]
+}
+```
+
+**多轮对话 loss_mask 说明**：
+- SFT 模式下，只对 assistant 的回复计算损失
+- `loss_mask` 中 1 表示需要计算损失的 token，0 表示跳过
+- 多轮对话中，中间的 user/system 轮次会被标记为 0
 
 ---
 
@@ -140,6 +194,23 @@ RolloutDataSource
 - 使用 HF 原生 `state_dict()` / `load_state_dict()` 支持 checkpoint
 - 使用 HF `set_epoch()` 实现可复现的 shuffle
 
+### SFT Rollout 函数
+
+SFT 模式使用专用的 rollout 函数 `slime.rollout.sft_rollout.generate_rollout`：
+
+```python
+# 核心逻辑
+def generate_rollout(args, rollout_id, *, evaluation=False):
+    # 1. 获取批量数据
+    # 2. 应用 chat template，生成 loss_mask
+    # 3. 返回 Sample 列表（无需生成，直接使用数据集内容）
+    pass
+```
+
+**loss_mask 计算**：
+- 对于多轮对话，只对 assistant 回复部分设置 mask=1
+- `response_length` 计算为从第一个 mask=1 位置到序列末尾的长度
+
 ### 添加新 Backend
 
 继承 `HFDatasetAdapterBase` 并实现 4 个方法：
@@ -171,4 +242,6 @@ class MyDatasetAdapter(HFDatasetAdapterBase):
 
 - [HuggingFace Datasets 文档](https://huggingface.co/docs/datasets)
 - 源码：`slime/utils/hf_dataset.py`
+- SFT Rollout：`slime/rollout/sft_rollout.py`
 - 测试：`tests/test_hf_datasets.py`
+- SFT 测试：`tests/test_qwen3-0.6B_hf_datasets_sft.py`
