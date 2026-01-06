@@ -735,6 +735,23 @@ def decoupled_policy_loss_function(
     proximal_log_probs = torch.cat(proximal_log_probs, dim=0)
     behavior_log_probs = torch.cat(behavior_log_probs, dim=0)
 
+    # === 4.1 Validate shape consistency (defensive check) ===
+    if log_probs.shape != proximal_log_probs.shape:
+        raise RuntimeError(
+            f"Shape mismatch between log_probs {log_probs.shape} and "
+            f"proximal_log_probs {proximal_log_probs.shape}. "
+            f"This indicates proximal_log_probs was not computed with the same "
+            f"get_log_probs_and_entropy() call or data was corrupted."
+        )
+
+    if log_probs.shape != behavior_log_probs.shape:
+        raise RuntimeError(
+            f"Shape mismatch between log_probs {log_probs.shape} and "
+            f"behavior_log_probs {behavior_log_probs.shape}. "
+            f"This indicates behavior_log_probs was not computed with the same "
+            f"get_log_probs_and_entropy() call or data was corrupted."
+        )
+
     # === 5. Compute importance weights: π_prox / π_behav ===
     importance_weights = compute_offpolicy_importance_weights(
         proximal_log_probs,
@@ -743,12 +760,15 @@ def decoupled_policy_loss_function(
         clip_max=getattr(args, 'importance_weight_clip_max', None),
     )
 
-    # === 6. Compute PPO KL (for ratio): log π_prox - log π_θ ===
-    ppo_kl_prox = proximal_log_probs - log_probs
+    # === 6. Compute log-ratio intermediate for PPO ratio calculation ===
+    # Note: This computes log(π_prox) - log(π_θ), which is an intermediate value.
+    # The actual ratio π_θ/π_prox is computed in compute_decoupled_policy_loss as:
+    #   ratio = exp(-(log(π_prox) - log(π_θ))) = exp(log(π_θ) - log(π_prox)) = π_θ/π_prox
+    log_ratio_intermediate = proximal_log_probs - log_probs
 
     # === 7. Compute decoupled policy loss ===
     pg_loss, pg_clipfrac = compute_decoupled_policy_loss(
-        ppo_kl_prox,
+        log_ratio_intermediate,
         importance_weights,
         advantages,
         args.eps_clip,
@@ -765,6 +785,8 @@ def decoupled_policy_loss_function(
     loss = pg_loss - args.entropy_coef * entropy_loss
 
     # === 10. Add KL loss (relative to reference model) ===
+    # Note: This is NOT double penalization! In GRPO, advantages contain only rewards
+    # (see get_grpo_returns in ppo_utils.py), so we need to add KL constraint separately.
     if args.use_kl_loss:
         ref_log_probs = batch["ref_log_probs"]
         ref_log_probs = torch.cat(ref_log_probs, dim=0)
@@ -798,7 +820,7 @@ def decoupled_policy_loss_function(
         "pg_loss": pg_loss.clone().detach(),
         "entropy_loss": entropy_loss.clone().detach(),
         "pg_clipfrac": pg_clipfrac.clone().detach(),
-        "ppo_kl_prox": sum_of_sample_mean(ppo_kl_prox).clone().detach(),
+        "ppo_kl_prox": sum_of_sample_mean(log_ratio_intermediate).clone().detach(),
         "importance_weight_mean": importance_weight_mean.clone().detach(),
         "importance_weight_max": importance_weight_max.clone().detach(),
         "effective_sample_size": effective_sample_size.clone().detach(),

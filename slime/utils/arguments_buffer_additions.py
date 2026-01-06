@@ -5,11 +5,12 @@
 parser.add_argument(
     "--buffer-sampling-strategy",
     type=str,
-    choices=["fifo_staleness", "priority", "random", "reservoir", "custom"],
-    default="fifo_staleness",
+    choices=["lifo_staleness", "fifo_staleness", "priority", "random", "reservoir", "custom"],
+    default="lifo_staleness",
     help=(
         "Buffer sampling strategy: "
-        "'fifo_staleness': FIFO with staleness filtering (DEFAULT, recommended for most cases); "
+        "'lifo_staleness': LIFO with staleness filtering (DEFAULT, recommended for most cases); "
+        "'fifo_staleness': FIFO with staleness filtering; "
         "'priority': Priority-based sampling using reward/advantage metrics; "
         "'random': Random sampling with staleness filtering; "
         "'reservoir': Reservoir sampling for uniform distribution; "

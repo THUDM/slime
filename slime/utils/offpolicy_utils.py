@@ -55,7 +55,7 @@ def compute_offpolicy_importance_weights(
 
 @torch.compile(dynamic=True)
 def compute_decoupled_policy_loss(
-    ppo_kl_prox: torch.Tensor,  # log(π_prox) - log(π_θ)
+    log_ratio_intermediate: torch.Tensor,  # log(π_prox) - log(π_θ) from loss.py
     importance_weights: torch.Tensor,  # π_prox / π_behav
     advantages: torch.Tensor,
     eps_clip: float,
@@ -69,7 +69,8 @@ def compute_decoupled_policy_loss(
     where ratio = π_θ / π_prox
 
     Args:
-        ppo_kl_prox: log(π_prox) - log(π_θ), for computing ratio
+        log_ratio_intermediate: log(π_prox) - log(π_θ), computed in loss.py
+            Note: This is the NEGATIVE of what we want for the ratio, so we negate it
         importance_weights: π_prox / π_behav
         advantages: Advantage values [num_tokens]
         eps_clip: Lower clip threshold
@@ -80,8 +81,10 @@ def compute_decoupled_policy_loss(
         pg_losses: Per-token losses [num_tokens]
         clipfrac: Clipping fraction (for monitoring)
     """
-    # Compute ratio: π_θ / π_prox = exp(-(log π_prox - log π_θ))
-    ratio_prox = (-ppo_kl_prox).exp()
+    # Compute ratio: π_θ / π_prox = exp(-(log(π_prox) - log(π_θ)))
+    #                              = exp(log(π_θ) - log(π_prox))
+    #                              = π_θ / π_prox
+    ratio_prox = (-log_ratio_intermediate).exp()
 
     # Unclipped loss
     pg_losses1 = -ratio_prox * advantages

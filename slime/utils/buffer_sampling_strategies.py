@@ -218,17 +218,22 @@ class FIFOWithStalenessStrategy(BaseSamplingStrategy):
         # Step 1: Filter by staleness
         valid_groups, stale_groups = self.filter_by_staleness(buffer)
 
-        # Step 2: Filter by reuse count
-        reusable_groups = self.filter_by_reuse_count(valid_groups)
-
-        # 🔧 FIX: Auto-evict exhausted groups when all are filtered
+        # Step 2: Filter by reuse count AND identify exhausted groups immediately
+        reusable_groups = []
         exhausted_groups = []
-        if len(reusable_groups) == 0 and len(valid_groups) > 0:
-            # All valid groups have exhausted their reuse limit
-            # These groups should be removed to make room for new data
-            exhausted_groups = valid_groups
-            print(f"[Buffer Sampling] All {len(exhausted_groups)} groups exhausted reuse limit (>={self.max_reuse_count}). "
-                  f"Auto-evicting to make room for new rollout data.")
+
+        if self.max_reuse_count > 0:
+            for group in valid_groups:
+                sample = group[0]
+                reuse_count = sample.metadata.get('buffer_reuse_count', 0) if sample.metadata else 0
+
+                if reuse_count < self.max_reuse_count:
+                    reusable_groups.append(group)
+                else:
+                    # 🔧 FIX: Identify exhausted groups immediately, not just when all are exhausted
+                    exhausted_groups.append(group)
+        else:
+            reusable_groups = valid_groups
 
         # Step 3: 🔧 NEW: Version-aware stratified sampling for off-policy diversity
         # Instead of pure FIFO (always taking oldest), stratify by version to ensure
@@ -255,8 +260,10 @@ class FIFOWithStalenessStrategy(BaseSamplingStrategy):
                   f"(staleness > {self.max_staleness})")
             self.remove_from_buffer(buffer, stale_groups)
 
-        # 🔧 FIX: Remove exhausted groups
+        # 🔧 FIX: Remove exhausted groups immediately (not just when all exhausted)
         if exhausted_groups:
+            print(f"[Buffer Sampling] Removing {len(exhausted_groups)} exhausted groups "
+                  f"(reuse_count >= {self.max_reuse_count}) to free up space")
             self.remove_from_buffer(buffer, exhausted_groups)
 
         self.total_sampled += len(sampled)
@@ -309,8 +316,10 @@ class FIFOWithStalenessStrategy(BaseSamplingStrategy):
         samples_per_version = num_samples // num_versions
         remainder = num_samples % num_versions
 
-        # Sort versions (oldest first for FIFO-like behavior)
-        sorted_versions = sorted(version_groups.keys())
+        # 🔧 FIX: Sort versions newest-first to prioritize fresh data for off-policy GRPO
+        # This ensures that when num_samples < num_versions, we sample from newest versions
+        # and discard oldest (not the other way around, which would harm IS weight stability)
+        sorted_versions = sorted(version_groups.keys(), reverse=True)
 
         # Phase 1: Sample proportionally from each version
         for version in sorted_versions:
@@ -355,6 +364,110 @@ class FIFOWithStalenessStrategy(BaseSamplingStrategy):
                   f"(total={len(sampled)} groups from {len(version_counts)} versions)")
 
         return sampled[:num_samples]
+
+
+class LIFOWithStalenessStrategy(BaseSamplingStrategy):
+    """
+    LIFO (Last-In-First-Out) sampling with staleness filtering.
+
+    Prioritizes NEWEST data to minimize importance weight variance in off-policy GRPO.
+
+    Key advantages:
+    - Newest data has π_behavior ≈ π_θ → IS weight ≈ 1.0
+    - Minimal gradient variance
+    - Fastest convergence
+    - Most stable training
+
+    Recommended for:
+    - Off-policy GRPO where IS weight stability is critical
+    - Fast convergence scenarios
+    - When rollout data is abundant
+    - Aggressive off-policy training
+
+    Trade-offs:
+    - May waste older data if buffer is always full
+    - Lower data utilization compared to FIFO
+    - Requires higher rollout throughput
+    """
+
+    def get_name(self) -> str:
+        return "lifo_with_staleness"
+
+    def sample(
+        self,
+        buffer: List[List[Sample]],
+        num_samples: int
+    ) -> List[List[Sample]]:
+        """
+        Sample using LIFO (newest-first) with staleness filtering.
+
+        Algorithm:
+        1. Filter by staleness
+        2. Filter by reuse count (identify exhausted groups)
+        3. Take from END of buffer (newest data)
+        4. Update reuse count or remove
+        5. Clean up stale and exhausted groups
+        """
+        if len(buffer) == 0 or num_samples == 0:
+            return []
+
+        # Step 1: Filter by staleness
+        valid_groups, stale_groups = self.filter_by_staleness(buffer)
+
+        # Step 2: Filter by reuse count AND identify exhausted groups
+        reusable_groups = []
+        exhausted_groups = []
+
+        if self.max_reuse_count > 0:
+            for group in valid_groups:
+                sample = group[0]
+                reuse_count = sample.metadata.get('buffer_reuse_count', 0) if sample.metadata else 0
+
+                if reuse_count < self.max_reuse_count:
+                    reusable_groups.append(group)
+                else:
+                    exhausted_groups.append(group)
+        else:
+            reusable_groups = valid_groups
+
+        # Step 3: LIFO - take from END (newest samples)
+        num_to_sample = min(len(reusable_groups), num_samples)
+        sampled = reusable_groups[-num_to_sample:] if num_to_sample > 0 else []
+
+        # Step 4: Update reuse count (if not removing)
+        if not self.remove_on_sample and sampled:
+            self.increment_reuse_count(sampled)
+
+        # Step 5: Remove from buffer
+        if self.remove_on_sample and sampled:
+            self.remove_from_buffer(buffer, sampled)
+
+        # Always remove stale groups
+        if stale_groups:
+            print(f"[Buffer Sampling] Removing {len(stale_groups)} stale groups "
+                  f"(staleness > {self.max_staleness})")
+            self.remove_from_buffer(buffer, stale_groups)
+
+        # Remove exhausted groups immediately
+        if exhausted_groups:
+            print(f"[Buffer Sampling] Removing {len(exhausted_groups)} exhausted groups "
+                  f"(reuse_count >= {self.max_reuse_count})")
+            self.remove_from_buffer(buffer, exhausted_groups)
+
+        self.total_sampled += len(sampled)
+
+        # Log version distribution for monitoring
+        if sampled:
+            versions = [g[0].policy_version for g in sampled if g[0].policy_version is not None]
+            if versions:
+                version_counts = {}
+                for v in versions:
+                    version_counts[v] = version_counts.get(v, 0) + 1
+                version_range = f"[{min(versions)}, {max(versions)}]"
+                print(f"[Buffer Sampling] LIFO sample: {dict(sorted(version_counts.items()))} "
+                      f"(total={len(sampled)} groups, version_range={version_range}, newest-first)")
+
+        return sampled
 
 
 class PrioritySamplingStrategy(BaseSamplingStrategy):
@@ -829,6 +942,8 @@ def get_sampling_strategy(
     STRATEGIES = {
         'fifo': FIFOWithStalenessStrategy,  # Legacy name
         'fifo_staleness': FIFOWithStalenessStrategy,
+        'lifo': LIFOWithStalenessStrategy,  # NEW: Newest-first sampling
+        'lifo_staleness': LIFOWithStalenessStrategy,  # Alias
         'priority': PrioritySamplingStrategy,
         'random': RandomSamplingStrategy,
         'reservoir': ReservoirSamplingStrategy,
