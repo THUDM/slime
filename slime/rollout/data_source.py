@@ -142,13 +142,13 @@ class RolloutDataSource(DataSource):
             return
 
         logger.info(f"load metadata from {path}")
-        logger.info(f"load metadata: {self.metadata}")
         state_dict = torch.load(path)
         self.sample_offset = state_dict.get("sample_offset", 0)
         self.epoch_id = state_dict.get("epoch_id", 0)
         self.sample_group_index = state_dict.get("sample_group_index", 0)
         self.sample_index = state_dict.get("sample_index", 0)
         self.metadata = state_dict.get("metadata", {})
+        logger.info(f"load metadata: {self.metadata}")
 
         if self.args.rollout_global_dataset and self.args.rollout_shuffle:
             self.dataset.shuffle(self.epoch_id)
