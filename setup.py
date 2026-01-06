@@ -32,7 +32,7 @@ class bdist_wheel(_bdist_wheel):
 setup(
     author="slime Team",
     name="slime",
-    version="0.2.1",
+    version="0.2.2",
     packages=find_packages(include=["slime*", "slime_plugins*"]),
     include_package_data=True,
     install_requires=_fetch_requirements("requirements.txt"),
