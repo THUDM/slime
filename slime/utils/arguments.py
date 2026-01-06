@@ -695,6 +695,16 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             reset_arg(parser, "--save", type=str, default=None)
             reset_arg(parser, "--save-interval", type=int, default=None)
             reset_arg(parser, "--async-save", action="store_true")
+            reset_arg(
+                parser,
+                "--no-save-optim",
+                action="store_true",
+                default=False,
+                help=(
+                    "If set, do not save the optimizer state when saving checkpoints. "
+                    "This reduces checkpoint size but disables training resumption from the saved checkpoint."
+                ),
+            )
             parser.add_argument(
                 "--save-hf",
                 type=str,
