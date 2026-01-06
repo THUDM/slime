@@ -2,7 +2,8 @@ import os
 import slime.utils.external_utils.command_utils as U
 
 ENABLE_EVAL = bool(int(os.environ.get("SLIME_TEST_ENABLE_EVAL", "1")))
-NUM_GPUS = 2
+ENABLE_COLOCATE = bool(int(os.environ.get("SLIME_TEST_ENABLE_COLOCATE", "1")))
+NUM_GPUS = 4
 
 MODEL_NAME = "Qwen3-4B"
 
@@ -75,7 +76,12 @@ def execute():
 
     ci_args = "--ci-test "
 
-    misc_args = "--actor-num-nodes 1 " f"--actor-num-gpus-per-node {NUM_GPUS} " "--colocate "
+    if ENABLE_COLOCATE:
+        misc_args = f"--actor-num-nodes 1 --actor-num-gpus-per-node {NUM_GPUS} --colocate "
+    else:
+        misc_args = (
+            f"--actor-num-nodes 1 --actor-num-gpus-per-node {NUM_GPUS // 2} --rollout-num-gpus {NUM_GPUS // 2} "
+        )
 
     train_args = (
         f"{ckpt_args} "
