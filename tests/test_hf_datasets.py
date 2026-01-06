@@ -4,7 +4,7 @@ This test file covers:
 1. HFIterableDatasetAdapter basic functionality (initialization, get_next_batch, shuffle)
 2. RolloutDataSource mixed mode logic (auto-detection via duck typing)
 3. Checkpoint support (save/load/resume across epochs)
-4. Edge cases (dp_size=None, dataset=None, empty dataset, sample_offset overflow)
+4. Edge cases (dataset=None, empty dataset, sample_offset overflow)
 
 Test Strategy:
 - Use small synthetic datasets (100 samples) for fast execution
@@ -146,7 +146,6 @@ class TestHFDatasetAdapters:
             label_key="label",
             metadata_key="metadata",
             seed=42,
-            dp_size=1,
             num_workers=0,  # Single-process for testing
             shuffle_buffer_size=100,
         )
@@ -155,7 +154,6 @@ class TestHFDatasetAdapters:
         assert adapter.epoch_id == 0
         assert adapter.consumed_count == 0
         assert adapter.global_consumed_count == 0
-        assert adapter.dp_size == 1
         assert len(adapter) == 100  # Dataset size
 
     def test_get_next_batch_sequential(self, test_jsonl_data, mock_tokenizer, mock_processor):
@@ -171,7 +169,6 @@ class TestHFDatasetAdapters:
             prompt_key="input",
             label_key="label",
             seed=42,
-            dp_size=1,
             num_workers=0,  # Single-process for testing
         )
 
@@ -201,7 +198,6 @@ class TestHFDatasetAdapters:
             prompt_key="input",
             label_key="label",
             seed=42,
-            dp_size=1,
             num_workers=0,  # Single-process for testing
         )
 
@@ -255,9 +251,6 @@ class TestRolloutDataSourceMixedMode:
 
         data_source = RolloutDataSource(mock_args)
 
-        # Trigger delayed initialization with dp_size
-        data_source.set_train_parallel_config({"dp_size": 1})
-
         # Check dataset was created (Legacy mode since use_hf_datasets=False)
         assert data_source.dataset is not None
 
@@ -280,7 +273,6 @@ class TestRolloutDataSourceMixedMode:
         mock_args.use_hf_datasets = True
 
         data_source = RolloutDataSource(mock_args)
-        data_source.set_train_parallel_config({"dp_size": 1})
 
         # Verify duck typing detected HF adapter
         assert hasattr(data_source.dataset, "get_next_batch")
@@ -309,7 +301,6 @@ class TestCheckpointSupport:
 
         # Create data source with Legacy Dataset
         data_source = RolloutDataSource(mock_args)
-        data_source.set_train_parallel_config({"dp_size": 1})
 
         # Consume some samples
         data_source.get_samples(num_samples=10)
@@ -325,7 +316,6 @@ class TestCheckpointSupport:
 
         # Load checkpoint into new data source
         data_source2 = RolloutDataSource(mock_args)
-        data_source2.set_train_parallel_config({"dp_size": 1})
 
         # Set load path
         data_source2.args.load = mock_args.save
@@ -350,7 +340,6 @@ class TestCheckpointSupport:
         mock_args.use_hf_datasets = True
 
         data_source = RolloutDataSource(mock_args)
-        data_source.set_train_parallel_config({"dp_size": 1})
 
         # Consume some samples
         data_source.get_samples(num_samples=10)
@@ -374,25 +363,6 @@ class TestCheckpointSupport:
 
 class TestEdgeCases:
     """Test edge cases and error handling."""
-
-    @patch("slime.rollout.data_source.load_tokenizer")
-    @patch("slime.rollout.data_source.load_processor")
-    def test_dp_size_none_fallback(self, mock_load_proc, mock_load_tok, mock_args):
-        """Test dp_size=None fallback to 1."""
-        from slime.rollout.data_source import RolloutDataSource
-
-        mock_load_tok.return_value = MagicMock()
-        mock_load_proc.return_value = None
-
-        data_source = RolloutDataSource(mock_args)
-
-        # Access dataset BEFORE set_train_parallel_config is called
-        # This triggers fallback logic in @property dataset
-        dataset = data_source.dataset
-
-        # Verify dp_size was set to 1 (fallback)
-        assert data_source._dp_size == 1
-        assert dataset is not None
 
     @patch("slime.rollout.data_source.load_tokenizer")
     @patch("slime.rollout.data_source.load_processor")
@@ -426,7 +396,6 @@ class TestEdgeCases:
         mock_load_proc.return_value = None
 
         data_source = RolloutDataSource(mock_args)
-        data_source.set_train_parallel_config({"dp_size": 1})
 
         # Set load path to nonexistent location
         data_source.args.load = "/nonexistent/path"
@@ -491,7 +460,6 @@ class TestIntegration:
 
             # === Phase 1: Run 10 rollouts with checkpoint at step 5 ===
             data_source = RolloutDataSource(args)
-            data_source.set_train_parallel_config({"dp_size": 2})
 
             consumed_sample_ids = set()
             num_rollouts = 10
@@ -552,7 +520,6 @@ class TestIntegration:
 
             # === Phase 3: Resume from checkpoint and verify state restoration ===
             data_source2 = RolloutDataSource(args)
-            data_source2.set_train_parallel_config({"dp_size": 2})
             data_source2.args.load = args.save
             data_source2.load(rollout_id=5)
 
@@ -606,7 +573,6 @@ class TestIntegration:
         ):
 
             data_source = RolloutDataSource(args)
-            data_source.set_train_parallel_config({"dp_size": 1})
 
             # Consume exactly 100 samples (one complete epoch)
             # With 100 samples and batch_size=25, need 4 rollouts
@@ -640,7 +606,6 @@ class TestIntegration:
 
             # Resume from checkpoint
             data_source2 = RolloutDataSource(args)
-            data_source2.set_train_parallel_config({"dp_size": 1})
             data_source2.args.load = args.save
             data_source2.load(rollout_id=4)
 
@@ -689,7 +654,6 @@ class TestHFStateTracking:
             label_key="label",
             metadata_key="metadata",
             seed=42,
-            dp_size=1,
             num_workers=0,
             do_shuffle=False,  # Disable shuffle for deterministic test
         )
@@ -717,7 +681,6 @@ class TestHFStateTracking:
             label_key="label",
             metadata_key="metadata",
             seed=42,
-            dp_size=1,
             num_workers=0,
             do_shuffle=False,
         )
@@ -755,7 +718,6 @@ class TestHFStateTracking:
             label_key="label",
             metadata_key="metadata",
             seed=42,
-            dp_size=1,
             num_workers=0,
             do_shuffle=False,
         )
@@ -791,7 +753,6 @@ class TestHFStateTracking:
             max_length=None,
             prompt_key="input",
             seed=42,
-            dp_size=1,
             num_workers=0,
             do_shuffle=True,
             shuffle_buffer_size=100,  # Full buffer for exact shuffle
@@ -805,7 +766,6 @@ class TestHFStateTracking:
             max_length=None,
             prompt_key="input",
             seed=42,
-            dp_size=1,
             num_workers=0,
             do_shuffle=True,
             shuffle_buffer_size=100,
@@ -839,7 +799,6 @@ class TestHFStateTracking:
             label_key="label",
             metadata_key="metadata",
             seed=42,
-            dp_size=1,
             num_workers=0,
             do_shuffle=False,
         )
@@ -869,7 +828,6 @@ class TestHFStateTracking:
             label_key="label",
             metadata_key="metadata",
             seed=42,
-            dp_size=1,
             num_workers=0,
             do_shuffle=False,
         )

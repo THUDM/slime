@@ -213,12 +213,12 @@ def generate_rollout(args, rollout_id, *, evaluation=False):
 
 ### 添加新 Backend
 
-继承 `HFDatasetAdapterBase` 并实现 4 个方法：
+实现以下接口的类：
 
 ```python
-from slime.utils.hf_dataset import HFDatasetAdapterBase
+class MyDatasetAdapter:
+    """自定义数据集适配器需要实现以下方法"""
 
-class MyDatasetAdapter(HFDatasetAdapterBase):
     def get_next_batch(self, num_samples: int) -> list[Sample]:
         """返回下一批样本"""
         pass

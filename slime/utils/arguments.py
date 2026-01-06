@@ -550,8 +550,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=int,
                 default=1000,
                 help=(
-                    "Base prefetch buffer size for streaming mode. "
-                    "Actual buffer size = base_buffer_size * dp_size. "
+                    "Prefetch buffer size for streaming mode. "
                     "Larger buffer improves training throughput but increases memory usage. "
                     "Default: 1000."
                 ),

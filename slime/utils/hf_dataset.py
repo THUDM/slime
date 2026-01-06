@@ -1,18 +1,17 @@
-"""HuggingFace Datasets integration for Slime.
+"""HuggingFace Datasets streaming adapter for large-scale datasets (100GB+).
 
-This module provides streaming dataset adapter using HuggingFace Datasets library,
-enabling efficient loading of large-scale datasets (100GB+) without exhausting memory.
+This module provides a streaming dataset adapter using HuggingFace Datasets library,
+enabling efficient loading of large-scale datasets without exhausting memory.
 
 Key Features:
-- Streaming mode (HFIterableDatasetAdapter): Zero memory overhead, suitable for 100GB+ datasets
-- Unified interface compatible with legacy Dataset class
+- Streaming mode: Zero memory overhead, suitable for 100GB+ datasets
 - Reproducible shuffling with epoch-based seeds (via HF's set_epoch)
 - Checkpoint support using HF's native state_dict/load_state_dict
 - PyTorch DataLoader integration for multi-process prefetching
 
 Architecture Note:
-- These adapters are used by RolloutDataSource (single instance)
-- They generate global data (not sharded by dp_rank)
+- Used by RolloutDataSource (single instance)
+- Generates global data (not sharded by dp_rank)
 - Data sharding happens in RolloutManager._split_train_data_by_dp()
 """
 
@@ -20,7 +19,6 @@ import json
 import logging
 
 import numpy as np
-import torch
 from datasets import IterableDataset as HFIterableDataset
 from datasets import load_dataset
 from torch.utils.data import DataLoader
@@ -31,154 +29,25 @@ from slime.utils.types import Sample
 logger = logging.getLogger(__name__)
 
 
-class HFDatasetAdapterBase:
-    """Base class for HF Dataset adapters.
+class HFIterableDatasetAdapter:
+    """Streaming HF Dataset adapter with checkpoint support.
 
-    Defines the common interface that both streaming and cached adapters must implement.
-    This ensures compatibility with RolloutDataSource regardless of the underlying mode.
-    """
-
-    def get_next_batch(self, num_samples: int) -> list[Sample]:
-        """Get next batch of samples (sequential consumption).
-
-        Args:
-            num_samples: Number of samples to fetch
-
-        Returns:
-            List of Sample objects
-        """
-        raise NotImplementedError
-
-    def shuffle(self, new_epoch_id: int):
-        """Shuffle dataset for new epoch with reproducible seed.
-
-        Args:
-            new_epoch_id: Epoch ID used to derive shuffle seed
-        """
-        raise NotImplementedError
-
-    def get_checkpoint_state(self) -> dict:
-        """Get current state for checkpoint.
-
-        Returns:
-            Dictionary containing epoch_id, consumed_count, etc.
-        """
-        raise NotImplementedError
-
-    def load_checkpoint_state(self, state: dict):
-        """Load state from checkpoint.
-
-        Args:
-            state: State dictionary saved by get_checkpoint_state()
-        """
-        raise NotImplementedError
-
-    # NOTE: __len__ and __getitem__ are NOT implemented
-    # Reason: Streaming datasets cannot determine length after filtering
-    # Slime's data consumption is sequential, not random access
-
-
-class HFStreamingDatasetWrapper(TorchIterableDataset):
-    """Thin wrapper around HF IterableDataset for PyTorch DataLoader compatibility.
-
-    This wrapper leverages HF's native capabilities:
-    - state_dict() / load_state_dict() for checkpoint save/resume
-    - set_epoch() for automatic reshuffling (effective_seed = seed + epoch)
-    - shuffle(seed, buffer_size) for fast approximate shuffling
-
-    We only add __len__() support via known dataset_size.
-
-    Args:
-        hf_dataset: HF IterableDataset (already with .shuffle() applied if needed)
-        dataset_size: Known dataset size for __len__() support
-    """
-
-    def __init__(self, hf_dataset: HFIterableDataset, dataset_size: int):
-        super().__init__()
-        self.hf_dataset = hf_dataset
-        self.dataset_size = dataset_size
-
-    def __len__(self) -> int:
-        return self.dataset_size
-
-    def set_epoch(self, epoch: int):
-        """Delegate to HF's set_epoch() - triggers automatic reshuffle."""
-        self.hf_dataset.set_epoch(epoch)
-
-    def state_dict(self) -> dict:
-        """Delegate to HF's state_dict() - returns shard + example position."""
-        return self.hf_dataset.state_dict()
-
-    def load_state_dict(self, state_dict: dict):
-        """Delegate to HF's load_state_dict() - resumes from checkpoint."""
-        self.hf_dataset.load_state_dict(state_dict)
-
-    def __iter__(self):
-        """Iterate up to dataset_size samples."""
-        count = 0
-        for sample in self.hf_dataset:
-            yield sample
-            count += 1
-            if count >= self.dataset_size:
-                break
-
-
-def create_streaming_dataloader(
-    hf_dataset: HFIterableDataset,
-    dataset_size: int,
-    num_workers: int = 4,
-    prefetch_factor: int = 2,
-    seed: int = 42,
-    shuffle_buffer_size: int = 10000,
-    do_shuffle: bool = True,
-) -> tuple[DataLoader, HFStreamingDatasetWrapper]:
-    """Create DataLoader from HF streaming dataset with known size.
-
-    Args:
-        hf_dataset: HF IterableDataset
-        dataset_size: Known dataset size for __len__() and epoch tracking
-        num_workers: DataLoader workers (0 for single-process)
-        prefetch_factor: Prefetch factor per worker
-        seed: Random seed for shuffling
-        shuffle_buffer_size: Buffer size for approximate shuffling
-        do_shuffle: Whether to enable shuffling
-
-    Returns:
-        Tuple of (DataLoader, HFStreamingDatasetWrapper)
-    """
-    # Apply shuffle at creation time (with buffer_size for fast approximate shuffle)
-    if do_shuffle:
-        hf_dataset = hf_dataset.shuffle(seed=seed, buffer_size=shuffle_buffer_size)
-
-    wrapper = HFStreamingDatasetWrapper(hf_dataset, dataset_size)
-
-    dataloader = DataLoader(
-        wrapper,
-        batch_size=None,  # Return individual samples (we batch ourselves)
-        num_workers=num_workers,
-        prefetch_factor=prefetch_factor if num_workers > 0 else None,
-        persistent_workers=num_workers > 0,
-    )
-    return dataloader, wrapper
-
-
-class HFIterableDatasetAdapter(HFDatasetAdapterBase):
-    """Streaming mode HF Dataset adapter using PyTorch DataLoader.
-
-    This adapter enables loading and processing large datasets (100GB+) without
-    loading everything into memory. It uses HuggingFace's streaming mode combined
-    with PyTorch DataLoader for multi-process prefetching.
+    Enables loading and processing large datasets (100GB+) without loading
+    everything into memory. Uses HuggingFace's streaming mode combined with
+    PyTorch DataLoader for multi-process prefetching.
 
     Uses HF's native checkpoint support:
     - state_dict() / load_state_dict() for efficient save/resume
     - set_epoch() for automatic reshuffling (effective_seed = seed + epoch)
     - shuffle(seed, buffer_size) for fast approximate shuffling
 
-    Key Design Decisions:
-    - No .shard(dp_rank): RolloutManager is a single instance, generates global data
+    Key Design:
+    - RolloutManager is a single instance, generates global data
     - dataset_size is required for __len__() support and epoch tracking
-    - PyTorch DataLoader handles prefetching (replaces custom threading)
-    - Sequential consumption: No random access, only get_next_batch()
+    - Sequential consumption only: No random access, only get_next_batch()
+
+    VERIFIED: HF's state_dict enables exact position resume without sample skipping.
+    See tests/test_hf_datasets.py::TestHFStateTracking for verification tests.
 
     Args:
         path: Dataset path (local JSONL/Parquet or HF hub)
@@ -194,11 +63,11 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
         seed: Random seed for shuffle (default: 42)
         apply_chat_template: Whether to apply chat template (default: False)
         apply_chat_template_kwargs: Additional kwargs for chat template
-        dp_size: Data parallel size (NOT used for sharding, only buffer sizing)
         num_workers: Number of DataLoader workers (default: 4)
         prefetch_factor: Prefetch factor per worker (default: 2)
         shuffle_buffer_size: Buffer size for HF shuffle (default: 10000)
         do_shuffle: Whether to enable shuffling (default: True)
+        split: Dataset split name (default: "train")
     """
 
     def __init__(
@@ -217,7 +86,6 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
         seed: int = 42,
         apply_chat_template: bool = False,
         apply_chat_template_kwargs: dict | None = None,
-        dp_size: int = 1,
         num_workers: int = 4,
         prefetch_factor: int = 2,
         shuffle_buffer_size: int = 10000,
@@ -237,7 +105,6 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
         self.seed = seed
         self.apply_chat_template = apply_chat_template
         self.apply_chat_template_kwargs = apply_chat_template_kwargs or {}
-        self.dp_size = dp_size
         self.num_workers = num_workers
         self.prefetch_factor = prefetch_factor
         self.shuffle_buffer_size = shuffle_buffer_size
@@ -250,17 +117,19 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
         self.global_consumed_count = 0  # Total samples consumed across all epochs
 
         # Load and process HF dataset
-        hf_dataset = self._load_and_process_dataset()
+        self.hf_dataset = self._load_and_process_dataset()
 
-        # Create DataLoader with wrapper
-        self.dataloader, self._wrapper = create_streaming_dataloader(
-            hf_dataset,
-            dataset_size=dataset_size,
+        # Apply shuffle at creation time
+        if do_shuffle:
+            self.hf_dataset = self.hf_dataset.shuffle(seed=seed, buffer_size=shuffle_buffer_size)
+
+        # Create DataLoader
+        self.dataloader = DataLoader(
+            _HFDatasetWrapper(self.hf_dataset, dataset_size),
+            batch_size=None,  # Return individual samples (we batch ourselves)
             num_workers=num_workers,
-            prefetch_factor=prefetch_factor,
-            seed=seed,
-            shuffle_buffer_size=shuffle_buffer_size,
-            do_shuffle=do_shuffle,
+            prefetch_factor=prefetch_factor if num_workers > 0 else None,
+            persistent_workers=num_workers > 0,
         )
         self._iter = None
 
@@ -274,11 +143,7 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
         return self.dataset_size
 
     def _load_and_process_dataset(self) -> HFIterableDataset:
-        """Load base dataset and apply processing pipeline.
-
-        Returns:
-            Processed HF IterableDataset ready for iteration
-        """
+        """Load base dataset and apply processing pipeline."""
         logger.info(f"Loading dataset from {self.path} (streaming mode, split={self.split})")
 
         # Determine file type and load
@@ -312,24 +177,17 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
     def _preprocess_function(self, examples: dict) -> dict:
         """Preprocess function for HF .map().
 
-        This function processes a batch of raw samples and converts them to Sample objects.
+        Processes a batch of raw samples and converts them to Sample objects.
         Samples that are too long are filtered out by marking is_valid=False.
-
-        Args:
-            examples: Batch of raw data from HF dataset
-
-        Returns:
-            Processed batch with 'samples' and 'is_valid' fields
         """
         from slime.utils.data import _build_messages, _should_skip_prompt
 
         processed_samples = []
         is_valid_list = []
 
-        batch_size = len(examples[list(examples.keys())[0]])  # Get batch size from first key
+        batch_size = len(examples[list(examples.keys())[0]])
 
         for idx in range(batch_size):
-            # Extract single example
             data = {k: v[idx] for k, v in examples.items()}
 
             try:
@@ -363,10 +221,9 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
                 else:
                     formatted_prompt = prompt
 
-                # Handle multimodal (optional, skip if not using multimodal)
+                # Handle multimodal (experimental)
                 multimodal_inputs = None
                 if self.processor:
-                    # Note: Multimodal support is not prioritized in Phase 1
                     logger.warning("Multimodal support is experimental in streaming mode")
                     try:
                         from qwen_vl_utils import process_vision_info
@@ -412,12 +269,6 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
 
         This is the main consumption interface. StopIteration naturally propagates
         to the main thread, enabling clean epoch transitions.
-
-        Args:
-            num_samples: Number of samples to fetch
-
-        Returns:
-            List of Sample objects
         """
         if self._iter is None:
             self._iter = iter(self.dataloader)
@@ -425,23 +276,21 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
         samples = []
         for _ in range(num_samples):
             try:
-                # Get processed sample from DataLoader
                 sample_data = next(self._iter)
-                # Extract Sample object from the processed dict
                 sample = sample_data["samples"]
                 if sample is None:
-                    continue  # Skip invalid (should be filtered, but just in case)
+                    continue
 
                 samples.append(sample)
                 self.consumed_count += 1
                 self.global_consumed_count += 1
 
             except StopIteration:
-                # Epoch ended - clean transition in main thread!
+                # Epoch ended - clean transition
                 logger.info(f"Epoch {self.epoch_id} completed ({self.consumed_count} samples)")
                 self.epoch_id += 1
                 self.consumed_count = 0
-                self._wrapper.set_epoch(self.epoch_id)  # Triggers reshuffle in HF
+                self.hf_dataset.set_epoch(self.epoch_id)  # Triggers reshuffle
                 self._iter = iter(self.dataloader)
 
                 # Get sample from new epoch
@@ -461,11 +310,8 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
     def shuffle(self, new_epoch_id: int):
         """Shuffle for new epoch.
 
-        This is called by RolloutDataSource when starting a new epoch.
+        Called by RolloutDataSource when starting a new epoch.
         Delegates to HF's set_epoch() which handles reshuffling automatically.
-
-        Args:
-            new_epoch_id: New epoch ID
         """
         if self.epoch_id == new_epoch_id:
             return
@@ -473,59 +319,50 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
         logger.info(f"Shuffling for epoch {new_epoch_id} (current epoch: {self.epoch_id})")
         self.epoch_id = new_epoch_id
         self.consumed_count = 0
-        self._wrapper.set_epoch(new_epoch_id)  # HF handles reshuffling
+        self.hf_dataset.set_epoch(new_epoch_id)
         self._iter = iter(self.dataloader)
 
     def get_checkpoint_state(self) -> dict:
         """Get state for checkpoint using HF's native state_dict.
 
-        State tracking design:
-        - epoch_id: Current epoch number (used for seed+epoch reproducible shuffle)
-        - consumed_count: Samples consumed in current epoch (for statistics/logging)
+        State tracking:
+        - epoch_id: Current epoch number (for seed+epoch reproducible shuffle)
+        - consumed_count: Samples consumed in current epoch (for statistics)
         - global_consumed_count: Total samples consumed across all epochs
-        - hf_state_dict: HF's native iterator state (stores exact position, no manual skip needed)
+        - hf_state_dict: HF's native iterator state (stores exact position)
 
         VERIFIED: hf_state_dict enables exact position resume without sample skipping.
-        See tests/test_hf_datasets.py::TestHFStateTracking for verification tests.
-
-        Returns:
-            State dictionary containing epoch_id, consumed_count, and HF state
         """
         return {
             "epoch_id": self.epoch_id,
             "consumed_count": self.consumed_count,
             "global_consumed_count": self.global_consumed_count,
-            "hf_state_dict": self._wrapper.state_dict(),  # HF's native state
+            "hf_state_dict": self.hf_dataset.state_dict(),
         }
 
     def load_checkpoint_state(self, state: dict):
         """Load state from checkpoint using HF's native load_state_dict.
 
-        VERIFIED BEHAVIOR (see tests/test_hf_datasets.py::TestHFStateTracking):
+        VERIFIED BEHAVIOR:
         - HF's state_dict() stores exact iterator position (shard + offset)
         - load_state_dict() restores this position accurately
         - No manual sample skipping is needed after load
-        - Tested: consume 35 → checkpoint → resume → next samples match original continuation
-
-        Args:
-            state: State dictionary saved by get_checkpoint_state()
         """
         self.epoch_id = state.get("epoch_id", 0)
         self.consumed_count = state.get("consumed_count", 0)
         self.global_consumed_count = state.get("global_consumed_count", 0)
 
-        # Restore HF iterator state (handles shard + example position)
+        # Restore HF iterator state
         if "hf_state_dict" in state:
-            self._wrapper.load_state_dict(state["hf_state_dict"])
+            self.hf_dataset.load_state_dict(state["hf_state_dict"])
 
-        self._wrapper.set_epoch(self.epoch_id)
+        self.hf_dataset.set_epoch(self.epoch_id)
         self._iter = iter(self.dataloader)
 
         logger.info(
             f"Loaded checkpoint: epoch={self.epoch_id}, "
             f"consumed={self.consumed_count}, "
-            f"global_consumed={self.global_consumed_count} "
-            f"(using HF native checkpoint)"
+            f"global_consumed={self.global_consumed_count}"
         )
 
     def __iter__(self):
@@ -546,8 +383,28 @@ class HFIterableDatasetAdapter(HFDatasetAdapterBase):
                 self.global_consumed_count += 1
                 yield sample
             except StopIteration:
-                # Epoch ended
                 self.epoch_id += 1
                 self.consumed_count = 0
-                self._wrapper.set_epoch(self.epoch_id)
+                self.hf_dataset.set_epoch(self.epoch_id)
                 self._iter = iter(self.dataloader)
+
+
+class _HFDatasetWrapper(TorchIterableDataset):
+    """Minimal wrapper for PyTorch DataLoader compatibility.
+
+    Only provides __iter__ with dataset_size limit. All other operations
+    go directly through the HF dataset.
+    """
+
+    def __init__(self, hf_dataset: HFIterableDataset, dataset_size: int):
+        super().__init__()
+        self.hf_dataset = hf_dataset
+        self.dataset_size = dataset_size
+
+    def __iter__(self):
+        count = 0
+        for sample in self.hf_dataset:
+            yield sample
+            count += 1
+            if count >= self.dataset_size:
+                break

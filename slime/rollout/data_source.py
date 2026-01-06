@@ -52,16 +52,12 @@ class RolloutDataSource(DataSource):
         # TODO remove this
         self.metadata = {}
 
-        # Delayed initialization: dataset will be created in set_train_parallel_config()
-        # Reason: DP config is not available until TrainRayActor.init() completes
         self._dataset = None
         self._tokenizer = None
         self._processor = None
-        self._dp_size = None
         self._use_hf_datasets = getattr(args, "use_hf_datasets", False)
 
-        # Prepare tokenizer/processor if using global dataset
-        # These are needed early for dump_details
+        # Initialize dataset if using global dataset
         if args.rollout_global_dataset:
             self._tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
             self._processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
@@ -72,25 +68,13 @@ class RolloutDataSource(DataSource):
                 if self._processor:
                     self._processor.save_pretrained(Path(d) / "processor")
 
-    def set_train_parallel_config(self, config: dict):
-        """Called by RolloutManager after receiving DP config from TrainRayActor.
-
-        This triggers lazy initialization of the dataset with DP information.
-
-        Args:
-            config: Configuration dict containing dp_size, etc.
-        """
-        self._dp_size = config.get("dp_size", 1)
-
-        # Lazy initialization of dataset (only if not already created)
-        if self._dataset is None and self.args.rollout_global_dataset:
-            logger.info(f"Initializing dataset with dp_size={self._dp_size}")
+            # Create dataset immediately
             self._create_dataset()
 
     def _create_dataset(self):
-        """Create dataset with DP awareness.
+        """Create dataset based on configuration.
 
-        This method selects the appropriate dataset implementation based on args:
+        Selects the appropriate dataset implementation based on args:
         - HF Datasets (streaming mode) if --use-hf-datasets is set
         - Legacy Dataset otherwise
 
@@ -124,7 +108,6 @@ class RolloutDataSource(DataSource):
                 seed=self.args.rollout_seed,
                 apply_chat_template=self.args.apply_chat_template,
                 apply_chat_template_kwargs=self.args.apply_chat_template_kwargs,
-                dp_size=self._dp_size or 1,
                 num_workers=getattr(self.args, "hf_dataset_num_proc", 4),
                 prefetch_factor=2,
                 shuffle_buffer_size=getattr(self.args, "hf_dataset_shuffle_buffer", 10000),
@@ -158,18 +141,7 @@ class RolloutDataSource(DataSource):
 
     @property
     def dataset(self):
-        """Accessor for dataset with auto-initialization fallback.
-
-        This ensures backward compatibility with code that directly accesses self.dataset.
-        """
-        if self._dataset is None and self.args.rollout_global_dataset:
-            # Fallback: Initialize with dp_size=1 if set_train_parallel_config was not called
-            logger.warning(
-                "Dataset accessed before set_train_parallel_config was called. "
-                "Initializing with dp_size=1. This may indicate a bug."
-            )
-            self._dp_size = 1
-            self._create_dataset()
+        """Accessor for dataset."""
         return self._dataset
 
     def get_samples(self, num_samples):
