@@ -1,11 +1,14 @@
 import os
+from argparse import ArgumentParser
 import slime.utils.external_utils.command_utils as U
 
 ENABLE_EVAL = bool(int(os.environ.get("SLIME_TEST_ENABLE_EVAL", "1")))
-ENABLE_COLOCATE = bool(int(os.environ.get("SLIME_TEST_ENABLE_COLOCATE", "1")))
 NUM_GPUS = 4
 
 MODEL_NAME = "Qwen3-4B"
+
+parser = ArgumentParser()
+parser.add_argument("--colocated", action="store_true", help="Whether to run with colocate.")
 
 
 def prepare():
@@ -15,7 +18,7 @@ def prepare():
     U.hf_download_dataset("zhuzilin/aime-2024")
 
 
-def execute():
+def execute(args):
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} "
 
     rollout_args = (
@@ -76,7 +79,7 @@ def execute():
 
     ci_args = "--ci-test "
 
-    if ENABLE_COLOCATE:
+    if args.colocated:
         misc_args = f"--actor-num-nodes 1 --actor-num-gpus-per-node {NUM_GPUS} --colocate "
     else:
         misc_args = (
@@ -112,7 +115,8 @@ def execute():
 
 
 if __name__ == "__main__":
+    args = parser.parse_args()
     prepare()
     for proxy_var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
         os.environ.pop(proxy_var, None)
-    execute()
+    execute(args)
