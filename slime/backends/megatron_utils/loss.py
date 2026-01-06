@@ -76,9 +76,7 @@ def get_responses(
 
     cp_size = mpu.get_context_parallel_world_size()
     end = 0
-    for i, (tokens, total_length, response_length) in enumerate(
-        zip(unconcat_tokens, total_lengths, response_lengths, strict=False)
-    ):
+    for i, (tokens, total_length, response_length) in enumerate(zip(unconcat_tokens, total_lengths, response_lengths, strict=False)):
         max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
         if cp_size == 1:
             if qkv_format == "bshd":
@@ -258,14 +256,7 @@ def _compute_seq_kls_with_cp(
         return [], chunked_loss_masks
 
     def compute_local_numerators() -> torch.Tensor:
-        return torch.stack(
-            [
-                ((old_log_prob - log_prob) * chunked_loss_mask).sum()
-                for log_prob, old_log_prob, chunked_loss_mask in zip(
-                    log_probs, old_log_probs, chunked_loss_masks, strict=False
-                )
-            ]
-        )
+        return torch.stack([((old_log_prob - log_prob) * chunked_loss_mask).sum() for log_prob, old_log_prob, chunked_loss_mask in zip(log_probs, old_log_probs, chunked_loss_masks, strict=False)])
 
     if track_grad:
         local_numerators = compute_local_numerators()
@@ -347,9 +338,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             if cp_rank == 0:
                 k[-1] += reward
             rewards.append(k)
-        advantages, returns = get_advantages_and_returns_batch(
-            total_lengths, response_lengths, values, rewards, args.gamma, args.lambd
-        )
+        advantages, returns = get_advantages_and_returns_batch(total_lengths, response_lengths, values, rewards, args.gamma, args.lambd)
 
     elif args.advantage_estimator == "reinforce_plus_plus":
         rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
@@ -380,14 +369,8 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         response_lengths = rollout_data.get("response_lengths")
         device = student_log_probs[0].device
         teacher_log_probs = [t_log_prob.to(device=device) for t_log_prob in teacher_log_probs]
-        teacher_log_probs = [
-            t_log_prob[-response_length:]
-            for t_log_prob, response_length in zip(teacher_log_probs, response_lengths, strict=False)
-        ]
-        advantages = [
-            teacher_log_prob - student_log_prob
-            for teacher_log_prob, student_log_prob in zip(teacher_log_probs, student_log_probs, strict=False)
-        ]
+        teacher_log_probs = [t_log_prob[-response_length:] for t_log_prob, response_length in zip(teacher_log_probs, response_lengths, strict=False)]
+        advantages = [teacher_log_prob - student_log_prob for teacher_log_prob, student_log_prob in zip(teacher_log_probs, student_log_probs, strict=False)]
         returns = advantages
 
     else:
@@ -409,9 +392,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             all_masks = torch.cat(mask_chunks)
 
         if all_masks.numel() > 0:
-            assert (
-                all_advs.size() == all_masks.size()
-            ), f"Shape mismatch before whitening: advantages {all_advs.size()}, masks {all_masks.size()}"
+            assert all_advs.size() == all_masks.size(), f"Shape mismatch before whitening: advantages {all_advs.size()}, masks {all_masks.size()}"
             dp_group = mpu.get_data_parallel_group()
 
             whitened_advs_flat = distributed_masked_whiten(
@@ -464,9 +445,7 @@ def icepop_function(
     old_log_probs = torch.cat(train_log_probs, dim=0)
     ice_ratio = torch.exp(old_log_probs - rollout_log_probs)
     ice_abs = (torch.exp(old_log_probs - rollout_log_probs) - 1).abs()
-    ice_weight = torch.where(
-        (ice_ratio >= args.tis_clip_low) & (ice_ratio <= args.tis_clip), ice_ratio, torch.zeros_like(ice_ratio)
-    )
+    ice_weight = torch.where((ice_ratio >= args.tis_clip_low) & (ice_ratio <= args.tis_clip), ice_ratio, torch.zeros_like(ice_ratio))
     ice_clipfrac = (ice_weight != ice_ratio).float()
     metrics = {
         "tis": ice_ratio.clone().detach(),
@@ -657,9 +636,7 @@ def policy_loss_function(
         custom_pg_loss_reducer_func = load_function(args.custom_pg_loss_reducer_function_path)
         # Determine which loss_masks to use for pg_loss reducer
         pg_loss_masks = modified_response_masks if (args.get_mismatch_metrics or args.use_tis) else batch["loss_masks"]
-        pg_loss_reducer = custom_pg_loss_reducer_func(
-            total_lengths, response_lengths, pg_loss_masks, args.calculate_per_token_loss
-        )
+        pg_loss_reducer = custom_pg_loss_reducer_func(total_lengths, response_lengths, pg_loss_masks, args.calculate_per_token_loss)
     else:
         pg_loss_reducer = sum_of_sample_mean
 
@@ -776,7 +753,7 @@ def value_loss_function(
 
     # Ensure gradients propagate even when local sequences are empty
     if values.numel() == 0:
-        loss = loss + 0 * values.sum()
+        loss += 0 * values.sum()
 
     reported_loss = {
         "value_loss": loss.clone().detach(),
@@ -898,9 +875,7 @@ def loss_function(
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
     global_batch_size = batch.get("dynamic_global_batch_size", args.global_batch_size)
     if not args.calculate_per_token_loss:
-        loss = (
-            loss * num_microbatches / global_batch_size * mpu.get_data_parallel_world_size(with_context_parallel=True)
-        )
+        loss = loss * num_microbatches / global_batch_size * mpu.get_data_parallel_world_size(with_context_parallel=True)
     else:
         loss = loss * mpu.get_context_parallel_world_size()
 
