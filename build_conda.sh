@@ -12,6 +12,8 @@ source ~/.bashrc
 micromamba create -n slime python=3.12 pip -c conda-forge -y
 micromamba activate slime
 export CUDA_HOME="$CONDA_PREFIX"
+export SGLANG_COMMIT="24c91001cf99ba642be791e099d358f4dfe955f5"
+export MEGATRON_COMMIT="3714d81d418c9f1bca4594fc35f9e8289f652862"
 
 export BASE_DIR=${BASE_DIR:-"/root"}
 cd $BASE_DIR
@@ -27,7 +29,7 @@ pip install torch==2.9.1 torchvision==0.24.1 torchaudio==2.9.1 --index-url https
 # install sglang
 git clone https://github.com/sgl-project/sglang.git
 cd sglang
-git checkout 5e2cda6158e670e64b926a9985d65826c537ac82
+git checkout ${SGLANG_COMMIT}
 # Install the python packages
 pip install -e "python[all]"
 
@@ -53,11 +55,8 @@ pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation
 # megatron
 cd $BASE_DIR
 git clone https://github.com/NVIDIA/Megatron-LM.git --recursive && \
-  cd Megatron-LM/ && git checkout core_v0.14.0 && \
+  cd Megatron-LM/ && git checkout ${MEGATRON_COMMIT} && \
   pip install -e .
-
-# https://github.com/pytorch/pytorch/issues/168167
-pip install nvidia-cudnn-cu12==9.16.0.29
 
 # install slime and apply patches
 
@@ -73,8 +72,11 @@ else
   pip install -e .
 fi
 
+# https://github.com/pytorch/pytorch/issues/168167
+pip install nvidia-cudnn-cu12==9.16.0.29
+
 # apply patch
 cd $BASE_DIR/sglang
-git apply $SLIME_DIR/docker/patch/v0.5.6/sglang.patch
+git apply $SLIME_DIR/docker/patch/v0.5.7/sglang.patch
 cd $BASE_DIR/Megatron-LM
-git apply $SLIME_DIR/docker/patch/v0.5.6/megatron.patch
+git apply $SLIME_DIR/docker/patch/v0.5.7/megatron.patch
