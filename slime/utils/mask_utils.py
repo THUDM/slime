@@ -108,34 +108,11 @@ class MultiTurnLossMaskGenerator:
 
         return all_token_ids, all_loss_masks
 
-    def gen_multi_turn_loss_mask_distill_qwen(
-        self, messages: list[dict], tools: list[dict] = None
-    ) -> tuple[list[int], list[int]]:
-        prompt = self.tokenizer.apply_chat_template(
-            messages[:1], tokenize=False, add_generation_prompt=True, tools=tools
-        )
-        response = messages[-1]["content"]
-        prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
-        response_tokens = self.tokenizer(response, add_special_tokens=False)["input_ids"]
-
-        response_length = len(response_tokens)
-        token_ids = prompt_tokens + response_tokens
-        loss_mask = [0] * len(prompt_tokens) + [1] * response_length
-
-        if messages[-1].get("step_loss_mask", 1) != 1:
-            loss_mask = [0] * len(token_ids)
-        return token_ids, loss_mask
-
     def get_loss_mask(self, messages: list[dict], tools: list[dict] = None) -> tuple[list[int], list[int]]:
         if self.tokenizer_type == "qwen":
-            if "<｜Assistant｜>" in self.tokenizer.get_added_vocab():
-                return self.gen_multi_turn_loss_mask_distill_qwen(messages, tools)
-
             return self.gen_multi_turn_loss_mask_qwen(messages, tools)
         elif self.tokenizer_type == "qwen3":
             return self.gen_multi_turn_loss_mask_qwen3(messages, tools)
-        elif self.tokenizer_type == "distill_qwen":
-            return self.gen_multi_turn_loss_mask_distill_qwen(messages, tools)
         else:
             raise ValueError(f"Unsupported tokenizer type: {self.tokenizer_type}")
 
