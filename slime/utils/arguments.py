@@ -529,7 +529,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--tool-key",
                 type=str,
-                default=None,
+                default="tools",
                 help=(
                     "When need to add tools during apply_chat_template, you should provide the key for the tools in the prompt dataset."
                 ),
