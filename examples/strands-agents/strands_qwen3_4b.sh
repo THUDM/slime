@@ -38,7 +38,7 @@ CKPT_ARGS=(
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data /root/data/dapo-math-17k/dapo-math-17k.jsonl
+   --prompt-data /root/data/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
    --rollout-shuffle
@@ -55,7 +55,7 @@ ROLLOUT_ARGS=(
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data aime  /root/data/aime-2024/aime-2024.jsonl
+   --eval-prompt-data aime  /root/data/aime-2024.jsonl
    --n-samples-per-eval-prompt 16
    --eval-max-response-len 16384
    --eval-top-p 1
