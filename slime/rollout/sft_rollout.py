@@ -1,4 +1,7 @@
 import logging
+import concurrent.futures
+import time
+import os
 
 from slime.utils.mask_utils import MultiTurnLossMaskGenerator
 from slime.utils.processing_utils import load_processor, load_tokenizer
@@ -7,11 +10,25 @@ __all__ = ["generate_rollout"]
 
 logger = logging.getLogger(__name__)
 
-
+ROLLOUT_NUM_CPUS = os.environ.get("ROLLOUT_NUM_CPUS", 8)
 TOKENIZER = None
 PROCESSOR = None
 MASK_GENERATOR = None
 SAMPLE_PRINTED = False
+_EXECUTOR = None
+
+
+def _init_worker(hf_checkpoint, loss_mask_type):
+    global TOKENIZER, PROCESSOR, MASK_GENERATOR
+    TOKENIZER = load_tokenizer(hf_checkpoint, trust_remote_code=True)
+    PROCESSOR = load_processor(hf_checkpoint, trust_remote_code=True)
+    MASK_GENERATOR = MultiTurnLossMaskGenerator(TOKENIZER, tokenizer_type=loss_mask_type)
+
+
+def _process_single_sample(messages, tools):
+    token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
+    response_length = MASK_GENERATOR.get_response_lengths([loss_mask])[0]
+    return token_ids, loss_mask, response_length
 
 
 def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
@@ -29,33 +46,29 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
     assert not evaluation
     assert args.rollout_global_dataset
 
-    global TOKENIZER, PROCESSOR, MASK_GENERATOR, SAMPLE_PRINTED
-    if TOKENIZER is None:
-        TOKENIZER = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
-
-    if PROCESSOR is None:
-        PROCESSOR = load_processor(args.hf_checkpoint, trust_remote_code=True)
-
-    if MASK_GENERATOR is None:
-        MASK_GENERATOR = MultiTurnLossMaskGenerator(TOKENIZER, tokenizer_type=args.loss_mask_type)
-
+    global TOKENIZER, PROCESSOR, MASK_GENERATOR, SAMPLE_PRINTED, _EXECUTOR
+    
     samples = data_buffer.get_samples(args.rollout_batch_size)
-
-    import time
+    
     start_time = time.perf_counter()
-    mask_gen_time = 0
-    buffer_get_time = time.perf_counter() - start_time # This is small here but good to track
 
-    for i, sample in enumerate(samples):
-        (sample,) = sample
-        messages = sample.prompt
-        tools = sample.metadata.get("tools", None)
+    if _EXECUTOR is None:
+        _EXECUTOR = concurrent.futures.ProcessPoolExecutor(
+            max_workers=ROLLOUT_NUM_CPUS,
+            initializer=_init_worker,
+            initargs=(args.hf_checkpoint, args.loss_mask_type)
+        )
 
-        m_start = time.perf_counter()
-        token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
-        mask_gen_time += time.perf_counter() - m_start
+    tasks = []
+    for sample in samples:
+        (s,) = sample
+        tasks.append((s.prompt, s.metadata.get("tools", None)))
 
-        response_length = MASK_GENERATOR.get_response_lengths([loss_mask])[0]
+    results = list(_EXECUTOR.map(lambda x: _process_single_sample(*x), tasks))
+
+    for i, (sample_wrapper, result) in enumerate(zip(samples, results)):
+        (sample,) = sample_wrapper
+        token_ids, loss_mask, response_length = result
 
         sample.tokens = token_ids
         sample.response_length = response_length
@@ -64,14 +77,14 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
 
         if i == 0 and not SAMPLE_PRINTED:
             logger.info(
-                f"sft_rollout::generate_rollout example data: {sample=} (raw){messages=} (raw){token_ids=} (raw){loss_mask=} {response_length=}"
+                f"sft_rollout::generate_rollout example data: {sample=} (raw)prompt={sample.prompt} (raw){token_ids=} (raw){loss_mask=} {response_length=}"
             )
             SAMPLE_PRINTED = True
 
     total_time = time.perf_counter() - start_time
     logger.info(
         f"sft_rollout::generate_rollout rollout_id={rollout_id} batch_size={len(samples)} "
-        f"total_time={total_time:.4f}s (mask_gen={mask_gen_time:.4f}s, other={total_time-mask_gen_time:.4f}s)"
+        f"total_time={total_time:.4f}s"
     )
 
     return samples
