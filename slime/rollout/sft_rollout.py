@@ -41,12 +41,19 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
 
     samples = data_buffer.get_samples(args.rollout_batch_size)
 
+    import time
+    start_time = time.perf_counter()
+    mask_gen_time = 0
+    buffer_get_time = time.perf_counter() - start_time # This is small here but good to track
+
     for i, sample in enumerate(samples):
         (sample,) = sample
         messages = sample.prompt
         tools = sample.metadata.get("tools", None)
 
+        m_start = time.perf_counter()
         token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
+        mask_gen_time += time.perf_counter() - m_start
 
         response_length = MASK_GENERATOR.get_response_lengths([loss_mask])[0]
 
@@ -60,5 +67,11 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
                 f"sft_rollout::generate_rollout example data: {sample=} (raw){messages=} (raw){token_ids=} (raw){loss_mask=} {response_length=}"
             )
             SAMPLE_PRINTED = True
+
+    total_time = time.perf_counter() - start_time
+    logger.info(
+        f"sft_rollout::generate_rollout rollout_id={rollout_id} batch_size={len(samples)} "
+        f"total_time={total_time:.4f}s (mask_gen={mask_gen_time:.4f}s, other={total_time-mask_gen_time:.4f}s)"
+    )
 
     return samples
