@@ -35,7 +35,7 @@ from slime.utils.tracking_utils import init_tracking
 from ...utils import tracking_utils
 from ...utils.profile_utils import TrainProfiler
 from . import checkpoint
-from .data_packing import pack_sequences, pad_packed_sequence_with_cp, unpack_sequences
+from .data_packing import pack_sequences, pad_packed_sequence_with_cp, unpack_sequences, unpack_sequences_with_cp
 from .lr_scheduler import get_lr_scheduler
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
@@ -386,6 +386,7 @@ class FSDPTrainRayActor(TrainRayActor):
                         model_input_ids=model_args["input_ids"],
                         allow_compile=not self.args.true_on_policy_mode,
                         temperature=self.args.rollout_temperature,
+                        gather_result=False,
                     )
                     batch[f"{store_prefix}log_probs"] = log_probs_result
                     if store_prefix == "":
@@ -596,7 +597,7 @@ class FSDPTrainRayActor(TrainRayActor):
         logits = self.model(**model_args).logits.squeeze(0).float()
 
         # Compute log probs and entropy (unified for both CP and non-CP modes)
-        log_probs, entropy_result = get_logprob_and_entropy_with_cp(
+        log_probs, entropy = get_logprob_and_entropy_with_cp(
             logits=logits,
             target_tokens=packed_batch["tokens"],
             cp_rank=self.cp_rank,
@@ -605,11 +606,12 @@ class FSDPTrainRayActor(TrainRayActor):
             model_input_ids=model_args["input_ids"],
             allow_compile=not self.args.true_on_policy_mode,
             temperature=self.args.rollout_temperature,
+            gather_result=False,
         )
         packed_batch["cur_log_probs"] = log_probs
-        packed_batch["entropy"] = entropy_result
+        packed_batch["entropy"] = entropy
 
-        unpacked_batches = unpack_sequences(packed_batch)
+        unpacked_batches = unpack_sequences_with_cp(packed_batch, self.cp_rank, self.cp_size)
 
         old_log_prob_key = "rollout_log_probs" if self.args.use_rollout_logprobs else "log_probs"
         missing_old_log_probs = [
@@ -697,9 +699,9 @@ class FSDPTrainRayActor(TrainRayActor):
             pg_clipfrac = sum_of_token(pg_clipfrac, response_lengths, loss_masks)
             ppo_kl = sum_of_token(ppo_kl.abs(), response_lengths, loss_masks)
         else:
-            pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
-            pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
-            ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
+            pg_loss = sum_of_sample_mean_with_cp(pg_loss, response_lengths, loss_masks, self.cp_size, self.cp_group)
+            pg_clipfrac = sum_of_sample_mean_with_cp(pg_clipfrac, response_lengths, loss_masks, self.cp_size, self.cp_group)
+            ppo_kl = sum_of_sample_mean_with_cp(ppo_kl.abs(), response_lengths, loss_masks, self.cp_size, self.cp_group)
 
         # Only compare rollout vs. train log probs when they originate from different stages.
         train_rollout_logprob_abs_diff = None
@@ -709,8 +711,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 train_rollout_logprob_abs_diff, response_lengths, loss_masks
             ).detach()
 
-        entropy = torch.cat([batch["entropy"] for batch in unpacked_batches], dim=0)
-        entropy_loss = sum_of_sample_mean(entropy, response_lengths, loss_masks)
+        entropy_loss = sum_of_sample_mean_with_cp(entropy, response_lengths, loss_masks, self.cp_size, self.cp_group)
 
         loss = pg_loss - self.args.entropy_coef * entropy_loss
 
@@ -725,7 +726,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 kl_loss_type=self.args.kl_loss_type,
                 importance_ratio=importance_ratio,
             )
-            kl_loss = sum_of_sample_mean(kl, response_lengths, loss_masks)
+            kl_loss = sum_of_sample_mean_with_cp(kl, response_lengths, loss_masks, self.cp_size, self.cp_group)
 
             loss = loss + self.args.kl_loss_coef * kl_loss
 
@@ -961,6 +962,7 @@ def get_logprob_and_entropy_with_cp(
     cp_group,
     model_input_ids: torch.Tensor,
     allow_compile: bool,
+    gather_result: bool,
     temperature: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute log probabilities and entropy in Context Parallel mode.
@@ -1009,15 +1011,18 @@ def get_logprob_and_entropy_with_cp(
         logits, local_tokens, allow_compile=allow_compile, temperature=temperature
     )
 
-    # Pad for the last rank
-    if cp_rank == cp_size - 1:
-        local_log_probs = F.pad(local_log_probs, (0, chunk_size - local_log_probs.shape[0]), value=0)
-
     # Compute entropy
     shifted_logits = logits[:-1, :] if cp_rank == cp_size - 1 else logits
     log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
     probs = torch.softmax(shifted_logits, dim=-1)
     entropy = -(probs * log_probs_full).sum(dim=-1)
+
+    if not gather_result:
+        return local_log_probs, entropy
+
+    # Pad for the last rank
+    if cp_rank == cp_size - 1:
+        local_log_probs = F.pad(local_log_probs, (0, chunk_size - local_log_probs.shape[0]), value=0)
 
     # Pad entropy for the last rank
     if cp_rank == cp_size - 1:
@@ -1045,24 +1050,59 @@ def get_logprob_and_entropy_with_cp(
     return log_probs, entropy_result
 
 
-def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks: list[torch.Tensor]) -> torch.Tensor:
+# def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks: list[torch.Tensor]) -> torch.Tensor:
+#     """Compute sum of per-sample means across variable-length responses.
+
+#     Parameters:
+#         x: Flat tensor containing concatenated per-token values across samples.
+#         response_lengths: Lengths of each sample's response segment in `x`.
+#         loss_masks: Per-sample masks aligned with `response_lengths`.
+
+#     Returns:
+#         A scalar tensor equal to the sum over samples of the mean value within
+#         each sample's response segment.
+#     """
+#     return sum(
+#         [
+#             (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)
+#             for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
+#         ]
+#     )
+
+def sum_of_sample_mean_with_cp(x: torch.Tensor, response_lengths: list[int], loss_masks: list[torch.Tensor], cp_size: int, cp_group: dist.ProcessGroup) -> torch.Tensor:
     """Compute sum of per-sample means across variable-length responses.
 
     Parameters:
         x: Flat tensor containing concatenated per-token values across samples.
         response_lengths: Lengths of each sample's response segment in `x`.
         loss_masks: Per-sample masks aligned with `response_lengths`.
+        cp_size: Context parallelism world size
+        cp_group: Context parallelism communication group
 
     Returns:
         A scalar tensor equal to the sum over samples of the mean value within
         each sample's response segment.
     """
-    return sum(
-        [
-            (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)
-            for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
-        ]
-    )
+    if cp_size == 1:
+        return sum(
+            [
+                (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)
+                for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
+            ]
+        )
+    
+    local_numerators = torch.zeros(len(loss_masks), device=x.device)
+    local_denominators = torch.zeros(len(loss_masks), device=x.device)
+
+    start = 0
+    for i in range(len(loss_masks)): 
+        local_numerators[i] = (x[start:start+len(loss_masks[i])] * loss_masks[i]).sum()
+        local_denominators[i] = torch.clamp_min(loss_masks[i].sum(), 1)
+        start += len(loss_masks[i])
+
+    dist.all_reduce(local_numerators, op=dist.ReduceOp.SUM, group=cp_group)
+    dist.all_reduce(local_denominators, op=dist.ReduceOp.SUM, group=cp_group)
+    return (local_numerators / local_denominators).sum()
 
 
 @torch.no_grad()

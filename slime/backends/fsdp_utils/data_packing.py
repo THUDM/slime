@@ -194,6 +194,103 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
 
     return instances
 
+def unpack_sequences_with_cp(packed_batch: dict, cp_rank: int, cp_size: int) -> list[dict]:
+    """
+    Unpack sequences from a packed batch in Context Parallel mode.
+
+    Args:
+        packed_batch: Packed batch
+        cp_rank: Context Parallel rank
+        cp_size: Context Parallel world size
+    Returns:
+        List of unpacked batches
+    """
+
+    cu_seqlens = packed_batch["cu_seqlens"]
+    num_sequences = len(cu_seqlens) - 1
+    response_lengths = packed_batch["response_lengths"]
+    multimodal_num_items = packed_batch.get("multimodal_num_items", {})
+
+    chunk_size = cu_seqlens[-1].item() // cp_size
+    local_start = cp_rank * chunk_size
+    local_end = local_start + chunk_size if cp_rank < cp_size - 1 else cu_seqlens[-1].item()
+
+    instances = []
+
+    # Calculate pad_length by counting trailing zeros
+    tokens = packed_batch["tokens"]
+    nonzero_indices = (tokens != 0).nonzero(as_tuple=True)[0]
+    if len(nonzero_indices) > 0:
+        # Last non-zero index, pad_length is everything after it
+        pad_length = len(tokens) - nonzero_indices[-1].item() - 1
+    else:
+        pad_length = 0  # No padding if no non-zero tokens (or all zeros)
+    for i in range(num_sequences):
+        start_idx = cu_seqlens[i].item()
+        end_idx = cu_seqlens[i + 1].item()
+        instance = {}
+
+        # Copy any additional attributes that might exist in the packed batch
+        for key, value in packed_batch.items():
+            if key not in instance:
+                # Skip multimodal_num_items - it's metadata
+                if key == "multimodal_num_items":
+                    continue
+                # Handle multimodal_train_inputs dict: split each tensor using multimodal_num_items
+                elif key == "multimodal_train_inputs" and isinstance(value, dict):
+                    instance[key] = {}
+                    for mm_key, mm_tensor in value.items():
+                        if mm_key in multimodal_num_items:
+                            num_items_list = multimodal_num_items[mm_key]
+                            start_mm_idx = sum(num_items_list[:i])
+                            end_mm_idx = start_mm_idx + num_items_list[i]
+                            if num_items_list[i] > 0:
+                                instance[key][mm_key] = mm_tensor[start_mm_idx:end_mm_idx]
+                # For tensor attributes, we need to slice them appropriately
+                elif isinstance(value, torch.Tensor):
+                    global_resp_start = end_idx - response_lengths[i] - pad_length
+                    global_resp_end = end_idx -pad_length
+                    if cp_size > 1:
+                        local_resp_start =  max(global_resp_start, local_start) - local_start
+                        local_resp_end = min(global_resp_end, local_end) - local_start
+                    if key in ["log_probs", "ref_log_probs", "cur_log_probs", "entropy"]:
+                        # These are computed from logits[:-1] so they have length seq_len-1
+                        if cp_size == 1:
+                            instance[key] = value[global_resp_start - 1 : global_resp_end - 1]
+                        else:
+                            if local_resp_start < local_resp_end:
+                                instance[key] = value[local_resp_start:local_resp_end]
+                    elif key == "rollout_log_probs":
+                        # rollout_log_probs is packed based on response_lengths, so slice differently
+                        instance[key] = value[sum(response_lengths[:i]) : sum(response_lengths[: i + 1])]
+                    elif key in ["tokens", "position_ids"]:
+                        # For other tensor attributes, try to slice them
+                        if len(value) > start_idx:
+                            instance[key] = value[start_idx:end_idx]
+                        else:
+                            raise ValueError(f"Attribute {key} is not found in the packed batch")
+                    elif key in ["loss_masks", "advantages", "returns"]:
+                        # These tensors are packed based on response_lengths
+                        start = sum(response_lengths[:i])
+                        end = sum(response_lengths[: i + 1])
+                        if cp_size == 1:
+                            instance[key] = value[start:end]
+                        else:
+                            overlap_start = max(global_resp_start, local_start)
+                            overlap_end = min(global_resp_end, local_end)
+                            if overlap_end > overlap_start:
+                                resp_local_start = overlap_start - global_resp_start
+                                resp_local_end = overlap_end - global_resp_start
+                                instance[key] = value[start + resp_local_start:start + resp_local_end]
+                elif isinstance(value, list):
+                    instance[key] = value[i]
+                else:
+                    raise ValueError(f"Attribute {key} is not found in the packed batch")
+
+        instances.append(instance)
+
+    return instances
+
 
 def pad_packed_sequence_with_cp(packed_sequence: dict, cp_size: int) -> dict:
     """Pad packed sequence to make total length divisible by cp_size.
