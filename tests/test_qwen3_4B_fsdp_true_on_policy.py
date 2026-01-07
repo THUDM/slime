@@ -33,7 +33,7 @@ def execute(args):
         "--n-samples-per-prompt 8 "
         "--rollout-max-response-len 4096 "
         "--rollout-temperature 1 "
-        "--global-batch-size 32 "
+        "--global-batch-size 64 "
     )
 
     eval_args = (
