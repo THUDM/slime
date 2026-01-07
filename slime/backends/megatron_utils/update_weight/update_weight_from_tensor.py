@@ -125,14 +125,24 @@ class UpdateWeightFromTensor:
 
         # int4/fp4 post_process
         if self.args.int4_params_rollout:
-            ray.get(self.post_process_weights(self.rollout_engines))
+            ray.get(self.post_process_weights(
+                restore_weights_before_load=False,
+                post_process_quantization=True,
+                rollout_engines=self.rollout_engines
+            ))
             dist.barrier(group=get_gloo_group())
 
     def post_process_weights(
         self,
+        restore_weights_before_load: bool,
+        post_process_quantization: bool,
         rollout_engines: Sequence[ActorHandle], ):
         refs = [
-            engine.post_process_weights.remote(enable_quant_post_process=True)
+            engine.post_process_weights.remote(
+                enable_quant_post_process=True,
+                restore_weights_before_load=restore_weights_before_load,
+                post_process_quantization=post_process_quantization
+            )
             for engine in rollout_engines
         ]
         return refs
