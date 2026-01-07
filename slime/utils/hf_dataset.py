@@ -180,13 +180,15 @@ class HFIterableDatasetAdapter:
         Processes a batch of raw samples and converts them to Sample objects.
         Samples that are too long are filtered out by marking is_valid=False.
         """
-        from slime.utils.data import _build_messages, _should_skip_prompt
-
-        processed_samples = []
-        is_valid_list = []
+        from slime.utils.data import _build_messages, filter_long_prompt
 
         batch_size = len(examples[list(examples.keys())[0]])
+        processed_samples = [None] * batch_size
+        is_valid_list = [False] * batch_size
+        samples_to_filter = []  # Collect valid samples for batch filtering
+        sample_index_map = {}  # Map sample id -> original index for filtered samples
 
+        # Step 1: Process all samples and create Sample objects
         for idx in range(batch_size):
             data = {k: v[idx] for k, v in examples.items()}
 
@@ -233,17 +235,8 @@ class HFIterableDatasetAdapter:
                         multimodal_inputs = {"images": images, "videos": videos}
                     except Exception as e:
                         logger.warning(f"Failed to process multimodal input: {e}, skipping sample")
-                        is_valid_list.append(False)
-                        processed_samples.append(None)
+                        # Keep as None and False (already initialized)
                         continue
-
-                # Filter by length
-                if _should_skip_prompt(
-                    formatted_prompt, self.tokenizer, self.processor, self.max_length, multimodal_inputs
-                ):
-                    is_valid_list.append(False)
-                    processed_samples.append(None)
-                    continue
 
                 # Create Sample object
                 sample = Sample(
@@ -253,14 +246,36 @@ class HFIterableDatasetAdapter:
                     multimodal_inputs=multimodal_inputs,
                 )
 
-                processed_samples.append(sample)
-                is_valid_list.append(True)
+                processed_samples[idx] = sample
+                samples_to_filter.append(sample)
+                sample_index_map[id(sample)] = idx
 
             except Exception as e:
                 logger.warning(f"Failed to preprocess sample: {e}, skipping")
-                is_valid_list.append(False)
-                processed_samples.append(None)
+                # Keep as None and False (already initialized)
                 continue
+
+        # Step 2: Batch filter all valid samples by length
+        if samples_to_filter:
+            filtered_result = filter_long_prompt(samples_to_filter, self.tokenizer, self.processor, self.max_length)
+
+            # filter_long_prompt returns False when max_length is None or prompt is not a string (no filtering)
+            if filtered_result is False:
+                # No filtering applied, all valid samples pass
+                filtered_samples_ids = {id(sample) for sample in samples_to_filter}
+            else:
+                # Samples that passed the length filter
+                filtered_samples_ids = {id(sample) for sample in filtered_result}
+
+            # Step 3: Update is_valid_list and processed_samples based on filtering results
+            for sample in samples_to_filter:
+                idx = sample_index_map[id(sample)]
+                if id(sample) in filtered_samples_ids:
+                    is_valid_list[idx] = True
+                else:
+                    # Sample was filtered out (too long)
+                    is_valid_list[idx] = False
+                    processed_samples[idx] = None
 
         return {"samples": processed_samples, "is_valid": is_valid_list}
 
@@ -311,7 +326,8 @@ class HFIterableDatasetAdapter:
         """Shuffle for new epoch.
 
         Called by RolloutDataSource when starting a new epoch.
-        Delegates to HF's set_epoch() which handles reshuffling automatically.
+        Uses HF's set_epoch() to change shuffle seed (effective_seed = seed + epoch_id),
+        then recreates iterator to apply new shuffle order with the updated seed.
         """
         if self.epoch_id == new_epoch_id:
             return
