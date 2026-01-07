@@ -2,7 +2,6 @@
 
 import logging
 
-import wandb
 from camel.interpreters import SubprocessInterpreter
 from strands import Agent, tool
 from strands_sglang import SGLangClient, SGLangModel
@@ -102,22 +101,6 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     trajectory = model.format_request_messages(agent.messages, None)
     sample.tool_call_count = [message["role"] == "tool" for message in trajectory].count(True)
 
-    # Log debug metrics (wrapped in try-except for async safety with concurrent rollouts)
-    if wandb.run:
-        try:
-            wandb.log(
-                {
-                    "debug/token_length": len(sample.tokens),
-                    "debug/response_length": sample.response_length,
-                    "debug/num_messages": len(agent.messages),  # not including system prompt
-                    "debug/tool_iterations": sample.tool_iterations,  # number of assistant messages with >=1 tool calls
-                    "debug/tool_call_count": sample.tool_call_count,  # number of tool calls
-                    "debug/truncated": int(sample.status == Sample.Status.TRUNCATED),
-                }
-            )
-        except Exception:
-            pass  # Ignore wandb async errors from concurrent logging
-
     model.reset()
     agent.cleanup()
     return sample
@@ -138,6 +121,8 @@ async def reward_func(args, sample: Sample, **kwargs):
 
     result["pred"] = result["pred"] or ""
     logger.info(
-        f"reward={result['score']} | status={sample.status} | tool_iters={tool_iterations} | len={sample.response_length}"
+        f"reward={result['score']:.2f} | status={sample.status.name} | "
+        f"tool_iters={tool_iterations} | tool_calls={getattr(sample, 'tool_call_count', 0)} | "
+        f"tokens={len(sample.tokens)} | resp_len={sample.response_length} | "
     )
     return result["score"]
