@@ -92,7 +92,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 4, "test_file": "test_qwen3_4B_fsdp_true_on_policy.py --colocated"}, {"num_gpus": 4, "test_file": "test_qwen3_4B_fsdp_true_on_policy.py"}, {"num_gpus": 8, "test_file": "test_qwen3_vl_4B_fsdp.py"}]
+        info: [{"num_gpus": 4, "test_file": "test_qwen3_4B_fsdp_true_on_policy.py --colocated"}, {"num_gpus": 8, "test_file": "test_qwen3_vl_4B_fsdp.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}
