@@ -31,11 +31,11 @@ async def async_rm(args, sample: Sample, **kwargs):
     # === NEW: Add comprehensive error handling and validation ===
     try:
         # Debug log
-        print(f"[DEBUG] async_rm called for sample. Has response: {sample.response is not None}, "
-              f"Has label: {sample.label is not None}")
+        # print(f"[DEBUG] async_rm called for sample. Has response: {sample.response is not None}, "
+        #       f"Has label: {sample.label is not None}")
 
         if args.custom_rm_path is not None:
-            print(f"[DEBUG] Using custom RM: {args.custom_rm_path}")
+            # print(f"[DEBUG] Using custom RM: {args.custom_rm_path}")
             rm_function = load_function(args.custom_rm_path)
 
             # Validate sample before calling reward function
@@ -47,9 +47,9 @@ async def async_rm(args, sample: Sample, **kwargs):
                 print(f"[WARNING] Sample has None label, returning reward=0")
                 return 0
 
-            print(f"[DEBUG] Calling custom reward function...")
+            # print(f"[DEBUG] Calling custom reward function...")
             result = await rm_function(args, sample, **kwargs)
-            print(f"[DEBUG] Custom reward function returned: {result} (type: {type(result)})")
+            # print(f"[DEBUG] Custom reward function returned: {result} (type: {type(result)})")
 
             # Validate result
             if result is None:
@@ -68,7 +68,7 @@ async def async_rm(args, sample: Sample, **kwargs):
         response = sample.response
         label = sample.label
 
-        print(f"[DEBUG] Using built-in RM type: {rm_type}")
+        # print(f"[DEBUG] Using built-in RM type: {rm_type}")
 
         if rm_type.startswith("boxed_"):
             response = extract_boxed_answer(response) or ""

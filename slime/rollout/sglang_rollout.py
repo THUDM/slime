@@ -246,10 +246,10 @@ async def generate_and_rm(
 
         # for multi agent system, the reward of some sample is calculated during generation.
         samples_need_reward = [sample for sample in samples if sample.reward is None]
-        print(f"[DEBUG] sglang_rollout: {len(samples_need_reward)}/{len(samples)} samples need reward computation")
+        # print(f"[DEBUG] sglang_rollout: {len(samples_need_reward)}/{len(samples)} samples need reward computation")
 
         rewards = await batched_async_rm(args, samples_need_reward)
-        print(f"[DEBUG] sglang_rollout: batched_async_rm returned {len(rewards)} rewards")
+        # print(f"[DEBUG] sglang_rollout: batched_async_rm returned {len(rewards)} rewards")
 
         # Verify rewards before setting
         none_count = sum(1 for r in rewards if r is None)
@@ -282,7 +282,7 @@ async def generate_and_rm(
         else:
             sample.reward = reward
 
-        print(f"[DEBUG] sglang_rollout: Single sample reward set to {sample.reward}")
+        # print(f"[DEBUG] sglang_rollout: Single sample reward set to {sample.reward}")
 
     return sample
 
