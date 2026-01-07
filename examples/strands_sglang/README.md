@@ -24,6 +24,8 @@ This example connects `slime` with [`strands-sglang`](https://github.com/horizon
 4. Go to the example folder: `cd /root/slime/examples/strands_sglang`
 5. Install other dependencies: `pip install -r requirements.txt`
 
+> NOTE: `strands-sglang` is under rapid development, so we recommend using the GitHub repo version: `strands-sglang @ git+https://github.com/horizon-rl/strands-sglang.git`
+
 > NOTE: We use camel-ai's subprocess code interpreter for python code execution, which is NOT a good practice; it's just for convenience of this example.
 
 ## Prepare Model
