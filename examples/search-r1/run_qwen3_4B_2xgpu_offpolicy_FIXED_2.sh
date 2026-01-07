@@ -147,7 +147,9 @@ BUFFER_SAMPLING_ARGS=(
    # - Ensures policy_version accurately reflects sample age
    # - Key insight: reuse_count acts as "hidden staleness"
    # - With reuse=3 and staleness=5, effective max age = 5+3×0.5 ≈ 6.5 steps
-   --buffer-reuse-samples 3
+   # --buffer-reuse-samples 3
+   --buffer-reuse-samples 10
+
 )
 
 

@@ -182,54 +182,42 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
 
     def get_samples(self, num_samples: int) -> list[list[Sample]]:
         """
-        Get samples with automatic buffer mixing.
+        Get samples for rollout generation - ALWAYS returns NEW prompts from dataset.
+
+        🔧 CRITICAL FIX: This method is used by generate_rollout() to get prompts for generation.
+        We must ALWAYS return NEW prompts from the dataset, NOT existing samples from buffer.
+
+        Why this is important:
+        - Before fix: When buffer had samples, we'd return those (which already have responses)
+        - This meant NO NEW DATA was generated until buffer was exhausted
+        - With --buffer-reuse-samples=10, buffer could serve the same data 10+ times
+        - Result: Policy trained on stale data without generating fresh samples
+
+        After fix:
+        - ALWAYS get new prompts from dataset for generation
+        - Each rollout iteration generates fresh data with current policy
+        - Buffer is used ONLY for training (via get_training_samples())
+        - This ensures continuous data generation regardless of buffer state
 
         Behavior:
-        - If buffer disabled: return only new samples from dataset (on-policy)
-        - If buffer enabled: prioritize buffer, then fill with dataset (off-policy)
+        - Buffer disabled: return new samples from dataset (on-policy)
+        - Buffer enabled: return new samples from dataset (for generation)
+
+        Note: For training, use get_training_samples() which samples from buffer.
 
         Args:
             num_samples: Number of sample groups to retrieve
 
         Returns:
-            List of sample groups
+            List of NEW sample groups from dataset (prompts only, no responses)
         """
-        if not self.buffer_enabled:
-            # Buffer disabled: use only new data (on-policy behavior)
-            return super().get_samples(num_samples=num_samples)
+        # 🔧 FIX: Always get new prompts from dataset, regardless of buffer state
+        # This ensures every rollout generates fresh data with the current policy
+        samples = super().get_samples(num_samples=num_samples)
 
-        # Buffer enabled: sample from buffer first (off-policy behavior)
-        samples = self._get_samples_from_buffer(num_samples)
-        num_samples -= len(samples)
-
-        if num_samples == 0:
-            return samples
-
-        # 🔧 FIX: When buffer is exhausted/empty, don't fallback to dataset
-        # In off-policy mode with buffer, getting new prompts from dataset here
-        # would pollute the buffer with incomplete samples.
-        # The correct flow is:
-        # 1. Buffer exhausted -> return what we have (even if less than requested)
-        # 2. Caller (rollout) will notice and trigger new rollout generation
-        # 3. New rollout generates complete samples and adds to buffer
-
-        if len(samples) < num_samples:
-            print(f"[Buffer] WARNING: Buffer only provided {len(samples)}/{num_samples + len(samples)} requested samples.")
-
-            if len(samples) == 0:
-                # Buffer is completely empty or all exhausted
-                print(f"[Buffer] Buffer is empty/exhausted. Need new rollout to generate data.")
-                print(f"[Buffer] Falling back to dataset for {num_samples} new prompts - these MUST go through rollout generation.")
-                # Get new prompts that will be generated in this rollout
-                samples = super().get_samples(num_samples=num_samples)
-
-            else:
-                # Buffer provided some but not enough
-                # For now, just return what we have. The caller can decide whether to:
-                # - Use fewer samples for this iteration
-                # - Or get more from dataset (but they must be generated!)
-                print(f"[Buffer] Returning {len(samples)} samples (short by {num_samples}).")
-                print(f"[Buffer] Consider: (1) increasing buffer size, (2) decreasing reuse count limit, or (3) generating more frequently.")
+        if self.buffer_enabled:
+            print(f"[Buffer] Generated {len(samples)} NEW prompts from dataset for rollout generation.")
+            print(f"[Buffer] Current buffer size: {len(self.buffer)}/{self.buffer_max_size}")
 
         return samples
 
