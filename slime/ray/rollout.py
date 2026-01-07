@@ -342,25 +342,81 @@ class RolloutManager:
                 data = data[:trim_len]
                 print(f"trim number of samples from {origin_data_length} to {trim_len}")
 
-        # === Tag samples with current policy version ===
+        # === Tag samples with current policy version (ENHANCED) ===
         # IMPORTANT: Only set policy_version for NEW samples (from dataset)
         # For samples from buffer (re-generation), they already have policy_version
         # and we should NOT overwrite it, otherwise we lose track of when they were generated
+
+        untagged_count = 0
+        retagged_count = 0
+        invalid_count = 0
+
         for sample in data:
-            # Only set if not already set (i.e., new samples from dataset)
+            # Case 1: Sample has no policy_version attribute or it's None
             if not hasattr(sample, 'policy_version') or sample.policy_version is None:
                 sample.policy_version = self.current_policy_version
+                untagged_count += 1
+
+            # Case 2: Sample has an INVALID policy_version (defensive check)
+            elif not isinstance(sample.policy_version, int) or sample.policy_version < 0:
+                print(f"[WARNING] Sample has invalid policy_version={sample.policy_version}, "
+                      f"retagging with current version {self.current_policy_version}")
+                sample.policy_version = self.current_policy_version
+                invalid_count += 1
+
+            # Case 3: Sample already has a valid policy_version
+            else:
+                # This is expected for samples from buffer (shouldn't happen in generate())
+                # Log if version is much older than current (potential issue)
+                staleness = self.current_policy_version - sample.policy_version
+                if staleness > 10:  # Threshold for warning
+                    print(f"[WARNING] Sample with very old policy_version={sample.policy_version} "
+                          f"detected (current={self.current_policy_version}, staleness={staleness}). "
+                          f"This may indicate a buffer issue.")
+
+        # Log summary for monitoring
+        if untagged_count > 0:
+            print(f"[Policy Version] Tagged {untagged_count} new samples with version {self.current_policy_version}")
+        if invalid_count > 0:
+            print(f"[Policy Version] Fixed {invalid_count} samples with invalid policy_version")
 
         return data, metrics
 
     def on_policy_update(self):
-        """Called after training completes to increment policy version."""
-        self.current_policy_version += 1
-        print(f"[Off-Policy Tracking] Policy version updated to {self.current_policy_version}")
+        """
+        Called after training completes to increment policy version.
 
-        # === Update data source policy version (for staleness-aware sampling) ===
+        CRITICAL: This method must be called after EVERY training step to ensure
+        policy_version stays in sync with actual policy updates.
+        """
+        old_version = self.current_policy_version
+        self.current_policy_version += 1
+        new_version = self.current_policy_version
+
+        print(f"[Off-Policy Tracking] Policy version updated: {old_version} -> {new_version}")
+
+        # === Update data source policy version (MANDATORY) ===
+        # This MUST succeed to maintain consistency
         if hasattr(self.data_source, 'update_policy_version'):
-            self.data_source.update_policy_version(self.current_policy_version)
+            self.data_source.update_policy_version(new_version)
+
+            # === VERIFICATION: Check if update succeeded ===
+            if hasattr(self.data_source, 'current_policy_version'):
+                actual_version = self.data_source.current_policy_version
+                if actual_version != new_version:
+                    # CRITICAL ERROR: Version mismatch detected
+                    raise RuntimeError(
+                        f"[CRITICAL] Policy version sync failed! "
+                        f"RolloutManager.current_policy_version={new_version}, "
+                        f"DataSource.current_policy_version={actual_version}. "
+                        f"This will cause incorrect staleness calculation!"
+                    )
+                print(f"[Off-Policy Tracking] DataSource policy version verified: {actual_version}")
+        else:
+            # CRITICAL WARNING: DataSource doesn't support policy version tracking
+            print(f"[WARNING] DataSource does not implement update_policy_version()! "
+                  f"Staleness-aware sampling will NOT work correctly. "
+                  f"Please ensure your DataSource class inherits from RolloutDataSourceWithBuffer.")
 
         # === Update staleness controller ===
         if self.staleness_controller is not None:

@@ -665,11 +665,12 @@ class PrioritySamplingStrategy(BaseSamplingStrategy):
 
         Algorithm:
         1. Filter by staleness
-        2. Filter by reuse count
+        2. Filter by reuse count AND identify exhausted groups
         3. Compute priority scores
         4. Sort by score (high → low)
         5. Take top num_samples groups
         6. Remove from buffer if remove_on_sample=True
+        7. Remove stale and exhausted groups
         """
         if len(buffer) == 0 or num_samples == 0:
             return []
@@ -677,14 +678,28 @@ class PrioritySamplingStrategy(BaseSamplingStrategy):
         # Step 1: Filter by staleness
         valid_groups, stale_groups = self.filter_by_staleness(buffer)
 
-        # Step 2: Filter by reuse count
-        valid_groups = self.filter_by_reuse_count(valid_groups)
+        # Step 2: Filter by reuse count AND identify exhausted groups immediately
+        reusable_groups = []
+        exhausted_groups = []
+
+        if self.max_reuse_count > 0:
+            for group in valid_groups:
+                sample = group[0]
+                reuse_count = sample.metadata.get('buffer_reuse_count', 0) if sample.metadata else 0
+
+                if reuse_count < self.max_reuse_count:
+                    reusable_groups.append(group)
+                else:
+                    # 🔧 FIX: Identify exhausted groups immediately for removal
+                    exhausted_groups.append(group)
+        else:
+            reusable_groups = valid_groups
 
         # Step 3: Compute priorities
         scored_groups = []
         breakdowns = []  # Collect breakdowns for statistics
 
-        for group in valid_groups:
+        for group in reusable_groups:
             try:
                 score, breakdown = self.compute_priority(group)
                 scored_groups.append((group, score))
@@ -726,17 +741,24 @@ class PrioritySamplingStrategy(BaseSamplingStrategy):
                 self.priority_scores_history = self.priority_scores_history[-100:]
 
         # Step 7: Update reuse count (if not removing)
-        if not self.remove_on_sample:
+        if not self.remove_on_sample and sampled:
             self.increment_reuse_count(sampled)
 
         # Step 8: Remove from buffer
-        if self.remove_on_sample:
+        if self.remove_on_sample and sampled:
             self.remove_from_buffer(buffer, sampled)
 
-        # Remove stale groups
+        # Always remove stale groups
         if stale_groups:
-            print(f"[Buffer Sampling] Removing {len(stale_groups)} stale groups")
+            print(f"[Buffer Sampling] Removing {len(stale_groups)} stale groups "
+                  f"(staleness > {self.max_staleness})")
             self.remove_from_buffer(buffer, stale_groups)
+
+        # 🔧 FIX: Remove exhausted groups immediately
+        if exhausted_groups:
+            print(f"[Buffer Sampling] Removing {len(exhausted_groups)} exhausted groups "
+                  f"(reuse_count >= {self.max_reuse_count})")
+            self.remove_from_buffer(buffer, exhausted_groups)
 
         self.total_sampled += len(sampled)
         return sampled
@@ -811,10 +833,11 @@ class RandomSamplingStrategy(BaseSamplingStrategy):
 
         Algorithm:
         1. Filter by staleness
-        2. Filter by reuse count
+        2. Filter by reuse count AND identify exhausted groups
         3. Random shuffle
         4. Take first num_samples groups
         5. Remove from buffer if remove_on_sample=True
+        6. Remove stale and exhausted groups
         """
         if len(buffer) == 0 or num_samples == 0:
             return []
@@ -822,28 +845,52 @@ class RandomSamplingStrategy(BaseSamplingStrategy):
         # Step 1: Filter by staleness
         valid_groups, stale_groups = self.filter_by_staleness(buffer)
 
-        # Step 2: Filter by reuse count
-        valid_groups = self.filter_by_reuse_count(valid_groups)
+        # Step 2: Filter by reuse count AND identify exhausted groups immediately
+        reusable_groups = []
+        exhausted_groups = []
+
+        if self.max_reuse_count > 0:
+            for group in valid_groups:
+                sample = group[0]
+                reuse_count = sample.metadata.get('buffer_reuse_count', 0) if sample.metadata else 0
+
+                if reuse_count < self.max_reuse_count:
+                    reusable_groups.append(group)
+                else:
+                    # 🔧 FIX: Identify exhausted groups immediately for removal
+                    exhausted_groups.append(group)
+        else:
+            reusable_groups = valid_groups
 
         # Step 3: Random sampling
-        num_to_sample = min(len(valid_groups), num_samples)
+        num_to_sample = min(len(reusable_groups), num_samples)
 
-        # Use numpy for reproducibility
-        indices = np.random.choice(len(valid_groups), num_to_sample, replace=False)
-        sampled = [valid_groups[i] for i in indices]
+        if num_to_sample > 0:
+            # Use numpy for reproducibility
+            indices = np.random.choice(len(reusable_groups), num_to_sample, replace=False)
+            sampled = [reusable_groups[i] for i in indices]
+        else:
+            sampled = []
 
         # Step 4: Update reuse count (if not removing)
-        if not self.remove_on_sample:
+        if not self.remove_on_sample and sampled:
             self.increment_reuse_count(sampled)
 
         # Step 5: Remove from buffer
-        if self.remove_on_sample:
+        if self.remove_on_sample and sampled:
             self.remove_from_buffer(buffer, sampled)
 
-        # Remove stale groups
+        # Always remove stale groups
         if stale_groups:
-            print(f"[Buffer Sampling] Removing {len(stale_groups)} stale groups")
+            print(f"[Buffer Sampling] Removing {len(stale_groups)} stale groups "
+                  f"(staleness > {self.max_staleness})")
             self.remove_from_buffer(buffer, stale_groups)
+
+        # 🔧 FIX: Remove exhausted groups immediately
+        if exhausted_groups:
+            print(f"[Buffer Sampling] Removing {len(exhausted_groups)} exhausted groups "
+                  f"(reuse_count >= {self.max_reuse_count})")
+            self.remove_from_buffer(buffer, exhausted_groups)
 
         self.total_sampled += len(sampled)
         return sampled

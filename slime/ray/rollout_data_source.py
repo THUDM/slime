@@ -270,28 +270,68 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
         return samples
 
     def _get_samples_from_buffer(self, num_samples: int) -> list[list[Sample]]:
-        """Sample from buffer using configured sampling strategy"""
+        """
+        Sample from buffer using configured sampling strategy.
+
+        ENHANCED: Added consistency checks for policy_version to ensure robustness.
+        """
         if len(self.buffer) == 0 or num_samples == 0:
             return []
 
         # NEW: Use sampling strategy instead of direct buffer_filter call
         if self.sampling_strategy is not None:
-            # Update strategy's current_policy_version
-            self.sampling_strategy.current_policy_version = self.current_policy_version
+            # === CONSISTENCY CHECK: Verify sampling strategy version ===
+            if self.sampling_strategy.current_policy_version != self.current_policy_version:
+                print(f"[WARNING] Sampling strategy version mismatch detected! "
+                      f"DataSource={self.current_policy_version}, "
+                      f"Strategy={self.sampling_strategy.current_policy_version}. "
+                      f"Auto-correcting...")
+                self.sampling_strategy.current_policy_version = self.current_policy_version
 
             # Sample using strategy
             samples = self.sampling_strategy.sample(self.buffer, num_samples)
 
+            # === VALIDATION: Check sampled data for anomalies ===
+            if len(samples) > 0:
+                versions = []
+                staleness_values = []
+
+                for group in samples:
+                    sample = group[0]
+                    if hasattr(sample, 'policy_version') and sample.policy_version is not None:
+                        versions.append(sample.policy_version)
+                        staleness = self.current_policy_version - sample.policy_version
+                        staleness_values.append(staleness)
+
+                        # Check for anomalies
+                        if staleness < 0:
+                            raise RuntimeError(
+                                f"[CRITICAL] Negative staleness detected! "
+                                f"sample.policy_version={sample.policy_version}, "
+                                f"current_policy_version={self.current_policy_version}. "
+                                f"This indicates policy_version was set incorrectly or "
+                                f"current_policy_version was not updated properly!"
+                            )
+
+                # Log sampling info with statistics
+                if versions:
+                    min_v, max_v = min(versions), max(versions)
+                    avg_staleness = sum(staleness_values) / len(staleness_values)
+
+                    print(f"[Buffer Sampling] Sampled {len(samples)} groups. "
+                          f"Version range: [{min_v}, {max_v}], "
+                          f"Current version: {self.current_policy_version}, "
+                          f"Avg staleness: {avg_staleness:.2f}")
+
+                    # Warning for excessive staleness (if max_staleness is configured)
+                    max_staleness_threshold = getattr(self.args, 'max_staleness', -1)
+                    if max_staleness_threshold >= 0 and max(staleness_values) > max_staleness_threshold * 1.5:
+                        print(f"[WARNING] Some samples have staleness ({max(staleness_values)}) "
+                              f"exceeding max_staleness ({max_staleness_threshold}) by 50%+. "
+                              f"This may indicate the sampling strategy is not filtering correctly.")
+
             # Update statistics
             self.total_sampled += len(samples)
-
-            # Log sampling info
-            if len(samples) > 0:
-                versions = [s[0].policy_version for s in samples if s[0].policy_version is not None]
-                if versions:
-                    print(f"[Buffer Sampling] Sampled {len(samples)} groups. "
-                          f"Version range: [{min(versions)}, {max(versions)}], "
-                          f"Current version: {self.current_policy_version}")
 
             return samples
         else:

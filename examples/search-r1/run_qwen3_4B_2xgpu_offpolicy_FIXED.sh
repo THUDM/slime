@@ -1,7 +1,13 @@
 #!/bin/bash
 
-# Off-policy GRPO training script for Qwen3-4B with 2xGPU
-
+# 🔧 FIXED Off-policy GRPO training script for Qwen3-4B with 2xGPU
+#
+# CRITICAL FIXES:
+# 1. Changed buffer_reuse_samples from 1000 → 3 (prevent version label corruption)
+# 2. Changed buffer_sampling_strategy from random → lifo_staleness (prioritize new samples)
+# 3. Reduced buffer_max_size from 1024 → 256 (faster version turnover)
+# 4. Increased max_staleness from 1 → 5 (match reuse count)
+# 5. Tightened importance weight clipping 0.1-10.0 → 0.5-2.0 (reduce variance)
 
 # for rerun the task
 pkill -9 sglang
@@ -83,14 +89,12 @@ OFFPOLICY_GRPO_ARGS=(
    # Use decoupled policy loss for off-policy
    --loss-type decoupled_policy_loss
 
-   # === Staleness Control (RECOMMENDED) ===
-   # 🔧 FIXED: Use max_staleness=4 for balanced off-policy
-   # - Allows using samples from versions [current-4, current]
-   # - Combined with stratified sampling, ensures version diversity
-   # - Not too aggressive (prevents large importance weight variance)
-   # --max-staleness 4
-   --max-staleness 1
-
+   # === Staleness Control ===
+   # 🔧 FIXED: Increased from 1 to 5 to match reuse count
+   # - Allows using samples from versions [current-5, current]
+   # - Balanced off-policy: not too aggressive, not too conservative
+   # - Combined with LIFO sampling, ensures newest data is prioritized
+   --max-staleness 5
 
    # === PPO Clipping Parameters ===
    # Asymmetric clipping: allows more aggressive positive updates
@@ -109,27 +113,39 @@ OFFPOLICY_GRPO_ARGS=(
    # === Entropy Regularization ===
    --entropy-coef 0.00
 
-   # === Importance Weight Clipping (RECOMMENDED) ===
-   # 🔧 FIXED: Enable clipping to prevent extreme importance weights
-   --importance-weight-clip-min 0.1
-   --importance-weight-clip-max 10.0
+   # === Importance Weight Clipping ===
+   # 🔧 FIXED: Tightened from [0.1, 10.0] to [0.5, 2.0]
+   # - Dramatically reduces gradient variance
+   # - Prevents weight explosion from old samples
+   # - More conservative but much more stable
+   --importance-weight-clip-min 0.5
+   --importance-weight-clip-max 2.0
 )
 
 
 BUFFER_SAMPLING_ARGS=(
-   # 🔧 FIXED: Reduced buffer size for faster version turnover
-   # --buffer-max-size 256
-   --buffer-max-size 1024
+   # 🔧 FIXED: Reduced from 1024 to 256 for faster version turnover
+   # - Smaller buffer means old samples are evicted faster
+   # - Ensures buffer contains mostly recent data
+   # - Reduces memory footprint
+   --buffer-max-size 256
 
-   # Use fifo_staleness strategy (with stratified sampling fix)
-   # --buffer-sampling-strategy lifo_staleness
-   --buffer-sampling-strategy random
+   # 🔧 CRITICAL FIX: Changed from random to lifo_staleness
+   # - LIFO = Last-In-First-Out (newest samples first)
+   # - Prioritizes samples where π_behave ≈ π_theta
+   # - Minimizes importance weight variance
+   # - See slime/utils/buffer_sampling_strategies.py:369
+   --buffer-sampling-strategy lifo_staleness
 
    # Allow sample reuse but don't remove on sample
    --buffer-remove-on-sample false
 
-   # --buffer-reuse-samples 10
-   --buffer-reuse-samples 1000
+   # 🔧 CRITICAL FIX: Reduced from 1000 to 3
+   # - Prevents version label corruption
+   # - Ensures policy_version accurately reflects sample age
+   # - Key insight: reuse_count acts as "hidden staleness"
+   # - With reuse=3 and staleness=5, effective max age = 5+3×0.5 ≈ 6.5 steps
+   --buffer-reuse-samples 3
 )
 
 
@@ -150,7 +166,7 @@ export WANDB_KEY="968275bc822c87ac741ecce2f06cdfb54dbc1608"  # Replace with your
 WANDB_ARGS=(
    --use-wandb
    --wandb-project slime-search-r1-offpolicy-stale-0107
-   --wandb-group qwen3-4B-2xgpu-offpolicy-stale1-random
+   --wandb-group qwen3-4B-2xgpu-offpolicy-FIXED
    --wandb-key ${WANDB_KEY}
 )
 
@@ -193,16 +209,18 @@ RUNTIME_ENV_JSON="{
 echo "========================================"
 echo "🔧 FIXED OFF-POLICY GRPO CONFIGURATION"
 echo "========================================"
-echo "✅ Version-aware stratified sampling enabled"
-echo "✅ buffer_reuse_samples: 10 (was 1000)"
-echo "✅ buffer_max_size: 256 (was 1024)"
-echo "✅ max_staleness: 4"
+echo "✅ buffer_sampling_strategy: lifo_staleness (was: random)"
+echo "✅ buffer_reuse_samples: 3 (was: 1000)"
+echo "✅ buffer_max_size: 256 (was: 1024)"
+echo "✅ max_staleness: 5 (was: 1)"
+echo "✅ importance_weight_clip: [0.5, 2.0] (was: [0.1, 10.0])"
 echo ""
 echo "Expected improvements:"
-echo "1. Each training batch uses samples from MULTIPLE versions"
-echo "2. Importance weights should stay close to 1.0"
-echo "3. Raw reward should increase steadily (no sudden drops)"
-echo "4. Version distribution log: {v1: N1, v2: N2, ...} instead of [vX, vX]"
+echo "1. Effective sample size should stay > 400 (was dropping to ~240)"
+echo "2. Grad norm should stay < 5.0 (was exploding to 20+)"
+echo "3. KL loss growth should be slower and more stable"
+echo "4. Version distribution: newest samples dominate the batch"
+echo "5. Training convergence should be smooth without sudden drops"
 echo "========================================"
 echo ""
 
@@ -227,12 +245,12 @@ ray job submit --address="http://127.0.0.1:8265" \
 
 
 # ==================== USAGE ====================
-# bash /mnt/shared-storage-user/puyuan/code/slime/examples/search-r1/run_qwen3_4B_2xgpu_offpolicy.sh 2>&1 | tee /mnt/shared-storage-user/puyuan/code/slime/examples/search-r1/logs/output_stale4_lifo.log
+# bash /mnt/shared-storage-user/puyuan/code/slime/examples/search-r1/run_qwen3_4B_2xgpu_offpolicy_FIXED.sh 2>&1 | tee /mnt/shared-storage-user/puyuan/code/slime/examples/search-r1/logs/output_FIXED.log
 #
 # Monitor key metrics during training:
-#   tail -f logs/output_stale4_fixed.log | grep -E "Buffer Sampling|importance_weight|raw_reward"
+#   tail -f logs/output_FIXED.log | grep -E "Buffer Sampling|importance_weight|effective_sample_size|grad_norm"
 #
 # Expected log output:
-#   [Buffer Sampling] Stratified sample: {60: 6, 61: 7, 62: 7, 63: 6, 64: 6}
-#     (total=32 groups from 5 versions)
-
+#   [Buffer Sampling] LIFO sample: {218: 10, 219: 12, 220: 10} (total=32 groups, version_range=[218, 220], newest-first)
+#   train/effective_sample_size: 450.5 (should stay > 400)
+#   train/grad_norm: 2.3 (should stay < 5.0)
