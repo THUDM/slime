@@ -715,11 +715,14 @@ class FSDPTrainRayActor(TrainRayActor):
         # Compute loss based on loss_type
         if self.args.loss_type == "sft_loss":
             # SFT loss: simple negative log-likelihood
+            # SFT training requires per-token loss, not per-sample loss
+            if not self.args.calculate_per_token_loss:
+                raise ValueError(
+                    "SFT training requires per-token loss. "
+                    "Please enable per-token loss by adding the flag: --calculate-per-token-loss"
+                )
             sft_loss = -log_probs
-            if self.args.calculate_per_token_loss:
-                sft_loss = sum_of_token(sft_loss, response_lengths, loss_masks)
-            else:
-                sft_loss = sum_of_sample_mean(sft_loss, response_lengths, loss_masks)
+            sft_loss = sum_of_token(sft_loss, response_lengths, loss_masks)
             loss = sft_loss
             # For SFT, pg_loss and pg_clipfrac are not meaningful but we still report them as 0
             pg_loss = torch.tensor(0.0, device=loss.device)
