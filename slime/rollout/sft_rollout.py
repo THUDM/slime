@@ -50,7 +50,6 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
     
     samples = data_buffer.get_samples(args.rollout_batch_size)
     
-    start_time = time.perf_counter()
 
     if _EXECUTOR is None:
         _EXECUTOR = concurrent.futures.ProcessPoolExecutor(
@@ -77,14 +76,8 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
 
         if i == 0 and not SAMPLE_PRINTED:
             logger.info(
-                f"sft_rollout::generate_rollout example data: {sample=} (raw)prompt={sample.prompt} (raw){token_ids=} (raw){loss_mask=} {response_length=}"
+                f"sft_rollout::generate_rollout example data: {sample=} (raw){messages=} (raw){token_ids=} (raw){loss_mask=} {response_length=}"
             )
             SAMPLE_PRINTED = True
-
-    total_time = time.perf_counter() - start_time
-    logger.info(
-        f"sft_rollout::generate_rollout rollout_id={rollout_id} batch_size={len(samples)} "
-        f"total_time={total_time:.4f}s"
-    )
 
     return samples
