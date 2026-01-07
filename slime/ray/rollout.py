@@ -473,6 +473,8 @@ class RolloutManager:
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
         self.rollout_id = -1
 
+        self.need_connect_train_actors = True
+        self._metric_checker = MetricChecker.maybe_create(args)
         self._health_monitors = []
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
             for srv in self.servers.values():
@@ -530,7 +532,10 @@ class RolloutManager:
         gpu_counts = srv.engine_gpu_counts if srv else []
         gpu_offsets = srv.engine_gpu_offsets if srv else []
         num_new = srv.num_new_engines if srv else 0
-        return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets
+        return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets, self.need_connect_train_actors
+
+    def set_need_connect_train_actors(self, value: bool):
+        self.need_connect_train_actors = value
 
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset
@@ -603,6 +608,8 @@ class RolloutManager:
         )
 
     def clear_num_new_engines(self, model_name: str | None = None):
+        if len(dead_indices) > 0:
+            self.need_connect_train_actors = True
         # when fault tolerance is not enabled, we need to manually clear num_new_engines after update_weights
         srv = self._get_server(model_name)
         if srv:
