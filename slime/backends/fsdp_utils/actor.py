@@ -236,6 +236,22 @@ class FSDPTrainRayActor(TrainRayActor):
         else:
             logger.info(f"[Rank {rank}] Pure DP mode (cp_size=1)")
 
+    def _sync_gradients_across_cp(self) -> None:
+        """Synchronize gradients across Context Parallel ranks.
+
+        Ring Flash Attention only handles dk/dv reduce internally for attention computation.
+        All other parameter gradients (MLP, LayerNorm, Embedding, projection weights) must
+        be explicitly synchronized across CP ranks to ensure consistent weight updates.
+        """
+        from torch.distributed.tensor import DTensor
+
+        for param in self.model.parameters():
+            if param.grad is not None:
+                # FSDP2 grads are DTensors - extract local tensor for all_reduce
+                grad_tensor = param.grad._local_tensor if isinstance(param.grad, DTensor) else param.grad
+                dist.all_reduce(grad_tensor, op=dist.ReduceOp.SUM, group=self.cp_group)
+                grad_tensor.div_(self.cp_size)
+
     def _get_init_weight_context_manager(self):
         """Get context manager for model initialization.
 
@@ -763,6 +779,10 @@ class FSDPTrainRayActor(TrainRayActor):
             reported_accum.setdefault(k, []).append(v)
 
         if (mbs_id + 1) in grad_accum:
+            # Sync gradients across CP ranks before optimizer step.
+            if self.cp_size > 1:
+                self._sync_gradients_across_cp()
+
             # TODO: check if the grad norm is global grad norm.
             grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
             # the grad norm used to be of DTensor
@@ -772,6 +792,7 @@ class FSDPTrainRayActor(TrainRayActor):
             # Update learning rate
             self.lr_scheduler.step()
             self.optimizer.zero_grad(set_to_none=True)
+
             # Aggregate logs
             aggregated = {k: torch.stack(v).sum().item() for k, v in reported_accum.items()}
             # TODO: change this, this is slow.
