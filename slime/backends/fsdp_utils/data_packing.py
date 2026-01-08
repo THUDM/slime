@@ -250,34 +250,37 @@ def unpack_sequences_with_cp(packed_batch: dict, cp_rank: int, cp_size: int) -> 
                 elif isinstance(value, torch.Tensor):
                     global_resp_start = end_idx - response_lengths[i] - pad_length
                     global_resp_end = end_idx - pad_length
-                    if cp_size > 1:
-                        local_resp_start =  max(global_resp_start, local_start) - local_start
-                        local_resp_end = min(global_resp_end, local_end) - local_start
                     if key in ["log_probs", "ref_log_probs", "cur_log_probs", "entropy"]:
-                        # log_probs[i] = log prob of token at position (local_start + i + 1)
+                        # These are computed from logits[:-1] so they have length seq_len-1
                         if cp_size == 1:
                             instance[key] = value[global_resp_start - 1 : global_resp_end - 1]
                         else:
-                            # if local_resp_start < local_resp_end:
-                                # instance[key] = value[local_resp_start:local_resp_end]
-                            #
                             is_last_rank = (cp_rank == cp_size - 1)
-                            # Non-last ranks have +1 coverage (last logit predicts first token of next chunk)
                             log_probs_coverage_end = local_end if is_last_rank else local_end + 1
 
-                            # Find overlap between response and log_probs coverage
                             overlap_start = max(global_resp_start, local_start + 1)
                             overlap_end = min(global_resp_end, log_probs_coverage_end)
 
                             if overlap_end > overlap_start:
-                                # Convert to local indices: token at position g → index (g - local_start - 1)
                                 log_start = overlap_start - local_start - 1
                                 log_end = overlap_end - local_start - 1
                                 instance[key] = value[log_start:log_end]
                             #
                     elif key == "rollout_log_probs":
-                        # rollout_log_probs is packed based on response_lengths, so slice differently
-                        instance[key] = value[sum(response_lengths[:i]) : sum(response_lengths[: i + 1])]
+                        # rollout_log_probs is packed based on response_lengths
+                        start = sum(response_lengths[:i])
+                        end = sum(response_lengths[: i + 1])
+                        if cp_size == 1:
+                            instance[key] = value[start:end]
+                        else:
+                            is_last_rank = (cp_rank == cp_size - 1)
+                            coverage_end = local_end if is_last_rank else local_end + 1
+                            overlap_start = max(global_resp_start, local_start + 1)
+                            overlap_end = min(global_resp_end, coverage_end)
+                            if overlap_end > overlap_start:
+                                resp_local_start = overlap_start - global_resp_start
+                                resp_local_end = overlap_end - global_resp_start
+                                instance[key] = value[start + resp_local_start:start + resp_local_end]
                     elif key in ["tokens", "position_ids"]:
                         # For other tensor attributes, try to slice them
                         if len(value) > start_idx:
@@ -291,8 +294,10 @@ def unpack_sequences_with_cp(packed_batch: dict, cp_rank: int, cp_size: int) -> 
                         if cp_size == 1:
                             instance[key] = value[start:end]
                         else:
-                            overlap_start = max(global_resp_start, local_start)
-                            overlap_end = min(global_resp_end, local_end)
+                            is_last_rank = (cp_rank == cp_size - 1)
+                            coverage_end = local_end if is_last_rank else local_end + 1
+                            overlap_start = max(global_resp_start, local_start + 1)
+                            overlap_end = min(global_resp_end, coverage_end)
                             if overlap_end > overlap_start:
                                 resp_local_start = overlap_start - global_resp_start
                                 resp_local_end = overlap_end - global_resp_start
