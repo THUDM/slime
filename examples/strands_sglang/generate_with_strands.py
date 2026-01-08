@@ -49,13 +49,6 @@ def execute_python_code(code: str) -> str:
     return result
 
 
-def _is_truncation(e: Exception) -> bool:
-    """Check if exception indicates truncation (token/tool limit)."""
-    text = f"{type(e).__name__} {e}".lower()
-    keywords = ["max", "token", "context", "length", "iteration", "overflow"]
-    return sum(k in text for k in keywords) >= 2
-
-
 async def generate(args, sample: Sample, sampling_params) -> Sample:
     """Generate with TITO: tokens captured during generation, no retokenization."""
     assert not args.partial_rollout, "Partial rollout not supported."
@@ -121,8 +114,6 @@ async def reward_func(args, sample: Sample, **kwargs):
 
     result["pred"] = result["pred"] or ""
     logger.info(
-        f"reward={result['score']:.2f} | status={sample.status.name} | "
-        f"tool_iters={tool_iterations} | tool_calls={getattr(sample, 'tool_call_count', 0)} | "
-        f"tokens={len(sample.tokens)} | resp_len={sample.response_length} | "
+        f"reward={result['score']:.2f} | status={sample.status.name} | tool_iters={tool_iterations} | tool_calls={getattr(sample, 'tool_call_count', 0)} | tokens={len(sample.tokens)} | resp_len={sample.response_length} | "
     )
     return result["score"]
