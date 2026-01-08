@@ -43,7 +43,7 @@ ds.to_parquet("/root/datasets/geo3k_imgurl/train_formatted.parquet")
 ```bash
 export WANDB_API_KEY=your_wandb_api_key
 
-# Megatron backend (default -> Qwen3-VL-2B-Instruct + Megatron)
+# Megatron backend (default -> Qwen3-VL-8B-Instruct + Megatron)
 ./examples/geo3k_vlm/run_geo3k_vlm.sh
 
 # FSDP backend
