@@ -171,7 +171,7 @@ RUNTIME_ENV_JSON="{
     \"no_proxy\": \"${no_proxy}\",
     \"MASTER_ADDR\": \"${MASTER_ADDR}\"
     \"OPEN_TRAINING_INT4_FAKE_QAT_FLAG\": \"1\",
-    \"OPEN_TRAINING_INT4_GROUP_SIZE\": \"128\"
+    \"OPEN_TRAINING_INT4_GROUP_SIZE\": \"32\"
   }
 }"
 
