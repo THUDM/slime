@@ -29,8 +29,8 @@ For data and checkpoint preparation, please run:
 
 ```bash
 # download
-huggingface-cli download --repo-type dataset zhuzilin/gsm8k --local-dir /root/gsm8k
-huggingface-cli download Qwen/Qwen2.5-0.5B-Instruct --local-dir /root/Qwen2.5-0.5B-Instruct
+hf download --repo-type dataset zhuzilin/gsm8k --local-dir /root/gsm8k
+hf download Qwen/Qwen2.5-0.5B-Instruct --local-dir /root/Qwen2.5-0.5B-Instruct
 
 # convert ckpt
 cd slime/

@@ -52,7 +52,7 @@
     <link rel="search" title="搜索" href="../../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 05 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 08 日"/>
   </head>
   
   
@@ -502,14 +502,14 @@ document.write(`
 <h2>Reproduce<a class="headerlink" href="#reproduce" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">WANDB_API_KEY</span><span class="o">=</span>your_wandb_api_key
 
-<span class="c1"># Megatron backend (default -&gt; Qwen3-VL-2B-Instruct + Megatron)</span>
+<span class="c1"># Megatron backend (default -&gt; Qwen3-VL-8B-Instruct + Megatron)</span>
 ./examples/geo3k_vlm/run_geo3k_vlm.sh
 
 <span class="c1"># FSDP backend</span>
-<span class="nv">SLIME_SCRIPT_TRAIN_BACKEND</span><span class="o">=</span>fsdp<span class="w"> </span>./examples/geo3k_vlm/run_geo3k_vlm.sh
+<span class="nv">slime_SCRIPT_TRAIN_BACKEND</span><span class="o">=</span>fsdp<span class="w"> </span>./examples/geo3k_vlm/run_geo3k_vlm.sh
 
 <span class="c1"># With different model</span>
-<span class="nv">SLIME_SCRIPT_MODEL_NAME</span><span class="o">=</span>Qwen3-VL-4B-Instruct<span class="w"> </span>./examples/geo3k_vlm/run_geo3k_vlm.sh
+<span class="nv">slime_SCRIPT_MODEL_NAME</span><span class="o">=</span>Qwen3-VL-4B-Instruct<span class="w"> </span>./examples/geo3k_vlm/run_geo3k_vlm.sh
 
 <span class="c1"># SFT</span>
 ./examples/geo_3k_vlm/run_geo3k_vlm_sft.sh
@@ -525,23 +525,23 @@ document.write(`
 </tr>
 </thead>
 <tbody>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_SCRIPT_TRAIN_BACKEND</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">slime_SCRIPT_TRAIN_BACKEND</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">megatron</span></code></p></td>
 <td><p>Training backend (<code class="docutils literal notranslate"><span class="pre">megatron</span></code> or <code class="docutils literal notranslate"><span class="pre">fsdp</span></code>)</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_SCRIPT_MODEL_NAME</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">slime_SCRIPT_MODEL_NAME</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">Qwen3-VL-8B-Instruct</span></code></p></td>
 <td><p>Model name</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_SCRIPT_DATASET_NAME</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">slime_SCRIPT_DATASET_NAME</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">chenhegu/geo3k_imgurl</span></code></p></td>
 <td><p>HuggingFace dataset name</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_SCRIPT_NUM_GPUS</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">slime_SCRIPT_NUM_GPUS</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">8</span></code></p></td>
 <td><p>Number of GPUs</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">SLIME_SCRIPT_EXTERNAL_RAY</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">slime_SCRIPT_EXTERNAL_RAY</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">0</span></code></p></td>
 <td><p>Use external Ray cluster (<code class="docutils literal notranslate"><span class="pre">1</span></code> to enable)</p></td>
 </tr>
@@ -661,7 +661,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 05 日.
+  最后更新于 2026 年 01 月 08 日.
   <br/>
 </p>
   </div>

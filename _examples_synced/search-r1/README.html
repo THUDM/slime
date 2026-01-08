@@ -54,7 +54,7 @@
     <link rel="prev" title="SFT Qwen3-4B-Base" href="../../examples/qwen3-4b-base-openhermes.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Jan 05, 2026"/>
+    <meta name="docbuild:last-update" content="Jan 08, 2026"/>
   </head>
   
   
@@ -491,6 +491,8 @@ pip<span class="w"> </span>install<span class="w"> </span>chardet
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/
 git<span class="w"> </span>clone<span class="w"> </span>https://github.com/PeterGriffinJin/Search-R1.git
 <span class="nb">cd</span><span class="w"> </span>Search-R1/
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
+pip<span class="w"> </span>install<span class="w"> </span>tensordict
 
 <span class="c1"># Set your working directory</span>
 <span class="nv">WORK_DIR</span><span class="o">=</span>/root/Search-R1
@@ -513,7 +515,7 @@ python<span class="w"> </span><span class="nv">$WORK_DIR</span>/scripts/data_pro
 <p><strong>Note:</strong> If you plan to use local search backend, see the <a class="reference internal" href="#appendix-setting-up-local-retriever"><span class="std std-ref">Appendix</span></a> for instructions on setting up the local retrieval server.</p>
 <p>Initialize the Qwen2.5-3B model:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># hf checkpoint</span>
-huggingface-cli<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-3B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen2.5-3B
+hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-3B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen2.5-3B
 
 <span class="c1"># mcore checkpoint</span>
 <span class="nb">cd</span><span class="w"> </span>/root/slime
@@ -875,7 +877,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jan 05, 2026.
+  Last updated on Jan 08, 2026.
   <br/>
 </p>
   </div>
