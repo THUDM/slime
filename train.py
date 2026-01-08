@@ -173,7 +173,24 @@ def train(args):
                 if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
                     ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
                 ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
-        # else: weights were already updated in the last train iteration loop
+        else:
+            # 🔧 FIX: Multi-train with per-iteration updates
+            # Weights were already updated in the last train iteration loop (line 131-136)
+            # But we still need to switch from training model to rollout engine for next rollout cycle
+            # CRITICAL: Must onload WEIGHTS + CUDA_GRAPH + KV_CACHE, not just CUDA_GRAPH + KV_CACHE!
+            print(f"[Multi-Train] Preparing rollout engine for next rollout cycle after {train_iters_per_rollout} training iterations")
+            if args.enable_weights_backuper:
+                offload_train()
+                onload_rollout()  # ✅ onload WEIGHTS
+            else:
+                actor_model.clear_memory()
+                onload_rollout()  # ✅ onload WEIGHTS
+                offload_train()
+
+            if args.offload_rollout:
+                if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
+                    ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
+                ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
 
         if args.eval_interval is not None and (
             (rollout_id + 1) % args.eval_interval == 0
