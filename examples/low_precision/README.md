@@ -113,7 +113,7 @@ You need to configure the specific environment variables for quantization settin
 
 *   **`OPEN_TRAINING_INT4_FAKE_QAT_FLAG`**: Enables fake quantization operations for INT4 training.
 *   **`OPEN_TRAINING_INT4_GROUP_SIZE`**: Specifies the block size (group size) for model quantization.
-    *   Set to **128** for `moonlight-16B-A3B` and `qwen3-235B-A22B-int4`.
+    *   Set to **128** for `moonlight-16B-A3B` 、 `qwen3-30B-A3B`and `qwen3-235B-A22B-int4`.
     *   Set to **32** for `kimi-k2-Thinking-int4`.
 
 **Configuration Example:**
