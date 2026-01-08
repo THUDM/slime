@@ -1,14 +1,17 @@
+import logging
+import math
 import re
+from typing import Literal
+
 import torch
-from typing import Dict, Literal, Optional, Tuple, Union
-import torch.nn.functional as F
-import math  # 引入 math 模块
+
+logger = logging.getLogger(__name__)
 
 
 def pack_to_int32(
-        value: torch.Tensor,
-        num_bits: int,
-        packed_dim: Union[Literal[0], Literal[1]] = 1,
+    value: torch.Tensor,
+    num_bits: int,
+    packed_dim: Literal[0] | Literal[1] = 1,
 ) -> torch.Tensor:
     """
     Packs a tensor of quantized weights stored in int8 into int32s with padding
@@ -78,24 +81,8 @@ def pack_int4_to_int32(q_weight: torch.Tensor) -> torch.Tensor:
     """
     return pack_to_int32(q_weight, 4, -1)
 
-    N, K = q_weight.shape
-    assert K % 8 == 0, f"K ({K}) must be divisible by 8 for Int32 packing."
 
-    w_view = q_weight.view(N, K // 8, 8).to(torch.int32)
-
-    packed = torch.zeros((N, K // 8), dtype=torch.int32, device=q_weight.device)
-
-    for i in range(8):
-        val = (w_view[..., i] & 0xF) << (i * 4)
-        packed |= val
-
-    return packed
-
-
-def int4_block_quantize(
-        x: torch.Tensor,
-        group_size: int = 128
-) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+def int4_block_quantize(x: torch.Tensor, group_size: int = 128) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     De-quantized = Scale * Quantized (Zero Point is always 0)
     """
@@ -106,6 +93,7 @@ def int4_block_quantize(
     # Padding
     if K % group_size != 0:
         import torch.nn.functional as F
+
         x = F.pad(x, (0, group_size - (K % group_size)))
         N, K = x.shape
 
@@ -121,7 +109,7 @@ def int4_block_quantize(
     scale = scale.clamp(min=1e-5)
 
     # =========================================================
-    # Quantize
+    # 2. Quantize
     # =========================================================
     x_int_sym = (x_reshaped / scale).round().clamp(-8, 7)
 
@@ -139,78 +127,43 @@ def int4_block_quantize(
     return out, scale_out, zero_out
 
 
-def quantize_params(args, megatron_name, converted_named_params, quantization_config):
-    if quantization_config is None:
-        return converted_named_params
-
-    quant_method = quantization_config.get("quant_method")
-
-    if quant_method == "fp8":
-        return _quantize_params_fp8(megatron_name, converted_named_params, quantization_config)
-    elif quant_method == "compressed-tensors":
-        # 把过滤逻辑交给具体的函数去处理
-        return _quantize_params_int4(converted_named_params, quantization_config)
-    else:
-        return converted_named_params
-
-
 def _quantize_params_int4(converted_named_params, quantization_config):
-    # 1. 解析配置
+
     try:
         w_cfg = quantization_config["config_groups"]["group_0"]["weights"]
         group_size = w_cfg["group_size"]
         is_symmetric = w_cfg["symmetric"]
         ignore_rules = quantization_config.get("ignore", [])
     except KeyError as e:
-        raise ValueError(f"Invalid quantization_config: missing {e}")
+        raise ValueError(f"Invalid quantization_config: missing {e}") from e
 
     results = []
-    # Quantization Start
 
     for name, param in converted_named_params:
-        # 2. Ignore check
-        is_ignored = any(
-            (r.startswith("re:") and re.match(r[3:], name)) or r == name
-            for r in ignore_rules
-        )
+        is_ignored = any((r.startswith("re:") and re.match(r[3:], name)) or r == name for r in ignore_rules)
 
-        # 3. Process ignore case
         if is_ignored or not name.endswith(".weight") or param.dim() < 2:
             if is_ignored:
-                print(f"IGNORING: {name}")
+                logger.info(f"Ignoring parameter: {name}")
             results.append((name, param))
             continue
 
-        # 4. Reshape
         input_tensor = param.view(-1, param.shape[-1]) if param.dim() > 2 else param
 
-        # 5. Shape check
         if group_size != -1 and input_tensor.shape[-1] < group_size:
-            print(f"WARNING: Skipping {name}, K-dim {input_tensor.shape[-1]} < group_size")
+            logger.warning(f"Skipping {name}, K-dim {input_tensor.shape[-1]} < group_size")
             results.append((name, param))
             continue
 
-        print(f'[Debug quant slime 1] \n'
-              f'name is {name}',
-              f'input_tensor shape is {param.shape}')
-        # 6. Quantization
-        results.extend(_quantize_param_int4(
-            name,
-            input_tensor,
-            group_size,
-            param.shape,  # origin shape
-            is_symmetric
-        ))
+        results.extend(_quantize_param_int4(name, input_tensor, group_size, param.shape, is_symmetric))  # origin shape
 
     return results
 
+
 def _quantize_param_int4(name: str, weight: torch.Tensor, group_size: int, shape: torch.Tensor, is_symmetric: bool):
     """
-    Wraps the quantization function, handles renaming and packing. 统一使用非对称逻辑。
+    Wraps the quantization function, handles renaming and packing.
     """
-
-    # --- Renaming Logic
-
     base_name = name.replace(".weight", "")
 
     new_base_name = base_name
@@ -220,8 +173,10 @@ def _quantize_param_int4(name: str, weight: torch.Tensor, group_size: int, shape
     if group_size == -1:
         group_size = weight.shape[1]
     elif weight.shape[1] % group_size != 0:
-        print(
-            f"Warning: Weight {name} with shape {weight.shape} K dim is not divisible by group_size {group_size}. Skipping.")
+        logger.warning(
+            f"Weight {name} with shape {weight.shape} has K-dimension "
+            f"not divisible by group_size {group_size}. Skipping."
+        )
         return [(name, weight.to(original_dtype))]
 
     q_weight, scales, zeros = int4_block_quantize(weight, group_size)
@@ -232,10 +187,6 @@ def _quantize_param_int4(name: str, weight: torch.Tensor, group_size: int, shape
     scales_name = f"{new_base_name}.weight_scale"
     qweight_shape = f"{new_base_name}.weight_shape"
 
-    q_shape = torch.tensor(shape, dtype=torch.int32, device='cuda')
+    q_shape = torch.tensor(shape, dtype=torch.int32, device="cuda")
 
-    return [
-        (qweight_name, packed_q_weight),
-        (scales_name, scales.to(original_dtype)),
-        (qweight_shape, q_shape)
-    ]
+    return [(qweight_name, packed_q_weight), (scales_name, scales.to(original_dtype)), (qweight_shape, q_shape)]
