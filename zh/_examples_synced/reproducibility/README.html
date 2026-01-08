@@ -463,8 +463,8 @@ document.write(`
 <p>Here we provide the script to do RL training on Qwen2.5 0.5B model and GSM8K dataset with full deterministic.</p>
 <p>For data and checkpoint preparation, please run:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># download</span>
-hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/gsm8k<span class="w"> </span>--local-dir<span class="w"> </span>/root/gsm8k
-hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-0.5B-Instruct<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen2.5-0.5B-Instruct
+huggingface-cli<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/gsm8k<span class="w"> </span>--local-dir<span class="w"> </span>/root/gsm8k
+huggingface-cli<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen2.5-0.5B-Instruct<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen2.5-0.5B-Instruct
 
 <span class="c1"># convert ckpt</span>
 <span class="nb">cd</span><span class="w"> </span>slime/

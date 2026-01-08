@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>slime x Strands-Agents &#8212; slime</title>
+    <title>Slime x Strands-Agents &#8212; slime</title>
   
   
   
@@ -431,7 +431,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>slime x Strands-Agents</h1>
+    <h1>Slime x Strands-Agents</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -457,14 +457,14 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="slime-x-strands-agents">
-<h1>slime x Strands-Agents<a class="headerlink" href="#slime-x-strands-agents" title="Link to this heading">#</a></h1>
-<p>This is a running example that connects the <a class="reference external" href="https://github.com/strands-agents/sdk-python">Strands-Agents</a> agent scaffolding framework with slime for RL training.</p>
+<h1>Slime x Strands-Agents<a class="headerlink" href="#slime-x-strands-agents" title="Link to this heading">#</a></h1>
+<p>This is a running example that connects the <a class="reference external" href="https://github.com/strands-agents/sdk-python">Strands-Agents</a> agent scaffolding framework with Slime for RL training.</p>
 <section id="install-dependencies">
 <h2>Install Dependencies<a class="headerlink" href="#install-dependencies" title="Link to this heading">#</a></h2>
 <ol class="arabic simple">
 <li><p>Pull the <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code> image and enter it</p></li>
 <li><p>Goes to slime folder: <code class="docutils literal notranslate"><span class="pre">cd</span> <span class="pre">/root/slime</span></code> (Clone the repository if not already there: <code class="docutils literal notranslate"><span class="pre">cd</span> <span class="pre">/root</span> <span class="pre">&amp;&amp;</span> <span class="pre">git</span> <span class="pre">clone</span> <span class="pre">https://github.com/THUDM/slime.git</span></code>)</p></li>
-<li><p>Install slime: <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span></code></p></li>
+<li><p>Install Slime: <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span></code></p></li>
 <li><p>Goes to the example folder: <code class="docutils literal notranslate"><span class="pre">cd</span> <span class="pre">/root/slime/examples/strands-agents</span></code></p></li>
 <li><p>Install other dependencies: <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-r</span> <span class="pre">requirements.txt</span></code></p></li>
 </ol>
@@ -475,7 +475,7 @@ document.write(`
 <section id="prepare-model">
 <h2>Prepare Model<a class="headerlink" href="#prepare-model" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># hf checkpoint</span>
-hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-4B-Instruct-2507<span class="w"> </span>--local-dir<span class="w"> </span>/root/models/Qwen/Qwen3-4B-Instruct-2507
+huggingface-cli<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-4B-Instruct-2507<span class="w"> </span>--local-dir<span class="w"> </span>/root/models/Qwen/Qwen3-4B-Instruct-2507
 
 <span class="c1"># mcore checkpoint</span>
 <span class="nb">cd</span><span class="w"> </span>/root/slime

@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Evaluation with Nemo Skills &#8212; slime</title>
+    <title>Docs &#8212; slime</title>
   
   
   
@@ -431,7 +431,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>Evaluation with Nemo Skills</h1>
+    <h1>Docs</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -441,23 +441,11 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#overview">Overview</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">Prerequisites</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#setup-instructions">Setup Instructions</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-host-network">Prepare Host Network</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#launch-the-slime-container">Launch the slime Container</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#launch-the-skills-container">Launch the Skills Container</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configure-the-skills-container">Configure the Skills Container</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-evaluation">Running Evaluation</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-slime-container">Prepare slime Container</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#download-model-and-data">Download Model and Data</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#convert-model-to-megatron-lm-format">Convert Model to Megatron-LM Format</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-the-training-script">Run the Training Script</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-host-network">1) Prepare host network</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#launch-the-slime-container">2) Launch the slime container</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#launch-the-skills-container">3) Launch the Skills container</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#inside-the-skills-container">4) Inside the Skills container</a></li>
 </ul>
             </nav>
         </div>
@@ -469,36 +457,23 @@ document.write(`
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="evaluation-with-nemo-skills">
-<h1>Evaluation with Nemo Skills<a class="headerlink" href="#evaluation-with-nemo-skills" title="Link to this heading">#</a></h1>
-<p>This directory contains configuration and utilities for offloading complex evaluation benchmarks to a separate environment using the <code class="docutils literal notranslate"><span class="pre">eval_delegate</span></code> mechanism. It is designed to integrate with <a class="reference external" href="https://github.com/NVIDIA/NeMo-Skills">Nemo Skills</a> for running benchmarks like AIME25, Arena-Hard, and HLE, which may require specific environments distinct from the main training setup.</p>
-<section id="overview">
-<h2>Overview<a class="headerlink" href="#overview" title="Link to this heading">#</a></h2>
-<p>The setup allows slime to delegate evaluation tasks to a dedicated “Skills” server. This creates a clear separation of concerns:</p>
-<ol class="arabic simple">
-<li><p><strong>slime Container</strong>: Runs the main training loop and hosts the model using SGLang.</p></li>
-<li><p><strong>Skills Container</strong>: Hosts the <code class="docutils literal notranslate"><span class="pre">nemo_skills</span></code> environment, runs the evaluation logic, and queries the model running in the slime container.</p></li>
-</ol>
-</section>
+  <section class="tex2jax_ignore mathjax_ignore" id="docs">
+<h1>Docs<a class="headerlink" href="#docs" title="Link to this heading">#</a></h1>
 <section id="prerequisites">
 <h2>Prerequisites<a class="headerlink" href="#prerequisites" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p>A writable host directory for cached data (e.g., <code class="docutils literal notranslate"><span class="pre">/data/.cache</span></code>).</p></li>
-<li><p>Docker installed with NVIDIA GPU support.</p></li>
+<li><p>A writable host directory for cached data (<code class="docutils literal notranslate"><span class="pre">/data/.cache</span></code>)</p></li>
+<li><p>Choose descriptive container names to replace the placeholders (<code class="docutils literal notranslate"><span class="pre">&lt;slime</span> <span class="pre">container</span> <span class="pre">name&gt;</span></code>, <code class="docutils literal notranslate"><span class="pre">&lt;env</span> <span class="pre">container</span> <span class="pre">name&gt;</span></code>).</p></li>
 </ul>
 </section>
-<section id="setup-instructions">
-<h2>Setup Instructions<a class="headerlink" href="#setup-instructions" title="Link to this heading">#</a></h2>
 <section id="prepare-host-network">
-<h3>Prepare Host Network<a class="headerlink" href="#prepare-host-network" title="Link to this heading">#</a></h3>
-<p>Create a Docker network to allow communication between the slime and Skills containers.</p>
+<h2>1) Prepare host network<a class="headerlink" href="#prepare-host-network" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>docker<span class="w"> </span>network<span class="w"> </span>create<span class="w"> </span>skills-net
 </pre></div>
 </div>
 </section>
 <section id="launch-the-slime-container">
-<h3>Launch the slime Container<a class="headerlink" href="#launch-the-slime-container" title="Link to this heading">#</a></h3>
-<p>Start the main container where slime and the model will run. Replace <code class="docutils literal notranslate"><span class="pre">&lt;slime</span> <span class="pre">container</span> <span class="pre">name&gt;</span></code> with your desired name (e.g., <code class="docutils literal notranslate"><span class="pre">slime_main</span></code>).</p>
+<h2>2) Launch the slime container<a class="headerlink" href="#launch-the-slime-container" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>docker<span class="w"> </span>run<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-itd<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--shm-size<span class="w"> </span>32g<span class="w"> </span><span class="se">\</span>
@@ -515,8 +490,7 @@ document.write(`
 </div>
 </section>
 <section id="launch-the-skills-container">
-<h3>Launch the Skills Container<a class="headerlink" href="#launch-the-skills-container" title="Link to this heading">#</a></h3>
-<p>Start the container that will run the evaluation benchmarks. Replace <code class="docutils literal notranslate"><span class="pre">&lt;env</span> <span class="pre">container</span> <span class="pre">name&gt;</span></code> with your desired name (e.g., <code class="docutils literal notranslate"><span class="pre">skills_env</span></code>).</p>
+<h2>3) Launch the Skills container<a class="headerlink" href="#launch-the-skills-container" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>docker<span class="w"> </span>run<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>-itd<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--shm-size<span class="w"> </span>32g<span class="w"> </span><span class="se">\</span>
@@ -533,29 +507,24 @@ document.write(`
 </pre></div>
 </div>
 </section>
-<section id="configure-the-skills-container">
-<h3>Configure the Skills Container<a class="headerlink" href="#configure-the-skills-container" title="Link to this heading">#</a></h3>
-<p>Enter the <strong>Skills container</strong> and set up the environment.</p>
-<p><strong>a) Install Dependencies</strong></p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Clone repositories</span>
-git<span class="w"> </span>clone<span class="w"> </span>-b<span class="w"> </span>slime_skills<span class="w"> </span>https://github.com/guapisolo/slime.git<span class="w"> </span>/opt/slime
+<section id="inside-the-skills-container">
+<h2>4) Inside the Skills container<a class="headerlink" href="#inside-the-skills-container" title="Link to this heading">#</a></h2>
+<p>Clone repos and install the Skills package:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>-b<span class="w"> </span>slime_skills<span class="w"> </span>https://github.com/guapisolo/slime.git<span class="w"> </span>/opt/slime
 git<span class="w"> </span>clone<span class="w"> </span>-b<span class="w"> </span>slime<span class="w"> </span>https://github.com/guapisolo/Skills.git<span class="w"> </span>/opt/Skills
 
-<span class="c1"># Install Skills package</span>
 <span class="nb">cd</span><span class="w"> </span>/opt/Skills
 pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
 </pre></div>
 </div>
-<p><strong>b) Prepare Datasets</strong></p>
-<p>Download and prepare the datasets you intend to use.</p>
+<p>Download/prepare datasets:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/opt/Skills/nemo_skills/dataset
 python3<span class="w"> </span>aime25/prepare.py
 python3<span class="w"> </span>hle/prepare.py
 python3<span class="w"> </span>arena-hard/prepare.py
 </pre></div>
 </div>
-<p><strong>c) Start the Evaluation Server</strong></p>
-<p>Start the server that listens for evaluation requests from slime.</p>
+<p>Start the skills server:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/opt/slime
 python<span class="w"> </span>examples/eval/nemo_skills/skills_server.py<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--host<span class="w"> </span><span class="m">0</span>.0.0.0<span class="w"> </span><span class="se">\</span>
@@ -567,61 +536,7 @@ python<span class="w"> </span>examples/eval/nemo_skills/skills_server.py<span cl
 <span class="w">  </span>--openai-model-name<span class="w"> </span>slime-openai-model
 </pre></div>
 </div>
-<p>*Note: You can now connect to the server at <code class="docutils literal notranslate"><span class="pre">skills_server:9050</span></code> from within the <code class="docutils literal notranslate"><span class="pre">skills-net</span></code> Docker network. The server always proxies evaluation traffic to an OpenAI-compatible sglang router (slime starts and manage the router), so adjust <code class="docutils literal notranslate"><span class="pre">--openai-model-name</span></code> and <code class="docutils literal notranslate"><span class="pre">--max-concurrent-requests</span></code> as needed for your deployment.</p>
-</section>
-</section>
-<section id="running-evaluation">
-<h2>Running Evaluation<a class="headerlink" href="#running-evaluation" title="Link to this heading">#</a></h2>
-<p>The example scripts are located in <code class="docutils literal notranslate"><span class="pre">examples/eval/scripts</span></code>. Here is an example workflow for training Qwen3-4B with delegated evaluation.</p>
-<section id="prepare-slime-container">
-<h3>Prepare slime Container<a class="headerlink" href="#prepare-slime-container" title="Link to this heading">#</a></h3>
-<p>Enter the <strong>slime container</strong> and install the package.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
-git<span class="w"> </span>pull
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
-</pre></div>
-</div>
-</section>
-<section id="download-model-and-data">
-<h3>Download Model and Data<a class="headerlink" href="#download-model-and-data" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Download model weights (Qwen3-4B)</span>
-hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-4B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-4B
-
-<span class="c1"># Download training dataset (dapo-math-17k)</span>
-hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/dapo-math-17k<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--local-dir<span class="w"> </span>/root/dapo-math-17k
-</pre></div>
-</div>
-</section>
-<section id="convert-model-to-megatron-lm-format">
-<h3>Convert Model to Megatron-LM Format<a class="headerlink" href="#convert-model-to-megatron-lm-format" title="Link to this heading">#</a></h3>
-<p>You need to convert the HF model to the format required by Megatron-LM. Ensure you load the correct model arguments first.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Source model arguments</span>
-<span class="nb">source</span><span class="w"> </span>scripts/models/qwen3-4B.sh
-
-<span class="c1"># Convert model</span>
-<span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM<span class="w"> </span>python<span class="w"> </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--hf-checkpoint<span class="w"> </span>/root/Qwen3-4B<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--save<span class="w"> </span>/root/Qwen3-4B_torch_dist
-</pre></div>
-</div>
-</section>
-<section id="run-the-training-script">
-<h3>Run the Training Script<a class="headerlink" href="#run-the-training-script" title="Link to this heading">#</a></h3>
-<p>Run the training script.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>examples/eval/scripts/run-qwen3-4B.sh
-</pre></div>
-</div>
-</section>
-</section>
-<section id="configuration">
-<h2>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">#</a></h2>
-<p>The evaluation configuration is defined in <code class="docutils literal notranslate"><span class="pre">examples/eval/scripts/multi_tasks.yaml</span></code>. It specifies:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">delegate</span></code>: Configurations for the external skills server (URL, timeouts).</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">datasets</span></code>: List of datasets to evaluate on (e.g., <code class="docutils literal notranslate"><span class="pre">aime25</span></code>, <code class="docutils literal notranslate"><span class="pre">arena-hard</span></code>).</p></li>
-</ul>
+<p>You can now connect to the server at <code class="docutils literal notranslate"><span class="pre">skills_server:9050</span></code> from within the <code class="docutils literal notranslate"><span class="pre">skills-net</span></code> Docker network. The server always proxies evaluation traffic to an OpenAI-compatible sglang router (Slime starts and manage the router), so adjust <code class="docutils literal notranslate"><span class="pre">--openai-model-name</span></code> and <code class="docutils literal notranslate"><span class="pre">--max-concurrent-requests</span></code> as needed for your deployment.</p>
 </section>
 </section>
 
@@ -652,23 +567,11 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#overview">Overview</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">Prerequisites</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#setup-instructions">Setup Instructions</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-host-network">Prepare Host Network</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#launch-the-slime-container">Launch the slime Container</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#launch-the-skills-container">Launch the Skills Container</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configure-the-skills-container">Configure the Skills Container</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-evaluation">Running Evaluation</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-slime-container">Prepare slime Container</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#download-model-and-data">Download Model and Data</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#convert-model-to-megatron-lm-format">Convert Model to Megatron-LM Format</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#run-the-training-script">Run the Training Script</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-host-network">1) Prepare host network</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#launch-the-slime-container">2) Launch the slime container</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#launch-the-skills-container">3) Launch the Skills container</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#inside-the-skills-container">4) Inside the Skills container</a></li>
 </ul>
   </nav></div>
 

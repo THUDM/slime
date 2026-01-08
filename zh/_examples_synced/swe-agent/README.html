@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>SWE-agent training Example &#8212; slime</title>
+    <title>Introduction &#8212; slime</title>
   
   
   
@@ -427,7 +427,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>SWE-agent training Example</h1>
+    <h1>Introduction</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -437,18 +437,19 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#introduction">Introduction</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-environment">Prepare environment</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#update-submodules">Update submodules</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#docker-settings">Docker settings</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#installation">Installation</a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#">Introduction</a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-environment">Prepare environment</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#update-submodules">Update submodules</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#docker-settings">Docker settings</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#installation">Installation</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#preparing-data">Preparing data</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-train">Running train</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#troubleshooting">Troubleshooting</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#metrics">Metrics</a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#preparing-data">Preparing data</a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#running-train">Running train</a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#troubleshooting">Troubleshooting</a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#metrics">Metrics</a></li>
 </ul>
+
             </nav>
         </div>
     </div>
@@ -459,10 +460,8 @@ document.write(`
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="swe-agent-training-example">
-<h1>SWE-agent training Example<a class="headerlink" href="#swe-agent-training-example" title="Link to this heading">#</a></h1>
-<section id="introduction">
-<h2>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">#</a></h2>
+  <section id="introduction">
+<h1>Introduction<a class="headerlink" href="#introduction" title="Link to this heading">#</a></h1>
 <p>This is an example for SWE-agent training. This example uses NVIDIA's Nemo-Gym as the Gym environment implement, SWE-Gym as the training data, and SWE-bench as the evaluation.</p>
 <p>This implementation of this example is partially in submodules below:</p>
 <ul class="simple">
@@ -471,15 +470,15 @@ document.write(`
 </ul>
 </section>
 <section id="prepare-environment">
-<h2>Prepare environment<a class="headerlink" href="#prepare-environment" title="Link to this heading">#</a></h2>
+<h1>Prepare environment<a class="headerlink" href="#prepare-environment" title="Link to this heading">#</a></h1>
 <section id="update-submodules">
-<h3>Update submodules<a class="headerlink" href="#update-submodules" title="Link to this heading">#</a></h3>
+<h2>Update submodules<a class="headerlink" href="#update-submodules" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>submodule<span class="w"> </span>update<span class="w"> </span>--init<span class="w"> </span>--recursive<span class="w"> </span>.
 </pre></div>
 </div>
 </section>
 <section id="docker-settings">
-<h3>Docker settings<a class="headerlink" href="#docker-settings" title="Link to this heading">#</a></h3>
+<h2>Docker settings<a class="headerlink" href="#docker-settings" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 1. create a docker network</span>
 docker<span class="w"> </span>network<span class="w"> </span>create<span class="w"> </span>swe-net
 
@@ -523,7 +522,7 @@ apt<span class="w"> </span>update<span class="w"> </span><span class="o">&amp;&a
 <p>note: <code class="docutils literal notranslate"><span class="pre">-v</span> <span class="pre">/var/run/docker.sock:/var/run/docker.sock</span></code> is required for Docker-in-Docker SWE environment execution; use <code class="docutils literal notranslate"><span class="pre">--network</span> <span class="pre">swe-net</span></code> to enable communication between training &amp; environment.</p>
 </section>
 <section id="installation">
-<h3>Installation<a class="headerlink" href="#installation" title="Link to this heading">#</a></h3>
+<h2>Installation<a class="headerlink" href="#installation" title="Link to this heading">#</a></h2>
 <p>In <strong>environment docker</strong>, install Gym</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/yueming-yuan/Gym
 <span class="nb">cd</span><span class="w"> </span>Gym
@@ -551,15 +550,15 @@ uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </s
 </section>
 </section>
 <section id="preparing-data">
-<h2>Preparing data<a class="headerlink" href="#preparing-data" title="Link to this heading">#</a></h2>
-<p>In <strong>slime docker</strong>, download <strong>SWE-Gym</strong> data from huggingface and convert it to slime' prompt data format with this script.</p>
+<h1>Preparing data<a class="headerlink" href="#preparing-data" title="Link to this heading">#</a></h1>
+<p>In <strong>slime docker</strong>, download <strong>SWE-Gym</strong> data from huggingface and convert it to Slime' prompt data format with this script.</p>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cd</span> <span class="n">slime</span><span class="o">/</span><span class="n">examples</span><span class="o">/</span><span class="n">swe</span><span class="o">-</span><span class="n">agent</span>
 <span class="n">python</span> <span class="n">download_and_process_data</span><span class="o">.</span><span class="n">py</span> <span class="o">--</span><span class="nb">input</span> <span class="n">SWE</span><span class="o">-</span><span class="n">Gym</span><span class="o">/</span><span class="n">SWE</span><span class="o">-</span><span class="n">Gym</span> <span class="o">--</span><span class="n">output</span> <span class="o">/</span><span class="n">root</span><span class="o">/</span><span class="n">swe_train</span><span class="o">.</span><span class="n">jsonl</span>
 </pre></div>
 </div>
 </section>
 <section id="running-train">
-<h2>Running train<a class="headerlink" href="#running-train" title="Link to this heading">#</a></h2>
+<h1>Running train<a class="headerlink" href="#running-train" title="Link to this heading">#</a></h1>
 <ol class="arabic simple">
 <li><p>In environment docker, launch the agent server</p></li>
 </ol>
@@ -580,14 +579,14 @@ bash<span class="w"> </span>examples/swe-agent/run-qwen3-4b-instruct.sh
 </div>
 </section>
 <section id="troubleshooting">
-<h2>Troubleshooting<a class="headerlink" href="#troubleshooting" title="Link to this heading">#</a></h2>
+<h1>Troubleshooting<a class="headerlink" href="#troubleshooting" title="Link to this heading">#</a></h1>
 <ol class="arabic simple">
 <li><p>The first time of every SWE environment can be slow, and may need to wait before generation, because each SWE-Gym task has a specific docker, and <code class="docutils literal notranslate"><span class="pre">docker</span> <span class="pre">pull</span></code> takes time.</p></li>
 <li><p>Sometimes the environment may also be slow at evaluation. The timeout of evaluation is 10 minutes by default. If the server is stuck at <code class="docutils literal notranslate"><span class="pre">[EVAL]&lt;instance&gt;</span> <span class="pre">Running</span> <span class="pre">eval</span></code>, you may need to wait for it.</p></li>
 </ol>
 </section>
 <section id="metrics">
-<h2>Metrics<a class="headerlink" href="#metrics" title="Link to this heading">#</a></h2>
+<h1>Metrics<a class="headerlink" href="#metrics" title="Link to this heading">#</a></h1>
 <div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">agent</span><span class="o">/</span><span class="n">turns_mean</span><span class="p">,</span> <span class="n">agent</span><span class="o">/</span><span class="n">turns_sum</span> <span class="o">-</span> <span class="n">Turn</span> <span class="n">counts</span>
 <span class="n">agent</span><span class="o">/</span><span class="n">tool_calls_mean</span><span class="p">,</span> <span class="n">agent</span><span class="o">/</span><span class="n">tool_calls_sum</span> <span class="o">-</span> <span class="n">Tool</span> <span class="n">call</span> <span class="n">counts</span>
 <span class="n">agent</span><span class="o">/</span><span class="n">total_time_mean</span><span class="o">/</span><span class="nb">max</span><span class="o">/</span><span class="nb">min</span> <span class="o">-</span> <span class="n">Total</span> <span class="n">time</span> <span class="n">statistics</span>
@@ -601,7 +600,6 @@ bash<span class="w"> </span>examples/swe-agent/run-qwen3-4b-instruct.sh
 <span class="n">agent</span><span class="o">/</span><span class="n">model_time_ratio</span><span class="p">,</span> <span class="n">agent</span><span class="o">/</span><span class="n">env_time_ratio</span> <span class="o">-</span> <span class="n">Time</span> <span class="n">ratios</span>
 </pre></div>
 </div>
-</section>
 </section>
 
 
@@ -631,18 +629,19 @@ bash<span class="w"> </span>examples/swe-agent/run-qwen3-4b-instruct.sh
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#introduction">Introduction</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-environment">Prepare environment</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#update-submodules">Update submodules</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#docker-settings">Docker settings</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#installation">Installation</a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#">Introduction</a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#prepare-environment">Prepare environment</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#update-submodules">Update submodules</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#docker-settings">Docker settings</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#installation">Installation</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#preparing-data">Preparing data</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-train">Running train</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#troubleshooting">Troubleshooting</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#metrics">Metrics</a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#preparing-data">Preparing data</a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#running-train">Running train</a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#troubleshooting">Troubleshooting</a></li>
+<li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#metrics">Metrics</a></li>
 </ul>
+
   </nav></div>
 
 </div></div>

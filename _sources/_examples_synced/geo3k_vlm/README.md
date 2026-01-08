@@ -43,14 +43,14 @@ ds.to_parquet("/root/datasets/geo3k_imgurl/train_formatted.parquet")
 ```bash
 export WANDB_API_KEY=your_wandb_api_key
 
-# Megatron backend (default -> Qwen3-VL-8B-Instruct + Megatron)
+# Megatron backend (default -> Qwen3-VL-2B-Instruct + Megatron)
 ./examples/geo3k_vlm/run_geo3k_vlm.sh
 
 # FSDP backend
-slime_SCRIPT_TRAIN_BACKEND=fsdp ./examples/geo3k_vlm/run_geo3k_vlm.sh
+SLIME_SCRIPT_TRAIN_BACKEND=fsdp ./examples/geo3k_vlm/run_geo3k_vlm.sh
 
 # With different model
-slime_SCRIPT_MODEL_NAME=Qwen3-VL-4B-Instruct ./examples/geo3k_vlm/run_geo3k_vlm.sh
+SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-4B-Instruct ./examples/geo3k_vlm/run_geo3k_vlm.sh
 
 # SFT
 ./examples/geo_3k_vlm/run_geo3k_vlm_sft.sh
@@ -60,11 +60,11 @@ slime_SCRIPT_MODEL_NAME=Qwen3-VL-4B-Instruct ./examples/geo3k_vlm/run_geo3k_vlm.
 
 | Environment Variable | Default | Description |
 |---------------------|---------|-------------|
-| `slime_SCRIPT_TRAIN_BACKEND` | `megatron` | Training backend (`megatron` or `fsdp`) |
-| `slime_SCRIPT_MODEL_NAME` | `Qwen3-VL-8B-Instruct` | Model name |
-| `slime_SCRIPT_DATASET_NAME` | `chenhegu/geo3k_imgurl` | HuggingFace dataset name |
-| `slime_SCRIPT_NUM_GPUS` | `8` | Number of GPUs |
-| `slime_SCRIPT_EXTERNAL_RAY` | `0` | Use external Ray cluster (`1` to enable) |
+| `SLIME_SCRIPT_TRAIN_BACKEND` | `megatron` | Training backend (`megatron` or `fsdp`) |
+| `SLIME_SCRIPT_MODEL_NAME` | `Qwen3-VL-8B-Instruct` | Model name |
+| `SLIME_SCRIPT_DATASET_NAME` | `chenhegu/geo3k_imgurl` | HuggingFace dataset name |
+| `SLIME_SCRIPT_NUM_GPUS` | `8` | Number of GPUs |
+| `SLIME_SCRIPT_EXTERNAL_RAY` | `0` | Use external Ray cluster (`1` to enable) |
 
 ### Supported Models
 

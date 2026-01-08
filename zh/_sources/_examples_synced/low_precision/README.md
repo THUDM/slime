@@ -1,14 +1,14 @@
-# FP8 training examples
+## FP8 training examples
 
-This is an example of FP8 training and FP8 inference. Under FP8 training and inference, it can achieve more efficient inference throughput and lower training-inference mismatch, resulting in more stable training. More details can be found in [this blog](https://lmsys.org/blog/2025-11-25-fp8-rl/).
+This is an example of FP8 training and FP8 inference. Under FP8 training and inference, it can achieve more efficient inference throughput and lower training-inference mismatch, resulting in more stable training.
 
-## Files
+### Files
 
 * `run-qwen3-4b-fp8.sh`: example launch script with Qwen3‑4B in FP8.
 
 * `run-qwen3-30b-a3b-fp8-two-nodes.sh`: example launch script for running Qwen3‑30B‑A3B in FP8 across two nodes.
 
-## Quick Start
+### Quick Start
 
 1. Check if your training script is properly configured. 
 
@@ -44,7 +44,7 @@ Following the above command will launch FP8 training.
 Note that TransformerEngine does not specifically save FP8 quantized weights; the saved torch dist remains in original precision (usually bf16). If you want to evaluate under FP8, you need to convert the checkpoint from `torch_dist` to HuggingFace format, then convert to FP8 HuggingFace format.
 
 
-## Quick Explanation
+### Quick Explanation
 
 Here's a quick explanation of how FP8 training is currently implemented in slime:
 
@@ -57,7 +57,7 @@ Here's a quick explanation of how FP8 training is currently implemented in slime
 4. Save checkpoint: Similar to weight updates, if checkpoints need to be saved from the training engine, they will also be dequantized back to bf16 and saved to `torch_dist` format checkpoints.
 
 
-## TODO
+### TODO
 
 Currently, FP8 is far from being a complete feature and still has the following bugs, for examples:
 
