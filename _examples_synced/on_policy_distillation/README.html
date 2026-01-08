@@ -484,18 +484,19 @@ document.write(`
 </ol>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-32B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-32B
 hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-8B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-8B
-hf<span class="w"> </span>download<span class="w"> </span>zhuzilin/dapo-math-17k<span class="w"> </span>--local-dir<span class="w"> </span>/root/dapo-math-17k
+hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/dapo-math-17k<span class="w"> </span>--local-dir<span class="w"> </span>/root/dapo-math-17k
 </pre></div>
 </div>
 <ol class="arabic simple" start="2">
 <li><p>Run the hf to mcore for student model conversion:</p></li>
 </ol>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">HOME_DIR</span><span class="si">}</span><span class="s2">/slime/scripts/models/qwen3-8B.sh&quot;</span>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
+<span class="nb">source</span><span class="w"> </span>scripts/models/qwen3-8B.sh
 
-<span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM:<span class="si">${</span><span class="nv">HOME_DIR</span><span class="si">}</span>/slime<span class="w"> </span>python<span class="w"> </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
+<span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM<span class="w"> </span>python<span class="w"> </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
 <span class="w">    </span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--hf-checkpoint<span class="w"> </span><span class="si">${</span><span class="nv">HOME_DIR</span><span class="si">}</span>/checkpoints/Qwen/Qwen3-8B<span class="w"> </span><span class="se">\</span>
-<span class="w">    </span>--save<span class="w"> </span><span class="si">${</span><span class="nv">HOME_DIR</span><span class="si">}</span>/checkpoints/Qwen/Qwen3-8B_torch_dist
+<span class="w">    </span>--hf-checkpoint<span class="w"> </span>/root/Qwen3-8B<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--save<span class="w"> </span>/root/Qwen3-8B_torch_dist
 </pre></div>
 </div>
 <ol class="arabic simple" start="3">
