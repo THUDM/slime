@@ -205,6 +205,19 @@ class FSDPTrainRayActor(TrainRayActor):
 
         # Use context_parallel_size directly (defaults to 1 for pure DP)
         self.cp_size = self.args.context_parallel_size
+
+        # Check experimental feature flag for CP
+        if self.cp_size > 1:
+            if not getattr(self.args, "experimental_feature", False):
+                raise RuntimeError(
+                    f"Context Parallelism (cp_size={self.cp_size}) in FSDP is experimental and disabled by default. "
+                    "To enable it, set --experimental-feature. "
+                    "Note: CP in FSDP may produce different results compared to non-CP training."
+                )
+            logger.warning(
+                f"[Rank {rank}] Context Parallelism in FSDP is EXPERIMENTAL (cp_size={self.cp_size}). "
+                "Results may differ from non-CP training due to numerical differences in Ring Flash Attention."
+            )
         self.dp_size = world_size // self.cp_size
 
         # Create 2D device mesh: (dp_size, cp_size)
