@@ -240,7 +240,7 @@ class RolloutManager:
                     global_batch_size = self._dynamic_global_batch_size
 
                 if len(data) % global_batch_size != 0:
-                    trim_len = (len(data) // self.args.global_batch_size) * global_batch_size
+                    trim_len = (len(data) // global_batch_size) * global_batch_size
                     if trim_len == 0:
                         raise ValueError(f"Not enough samples {len(data)} for global_batch_size {global_batch_size}")
                     origin_data_length = len(data)

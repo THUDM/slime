@@ -20,6 +20,8 @@ Download and prepare the training data:
 cd /root/
 git clone https://github.com/PeterGriffinJin/Search-R1.git
 cd Search-R1/
+pip install -e . --no-deps
+pip install tensordict
 
 # Set your working directory
 WORK_DIR=/root/Search-R1
@@ -45,7 +47,7 @@ Initialize the Qwen2.5-3B model:
 
 ```bash
 # hf checkpoint
-huggingface-cli download Qwen/Qwen2.5-3B --local-dir /root/Qwen2.5-3B
+hf download Qwen/Qwen2.5-3B --local-dir /root/Qwen2.5-3B
 
 # mcore checkpoint
 cd /root/slime
