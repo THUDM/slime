@@ -268,7 +268,14 @@ async def generate_and_rm_group(
             asyncio.create_task(generate_and_rm(args, sample, current_sampling_params, evaluation=evaluation))
         )
 
-    group = await asyncio.gather(*tasks)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Handle exceptions by marking corresponding samples as ABORTED
+    for idx, result in enumerate(results):
+        if isinstance(result, Exception):
+            group[idx].status = Sample.Status.ABORTED
+        else:
+            group[idx] = result
 
     # for the rm that need the whole group, we will do the rm here
     if not state.aborted and args.group_rm:
