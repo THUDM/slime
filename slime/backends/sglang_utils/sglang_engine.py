@@ -486,7 +486,7 @@ def _compute_server_args(
         "skip_server_warmup": True,
         # always enable draft weights cpu backup so that we run training without mtp weights.
         "enable_draft_weights_cpu_backup": True,
-        # always load format dummy to wait train actors update weights.
+        # always load format dummy to wait for train actors to update weights.
         "load_format": "dummy",
     }
 
