@@ -16,7 +16,7 @@ This is a running example that connects the [Strands-Agents](https://github.com/
 
 ```bash
 # hf checkpoint
-huggingface-cli download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/models/Qwen/Qwen3-4B-Instruct-2507
+hf download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/models/Qwen/Qwen3-4B-Instruct-2507
 
 # mcore checkpoint
 cd /root/slime

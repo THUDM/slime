@@ -17,17 +17,18 @@ In this example, the teacher model acts as a reward model (RM) by providing teac
 ```bash
 hf download Qwen/Qwen3-32B --local-dir /root/Qwen3-32B
 hf download Qwen/Qwen3-8B --local-dir /root/Qwen3-8B
-hf download zhuzilin/dapo-math-17k --local-dir /root/dapo-math-17k
+hf download --repo-type dataset zhuzilin/dapo-math-17k --local-dir /root/dapo-math-17k
 ```
 
 2. Run the hf to mcore for student model conversion:
 ```bash
-source "${HOME_DIR}/slime/scripts/models/qwen3-8B.sh"
+cd /root/slime
+source scripts/models/qwen3-8B.sh
 
-PYTHONPATH=/root/Megatron-LM:${HOME_DIR}/slime python tools/convert_hf_to_torch_dist.py \
+PYTHONPATH=/root/Megatron-LM python tools/convert_hf_to_torch_dist.py \
     ${MODEL_ARGS[@]} \
-    --hf-checkpoint ${HOME_DIR}/checkpoints/Qwen/Qwen3-8B \
-    --save ${HOME_DIR}/checkpoints/Qwen/Qwen3-8B_torch_dist
+    --hf-checkpoint /root/Qwen3-8B \
+    --save /root/Qwen3-8B_torch_dist
 ```
 3. run on-policy distillation:
 ```bash

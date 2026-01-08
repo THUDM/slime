@@ -56,30 +56,33 @@ def _create_actor_per_node(actor_cls) -> list:
 @ray.remote
 class _KiminaServerActor:
     def __init__(self):
-        self.addr = _get_current_node_host_ip()
         self.port = get_free_port()
 
         if _KILL_PREVIOUS_KIMINA_DOCKER:
             _docker_stop_all()
 
-        _docker_start(port=self.port)
+        self.docker_name = _docker_start(port=self.port)
         _wait_server_ready(base_url=self.get_api_url())
 
     def get_api_url(self):
-        return f"http://{self.addr}:{self.port}"
+        return f"http://{self.docker_name}:8000"
 
 
 def _docker_start(port: int):
-    name = f"kimina_lean_server_auto_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}-{random.randint(0, 1000000)}"
+    docker_name = (
+        f"kimina_lean_server_auto_{datetime.datetime.now().strftime('%Y%m%d%H%M%S')}-{random.randint(0, 1000000)}"
+    )
     exec_command(
         "docker run "
         "-d "
-        f"--name {name} "
+        f"--name {docker_name} "
         "--restart unless-stopped "
+        "--network formal_math "
         # "--env-file .env "  # do not use env yet
         f"-p {port}:8000 "
         f"projectnumina/kimina-lean-server:2.0.0"
     )
+    return docker_name
 
 
 def _wait_server_ready(base_url: str):
@@ -101,13 +104,3 @@ def _docker_stop_all():
         '[ -n "$ids" ] && docker stop $ids && docker rm $ids; '
         "true"
     )
-
-
-def _get_current_node_host_ip():
-    # when RL container uses network=host
-    return "127.0.0.1"
-
-    # when RL container does not use network=host
-    # https://stackoverflow.com/questions/22944631
-    # out = exec_command("ip route show default | awk '/default/ {print $3}'", capture_output=True)
-    # return out.strip()
