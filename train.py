@@ -97,8 +97,10 @@ def train(args):
                     print(f"[Multi-Train] Completed {train_iter}/{train_iters_per_rollout} training iterations.")
                 break  # Exit train iteration loop
 
-            if args.offload_rollout and train_iter == 0:
-                # Only offload rollout after first iteration (when rollout was generated)
+            # 🔧 FIX: Offload rollout engine before training to prevent OOM in multi-train mode
+            if args.offload_rollout:
+                # First iteration: rollout was just generated, need to offload
+                # Subsequent iterations: rollout was onloaded in previous iteration for weight update (line 136-139), need to offload again
                 ray.get(rollout_manager.offload.remote())
 
             # === Execute training ===
