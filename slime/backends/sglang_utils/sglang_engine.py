@@ -350,7 +350,6 @@ class SGLangEngine(RayActor):
 
     def post_process_weights(
         self,
-        enable_quant_post_process: bool = False,
         restore_weights_before_load: bool = False,
         post_process_quantization: bool = False,
     ):
@@ -361,7 +360,6 @@ class SGLangEngine(RayActor):
         """
 
         payload = {
-            "enable_quant_post_process": enable_quant_post_process,
             "restore_weights_before_load": restore_weights_before_load,
             "post_process_quantization": post_process_quantization
         }

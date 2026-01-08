@@ -17,6 +17,7 @@ from .update_weight_from_distributed import (
     connect_rollout_engines_from_distributed,
     disconnect_rollout_engines_from_distributed,
     update_weights_from_distributed,
+    post_process_weights,
 )
 
 
@@ -114,6 +115,14 @@ class UpdateWeightFromTensor:
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
+        if self.args.int4_params_rollout:
+            ray.get(post_process_weights(
+                restore_weights_before_load=True,
+                post_process_quantization=False,
+                rollout_engines=self.rollout_engines
+            ))
+            dist.barrier(group=get_gloo_group())
+
         megatron_local_weights = self.weights_getter()
 
         for hf_named_tensors in self._hf_weight_iterator.get_hf_weight_chunks(megatron_local_weights):
@@ -125,27 +134,13 @@ class UpdateWeightFromTensor:
 
         # int4/fp4 post_process
         if self.args.int4_params_rollout:
-            ray.get(self.post_process_weights(
+            ray.get(post_process_weights(
                 restore_weights_before_load=False,
                 post_process_quantization=True,
                 rollout_engines=self.rollout_engines
             ))
             dist.barrier(group=get_gloo_group())
 
-    def post_process_weights(
-        self,
-        restore_weights_before_load: bool,
-        post_process_quantization: bool,
-        rollout_engines: Sequence[ActorHandle], ):
-        refs = [
-            engine.post_process_weights.remote(
-                enable_quant_post_process=True,
-                restore_weights_before_load=restore_weights_before_load,
-                post_process_quantization=post_process_quantization
-            )
-            for engine in rollout_engines
-        ]
-        return refs
 
     def _send_hf_params(self, hf_named_tensors) -> tuple[list[ObjectRef], Any]:
         all_refs = []
