@@ -47,6 +47,8 @@ For a comprehensive quick start guide covering environment setup, data preparati
 
 We also provide examples for some use cases not covered in the quick start guide; please check [examples](examples/).
 
+Python 3.10+ is required (uses `zip(..., strict=True)` in core utilities).
+
 ## Projects Built upon slime
 
 slime has powered several novel research projects and production systems. Here are some notable examples:

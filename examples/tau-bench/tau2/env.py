@@ -163,10 +163,10 @@ def compute_partial_score_from_reward_info(
 
     if normalize_over_present:
         present = {k: weight_map[k] for k in components.keys()}
-        denom = sum(present.values())
-        if denom <= 0:
+        weight_sum = sum(present.values())
+        if weight_sum <= 0:
             return 0.0, components
-        score = sum(components[k] * present[k] for k in components.keys()) / denom
+        score = sum(components[k] * present[k] for k in components.keys()) / weight_sum
         return float(score), components
 
     score = sum(components[k] * weight_map[k] for k in components.keys())

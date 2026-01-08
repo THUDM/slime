@@ -55,7 +55,7 @@ async def _generate_one_action(
     *,
     messages: list[dict[str, str]],
     sampling_params: dict[str, Any],
-    max_repair_attempts: int = 1,
+    max_retries: int = 1,
 ) -> tuple[str, Any | None, str | None]:
     stops = list(sampling_params.get("stop") or [])
     if "</tool_call>" not in stops:
@@ -66,7 +66,7 @@ async def _generate_one_action(
     last_text = ""
     last_error: str | None = None
 
-    for attempt in range(max_repair_attempts + 1):
+    for attempt in range(max_retries + 1):
         turn_sample = Sample(prompt=working_messages, metadata={})
         turn_sample = await sglang_generate(args, turn_sample, sampling_params.copy())
         if turn_sample.status == Sample.Status.ABORTED:
@@ -79,7 +79,7 @@ async def _generate_one_action(
             return text, parsed, None
         except Exception as exc:
             last_error = str(exc)
-            if attempt >= max_repair_attempts:
+            if attempt >= max_retries:
                 break
             working_messages = working_messages + [
                 {"role": "assistant", "content": text},
@@ -146,7 +146,7 @@ async def generate(args, sample: Sample, sampling_params: dict) -> Sample:
             args,
             messages=messages,
             sampling_params=sampling_params,
-            max_repair_attempts=1,
+            max_retries=1,
         )
         if assistant_text:
             messages.append({"role": "assistant", "content": assistant_text})

@@ -14,7 +14,7 @@ This cookbook shows you how we did it. Everything is public and open source: [tr
 ```bash
 export SLIME_ROOT="$(pwd)" TAU_BENCH_OUT_DIR="${SLIME_ROOT}/examples/tau-bench/outputs"
 git clone https://github.com/sierra-research/tau2-bench.git "${TAU_BENCH_OUT_DIR}/_external/tau2-bench"
-cd "${TAU_BENCH_OUT_DIR}/_external/tau2-bench" && git checkout 337326e && pip install -e . --no-deps && cd "${SLIME_ROOT}"
+cd "${TAU_BENCH_OUT_DIR}/_external/tau2-bench" && git checkout 337326e62d8e0ca74c353b004a9c5d748e0ba914 && pip install -e . --no-deps && cd "${SLIME_ROOT}"
 export TAU2_DATA_DIR="${TAU_BENCH_OUT_DIR}/_external/tau2-bench/data"
 pip install gymnasium addict deepdiff fs langfuse plotly pydantic-argparse redis ruff scikit-learn seaborn tenacity watchdog "litellm==1.65.0"
 cp examples/tau-bench/tau2/.env.template examples/tau-bench/tau2/.env  # ADD OPENAI_API_KEY
@@ -28,7 +28,7 @@ CUDA_VISIBLE_DEVICES=0,1 python3 -m sglang.launch_server \
   --model-path Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
   --host 0.0.0.0 --port 30000 --tp 2 --mem-fraction-static 0.70
 
-# Terminal 2: Run evaluation (uses GPT-4.1-mini as user simulator)
+# Terminal 2: Run evaluation (uses GPT-4.1-2025-04-14 as user simulator; requires OPENAI_API_KEY)
 python3 examples/tau-bench/tau2/eval.py \
   --hf-checkpoint Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
   --sglang-url http://127.0.0.1:30000/generate \
@@ -286,7 +286,7 @@ User: "Done. Still no data."
 
 **Chat templates**: Training on multi-turn conversations requires `--apply-chat-template` flag.
 
-**User simulator**: Training uses a local instruct model on port 30001 (`TAU2_USER_API_BASE=http://127.0.0.1:30001/v1`). Evaluation defaults to GPT-4.1-mini for cleaner signal (fewer function calling errors).
+**User simulator**: Training uses a local instruct model on port 30001 (`TAU2_USER_API_BASE=http://127.0.0.1:30001/v1`). Evaluation defaults to GPT-4.1-2025-04-14 (OpenAI) for cleaner signal (fewer function calling errors); set `TAU2_USER_MODEL=gpt-4.1-mini` if you want the smaller model used for the reported numbers above.
 
 ## Quickstart: Reproduce Pass@4
 
@@ -299,7 +299,7 @@ CUDA_VISIBLE_DEVICES=0,1 python3 -m sglang.launch_server \
   --host 0.0.0.0 --port 30000 --tp 2 --mem-fraction-static 0.70
 ```
 
-**2. Run evaluation** (uses GPT-4.1-mini as user simulator):
+**2. Run evaluation** (uses GPT-4.1-2025-04-14 as user simulator; requires `OPENAI_API_KEY`):
 ```bash
 python3 examples/tau-bench/tau2/eval.py \
   --hf-checkpoint Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
@@ -313,11 +313,7 @@ This takes ~2 hours on 2×H100. Results: Pass@1 and Pass@4 metrics across all do
 
 The script outputs both Pass@1 and Pass@4. Results are stochastic; see the local reproduction table above for a concrete run and config.
 
-To run without external API keys, start the local user simulator and set:
-```bash
-export TAU2_USER_API_BASE=http://127.0.0.1:30001/v1
-export TAU2_USER_MODEL=openai/Qwen/Qwen3-4B-Instruct-2507
-```
+Note: `eval.py` reports pass@k (any success among k attempts). The official tau2-bench leaderboard uses pass^k; use tau2-bench metrics if you need leaderboard-comparable numbers.
 
 To run without external API keys, start the local user simulator and set:
 ```bash

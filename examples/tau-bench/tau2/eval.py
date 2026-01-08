@@ -235,7 +235,7 @@ def _summarize(results: list[PassKResult], *, k: int) -> dict[str, Any]:
     return {"total": total, "pass_at_1": pass1, f"pass_at_{k}": passk}
 
 
-async def main_async() -> None:
+def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate tau2-bench with Pass@K sampling")
     parser.add_argument("--hf-checkpoint", required=True)
     parser.add_argument("--sglang-url", required=True)
@@ -250,9 +250,20 @@ async def main_async() -> None:
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument("--max-new-tokens", type=int, default=1200)
-    parser.add_argument("--user-model", default=os.environ.get("TAU2_USER_MODEL", "gpt-4.1-mini"))
+    parser.add_argument("--user-model", default=os.environ.get("TAU2_USER_MODEL", "gpt-4.1-2025-04-14"))
     parser.add_argument("--user-temperature", type=float, default=float(os.environ.get("TAU2_USER_TEMPERATURE", "0.7")))
+    return parser
+
+
+def _validate_args(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    if args.num_samples < 1:
+        parser.error("--num-samples must be >= 1")
+
+
+async def main_async() -> None:
+    parser = _build_arg_parser()
     args = parser.parse_args()
+    _validate_args(args, parser)
 
     domains = _parse_csv(args.domains)
     tokenizer = AutoTokenizer.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
@@ -358,4 +369,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

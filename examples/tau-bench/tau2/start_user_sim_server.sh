@@ -5,6 +5,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 TAU_BENCH_OUT_DIR="${TAU_BENCH_OUT_DIR:-${SCRIPT_DIR}/../outputs}"
 
 MODEL_DIR="${MODEL_DIR:-${TAU_BENCH_OUT_DIR}/models/Qwen3-4B-Instruct-2507}"
+HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-30001}"
 # Keep these GPUs separate from training CUDA_VISIBLE_DEVICES.
 GPUS="${GPUS:-2,3}"
@@ -19,7 +20,7 @@ fi
 
 CUDA_VISIBLE_DEVICES="${GPUS}" python3 -m sglang.launch_server \
   --model-path "${MODEL_DIR}" \
-  --host 0.0.0.0 \
+  --host "${HOST}" \
   --port "${PORT}" \
   --tp "${TP}" \
   --mem-fraction-static "${MEM_FRACTION}"

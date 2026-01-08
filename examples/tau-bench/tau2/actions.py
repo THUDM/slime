@@ -52,11 +52,13 @@ def _to_functional_call(name: str, arguments: dict[str, Any]) -> str:
 
 
 def parse_action(text: str) -> ParsedAction:
-    match = _TOOL_CALL_RE.search(text)
-    if not match:
+    matches = list(_TOOL_CALL_RE.finditer(text))
+    if not matches:
         raise ValueError("Missing <tool_call>...</tool_call> block")
+    if len(matches) > 1:
+        raise ValueError("Multiple <tool_call> blocks found; expected exactly one")
 
-    data = json.loads(match.group(1))
+    data = json.loads(matches[0].group(1))
     name = data.get("name")
     arguments = data.get("arguments") or {}
 
@@ -103,7 +105,11 @@ def split_observation(observation: str) -> ParsedObservation:
         else:
             other_lines.append(content if role is None else f"{role}: {content}")
 
-    return ParsedObservation(user="\n".join(user_lines).strip(), tool="\n".join(tool_lines).strip(), other="\n".join(other_lines).strip())
+    return ParsedObservation(
+        user="\n".join(user_lines).strip(),
+        tool="\n".join(tool_lines).strip(),
+        other="\n".join(other_lines).strip(),
+    )
 
 
 def followup_messages_for_observation(
@@ -134,4 +140,3 @@ def env_action_from_parsed_action(action: ParsedAction) -> str:
             raise ValueError("respond requires a non-empty content string")
         return content
     return action.raw_action_call
-

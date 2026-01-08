@@ -15,7 +15,18 @@ from env import PartialScoreWeights, compute_partial_score_from_reward_info, par
 from slime.utils.types import Sample
 
 
+CURRICULUM_SOLVED_THRESHOLD = 0.75
+CURRICULUM_HARD_THRESHOLD = 0.25
+
+
 class _Curriculum:
+    """Process-local curriculum tracker.
+
+    Note: In distributed Ray settings, each worker maintains its own tracker
+    instance. This is a best-effort heuristic; disable via TAU2_USE_CURRICULUM=0
+    for fully deterministic behavior across workers.
+    """
+
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._attempts: dict[str, int] = defaultdict(int)
@@ -49,9 +60,9 @@ class _Curriculum:
             if attempts < self.min_attempts():
                 return 1.0
             rate = self._successes.get(task_id, 0) / attempts if attempts else 0.0
-        if rate > 0.75:
+        if rate > CURRICULUM_SOLVED_THRESHOLD:
             return self.solved_weight()
-        if rate < 0.25:
+        if rate < CURRICULUM_HARD_THRESHOLD:
             return self.hard_weight()
         return 1.0
 
@@ -63,6 +74,7 @@ def _alpha(domain: str | None) -> float:
     base = float(os.environ.get("TAU2_REWARD_ALPHA", "0.25"))
     if os.environ.get("TAU2_DOMAIN_ADAPTIVE_ALPHA", "1") != "1" or not domain:
         return base
+    # Telecom uses a higher multiplier to compensate for dual-control communication overhead.
     mult = {"retail": 0.8, "airline": 1.0, "telecom": 1.6}.get(domain, 1.0)
     return base * mult
 
@@ -87,12 +99,44 @@ def _flatten(samples: list[Sample] | list[list[Sample]]) -> list[Sample]:
     return list(samples)
 
 
+def _normalize_rewards(
+    rewards: list[float],
+    *,
+    valid_mask: list[float],
+    n_samples_per_prompt: int,
+    apply_std: bool,
+) -> list[float]:
+    if not rewards:
+        return []
+    if n_samples_per_prompt <= 0:
+        raise ValueError(f"n_samples_per_prompt must be >= 1 (got {n_samples_per_prompt})")
+    if len(rewards) % n_samples_per_prompt != 0:
+        raise ValueError(
+            "Reward count must be a multiple of n_samples_per_prompt "
+            f"(count={len(rewards)}, n_samples_per_prompt={n_samples_per_prompt})."
+        )
+
+    rewards_t = torch.tensor(rewards, dtype=torch.float).view(-1, n_samples_per_prompt)
+    mask_t = torch.tensor(valid_mask, dtype=torch.float).view(-1, n_samples_per_prompt)
+
+    denom = mask_t.sum(dim=-1, keepdim=True).clamp(min=1.0)
+    mean = (rewards_t * mask_t).sum(dim=-1, keepdim=True) / denom
+    centered = (rewards_t - mean) * mask_t
+
+    if apply_std:
+        var = (centered**2).sum(dim=-1, keepdim=True) / denom
+        centered = centered / (torch.sqrt(var) + 1e-6)
+
+    return centered.flatten().tolist()
+
+
 def tau2_reward_post_process(args, samples: list[Sample] | list[list[Sample]]) -> tuple[list[float], list[float]]:
     flat = _flatten(samples)
 
     raw_rewards: list[float] = []
     shaped_rewards: list[float] = []
     sample_weights: list[float] = []
+    valid_mask: list[float] = []
 
     for sample in flat:
         task_reward = float(sample.get_reward_value(args))
@@ -110,10 +154,12 @@ def tau2_reward_post_process(args, samples: list[Sample] | list[list[Sample]]) -
         )
 
         shaped = task_reward + _alpha(domain) * partial_score
-        shaped_rewards.append(float(shaped))
+        is_valid = not sample.remove_sample
+        valid_mask.append(1.0 if is_valid else 0.0)
+        shaped_rewards.append(float(shaped) if is_valid else 0.0)
 
         _curriculum.update(task_id, task_reward)
-        w = _curriculum.weight(task_id)
+        w = _curriculum.weight(task_id) if is_valid else 0.0
         sample_weights.append(w)
 
         sample.metadata = {
@@ -130,21 +176,19 @@ def tau2_reward_post_process(args, samples: list[Sample] | list[list[Sample]]) -
         and args.rewards_normalization
         and shaped_rewards
     ):
-        rewards = torch.tensor(shaped_rewards, dtype=torch.float)
-        if rewards.shape[-1] == args.n_samples_per_prompt * args.rollout_batch_size:
-            rewards = rewards.reshape(-1, args.n_samples_per_prompt)
-        else:
-            rewards = rewards.view(-1, rewards.shape[-1])
-        rewards = rewards - rewards.mean(dim=-1, keepdim=True)
-
-        if args.advantage_estimator in {"grpo", "gspo"} and args.grpo_std_normalization:
-            rewards = rewards / (rewards.std(dim=-1, keepdim=True) + 1e-6)
+        rewards = _normalize_rewards(
+            shaped_rewards,
+            valid_mask=valid_mask,
+            n_samples_per_prompt=args.n_samples_per_prompt,
+            apply_std=(args.advantage_estimator in {"grpo", "gspo"} and args.grpo_std_normalization),
+        )
 
         if os.environ.get("TAU2_APPLY_CURRICULUM_WEIGHTS", "1") == "1":
-            weights = torch.tensor(sample_weights, dtype=torch.float).view(rewards.shape)
-            rewards = rewards * weights
+            weights = torch.tensor(sample_weights, dtype=torch.float).view(-1, args.n_samples_per_prompt)
+            rewards_t = torch.tensor(rewards, dtype=torch.float).view_as(weights)
+            rewards = (rewards_t * weights).flatten().tolist()
 
-        return raw_rewards, rewards.flatten().tolist()
+        return raw_rewards, rewards
 
     if os.environ.get("TAU2_APPLY_CURRICULUM_WEIGHTS", "1") == "1":
         shaped_rewards = [r * sample_weights[i] for i, r in enumerate(shaped_rewards)]
