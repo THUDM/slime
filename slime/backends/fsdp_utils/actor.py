@@ -516,11 +516,14 @@ class FSDPTrainRayActor(TrainRayActor):
                 continue
             val = torch.tensor([0.0], device=torch.cuda.current_device())
             for _mbs_id, batches in enumerate(packed_batches):
-                unpacked_batches = unpack_sequences(batches)
+                unpacked_batches = unpack_sequences_with_cp(batches, self.cp_rank, self.cp_size)
                 for unpacked_batch in unpacked_batches:
+                    if metric_key not in unpacked_batch:
+                        continue
                     if isinstance(unpacked_batch[metric_key], torch.Tensor):
                         loss_masks_tensor = unpacked_batch["loss_masks"].to(device=torch.cuda.current_device())
                         metric_tensor = unpacked_batch[metric_key].to(device=torch.cuda.current_device())
+                        logger.info(f"metric_tensor: {metric_tensor.shape}, loss_masks_tensor: {loss_masks_tensor.shape}, metric_key: {metric_key}")
                         val += (metric_tensor * loss_masks_tensor).sum() / loss_masks_tensor.sum().clamp_min(1)
                     else:
                         val += unpacked_batch[metric_key]
@@ -1011,8 +1014,13 @@ def get_logprob_and_entropy_with_cp(
         logits, local_tokens, allow_compile=allow_compile, temperature=temperature
     )
 
+    # shifted_logits = logits[:-1, :] if cp_rank == cp_size - 1 else logits
+    #
     # Compute entropy
-    shifted_logits = logits[:-1, :] if cp_rank == cp_size - 1 else logits
+    # - Non-last ranks: [chunk_size, vocab]
+    # - Last rank: [chunk_size-1, vocab]
+    shifted_logits = logits
+    #
     log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
     probs = torch.softmax(shifted_logits, dim=-1)
     entropy = -(probs * log_probs_full).sum(dim=-1)
