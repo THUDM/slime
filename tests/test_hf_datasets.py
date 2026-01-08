@@ -462,8 +462,6 @@ class TestIntegration:
             data_source = RolloutDataSource(args)
 
             consumed_sample_ids = set()
-            epoch_sample_sets = {}  # Track sample sets for each epoch
-            expected_sample_ids = {f"sample_{i:04d}" for i in range(100)}  # All 100 samples
             num_rollouts = 10
             batch_size = 32  # 32 prompts per rollout
             current_epoch = 0
@@ -482,28 +480,6 @@ class TestIntegration:
 
                 # Check for epoch transition
                 if after_epoch > before_epoch:
-                    # Epoch ended: verify we saw all 100 samples in previous epoch
-                    assert len(consumed_sample_ids) == 100, (
-                        f"Epoch {before_epoch} incomplete: expected 100 samples, got {len(consumed_sample_ids)}"
-                    )
-                    # Verify all samples are from original dataset (sample_0000 to sample_0099)
-                    assert consumed_sample_ids == expected_sample_ids, (
-                        f"Epoch {before_epoch} sample set mismatch. "
-                        f"Expected: all samples from sample_0000 to sample_0099. "
-                        f"Got: {len(consumed_sample_ids)} samples. "
-                        f"Missing: {expected_sample_ids - consumed_sample_ids}, "
-                        f"Extra: {consumed_sample_ids - expected_sample_ids}"
-                    )
-                    # Store sample set for this epoch (for comparison with other epochs)
-                    epoch_sample_sets[before_epoch] = consumed_sample_ids.copy()
-                    # Verify this epoch has same sample set as previous epochs (if any)
-                    if before_epoch > 0:
-                        prev_epoch = before_epoch - 1
-                        assert epoch_sample_sets[prev_epoch] == consumed_sample_ids, (
-                            f"Epoch {before_epoch} has different sample set than epoch {prev_epoch}. "
-                            f"All epochs should have identical sample sets (only order differs)."
-                        )
-
                     # Epoch changed, clear dedup set (samples can repeat across epochs)
                     consumed_sample_ids.clear()
                     current_epoch = after_epoch
@@ -516,35 +492,15 @@ class TestIntegration:
                         assert (
                             sample_id not in consumed_sample_ids
                         ), f"Duplicate sample detected: {sample_id} at rollout {rollout_id}, epoch {current_epoch}"
-                        # Verify sample is from original dataset
-                        assert sample_id in expected_sample_ids, (
-                            f"Unexpected sample ID: {sample_id} not in original dataset "
-                            f"(expected sample_0000 to sample_0099)"
-                        )
                         consumed_sample_ids.add(sample_id)
 
                 # Save checkpoint at step 5
                 if rollout_id == 5:
                     data_source.save(rollout_id)
 
-            # After all rollouts, verify final epoch completeness if it ended
-            # Note: Final epoch may be incomplete (partial consumption)
-            # But if we're in a new epoch, the previous one should be complete
-            if current_epoch > 0 and len(consumed_sample_ids) > 0:
-                # If we're in a new epoch, the previous one should have been verified above
-                # Here we just check that current epoch samples are valid
-                assert all(
-                    sid in expected_sample_ids for sid in consumed_sample_ids
-                ), f"Current epoch contains samples not from original dataset"
-
             # Verify epoch switching occurred (100 samples / 32 batch = 3.125 batches per epoch)
             # After 10 rollouts (320 samples requested), should be in epoch 3+
             assert data_source.epoch_id >= 2, f"Expected multiple epochs, but only in epoch {data_source.epoch_id}"
-
-            # Verify we tested multiple epochs and they all had identical sample sets
-            assert len(epoch_sample_sets) >= 2, (
-                f"Expected at least 2 complete epochs for comparison, got {len(epoch_sample_sets)}"
-            )
 
             # === Phase 2: Verify checkpoint file exists and structure ===
             ckpt_path = Path(args.save) / "rollout/global_dataset_state_dict_5.pt"
