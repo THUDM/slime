@@ -4,7 +4,7 @@ from pathlib import Path
 
 import slime.utils.external_utils.command_utils as U
 
-dataset_transform_id = os.environ["slime_DATASET_TRANSFORM_ID"]
+dataset_transform_id = os.environ["SLIME_DATASET_TRANSFORM_ID"]
 
 MODEL_NAME, MODEL_TYPE = "Qwen3-8B-Base", "qwen3-8B"
 
@@ -13,7 +13,7 @@ NUM_GPUS = 8
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    U.exec_command(f"huggingface-cli download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     U.convert_checkpoint(model_name=MODEL_NAME, megatron_model_type=MODEL_TYPE, num_gpus_per_node=NUM_GPUS)
 
 

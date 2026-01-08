@@ -3,18 +3,18 @@ import os
 
 import slime.utils.external_utils.command_utils as U
 
-MODEL_NAME = os.environ.get("slime_SCRIPT_MODEL_NAME", "Qwen3-0.6B")
+MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-0.6B")
 assert MODEL_NAME in {"Qwen3-0.6B", "Qwen3-4B"}
 
-MODE = os.environ.get("slime_SCRIPT_MODE", "normal")
+MODE = os.environ.get("SLIME_SCRIPT_MODE", "normal")
 assert MODE in {"normal", "debug_minimal", "debug_one_sample"}
 
-NUM_GPUS = int(os.environ.get("slime_SCRIPT_NUM_GPUS", "1"))
+NUM_GPUS = int(os.environ.get("SLIME_SCRIPT_NUM_GPUS", "1"))
 
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    U.exec_command(f"huggingface-cli download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     U.hf_download_dataset("zhuzilin/gsm8k")
 
 

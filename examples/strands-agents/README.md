@@ -1,12 +1,12 @@
-# slime x Strands-Agents
+# Slime x Strands-Agents
 
-This is a running example that connects the [Strands-Agents](https://github.com/strands-agents/sdk-python) agent scaffolding framework with slime for RL training.
+This is a running example that connects the [Strands-Agents](https://github.com/strands-agents/sdk-python) agent scaffolding framework with Slime for RL training.
 
 ## Install Dependencies
 
 1. Pull the `slimerl/slime:latest` image and enter it
 2. Goes to slime folder: `cd /root/slime` (Clone the repository if not already there: `cd /root && git clone https://github.com/THUDM/slime.git`)
-3. Install slime: `pip install -e .`
+3. Install Slime: `pip install -e .`
 4. Goes to the example folder: `cd /root/slime/examples/strands-agents`
 5. Install other dependencies: `pip install -r requirements.txt`
 
@@ -16,7 +16,7 @@ This is a running example that connects the [Strands-Agents](https://github.com/
 
 ```bash
 # hf checkpoint
-hf download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/models/Qwen/Qwen3-4B-Instruct-2507
+huggingface-cli download Qwen/Qwen3-4B-Instruct-2507 --local-dir /root/models/Qwen/Qwen3-4B-Instruct-2507
 
 # mcore checkpoint
 cd /root/slime

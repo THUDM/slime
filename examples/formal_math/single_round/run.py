@@ -11,8 +11,8 @@ arg_ref_load = os.environ.get("ARG_REF_LOAD")
 arg_load = os.environ.get("ARG_LOAD")
 eval_max_response_len = os.environ.get("ARG_EVAL_MAX_RESPONSE_LEN")
 
-dataset_transform_id = os.environ.get("slime_DATASET_TRANSFORM_ID")
-mode = os.environ.get("slime_MODE", "train")
+dataset_transform_id = os.environ.get("SLIME_DATASET_TRANSFORM_ID")
+mode = os.environ.get("SLIME_MODE", "train")
 assert mode in {"train", "eval_pass_at_k", "eval_flc"}
 
 # MODEL_NAME, MODEL_TYPE = "Qwen3-4B", "qwen3-4B"
@@ -23,7 +23,7 @@ NUM_GPUS = 8
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    U.exec_command(f"huggingface-cli download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     if arg_ref_load is None:
         U.convert_checkpoint(
             model_name=MODEL_NAME,
@@ -81,7 +81,7 @@ def execute():
     )
 
     if mode == "eval_flc":
-        flc_chunk = os.environ["slime_FLC_CHUNK"]
+        flc_chunk = os.environ["SLIME_FLC_CHUNK"]
         eval_args += (
             "--eval-prompt-data "
             f"flc /root/datasets/formal_math_single_round/{dataset_transform_id}/flc_train.jsonl@[{flc_chunk}] "
