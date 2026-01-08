@@ -269,7 +269,7 @@ def unpack_sequences_with_cp(packed_batch: dict, cp_rank: int, cp_size: int) -> 
                     elif key == "rollout_log_probs":
                         # rollout_log_probs is packed based on response_lengths
                         start = sum(response_lengths[:i])
-                        end = sum(response_lengths[: i + 1])
+                        end = sum(response_lengths[: i+1])
                         if cp_size == 1:
                             instance[key] = value[start:end]
                         else:
@@ -290,7 +290,7 @@ def unpack_sequences_with_cp(packed_batch: dict, cp_rank: int, cp_size: int) -> 
                     elif key in ["loss_masks", "advantages", "returns"]:
                         # These tensors are packed based on response_lengths
                         start = sum(response_lengths[:i])
-                        end = sum(response_lengths[: i + 1])
+                        end = sum(response_lengths[: i+1])
                         if cp_size == 1:
                             instance[key] = value[start:end]
                         else:
