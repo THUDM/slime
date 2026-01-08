@@ -538,14 +538,14 @@ class MegatronTrainRayActor(TrainRayActor):
                 ray.get(self.rollout_manager.recover_rollout_engines.remote())
             dist.barrier(group=get_gloo_group())
 
-        rollout_engines, rollout_engine_lock, num_new_engines, engine_gpu_counts, engine_gpu_offsets = ray.get(
+        rollout_engines, rollout_engine_lock, _, engine_gpu_counts, engine_gpu_offsets, need_connect_train_actors = ray.get(
             self.rollout_manager.get_rollout_engines_and_lock.remote()
         )
 
         if self.args.offload_train:
             reload_process_groups()
 
-        if num_new_engines > 0:
+        if need_connect_train_actors:
             self.weight_updater.connect_rollout_engines(
                 rollout_engines,
                 rollout_engine_lock,
@@ -554,7 +554,8 @@ class MegatronTrainRayActor(TrainRayActor):
             )
             dist.barrier(group=get_gloo_group())
             if dist.get_rank() == 0:
-                ray.get(self.rollout_manager.clear_num_new_engines.remote())
+                print("Connected rollout engines to train actors.")
+                ray.get(self.rollout_manager.set_need_connect_train_actors.remote(False))
 
         with torch_memory_saver.disable() if self.args.offload_train else nullcontext():
             print_memory("before update_weights")
