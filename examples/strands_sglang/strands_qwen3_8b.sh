@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Qwen3-8B Training with Strands-SGLang
+# Note: 8B model requires ~2x memory of 4B, adjusted settings accordingly
+
 # for rerun the task
 pkill -9 sglang
 sleep 3
@@ -23,18 +26,18 @@ else
 fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
-source "/root/slime/scripts/models/qwen3-4B.sh"
+source "/root/slime/scripts/models/qwen3-8B.sh"
 
 # Generate timestamp suffix for save path
 TIMESTAMP_SUFFIX=$(date +%Y%m%d_%H%M%S)
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/models/Qwen/Qwen3-4B-Instruct-2507
-   --ref-load /root/models/Qwen/Qwen3-4B-Instruct-2507_torch_dist
-   # --load Qwen3-4B-Instruct-2507_strands_dapo
-   --save /root/models/Qwen/Qwen3-4B-Instruct-2507_strands_dapo_${TIMESTAMP_SUFFIX}
+   --hf-checkpoint /root/models/Qwen/Qwen3-8B
+   --ref-load /root/models/Qwen/Qwen3-8B_torch_dist
+   # --load Qwen3-8B_strands_dapo
+   --save /root/models/Qwen/Qwen3-8B_strands_dapo_${TIMESTAMP_SUFFIX}
    --save-interval 20
-   --rotary-base 5000000
+   --rotary-base 1000000
 )
 
 ROLLOUT_ARGS=(
@@ -44,12 +47,12 @@ ROLLOUT_ARGS=(
    --rollout-shuffle
    # --reward-key score
    --num-rollout 3000
-   --rollout-batch-size 32
+   --rollout-batch-size 16  # Reduced from 32 for 8B model memory
    --n-samples-per-prompt 8
-   --rollout-max-response-len 8192
+   --rollout-max-response-len 16384
    --rollout-temperature 1
 
-   --global-batch-size 256
+   --global-batch-size 128  # Reduced from 256 for 8B model memory
    --balance-data
 )
 
@@ -75,7 +78,7 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 9216
+   --max-tokens-per-gpu 18432
 )
 
 GRPO_ARGS=(
@@ -100,13 +103,13 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=(
    --use-wandb
    --wandb-project strands-slime
-   --wandb-group Qwen3-4B-Instruct-2507-strands-dapo
+   --wandb-group Qwen3-8B-strands-dapo
    --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
-   --sglang-mem-fraction-static 0.7
+   --sglang-mem-fraction-static 0.2
    # Note: strands-sglang handles tool parsing internally (HermesToolCallParser)
    # No need for --sglang-tool-call-parser
 )
