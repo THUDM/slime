@@ -64,27 +64,84 @@ def train(args):
         if args.eval_interval is not None and rollout_id == 0:
             ray.get(rollout_manager.eval.remote(rollout_id))
 
-        rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
+        # === NEW: Multi-train per rollout support ===
+        # Get train_iters_per_rollout parameter (default=1 for backward compatibility)
+        train_iters_per_rollout = getattr(args, 'train_iters_per_rollout', 1)
+        update_policy_every_iter = getattr(args, 'update_policy_version_every_train_iter', False)
 
-        # 🔧 FIX: Handle case where training is skipped due to exhausted buffer
-        if rollout_data_ref is None:
-            print(f"[Train] Step {rollout_id}: Training skipped - buffer exhausted, no samples available.")
-            print(f"[Train] Continuing to next rollout to generate new data...")
-            continue  # Skip to next iteration to trigger rollout generation
+        if train_iters_per_rollout > 1:
+            # Check if buffer is enabled (multi-train only works in off-policy mode)
+            buffer_enabled = hasattr(args, 'loss_type') and args.loss_type == 'decoupled_policy_loss'
+            if not buffer_enabled:
+                print(f"[WARNING] train_iters_per_rollout={train_iters_per_rollout} is set but buffer is not enabled.")
+                print(f"[WARNING] Multi-train per rollout only works in off-policy mode (loss_type=decoupled_policy_loss).")
+                print(f"[WARNING] Falling back to standard single-train behavior.")
+                train_iters_per_rollout = 1
 
-        if args.offload_rollout:
-            ray.get(rollout_manager.offload.remote())
+        # === Train Iteration Loop ===
+        for train_iter in range(train_iters_per_rollout):
+            if train_iter == 0:
+                # First iteration: generate new rollout data + sample from buffer
+                rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
+            else:
+                # Subsequent iterations: only sample from buffer (no new rollout)
+                rollout_data_ref = ray.get(rollout_manager.sample_training_data.remote(rollout_id, train_iter))
 
-        if args.use_critic:
-            critic_train_handle = critic_model.async_train(rollout_id, rollout_data_ref)
-            if rollout_id >= args.num_critic_only_steps:
+            # 🔧 FIX: Handle case where training is skipped due to exhausted buffer
+            if rollout_data_ref is None:
+                if train_iter == 0:
+                    print(f"[Train] Rollout {rollout_id}: Training skipped - buffer exhausted, no samples available.")
+                    print(f"[Train] Continuing to next rollout to generate new data...")
+                else:
+                    print(f"[Multi-Train] Rollout {rollout_id}, iteration {train_iter + 1}: Buffer exhausted.")
+                    print(f"[Multi-Train] Completed {train_iter}/{train_iters_per_rollout} training iterations.")
+                break  # Exit train iteration loop
+
+            if args.offload_rollout and train_iter == 0:
+                # Only offload rollout after first iteration (when rollout was generated)
+                ray.get(rollout_manager.offload.remote())
+
+            # === Execute training ===
+            if args.use_critic:
+                critic_train_handle = critic_model.async_train(rollout_id, rollout_data_ref)
+                if rollout_id >= args.num_critic_only_steps:
+                    ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
+                ray.get(critic_train_handle)
+            else:
                 ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
-            ray.get(critic_train_handle)
-        else:
-            ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
 
-        # === Notify rollout manager that policy has been updated ===
-        ray.get(rollout_manager.on_policy_update.remote())
+            # === Policy version update logic ===
+            if update_policy_every_iter:
+                # Update policy version after each training iteration
+                ray.get(rollout_manager.on_policy_update.remote())
+                if train_iter < train_iters_per_rollout - 1:
+                    print(f"[Multi-Train] Policy version updated after iteration {train_iter + 1}/{train_iters_per_rollout}")
+            elif train_iter == train_iters_per_rollout - 1:
+                # Default: only update after all training iterations complete
+                ray.get(rollout_manager.on_policy_update.remote())
+
+            if train_iter < train_iters_per_rollout - 1:
+                # Not the last iteration - prepare for next training iteration
+                # Update weights before next iteration (important for multi-train)
+                if args.enable_weights_backuper:
+                    offload_train()
+                    onload_rollout()
+                    actor_model.update_weights()
+                else:
+                    actor_model.clear_memory()
+                    onload_rollout()
+                    actor_model.update_weights()
+                    offload_train()
+
+                if args.offload_rollout:
+                    if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
+                        ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
+                    ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
+
+        # === End of train iteration loop ===
+
+        # === Post-training operations (after all train iterations) ===
+        # These operations only run once per rollout, not per train iteration
 
         if args.save_interval is not None and (
             (rollout_id + 1) % args.save_interval == 0
@@ -97,20 +154,24 @@ def train(args):
             if args.rollout_global_dataset:
                 ray.get(rollout_manager.save.remote(rollout_id))
 
-        if args.enable_weights_backuper:
-            offload_train()
-            onload_rollout()
-            actor_model.update_weights()
-        else:
-            actor_model.clear_memory()
-            onload_rollout()
-            actor_model.update_weights()
-            offload_train()
+        # Update weights after all train iterations (if not already done in loop)
+        if train_iters_per_rollout == 1 or not update_policy_every_iter:
+            # Standard single-train or multi-train without per-iteration updates
+            if args.enable_weights_backuper:
+                offload_train()
+                onload_rollout()
+                actor_model.update_weights()
+            else:
+                actor_model.clear_memory()
+                onload_rollout()
+                actor_model.update_weights()
+                offload_train()
 
-        if args.offload_rollout:
-            if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
-                ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
-            ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
+            if args.offload_rollout:
+                if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
+                    ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_CUDA_GRAPH]))
+                ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
+        # else: weights were already updated in the last train iteration loop
 
         if args.eval_interval is not None and (
             (rollout_id + 1) % args.eval_interval == 0

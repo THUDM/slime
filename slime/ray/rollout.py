@@ -215,9 +215,21 @@ class RolloutManager:
             # get_samples() is used for rollout generation and may return PENDING prompts
 
             if hasattr(self.data_source, 'get_training_samples') and self.data_source.buffer_enabled:
+                # === FIX 4: Calculate correct sample count for off-policy mode ===
+                # In off-policy mode, we need to sample enough groups to satisfy global_batch_size
+                # num_samples is in GROUPS (not individual samples)
+                # Each group has n_samples_per_prompt samples
+                import math
+                num_groups_needed = math.ceil(self.args.global_batch_size / self.args.n_samples_per_prompt)
+
+                print(f"[Off-Policy Training] Sampling {num_groups_needed} groups from buffer "
+                      f"(global_batch_size={self.args.global_batch_size}, "
+                      f"n_samples_per_prompt={self.args.n_samples_per_prompt}, "
+                      f"total_samples={num_groups_needed * self.args.n_samples_per_prompt})")
+
                 # Use dedicated method for training that only samples from buffer
                 train_data_samples = self.data_source.get_training_samples(
-                    num_samples=self.args.rollout_batch_size
+                    num_samples=num_groups_needed
                 )
 
                 # If buffer is empty/exhausted, skip this training step
@@ -227,6 +239,7 @@ class RolloutManager:
                     return None  # Signal to skip training
             else:
                 # Fallback to regular get_samples for backward compatibility
+                # In on-policy mode, use rollout_batch_size (original behavior)
                 train_data_samples = self.data_source.get_samples(
                     num_samples=self.args.rollout_batch_size
                 )
@@ -262,6 +275,22 @@ class RolloutManager:
                     flattened_samples.extend(group)
                 train_data_samples = flattened_samples
 
+            # === FIX 5: Trim training data to exact global_batch_size ===
+            # In off-policy mode, we might sample slightly more than global_batch_size
+            # (due to rounding up to complete groups). Trim to exact size to ensure
+            # get_data_iterator assertions pass.
+            if self.data_source.buffer_enabled and len(train_data_samples) > self.args.global_batch_size:
+                original_len = len(train_data_samples)
+                train_data_samples = train_data_samples[:self.args.global_batch_size]
+                print(f"[Off-Policy Training] Trimmed training data from {original_len} to {len(train_data_samples)} "
+                      f"samples to match global_batch_size={self.args.global_batch_size}")
+            elif self.data_source.buffer_enabled and len(train_data_samples) < self.args.global_batch_size:
+                # This shouldn't happen if our sampling logic is correct, but handle defensively
+                print(f"[WARNING] Training data has {len(train_data_samples)} samples, "
+                      f"less than global_batch_size={self.args.global_batch_size}. "
+                      f"This may cause training issues.")
+
+
             # === Step 6: Convert to training format ===
             # IMPORTANT: Verify all samples have valid rewards before conversion
             none_reward_indices = [i for i, s in enumerate(train_data_samples) if s.reward is None]
@@ -287,6 +316,106 @@ class RolloutManager:
                 self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
             else:
                 self.num_new_engines = 0
+
+    def sample_training_data(self, rollout_id, train_iter):
+        """
+        Sample training data from buffer without generating new rollout data.
+
+        This method is used for multi-train-per-rollout scenarios where we want to
+        train multiple times on the same rollout's buffer without generating new data.
+
+        Args:
+            rollout_id: The rollout ID (for logging purposes)
+            train_iter: The training iteration within this rollout (0-indexed)
+
+        Returns:
+            Box containing ray.put(train_data), or None if buffer is exhausted
+        """
+        # === Only works in buffer mode ===
+        if not (hasattr(self.data_source, 'buffer_enabled') and self.data_source.buffer_enabled):
+            raise RuntimeError(
+                "sample_training_data() only works in off-policy buffer mode. "
+                "For on-policy mode, use generate() instead."
+            )
+
+        print(f"[Multi-Train] Rollout {rollout_id}, Train Iteration {train_iter + 1}")
+
+        try:
+            # === Step 1: Sample data from buffer (NO rollout generation) ===
+            import math
+            num_groups_needed = math.ceil(self.args.global_batch_size / self.args.n_samples_per_prompt)
+
+            print(f"[Multi-Train] Sampling {num_groups_needed} groups from buffer "
+                  f"(global_batch_size={self.args.global_batch_size}, "
+                  f"n_samples_per_prompt={self.args.n_samples_per_prompt}, "
+                  f"total_samples={num_groups_needed * self.args.n_samples_per_prompt})")
+
+            train_data_samples = self.data_source.get_training_samples(
+                num_samples=num_groups_needed
+            )
+
+            # If buffer is empty/exhausted, skip this training iteration
+            if len(train_data_samples) == 0:
+                print(f"[Multi-Train] Buffer exhausted, no samples available for training iteration {train_iter + 1}.")
+                print(f"[Multi-Train] Skipping remaining training iterations.")
+                return None
+
+            # === Step 2: Defensive checks (reuse from generate()) ===
+            incomplete_groups = []
+            for i, group in enumerate(train_data_samples):
+                for j, sample in enumerate(group):
+                    if sample.status == Sample.Status.PENDING and (not hasattr(sample, 'response') or not sample.response):
+                        incomplete_groups.append((i, j, sample))
+
+            if len(incomplete_groups) > 0:
+                print(f"[CRITICAL WARNING] Found {len(incomplete_groups)} incomplete samples from buffer!")
+                for i, j, sample in incomplete_groups[:5]:
+                    print(f"  Group {i}, Sample {j}: "
+                          f"group_index={getattr(sample, 'group_index', '?')}, "
+                          f"index={getattr(sample, 'index', '?')}, "
+                          f"status={sample.status}, "
+                          f"has_response={hasattr(sample, 'response') and bool(sample.response)}")
+                raise RuntimeError(
+                    f"Buffer integrity error: {len(incomplete_groups)} incomplete samples detected!"
+                )
+
+            # === Step 3: Flatten grouped samples ===
+            if len(train_data_samples) > 0 and isinstance(train_data_samples[0], list):
+                flattened_samples = []
+                for group in train_data_samples:
+                    flattened_samples.extend(group)
+                train_data_samples = flattened_samples
+
+            # === Step 4: Trim to exact global_batch_size ===
+            if len(train_data_samples) > self.args.global_batch_size:
+                original_len = len(train_data_samples)
+                train_data_samples = train_data_samples[:self.args.global_batch_size]
+                print(f"[Multi-Train] Trimmed training data from {original_len} to {len(train_data_samples)} samples")
+            elif len(train_data_samples) < self.args.global_batch_size:
+                print(f"[WARNING] Training data has {len(train_data_samples)} samples, "
+                      f"less than global_batch_size={self.args.global_batch_size}")
+
+            # === Step 5: Verify rewards ===
+            none_reward_indices = [i for i, s in enumerate(train_data_samples) if s.reward is None]
+            if len(none_reward_indices) > 0:
+                print(f"[CRITICAL ERROR] Found {len(none_reward_indices)}/{len(train_data_samples)} samples with None rewards!")
+                for idx in none_reward_indices[:10]:
+                    print(f"[CRITICAL ERROR] Forcing reward=1e-8 for sample {idx}")
+                    train_data_samples[idx].reward = 1e-8
+
+            # === Step 6: Convert to training format ===
+            train_data = self._convert_samples_to_train_data(train_data_samples)
+
+            # === Step 7: Record batch in staleness controller ===
+            if self.staleness_controller is not None:
+                num_samples = len(train_data["tokens"])
+                self.staleness_controller.on_generation_completed(num_samples)
+
+            return Box(ray.put(train_data))
+
+        except Exception as e:
+            print(f"[Multi-Train] Error in train iteration {train_iter + 1}: {e}")
+            raise
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
@@ -336,11 +465,22 @@ class RolloutManager:
             while isinstance(data[0], list):
                 data = sum(data, [])
 
-            if len(data) % self.args.global_batch_size != 0:
+            # === FIX 1: Skip trim in off-policy buffer mode ===
+            # In off-policy mode, rollout generates partial batches that go to buffer
+            # Training samples from buffer to reach global_batch_size
+            # Only trim in on-policy mode where rollout data is used directly for training
+            buffer_enabled = hasattr(self.data_source, 'buffer_enabled') and self.data_source.buffer_enabled
+
+            if not buffer_enabled and len(data) % self.args.global_batch_size != 0:
                 trim_len = (len(data) // self.args.global_batch_size) * self.args.global_batch_size
                 origin_data_length = len(data)
                 data = data[:trim_len]
-                print(f"trim number of samples from {origin_data_length} to {trim_len}")
+                print(f"[On-Policy] Trimming samples from {origin_data_length} to {trim_len} to match global_batch_size={self.args.global_batch_size}")
+            elif buffer_enabled:
+                # Off-policy mode: keep all generated samples
+                print(f"[Off-Policy] Generated {len(data)} samples (rollout_batch_size={self.args.rollout_batch_size}, "
+                      f"n_samples_per_prompt={self.args.n_samples_per_prompt}). "
+                      f"Training will sample {self.args.global_batch_size} from buffer.")
 
         # === Tag samples with current policy version (ENHANCED) ===
         # IMPORTANT: Only set policy_version for NEW samples (from dataset)
@@ -831,12 +971,26 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
     if args.load_debug_rollout_data:
         return
 
+    # === FIX 2: Handle empty samples (defensive programming) ===
+    if len(samples) == 0:
+        print(f"[WARNING] Rollout {rollout_id} generated 0 samples. Skipping metrics logging.")
+        print(f"[WARNING] This may indicate a configuration issue. Check:")
+        print(f"  - rollout_batch_size={args.rollout_batch_size}")
+        print(f"  - n_samples_per_prompt={args.n_samples_per_prompt}")
+        print(f"  - global_batch_size={args.global_batch_size}")
+        print(f"  - Expected: rollout_batch_size * n_samples_per_prompt = {args.rollout_batch_size * args.n_samples_per_prompt}")
+        return
+
     log_dict = {**(rollout_extra_metrics or {})}
     response_lengths = [sample.effective_response_length for sample in samples]
     log_dict["perf/rollout_time"] = rollout_time
-    if args.rollout_num_gpus:
-        log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
-    log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+
+    # Safely compute metrics only if we have data
+    if len(response_lengths) > 0:
+        if args.rollout_num_gpus:
+            log_dict["perf/tokens_per_gpu_per_sec"] = sum(response_lengths) / rollout_time / args.rollout_num_gpus
+        log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
+
     log_dict |= dict_add_prefix(_compute_metrics_from_samples(args, samples), f"rollout/")
     print(f"perf {rollout_id}: {log_dict}")
     step = (

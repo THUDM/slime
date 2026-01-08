@@ -612,6 +612,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "`rollout_batch_size * n_samples_per_prompt // num_steps_per_rollout`."
                 ),
             )
+
             # mbs for the training, will be ignored if `use_dynamic_batch_size` is set.
             reset_arg(parser, "--micro-batch-size", type=int, default=1)
             parser.add_argument(
@@ -771,6 +772,33 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "'custom_loss': user-defined custom loss (set path via --custom-loss-function-path)."
                 ),
             )
+
+
+            # === NEW: Multi-train per rollout for off-policy GRPO ===
+            parser.add_argument(
+                "--train-iters-per-rollout",
+                type=int,
+                default=1,
+                help=(
+                    "Number of training iterations per rollout step. Each iteration samples "
+                    "a fresh batch from the buffer. Useful for off-policy GRPO to improve "
+                    "sample efficiency by training multiple times on the accumulated buffer data. "
+                    "Default is 1 (standard behavior). Set to >1 for multi-train per rollout. "
+                    "Note: Only effective when buffer is enabled (off-policy mode)."
+                ),
+            )
+            parser.add_argument(
+                "--update-policy-version-every-train-iter",
+                action="store_true",
+                help=(
+                    "If set, policy version will be updated after EACH training iteration "
+                    "within a rollout (when train-iters-per-rollout > 1). By default, policy "
+                    "version is only updated once after all training iterations complete. "
+                    "Updating every iteration provides finer-grained staleness tracking but "
+                    "may increase off-policy-ness for later iterations within the same rollout."
+                ),
+            )
+
             parser.add_argument(
                 "--custom-loss-function-path",
                 type=str,
@@ -1617,10 +1645,38 @@ def slime_validate_args(args):
             )
         args.global_batch_size = global_batch_size
 
-    assert args.rollout_batch_size * args.n_samples_per_prompt % args.global_batch_size == 0, (
-        f"rollout_batch_size {args.rollout_batch_size} * n_samples_per_prompt {args.n_samples_per_prompt} "
-        f"is not a multiple of global_batch_size {args.global_batch_size}"
+    # === FIX 3: Add diagnostic info for off-policy GRPO settings ===
+    # Original assertion commented out to support off-policy GRPO:
+    # assert args.rollout_batch_size * args.n_samples_per_prompt % args.global_batch_size == 0
+
+    rollout_samples = args.rollout_batch_size * args.n_samples_per_prompt
+
+    # Detect off-policy mode based on loss_type or explicit buffer settings
+    is_offpolicy = (
+        getattr(args, 'loss_type', 'policy_loss') == 'decoupled_policy_loss' or
+        getattr(args, 'use_buffer', False)
     )
+
+    if rollout_samples < args.global_batch_size:
+        if is_offpolicy:
+            print(f"[Off-Policy GRPO] Configuration detected:")
+            print(f"  - Rollout generates: {rollout_samples} samples per step")
+            print(f"  - Training requires: {args.global_batch_size} samples per step")
+            print(f"  - Buffer will accumulate rollout data and sample {args.global_batch_size} for training")
+            print(f"  - This is EXPECTED for off-policy GRPO with sample reuse")
+        else:
+            print(f"[WARNING] Potential configuration issue:")
+            print(f"  - rollout_batch_size * n_samples_per_prompt = {rollout_samples}")
+            print(f"  - global_batch_size = {args.global_batch_size}")
+            print(f"  - Rollout generates fewer samples than needed for training")
+            print(f"  - If using off-policy GRPO, ensure buffer is enabled (loss_type=decoupled_policy_loss)")
+            print(f"  - If using on-policy GRPO, consider setting global_batch_size <= {rollout_samples}")
+    elif rollout_samples % args.global_batch_size != 0:
+        print(f"[INFO] rollout_batch_size * n_samples_per_prompt ({rollout_samples}) "
+              f"is not a multiple of global_batch_size ({args.global_batch_size})")
+        if not is_offpolicy:
+            print(f"[INFO] Excess samples will be trimmed in on-policy mode")
+
 
     if args.n_samples_per_prompt == 1:
         args.grpo_std_normalization = False
