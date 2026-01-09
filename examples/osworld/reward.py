@@ -259,9 +259,11 @@ def compute_shaped_reward(
     return max(0.0, min(1.0, reward))
 
 
-def _merge_reward_config(reward_config: dict | None) -> tuple[float | None, OSWorldPartialWeights | None]:
+def _merge_reward_config(
+    reward_config: dict | None,
+) -> tuple[float | None, OSWorldPartialWeights | None, str | None]:
     if not reward_config:
-        return None, None
+        return None, None, None
 
     alpha = reward_config.get("alpha")
     weights_cfg = reward_config.get("weights", {}) or {}
@@ -269,7 +271,8 @@ def _merge_reward_config(reward_config: dict | None) -> tuple[float | None, OSWo
     for key, value in weights_cfg.items():
         if hasattr(weights, key):
             setattr(weights, key, float(value))
-    return alpha, weights
+    task_complexity = reward_config.get("task_complexity")
+    return alpha, weights, task_complexity
 
 
 def _attach_reward_breakdown(sample: Sample, breakdown: dict) -> None:
@@ -290,7 +293,7 @@ def compute_reward_from_metadata(sample: Sample, reward_config: dict | None = No
     osworld_meta = metadata.get("osworld", {})
     if reward_config is None:
         reward_config = osworld_meta.get("reward_config")
-    alpha, weights = _merge_reward_config(reward_config)
+    alpha, weights, task_complexity = _merge_reward_config(reward_config)
 
     task_reward = float(osworld_meta.get("task_reward", 0.0))
     step_signals = osworld_meta.get("step_signals", [])
@@ -303,6 +306,7 @@ def compute_reward_from_metadata(sample: Sample, reward_config: dict | None = No
         num_steps=num_steps,
         weights=weights,
         max_steps=max_steps,
+        task_complexity=task_complexity or "medium",
         a11y_mode=a11y_mode,
     )
     components["fallback_penalty"] = compute_fallback_penalty(step_signals)
@@ -339,7 +343,7 @@ async def async_compute_reward(args: Any, sample: Sample, **kwargs) -> float:
     osworld_meta = metadata.get("osworld", {})
 
     reward_config = osworld_meta.get("reward_config")
-    alpha, weights = _merge_reward_config(reward_config)
+    alpha, weights, task_complexity = _merge_reward_config(reward_config)
 
     task_reward = float(osworld_meta.get("task_reward", 0.0))
     step_signals = osworld_meta.get("step_signals", [])
@@ -352,6 +356,7 @@ async def async_compute_reward(args: Any, sample: Sample, **kwargs) -> float:
         num_steps=num_steps,
         weights=weights,
         max_steps=max_steps,
+        task_complexity=task_complexity or "medium",
         a11y_mode=a11y_mode,
     )
     components["fallback_penalty"] = compute_fallback_penalty(step_signals)

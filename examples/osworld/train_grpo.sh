@@ -29,6 +29,13 @@ DISABLE_EVAL=${SLIME_SCRIPT_DISABLE_EVAL:-"true"}
 
 export OSWORLD_REPLAY_BUFFER=${SLIME_SCRIPT_REPLAY_BUFFER:-"/ephemeral/osworld_union/osworld_replay_union.jsonl"}
 export OSWORLD_REPLAY_THRESHOLD=${SLIME_SCRIPT_REPLAY_THRESHOLD:-"0.5"}
+export OSWORLD_REWARD_DEBUG_LIMIT=${SLIME_SCRIPT_REWARD_DEBUG_LIMIT:-"5"}
+
+# Sampling schedule:
+# Phase 1 (exploration): SLIME_SCRIPT_ROLLOUT_TEMPERATURE=0.8
+# Phase 2 (stability):   SLIME_SCRIPT_ROLLOUT_TEMPERATURE=0.5
+ROLLOUT_TEMPERATURE=${SLIME_SCRIPT_ROLLOUT_TEMPERATURE:-0.8}
+ROLLOUT_TOP_P=${SLIME_SCRIPT_ROLLOUT_TOP_P:-0.95}
 
 pkill -9 sglang 2>/dev/null || true
 ray stop --force 2>/dev/null || true
@@ -69,8 +76,8 @@ ROLLOUT_ARGS=(
     --n-samples-per-prompt 4
     --rollout-max-response-len 512
     --rollout-max-context-len 16384
-    --rollout-temperature 0.8
-    --rollout-top-p 0.95
+    --rollout-temperature "$ROLLOUT_TEMPERATURE"
+    --rollout-top-p "$ROLLOUT_TOP_P"
     --global-batch-size 8
 )
 

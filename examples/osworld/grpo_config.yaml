@@ -21,10 +21,11 @@ env_defaults:
 # Reward shaping
 reward:
   alpha: 0.3
+  task_complexity: low
 
   weights:
     action_parse_valid: 0.10
     action_executed: 0.15
-    a11y_grounding: 0.30
-    tool_calling: 0.25
+    a11y_grounding: 0.10
+    tool_calling: 0.15
     efficiency: 0.05

@@ -7,7 +7,7 @@ Usage:
     python examples/osworld/eval.py \
         --checkpoint /path/to/model \
         --tasks /path/to/tasks.parquet \
-        --max-turns 8 \
+        --max-turns 12 \
         --seeds 3
 """
 
@@ -75,6 +75,7 @@ RULES:
 - Look at the screenshot and accessibility tree to find the right coordinates.
 - Think step by step about what action will make progress toward the goal.
 - Do not repeat the same action if the screen has not changed.
+- If you use the a11y tree, include the element name in the action arguments.
 """
 
 
@@ -301,7 +302,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", required=True, help="Path to model checkpoint")
     parser.add_argument("--tasks", required=True, help="Path to tasks parquet file")
-    parser.add_argument("--max-turns", type=int, default=8)
+    parser.add_argument("--max-turns", type=int, default=12)
     parser.add_argument("--seeds", type=int, default=1)
     parser.add_argument("--output", default="eval_results.json")
     parser.add_argument("--osworld-path", default="/tmp/OSWorld")

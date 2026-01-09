@@ -92,9 +92,19 @@ Key configuration in `train_grpo.sh`:
 | Parameter | Value | Purpose |
 |-----------|-------|---------|
 | `--n-samples-per-prompt` | 4 | Within-prompt variance |
-| `--rollout-temperature` | 0.8 | Exploration |
+| `--rollout-temperature` | 0.8 → 0.5 | Exploration → stability (two-phase) |
 | `OSWORLD_REPLAY_BUFFER` | osworld_replay_union.jsonl | Replay injection |
 | `--rollout-function-path` | examples.osworld.rollout.generate_rollout | Custom batch rollout |
+
+Recommended schedule:
+
+```bash
+# Phase 1: exploration
+SLIME_SCRIPT_ROLLOUT_TEMPERATURE=0.8 bash examples/osworld/train_grpo.sh
+
+# Phase 2: stability (reduce repeated actions)
+SLIME_SCRIPT_ROLLOUT_TEMPERATURE=0.5 bash examples/osworld/train_grpo.sh
+```
 
 ### 3. Reward Shaping
 
@@ -105,6 +115,12 @@ shaped_reward = task_reward + 0.3 * partial_score - penalties
 **Partial scores**: action parsing, execution, a11y grounding, efficiency, screen changes
 
 **Penalties**: repetition, excessive waits, fallback parsing
+
+Debugging tip:
+
+```bash
+OSWORLD_REWARD_DEBUG_LIMIT=10 bash examples/osworld/train_grpo.sh
+```
 
 ## Methods
 
@@ -177,6 +193,15 @@ python run.py --observation_type screenshot --model your_model --result_dir resu
 ```
 
 The training script includes optional built-in evaluation. Set `DISABLE_EVAL=false` in `train_grpo.sh` to enable periodic evaluation during training.
+
+For local eval with the lightweight script, use a higher turn cap to avoid truncating successful multi-step tasks:
+
+```bash
+python examples/osworld/tools/eval.py \
+  --checkpoint /path/to/model \
+  --tasks /path/to/tasks.parquet \
+  --max-turns 12
+```
 
 ## References
 

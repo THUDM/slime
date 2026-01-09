@@ -983,6 +983,8 @@ RULES:
 - ONE action per response.
 - Use a11y tree coordinates when available.
 - Use WAIT after navigation.
+- Do not repeat the same action/coordinate if the screen has not changed.
+- If you use the a11y tree, include the element name in the action arguments.
 """
 
 
