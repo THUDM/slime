@@ -1699,6 +1699,16 @@ def slime_validate_args(args):
             args.use_dynamic_batch_size is False
         ), "Dynamic batch size is not supported for bshd format. Please specify --micro-batch-size instead."
 
+    if (
+        args.train_backend == "fsdp"
+        and getattr(args, "context_parallel_size", 1) > 1
+        and getattr(args, "attn_implementation", None) == "flash_attention_3"
+    ):
+        raise ValueError(
+            "FSDP context parallelism implementation does not support flash_attention_3 for now. "
+            f"context_parallel_size={args.context_parallel_size} and attn_implementation='flash_attention_3'. "
+            "Please use --attn-implementation flash_attention_2 or set --context-parallel-size 1."
+        )
 
 def hf_validate_args(args, hf_config):
     def equal(x, y):
