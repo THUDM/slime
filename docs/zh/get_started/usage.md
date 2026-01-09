@@ -279,7 +279,7 @@ slime 通过引入 sglang 的 `ServerArgs.add_cli_args`，从而引入了几乎�
 
 - 在训推一体的训练时，往往需要限制 `--mem-fraction-static`，这个参数需要转变为 `--sglang-mem-fraction-static`；
 - 在训练中，希望 sglang 能推理超过 huggingface checkpoint 的 `config.json` 中标识的最长 context length，需要使用 `--context-length`，那么在 slime 中需要使用 `--sglang-context-length`；
-- 在进行多机大 ep 推理的时候，需要 `--enable-ep-moe`、`--enable-dp-attention`、`--dp-size`、`--enable-deepep-moe` 等，则可以对应地传入 `--sglang-enable-ep-moe`、`--sglang-enable-dp-attention`、`--sglang-dp-size`、`--sglang-enable-deepep-moe` 。
+- 在进行多机大 ep 推理的时候，需要 `--ep-size`、`--enable-dp-attention`、`--dp-size`、`--moe-a2a-backend deepep` 等，则可以对应地传入 `--sglang-ep-size`、`--sglang-enable-dp-attention`、`--sglang-dp-size`、`--sglang-moe-a2a-backend deepep` 。
 
 有部分参与和 slime 的资源调度相关，会由 slime 自行配置，例如：
 
