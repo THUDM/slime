@@ -123,10 +123,20 @@ class Sample:
 
     @staticmethod
     def from_dict(data: dict):
+        data = dict(data)
         data["status"] = Sample.Status(data["status"])
         data["spec_info"] = Sample.SpecInfo.from_dict(data.get("spec_info", {}))
         data["prefix_cache_info"] = Sample.PrefixCacheInfo.from_dict(data.get("prefix_cache_info", {}))
-        return Sample(**data)
+
+        field_names = set(Sample.__dataclass_fields__.keys())
+        init_data = {k: v for k, v in data.items() if k in field_names}
+        sample = Sample(**init_data)
+
+        for key, value in data.items():
+            if key not in field_names:
+                setattr(sample, key, value)
+
+        return sample
 
     def get_reward_value(self, args) -> float:
         return self.reward if not args.reward_key else self.reward[args.reward_key]
