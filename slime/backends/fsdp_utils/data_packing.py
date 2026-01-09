@@ -265,7 +265,6 @@ def unpack_sequences_with_cp(packed_batch: dict, cp_rank: int, cp_size: int) -> 
                                 log_start = overlap_start - local_start - 1
                                 log_end = overlap_end - local_start - 1
                                 instance[key] = value[log_start:log_end]
-                            #
                     elif key == "rollout_log_probs":
                         # rollout_log_probs is packed based on response_lengths
                         start = sum(response_lengths[:i])

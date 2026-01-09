@@ -632,10 +632,9 @@ class FSDPTrainRayActor(TrainRayActor):
             )
         old_log_probs = torch.cat([batch[old_log_prob_key] for batch in unpacked_batches], dim=0)
         log_probs = torch.cat([batch["cur_log_probs"] for batch in unpacked_batches], dim=0)
-        entropy = torch.cat([batch["entropy"] for batch in unpacked_batches], dim=0)
         advantages = torch.cat([batch["advantages"] for batch in unpacked_batches], dim=0)
         loss_masks = [batch["loss_masks"].to(device=log_probs.device) for batch in unpacked_batches]
-        response_lengths = [batch["response_lengths"] for batch in unpacked_batches]
+        response_lengths = [batch["response_lengths"] for batch in unpacked_batches] if self.cp_size == 1 else [len(batch["loss_masks"]) for batch in unpacked_batches]
 
         advantages = advantages.to(device=log_probs.device)
         old_log_probs = old_log_probs.to(device=log_probs.device)
@@ -706,19 +705,20 @@ class FSDPTrainRayActor(TrainRayActor):
             pg_clipfrac = sum_of_token(pg_clipfrac, response_lengths, loss_masks)
             ppo_kl = sum_of_token(ppo_kl.abs(), response_lengths, loss_masks)
         else:
-            pg_loss = sum_of_sample_mean_with_cp(pg_loss, response_lengths, loss_masks, self.cp_size)
-            pg_clipfrac = sum_of_sample_mean_with_cp(pg_clipfrac, response_lengths, loss_masks, self.cp_size)
-            ppo_kl = sum_of_sample_mean_with_cp(ppo_kl.abs(), response_lengths, loss_masks, self.cp_size)
+            pg_loss = sum_of_sample_mean(pg_loss, response_lengths, loss_masks)
+            pg_clipfrac = sum_of_sample_mean(pg_clipfrac, response_lengths, loss_masks)
+            ppo_kl = sum_of_sample_mean(ppo_kl.abs(), response_lengths, loss_masks)
 
         # Only compare rollout vs. train log probs when they originate from different stages.
         train_rollout_logprob_abs_diff = None
         if not self.args.use_rollout_logprobs and rollout_log_probs is not None:
             train_rollout_logprob_abs_diff = (old_log_probs - rollout_log_probs).abs()
-            train_rollout_logprob_abs_diff = sum_of_sample_mean_with_cp(
-                train_rollout_logprob_abs_diff, response_lengths, loss_masks, self.cp_size
+            train_rollout_logprob_abs_diff = sum_of_sample_mean(
+                train_rollout_logprob_abs_diff, response_lengths, loss_masks
             ).detach()
 
-        entropy_loss = sum_of_sample_mean_with_cp(entropy, response_lengths, loss_masks, self.cp_size)
+        entropy = torch.cat([batch["entropy"] for batch in unpacked_batches], dim=0)
+        entropy_loss = sum_of_sample_mean(entropy, response_lengths, loss_masks)
 
         loss = pg_loss - self.args.entropy_coef * entropy_loss
 
@@ -733,7 +733,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 kl_loss_type=self.args.kl_loss_type,
                 importance_ratio=importance_ratio,
             )
-            kl_loss = sum_of_sample_mean_with_cp(kl, response_lengths, loss_masks, self.cp_size)
+            kl_loss = sum_of_sample_mean(kl, response_lengths, loss_masks)
 
             loss = loss + self.args.kl_loss_coef * kl_loss
 
@@ -1029,7 +1029,6 @@ def get_logprob_and_entropy_with_cp(
 
     return local_log_probs, entropy
 
-# [TODO] leave this here for now
 def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks: list[torch.Tensor]) -> torch.Tensor:
     """Compute sum of per-sample means across variable-length responses.
 
@@ -1048,39 +1047,6 @@ def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks:
             for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
         ]
     )
-
-def sum_of_sample_mean_with_cp(x: torch.Tensor, response_lengths: list[int], loss_masks: list[torch.Tensor], cp_size: int) -> torch.Tensor:
-    """Compute sum of per-sample means across variable-length responses.
-
-    Parameters:
-        x: Flat tensor containing concatenated per-token values across samples.
-        response_lengths: Lengths of each sample's response segment in `x`.
-        loss_masks: Per-sample masks aligned with `response_lengths`.
-        cp_size: Context parallelism world size
-
-    Returns:
-        A scalar tensor equal to the sum over samples of the mean value within
-        each sample's response segment.
-    """
-    if cp_size == 1:
-        return sum(
-            [
-                (x_i * loss_mask_i).sum() / torch.clamp_min(loss_mask_i.sum(), 1)
-                for x_i, loss_mask_i in zip(x.split(response_lengths, dim=0), loss_masks, strict=False)
-            ]
-        )
-    
-    num_local_samples = len(loss_masks)
-    local_numerators = torch.zeros(num_local_samples, device=x.device)
-    local_denominators = torch.zeros(num_local_samples, device=x.device)
-
-    start = 0
-    for i, mask in enumerate(loss_masks): 
-        local_numerators[i] = (x[start:start+len(mask)] * mask).sum()
-        local_denominators[i] = torch.clamp_min(mask.sum(), 1)
-        start += len(mask)
-
-    return (local_numerators / local_denominators).sum()
 
 @torch.no_grad()
 def move_torch_optimizer(optimizer, device):
