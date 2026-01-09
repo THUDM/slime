@@ -74,6 +74,7 @@ fi
 
 # https://github.com/pytorch/pytorch/issues/168167
 pip install nvidia-cudnn-cu12==9.16.0.29
+pip install "numpy<2"
 
 # apply patch
 cd $BASE_DIR/sglang
