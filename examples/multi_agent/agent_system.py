@@ -20,18 +20,7 @@ async def generate_response(args, prompt, key):
 
         url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
-        if args.apply_chat_template:
-            assert isinstance(prompt, list), "prompt should be a list when apply_chat_template is True"
-            prompt_text = tokenizer.apply_chat_template(
-                prompt,
-                tokenize=False,
-                add_generation_prompt=True,  # Add generation prompt for the assistant
-                **(args.apply_chat_template_kwargs or {}),
-            )
-            sample.prompt = prompt_text
-        else:
-            assert isinstance(prompt, str), "prompt should be a string when apply_chat_template is False"
-            sample.prompt = prompt
+        sample.prompt = prompt
         prompt_token_ids = tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
         sample.tokens = prompt_token_ids
         prompt_length = len(prompt_token_ids)
@@ -160,7 +149,7 @@ class SelectorAgent(Agent):
 
     def extract_selected_solution_idx(self, response: str, candidate_solutions: list[str]) -> int:
         """Extracts the selected solution ID from the response."""
-        PATTERN = re.compile("Judgment:\s*(\d+)")
+        PATTERN = re.compile(r"Judgment:\s*(\d+)")
         matched = PATTERN.findall(response)
         try:
             selected_id = int(matched[0]) - 1
