@@ -48,12 +48,20 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
 
         token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
 
-        response_length = MASK_GENERATOR.get_response_lengths([loss_mask])[0]
+        # Calculate response_length = length after first 1 (prompt excluded)
+        # This ensures loss_mask[-response_length:] gets the correct mask including
+        # intermediate 0s for user turns in multi-turn conversations
+        try:
+            first_one_index = loss_mask.index(1)
+            response_length = len(loss_mask) - first_one_index
+        except ValueError:
+            # No 1 in loss_mask means no tokens need loss computation
+            response_length = 0
 
         sample.tokens = token_ids
         sample.response_length = response_length
         sample.reward = 0
-        sample.loss_mask = loss_mask[-response_length:]
+        sample.loss_mask = loss_mask[-response_length:] if response_length > 0 else []
 
         if i == 0 and not SAMPLE_PRINTED:
             logger.info(

@@ -95,10 +95,13 @@ def pack_sequences(
             "response_lengths": [response_lengths[i] for i in indices],
             "advantages": torch.tensor(flat_advantages, dtype=torch.float32),
             "returns": torch.tensor(flat_returns, dtype=torch.float32),
-            "rollout_log_probs": torch.tensor(
-                flat_rollout_log_probs, dtype=torch.float32, device=torch.cuda.current_device()
-            ),
         }
+
+        # Only add rollout_log_probs if they were actually provided
+        if flat_rollout_log_probs:
+            packed_batch["rollout_log_probs"] = torch.tensor(
+                flat_rollout_log_probs, dtype=torch.float32, device=torch.cuda.current_device()
+            )
 
         # Collect and add multimodal training tensors for this partition
         if multimodal_train_inputs:
@@ -138,17 +141,18 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
 
     instances = []
 
-    # Calculate pad_length by counting trailing zeros
+    # Calculate pad_length using content_length (stored before padding)
+    # cu_seqlens[-1] is updated to include padding for flash attention, so we can't rely on it
     tokens = packed_batch["tokens"]
-    nonzero_indices = (tokens != 0).nonzero(as_tuple=True)[0]
-    if len(nonzero_indices) > 0:
-        # Last non-zero index, pad_length is everything after it
-        pad_length = len(tokens) - nonzero_indices[-1].item() - 1
-    else:
-        pad_length = 0  # No padding if no non-zero tokens (or all zeros)
+    content_length = packed_batch.get("content_length", len(tokens))
+    pad_length = len(tokens) - content_length
+
     for i in range(num_sequences):
         start_idx = cu_seqlens[i].item()
         end_idx = cu_seqlens[i + 1].item()
+        # Only the last sequence's end_idx includes CP padding (cu_seqlens[-1] was updated)
+        # For non-last sequences, end_idx is already correct
+        actual_end_idx = end_idx - pad_length if i == num_sequences - 1 else end_idx
         instance = {}
 
         # Copy any additional attributes that might exist in the packed batch
@@ -156,6 +160,9 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
             if key not in instance:
                 # Skip multimodal_num_items - it's metadata
                 if key == "multimodal_num_items":
+                    continue
+                # Skip content_length - it's metadata for unpacking
+                if key == "content_length":
                     continue
                 # Handle multimodal_train_inputs dict: split each tensor using multimodal_num_items
                 elif key == "multimodal_train_inputs" and isinstance(value, dict):
@@ -171,9 +178,10 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
                 elif isinstance(value, torch.Tensor):
                     if key in ["log_probs", "ref_log_probs", "cur_log_probs", "entropy"]:
                         # These are computed from logits[:-1] so they have length seq_len-1
-                        instance[key] = value[
-                            end_idx - 1 - response_lengths[i] - pad_length : end_idx - 1 - pad_length
-                        ]
+                        # Use actual_end_idx which excludes CP padding for the last sequence
+                        start = actual_end_idx - 1 - response_lengths[i]
+                        end = actual_end_idx - 1
+                        instance[key] = value[start:end]
                     elif key == "rollout_log_probs":
                         # rollout_log_probs is packed based on response_lengths, so slice differently
                         instance[key] = value[sum(response_lengths[:i]) : sum(response_lengths[: i + 1])]
@@ -209,6 +217,9 @@ def pad_packed_sequence_with_cp(packed_sequence: dict, cp_size: int) -> dict:
     # Calculate padding needed: (cp_size - seq_length % cp_size) % cp_size
     remainder = seq_length % cp_size
     pad_length = (cp_size - remainder) % cp_size
+
+    # Store original content length before padding for correct unpacking
+    packed_sequence["content_length"] = seq_length
 
     if pad_length > 0:
         packed_sequence["tokens"] = F.pad(packed_sequence["tokens"], (0, pad_length), value=0)

@@ -535,6 +535,69 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
 
+            # HuggingFace Datasets Integration
+            parser.add_argument(
+                "--use-hf-datasets",
+                action="store_true",
+                default=False,
+                help=(
+                    "Enable HuggingFace Datasets integration for efficient loading of large-scale datasets (100GB+). "
+                    "Uses streaming mode with zero memory overhead and prefetch buffer for high throughput."
+                ),
+            )
+            parser.add_argument(
+                "--hf-dataset-buffer-size",
+                type=int,
+                default=1000,
+                help=(
+                    "Prefetch buffer size for streaming mode. "
+                    "Larger buffer improves training throughput but increases memory usage. "
+                    "Default: 1000."
+                ),
+            )
+            parser.add_argument(
+                "--hf-dataset-shuffle-buffer",
+                type=int,
+                default=10000,
+                help=(
+                    "Shuffle buffer size for HuggingFace Datasets streaming mode. "
+                    "Larger buffer improves shuffle randomness but increases memory usage. "
+                    "Default: 10000 (industry standard for large-scale datasets)."
+                ),
+            )
+            parser.add_argument(
+                "--hf-dataset-num-proc",
+                type=int,
+                default=8,
+                help=(
+                    "Number of parallel workers for preprocessing when using HuggingFace Datasets. "
+                    "Applies to both streaming and cached modes. "
+                    "Increase this value if you have more CPU cores available. "
+                    "Default: 8."
+                ),
+            )
+            parser.add_argument(
+                "--hf-datasets-num-samples",
+                type=int,
+                default=None,
+                help=(
+                    "Number of samples in the HuggingFace streaming dataset. "
+                    "Required when using --use-hf-datasets for proper epoch tracking. "
+                    "This enables __len__() support and deterministic epoch boundaries."
+                ),
+            )
+            parser.add_argument(
+                "--hf-dataset-split",
+                type=str,
+                default="train",
+                help=(
+                    "Split name to use when loading HuggingFace datasets. "
+                    "For HF Hub datasets, specifies which split to load (e.g., 'train', 'test'). "
+                    "Some datasets like 'nvidia/Nemotron-Agentic-v1' have custom splits "
+                    "like 'interactive_agent' or 'tool_calling'. Default: 'train'."
+                ),
+            )
+
             parser.add_argument(
                 "--start-rollout-id",
                 type=int,
