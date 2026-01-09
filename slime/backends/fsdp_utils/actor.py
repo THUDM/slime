@@ -618,7 +618,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 batch for batch in unpacked_batches
                 if "loss_masks" in batch and isinstance(batch["loss_masks"], torch.Tensor)
             ]
-            logger.info(f"rank {dist.get_rank()}: {len(unpacked_batches)}")
 
         old_log_prob_key = "rollout_log_probs" if self.args.use_rollout_logprobs else "log_probs"
         missing_old_log_probs = [
@@ -738,7 +737,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
             loss = loss + self.args.kl_loss_coef * kl_loss
 
-        logger.info(f"rank {dist.get_rank()}: loss: {loss}")
         if self.cp_size > 1:
             dist.all_reduce(loss, op=dist.ReduceOp.SUM, group=self.cp_group)
             loss = loss / self.cp_size
