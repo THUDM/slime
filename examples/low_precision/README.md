@@ -105,7 +105,90 @@ python tools/convert_hf_to_hf_int4.py \
   --local_data_path /path/to/your/wikitext
 ```
 
-#### 3. Start INT4 Training
+#### 3. Modifying the Transformer Engine Code
+
+Maintaining a custom patch for the Transformer Engine (TE) introduces significant complexity to the project. Therefore, we strongly recommend using our pre-built Docker image. 
+Alternatively, if you must use newest docker and code, follow the steps below to manually modify the TE code.
+
+**Option A: Use the Pre-built Docker Image (Recommended)**
+
+-   Use the provided Docker image which already contains the necessary environment configuration.
+
+**Option B: Manual Modification**
+- **Target File:**
+        `/usr/local/lib/python3.12/dist-packages/transformer_engine/pytorch/module/grouped_linear.py`
+- **Instructions:**
+        Add the helper functions and modify the `forward` method within the `_GroupedLinear` class as shown below:
+
+```python
+# 1. Add these helper functions (e.g., at the top of the file)
+import os
+import torch
+
+def ceil_div(x: int, y: int) -> int:
+    return (x + y - 1) // y
+
+def fake_int4_quantization_ste(x, block_size):
+    m, n = x.shape
+    block_size_m, block_size_n = block_size[0], block_size[1]
+
+    m_padded = ceil_div(m, block_size_m) * block_size_m
+    n_padded = ceil_div(n, block_size_n) * block_size_n
+
+    x_padded = torch.zeros(
+        (m_padded, n_padded),
+        dtype=x.dtype, device=x.device
+    )
+    x_padded[:m, :n] = x
+
+    x_view = x_padded.view(
+        m_padded // block_size_m,
+        block_size_m,
+        n_padded // block_size_n,
+        block_size_n
+    )
+
+    x_max = x_view.abs().float().amax(dim=(1, 3), keepdim=True)
+    q_max = 7
+    x_scale = x_max / q_max
+
+    x_scale = x_scale.clamp(min=1e-5)
+
+    x_div = x_view / x_scale
+    x_round = torch.round(x_div)
+
+    x_q_clamped = x_round.clamp(-q_max, q_max)
+
+    x_dequant_view = x_q_clamped * x_scale
+
+    x_dequant_full = x_dequant_view.view_as(x_padded)
+    x_out = x_dequant_full[:m, :n].contiguous().to(x.dtype)
+
+    return x + (x_out - x).detach()
+
+# 2. Modify the forward method in the _GroupedLinear class
+class _GroupedLinear(torch.autograd.Function):
+    @staticmethod
+    def forward(
+        ...
+    ) -> torch.Tensor:
+        ...
+
+        # Initialize weights
+        weights_fp8: list
+        if fp8:
+          ...
+        else:
+            # Change this section
+            # Check environment variable to apply INT4 fake quantization
+            if os.getenv("OPEN_TRAINING_INT4_FAKE_QAT_FLAG", "0") == "1":
+                group_size = int(os.getenv("OPEN_TRAINING_INT4_GROUP_SIZE", "128"))
+                weights_fp8 = [fake_int4_quantization_ste(w, [1, group_size]) for w in weights]
+            else:
+                weights_fp8 = [cast_if_needed(weight, activation_dtype) for weight in weights]
+```
+
+#### 4. Start INT4 Training
 
 You need to configure the specific environment variables for quantization settings.
 
