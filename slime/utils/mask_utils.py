@@ -7,8 +7,14 @@ def get_response_lengths(loss_masks: list[list[int]]) -> list[int]:
 
 
 class MultiTurnLossMaskGenerator:
-    def __init__(self, tokenizer: AutoTokenizer, tokenizer_type: str = "qwen"):
+    def __init__(
+        self,
+        tokenizer: AutoTokenizer,
+        tokenizer_type: str = "qwen",
+        apply_chat_template_fn=None,
+    ):
         self.tokenizer = tokenizer
+        self.apply_chat_template_fn = apply_chat_template_fn or tokenizer.apply_chat_template
         self.system_message_length, self.gen_token_length = self.get_system_message_length()
         self.tokenizer_type = tokenizer_type
 
@@ -30,14 +36,12 @@ class MultiTurnLossMaskGenerator:
             {"role": "user", "content": test_string},
         ]
         raw_token_ids = self.tokenizer(test_string, add_special_tokens=False)["input_ids"]
-        chat_template_token = self.tokenizer.apply_chat_template(
-            test_messages, add_special_tokens=False, tokenize=False
-        )
+        chat_template_token = self.apply_chat_template_fn(test_messages, add_special_tokens=False, tokenize=False)
         chat_template_token_ids = self.tokenizer(chat_template_token, add_special_tokens=False)["input_ids"]
         idx_1, idx_2 = self.find_all_sublist_indices(chat_template_token_ids, raw_token_ids)
         end_interval = len(chat_template_token_ids) - len(raw_token_ids) - idx_2
         gen_token_length = len(
-            self.tokenizer.apply_chat_template(
+            self.apply_chat_template_fn(
                 test_messages, add_special_tokens=False, tokenize=True, add_generation_prompt=True
             )
         ) - len(chat_template_token_ids)
@@ -53,9 +57,9 @@ class MultiTurnLossMaskGenerator:
 
         for i, message in enumerate(messages):
             if i == 0:
-                message_ids = self.tokenizer.apply_chat_template([message], tokenize=True, tools=tools)
+                message_ids = self.apply_chat_template_fn([message], tokenize=True, tools=tools)
             else:
-                message_ids = self.tokenizer.apply_chat_template([message], tokenize=True)
+                message_ids = self.apply_chat_template_fn([message], tokenize=True)
 
             if message["role"] != "system" and i > 0:
                 message_ids = message_ids[self.system_message_length :]
@@ -80,16 +84,14 @@ class MultiTurnLossMaskGenerator:
         all_token_ids = []
 
         prefix_message = {"role": "user", "content": "FOR CALCULATING LOSS MASK ONLY"}
-        prefix_token_ids = self.tokenizer.apply_chat_template([prefix_message], tokenize=True)
+        prefix_token_ids = self.apply_chat_template_fn([prefix_message], tokenize=True)
 
         for i, message in enumerate(messages):
             if i == 0:
-                tailed_message_ids = self.tokenizer.apply_chat_template(
-                    [message, prefix_message], tokenize=True, tools=tools
-                )
+                tailed_message_ids = self.apply_chat_template_fn([message, prefix_message], tokenize=True, tools=tools)
                 message_ids = tailed_message_ids[: -len(prefix_token_ids)]
             else:
-                prefixed_message_ids = self.tokenizer.apply_chat_template([prefix_message, message], tokenize=True)
+                prefixed_message_ids = self.apply_chat_template_fn([prefix_message, message], tokenize=True)
                 message_ids = prefixed_message_ids[len(prefix_token_ids) :]
 
             if message["role"] != "system" and i > 0:
