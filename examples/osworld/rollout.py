@@ -35,7 +35,15 @@ from slime.utils.processing_utils import (
 )
 from slime.utils.types import Sample
 
-from .env import OSWORLD_SYSTEM_PROMPT, OSWorldEnvWrapper, build_env, finalize_episode, on_reset
+from .env import (
+    OSWORLD_SYSTEM_PROMPT,
+    QWEN3_MAX_PIXELS,
+    OSWorldEnvWrapper,
+    build_env,
+    finalize_episode,
+    on_reset,
+    resize_screenshot_for_vlm,
+)
 from .replay_buffer import get_replay_buffer
 from .reward import compute_reward_from_metadata
 
@@ -176,7 +184,12 @@ def _decode_replay_images(images: list[Any]) -> list[Image.Image]:
     decoded: list[Image.Image] = []
     for img in images:
         if isinstance(img, Image.Image):
-            decoded.append(img.convert("RGB"))
+            resized = resize_screenshot_for_vlm(img.convert("RGB"))
+            if os.environ.get("OSWORLD_ASSERT_REPLAY_IMAGE_SIZE") == "1":
+                pixels = resized.size[0] * resized.size[1]
+                if pixels > QWEN3_MAX_PIXELS:
+                    raise ValueError(f"Replay image exceeds max pixels after resize: {resized.size}")
+            decoded.append(resized)
             continue
         if not isinstance(img, str):
             continue
@@ -185,7 +198,12 @@ def _decode_replay_images(images: list[Any]) -> list[Image.Image]:
             _, payload = img.split(",", 1)
         try:
             img_bytes = base64.b64decode(payload)
-            decoded.append(Image.open(io.BytesIO(img_bytes)).convert("RGB"))
+            resized = resize_screenshot_for_vlm(Image.open(io.BytesIO(img_bytes)).convert("RGB"))
+            if os.environ.get("OSWORLD_ASSERT_REPLAY_IMAGE_SIZE") == "1":
+                pixels = resized.size[0] * resized.size[1]
+                if pixels > QWEN3_MAX_PIXELS:
+                    raise ValueError(f"Replay image exceeds max pixels after resize: {resized.size}")
+            decoded.append(resized)
         except Exception as exc:
             logger.warning(f"Failed to decode replay image: {exc}")
     return decoded
