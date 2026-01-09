@@ -31,7 +31,7 @@ TIMESTAMP_SUFFIX=$(date +%Y%m%d_%H%M%S)
 CKPT_ARGS=(
    --hf-checkpoint /root/models/Qwen/Qwen3-4B-Instruct-2507
    --ref-load /root/models/Qwen/Qwen3-4B-Instruct-2507_torch_dist
-   # --load Qwen3-4B-Instruct-2507_strands_dapo_1129
+   # --load Qwen3-4B-Instruct-2507_strands_dapo
    --save /root/models/Qwen/Qwen3-4B-Instruct-2507_strands_dapo_${TIMESTAMP_SUFFIX}
    --save-interval 20
    --rotary-base 5000000
@@ -42,7 +42,7 @@ ROLLOUT_ARGS=(
    --input-key prompt
    --label-key label
    --rollout-shuffle
-   --reward-key score
+   # --reward-key score
    --num-rollout 3000
    --rollout-batch-size 32
    --n-samples-per-prompt 8
@@ -56,7 +56,7 @@ ROLLOUT_ARGS=(
 EVAL_ARGS=(
    --eval-interval 20
    --eval-prompt-data aime  /root/data/aime-2024.jsonl
-   --n-samples-per-eval-prompt 16
+   --n-samples-per-eval-prompt 8
    --eval-max-response-len 16384
    --eval-top-p 1
 )
@@ -107,7 +107,8 @@ WANDB_ARGS=(
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
    --sglang-mem-fraction-static 0.7
-   --sglang-tool-call-parser qwen  # Enable tool call parsing for Strands Agent
+   # Note: strands-sglang handles tool parsing internally (HermesToolCallParser)
+   # No need for --sglang-tool-call-parser
 )
 
 MISC_ARGS=(
@@ -122,8 +123,8 @@ MISC_ARGS=(
 )
 
 CUSTOM_ARGS=(
-   --custom-generate-function-path examples.strands-agents.generate_with_strands.generate
-   --custom-rm-path examples.strands-agents.generate_with_strands.reward_func
+   --custom-generate-function-path examples.strands_sglang.generate_with_strands.generate
+   --custom-rm-path examples.strands_sglang.generate_with_strands.reward_func
 )
 
 # launch the master node of ray in container
