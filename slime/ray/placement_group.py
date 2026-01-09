@@ -1,5 +1,6 @@
 import logging
 import socket
+import os
 
 import ray
 from ray.util.placement_group import placement_group
@@ -10,6 +11,7 @@ from .rollout import RolloutManager
 
 logger = logging.getLogger(__name__)
 
+ROLLOUT_NUM_CPUS = os.environ.get("ROLLOUT_NUM_CPUS", 8)
 
 @ray.remote(num_gpus=1)
 class InfoActor:
@@ -168,7 +170,7 @@ def create_training_models(args, pgs, rollout_manager):
 
 def create_rollout_manager(args, pg):
     rollout_manager = RolloutManager.options(
-        num_cpus=1,
+        num_cpus=ROLLOUT_NUM_CPUS,
         num_gpus=0,
     ).remote(args, pg)
 
