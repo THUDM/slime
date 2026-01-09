@@ -340,7 +340,7 @@ FSDP和Megatron后端支持的参数的对比如下表所示，接下来FSDP会�
 | **张量并行** | `--tensor-model-parallel-size` | Coming Soon |  |
 | **流水线并行** | `--pipeline-model-parallel-size` | Coming Soon |  |
 | **专家并行** | `--expert-model-parallel-size` | Coming Soon |  |
-| **上下文并行** | `--context-parallel-size` | `--context-parallel-size` | 两者都支持 CP |
+| **上下文并行** | `--context-parallel-size` | `--context-parallel-size` + `--experimental-feature` | **FSDP**: CP 为实验性功能，需要 `--experimental-feature` 标志 |
 | **初始学习率** | `--lr` | `--lr` | 参数相同 |
 | **学习率衰减** | `--lr-decay-style` (linear/cosine 等) | `--lr-decay-style` | 参数相同 |
 | **Warmup** | `--lr-warmup-iters` (步数) | `--lr-warmup-iters` | 参数相同 |

@@ -341,7 +341,7 @@ Parameters that FSDP used are shown as below in comparison to Megatron, more sup
 | **Tensor Parallel**       | `--tensor-model-parallel-size`                               | Coming Soon                                            |                                                              |
 | **Pipeline Parallel**     | `--pipeline-model-parallel-size`                             | Coming Soon                                            |                                                              |
 | **Expert Parallel**       | `--expert-model-parallel-size`                               | Coming Soon                                            |                                                              |
-| **Context Parallel**      | `--context-parallel-size`                                    | `--context-parallel-size`                              | Both support CP                                              |
+| **Context Parallel**      | `--context-parallel-size`                                    | `--context-parallel-size` + `--experimental-feature`   | **FSDP**: CP is experimental, requires `--experimental-feature` flag |
 | **Initial Learning Rate** | `--lr`                                                       | `--lr`                                                 | Same parameter                                               |
 | **Learning Rate Decay**   | `--lr-decay-style` (linear/cosine etc.)                      | `--lr-decay-style`                     | Same parameter |
 | **Warmup**                | `--lr-warmup-iters` (steps)                                  | `--lr-warmup-iters`                   | Same parameter |
