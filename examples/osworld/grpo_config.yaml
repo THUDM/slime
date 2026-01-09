@@ -1,0 +1,31 @@
+# OSWorld VLM multi-turn training configuration
+
+# Rollout settings
+max_turns: 8
+rollout_interaction_env_path: examples.osworld.env
+
+# Context limits
+max_total_tokens: 16384
+stop_on_max_tokens: true
+
+# Environment defaults
+env_defaults:
+  provider_name: docker
+  os_type: Ubuntu
+  action_space: pyautogui
+  headless: true
+  require_a11y_tree: true
+  include_a11y_in_obs: true
+  a11y_max_length: 4096
+
+# Reward shaping
+reward:
+  alpha: 0.3
+  task_complexity: low
+
+  weights:
+    action_parse_valid: 0.10
+    action_executed: 0.15
+    a11y_grounding: 0.10
+    tool_calling: 0.15
+    efficiency: 0.05

@@ -44,6 +44,41 @@ def process_vision_info(prompt, processor):
     return multimodal_inputs
 
 
+def prepare_model_inputs(
+    messages,
+    tokenizer,
+    processor,
+    metadata: dict | None = None,
+    apply_chat_template: bool = True,
+    apply_chat_template_kwargs: dict | None = None,
+):
+    """Build model input ids and processed multimodal inputs from chat messages."""
+    chat_kwargs = apply_chat_template_kwargs or {}
+    if apply_chat_template:
+        if processor is not None and hasattr(processor, "apply_chat_template"):
+            text = processor.apply_chat_template(messages, tokenize=False, **chat_kwargs)
+        else:
+            text = tokenizer.apply_chat_template(messages, tokenize=False, **chat_kwargs)
+    else:
+        text = messages if isinstance(messages, str) else tokenizer.apply_chat_template(messages, tokenize=False)
+
+    if processor is None:
+        input_ids = tokenizer.encode(text, add_special_tokens=False)
+        return input_ids, {"multimodal_inputs": None}
+
+    multimodal_inputs = process_vision_info(messages, processor)
+    if metadata and "images" in metadata and not multimodal_inputs.get("images"):
+        multimodal_inputs = {**multimodal_inputs, "images": metadata["images"]}
+
+    processor_output = processor(text=text, **multimodal_inputs)
+    input_ids = processor_output["input_ids"][0]
+    if hasattr(input_ids, "tolist"):
+        input_ids = input_ids.tolist()
+
+    extra = {k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]}
+    return input_ids, {"multimodal_inputs": extra}
+
+
 def encode_image_for_rollout_engine(image) -> str:
     """Load an image from path, ensure RGB, encode as PNG base64 string."""
     buffer = io.BytesIO()
