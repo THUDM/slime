@@ -23,7 +23,7 @@ NUM_GPUS = 8
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"huggingface-cli download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
+    U.exec_command(f"hf download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
     if arg_ref_load is None:
         U.convert_checkpoint(
             model_name=MODEL_NAME,
