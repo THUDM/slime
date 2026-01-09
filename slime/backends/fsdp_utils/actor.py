@@ -106,10 +106,10 @@ class FSDPTrainRayActor(TrainRayActor):
 
         full_state = model.state_dict()
 
-        model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=self.fsdp_cpu_offload, args=self.args)
+        model = apply_fsdp2(model, mesh=self.fsdp_mesh, cpu_offload=self.fsdp_cpu_offload, args=self.args)
 
         model = self._fsdp2_load_full_state_dict(
-            model, full_state, self.dp_mesh, cpu_offload=True if self.fsdp_cpu_offload else None
+            model, full_state, self.fsdp_mesh, cpu_offload=True if self.fsdp_cpu_offload else None
         )
 
         self.model = model
@@ -228,9 +228,11 @@ class FSDPTrainRayActor(TrainRayActor):
         self.mesh = init_device_mesh("cuda", mesh_shape=(self.dp_size, self.cp_size), mesh_dim_names=("dp", "cp"))
 
         # Extract process groups from mesh
-        self.dp_group = self.mesh.get_group("dp")  # For FSDP gradient sync, metric reduction
+        self.dp_group = self.mesh.get_group("dp")  # For metric reduction across DP
         self.cp_group = self.mesh.get_group("cp")  # For Ring Flash Attention, logit gathering
-        self.dp_mesh = self.mesh["dp"]  # For FSDP
+
+        # Usem none for cp_size > 1 so FSDP handles gradient sync across all ranks (DP + CP)
+        self.fsdp_mesh = None if self.cp_size > 1 else self.mesh["dp"]
 
         # Compute local ranks within each dimension
         self.dp_rank = rank // self.cp_size
@@ -248,22 +250,6 @@ class FSDPTrainRayActor(TrainRayActor):
             logger.info(f"[Rank {rank}] CP initialized via device mesh")
         else:
             logger.info(f"[Rank {rank}] Pure DP mode (cp_size=1)")
-
-    def _sync_gradients_across_cp(self) -> None:
-        """Synchronize gradients across Context Parallel ranks.
-
-        Ring Flash Attention only handles dk/dv reduce internally for attention computation.
-        All other parameter gradients (MLP, LayerNorm, Embedding, projection weights) must
-        be explicitly synchronized across CP ranks to ensure consistent weight updates.
-        """
-        from torch.distributed.tensor import DTensor
-
-        for param in self.model.parameters():
-            if param.grad is not None:
-                # FSDP2 grads are DTensors - extract local tensor for all_reduce
-                grad_tensor = param.grad._local_tensor if isinstance(param.grad, DTensor) else param.grad
-                dist.all_reduce(grad_tensor, op=dist.ReduceOp.SUM, group=self.cp_group)
-                grad_tensor.div_(self.cp_size)
 
     def _get_init_weight_context_manager(self):
         """Get context manager for model initialization.
@@ -792,10 +778,6 @@ class FSDPTrainRayActor(TrainRayActor):
             reported_accum.setdefault(k, []).append(v)
 
         if (mbs_id + 1) in grad_accum:
-            # Sync gradients across CP ranks before optimizer step.
-            if self.cp_size > 1:
-                self._sync_gradients_across_cp()
-
             # TODO: check if the grad norm is global grad norm.
             grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
             # the grad norm used to be of DTensor
@@ -900,8 +882,8 @@ class FSDPTrainRayActor(TrainRayActor):
             full_state = ref_model.state_dict()
 
             # Always use CPUOffloadPolicy for reference, let FSDP2 handle the offload. It is faster than model.cpu().
-            ref_model = apply_fsdp2(ref_model, mesh=self.dp_mesh, cpu_offload=True, args=self.args)
-            ref_model = self._fsdp2_load_full_state_dict(ref_model, full_state, self.dp_mesh, cpu_offload=True)
+            ref_model = apply_fsdp2(ref_model, mesh=self.fsdp_mesh, cpu_offload=True, args=self.args)
+            ref_model = self._fsdp2_load_full_state_dict(ref_model, full_state, self.fsdp_mesh, cpu_offload=True)
 
             logger.info(f"[Rank {dist.get_rank()}] Reference model created with FSDP2 CPUOffloadPolicy")
             return ref_model
