@@ -1,13 +1,8 @@
 import logging
 
-
 try:
-    _TORCH_MEMORY_SAVER_AVAILABLE = True
-except ImportError:
-    logging.warning("torch_memory_saver is not installed, refer to : https://github.com/fzyzcjy/torch_memory_saver")
-    _TORCH_MEMORY_SAVER_AVAILABLE = False
+    from torch.distributed.fsdp import fully_shard  # noqa: F401
 
-try:
     _FSDP_AVAILABLE = True
 except ImportError as e:
     logging.warning(f"FSDP backend dependencies not available: {e}")
