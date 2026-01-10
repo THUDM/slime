@@ -1,6 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeMLP
 
 from slime.backends.fsdp_utils.kernels.fused_experts import (
@@ -9,6 +8,8 @@ from slime.backends.fsdp_utils.kernels.fused_experts import (
     MoeSumReduceFunction,
     SiluAndMulFunction,
 )
+
+from .qwen3_moe_utils import qwen3_moe_routing
 
 
 def fused_experts_impl(
@@ -93,13 +94,10 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
         # router_logits: (batch * sequence_length, n_experts)
         router_logits = self.gate(hidden_states)
 
-        routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
-        routing_weights, selected_experts = torch.topk(routing_weights, self.top_k, dim=-1)
-
-        if self.norm_topk_prob:  # only diff with mixtral sparse moe block!
-            routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
-        # we cast back to the input dtype
-        routing_weights = routing_weights.to(hidden_states.dtype)
+        # Qwen3-style routing: softmax → topk → renormalize
+        routing_weights, selected_experts = qwen3_moe_routing(
+            router_logits, self.top_k, self.norm_topk_prob, hidden_states.dtype
+        )
 
         selected_experts = Qwen3MoeSparseMoeBlock.dispatcher.dispatch(selected_experts)
 
