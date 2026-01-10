@@ -106,10 +106,10 @@ class FSDPTrainRayActor(TrainRayActor):
 
         full_state = model.state_dict()
 
-        model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=self.fsdp_cpu_offload, args=self.args)
+        model = apply_fsdp2(model, mesh=self.fsdp_mesh, cpu_offload=self.fsdp_cpu_offload, args=self.args)
 
         model = self._fsdp2_load_full_state_dict(
-            model, full_state, self.dp_mesh, cpu_offload=True if self.fsdp_cpu_offload else None
+            model, full_state, self.fsdp_mesh, cpu_offload=True if self.fsdp_cpu_offload else None
         )
 
         self.model = model
@@ -205,6 +205,19 @@ class FSDPTrainRayActor(TrainRayActor):
 
         # Use context_parallel_size directly (defaults to 1 for pure DP)
         self.cp_size = self.args.context_parallel_size
+
+        # Check experimental feature flag for CP
+        if self.cp_size > 1:
+            if not getattr(self.args, "experimental_feature", False):
+                raise RuntimeError(
+                    f"Context Parallelism (cp_size={self.cp_size}) in FSDP is experimental and disabled by default. "
+                    "To enable it, set --experimental-feature. "
+                    "Note: CP in FSDP may produce different results compared to non-CP training."
+                )
+            logger.warning(
+                f"[Rank {rank}] Context Parallelism in FSDP is EXPERIMENTAL (cp_size={self.cp_size}). "
+                "Results may differ from non-CP training due to numerical differences in Ring Flash Attention."
+            )
         self.dp_size = world_size // self.cp_size
 
         # Create 2D device mesh: (dp_size, cp_size)
@@ -215,9 +228,11 @@ class FSDPTrainRayActor(TrainRayActor):
         self.mesh = init_device_mesh("cuda", mesh_shape=(self.dp_size, self.cp_size), mesh_dim_names=("dp", "cp"))
 
         # Extract process groups from mesh
-        self.dp_group = self.mesh.get_group("dp")  # For FSDP gradient sync, metric reduction
+        self.dp_group = self.mesh.get_group("dp")  # For metric reduction across DP
         self.cp_group = self.mesh.get_group("cp")  # For Ring Flash Attention, logit gathering
-        self.dp_mesh = self.mesh["dp"]  # For FSDP
+
+        # Usem none for cp_size > 1 so FSDP handles gradient sync across all ranks (DP + CP)
+        self.fsdp_mesh = None if self.cp_size > 1 else self.mesh["dp"]
 
         # Compute local ranks within each dimension
         self.dp_rank = rank // self.cp_size
@@ -772,6 +787,7 @@ class FSDPTrainRayActor(TrainRayActor):
             # Update learning rate
             self.lr_scheduler.step()
             self.optimizer.zero_grad(set_to_none=True)
+
             # Aggregate logs
             aggregated = {k: torch.stack(v).sum().item() for k, v in reported_accum.items()}
             # TODO: change this, this is slow.
@@ -866,8 +882,8 @@ class FSDPTrainRayActor(TrainRayActor):
             full_state = ref_model.state_dict()
 
             # Always use CPUOffloadPolicy for reference, let FSDP2 handle the offload. It is faster than model.cpu().
-            ref_model = apply_fsdp2(ref_model, mesh=self.dp_mesh, cpu_offload=True, args=self.args)
-            ref_model = self._fsdp2_load_full_state_dict(ref_model, full_state, self.dp_mesh, cpu_offload=True)
+            ref_model = apply_fsdp2(ref_model, mesh=self.fsdp_mesh, cpu_offload=True, args=self.args)
+            ref_model = self._fsdp2_load_full_state_dict(ref_model, full_state, self.fsdp_mesh, cpu_offload=True)
 
             logger.info(f"[Rank {dist.get_rank()}] Reference model created with FSDP2 CPUOffloadPolicy")
             return ref_model

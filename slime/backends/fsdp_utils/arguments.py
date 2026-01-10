@@ -49,6 +49,7 @@ class FSDPArgs:
 
     # Context Parallelism
     context_parallel_size: int = 1  # Context Parallelism size
+    experimental_feature: bool = False  # Enable experimental features (e.g., CP in FSDP)
     # Profile
     record_memory_history: bool = False
     memory_snapshot_path: str = "snapshot.pickle"
