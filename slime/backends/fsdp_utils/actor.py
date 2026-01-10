@@ -997,7 +997,7 @@ def get_logprob_and_entropy_with_cp(
     )
 
     # For the last rank, remove the last logit
-    logits = logits if cp_rank < cp_size - 1 else logits[:-1, :]
+    shifted_logits = logits if cp_rank < cp_size - 1 else logits[:-1, :]
 
     # Get local tokens for current rank
     local_tokens = (
@@ -1006,7 +1006,7 @@ def get_logprob_and_entropy_with_cp(
 
     # Compute local log probs
     local_log_probs = gather_log_probs_packed(
-        logits, local_tokens, allow_compile=allow_compile, temperature=temperature
+        shifted_logits, local_tokens, allow_compile=allow_compile, temperature=temperature
     )
 
     # Pad for the last rank
@@ -1014,7 +1014,6 @@ def get_logprob_and_entropy_with_cp(
         local_log_probs = F.pad(local_log_probs, (0, chunk_size - local_log_probs.shape[0]), value=0)
 
     # Compute entropy
-    shifted_logits = logits[:-1, :] if cp_rank == cp_size - 1 else logits
     log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
     probs = torch.softmax(shifted_logits, dim=-1)
     entropy = -(probs * log_probs_full).sum(dim=-1)
