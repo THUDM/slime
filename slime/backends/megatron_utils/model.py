@@ -26,9 +26,11 @@ from slime.utils import tracking_utils
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
-from .data import DataIterator, get_batch
-from .loss import loss_function
+from .data import MegatronParallelState, get_packed_seq_params
 from .model_provider import get_model_provider_func
+
+from ..training_utils.data import DataIterator, get_batch
+from ..training_utils.loss import loss_function
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +156,7 @@ def forward_only(
     model: Sequence[DDP],
     data_iterator: Sequence[DataIterator],
     num_microbatches: Sequence[int],
+    parallel_state: MegatronParallelState,
     store_prefix: str = "",
 ) -> dict[str, list[torch.Tensor]]:
     """Run forward passes only and collect non-loss outputs (e.g., logprobs).
@@ -213,12 +216,13 @@ def forward_only(
                 "response_lengths",
                 "max_seq_lens",
             ],
+            parallel_state,
             args.data_pad_size_multiplier,
             args.qkv_format,
         )
         unconcat_tokens = batch["unconcat_tokens"]
         tokens = batch["tokens"]
-        packed_seq_params = batch["packed_seq_params"]
+        packed_seq_params = get_packed_seq_params(batch, args)
         total_lengths = batch["total_lengths"]
         response_lengths = batch["response_lengths"]
         output_tensor = model(
@@ -234,6 +238,7 @@ def forward_only(
         return output_tensor, partial(
             f,
             args=args,
+            parallel_state=parallel_state,
             unconcat_tokens=unconcat_tokens,
             total_lengths=total_lengths,
             response_lengths=response_lengths,
@@ -304,6 +309,7 @@ def train_one_step(
     optimizer: MegatronOptimizer,
     opt_param_scheduler: OptimizerParamScheduler,
     num_microbatches: int,
+    parallel_state: MegatronParallelState,
 ) -> tuple[dict[str, float], float]:
     """Execute a single pipeline-parallel training step.
 
@@ -371,6 +377,7 @@ def train_one_step(
                 "rollout_log_probs",
                 "max_seq_lens",
             ],
+            parallel_state,
             args.data_pad_size_multiplier,
             args.qkv_format,
         )
@@ -386,7 +393,7 @@ def train_one_step(
                 position_ids=None,
                 attention_mask=None,
                 labels=None,
-                packed_seq_params=batch["packed_seq_params"],
+                packed_seq_params=get_packed_seq_params(batch, args),
                 loss_mask=batch["full_loss_masks"],
             )
         else:
@@ -395,7 +402,7 @@ def train_one_step(
                 "position_ids": None,
                 "attention_mask": None,
                 "labels": None,
-                "packed_seq_params": batch["packed_seq_params"],
+                "packed_seq_params": get_packed_seq_params(batch, args),
                 "loss_mask": batch["full_loss_masks"],
             }
 
@@ -410,7 +417,7 @@ def train_one_step(
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             os.environ["ROUTING_REPLAY_STAGE"] = old_stage
 
-        return output_tensor, partial(loss_function, args, batch, num_microbatches)
+        return output_tensor, partial(loss_function, args, parallel_state, batch, num_microbatches)
 
     # Forward pass.
     forward_backward_func = get_forward_backward_func()
@@ -500,6 +507,7 @@ def train(
     opt_param_scheduler: OptimizerParamScheduler,
     data_iterator: Sequence[DataIterator],
     num_microbatches: Sequence[int],
+    parallel_state: MegatronParallelState,
 ) -> None:
     """Run training over a rollout consisting of multiple steps.
 
@@ -597,6 +605,7 @@ def train(
             optimizer,
             opt_param_scheduler,
             num_microbatches[step_id],
+            parallel_state,
         )
 
         if step_id == 0:
