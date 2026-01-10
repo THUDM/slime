@@ -102,10 +102,10 @@ def int4_block_quantize(x: torch.Tensor, group_size: int = 128) -> tuple[torch.T
 
     # =========================================================
     # 1. Scale
-    #    Range: [-7, 7] -> dividing by 7.5
+    #    Range: [-7, 7] -> dividing by 7.0
     # =========================================================
     x_abs_max = x_reshaped.abs().amax(dim=-1, keepdim=True)
-    scale = x_abs_max / 7.5
+    scale = x_abs_max / 7.0
     scale = scale.clamp(min=1e-5)
 
     # =========================================================
