@@ -16,7 +16,6 @@ from transformers import AutoConfig, AutoTokenizer
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import train_dump_utils
 from slime.utils.context_utils import with_defer
-from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.ray_utils import Box
@@ -29,7 +28,7 @@ from slime.utils.types import RolloutBatch
 from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
 from .checkpoint import load_checkpoint
-from .data import MegatronParallelState
+from .parallel import MegatronParallelState
 from .initialize import init, is_megatron_main_rank
 from .model import forward_only, initialize_model_and_optimizer, save, train
 from .update_weight.common import named_params_and_buffers
@@ -37,7 +36,7 @@ from .update_weight.update_weight_from_distributed import UpdateWeightFromDistri
 from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
 
 from ..training_utils.data import DataIterator, get_data_iterator, sync_actor_critic_data, get_rollout_data
-from ..training_utils.cp_utils import slice_log_prob_with_cp, slice_with_cp
+from ..training_utils.cp_utils import slice_with_cp
 from ..training_utils.log_utils import log_perf_data, log_rollout_data
 from ..training_utils.loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 

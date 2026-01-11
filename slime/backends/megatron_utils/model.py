@@ -26,7 +26,7 @@ from slime.utils import tracking_utils
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
-from .data import MegatronParallelState, get_packed_seq_params
+from .parallel import MegatronParallelState, get_packed_seq_params
 from .model_provider import get_model_provider_func
 
 from ..training_utils.data import DataIterator, get_batch
