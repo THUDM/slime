@@ -343,7 +343,7 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                 sample.status = Sample.Status.COMPLETED
                 break
 
-            obs_log_probs = [float("-inf")] * len(obs_prompt_ids)
+            obs_log_probs = [0.0] * len(obs_prompt_ids)
             _append_to_sample(sample, response_tokens, obs_prompt_ids, obs_log_probs, loss_mask_val=0)
             budget = _update_budget(budget, len(obs_prompt_ids))
 
