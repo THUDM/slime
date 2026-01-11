@@ -14,12 +14,12 @@ from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.types import RolloutBatch
 
-from .types import ParallelState
+from .parallel import ParallelState
+from .cp_utils import get_sum_of_sample_mean, slice_with_cp, slice_log_prob_with_cp
 
 from ...utils import tracking_utils
 from ...utils.ray_utils import Box
 from ...utils.data import process_rollout_data
-from .cp_utils import get_sum_of_sample_mean, slice_with_cp, slice_log_prob_with_cp
 
 logger = logging.getLogger(__name__)
 

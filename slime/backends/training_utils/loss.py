@@ -21,8 +21,8 @@ from slime.utils.ppo_utils import (
 )
 from slime.utils.types import RolloutBatch
 
-from ..training_utils.cp_utils import get_logits_and_tokens_offset_with_cp, all_gather_with_cp, get_sum_of_sample_mean
-from ..training_utils.types import ParallelState
+from .cp_utils import get_logits_and_tokens_offset_with_cp, all_gather_with_cp, get_sum_of_sample_mean
+from .parallel import ParallelState
 
 
 def get_responses(

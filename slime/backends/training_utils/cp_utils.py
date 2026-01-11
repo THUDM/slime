@@ -4,7 +4,7 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
-from .types import ParallelState
+from .parallel import ParallelState
 
 def get_logits_and_tokens_offset_with_cp(
     total_length: int,

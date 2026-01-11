@@ -10,10 +10,10 @@ from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step
 from slime.utils.types import RolloutBatch
 
-from .types import ParallelState
+from .cp_utils import get_sum_of_sample_mean
+from .parallel import ParallelState
 
 from ...utils import tracking_utils
-from .cp_utils import get_sum_of_sample_mean
 
 logger = logging.getLogger(__name__)
 
