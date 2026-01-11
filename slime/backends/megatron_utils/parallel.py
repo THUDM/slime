@@ -7,7 +7,7 @@ from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.utils import get_model_config
 
-from ..training_utils.parallel_state import ParallelState
+from ..training_utils.parallel import ParallelState
 
 logger = logging.getLogger(__name__)
 
