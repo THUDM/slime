@@ -16,7 +16,7 @@ In terms of the environment interaction, this example initializes a custom inter
 
 The reward model is the default math RM. 
 
-![VLM multi-turn geo3k reward](vlm_multi_turn_geo3k_reward.png)
+![VLM multi-turn geo3k reward](geo3k_vlm_multi_turn_reward.png)
 
 ## Reproduce
 ```bash
