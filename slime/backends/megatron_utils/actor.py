@@ -36,7 +36,7 @@ from .update_weight.common import named_params_and_buffers
 from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
 from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
 
-from ..training_utils.data import DataIterator, get_data_iterator, sync_actor_critic_data
+from ..training_utils.data import DataIterator, get_data_iterator, sync_actor_critic_data, get_rollout_data
 from ..training_utils.cp_utils import slice_log_prob_with_cp, slice_with_cp
 from ..training_utils.log_utils import log_perf_data, log_rollout_data
 from ..training_utils.loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
@@ -181,73 +181,6 @@ class MegatronTrainRayActor(TrainRayActor):
         reload_process_groups()
         print_memory("after wake_up model")
 
-    def _get_rollout_data(self, rollout_data_ref: Box) -> RolloutBatch:
-        # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
-        # Both first pp stage and the last pp stage will receive the data.
-        rollout_data = process_rollout_data(
-            self.args,
-            rollout_data_ref,
-            mpu.get_data_parallel_rank(with_context_parallel=False),
-            mpu.get_data_parallel_world_size(with_context_parallel=False),
-        )
-        # TODO: this is ugly, move to somewhere else?
-        # move tokens to GPU in advance
-        rollout_data["tokens"] = [
-            torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device()) for t in rollout_data["tokens"]
-        ]
-        rollout_data["loss_masks"] = [
-            torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
-        ]
-        if "multimodal_train_inputs" in rollout_data:
-            # Move multimodal training tensors to GPU in advance
-            rollout_data["multimodal_train_inputs"] = [
-                (
-                    {key: tensor.to(device=torch.cuda.current_device()) for key, tensor in mm_dict.items()}
-                    if mm_dict is not None
-                    else None
-                )
-                for mm_dict in rollout_data["multimodal_train_inputs"]
-            ]
-
-        if self.args.qkv_format == "bshd":
-            # TODO: micro-batch wise dynamic, possibly move to @data.py:get_data_iterator
-            max_seq_len = max(rollout_data["total_lengths"])
-
-            # pad to reduce memory fragmentation and maybe make the computation faster
-            pad_size = mpu.get_tensor_model_parallel_world_size() * self.args.data_pad_size_multiplier
-            max_seq_len = (max_seq_len + pad_size - 1) // pad_size * pad_size
-
-            rollout_data["max_seq_lens"] = [max_seq_len] * len(rollout_data["tokens"])
-
-        if "rollout_log_probs" in rollout_data:
-            rollout_data["rollout_log_probs"] = [
-                torch.tensor(
-                    slice_log_prob_with_cp(
-                        log_prob,
-                        total_length,
-                        response_length,
-                        self.parallel_state,
-                        self.args.qkv_format,
-                        rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
-                    ),
-                    device=torch.cuda.current_device(),
-                    dtype=torch.float32,
-                )
-                for i, (log_prob, total_length, response_length) in enumerate(
-                    zip(
-                        rollout_data["rollout_log_probs"],
-                        rollout_data["total_lengths"],
-                        rollout_data["response_lengths"],
-                        strict=False,
-                    )
-                )
-            ]
-        if "rollout_routed_experts" in rollout_data:
-            rollout_data["rollout_routed_experts"] = [
-                torch.from_numpy(r) for r in rollout_data["rollout_routed_experts"]
-            ]
-        return rollout_data
-
     def _switch_model(self, target_tag: str) -> None:
         if target_tag not in self.weights_backuper.backup_tags:
             raise ValueError(f"Cannot switch to unknown model tag: {target_tag}")
@@ -355,7 +288,7 @@ class MegatronTrainRayActor(TrainRayActor):
             self.wake_up()
 
         with timer("data_preprocess"):
-            rollout_data = self._get_rollout_data(rollout_data_ref)
+            rollout_data = get_rollout_data(self.args, rollout_data_ref, self.parallel_state)
             if self.args.debug_rollout_only:
                 log_rollout_data(rollout_id, self.args, rollout_data, self.parallel_state)
                 return

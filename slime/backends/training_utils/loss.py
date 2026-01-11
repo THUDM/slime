@@ -4,6 +4,7 @@ from typing import Any
 
 import torch
 from torch.utils.checkpoint import checkpoint
+import torch.distributed as dist
 
 from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function

@@ -17,13 +17,83 @@ from slime.utils.types import RolloutBatch
 from .types import ParallelState
 
 from ...utils import tracking_utils
-from .cp_utils import get_sum_of_sample_mean, slice_with_cp
+from ...utils.ray_utils import Box
+from ...utils.data import process_rollout_data
+from .cp_utils import get_sum_of_sample_mean, slice_with_cp, slice_log_prob_with_cp
 
 logger = logging.getLogger(__name__)
 
 
+def get_rollout_data(args: Namespace, rollout_data_ref: Box, parallel_state: ParallelState) -> RolloutBatch:
+    # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
+    # Both first pp stage and the last pp stage will receive the data.
+    rollout_data = process_rollout_data(
+        args,
+        rollout_data_ref,
+        parallel_state.dp_rank,
+        parallel_state.dp_size,
+    )
+    # TODO: this is ugly, move to somewhere else?
+    # move tokens to GPU in advance
+    rollout_data["tokens"] = [
+        torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device()) for t in rollout_data["tokens"]
+    ]
+    rollout_data["loss_masks"] = [
+        torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
+    ]
+    if "multimodal_train_inputs" in rollout_data:
+        # Move multimodal training tensors to GPU in advance
+        rollout_data["multimodal_train_inputs"] = [
+            (
+                {key: tensor.to(device=torch.cuda.current_device()) for key, tensor in mm_dict.items()}
+                if mm_dict is not None
+                else None
+            )
+            for mm_dict in rollout_data["multimodal_train_inputs"]
+        ]
+
+    if args.qkv_format == "bshd":
+        # TODO: micro-batch wise dynamic, possibly move to @data.py:get_data_iterator
+        max_seq_len = max(rollout_data["total_lengths"])
+
+        # pad to reduce memory fragmentation and maybe make the computation faster
+        pad_size = parallel_state.tp_size * args.data_pad_size_multiplier
+        max_seq_len = (max_seq_len + pad_size - 1) // pad_size * pad_size
+
+        rollout_data["max_seq_lens"] = [max_seq_len] * len(rollout_data["tokens"])
+
+    if "rollout_log_probs" in rollout_data:
+        rollout_data["rollout_log_probs"] = [
+            torch.tensor(
+                slice_log_prob_with_cp(
+                    log_prob,
+                    total_length,
+                    response_length,
+                    parallel_state,
+                    args.qkv_format,
+                    rollout_data["max_seq_lens"][i] if args.qkv_format == "bshd" else None,
+                ),
+                device=torch.cuda.current_device(),
+                dtype=torch.float32,
+            )
+            for i, (log_prob, total_length, response_length) in enumerate(
+                zip(
+                    rollout_data["rollout_log_probs"],
+                    rollout_data["total_lengths"],
+                    rollout_data["response_lengths"],
+                    strict=False,
+                )
+            )
+        ]
+    if "rollout_routed_experts" in rollout_data:
+        rollout_data["rollout_routed_experts"] = [
+            torch.from_numpy(r) for r in rollout_data["rollout_routed_experts"]
+        ]
+    return rollout_data
+
+
 def get_batch(
-    data_iterator: "DataIterator", keys: Sequence[str], parallel_state: ParallelState, pad_multiplier: int = 128, qkv_format: str = "thd"
+    data_iterator: "DataIterator", keys: Sequence[str], parallel_state: ParallelState, pad_multiplier: int = 128, qkv_format: str = "thd", get_position_ids: bool = False
 ) -> dict[str, torch.Tensor | list[torch.Tensor] | None]:
     """
     Generate a CP-ready micro-batch with packed sequence parameters.
@@ -95,6 +165,25 @@ def get_batch(
         raise ValueError(f"Unsupported qkv_format: {qkv_format}")
 
     batch["tokens"] = tokens
+
+    if get_position_ids:
+        position_ids_list = []
+        for t in batch["unconcat_tokens"]:
+            seq_len = t.size(0)
+            pos_ids = torch.arange(seq_len, device=t.device, dtype=torch.long)
+            position_ids_list.append(pos_ids)
+        
+        if qkv_format == "bshd":
+            position_ids = [slice_with_cp(p, 0, parallel_state, qkv_format, max_seqlen) for p in position_ids_list]
+            position_ids = torch.stack(position_ids)
+        elif qkv_format == "thd":
+            position_ids = [slice_with_cp(p, 0, parallel_state, qkv_format) for p in position_ids_list]
+            position_ids = torch.cat(position_ids)
+            if pad != 0:
+                position_ids = F.pad(position_ids, (0, pad), value=0)
+            position_ids = position_ids.unsqueeze(0)
+        
+        batch["position_ids"] = position_ids
 
     # loss masks
     loss_masks = []

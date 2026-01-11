@@ -18,4 +18,9 @@ class ParallelState:
     tp_group: dist.ProcessGroup | None
     dp_mesh: dist.DeviceMesh | None
     cp_mesh: dist.DeviceMesh | None
-    is_pp_last_stage: bool | None
+    is_pp_last_stage: bool
+
+    def __init__(self):
+        self.vpp_size = 1
+        self.microbatch_group_size_per_vp_stage = None
+        self.is_pp_last_stage = True

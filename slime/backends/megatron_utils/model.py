@@ -31,6 +31,7 @@ from .model_provider import get_model_provider_func
 
 from ..training_utils.data import DataIterator, get_batch
 from ..training_utils.loss import loss_function
+from ..training_utils.log_utils import aggregate_forward_results, log_train_step, aggregate_train_losses
 
 logger = logging.getLogger(__name__)
 
@@ -281,22 +282,11 @@ def forward_only(
     rollout_data = {}
     # Store the results on the last stage
     if mpu.is_pipeline_last_stage():
-        keys = forward_data_store[0].keys()
-        for key in keys:
-            values = []
-            for value in forward_data_store:
-                assert isinstance(value[key], list)
-                values += value[key]
-
-            if args.use_dynamic_batch_size:
-                # TODO: This is ugly... Find a better way to make the data have the same order.
-                # TODO: move this out of the loop.
-                origin_values = [None] * len(values)
-                origin_indices = sum(data_iterator[0].micro_batch_indices, [])
-                for value, origin_index in zip(values, origin_indices, strict=False):
-                    origin_values[origin_index] = value
-                values = origin_values
-            rollout_data[f"{store_prefix}{key}"] = values
+        aggregated = aggregate_forward_results(
+            forward_data_store, data_iterator[0], args, store_prefix=""
+        )
+        for key, value in aggregated.items():
+            rollout_data[f"{store_prefix}{key}"] = value
     return rollout_data
 
 
@@ -465,22 +455,7 @@ def train_one_step(
     optimizer.zero_grad()
 
     if mpu.is_pipeline_last_stage(ignore_virtual=True):
-        # Average loss across microbatches.
-        keys = losses_reduced[0]["keys"]
-        values = None
-        for x in losses_reduced:
-            if values is None:
-                values = x["values"]
-            else:
-                values += x["values"]
-        assert len(keys) + 1 == values.numel()
-        torch.distributed.all_reduce(values, group=mpu.get_data_parallel_group(with_context_parallel=True))
-
-        loss_reduced = {}
-        values = values.tolist()
-        num_samples_or_tokens = values[0]
-        for key, value in zip(keys, values[1:], strict=False):
-            loss_reduced[key] = value * mpu.get_context_parallel_world_size() / num_samples_or_tokens
+        loss_reduced = aggregate_train_losses(losses_reduced, parallel_state)
         return loss_reduced, grad_norm
     return {}, grad_norm
 
@@ -647,20 +622,26 @@ def train(
             accumulated_step_id = rollout_id * num_steps_per_rollout + step_id
             role = getattr(model[0], "role", "actor")
             role_tag = "" if role == "actor" else f"{role}-"
-            log_dict = {
-                f"train/{role_tag}{key}": val.mean().item() if isinstance(val, torch.Tensor) else val
-                for key, val in loss_dict.items()
-            }
-            log_dict[f"train/{role_tag}grad_norm"] = grad_norm
+            
+            extra_metrics = {}
             if args.enable_mtp_training:
-                log_dict[f"train/{role_tag}mtp_loss"] = mtp_losses
-
+                extra_metrics["mtp_loss"] = mtp_losses
+            
             for param_group_id, param_group in enumerate(optimizer.param_groups):
-                log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
-
-            log_dict["train/step"] = accumulated_step_id
-            tracking_utils.log(args, log_dict, step_key="train/step")
-
+                extra_metrics[f"lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
+            
+            log_dict = log_train_step(
+                args=args,
+                loss_dict=loss_dict,
+                grad_norm=grad_norm,
+                rollout_id=rollout_id,
+                step_id=step_id,
+                num_steps_per_rollout=num_steps_per_rollout,
+                role=role,
+                extra_metrics=extra_metrics,
+                should_log=True,
+            )
+            
             if args.ci_test and not args.ci_disable_kl_checker:
                 if step_id == 0 and "train/ppo_kl" in log_dict and "train/pg_clipfrac" in log_dict:
                     if args.multi_latent_attention:
