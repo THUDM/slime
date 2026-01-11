@@ -6,7 +6,7 @@ from ring_flash_attn import substitute_hf_flash_attn
 from argparse import Namespace
 import logging
 
-from ..training_utils.types import ParallelState
+from ..training_utils.parallel import ParallelState
 
 from slime.utils.distributed_utils import get_gloo_group
 
@@ -20,11 +20,13 @@ class FSDPParallelState(ParallelState):
         rank = dist.get_rank()
 
         self.cp_size = args.context_parallel_size
-        self.dp_size = world_size # with CP ranks, for reduction
+        self.dp_size = world_size // self.cp_size
+        self.dp_cp_size = world_size
 
         self.dp_rank = rank // self.cp_size
-        self.dp_src_rank = self.dp_rank // world_size
         self.cp_rank = rank % self.cp_size
+        self.dp_cp_rank = rank
+        self.dp_src_rank = self.dp_rank // world_size
 
         self.tp_size = 1
         self.tp_rank = 0
@@ -33,9 +35,10 @@ class FSDPParallelState(ParallelState):
         self.mesh = init_device_mesh("cuda", mesh_shape=(world_size // self.cp_size, self.cp_size), mesh_dim_names=("dp", "cp"))
         self.dp_mesh = self.mesh["dp"]
 
-        self.dp_group = dist.group.WORLD
-        self.dp_group_gloo = get_gloo_group()
+        self.dp_group = self.mesh.get_group("dp")
         self.cp_group = self.mesh.get_group("cp")
+        self.dp_cp_group = dist.group.WORLD
+        self.dp_cp_group_gloo = get_gloo_group()
 
         logger.info(
             f"[Rank {rank}] Device mesh (2D): world_size={world_size}, "

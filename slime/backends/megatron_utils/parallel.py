@@ -15,33 +15,28 @@ logger = logging.getLogger(__name__)
 class MegatronParallelState(ParallelState):
     """
     ParallelState for Megatron backend, initialized from mpu module.
-    
-    This class provides a convenient way to create ParallelState from Megatron's mpu
-    without explicitly passing all parameters.
-    
-    Example:
-        from megatron.core import mpu
-        parallel_state = MegatronParallelState(with_context_parallel=True)
     """
     
     def __init__(
         self, 
         model: torch.nn.Module | Sequence[torch.nn.Module] | None = None,
-        with_context_parallel: bool = True,
     ):
         super().__init__()
 
-        self.dp_rank=mpu.get_data_parallel_rank(with_context_parallel=with_context_parallel)
-        self.dp_src_rank=mpu.get_data_parallel_src_rank(with_context_parallel=with_context_parallel)
+        self.dp_rank=mpu.get_data_parallel_rank(with_context_parallel=False)
         self.cp_rank=mpu.get_context_parallel_rank()
         self.tp_rank=mpu.get_tensor_model_parallel_rank()
+        self.dp_cp_rank=mpu.get_data_parallel_rank(with_context_parallel=True)
+        self.dp_src_rank=mpu.get_data_parallel_src_rank(with_context_parallel=True)
 
-        self.dp_size=mpu.get_data_parallel_world_size(with_context_parallel=with_context_parallel)
+        self.dp_size=mpu.get_data_parallel_world_size(with_context_parallel=False)
+        self.dp_cp_size=mpu.get_data_parallel_world_size(with_context_parallel=True)
         self.cp_size=mpu.get_context_parallel_world_size()
         self.tp_size=mpu.get_tensor_model_parallel_world_size()
 
-        self.dp_group=mpu.get_data_parallel_group(with_context_parallel=with_context_parallel)
-        self.dp_group_gloo=mpu.get_data_parallel_group_gloo(with_context_parallel=with_context_parallel)
+        self.dp_group=mpu.get_data_parallel_group(with_context_parallel=False)
+        self.dp_cp_group=mpu.get_data_parallel_group(with_context_parallel=True)
+        self.dp_cp_group_gloo=mpu.get_data_parallel_group_gloo(with_context_parallel=True)
         self.cp_group=mpu.get_context_parallel_group()
         self.tp_group=mpu.get_tensor_model_parallel_group()
 

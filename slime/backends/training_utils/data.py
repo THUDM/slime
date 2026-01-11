@@ -33,7 +33,6 @@ def get_rollout_data(args: Namespace, rollout_data_ref: Box, parallel_state: Par
         parallel_state.dp_rank,
         parallel_state.dp_size,
     )
-    # TODO: this is ugly, move to somewhere else?
     # move tokens to GPU in advance
     rollout_data["tokens"] = [
         torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device()) for t in rollout_data["tokens"]
@@ -312,7 +311,7 @@ def get_data_iterator(
     - `num_microbatches`: list[int], one per local step in the rollout (length = steps)
     """
     dp_size = parallel_state.dp_size
-    dp_group = parallel_state.dp_group_gloo
+    dp_group = parallel_state.dp_group
     vpp_size = parallel_state.vpp_size
     microbatch_group_size_per_vp_stage = parallel_state.microbatch_group_size_per_vp_stage
 

@@ -840,7 +840,7 @@ def loss_function(
     global_batch_size = batch.get("dynamic_global_batch_size", args.global_batch_size)
     if not args.calculate_per_token_loss:
         loss = (
-            loss * num_microbatches / global_batch_size * parallel_state.dp_size
+            loss * num_microbatches / global_batch_size * parallel_state.dp_cp_size
         )
     else:
         loss = loss * parallel_state.cp_size
