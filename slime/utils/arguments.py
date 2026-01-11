@@ -256,6 +256,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
             parser.add_argument(
+                "--max-turns",
+                type=int,
+                default=1,
+                help=("The maximum turns of turns` in sglang."),
+            )
+            parser.add_argument(
                 "--rollout-skip-special-tokens",
                 action="store_true",
                 default=False,
