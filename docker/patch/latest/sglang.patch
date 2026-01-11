@@ -145,6 +145,50 @@ index 88705cc35..c8dc052f1 100644
  
  @app.post("/update_weight_version")
  async def update_weight_version(obj: UpdateWeightVersionReqInput, request: Request):
+diff --git a/python/sglang/srt/layers/attention/nsa/nsa_indexer.py b/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
+index c9e82e4b1..58270e34a 100644
+--- a/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
++++ b/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ from abc import ABC, abstractmethod
+ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+ 
++import os
+ import torch
+ from einops import rearrange
+ 
+@@ -188,6 +189,9 @@ class Indexer(MultiPlatformOp):
+     @torch.compile(dynamic=True)
+     def _get_logits_head_gate(self, x: torch.Tensor, q_scale: torch.Tensor):
+         weights, _ = self.weights_proj(x.float())
++        if weights.shape[1] < 32:
++            assert 32 % weights.shape[1] == 0
++            weights = weights.repeat_interleave(32 // weights.shape[1], dim=1)
+         weights = weights * self.n_heads**-0.5
+         weights = weights.unsqueeze(-1) * q_scale * self.softmax_scale
+         return weights
+@@ -278,7 +282,10 @@ class Indexer(MultiPlatformOp):
+             key, [self.rope_head_dim, self.head_dim - self.rope_head_dim], dim=-1
+         )
+ 
+-        _, k_rope = self.rotary_emb(positions, k_rope, k_rope)
++        if os.environ.get("USE_FIRST_HALF_ROPE", "0") == "1":
++            k_rope, _ = self.rotary_emb(positions, k_rope, k_rope)
++        else:
++            _, k_rope = self.rotary_emb(positions, k_rope, k_rope)
+         key[..., : self.rope_head_dim] = k_rope
+         key = rotate_activation(key)
+ 
+@@ -837,6 +844,9 @@ class Indexer(MultiPlatformOp):
+         query, key = self._get_q_k_bf16(
+             q_lora, x, positions, enable_dual_stream, forward_batch=forward_batch
+         )
++        if query.shape[1] < 32:
++            assert 32 % query.shape[1] == 0
++            query = query.repeat_interleave(32//query.shape[1], dim=1)
+ 
+         if enable_dual_stream:
+             current_stream = torch.cuda.current_stream()
 diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
 index b07164c53..8e6722ce0 100644
 --- a/python/sglang/srt/layers/layernorm.py
@@ -702,7 +746,7 @@ index 1f1875254..51d8651ce 100644
          parameter = self.model_runner.get_weights_by_name(
              recv_req.name, recv_req.truncate_size
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index 1d69c0582..aa9aefec6 100644
+index 1d69c0582..c849913e9 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
 @@ -558,7 +558,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
@@ -715,7 +759,7 @@ index 1d69c0582..aa9aefec6 100644
  
          if self.device == "cuda":
              self.init_cublas()
-@@ -2224,11 +2225,12 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -2224,11 +2225,19 @@ class ModelRunner(ModelRunnerKVCacheMixin):
          output.expert_distribution_metrics = recorder_outputs.get("metrics")
  
          # Copy cached routing experts' buffers back to CPU cache
@@ -725,15 +769,22 @@ index 1d69c0582..aa9aefec6 100644
 -            cuda_graph_batch=getattr(self.graph_runner, "bs", None),
 -        )
 +        if not self.is_draft_worker:
++            # In speculative decoding, num_tokens_per_bs > 1, so we need to pass
++            # the actual number of tokens per dp rank in cuda graph, not batch size.
++            cuda_graph_num_tokens = None
++            if getattr(self.graph_runner, "bs", None):
++                cuda_graph_num_tokens = (
++                    self.graph_runner.bs * self.graph_runner.num_tokens_per_bs
++                )
 +            get_global_experts_capturer().on_forward_end(
 +                forward_batch=forward_batch,
 +                can_run_graph=output.can_run_graph,
-+                cuda_graph_batch=getattr(self.graph_runner, "bs", None),
++                cuda_graph_batch=cuda_graph_num_tokens,
 +            )
  
          if self.eplb_manager is not None:
              self.eplb_manager.on_forward_pass_end()
-@@ -2436,6 +2438,42 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -2436,6 +2445,42 @@ class ModelRunner(ModelRunnerKVCacheMixin):
              logger.error(f"IPC weight update failed: {e}")
              return False, str(e)
  
