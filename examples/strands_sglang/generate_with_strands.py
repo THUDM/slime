@@ -1,5 +1,3 @@
-"""Strands-SGLang integration for RL training with TITO support."""
-
 import logging
 
 from camel.interpreters import SubprocessInterpreter
