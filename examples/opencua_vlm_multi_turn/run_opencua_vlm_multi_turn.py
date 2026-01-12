@@ -18,7 +18,7 @@ EXTERNAL_RAY = int(os.environ.get("SLIME_SCRIPT_EXTERNAL_RAY", "0"))
 TRAIN_BACKEND = os.environ.get("SLIME_SCRIPT_TRAIN_BACKEND", "fsdp").lower()
 assert TRAIN_BACKEND in {"fsdp", "megatron"}
 
-DATASET_NAME = "xlangai/AgentNet"
+DATASET_NAME = "mlfoundations-cua-dev/agentnet-clicks"
 DATA_ROOT = "/root/datasets/opencua"
 TRAIN_DATA_PATH = os.path.join(DATA_ROOT, "train_relative_base64.parquet")
 
@@ -37,6 +37,7 @@ def prepare():
         U.exec_command(f"hf download --repo-type dataset {DATASET_NAME} --local-dir {DATA_ROOT}")
     if not os.path.exists(TRAIN_DATA_PATH):
         raise FileNotFoundError(f"Dataset not found. Expected local dataset at {TRAIN_DATA_PATH}; ")
+    U.exec_command("python examples/opencua_vlm_multi_turn/data_prepocessing.py")
 
 
 def execute():
@@ -58,7 +59,6 @@ def execute():
         "--input-key easyr1_prompt "
         "--label-key relative_bbox "
         '--multimodal-keys \'{"image": "images_base64"}\' '
-        #'--metadata-key relative_bbox '
         "--rm-type opencua_click "
         "--apply-chat-template "
         "--custom-generate-function-path examples.opencua_vlm_multi_turn.rollout.generate "
