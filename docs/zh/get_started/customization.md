@@ -406,4 +406,14 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 - 自定义路由逻辑
 - 缓存和优化
 
+---
+
+### 19. MoE 路由重放
+
+通过记录和重放专家路由决策来稳定 MoE RL 训练。
+
+| 参数 | 说明 |
+| --- | --- |
+| `--use-routing-replay` | 训练中前向-反向路由一致性。([arXiv:2507.18071](https://arxiv.org/abs/2507.18071)) |
+| `--use-rollout-routing-replay` | R3：在训练时重放 rollout 阶段的路由。**需要 `--use-slime-router`**。([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
 
