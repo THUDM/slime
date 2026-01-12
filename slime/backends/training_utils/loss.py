@@ -782,6 +782,7 @@ def loss_function(
     batch: RolloutBatch,
     num_microbatches: int,
     logits: torch.Tensor,
+    apply_megatron_loss_scaling: bool = False,
 ) -> tuple[torch.Tensor, int | torch.Tensor, dict[str, list[str] | torch.Tensor]]:
     """Dispatch to the configured loss and rescale for Megatron integration.
 
@@ -839,11 +840,12 @@ def loss_function(
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
     global_batch_size = batch.get("dynamic_global_batch_size", args.global_batch_size)
     if not args.calculate_per_token_loss:
-        loss = (
-            loss * num_microbatches / global_batch_size * parallel_state.dp_cp_size
-        )
+        loss = loss / global_batch_size
+        if apply_megatron_loss_scaling:
+            loss = loss * num_microbatches * parallel_state.dp_cp_size
     else:
-        loss = loss * parallel_state.cp_size
+        if apply_megatron_loss_scaling:
+            loss = loss * parallel_state.cp_size
 
     return (
         loss,
