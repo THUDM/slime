@@ -12,9 +12,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model-id", type=str, required=True, help="local BF16 path")
+    parser.add_argument("--input-dir", type=str, required=True, help="local BF16 path")
     parser.add_argument("--output-dir", type=str, required=True)
-    parser.add_argument("--local-data-path", type=str, required=True, help="dataset path")
+    parser.add_argument("--data-dir", type=str, required=True, help="dataset path")
     parser.add_argument("--quant-type", type=str, choices=["W4A16", "W8A16"], default="W4A16")
     parser.add_argument("--num-calibration-samples", type=int, default=256, help="sample nums")
     parser.add_argument("--max-sequence-length", type=int, default=2048)

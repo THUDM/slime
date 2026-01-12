@@ -83,7 +83,7 @@ class UpdateWeightFromDistributed:
         dist.barrier(group=get_gloo_group())
 
         # int4/fp4 pre_process
-        if self.args.int4_params_rollout:
+        if self.quantization_config.get("quant_method") in ["compressed-tensors"]:
             ray.get(
                 post_process_weights(
                     restore_weights_before_load=True,
@@ -128,7 +128,7 @@ class UpdateWeightFromDistributed:
         dist.barrier(group=get_gloo_group())
 
         # int4/fp4 post_process
-        if self.args.int4_params_rollout:
+        if self.quantization_config.get("quant_method") in ["compressed-tensors"]:
             ray.get(
                 post_process_weights(
                     restore_weights_before_load=False,

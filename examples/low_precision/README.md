@@ -85,14 +85,7 @@ This guide provides examples for INT4 STE (Straight-Through Estimator) training 
 
 ### Quick Start
 
-#### 1. Configure Training Arguments
-Ensure your training script is properly configured. For training tasks, you must add the following flag to your launch arguments:
-
-```bash
---int4-params-rollout
-```
-
-#### 2. Convert HuggingFace Weights to INT4
+#### 1. Convert HuggingFace Weights to INT4
 First, download the PTQ (Post-Training Quantization) calibration dataset from HuggingFace:
 [https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1](https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1)
 
@@ -100,12 +93,12 @@ Next, use the `tools/convert_hf_to_hf_int4.py` script to convert BF16 weights to
 
 ```bash
 python tools/convert_hf_to_hf_int4.py \
-  --model_id /path/to/your/original/models \
-  --output_dir /path/to/your/save/models \
-  --local_data_path /path/to/your/wikitext
+  --input-dir /path/to/your/original/models \
+  --output-dir /path/to/your/save/models \
+  --data-dir /path/to/your/wikitext
 ```
 
-#### 3. Start INT4 Training
+#### 2. Start INT4 Training
 
 You need to configure the specific environment variables for quantization settings.
 

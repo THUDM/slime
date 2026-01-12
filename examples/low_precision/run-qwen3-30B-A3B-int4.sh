@@ -131,12 +131,6 @@ MISC_ARGS=(
    # --moe-token-dispatcher-type flex
 )
 
-PRECISE_ARGS=(
-   --transformer-impl transformer_engine
-   --bf16
-   --int4-params-rollout
-)
-
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
@@ -167,6 +161,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
-   ${MISC_ARGS[@]} \
-   ${PRECISE_ARGS[@]}
+   ${MISC_ARGS[@]}
    

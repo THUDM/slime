@@ -8,6 +8,9 @@ import torch
 logger = logging.getLogger(__name__)
 
 
+__all__ = ["quantize_params_compressed_tensors"]
+
+
 def pack_to_int32(
     value: torch.Tensor,
     num_bits: int,
@@ -127,15 +130,11 @@ def int4_block_quantize(x: torch.Tensor, group_size: int = 128) -> tuple[torch.T
     return out, scale_out, zero_out
 
 
-def _quantize_params_int4(converted_named_params, quantization_config):
-
-    try:
-        w_cfg = quantization_config["config_groups"]["group_0"]["weights"]
-        group_size = w_cfg["group_size"]
-        is_symmetric = w_cfg["symmetric"]
-        ignore_rules = quantization_config.get("ignore", [])
-    except KeyError as e:
-        raise ValueError(f"Invalid quantization_config: missing {e}") from e
+def quantize_params_compressed_tensors(converted_named_params, quantization_config):
+    w_cfg = quantization_config["config_groups"]["group_0"]["weights"]
+    group_size = w_cfg["group_size"]
+    is_symmetric = w_cfg["symmetric"]
+    ignore_rules = quantization_config.get("ignore", [])
 
     results = []
 
@@ -143,8 +142,6 @@ def _quantize_params_int4(converted_named_params, quantization_config):
         is_ignored = any((r.startswith("re:") and re.match(r[3:], name)) or r == name for r in ignore_rules)
 
         if is_ignored or not name.endswith(".weight") or param.dim() < 2:
-            if is_ignored:
-                logger.info(f"Ignoring parameter: {name}")
             results.append((name, param))
             continue
 

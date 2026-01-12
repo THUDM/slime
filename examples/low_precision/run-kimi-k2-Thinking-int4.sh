@@ -155,12 +155,6 @@ MISC_ARGS=(
    --no-check-for-nan-in-loss-and-grad
 )
 
-PRECISE_ARGS=(
-   --transformer-impl transformer_engine
-   --bf16
-   --int4-params-rollout
-)
-
 # Build the runtime environment JSON with proper variable substitution
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
@@ -192,5 +186,4 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
-   ${MISC_ARGS[@]} \
-   ${PRECISE_ARGS[@]}
+   ${MISC_ARGS[@]}
