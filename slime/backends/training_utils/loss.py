@@ -288,7 +288,7 @@ def compute_advantages_and_returns(args: Namespace, parallel_state: ParallelStat
                 k[-1] += reward
             rewards.append(k)
         advantages, returns = get_advantages_and_returns_batch(
-            total_lengths, response_lengths, values, rewards, args.gamma, args.lambd
+            total_lengths, response_lengths, values, rewards, args.gamma, args.lambd, parallel_state
         )
 
     elif args.advantage_estimator == "reinforce_plus_plus":
@@ -301,6 +301,7 @@ def compute_advantages_and_returns(args: Namespace, parallel_state: ParallelStat
             total_lengths=total_lengths,
             kl_coef=args.kl_coef,
             gamma=args.gamma,
+            parallel_state=parallel_state,
         )
         advantages = [r for r in returns]
 
@@ -566,6 +567,7 @@ def policy_loss_function(
             "loss_masks": batch["loss_masks"],
             "total_lengths": total_lengths,
             "response_lengths": response_lengths,
+            "parallel_state": parallel_state,
         }
 
         if args.custom_tis_function_path is not None:
