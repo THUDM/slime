@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>VLM Multi-Turn (FSDP backend, geo3k dataset) &#8212; slime</title>
+    <title>VLM Multi-Turn (geo3k dataset) &#8212; slime</title>
   
   
   
@@ -431,7 +431,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>VLM Multi-Turn (FSDP backend, geo3k dataset)</h1>
+    <h1>VLM Multi-Turn (geo3k dataset)</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -454,11 +454,12 @@ document.write(`
 <div id="searchbox"></div>
                 <article class="bd-article">
                   
-  <section class="tex2jax_ignore mathjax_ignore" id="vlm-multi-turn-fsdp-backend-geo3k-dataset">
-<h1>VLM Multi-Turn (FSDP backend, geo3k dataset)<a class="headerlink" href="#vlm-multi-turn-fsdp-backend-geo3k-dataset" title="Link to this heading">#</a></h1>
-<p>Training VLM with FSDP on <a class="reference external" href="https://huggingface.co/datasets/hiyouga/geometry3k">geo3k dataset</a> with multi-turn reasoning with interactive environment feedback, using GRPO. For dataset, we used the <a class="reference external" href="https://huggingface.co/datasets/VeraIsHere/geo3k_imgurl_processed">processed version</a>.</p>
-<p>The multi-turn rollout is implemented through a custom generate function  <code class="docutils literal notranslate"><span class="pre">examples.geo3k_vlm_multi_turn.rollout.generate</span></code>, overriding the original generate function.</p>
-<p>In terms of the environment interaction, this example initializes a custom interactive environment in <code class="docutils literal notranslate"><span class="pre">examples/geo3k_vlm_multi_turn/env_geo3k.py</span></code> with the APIs below.</p>
+  <section class="tex2jax_ignore mathjax_ignore" id="vlm-multi-turn-geo3k-dataset">
+<h1>VLM Multi-Turn (geo3k dataset)<a class="headerlink" href="#vlm-multi-turn-geo3k-dataset" title="Link to this heading">#</a></h1>
+<p>Training VLM on <a class="reference external" href="https://huggingface.co/datasets/hiyouga/geometry3k">geo3k dataset</a> with multi-turn reasoning with interactive environment feedback, using GRPO. For dataset, we used the <a class="reference external" href="https://huggingface.co/datasets/VeraIsHere/geo3k_imgurl_processed">processed version</a>.</p>
+<p>Thanks to Slime’s clean design, multi-turn RL aligns with first principles: with a <a class="reference internal" href="#rollout.py#L309"><span class="xref myst">custom rollout function</span></a>, any training backend (e.g. FSDP/Megatron) can use it.</p>
+<p>The multi-turn rollout is implemented through a <a class="reference internal" href="#rollout.py#L309"><span class="xref myst">custom generate function</span></a>, overriding the original generate function.</p>
+<p>In terms of the environment interaction, this example initializes a <a class="reference internal" href="#env_geo3k.py"><span class="xref myst">custom interactive environment</span></a> with the APIs below.</p>
 <details>
 <summary>Environment API (geo3k)</summary>
 <ul class="simple">
@@ -469,7 +470,8 @@ document.write(`
 </ul>
 </details><br>
 <p>The reward model is the default math RM.</p>
-<p><img alt="VLM multi-turn geo3k reward" src="_examples_synced/geo3k_vlm_multi_turn/geo3k_vlm_multi_turn_reward.png" /></p>
+<p><img alt="VLM multi-turn geo3k reward" src="_examples_synced/geo3k_vlm_multi_turn/geo3k_vlm_multi_turn_reward.png" />
+<img alt="Rollout megatron" src="_examples_synced/geo3k_vlm_multi_turn/rollout_experiment_result_megatron.png" /></p>
 <section id="reproduce">
 <h2>Reproduce<a class="headerlink" href="#reproduce" title="Link to this heading">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 1) Set environment variable</span>
