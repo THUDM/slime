@@ -32,6 +32,7 @@ from .model_provider import get_model_provider_func
 from ..training_utils.data import DataIterator, get_batch
 from ..training_utils.loss import loss_function
 from ..training_utils.log_utils import aggregate_forward_results, log_train_step, aggregate_train_losses
+from ..training_utils.ci_utils import check_kl, check_grad_norm
 
 logger = logging.getLogger(__name__)
 
@@ -407,7 +408,7 @@ def train_one_step(
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             os.environ["ROUTING_REPLAY_STAGE"] = old_stage
 
-        return output_tensor, partial(loss_function, args, parallel_state, batch, num_microbatches)
+        return output_tensor, partial(loss_function, args, parallel_state, batch, num_microbatches, apply_megatron_loss_scaling=True)
 
     # Forward pass.
     forward_backward_func = get_forward_backward_func()
@@ -643,37 +644,20 @@ def train(
             )
             
             if args.ci_test and not args.ci_disable_kl_checker:
-                if step_id == 0 and "train/ppo_kl" in log_dict and "train/pg_clipfrac" in log_dict:
-                    if args.multi_latent_attention:
-                        # TODO: mla currently have non-zero kl, need further investigation
-                        assert log_dict["train/ppo_kl"] < 1e-8, f"{log_dict=}"
-                    else:
-                        assert log_dict["train/ppo_kl"] == 0.0 and log_dict["train/pg_clipfrac"] == 0.0, f"{log_dict=}"
-                if accumulated_step_id == 0 and "train/kl_loss" in log_dict:
-                    assert log_dict["train/kl_loss"] == 0.0, f"{log_dict=}"
+                check_kl(args, log_dict, step_id, accumulated_step_id)
 
             logger.info(f"{role_tag}step {accumulated_step_id}: {log_dict}")
 
-            if args.ci_save_grad_norm is not None:
-                ci_save_grad_norm_path = args.ci_save_grad_norm.format(
-                    role=role,
+            if args.ci_test:
+                check_grad_norm(
+                    args=args,
+                    grad_norm=grad_norm,
                     rollout_id=rollout_id,
                     step_id=step_id,
-                )
-                torch.save(grad_norm, ci_save_grad_norm_path)
-            elif args.ci_load_grad_norm is not None:
-                ci_load_grad_norm_path = args.ci_load_grad_norm.format(
                     role=role,
-                    rollout_id=rollout_id,
-                    step_id=step_id,
+                    rank=mpu.get_data_parallel_rank(),
                 )
-                expected_grad_norm = torch.load(ci_load_grad_norm_path)
-                assert math.isclose(
-                    grad_norm,
-                    expected_grad_norm,
-                    rel_tol=0.01,
-                    abs_tol=0.01,
-                ), f"grad norm mismatch: {grad_norm} != {expected_grad_norm}"
+
     # Close out pre-hooks if using distributed optimizer and overlapped param gather.
     if pre_hook_enabled:
         disable_forward_pre_hook(model)

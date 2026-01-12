@@ -23,6 +23,7 @@ from slime.utils.tracking_utils import init_tracking
 from ..training_utils.data import DataIterator, get_data_iterator, get_rollout_data, get_batch
 from ..training_utils.loss import get_log_probs_and_entropy, compute_advantages_and_returns, loss_function
 from ..training_utils.log_utils import log_rollout_data, log_train_step, aggregate_train_losses, aggregate_forward_results
+from ..training_utils.ci_utils import check_grad_norm
 
 from ...utils.profile_utils import TrainProfiler
 from . import checkpoint
@@ -320,7 +321,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 num_steps_per_rollout = len(num_microbatches)
                 for step_id in range(num_steps_per_rollout):
                     for _ in self.prof.iterate_train_log_probs(
-                        tqdm(range(num_microbatches[step_id]), desc=f"{store_prefix}log_probs_step{step_id}", disable=dist.get_rank() != 0)
+                        tqdm(range(num_microbatches[step_id]), desc=f"{store_prefix}log_probs", disable=dist.get_rank() != 0)
                     ):
                         forward_only_keys = ["tokens", "loss_masks", "multimodal_train_inputs", "total_lengths", "response_lengths", "max_seq_lens"]
                         batch = get_batch(data_iterator, forward_only_keys, self.parallel_state, self.args.data_pad_size_multiplier, self.args.qkv_format, get_position_ids=True)
@@ -420,7 +421,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 
                 losses_reduced = []
                 for _ in self.prof.iterate_train_actor(
-                    tqdm(range(num_microbatches[step_id]), desc=f"actor_train_step{step_id}", disable=dist.get_rank() != 0)
+                    tqdm(range(num_microbatches[step_id]), desc=f"actor_train", disable=dist.get_rank() != 0)
                 ):
                     batch = get_batch(
                         data_iterator,
@@ -445,6 +446,16 @@ class FSDPTrainRayActor(TrainRayActor):
                 )
                 self.optimizer.step()
                 self.lr_scheduler.step()
+
+                if self.args.ci_test:
+                    check_grad_norm(
+                        args=self.args,
+                        grad_norm=self.grad_norm,
+                        rollout_id=rollout_id,
+                        step_id=step_id,
+                        role="actor",
+                        rank=self.parallel_state.dp_cp_rank,
+                    )
                 
                 loss_dict = aggregate_train_losses(losses_reduced, self.parallel_state)
                 
@@ -492,6 +503,7 @@ class FSDPTrainRayActor(TrainRayActor):
             batch=batch,
             num_microbatches=num_microbatches,
             logits=logits,
+            apply_megatron_loss_scaling=False,
         )
 
         loss.backward()

@@ -336,8 +336,12 @@ def aggregate_train_losses(
             values += log_dict["values"]
     
     assert len(keys) + 1 == values.numel(), f"Expected {len(keys) + 1} values, got {values.numel()}"
+
+    print(f"[DEBUG aggregate_train_losses] values: {values}")
     
     dist.all_reduce(values, op=dist.ReduceOp.SUM, group=parallel_state.dp_cp_group)
+
+    print(f"[DEBUG aggregate_train_losses] after all_reduce values: {values}")
     
     loss_reduced = {}
     values = values.tolist()
@@ -398,5 +402,6 @@ def log_train_step(
     
     if should_log:
         tracking_utils.log(args, log_dict_out, step_key="train/step")
+        logger.info(f"{role_tag}step {accumulated_step_id}: {log_dict_out}")
     
     return log_dict_out
