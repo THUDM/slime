@@ -1,7 +1,7 @@
 # VLM Multi-Turn (geo3k dataset)
-Training VLM on [geo3k dataset](https://huggingface.co/datasets/hiyouga/geometry3k) with multi-turn reasoning with interactive environment feedback, using GRPO. For dataset, we used the [processed version](https://huggingface.co/datasets/VeraIsHere/geo3k_imgurl_processed).
+Training VLM on [geo3k dataset](https://huggingface.co/datasets/hiyouga/geometry3k) with multi-turn reasoning with interactive environment feedback, using GRPO. For the dataset, we used the [processed version](https://huggingface.co/datasets/VeraIsHere/geo3k_imgurl_processed).
 
-Thanks to Slime's clean design, multi-turn RL aligns with first principles: with a [custom rollout function](rollout.py#L309), any training backend (e.g. FSDP/Megatron) can use it.
+**Thanks to slime's clean design, multi-turn RL aligns with first principles: with a [custom rollout function](rollout.py#L309), any training backend (e.g. Megatron/FSDP) can use it.**
 
 The multi-turn rollout is implemented through a [custom generate function](rollout.py#L309), overriding the original generate function.
 

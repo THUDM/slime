@@ -456,8 +456,8 @@ document.write(`
                   
   <section class="tex2jax_ignore mathjax_ignore" id="vlm-multi-turn-geo3k-dataset">
 <h1>VLM Multi-Turn (geo3k dataset)<a class="headerlink" href="#vlm-multi-turn-geo3k-dataset" title="Link to this heading">#</a></h1>
-<p>Training VLM on <a class="reference external" href="https://huggingface.co/datasets/hiyouga/geometry3k">geo3k dataset</a> with multi-turn reasoning with interactive environment feedback, using GRPO. For dataset, we used the <a class="reference external" href="https://huggingface.co/datasets/VeraIsHere/geo3k_imgurl_processed">processed version</a>.</p>
-<p>Thanks to Slime’s clean design, multi-turn RL aligns with first principles: with a <a class="reference internal" href="#rollout.py#L309"><span class="xref myst">custom rollout function</span></a>, any training backend (e.g. FSDP/Megatron) can use it.</p>
+<p>Training VLM on <a class="reference external" href="https://huggingface.co/datasets/hiyouga/geometry3k">geo3k dataset</a> with multi-turn reasoning with interactive environment feedback, using GRPO. For the dataset, we used the <a class="reference external" href="https://huggingface.co/datasets/VeraIsHere/geo3k_imgurl_processed">processed version</a>.</p>
+<p><strong>Thanks to slime’s clean design, multi-turn RL aligns with first principles: with a <a class="reference internal" href="#rollout.py#L309"><span class="xref myst">custom rollout function</span></a>, any training backend (e.g. Megatron/FSDP) can use it.</strong></p>
 <p>The multi-turn rollout is implemented through a <a class="reference internal" href="#rollout.py#L309"><span class="xref myst">custom generate function</span></a>, overriding the original generate function.</p>
 <p>In terms of the environment interaction, this example initializes a <a class="reference internal" href="#env_geo3k.py"><span class="xref myst">custom interactive environment</span></a> with the APIs below.</p>
 <details>
