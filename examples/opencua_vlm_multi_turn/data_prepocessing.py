@@ -116,5 +116,5 @@ dataset = dataset.map(
 # 6. Save
 # -------------------------
 print(dataset[0])
-dataset.to_parquet("/root/datasets/opencua/train_relative.parquet")
-print("Saved train_relative.parquet")
+dataset.to_parquet("/root/datasets/opencua/train_relative_base64.parquet")
+print("Saved train_relative_base64.parquet")
