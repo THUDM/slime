@@ -64,3 +64,84 @@ Currently, FP8 is far from being a complete feature and still has the following 
 - FP8 weights (`--fp8-param-gather`) can provide memory savings benefits, but currently FP8 weights must be used with TransformerEngine's FusedAdam, which conflicts with the commonly used Adam CPU offload technique in Megatron-LM.
 
 The slime team will continue to collaborate with the NVIDIA team to contribute more complete FP8 training infrastructure to the community.
+
+
+Here is a polished and professional version of your documentation.
+
+I have corrected grammatical errors, improved the flow, standardizes the terminology (e.g., capitalizing "STE"), and clarified the instructions.
+
+***
+
+## INT4 Training Examples
+
+This guide provides examples for INT4 STE (Straight-Through Estimator) training and INT4 inference. Utilizing INT4 inference significantly improves throughput, thereby accelerating the training pipeline (specifically during the rollout generation phase).
+
+### Files
+
+*   `run-moonlight-16B-A3B-int4.sh`: Launch script for **Moonlight-16B-A3B** (INT4) on 4x H200 GPUs.
+*   `run-qwen3‑30B‑A3B-int4.sh`: Launch script for **Qwen3‑30B‑A3B** (INT4) on 8x H200 GPUs.
+*   `run-qwen3-235B-A22B-int4.sh`: Launch script for **Qwen3-235B-A22B** (INT4) on 64x H200 GPUs.
+*   `run-kimi-k2-Thinking-int4.sh`: Launch script for **Kimi-k2-Thinking** (INT4) on 256x H200 GPUs.
+
+### Quick Start
+
+#### 1. Configure Training Arguments
+Ensure your training script is properly configured. For training tasks, you must add the following flag to your launch arguments:
+
+```bash
+--int4-params-rollout
+```
+
+#### 2. Convert HuggingFace Weights to INT4
+First, download the PTQ (Post-Training Quantization) calibration dataset from HuggingFace:
+[https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1](https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1)
+
+Next, use the `tools/convert_hf_to_hf_int4.py` script to convert BF16 weights to INT4 format. Ensure that the `--hf-checkpoint` parameter points to a directory where `config.json` contains the correct `quantization_config`. Slime will automatically utilize INT4 quantization during weight updates.
+
+```bash
+python tools/convert_hf_to_hf_int4.py \
+  --model_id /path/to/your/original/models \
+  --output_dir /path/to/your/save/models \
+  --local_data_path /path/to/your/wikitext
+```
+
+#### 3. Start INT4 Training
+
+You need to configure the specific environment variables for quantization settings.
+
+**Environment Variables:**
+
+*   **`OPEN_TRAINING_INT4_FAKE_QAT_FLAG`**: Enables fake quantization operations for INT4 training.
+*   **`OPEN_TRAINING_INT4_GROUP_SIZE`**: Specifies the block size (group size) for model quantization.
+    *   Set to **128** for `moonlight-16B-A3B` 、 `qwen3-30B-A3B`and `qwen3-235B-A22B-int4`.
+    *   Set to **32** for `kimi-k2-Thinking-int4`.
+
+**Configuration Example:**
+
+```json
+RUNTIME_ENV_JSON="{
+  \"env_vars\": {
+    ...
+    \"OPEN_TRAINING_INT4_FAKE_QAT_FLAG\": \"1\",
+    \"OPEN_TRAINING_INT4_GROUP_SIZE\": \"128\"
+  }
+}"
+```
+
+**Launch Commands:**
+
+```bash
+# Moonlight-16B-A3B Int4 training
+bash examples/low_precision/run-moonlight-16B-A3B-int4.sh
+
+# Qwen3‑30B‑A3B Int4 training
+bash examples/low_precision/run-qwen3‑30B‑A3B-int4.sh
+
+# Qwen3-235B-A22B Int4 training (8 nodes)
+bash examples/low_precision/run-qwen3-235B-A22B-int4.sh
+
+# Kimi-k2-Thinking Int4 training (32 nodes)
+bash examples/low_precision/run-kimi-k2-Thinking-int4.sh
+```
+
+- For multi-node environments, please start the Ray service according to your cluster configuration.
