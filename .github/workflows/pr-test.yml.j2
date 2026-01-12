@@ -13,6 +13,7 @@
         {'test_file': 'test_qwen3_4B_fsdp_true_on_policy.py', 'num_gpus': 2},
         {'test_file': 'test_qwen3_vl_4B_fsdp.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_0.6B_fsdp_distributed.py', 'num_gpus': 2},
+        {'test_file': 'test_qwen3_0.6B_megatron_fsdp_align.py', 'num_gpus': 4},
       ],
     },
     'e2e-test-megatron': {
@@ -29,6 +30,7 @@
       'label': 'run-ci-precision',
       'tests': [
         {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_0.6B_megatron_fsdp_align.py', 'num_gpus': 4},
       ],
     },
     'e2e-test-ckpt': {
@@ -61,6 +63,7 @@
         {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
         {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_0.6B_megatron_fsdp_align.py', 'num_gpus': 4},
         {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ckpt.py --async-save', 'num_gpus': 8},
         {'test_file': 'test_qwen2.5_0.5B_gsm8k.py', 'num_gpus': 2},
