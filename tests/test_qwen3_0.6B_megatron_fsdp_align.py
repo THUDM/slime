@@ -102,7 +102,10 @@ def execute():
         U.execute_train(
             train_args=train_args
             + (
-                f"{fsdp_args}" f"--load-debug-rollout-data {debug_data_path} " f"--ci-save-grad-norm {grad_norm_path} "
+                f"{fsdp_args}"
+                f"--load-debug-rollout-data {debug_data_path} "
+                f"--ci-save-grad-norm {grad_norm_path} "
+                "--debug-train-only "
             ),
             num_gpus_per_node=NUM_GPUS,
             megatron_model_type=None,
@@ -129,6 +132,7 @@ def execute():
                 "--accumulate-allreduce-grads-in-fp32 "
                 "--attention-softmax-in-fp32 "
                 "--attention-backend flash "
+                "--debug-train-only "
             ),
             num_gpus_per_node=NUM_GPUS,
             megatron_model_type=MODEL_TYPE,
