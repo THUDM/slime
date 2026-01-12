@@ -8,7 +8,7 @@ NUM_GPUS = 4
 CP_SIZE = 1
 MEGATRON_TP_SIZE = 1
 MEGATRON_PP_SIZE = 1
-FORCE_GENERATE_TEST_DATA = False
+FORCE_GENERATE_TEST_DATA = True
 
 
 def prepare():
@@ -42,11 +42,11 @@ def get_common_args() -> str:
         "--rollout-shuffle "
         "--rm-type deepscaler "
         "--num-rollout 1 "
-        "--rollout-batch-size 4 "
+        "--rollout-batch-size 8 "
         "--n-samples-per-prompt 8 "
         "--rollout-max-response-len 8192 "
-        "--rollout-temperature 0.8 "
-        "--global-batch-size 32 "
+        "--rollout-temperature 1 "
+        "--global-batch-size 64 "
         "--use-dynamic-batch-size "
         "--max-tokens-per-gpu 8192 "
     )
@@ -198,6 +198,8 @@ def execute(debug_data_path: str):
     finally:
         if os.path.exists(grad_norm_path):
             os.remove(grad_norm_path)
+        if os.path.exists(debug_data_path) and FORCE_GENERATE_TEST_DATA:
+            os.remove(debug_data_path)
 
 
 if __name__ == "__main__":
