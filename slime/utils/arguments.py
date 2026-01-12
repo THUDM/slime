@@ -431,6 +431,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 nargs="+",
                 help="Address and ports of the external engines.",
             )
+            parser.add_argument(
+                "--int4-params-rollout",
+                action="store_true",
+                help="Use int4 params to rollout, only support in int4 qat rl",
+            )
             return parser
 
         def add_fault_tolerance_arguments(parser):
