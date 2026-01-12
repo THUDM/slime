@@ -244,7 +244,7 @@ def get_reinforce_plus_plus_returns(
 
         if cp_size > 1:
             # Step 1,2:Gather all chunks and token_offsets from all ranks and reconstruct the full response tensor by splitting and placing each part
-            from slime.backends.megatron_utils.cp_utils import all_gather_with_cp
+            from slime.backends.training_utils.cp_utils import all_gather_with_cp
 
             full_kl_response = all_gather_with_cp(local_kl_chunk, total_len, response_len)
         else:
@@ -339,7 +339,7 @@ def get_advantages_and_returns(
 
     cp_size = mpu.get_context_parallel_world_size()
     if cp_size > 1:
-        from slime.backends.megatron_utils.cp_utils import all_gather_with_cp
+        from slime.backends.training_utils.cp_utils import all_gather_with_cp
 
         full_rewards = all_gather_with_cp(rewards, total_len, response_len)
         full_values = all_gather_with_cp(values, total_len, response_len)
@@ -403,7 +403,7 @@ def get_advantages_and_returns_batch(
         dtype = values_list[0].dtype
 
         if cp_size > 1:
-            from slime.backends.megatron_utils.cp_utils import all_gather_with_cp
+            from slime.backends.training_utils.cp_utils import all_gather_with_cp
 
             full_values_list = []
             full_rewards_list = []
