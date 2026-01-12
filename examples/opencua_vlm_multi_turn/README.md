@@ -15,8 +15,7 @@ The multi-turn rollout is implemented through a custom generate function  `examp
 In terms of the environment interaction, this example initializes a custom interactive environment in `examples/opencua_vlm_multi_turn/env_opencua.py` with the APIs below.
 
 <details>
-<summary>Environment API (opencua)</summary>
-<summary>Environment API (opencua)</summary>
+<summary>Environment API (opencua click)</summary>
 
 - `build_env(sample: Sample | None = None, args: Any | None = None, **_) -> Geo3kEnv`: constructs the env.
 - `reset() -> tuple[dict, dict]`: clears internal state.
