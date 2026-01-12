@@ -520,6 +520,16 @@ class FSDPTrainRayActor(TrainRayActor):
                     if isinstance(unpacked_batch[metric_key], torch.Tensor):
                         loss_masks_tensor = unpacked_batch["loss_masks"].to(device=torch.cuda.current_device())
                         metric_tensor = unpacked_batch[metric_key].to(device=torch.cuda.current_device())
+                        if loss_masks_tensor.numel() == 0 or metric_tensor.numel() == 0:
+                            continue
+                        if loss_masks_tensor.shape != metric_tensor.shape:
+                            metric_tensor = metric_tensor.flatten()
+                            loss_masks_tensor = loss_masks_tensor.flatten()
+                            min_len = min(metric_tensor.numel(), loss_masks_tensor.numel())
+                            if min_len == 0:
+                                continue
+                            metric_tensor = metric_tensor[:min_len]
+                            loss_masks_tensor = loss_masks_tensor[:min_len]
                         val += (metric_tensor * loss_masks_tensor).sum() / loss_masks_tensor.sum().clamp_min(1)
                     else:
                         val += unpacked_batch[metric_key]
