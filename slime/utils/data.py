@@ -80,20 +80,18 @@ def _parse_generalized_path(s: str):
 
 def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_length: int | None) -> list[Sample]:
     if max_length is None:
-        return False
+        return origin_samples
 
     if not isinstance(origin_samples[0].prompt, str):
         logger.warning(
             "Skipping max_length check for list prompt. Set apply_chat_template=True to enable length filtering."
         )
-        return False
+        return origin_samples
 
     if processor:
         filtered_samples = []
         for sample in origin_samples:
-            from slime.utils.processing_utils import process_vision_info
-
-            multimodal_inputs = process_vision_info(sample.prompt, processor)
+            multimodal_inputs = sample.multimodal_inputs or {}
             processor_output = processor(text=sample.prompt, **multimodal_inputs)
             input_ids = processor_output["input_ids"][0]
             if len(input_ids) <= max_length:
