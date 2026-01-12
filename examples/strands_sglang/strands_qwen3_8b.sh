@@ -59,7 +59,7 @@ ROLLOUT_ARGS=(
 EVAL_ARGS=(
    --eval-interval 20
    --eval-prompt-data aime  /root/data/aime-2024.jsonl
-   --n-samples-per-eval-prompt 8
+   --n-samples-per-eval-prompt 16
    --eval-max-response-len 16384
    --eval-top-p 1
 )
@@ -109,7 +109,7 @@ WANDB_ARGS=(
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 2
-   --sglang-mem-fraction-static 0.2
+   --sglang-mem-fraction-static 0.4
    # Note: strands-sglang handles tool parsing internally (HermesToolCallParser)
    # No need for --sglang-tool-call-parser
 )
