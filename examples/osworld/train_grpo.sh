@@ -16,6 +16,14 @@ NUM_GPUS=${SLIME_SCRIPT_NUM_GPUS:-4}
 CP_SIZE=${SLIME_SCRIPT_CP_SIZE:-2}
 TRAIN_GPUS=${SLIME_SCRIPT_TRAIN_GPUS:-2}
 INFER_GPUS=${SLIME_SCRIPT_INFER_GPUS:-1}
+
+# VLM memory safety: CP=2 required for long sequences (>8K tokens)
+# OSWorld trajectories can reach 20K+ tokens with multi-turn screenshots
+if [ "$CP_SIZE" -lt 2 ]; then
+    echo "WARNING: CP_SIZE=$CP_SIZE is risky for VLM training with long sequences"
+    echo "OSWorld trajectories can exceed 16K tokens. Recommend CP_SIZE=2"
+    echo "Set SLIME_SCRIPT_CP_SIZE=2 or expect OOM during backward pass"
+fi
 # Training turns (exported for Ray job) - max 8 based on trajectory data
 export OSWORLD_TRAIN_TRUNCATE_TURNS=${SLIME_SCRIPT_TRAIN_TRUNCATE_TURNS:-8}
 
@@ -172,8 +180,16 @@ RUNTIME_ENV_JSON="{
   }
 }"
 
-# Run training
-echo "GSPO Training: ${MODEL_NAME} | GPUs: $NUM_GPUS | Output: $OUTPUT_DIR"
+# Run training - print configuration for debugging
+echo "=========================================="
+echo "GSPO Training Configuration"
+echo "=========================================="
+echo "Model: ${MODEL_NAME}"
+echo "Total GPUs: $NUM_GPUS | Train GPUs: $TRAIN_GPUS | Infer GPUs: $INFER_GPUS"
+echo "Context Parallel: $CP_SIZE | Data Parallel: $((TRAIN_GPUS / CP_SIZE))"
+echo "Global Batch: 8 | Max Context: 16384 | Max Turns: $OSWORLD_TRAIN_TRUNCATE_TURNS"
+echo "Output: $OUTPUT_DIR"
+echo "=========================================="
 
 ray job submit --address="http://127.0.0.1:8265" \
     --runtime-env-json="$RUNTIME_ENV_JSON" \
