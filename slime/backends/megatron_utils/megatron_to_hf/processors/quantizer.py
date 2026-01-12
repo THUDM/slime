@@ -4,12 +4,20 @@ import torch
 
 from slime.utils.fp8_kernel import blockwise_cast_to_fp8_triton
 
+from slime.utils.int4_kernel import _quantize_params_int4
+
 from ...sglang import quant_weight_ue8m0, should_deepgemm_weight_requant_ue8m0, transform_scale_ue8m0
 
 
 def quantize_params(args, megatron_name, converted_named_params, quantization_config):
     if quantization_config is None:
         return converted_named_params
+
+    quant_method = quantization_config.get("quant_method")
+
+    if args.int4_params_rollout and quant_method == "compressed-tensors":
+        return _quantize_params_int4(converted_named_params, quantization_config)
+
     assert quantization_config["quant_method"] == "fp8"
     assert quantization_config["fmt"] == "e4m3"
     assert quantization_config["activation_scheme"] == "dynamic"
