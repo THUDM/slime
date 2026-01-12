@@ -1,9 +1,11 @@
-# VLM Multi-Turn (FSDP backend, geo3k dataset)
-Training VLM with FSDP on [geo3k dataset](https://huggingface.co/datasets/hiyouga/geometry3k) with multi-turn reasoning with interactive environment feedback, using GRPO. For dataset, we used the [processed version](https://huggingface.co/datasets/VeraIsHere/geo3k_imgurl_processed).
+# VLM Multi-Turn (geo3k dataset)
+Training VLM on [geo3k dataset](https://huggingface.co/datasets/hiyouga/geometry3k) with multi-turn reasoning with interactive environment feedback, using GRPO. For dataset, we used the [processed version](https://huggingface.co/datasets/VeraIsHere/geo3k_imgurl_processed).
 
-The multi-turn rollout is implemented through a custom generate function  `examples.geo3k_vlm_multi_turn.rollout.generate`, overriding the original generate function.
+Thanks to Slime's clean design, multi-turn RL aligns with first principles: with a [custom rollout function](rollout.py#L309), any training backend (e.g. FSDP/Megatron) can use it.
 
-In terms of the environment interaction, this example initializes a custom interactive environment in `examples/geo3k_vlm_multi_turn/env_geo3k.py` with the APIs below.
+The multi-turn rollout is implemented through a [custom generate function](rollout.py#L309), overriding the original generate function.
+
+In terms of the environment interaction, this example initializes a [custom interactive environment](env_geo3k.py) with the APIs below.
 <details>
 <summary>Environment API (geo3k)</summary>
 
@@ -17,6 +19,7 @@ In terms of the environment interaction, this example initializes a custom inter
 The reward model is the default math RM. 
 
 ![VLM multi-turn geo3k reward](geo3k_vlm_multi_turn_reward.png)
+![Rollout megatron](rollout_experiment_result_megatron.png)
 
 ## Reproduce
 ```bash
