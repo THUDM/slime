@@ -54,7 +54,7 @@
     <link rel="prev" title="使用文档" href="usage.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 11 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 12 日"/>
   </head>
   
   
@@ -466,6 +466,7 @@ document.write(`
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-slime-router-middleware-paths">18. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#moe">19. MoE 路由重放</a></li>
 </ul>
 </li>
 </ul>
@@ -895,6 +896,27 @@ document.write(`
 <li><p>缓存和优化</p></li>
 </ul>
 </section>
+<hr class="docutils" />
+<section id="moe">
+<h3>19. MoE 路由重放<a class="headerlink" href="#moe" title="Link to this heading">#</a></h3>
+<p>通过记录和重放专家路由决策来稳定 MoE RL 训练。</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>参数</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--use-routing-replay</span></code></p></td>
+<td><p>训练中前向-反向路由一致性。(<a class="reference external" href="https://arxiv.org/abs/2507.18071">arXiv:2507.18071</a>)</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--use-rollout-routing-replay</span></code></p></td>
+<td><p>R3：在训练时重放 rollout 阶段的路由。<strong>需要 <code class="docutils literal notranslate"><span class="pre">--use-slime-router</span></code></strong>。(<a class="reference external" href="https://arxiv.org/abs/2510.11370">arXiv:2510.11370</a>)</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
 </section>
 </section>
 
@@ -972,6 +994,7 @@ document.write(`
 </ul>
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-router-slime-router-middleware-paths">18. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#moe">19. MoE 路由重放</a></li>
 </ul>
 </li>
 </ul>
@@ -1007,7 +1030,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 11 日.
+  最后更新于 2026 年 01 月 12 日.
   <br/>
 </p>
   </div>
