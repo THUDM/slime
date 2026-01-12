@@ -6,6 +6,7 @@ import torch.nn.functional as F
 
 from .parallel import ParallelState
 
+
 def get_logits_and_tokens_offset_with_cp(
     total_length: int,
     response_length: int,
@@ -121,7 +122,9 @@ def get_sum_of_sample_mean(
     return sum_of_sample_mean if not calculate_per_token_loss else sum_of_token
 
 
-def all_gather_with_cp(tensor: torch.Tensor, total_length: int, response_length: int, parallel_state: ParallelState) -> torch.Tensor:
+def all_gather_with_cp(
+    tensor: torch.Tensor, total_length: int, response_length: int, parallel_state: ParallelState
+) -> torch.Tensor:
     """
     Gather tensors across all ranks in the context parallel group.
     The first dimension of the output tensor will be the `response_length`.

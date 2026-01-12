@@ -22,14 +22,14 @@ def prepare():
         num_gpus_per_node=NUM_GPUS,
         dir_dst="/root/models",
     )
-    
+
     debug_data_path = "test_rollout_data_0.pt"
     if not os.path.exists(debug_data_path) or FORCE_GENERATE_TEST_DATA:
         print(f"[Test] Generating test rollout data at {debug_data_path}...")
         generate_test_data(debug_data_path)
     else:
         print(f"[Test] Using existing test data at {debug_data_path}")
-    
+
     return debug_data_path
 
 
@@ -70,33 +70,20 @@ def get_common_args() -> str:
     )
 
     sglang_args = (
-        "--rollout-num-gpus-per-engine 1 "
-        "--sglang-chunked-prefill-size 4096 "
-        "--sglang-mem-fraction-static 0.75 "
+        "--rollout-num-gpus-per-engine 1 " "--sglang-chunked-prefill-size 4096 " "--sglang-mem-fraction-static 0.75 "
     )
 
-    misc_args = (
-        "--actor-num-nodes 1 "
-        f"--actor-num-gpus-per-node {NUM_GPUS} "
-        "--colocate "
-        "--use-fault-tolerance "
-    )
+    misc_args = "--actor-num-nodes 1 " f"--actor-num-gpus-per-node {NUM_GPUS} " "--colocate " "--use-fault-tolerance "
 
-    return (
-        f"{rollout_args} "
-        f"{ppo_args} "
-        f"{optimizer_args} "
-        f"{sglang_args} "
-        f"{misc_args} "
-    )
+    return f"{rollout_args} " f"{ppo_args} " f"{optimizer_args} " f"{sglang_args} " f"{misc_args} "
 
 
 def generate_test_data(output_path: str):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     gen_script = os.path.join(script_dir, "utils/test_data_generator.py")
-    
+
     common_args = get_common_args()
-    
+
     gen_args = (
         f"--hf-checkpoint /root/models/{MODEL_NAME} "
         "--train-backend fsdp "
@@ -104,7 +91,7 @@ def generate_test_data(output_path: str):
         f"--save-debug-rollout-data {output_path} "
         "--debug-rollout-only "
     )
-    
+
     U.execute_train(
         train_args=gen_args,
         train_script=gen_script,
@@ -118,17 +105,11 @@ def build_train_args(train_backend: str, debug_data_path: str, ci_grad_norm_mode
     if train_backend == "megatron":
         ref_load_path = f"/root/models/{MODEL_NAME}_torch_dist"
 
-    ckpt_args = (
-        f"--hf-checkpoint /root/models/{MODEL_NAME} "
-        f"--ref-load {ref_load_path} "
-    )
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} " f"--ref-load {ref_load_path} "
 
     common_args = get_common_args()
 
-    debug_args = (
-        f"--load-debug-rollout-data {debug_data_path} "
-        "--debug-train-only "
-    )
+    debug_args = f"--load-debug-rollout-data {debug_data_path} " "--debug-train-only "
 
     if train_backend == "fsdp":
         train_backend_args = (
@@ -165,19 +146,13 @@ def build_train_args(train_backend: str, debug_data_path: str, ci_grad_norm_mode
     elif ci_grad_norm_mode == "load":
         ci_args += f"--ci-load-grad-norm {grad_norm_path} "
 
-    return (
-        f"{ckpt_args} "
-        f"{common_args} "
-        f"{debug_args} "
-        f"{train_backend_args} "
-        f"{ci_args} "
-    )
+    return f"{ckpt_args} " f"{common_args} " f"{debug_args} " f"{train_backend_args} " f"{ci_args} "
 
 
 def run_single_test(train_backend: str, debug_data_path: str, ci_grad_norm_mode: str = None):
     train_args = build_train_args(train_backend, debug_data_path, ci_grad_norm_mode)
     megatron_model_type = MODEL_TYPE if train_backend == "megatron" else None
-    
+
     U.execute_train(
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
@@ -187,11 +162,11 @@ def run_single_test(train_backend: str, debug_data_path: str, ci_grad_norm_mode:
 
 def execute(debug_data_path: str):
     grad_norm_path = "grad_norm_fsdp.pt"
-    
+
     try:
         print("[Test] Running FSDP and save grad norm...")
         run_single_test("fsdp", debug_data_path, ci_grad_norm_mode="save")
-        
+
         print("[Test] Running Megatron and compare grad norm...")
         run_single_test("megatron", debug_data_path, ci_grad_norm_mode="load")
 

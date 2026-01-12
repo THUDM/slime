@@ -2,24 +2,18 @@ import logging
 from argparse import Namespace
 from collections.abc import Sequence
 
-import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 
-from slime.utils import train_metric_utils
 from slime.utils.data import get_minimum_num_micro_batch_size
-from slime.utils.flops_utils import calculate_fwd_flops
-from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.types import RolloutBatch
 
-from .parallel import ParallelState
-from .cp_utils import get_sum_of_sample_mean, slice_with_cp, slice_log_prob_with_cp
-
-from ...utils import tracking_utils
-from ...utils.ray_utils import Box
 from ...utils.data import process_rollout_data
+from ...utils.ray_utils import Box
+from .cp_utils import slice_log_prob_with_cp, slice_with_cp
+from .parallel import ParallelState
 
 logger = logging.getLogger(__name__)
 
@@ -85,14 +79,17 @@ def get_rollout_data(args: Namespace, rollout_data_ref: Box, parallel_state: Par
             )
         ]
     if "rollout_routed_experts" in rollout_data:
-        rollout_data["rollout_routed_experts"] = [
-            torch.from_numpy(r) for r in rollout_data["rollout_routed_experts"]
-        ]
+        rollout_data["rollout_routed_experts"] = [torch.from_numpy(r) for r in rollout_data["rollout_routed_experts"]]
     return rollout_data
 
 
 def get_batch(
-    data_iterator: "DataIterator", keys: Sequence[str], parallel_state: ParallelState, pad_multiplier: int = 128, qkv_format: str = "thd", get_position_ids: bool = False
+    data_iterator: "DataIterator",
+    keys: Sequence[str],
+    parallel_state: ParallelState,
+    pad_multiplier: int = 128,
+    qkv_format: str = "thd",
+    get_position_ids: bool = False,
 ) -> dict[str, torch.Tensor | list[torch.Tensor] | None]:
     """
     Generate a CP-ready micro-batch with packed sequence parameters.
@@ -171,7 +168,7 @@ def get_batch(
             seq_len = t.size(0)
             pos_ids = torch.arange(seq_len, device=t.device, dtype=torch.long)
             position_ids_list.append(pos_ids)
-        
+
         if qkv_format == "bshd":
             position_ids = [slice_with_cp(p, 0, parallel_state, qkv_format, max_seqlen) for p in position_ids_list]
             position_ids = torch.stack(position_ids)
@@ -181,7 +178,7 @@ def get_batch(
             if pad != 0:
                 position_ids = F.pad(position_ids, (0, pad), value=0)
             position_ids = position_ids.unsqueeze(0)
-        
+
         batch["position_ids"] = position_ids
 
     # loss masks
@@ -382,6 +379,7 @@ def get_data_iterator(
         data_iterator,
         num_microbatches,
     )
+
 
 def sync_actor_critic_data(
     args: Namespace,

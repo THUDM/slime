@@ -1,16 +1,16 @@
-import torch
-import torch.distributed as dist
-from torch.distributed.device_mesh import init_device_mesh
-from ring_flash_attn import substitute_hf_flash_attn
-
-from argparse import Namespace
 import logging
+from argparse import Namespace
 
-from ..training_utils.parallel import ParallelState
+import torch.distributed as dist
+from ring_flash_attn import substitute_hf_flash_attn
+from torch.distributed.device_mesh import init_device_mesh
 
 from slime.utils.distributed_utils import get_gloo_group
 
+from ..training_utils.parallel import ParallelState
+
 logger = logging.getLogger(__name__)
+
 
 class FSDPParallelState(ParallelState):
     def __init__(self, args: Namespace):
@@ -32,7 +32,9 @@ class FSDPParallelState(ParallelState):
         self.tp_rank = 0
         self.tp_group = dist.new_group([rank])
 
-        self.mesh = init_device_mesh("cuda", mesh_shape=(world_size // self.cp_size, self.cp_size), mesh_dim_names=("dp", "cp"))
+        self.mesh = init_device_mesh(
+            "cuda", mesh_shape=(world_size // self.cp_size, self.cp_size), mesh_dim_names=("dp", "cp")
+        )
         self.dp_mesh = self.mesh["dp"]
 
         self.dp_group = self.mesh.get_group("dp")
@@ -52,4 +54,3 @@ class FSDPParallelState(ParallelState):
             logger.info(f"[Rank {rank}] CP initialized via device mesh")
         else:
             logger.info(f"[Rank {rank}] Pure DP mode (cp_size=1)")
-

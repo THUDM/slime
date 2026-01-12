@@ -20,16 +20,20 @@ from slime.utils.ray_utils import Box
 from slime.utils.timer import Timer, inverse_timer, timer
 from slime.utils.tracking_utils import init_tracking
 
-from ..training_utils.data import DataIterator, get_data_iterator, get_rollout_data, get_batch
-from ..training_utils.loss import get_log_probs_and_entropy, compute_advantages_and_returns, loss_function
-from ..training_utils.log_utils import log_rollout_data, log_train_step, aggregate_train_losses, aggregate_forward_results
-from ..training_utils.ci_utils import check_grad_norm
-
 from ...utils.profile_utils import TrainProfiler
+from ..training_utils.ci_utils import check_grad_norm
+from ..training_utils.data import DataIterator, get_batch, get_data_iterator, get_rollout_data
+from ..training_utils.log_utils import (
+    aggregate_forward_results,
+    aggregate_train_losses,
+    log_rollout_data,
+    log_train_step,
+)
+from ..training_utils.loss import compute_advantages_and_returns, get_log_probs_and_entropy, loss_function
 from . import checkpoint
 from .lr_scheduler import get_lr_scheduler
-from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 from .parallel import FSDPParallelState
+from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
 logger = logging.getLogger(__name__)
 
@@ -316,20 +320,37 @@ class FSDPTrainRayActor(TrainRayActor):
         try:
             forward_data_store = []
             data_iterator.reset()
-            
+
             with timer(f"{store_prefix}log_probs"), torch.no_grad():
                 num_steps_per_rollout = len(num_microbatches)
                 for step_id in range(num_steps_per_rollout):
                     for _ in self.prof.iterate_train_log_probs(
-                        tqdm(range(num_microbatches[step_id]), desc=f"{store_prefix}log_probs", disable=dist.get_rank() != 0)
+                        tqdm(
+                            range(num_microbatches[step_id]),
+                            desc=f"{store_prefix}log_probs",
+                            disable=dist.get_rank() != 0,
+                        )
                     ):
-                        forward_only_keys = ["tokens", "loss_masks", "multimodal_train_inputs", "total_lengths", "response_lengths", "max_seq_lens"]
-                        batch = get_batch(data_iterator, forward_only_keys, self.parallel_state, self.args.data_pad_size_multiplier, self.args.qkv_format, get_position_ids=True)
+                        forward_only_keys = [
+                            "tokens",
+                            "loss_masks",
+                            "multimodal_train_inputs",
+                            "total_lengths",
+                            "response_lengths",
+                            "max_seq_lens",
+                        ]
+                        batch = get_batch(
+                            data_iterator,
+                            forward_only_keys,
+                            self.parallel_state,
+                            self.args.data_pad_size_multiplier,
+                            self.args.qkv_format,
+                            get_position_ids=True,
+                        )
 
                         model_args = self._get_model_inputs_args(batch)
                         logits = active_model(**model_args).logits.float()
-                        
-                        
+
                         result = get_log_probs_and_entropy(
                             logits=logits,
                             args=self.args,
@@ -340,18 +361,16 @@ class FSDPTrainRayActor(TrainRayActor):
                             with_entropy=(store_prefix == ""),
                             max_seq_lens=batch.get("max_seq_lens", None),
                         )
-                        
+
                         batch_result = {
                             f"{store_prefix}log_probs": result["log_probs"],
                         }
                         if store_prefix == "" and "entropy" in result:
                             batch_result["entropy"] = result["entropy"]
                         forward_data_store.append(batch_result)
-            
-            rollout_data = aggregate_forward_results(
-                forward_data_store, data_iterator, self.args, store_prefix
-            )
-            
+
+            rollout_data = aggregate_forward_results(forward_data_store, data_iterator, self.args, store_prefix)
+
             return rollout_data
 
         finally:
@@ -363,8 +382,6 @@ class FSDPTrainRayActor(TrainRayActor):
                 if not self.fsdp_cpu_offload:
                     self.model.cuda()
                     dist.barrier(group=get_gloo_group())
-
-        return packed_batches, grad_accum
 
     def train(self, rollout_id: int, rollout_data_ref: Box) -> None:
         """Run one training update over a rollout batch.
@@ -415,35 +432,43 @@ class FSDPTrainRayActor(TrainRayActor):
         with timer("actor_train"):
             data_iterator.reset()
             num_steps_per_rollout = len(num_microbatches)
-            
+
             for step_id in range(num_steps_per_rollout):
                 self.optimizer.zero_grad(set_to_none=True)
-                
+
                 losses_reduced = []
                 for _ in self.prof.iterate_train_actor(
-                    tqdm(range(num_microbatches[step_id]), desc=f"actor_train", disable=dist.get_rank() != 0)
+                    tqdm(range(num_microbatches[step_id]), desc="actor_train", disable=dist.get_rank() != 0)
                 ):
                     batch = get_batch(
                         data_iterator,
-                        ["tokens", "loss_masks", "multimodal_train_inputs", "total_lengths", "response_lengths", 
-                         "max_seq_lens", "log_probs", "advantages", "returns", "ref_log_probs", "rollout_log_probs"],
+                        [
+                            "tokens",
+                            "loss_masks",
+                            "multimodal_train_inputs",
+                            "total_lengths",
+                            "response_lengths",
+                            "max_seq_lens",
+                            "log_probs",
+                            "advantages",
+                            "returns",
+                            "ref_log_probs",
+                            "rollout_log_probs",
+                        ],
                         self.parallel_state,
                         self.args.data_pad_size_multiplier,
                         self.args.qkv_format,
                         get_position_ids=True,
                     )
-                    
+
                     log_dict = self._train_step(
                         batch=batch,
                         step_id=step_id,
                         num_microbatches=num_microbatches[step_id],
                     )
                     losses_reduced.append(log_dict)
-                
-                grad_norm = torch.nn.utils.clip_grad_norm_(
-                    self.model.parameters(), 
-                    self.args.clip_grad
-                )
+
+                grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.args.clip_grad)
                 grad_norm = grad_norm.full_tensor().item()
 
                 self.optimizer.step()
@@ -458,13 +483,13 @@ class FSDPTrainRayActor(TrainRayActor):
                         role="actor",
                         rank=self.parallel_state.dp_cp_rank,
                     )
-                
+
                 loss_dict = aggregate_train_losses(losses_reduced, self.parallel_state)
-                
+
                 extra_metrics = {}
                 for param_group_id, param_group in enumerate(self.optimizer.param_groups):
                     extra_metrics[f"lr-pg_{param_group_id}"] = param_group["lr"]
-                
+
                 log_train_step(
                     args=self.args,
                     loss_dict=loss_dict,
@@ -509,7 +534,7 @@ class FSDPTrainRayActor(TrainRayActor):
         )
 
         loss.backward()
-        
+
         return log_dict
 
     @timer
@@ -577,7 +602,9 @@ class FSDPTrainRayActor(TrainRayActor):
 
             # Always use CPUOffloadPolicy for reference, let FSDP2 handle the offload. It is faster than model.cpu().
             ref_model = apply_fsdp2(ref_model, mesh=self.parallel_state.dp_mesh, cpu_offload=True, args=self.args)
-            ref_model = self._fsdp2_load_full_state_dict(ref_model, full_state, self.parallel_state.dp_mesh, cpu_offload=True)
+            ref_model = self._fsdp2_load_full_state_dict(
+                ref_model, full_state, self.parallel_state.dp_mesh, cpu_offload=True
+            )
 
             logger.info(f"[Rank {dist.get_rank()}] Reference model created with FSDP2 CPUOffloadPolicy")
             return ref_model
@@ -587,14 +614,14 @@ class FSDPTrainRayActor(TrainRayActor):
     def _get_model_inputs_args(self, batch: dict) -> dict:
         input_ids = batch["tokens"]
         position_ids = batch["position_ids"]
-        
+
         if self.parallel_state.cp_size > 1:
             if "cu_seqlens" in batch:
                 cu_seqlens = batch["cu_seqlens"]
                 if not cu_seqlens.is_cuda:
                     cu_seqlens = cu_seqlens.cuda()
                 update_ring_flash_attn_params(cu_seqlens, self.cp_group)
-            
+
             input_ids = torch.chunk(input_ids, self.parallel_state.cp_size, dim=1)[self.parallel_state.cp_rank]
             position_ids = torch.chunk(position_ids, self.parallel_state.cp_size, dim=1)[self.parallel_state.cp_rank]
 
@@ -603,10 +630,10 @@ class FSDPTrainRayActor(TrainRayActor):
             "position_ids": position_ids,
             "attention_mask": None,
         }
-        
+
         if batch.get("multimodal_train_inputs"):
             model_args.update(batch["multimodal_train_inputs"])
-            
+
         return model_args
 
 
@@ -678,4 +705,3 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False, args=None):
     fully_shard(model, **fsdp_kwargs)
 
     return model
-

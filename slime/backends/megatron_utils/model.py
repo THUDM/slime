@@ -22,17 +22,15 @@ from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
-from slime.utils import tracking_utils
 from slime.utils.memory_utils import clear_memory
 
-from .checkpoint import load_checkpoint, save_checkpoint
-from .parallel import MegatronParallelState, get_packed_seq_params
-from .model_provider import get_model_provider_func
-
+from ..training_utils.ci_utils import check_grad_norm, check_kl
 from ..training_utils.data import DataIterator, get_batch
+from ..training_utils.log_utils import aggregate_forward_results, aggregate_train_losses, log_train_step
 from ..training_utils.loss import loss_function
-from ..training_utils.log_utils import aggregate_forward_results, log_train_step, aggregate_train_losses
-from ..training_utils.ci_utils import check_kl, check_grad_norm
+from .checkpoint import load_checkpoint, save_checkpoint
+from .model_provider import get_model_provider_func
+from .parallel import MegatronParallelState, get_packed_seq_params
 
 logger = logging.getLogger(__name__)
 
@@ -283,9 +281,7 @@ def forward_only(
     rollout_data = {}
     # Store the results on the last stage
     if mpu.is_pipeline_last_stage():
-        aggregated = aggregate_forward_results(
-            forward_data_store, data_iterator[0], args, store_prefix=""
-        )
+        aggregated = aggregate_forward_results(forward_data_store, data_iterator[0], args, store_prefix="")
         for key, value in aggregated.items():
             rollout_data[f"{store_prefix}{key}"] = value
     return rollout_data
@@ -408,7 +404,9 @@ def train_one_step(
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
             os.environ["ROUTING_REPLAY_STAGE"] = old_stage
 
-        return output_tensor, partial(loss_function, args, parallel_state, batch, num_microbatches, apply_megatron_loss_scaling=True)
+        return output_tensor, partial(
+            loss_function, args, parallel_state, batch, num_microbatches, apply_megatron_loss_scaling=True
+        )
 
     # Forward pass.
     forward_backward_func = get_forward_backward_func()
@@ -623,14 +621,14 @@ def train(
             accumulated_step_id = rollout_id * num_steps_per_rollout + step_id
             role = getattr(model[0], "role", "actor")
             role_tag = "" if role == "actor" else f"{role}-"
-            
+
             extra_metrics = {}
             if args.enable_mtp_training:
                 extra_metrics["mtp_loss"] = mtp_losses
-            
+
             for param_group_id, param_group in enumerate(optimizer.param_groups):
                 extra_metrics[f"lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
-            
+
             log_dict = log_train_step(
                 args=args,
                 loss_dict=loss_dict,
@@ -642,7 +640,7 @@ def train(
                 extra_metrics=extra_metrics,
                 should_log=True,
             )
-            
+
             if args.ci_test and not args.ci_disable_kl_checker:
                 check_kl(args, log_dict, step_id, accumulated_step_id)
 
@@ -704,6 +702,7 @@ def save_hf_model(args, rollout_id: int, model: Sequence[DDP]) -> None:
 
     try:
         from megatron.bridge import AutoBridge
+
         from slime.utils.megatron_bridge_utils import patch_megatron_model
 
         path = Path(args.save_hf.format(rollout_id=rollout_id))
@@ -744,6 +743,7 @@ def initialize_model_and_optimizer(
 
     if torch.version.hip:
         import megatron.core.dist_checkpointing.strategies.filesystem_async as filesystem_async_module
+
         from slime.utils.rocm_checkpoint_writer import ROCmFileSystemWriterAsync
 
         filesystem_async_module.FileSystemWriterAsync = ROCmFileSystemWriterAsync

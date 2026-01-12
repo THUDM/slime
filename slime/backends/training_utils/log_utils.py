@@ -11,10 +11,10 @@ from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step
 from slime.utils.types import RolloutBatch
 
-from .cp_utils import get_sum_of_sample_mean
-from .parallel import ParallelState
-
 from ...utils import tracking_utils
+from .cp_utils import get_sum_of_sample_mean
+from .data import DataIterator
+from .parallel import ParallelState
 
 logger = logging.getLogger(__name__)
 
@@ -69,35 +69,37 @@ def gather_log_data(
 
 def aggregate_forward_results(
     forward_data_store: list[dict[str, list]],
-    data_iterator: "DataIterator",
+    data_iterator: DataIterator,
     args: Namespace,
     store_prefix: str = "",
 ) -> dict[str, list]:
     rollout_data = {}
     if not forward_data_store:
         return rollout_data
-    
+
     keys = forward_data_store[0].keys()
     for key in keys:
         values = []
         for batch_result in forward_data_store:
             assert isinstance(batch_result[key], list), f"Expected list for key {key}, got {type(batch_result[key])}"
             values += batch_result[key]
-        
+
         # Handle dynamic batch size: restore original order
-        if args.use_dynamic_batch_size and hasattr(data_iterator, 'micro_batch_indices'):
+        if args.use_dynamic_batch_size and hasattr(data_iterator, "micro_batch_indices"):
             origin_values = [None] * len(values)
             origin_indices = sum(data_iterator.micro_batch_indices, [])
             for value, origin_index in zip(values, origin_indices, strict=False):
                 origin_values[origin_index] = value
             values = origin_values
-        
+
         rollout_data[key] = values
-    
+
     return rollout_data
 
 
-def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatch, parallel_state: ParallelState) -> None:
+def log_rollout_data(
+    rollout_id: int, args: Namespace, rollout_data: RolloutBatch, parallel_state: ParallelState
+) -> None:
     """
     Summarize rollout fields and log reduced metrics on PP last stage, TP rank 0.
 
@@ -163,7 +165,9 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
             ):
                 assert reduced_log_dict["rollout/log_probs"] == reduced_log_dict["rollout/ref_log_probs"]
             if "rollout/log_probs" in reduced_log_dict and "rollout/rollout_log_probs" in reduced_log_dict:
-                assert isclose(reduced_log_dict["rollout/log_probs"], reduced_log_dict["rollout/rollout_log_probs"], abs_tol=0.03)
+                assert isclose(
+                    reduced_log_dict["rollout/log_probs"], reduced_log_dict["rollout/rollout_log_probs"], abs_tol=0.03
+                )
             if "rollout/entropy" in reduced_log_dict:
                 assert 0 < reduced_log_dict["rollout/entropy"] < 0.7
 
@@ -231,7 +235,9 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                 rollout_data["correct_entropy"] = [0] * num_correct_responses
 
 
-def log_multi_turn_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatch, parallel_state: ParallelState) -> None:
+def log_multi_turn_data(
+    rollout_id: int, args: Namespace, rollout_data: RolloutBatch, parallel_state: ParallelState
+) -> None:
     """
     Log multi-turn auxiliary metrics such as raw/observed response lengths and rounds.
 
@@ -297,9 +303,7 @@ def log_perf_data(rollout_id: int, args: Namespace, parallel_state: ParallelStat
         rollout_id=rollout_id,
         args=args,
         is_primary_rank=(
-            parallel_state.tp_rank == 0
-            and parallel_state.is_pp_last_stage
-            and parallel_state.dp_cp_rank == 0
+            parallel_state.tp_rank == 0 and parallel_state.is_pp_last_stage and parallel_state.dp_cp_rank == 0
         ),
         compute_total_fwd_flops=lambda seq_lens: calculate_fwd_flops(seqlens=seq_lens, args=args)
         / dist.get_world_size()
@@ -312,30 +316,30 @@ def aggregate_train_losses(
     parallel_state: ParallelState,
 ) -> dict[str, float]:
     """Aggregate loss metrics across micro-batches.
-    
+
     Sums loss values across all micro-batches, performs all-reduce across
     the data-parallel group, and computes per-sample/token averages.
-    
+
     Args:
         losses_reduced: List of log_dict from each micro-batch.
             Each log_dict has format: {"keys": list[str], "values": torch.Tensor}
         parallel_state: Parallel state containing dp_group and cp_size.
-    
+
     Returns:
         Dictionary mapping metric names to averaged values.
     """
     if not losses_reduced:
         return {}
-    
+
     keys = losses_reduced[0]["keys"]
-    
+
     values = None
     for log_dict in losses_reduced:
         if values is None:
             values = log_dict["values"].clone()
         else:
             values += log_dict["values"]
-    
+
     assert len(keys) + 1 == values.numel(), f"Expected {len(keys) + 1} values, got {values.numel()}"
 
     dist.all_reduce(values, op=dist.ReduceOp.SUM, group=parallel_state.dp_cp_group)
@@ -343,10 +347,10 @@ def aggregate_train_losses(
     loss_reduced = {}
     values = values.tolist()
     num_samples_or_tokens = values[0]
-    
+
     for key, value in zip(keys, values[1:], strict=False):
         loss_reduced[key] = value * parallel_state.cp_size / num_samples_or_tokens
-    
+
     return loss_reduced
 
 
@@ -362,9 +366,9 @@ def log_train_step(
     should_log: bool | None = None,
 ) -> dict[str, float]:
     """Log training metrics for one step.
-    
+
     Formats loss metrics, gradient norm, and extra metrics (e.g., learning rates, MTP loss) for tracking.
-    
+
     Args:
         args: Configuration.
         loss_dict: Dictionary of loss metrics from aggregate_train_losses.
@@ -375,30 +379,30 @@ def log_train_step(
         role: Role name (e.g., "actor", "critic").
         extra_metrics: Optional extra metrics to log (e.g., learning rates, MTP loss).
         should_log: Optional override for logging condition. If None, uses rank == 0.
-    
+
     Returns:
         The formatted log_dict (for CI tests or other uses).
     """
     accumulated_step_id = rollout_id * num_steps_per_rollout + step_id
     role_tag = "" if role == "actor" else f"{role}-"
-    
+
     log_dict_out = {
         f"train/{role_tag}{key}": val.mean().item() if isinstance(val, torch.Tensor) else val
         for key, val in loss_dict.items()
     }
     log_dict_out[f"train/{role_tag}grad_norm"] = float(grad_norm)
-    
+
     if extra_metrics:
         for key, val in extra_metrics.items():
             log_dict_out[f"train/{role_tag}{key}"] = val
-    
+
     log_dict_out["train/step"] = accumulated_step_id
-    
+
     if should_log is None:
         should_log = dist.get_rank() == 0
-    
+
     if should_log:
         tracking_utils.log(args, log_dict_out, step_key="train/step")
         logger.info(f"{role_tag}step {accumulated_step_id}: {log_dict_out}")
-    
+
     return log_dict_out

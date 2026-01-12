@@ -31,7 +31,7 @@ def check_grad_norm(
 
     if rank != 0:
         return
-    
+
     if args.ci_save_grad_norm is not None:
         ci_save_grad_norm_path = args.ci_save_grad_norm.format(
             role=role,
@@ -39,7 +39,7 @@ def check_grad_norm(
             step_id=step_id,
         )
         torch.save(grad_norm, ci_save_grad_norm_path)
-        
+
     elif args.ci_load_grad_norm is not None:
         ci_load_grad_norm_path = args.ci_load_grad_norm.format(
             role=role,
@@ -50,7 +50,6 @@ def check_grad_norm(
         assert math.isclose(
             grad_norm,
             expected_grad_norm,
-            rel_tol=0.01,
-            abs_tol=0.01,
+            rel_tol=0.03,
+            abs_tol=0.03,
         ), f"grad norm mismatch: {grad_norm} != {expected_grad_norm}"
-

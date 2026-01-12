@@ -4,7 +4,6 @@ from typing import Any
 
 import torch
 from torch.utils.checkpoint import checkpoint
-import torch.distributed as dist
 
 from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
@@ -21,7 +20,7 @@ from slime.utils.ppo_utils import (
 )
 from slime.utils.types import RolloutBatch
 
-from .cp_utils import get_logits_and_tokens_offset_with_cp, all_gather_with_cp, get_sum_of_sample_mean
+from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
 from .parallel import ParallelState
 
 
@@ -833,7 +832,14 @@ def loss_function(
             raise ValueError(f"Unknown loss type: {args.loss_type}")
 
     if args.recompute_loss_function:
-        loss, log = checkpoint(func, args, parallel_state, batch, logits, sum_of_sample_mean, )
+        loss, log = checkpoint(
+            func,
+            args,
+            parallel_state,
+            batch,
+            logits,
+            sum_of_sample_mean,
+        )
     else:
         loss, log = func(args, parallel_state, batch, logits, sum_of_sample_mean)
 
