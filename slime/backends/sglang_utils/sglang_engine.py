@@ -414,7 +414,7 @@ class SGLangEngine(RayActor):
 
         payload = {
             "restore_weights_before_load": restore_weights_before_load,
-            "post_process_quantization": post_process_quantization
+            "post_process_quantization": post_process_quantization,
         }
 
         return self._make_request(

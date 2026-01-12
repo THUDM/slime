@@ -82,13 +82,15 @@ class UpdateWeightFromDistributed:
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
         dist.barrier(group=get_gloo_group())
 
-        # int4/fp4 pre_process 
+        # int4/fp4 pre_process
         if self.args.int4_params_rollout:
-            ray.get(post_process_weights(
-                restore_weights_before_load=True,
-                post_process_quantization=False,
-                rollout_engines=self.rollout_engines
-            ))
+            ray.get(
+                post_process_weights(
+                    restore_weights_before_load=True,
+                    post_process_quantization=False,
+                    rollout_engines=self.rollout_engines,
+                )
+            )
             dist.barrier(group=get_gloo_group())
 
         buffer_size = 0
@@ -127,11 +129,13 @@ class UpdateWeightFromDistributed:
 
         # int4/fp4 post_process
         if self.args.int4_params_rollout:
-            ray.get(post_process_weights(
-                restore_weights_before_load=False,
-                post_process_quantization=True,
-                rollout_engines=self.rollout_engines
-            ))
+            ray.get(
+                post_process_weights(
+                    restore_weights_before_load=False,
+                    post_process_quantization=True,
+                    rollout_engines=self.rollout_engines,
+                )
+            )
             dist.barrier(group=get_gloo_group())
 
     def _update_weight_from_distributed(
@@ -316,17 +320,19 @@ def update_weights_from_distributed(
 
     return refs
 
+
 def post_process_weights(
     restore_weights_before_load: bool,
     post_process_quantization: bool,
-    rollout_engines: Sequence[ActorHandle], ):
+    rollout_engines: Sequence[ActorHandle],
+):
     """
     Trigger post-process for int4/fp4 quantization on all rollout engines.
     """
     refs = [
         engine.post_process_weights.remote(
             restore_weights_before_load=restore_weights_before_load,
-            post_process_quantization=post_process_quantization
+            post_process_quantization=post_process_quantization,
         )
         for engine in rollout_engines
     ]
