@@ -1,4 +1,4 @@
-# VLM Multi-Turn (FSDP backend, opencua dataset)
+# VLM Multi-Turn (FSDP backend, opencua click dataset)
 Training VLM with FSDP on [opencua click dataset](https://huggingface.co/datasets/mlfoundations-cua-dev/agentnet-clicks) with multi-turn reasoning with interactive environment feedback, using GRPO. .
 
 ## Data prepocessing
