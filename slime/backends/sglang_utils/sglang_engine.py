@@ -412,14 +412,12 @@ class SGLangEngine(RayActor):
         If you encounter issues, ensure your model is loaded on GPU devices rather than CPU.
         """
 
-        payload = {
-            "restore_weights_before_load": restore_weights_before_load,
-            "post_process_quantization": post_process_quantization,
-        }
-
         return self._make_request(
             "post_process_weights",
-            payload,
+            {
+                "restore_weights_before_load": restore_weights_before_load,
+                "post_process_quantization": post_process_quantization,
+            },
         )
 
     def start_profile(
