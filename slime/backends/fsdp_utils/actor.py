@@ -450,7 +450,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 if self.args.ci_test:
                     check_grad_norm(
                         args=self.args,
-                        grad_norm=self.grad_norm,
+                        grad_norm=grad_norm,
                         rollout_id=rollout_id,
                         step_id=step_id,
                         role="actor",
