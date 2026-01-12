@@ -187,6 +187,12 @@ class Dataset:
             prompt = _build_messages(data, prompt_key, as_conversation, multimodal_keys)
 
             metadata = data.get(metadata_key) or {}
+            if isinstance(metadata, str):
+                try:
+                    metadata = json.loads(metadata)
+                except json.JSONDecodeError as e:
+                    logger.warning("Failed to parse metadata JSON: %s", e)
+                    metadata = {}
             tools = None
             if tool_key is not None and tool_key in data:
                 tools = data[tool_key]
