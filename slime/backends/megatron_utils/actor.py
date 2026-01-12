@@ -16,7 +16,6 @@ from transformers import AutoConfig, AutoTokenizer
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import train_dump_utils
 from slime.utils.context_utils import with_defer
-from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.ray_utils import Box
@@ -28,12 +27,14 @@ from slime.utils.types import RolloutBatch
 
 from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
+from ..training_utils.cp_utils import slice_with_cp
+from ..training_utils.data import DataIterator, get_data_iterator, get_rollout_data, sync_actor_critic_data
+from ..training_utils.log_utils import log_perf_data, log_rollout_data
+from ..training_utils.loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .checkpoint import load_checkpoint
-from .cp_utils import slice_log_prob_with_cp, slice_with_cp
-from .data import DataIterator, get_data_iterator, log_perf_data, log_rollout_data, sync_actor_critic_data
 from .initialize import init, is_megatron_main_rank
-from .loss import compute_advantages_and_returns, get_log_probs_and_entropy, get_values
 from .model import forward_only, initialize_model_and_optimizer, save, train
+from .parallel import MegatronParallelState
 from .update_weight.common import named_params_and_buffers
 from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
 from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
@@ -91,6 +92,8 @@ class MegatronTrainRayActor(TrainRayActor):
         (self.model, self.optimizer, self.opt_param_scheduler, loaded_rollout_id) = initialize_model_and_optimizer(
             args, role
         )
+
+        self.parallel_state = MegatronParallelState(model=self.model)
 
         if role == "critic":
             if self.args.offload_train:
@@ -176,74 +179,6 @@ class MegatronTrainRayActor(TrainRayActor):
         reload_process_groups()
         print_memory("after wake_up model")
 
-    def _get_rollout_data(self, rollout_data_ref: Box) -> RolloutBatch:
-        # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
-        # Both first pp stage and the last pp stage will receive the data.
-        rollout_data = process_rollout_data(
-            self.args,
-            rollout_data_ref,
-            mpu.get_data_parallel_rank(with_context_parallel=False),
-            mpu.get_data_parallel_world_size(with_context_parallel=False),
-        )
-        # TODO: this is ugly, move to somewhere else?
-        # move tokens to GPU in advance
-        rollout_data["tokens"] = [
-            torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device()) for t in rollout_data["tokens"]
-        ]
-        rollout_data["loss_masks"] = [
-            torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
-        ]
-        if "multimodal_train_inputs" in rollout_data:
-            # Move multimodal training tensors to GPU in advance
-            rollout_data["multimodal_train_inputs"] = [
-                (
-                    {key: tensor.to(device=torch.cuda.current_device()) for key, tensor in mm_dict.items()}
-                    if mm_dict is not None
-                    else None
-                )
-                for mm_dict in rollout_data["multimodal_train_inputs"]
-            ]
-
-        if self.args.qkv_format == "bshd":
-            # TODO: micro-batch wise dynamic, possibly move to @data.py:get_data_iterator
-            max_seq_len = max(rollout_data["total_lengths"])
-
-            # pad to reduce memory fragmentation and maybe make the computation faster
-            pad_size = mpu.get_tensor_model_parallel_world_size() * self.args.data_pad_size_multiplier
-            max_seq_len = (max_seq_len + pad_size - 1) // pad_size * pad_size
-
-            rollout_data["max_seq_lens"] = [max_seq_len] * len(rollout_data["tokens"])
-
-        for key in ["rollout_log_probs", "teacher_log_probs"]:
-            if key not in rollout_data:
-                continue
-            rollout_data[key] = [
-                torch.tensor(
-                    slice_log_prob_with_cp(
-                        log_prob,
-                        total_length,
-                        response_length,
-                        self.args.qkv_format,
-                        rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
-                    ),
-                    device=torch.cuda.current_device(),
-                    dtype=torch.float32,
-                )
-                for i, (log_prob, total_length, response_length) in enumerate(
-                    zip(
-                        rollout_data[key],
-                        rollout_data["total_lengths"],
-                        rollout_data["response_lengths"],
-                        strict=False,
-                    )
-                )
-            ]
-        if "rollout_routed_experts" in rollout_data:
-            rollout_data["rollout_routed_experts"] = [
-                torch.from_numpy(r) for r in rollout_data["rollout_routed_experts"]
-            ]
-        return rollout_data
-
     def _switch_model(self, target_tag: str) -> None:
         if target_tag not in self.weights_backuper.backup_tags:
             raise ValueError(f"Cannot switch to unknown model tag: {target_tag}")
@@ -264,8 +199,8 @@ class MegatronTrainRayActor(TrainRayActor):
         for iterator in data_iterator:
             iterator.reset()
 
-        tp_rank = mpu.get_tensor_model_parallel_rank()
-        tp_size = mpu.get_tensor_model_parallel_world_size()
+        tp_rank = self.parallel_state.tp_rank
+        tp_size = self.parallel_state.tp_size
 
         def pad_func(experts, pad):
             _, num_layers, topk = experts.shape
@@ -291,9 +226,9 @@ class MegatronTrainRayActor(TrainRayActor):
             # TODO: fuse this padding with the following slice_with_cp to reduce memory copy.
             rollout_routed_experts = [pad_func(r, 1) for r in rollout_routed_experts]
             # TODO: maybe extract a common process function for here and get_batch?
-            rollout_routed_experts = [slice_with_cp(r, pad_func) for r in rollout_routed_experts]
+            rollout_routed_experts = [slice_with_cp(r, pad_func, self.parallel_state) for r in rollout_routed_experts]
             rollout_routed_experts = torch.cat(rollout_routed_experts, dim=0)
-            pad_size = mpu.get_tensor_model_parallel_world_size() * self.args.data_pad_size_multiplier
+            pad_size = self.parallel_state.tp_size * self.args.data_pad_size_multiplier
             pad = (pad_size - rollout_routed_experts.size(0) % pad_size) % pad_size
             if pad != 0:
                 rollout_routed_experts = pad_func(rollout_routed_experts, pad)
@@ -342,6 +277,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.model,
                 data_iterator,
                 num_microbatches,
+                self.parallel_state,
                 store_prefix=store_prefix,
             )
 
@@ -350,9 +286,9 @@ class MegatronTrainRayActor(TrainRayActor):
             self.wake_up()
 
         with timer("data_preprocess"):
-            rollout_data = self._get_rollout_data(rollout_data_ref)
+            rollout_data = get_rollout_data(self.args, rollout_data_ref, self.parallel_state)
             if self.args.debug_rollout_only:
-                log_rollout_data(rollout_id, self.args, rollout_data)
+                log_rollout_data(rollout_id, self.args, rollout_data, self.parallel_state)
                 return
 
         if self.role == "critic":
@@ -362,7 +298,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
     def train_critic(self, rollout_id: int, rollout_data: RolloutBatch) -> None:
         # Create data iterator for log_probs and train.
-        data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
+        data_iterator, num_microbatches = get_data_iterator(self.args, self.model, self.parallel_state, rollout_data)
         rollout_data.update(
             forward_only(
                 get_values,
@@ -370,13 +306,14 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.model,
                 data_iterator,
                 num_microbatches,
+                self.parallel_state,
             )
         )
 
         if rollout_id >= self.args.num_critic_only_steps:
             sync_actor_critic_data(self.args, rollout_data, self._actor_critic_groups)
 
-        compute_advantages_and_returns(self.args, rollout_data)
+        compute_advantages_and_returns(self.args, self.parallel_state, rollout_data)
 
         self.args.loss_type = "value_loss"
         train(
@@ -386,11 +323,12 @@ class MegatronTrainRayActor(TrainRayActor):
             self.opt_param_scheduler,
             data_iterator,
             num_microbatches,
+            self.parallel_state,
         )
 
     def train_actor(self, rollout_id: int, rollout_data: RolloutBatch) -> None:
         # Create data iterator for log_probs and train.
-        data_iterator, num_microbatches = get_data_iterator(self.args, self.model, rollout_data)
+        data_iterator, num_microbatches = get_data_iterator(self.args, self.model, self.parallel_state, rollout_data)
 
         if self.args.use_rollout_routing_replay:
             self.fill_routing_replay(data_iterator, num_microbatches, rollout_data)
@@ -436,12 +374,12 @@ class MegatronTrainRayActor(TrainRayActor):
 
                 # Calculate adv and returns. Need to performed before training (instead of on the fly),
                 # because we may need normalize the whole rollout.
-                compute_advantages_and_returns(self.args, rollout_data)
+                compute_advantages_and_returns(self.args, self.parallel_state, rollout_data)
 
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args)
 
-            log_rollout_data(rollout_id, self.args, rollout_data)
+            log_rollout_data(rollout_id, self.args, rollout_data, self.parallel_state)
 
             # Train
             if self.args.use_routing_replay:
@@ -454,6 +392,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     self.opt_param_scheduler,
                     data_iterator,
                     num_microbatches,
+                    self.parallel_state,
                 )
 
             self.prof.step(rollout_id=rollout_id)
@@ -477,7 +416,7 @@ class MegatronTrainRayActor(TrainRayActor):
                     logger.info(f"Updating ref model at rollout_id {rollout_id}")
                 self.weights_backuper.backup("ref")
 
-        log_perf_data(rollout_id, self.args)
+        log_perf_data(rollout_id, self.args, self.parallel_state)
 
     @timer
     def save_model(self, rollout_id: int, force_sync: bool = False) -> None:

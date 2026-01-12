@@ -406,4 +406,14 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 - Custom routing logic
 - Caching and optimization
 
+---
+
+### 19. MoE Routing Replay
+
+Stabilize MoE RL training by recording and replaying expert routing decisions to ensure consistency.
+
+| Argument | Description |
+| --- | --- |
+| `--use-routing-replay` | Forward-backward routing consistency in training. ([arXiv:2507.18071](https://arxiv.org/abs/2507.18071)) |
+| `--use-rollout-routing-replay` | R3: Replay routing from rollout during training. **Requires `--use-slime-router`**. ([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
 
