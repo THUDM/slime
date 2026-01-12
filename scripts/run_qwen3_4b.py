@@ -40,7 +40,7 @@ class ScriptArgs(U.ExecuteTrainConfig):
 
 def prepare(args: ScriptArgs):
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(f"huggingface-cli download Qwen/{args.model_name} --local-dir /root/models/{args.model_name}")
+    U.exec_command(f"hf download Qwen/{args.model_name} --local-dir /root/models/{args.model_name}")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
     U.hf_download_dataset("zhuzilin/aime-2024")
 
@@ -49,9 +49,7 @@ def prepare(args: ScriptArgs):
         U.hf_download_dataset("zyzshishui0627/IFBench")
 
     if args.rollout_fp8:
-        U.exec_command(
-            f"huggingface-cli download Qwen/{args.model_name}-FP8 --local-dir /root/models/{args.model_name}-FP8"
-        )
+        U.exec_command(f"hf download Qwen/{args.model_name}-FP8 --local-dir /root/models/{args.model_name}-FP8")
 
     if (args.train_backend == "megatron") and not args.enable_megatron_bridge:
         U.convert_checkpoint(
@@ -64,23 +62,21 @@ def prepare(args: ScriptArgs):
 
 def execute(args: ScriptArgs):
     load_save_path = f"/root/shared_data/{args.run_id}/checkpoints"
+
+    ref_load_path = f"/root/models/{args.model_name}"
+    if args.train_backend == "megatron" and not args.enable_megatron_bridge:
+        ref_load_path = f"/root/models/{args.model_name}_torch_dist"
+
     ckpt_args = (
         f"--hf-checkpoint /root/models/{args.model_name}{'-FP8' if args.rollout_fp8 else ''} "
         f"--load {load_save_path} "
+        f"--ref-load {ref_load_path} "
         f"--save {load_save_path} "
         f"--save-interval {2 if args.mode == 'debug_minimal' else 20} "
-        f"--save-retain-interval {2 if args.mode == 'debug_minimal' else 20} "
     )
+
     if args.train_backend == "megatron":
-        ref_load_path = (
-            f"/root/models/{args.model_name}/"
-            if args.enable_megatron_bridge
-            else f"/root/models/{args.model_name}_torch_dist"
-        )
-        ckpt_args += (
-            # FSDP does not support this
-            f"--ref-load {ref_load_path} "
-        )
+        ckpt_args += f"--save-retain-interval {2 if args.mode == 'debug_minimal' else 20} "
 
     rollout_args = (
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
@@ -95,7 +91,7 @@ def execute(args: ScriptArgs):
         "--rollout-batch-size 32 "
         "--n-samples-per-prompt 8 "
         f"--rollout-max-response-len {100 if args.mode == 'debug_minimal' else 8192} "
-        "--rollout-temperature 0.8 "
+        "--rollout-temperature 1 "
         "--global-batch-size 256 "
         "--balance-data "
     )
@@ -137,7 +133,7 @@ eval:
                 "--eval-prompt-data aime /root/datasets/aime-2024/aime-2024.jsonl "
                 "--n-samples-per-eval-prompt 16 "
                 f"--eval-max-response-len {eval_max_response_len} "
-                "--eval-top-p 0.7 "
+                "--eval-top-p 1 "
             )
 
     grpo_args = (

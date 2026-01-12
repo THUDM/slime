@@ -11,12 +11,12 @@ Regarding parallelism, for sglang we will enable EP64, activate dp attention, an
 
 ## Environment Setup
 
-For instructions on setting up the environment and downloading data, please refer to [Example: Qwen3-4B](./qwen3-4B.md).
+For instructions on setting up the environment and downloading data, please refer to [Example: Qwen3-4B](qwen3-4B.md).
 
 To prepare the DeepSeek R1 checkpoint, first you will need to download DeepSeek-R1 to a directory accessible by all machines (hereinafter referred to as `$BASE_DIR`):
 
 ```bash
-huggingface-cli download deepseek-ai/DeepSeek-R1 --local-dir $BASE_DIR/DeepSeek-R1
+hf download deepseek-ai/DeepSeek-R1 --local-dir $BASE_DIR/DeepSeek-R1
 ```
 
 The Hugging Face checkpoint for DeepSeek-R1 is in a block-quantized fp8 format. To convert it into a torch_dist format that Megatron can load, you first need to convert it to a bf16 Hugging Face checkpoint:
@@ -85,7 +85,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/deepseek-v3.sh"
 ```
 
-This reads the model's config from [scripts/models/deepseek-v3.sh](../../../scripts/models/deepseek-v3.sh). These configs are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in [scripts/models](../../../scripts/models/).
+This reads the model's config from [scripts/models/deepseek-v3.sh](https://github.com/THUDM/slime/blob/main/scripts/models/deepseek-v3.sh). These configs are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in [scripts/models](https://github.com/THUDM/slime/tree/main/scripts/models/).
 
 #### CKPT\_ARGS
 

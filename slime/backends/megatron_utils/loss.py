@@ -4,6 +4,7 @@ from typing import Any
 
 import torch
 from megatron.core import mpu
+from torch.utils.checkpoint import checkpoint
 
 from slime.utils.distributed_utils import distributed_masked_whiten
 from slime.utils.misc import load_function
@@ -30,6 +31,7 @@ def get_responses(
     unconcat_tokens: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
+    max_seq_lens: list[int] | None = None,
 ) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
     """Yield response-aligned `(logits_chunk, tokens_chunk)` pairs per sample.
 
@@ -52,24 +54,40 @@ def get_responses(
         `[R, V]` (policy) or `[R, 1]` (value) and `tokens_chunk` is shape `[R]`
         (1D int64), both aligned to response tokens for one sample.
     """
-    assert logits.size(0) == 1, f"{logits.shape}"
-    assert logits.dtype == torch.float32, f"{logits.dtype}"
+    qkv_format = args.qkv_format
 
-    logits = logits.squeeze(0)
+    assert logits.dtype == torch.float32, f"{logits.dtype}"
+    assert len(logits.shape) == 3, f"{logits.shape}"
+
+    if qkv_format == "thd":
+        assert logits.size(0) == 1, f"{logits.shape}"
+        logits = logits.squeeze(0)
+    else:
+        assert max_seq_lens is not None
+        logits = logits.view(-1, logits.size(-1))
+
     logits = logits.div(args.rollout_temperature)
 
     cp_size = mpu.get_context_parallel_world_size()
     end = 0
-    for tokens, total_length, response_length in zip(unconcat_tokens, total_lengths, response_lengths, strict=False):
+    for i, (tokens, total_length, response_length) in enumerate(
+        zip(unconcat_tokens, total_lengths, response_lengths, strict=False)
+    ):
+        max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
+
         if cp_size == 1:
-            end += total_length
-            start = end - response_length
+            if qkv_format == "bshd":
+                end = max_seq_len * i + total_length
+                start = end - response_length
+            else:
+                end += total_length
+                start = end - response_length
             logits_chunk = logits[start - 1 : end - 1]
             tokens_chunk = tokens[-response_length:]
         else:
             # TODO: this is super ugly... do better abstraction.
             chunk_size, chunks_offset, logits_offset, tokens_offset = get_logits_and_tokens_offset_with_cp(
-                total_length, response_length
+                total_length, response_length, qkv_format, max_seq_len
             )
 
             logits_0, logits_1 = logits[end : end + chunk_size], logits[end + chunk_size : end + 2 * chunk_size]
@@ -99,6 +117,7 @@ def get_log_probs_and_entropy(
     response_lengths: list[int],
     with_entropy: bool = False,
     non_loss_data: bool = True,
+    max_seq_lens: list[int] | None = None,
 ) -> dict[str, list[torch.Tensor]]:
     """Compute per-token log-probabilities (and optionally entropy) on responses.
 
@@ -131,9 +150,14 @@ def get_log_probs_and_entropy(
         unconcat_tokens=unconcat_tokens,
         total_lengths=total_lengths,
         response_lengths=response_lengths,
+        max_seq_lens=max_seq_lens,
     ):
         log_prob, entropy = calculate_log_probs_and_entropy(
-            logits_chunk, tokens_chunk, mpu.get_tensor_model_parallel_group(), with_entropy=with_entropy
+            logits_chunk,
+            tokens_chunk,
+            mpu.get_tensor_model_parallel_group(),
+            with_entropy=with_entropy,
+            chunk_size=args.log_probs_chunk_size,
         )
 
         log_probs_list.append(log_prob.squeeze(-1))
@@ -156,6 +180,7 @@ def get_values(
     response_lengths: list[int],
     with_entropy: bool = False,
     non_loss_data: bool = True,
+    max_seq_lens: list[int] | None = None,
 ) -> dict[str, list[torch.Tensor]]:
     """Extract per-token value predictions over response tokens.
 
@@ -183,6 +208,7 @@ def get_values(
         unconcat_tokens=unconcat_tokens,
         total_lengths=total_lengths,
         response_lengths=response_lengths,
+        max_seq_lens=max_seq_lens,
     ):
         assert logits_chunk.size(-1) == 1, f"{logits_chunk.shape}"
         value_list.append(logits_chunk.squeeze(-1))
@@ -220,6 +246,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     response_lengths: list[int] = rollout_data.get("response_lengths")
     loss_masks: list[torch.Tensor] = rollout_data.get("loss_masks")
     total_lengths: list[int] = rollout_data.get("total_lengths")
+    max_seq_lens: list[int] | None = rollout_data.get("max_seq_lens", None)
 
     # return when not the last pp stage.
     if log_probs is None and values is None:
@@ -246,12 +273,12 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         advantages = [r for r in returns]
 
     elif args.advantage_estimator == "ppo":
-        # TODO: optimize this
         old_rewards = rewards
         rewards = []
+        kl_coef = -args.kl_coef
+        cp_rank = mpu.get_context_parallel_rank()
         for reward, k in zip(old_rewards, kl, strict=False):
-            k *= -args.kl_coef
-            cp_rank = mpu.get_context_parallel_rank()
+            k *= kl_coef
             if cp_rank == 0:
                 k[-1] += reward
             rewards.append(k)
@@ -313,8 +340,11 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
                 total_len = total_lengths[i]
                 response_len = response_lengths[i]
                 prompt_len = total_len - response_len
+                max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
 
-                _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(total_len, response_len)
+                _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(
+                    total_len, response_len, args.qkv_format, max_seq_len
+                )
 
                 # Convert global offsets to response-space offsets
                 s0, e0 = token_offsets[0]
@@ -419,7 +449,7 @@ def policy_loss_function(
     Computes current log-probabilities and entropy from model logits, then
     calculates PPO-style clipped policy gradient loss. For GSPO, gathers
     full sequences via context-parallel all-gather before computing per-sample
-    KL. Optionally applies TIS (Temporal Importance Sampling) correction and
+    KL. Optionally applies TIS (Truncated Importance Sampling) correction and
     adds KL loss term if configured.
 
     Args:
@@ -443,6 +473,7 @@ def policy_loss_function(
 
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
+    max_seq_lens = batch.get("max_seq_lens", None)
 
     log_probs_and_entropy = get_log_probs_and_entropy(
         logits,
@@ -451,6 +482,7 @@ def policy_loss_function(
         total_lengths=total_lengths,
         response_lengths=response_lengths,
         with_entropy=True,
+        max_seq_lens=max_seq_lens,
     )
 
     log_probs = log_probs_and_entropy["log_probs"]
@@ -506,6 +538,16 @@ def policy_loss_function(
 
     # Apply off-policy correction using importance sampling if enabled
     if args.get_mismatch_metrics or args.use_tis:
+        # NOTE:
+        # `tis_func` may apply rejection-sampling style masking (RS) and return `modified_response_masks`.
+        # We rebuild `sum_of_sample_mean` with those masks to correct denominators for loss/backprop.
+        #
+        # However, mismatch/TIS/RS metrics (e.g., "truncate_fraction") are often defined over the
+        # *pre-RS* valid tokens. If we aggregate metrics with `modified_response_masks`, the rejected
+        # tokens are excluded from the denominator and the metric can be artificially driven to 0.
+        # Keep a copy of the original reducer (based on `batch["loss_masks"]`) for metric aggregation.
+        sum_of_sample_mean_for_mismatch_metrics = sum_of_sample_mean
+
         assert "rollout_log_probs" in batch, "rollout_log_probs must be provided for TIS"
 
         ois = (-ppo_kl).exp()
@@ -528,10 +570,26 @@ def policy_loss_function(
         # [decouple IS and rejection] Rebuild sum_of_sample_mean with modified_response_masks for denominator correction
         # modified_response_masks will be sliced with cp in get_sum_of_sample_mean
         sum_of_sample_mean = get_sum_of_sample_mean(
-            total_lengths, response_lengths, modified_response_masks, args.calculate_per_token_loss
+            total_lengths,
+            response_lengths,
+            modified_response_masks,
+            args.calculate_per_token_loss,
+            args.qkv_format,
+            max_seq_lens,
         )
 
-    pg_loss = sum_of_sample_mean(pg_loss)
+    # Determine pg_loss reducer: use custom if specified, otherwise default
+    if getattr(args, "custom_pg_loss_reducer_function_path", None) is not None:
+        custom_pg_loss_reducer_func = load_function(args.custom_pg_loss_reducer_function_path)
+        # Determine which loss_masks to use for pg_loss reducer
+        pg_loss_masks = modified_response_masks if (args.get_mismatch_metrics or args.use_tis) else batch["loss_masks"]
+        pg_loss_reducer = custom_pg_loss_reducer_func(
+            total_lengths, response_lengths, pg_loss_masks, args.calculate_per_token_loss
+        )
+    else:
+        pg_loss_reducer = sum_of_sample_mean
+
+    pg_loss = pg_loss_reducer(pg_loss)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)
     ppo_kl = sum_of_sample_mean(ppo_kl)
 
@@ -582,11 +640,13 @@ def policy_loss_function(
         reported_loss["kl_loss"] = kl_loss.clone().detach()
 
     if args.get_mismatch_metrics or args.use_tis:
-        reported_loss["ois"] = sum_of_sample_mean(ois).clone().detach()
+        # Aggregate mismatch/TIS/RS related metrics with the *pre-RS* masks.
+        # See comment above where `sum_of_sample_mean_for_mismatch_metrics` is defined.
+        reported_loss["ois"] = sum_of_sample_mean_for_mismatch_metrics(ois).clone().detach()
         # Assume all metrics are already cloned and detached
         for metric_key, metric_value in tis_metrics.items():
             key_name = f"{metric_key}"
-            reported_loss[key_name] = sum_of_sample_mean(metric_value)
+            reported_loss[key_name] = sum_of_sample_mean_for_mismatch_metrics(metric_value)
 
     if args.use_opsm:
         reported_loss["opsm_clipfrac"] = opsm_clipfrac
@@ -625,6 +685,7 @@ def value_loss_function(
         unconcat_tokens=batch["unconcat_tokens"],
         total_lengths=batch["total_lengths"],
         response_lengths=batch["response_lengths"],
+        max_seq_lens=batch.get("max_seq_lens", None),
     )
     values = torch.cat([value.flatten() for value in values["values"]], dim=0)
 
@@ -683,6 +744,7 @@ def sft_loss_function(
         total_lengths=total_lengths,
         response_lengths=response_lengths,
         with_entropy=False,
+        max_seq_lens=batch.get("max_seq_lens", None),
     )
 
     log_probs = log_probs_and_entropy["log_probs"]
@@ -738,42 +800,39 @@ def loss_function(
         batch["response_lengths"],
         batch["loss_masks"],
         args.calculate_per_token_loss,
+        args.qkv_format,
+        batch.get("max_seq_lens", None),
     )
-
-    loss_function_kwargs = {
-        "args": args,
-        "batch": batch,
-        "logits": logits,
-        "sum_of_sample_mean": sum_of_sample_mean,
-    }
 
     match args.loss_type:
         case "policy_loss":
-            loss, log = policy_loss_function(**loss_function_kwargs)
+            func = policy_loss_function
         case "value_loss":
-            loss, log = value_loss_function(**loss_function_kwargs)
+            func = value_loss_function
         case "sft_loss":
-            loss, log = sft_loss_function(**loss_function_kwargs)
+            func = sft_loss_function
         case "custom_loss":
-            custom_loss_function = load_function(args.custom_loss_function_path)
-            loss, log = custom_loss_function(**loss_function_kwargs)
+            func = load_function(args.custom_loss_function_path)
         case _:
             raise ValueError(f"Unknown loss type: {args.loss_type}")
 
+    if args.recompute_loss_function:
+        loss, log = checkpoint(func, args, batch, logits, sum_of_sample_mean)
+    else:
+        loss, log = func(args, batch, logits, sum_of_sample_mean)
+
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
+    global_batch_size = batch.get("dynamic_global_batch_size", args.global_batch_size)
     if not args.calculate_per_token_loss:
         loss = (
-            loss
-            * num_microbatches
-            / args.global_batch_size
-            * mpu.get_data_parallel_world_size(with_context_parallel=True)
+            loss * num_microbatches / global_batch_size * mpu.get_data_parallel_world_size(with_context_parallel=True)
         )
     else:
         loss = loss * mpu.get_context_parallel_world_size()
 
     return (
         loss,
-        num_tokens if args.calculate_per_token_loss else 1,
+        torch.tensor(num_tokens if args.calculate_per_token_loss else 1, device=logits.device),
         {
             "keys": list(log.keys()),
             "values": torch.tensor(

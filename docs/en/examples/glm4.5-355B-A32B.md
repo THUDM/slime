@@ -5,12 +5,12 @@ This is an example of doing GLM-4.5 RL training using 64xH100 GPUs.
 
 ## Environment Setup
 
-For instructions on setting up the environment and downloading data, please refer to [Example: Qwen3-4B](./qwen3-4B.md).
+For instructions on setting up the environment and downloading data, please refer to [Example: Qwen3-4B](qwen3-4B.md).
 
 First, you will need to download GLM-4.5 to a directory accessible by all machines (hereinafter referred to as `$BASE_DIR`):
 
 ```bash
-huggingface-cli download zai-org/GLM-4.5 --local-dir $BASE_DIR/GLM-4.5-355B-A32B
+hf download zai-org/GLM-4.5 --local-dir $BASE_DIR/GLM-4.5-355B-A32B
 ```
 
 Next, we need to convert the huggingface checkpoint into the torch_dist format with 2 nodes, each with 8 GPUs:
@@ -66,7 +66,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/models/glm4.5-355B-A32B.sh"
 ```
 
-This reads the model's config from [scripts/models/glm4.5-355B-A32B.sh](../../../scripts/models/glm4.5-355B-A32B.sh). These configs are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in [scripts/models](../../../scripts/models/).
+This reads the model's config from [scripts/models/glm4.5-355B-A32B.sh](https://github.com/THUDM/slime/blob/main/scripts/models/glm4.5-355B-A32B.sh). These configs are all Megatron parameters. When training with Megatron, it cannot read the model config from the checkpoint, so we need to configure it ourselves. We provide some examples in [scripts/models](https://github.com/THUDM/slime/tree/main/scripts/models/).
 
 #### PERF\_ARGS
 

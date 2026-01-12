@@ -213,12 +213,13 @@ def get_default_wandb_args(test_file: str, run_name_prefix: str | None = None, r
     if (x := run_name_prefix) is not None:
         wandb_run_name = f"{x}_{wandb_run_name}"
 
-    # do not put wandb_api_key value here to avoid leaking to logs explicitly
+    # Use the actual key value from environment to avoid shell expansion issues
+    wandb_key = os.environ.get("WANDB_API_KEY")
     return (
         "--use-wandb "
         f"--wandb-project slime-{test_name} "
         f"--wandb-group {wandb_run_name} "
-        f"--wandb-key ${{WANDB_API_KEY}} "
+        f"--wandb-key '{wandb_key}' "
         "--disable-wandb-random-suffix "
     )
 
@@ -261,4 +262,10 @@ NUM_GPUS_OF_HARDWARE = {
     "H100": 8,
     "GB200": 4,
     "GB300": 4,
+}
+
+GENERATION_HARDWARE = {
+    "H100": "Hopper",
+    "GB200": "Blackwell",
+    "GB300": "Blackwell",
 }

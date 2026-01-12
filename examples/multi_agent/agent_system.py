@@ -20,11 +20,10 @@ async def generate_response(args, prompt, key):
 
         url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}/generate"
 
-        prompt_token_ids = tokenizer.encode(prompt, add_special_tokens=False)
-        sample.tokens = prompt_token_ids
         sample.prompt = prompt
-        input_token_ids = prompt_token_ids
-        prompt_length = len(input_token_ids)
+        prompt_token_ids = tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
+        sample.tokens = prompt_token_ids
+        prompt_length = len(prompt_token_ids)
         current_sampling_params = deepcopy(sampling_params)
         current_sampling_params["max_new_tokens"] = min(
             sampling_params["max_new_tokens"], max_context_length - prompt_length
@@ -33,7 +32,7 @@ async def generate_response(args, prompt, key):
         if current_sampling_params["max_new_tokens"] <= 0:
             return None
 
-        payload = {"input_ids": input_token_ids, "sampling_params": current_sampling_params, "return_logprob": True}
+        payload = {"input_ids": prompt_token_ids, "sampling_params": current_sampling_params, "return_logprob": True}
 
         output = await post(url, payload)
 
@@ -150,7 +149,7 @@ class SelectorAgent(Agent):
 
     def extract_selected_solution_idx(self, response: str, candidate_solutions: list[str]) -> int:
         """Extracts the selected solution ID from the response."""
-        PATTERN = re.compile("Judgment:\s*(\d+)")
+        PATTERN = re.compile(r"Judgment:\s*(\d+)")
         matched = PATTERN.findall(response)
         try:
             selected_id = int(matched[0]) - 1

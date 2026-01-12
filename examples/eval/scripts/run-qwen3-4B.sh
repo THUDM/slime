@@ -36,10 +36,10 @@ source "${REPO_ROOT}/scripts/models/qwen3-4B.sh"
 EVAL_CONFIG_PATH=${SKILLS_EVAL_CONFIG_PATH:-"${REPO_ROOT}/examples/eval/scripts/multi_tasks.yaml"}
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/shared/Qwen3-4B
-   --ref-load /root/shared/Qwen3-4B_torch_dist
-   --load /root/shared/Qwen3-4B_slime/
-   --save /root/shared/Qwen3-4B_slime/
+   --hf-checkpoint /root/Qwen3-4B
+   --ref-load /root/Qwen3-4B_torch_dist
+   --load /root/Qwen3-4B_slime/
+   --save /root/Qwen3-4B_slime/
    --save-interval 20
 )
 
@@ -54,7 +54,7 @@ ROLLOUT_ARGS=(
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 8192
-   --rollout-temperature 0.8
+   --rollout-temperature 1
 
    --global-batch-size 256
    --balance-data
@@ -122,7 +122,9 @@ MISC_ARGS=(
 )
 
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
-export CUDA_VISIBLE_DEVICES=6,7
+# export CUDA_VISIBLE_DEVICES=0,1
+# Set Up Your GPUs for Training
+
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 2 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
 RUNTIME_ENV_JSON="{

@@ -23,9 +23,7 @@ logger = logging.getLogger(__name__)
 
 
 def get_batch(
-    data_iterator: "DataIterator",
-    keys: Sequence[str],
-    pad_multiplier: int = 128,
+    data_iterator: "DataIterator", keys: Sequence[str], pad_multiplier: int = 128, qkv_format: str = "thd"
 ) -> dict[str, torch.Tensor | PackedSeqParams | list[torch.Tensor] | None]:
     """
     Generate a CP-ready micro-batch with packed sequence parameters.
@@ -51,45 +49,98 @@ def get_batch(
     assert "tokens" in keys
     batch = data_iterator.get_next(keys)
 
-    packed_seq_params = None
+    if "dynamic_global_batch_size" in data_iterator.rollout_data:
+        batch["dynamic_global_batch_size"] = data_iterator.rollout_data["dynamic_global_batch_size"]
+
     tokens = batch["tokens"]
     # use 0 as the pad token id should be fine?
     pad_token_id = 0
+    pad_size = mpu.get_tensor_model_parallel_world_size() * pad_multiplier
 
     # for cp, we need all tokens to calculate logprob
     batch["unconcat_tokens"] = tokens
 
     cp_size = mpu.get_context_parallel_world_size()
-    tokens = [slice_with_cp(t, pad_token_id) for t in tokens]
 
-    cu_seqlens = [0]
-    for t in tokens:
-        cu_seqlens.append(cu_seqlens[-1] + t.size(0))
+    if qkv_format == "bshd":
+        max_seqlen = batch["max_seq_lens"][0]
+        assert max([t.size(0) for t in tokens]) <= max_seqlen
+        tokens = [slice_with_cp(t, pad_token_id, qkv_format, max_seqlen) for t in tokens]
+        tokens = torch.stack(tokens)
 
-    tokens = torch.cat(tokens)
+    elif qkv_format == "thd":
+        tokens = [slice_with_cp(t, pad_token_id, qkv_format) for t in tokens]
 
-    # Always pad to reduce memory fragmentation and maybe make the computation faster
-    pad_size = mpu.get_tensor_model_parallel_world_size() * pad_multiplier
-    pad = (pad_size - tokens.size(0) % pad_size) % pad_size
-    if pad != 0:
-        tokens = F.pad(tokens, (0, pad), value=pad_token_id)
-        cu_seqlens.append(cu_seqlens[-1] + pad)
+        cu_seqlens = [0]
+        for t in tokens:
+            cu_seqlens.append(cu_seqlens[-1] + t.size(0))
 
-    # thd requires the cu_seqlens to be of the origin length
-    cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int).cuda() * cp_size
-    max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+        tokens = torch.cat(tokens)
 
-    packed_seq_params = PackedSeqParams(
-        cu_seqlens_q=cu_seqlens,
-        cu_seqlens_kv=cu_seqlens,
-        max_seqlen_q=max_seqlen,
-        max_seqlen_kv=max_seqlen,
-        qkv_format="thd",
-    )
+        # Always pad to reduce memory fragmentation and maybe make the computation faster
+        pad = (pad_size - tokens.size(0) % pad_size) % pad_size
+        if pad != 0:
+            tokens = F.pad(tokens, (0, pad), value=pad_token_id)
+            cu_seqlens.append(cu_seqlens[-1] + pad)
 
-    tokens = tokens.unsqueeze(0)
+        # thd requires the cu_seqlens to be of the origin length
+        cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int).cuda() * cp_size
+        max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+
+        packed_seq_params = PackedSeqParams(
+            cu_seqlens_q=cu_seqlens,
+            cu_seqlens_kv=cu_seqlens,
+            max_seqlen_q=max_seqlen,
+            max_seqlen_kv=max_seqlen,
+            qkv_format="thd",
+        )
+
+        tokens = tokens.unsqueeze(0)
+    else:
+        raise ValueError(f"Unsupported qkv_format: {qkv_format}")
+
     batch["tokens"] = tokens
     batch["packed_seq_params"] = packed_seq_params
+
+    # loss masks
+    loss_masks = []
+    for loss_mask, total_length, response_length in zip(
+        batch["loss_masks"],
+        batch["total_lengths"],
+        batch["response_lengths"],
+        strict=True,
+    ):
+        prompt_length = total_length - response_length
+        loss_mask = F.pad(loss_mask, (prompt_length - 1, 1), value=0)
+        loss_mask = slice_with_cp(loss_mask, 0, qkv_format, max_seqlen)
+        loss_masks.append(loss_mask)
+
+    if qkv_format == "bshd":
+        loss_masks = torch.stack(loss_masks)
+    elif qkv_format == "thd":
+        loss_masks = torch.cat(loss_masks)
+        loss_masks = F.pad(loss_masks, (0, pad), value=0).unsqueeze(0)
+
+    assert loss_masks.shape == tokens.shape, f"loss_masks.shape: {loss_masks.shape}, tokens.shape: {tokens.shape}"
+    batch["full_loss_masks"] = loss_masks
+
+    # Process multimodal training tensors if present
+    multimodal_train_inputs = batch.get("multimodal_train_inputs", None)
+    if multimodal_train_inputs is not None:
+        multimodal_data = {}  # key -> concatenated tensor
+        multimodal_num_items = {}  # key -> list of item counts per sequence
+        for mm_input_dict in multimodal_train_inputs:
+            if mm_input_dict is not None:
+                for key, mm_tensor in mm_input_dict.items():
+                    if key not in multimodal_data:
+                        multimodal_data[key] = mm_tensor
+                        multimodal_num_items[key] = [mm_tensor.size(0)]
+                    else:
+                        multimodal_data[key] = torch.cat([multimodal_data[key], mm_tensor], dim=0)
+                        multimodal_num_items[key].append(mm_tensor.size(0))
+        batch["multimodal_train_inputs"] = multimodal_data
+        batch["multimodal_num_items"] = multimodal_num_items
+
     return batch
 
 
@@ -236,8 +287,15 @@ def get_data_iterator(
     cp_size = mpu.get_context_parallel_world_size()
 
     num_local_samples = len(rollout_data["total_lengths"])
-    num_local_gbs = args.global_batch_size // dp_size
+    global_batch_size = rollout_data.get("dynamic_global_batch_size", args.global_batch_size)
+    num_local_gbs = global_batch_size // dp_size
     num_steps_per_rollout = num_local_samples // num_local_gbs
+
+    if global_batch_size != args.global_batch_size:
+        logger.info(
+            f"Using dynamic global_batch_size={global_batch_size} (original={args.global_batch_size}), "
+            f"num_local_samples={num_local_samples}, num_steps_per_rollout={num_steps_per_rollout}"
+        )
 
     def _generate_data_iterator(rollout_data, micro_batch_size, micro_batch_indices=None):
         data_iterator = []
@@ -311,13 +369,17 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
         response_lengths = rollout_data["response_lengths"]
         loss_masks = rollout_data["loss_masks"]
         total_lengths = rollout_data["total_lengths"]
+        max_seq_lens = rollout_data.get("max_seq_lens", None)
 
         for key, val in rollout_data.items():
             if key in [
                 "tokens",
+                "multimodal_train_inputs",
                 "loss_masks",
                 "sample_indices",
                 "rollout_routed_experts",
+                "max_seq_lens",
+                "dynamic_global_batch_size",
             ]:
                 continue
             # Upload per sample mean for each rollout value
@@ -329,7 +391,13 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                     # modified in place and will cause problem for the next rollout.
                     val = torch.cat(val).clone().detach()
                     if key in ["log_probs", "ref_log_probs", "rollout_log_probs", "returns", "advantages", "values"]:
-                        sum_of_sample_mean = get_sum_of_sample_mean(total_lengths, response_lengths, loss_masks)
+                        sum_of_sample_mean = get_sum_of_sample_mean(
+                            total_lengths,
+                            response_lengths,
+                            loss_masks,
+                            qkv_format=args.qkv_format,
+                            max_seq_lens=max_seq_lens,
+                        )
                         val = cp_size * sum_of_sample_mean(val) / len(loss_masks)
                     else:
                         val = val.mean() * cp_size
@@ -358,6 +426,64 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
         log_multi_turn_data(rollout_id, args, rollout_data)
     if args.log_passrate:
         log_passrate(rollout_id, args, rollout_data)
+
+    if args.log_correct_samples:
+        if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
+            cp_size = mpu.get_context_parallel_world_size()
+            log_dict = {}
+            response_lengths = rollout_data["response_lengths"]
+            loss_masks = rollout_data["loss_masks"]
+            total_lengths = rollout_data["total_lengths"]
+
+            def quantile(total_value, n_quantiles, data) -> dict:
+                import math
+
+                assert n_quantiles > 1, f"n_quantiles({n_quantiles}) must be greater than 1."
+
+                quantiles = [((i + 1) / n_quantiles) for i in range(n_quantiles)]
+                cut_points = [total_value * q for q in quantiles]
+                cut_points[-1] = total_value
+
+                count = [0] * n_quantiles
+                for d in data:
+                    for i, point in enumerate(cut_points):
+                        if d <= point:
+                            count[i] += 1
+                            break
+
+                total = sum(count) + 1e-9
+                percentile = [c / total for c in count]
+
+                percentile = {f"p{min(math.ceil(q*100),100)}": p for q, p in zip(quantiles, percentile, strict=True)}
+                return percentile
+
+            raw_rewards = rollout_data["raw_reward"]
+            # Additional metrics for correct cases are calculated separately below.
+            correct_response_lengths = []
+            correct_total_lengths = []
+            correct_loss_masks = []
+            correct_entropy = []
+            for i, raw_reward in enumerate(raw_rewards):
+                if raw_reward == 1:
+                    correct_response_lengths.append(response_lengths[i])
+                    correct_total_lengths.append(total_lengths[i])
+                    correct_loss_masks.append(loss_masks[i])
+                    correct_entropy.append(-rollout_data["log_probs"][i])
+            num_correct_responses = len(correct_total_lengths)
+            rollout_data["correct_response_lengths"] = correct_response_lengths
+            correct_response_length_percentile = quantile(
+                args.rollout_max_response_len, 4, rollout_data["correct_response_lengths"]
+            )
+            for p, val in correct_response_length_percentile.items():
+                rollout_data[f"correct_length/{p}"] = [val] * num_correct_responses
+            if len(correct_entropy) > 0:
+                sum_of_sample_mean = get_sum_of_sample_mean(
+                    correct_total_lengths, correct_response_lengths, correct_loss_masks
+                )
+                correct_entropy = sum_of_sample_mean(torch.cat(correct_entropy, dim=0))
+                rollout_data["correct_entropy"] = [correct_entropy.item()] * num_correct_responses
+            else:
+                rollout_data["correct_entropy"] = [0] * num_correct_responses
 
 
 def log_multi_turn_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -> None:

@@ -107,7 +107,7 @@ def log_raw_info(args, all_meta_info, rollout_id):
                     "avg_reward": weighted_reward_sum / total_samples,
                 }
             )
-            if hasattr(args, "use_wandb") and args.use_wandb:
+            if args.use_wandb:
                 log_dict = {
                     "rollout/no_filter/total_samples": final_meta_info["total_samples"],
                     "rollout/no_filter/avg_reward": final_meta_info["avg_reward"],

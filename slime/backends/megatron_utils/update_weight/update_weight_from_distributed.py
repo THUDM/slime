@@ -52,7 +52,7 @@ class UpdateWeightFromDistributed:
         self.rollout_engine_lock = rollout_engine_lock
 
         # For TP:
-        #   1. AllGather paramters to rank 0
+        #   1. AllGather parameters to rank 0
         #   2. Broadcast parameters from rank 0 to all sglang engines
         self._is_pp_src_rank = (
             mpu.get_data_parallel_rank(with_context_parallel=True) == 0 and mpu.get_tensor_model_parallel_rank() == 0

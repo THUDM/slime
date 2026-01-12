@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # for rerun the task
-pkill -9 sglang
-sleep 3
-ray stop --force
-pkill -9 ray
-pkill -9 python
-sleep 3
-pkill -9 ray
-pkill -9 python
-pkill -9 redis
+# pkill -9 sglang
+# sleep 3
+# ray stop --force
+# pkill -9 ray
+# pkill -9 python
+# sleep 3
+# pkill -9 ray
+# pkill -9 python
+# pkill -9 redis
 
 set -ex
 
@@ -31,15 +31,15 @@ source "${SCRIPT_DIR}/../../scripts/models/qwen3-30B-A3B.sh"
 BASE_DIR="/root" 
 
 CKPT_ARGS=(
-   --hf-checkpoint “${BASE_DIR}/Qwen3-30B-A3B-FP8/”
-   --ref-load “${BASE_DIR}/Qwen3-30B-A3B_torch_dist/”
-   --load “${BASE_DIR}/Qwen3-30B-A3B_slime/”
-   --save “${BASE_DIR}/Qwen3-30B-A3B_slime/”
+   --hf-checkpoint "${BASE_DIR}/Qwen3-30B-A3B-FP8/"
+   --ref-load "${BASE_DIR}/Qwen3-30B-A3B_torch_dist/"
+   --load "${BASE_DIR}/Qwen3-30B-A3B_slime/"
+   --save "${BASE_DIR}/Qwen3-30B-A3B_slime/"
    --save-interval 20
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data “${BASE_DIR}/dapo-math-17k.jsonl”
+   --prompt-data "${BASE_DIR}/dapo-math-17k.jsonl"
    --input-key prompt
    --label-key label
    --apply-chat-template
@@ -49,7 +49,7 @@ ROLLOUT_ARGS=(
    --rollout-batch-size 16
    --n-samples-per-prompt 8
    --rollout-max-response-len 8192
-   --rollout-temperature 0.8
+   --rollout-temperature 1
 
    --global-batch-size 128
    --balance-data
@@ -57,10 +57,10 @@ ROLLOUT_ARGS=(
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data aime “${BASE_DIR}/aime-2024.jsonl”
+   --eval-prompt-data aime "${BASE_DIR}/aime-2024.jsonl"
    --n-samples-per-eval-prompt 16
    --eval-max-response-len 16384
-   --eval-top-p 0.7
+   --eval-top-p 1
 )
 
 PERF_ARGS=(

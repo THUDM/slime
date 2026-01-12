@@ -31,7 +31,6 @@ class TensorBackuper(ABC):
     def backup(self, tag: str):
         raise NotImplementedError
 
-    @abstractmethod
     def copy(self, *, src_tag: str, dst_tag: str):
         raise NotImplementedError
 
