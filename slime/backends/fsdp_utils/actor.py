@@ -444,6 +444,8 @@ class FSDPTrainRayActor(TrainRayActor):
                     self.model.parameters(), 
                     self.args.clip_grad
                 )
+                grad_norm = grad_norm.full_tensor().item()
+
                 self.optimizer.step()
                 self.lr_scheduler.step()
 

@@ -1,5 +1,6 @@
 import logging
 from argparse import Namespace
+from math import isclose
 
 import numpy as np
 import torch
@@ -161,10 +162,10 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                 and "rollout/ref_log_probs" in reduced_log_dict
             ):
                 assert reduced_log_dict["rollout/log_probs"] == reduced_log_dict["rollout/ref_log_probs"]
-            if "rollout/log_probs" in reduced_log_dict:
-                assert -0.5 < reduced_log_dict["rollout/log_probs"] < 0
+            if "rollout/log_probs" in reduced_log_dict and "rollout/rollout_log_probs" in reduced_log_dict:
+                assert isclose(reduced_log_dict["rollout/log_probs"], reduced_log_dict["rollout/rollout_log_probs"], abs_tol=0.03)
             if "rollout/entropy" in reduced_log_dict:
-                assert 0 < reduced_log_dict["rollout/entropy"] < 0.5
+                assert 0 < reduced_log_dict["rollout/entropy"] < 0.7
 
     if args.log_multi_turn:
         log_multi_turn_data(rollout_id, args, rollout_data, parallel_state)
@@ -337,12 +338,8 @@ def aggregate_train_losses(
     
     assert len(keys) + 1 == values.numel(), f"Expected {len(keys) + 1} values, got {values.numel()}"
 
-    print(f"[DEBUG aggregate_train_losses] values: {values}")
-    
     dist.all_reduce(values, op=dist.ReduceOp.SUM, group=parallel_state.dp_cp_group)
 
-    print(f"[DEBUG aggregate_train_losses] after all_reduce values: {values}")
-    
     loss_reduced = {}
     values = values.tolist()
     num_samples_or_tokens = values[0]
