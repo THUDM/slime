@@ -1,6 +1,7 @@
 # VLM Multi-Turn (FSDP backend, opencua dataset)
 Training VLM with FSDP on [opencua click dataset](https://huggingface.co/datasets/mlfoundations-cua-dev/agentnet-clicks) with multi-turn reasoning with interactive environment feedback, using GRPO. .
 
+<<<<<<< HEAD
 ## Data prepocessing
 There are some minor modifications to the prompt by converting absolute coordinates to relative coordinates to better accommodate Qwen3. In addition, images are converted to Base64 format so that they can be correctly recognized by slime. Therefore, you need to run the data preprocessing script before training or evaluation:
 ```
@@ -10,6 +11,12 @@ python examples/opencua_vlm_multi_turn/data_prepocessing.py
 Note that this script currently processes only a single subset of the dataset. For better performance, it is recommended to preprocess all dataset files.
 
 ## Rollout
+=======
+## data prepocessing
+
+
+## rollout
+>>>>>>> 17a297cf (readme)
 The multi-turn rollout is implemented through a custom generate function  `examples.opencua_vlm_multi_turn.rollout.generate`, overriding the original generate function.
 
 In terms of the environment interaction, this example initializes a custom interactive environment in `examples/opencua_vlm_multi_turn/env_opencua.py` with the APIs below.
