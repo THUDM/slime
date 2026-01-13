@@ -1,9 +1,12 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import torch.distributed as dist
 
 
 @dataclass
 class ParallelState:
+    """Core parallel state shared across all backends.
+    Required by the general training utils.
+    """
     dp_rank: int
     dp_src_rank: int
     dp_size: int
@@ -18,13 +21,6 @@ class ParallelState:
     tp_size: int
     tp_rank: int
     tp_group: dist.ProcessGroup | None
-    dp_mesh: dist.DeviceMesh | None
-    cp_mesh: dist.DeviceMesh | None
-    is_pp_last_stage: bool
-    vpp_size: int | None
-    microbatch_group_size_per_vp_stage: int | None
-
-    def __init__(self):
-        self.vpp_size = 1
-        self.microbatch_group_size_per_vp_stage = None
-        self.is_pp_last_stage = True
+    is_pp_last_stage: bool = True
+    vpp_size: int | None = 1
+    microbatch_group_size_per_vp_stage: int | None = None
