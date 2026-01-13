@@ -944,6 +944,8 @@ def generate_rollout(
                         f"raw_task_rewards={raw_task_rewards}, replay_reward={replay_sample.reward}"
                     )
 
+        # Drop aborted/invalid samples to avoid zero-length response issues in training.
+        group_results = [s for s in group_results if not getattr(s, "remove_sample", False)]
         all_results.append(group_results)
 
     return RolloutFnTrainOutput(samples=all_results)
