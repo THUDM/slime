@@ -89,7 +89,7 @@ This guide provides examples for INT4 STE (Straight-Through Estimator) training 
 First, download the PTQ (Post-Training Quantization) calibration dataset from HuggingFace:
 [https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1](https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1)
 
-Next, use the `tools/convert_hf_to_hf_int4.py` script to convert BF16 weights to INT4 format. Ensure that the `--hf-checkpoint` parameter points to a directory where `config.json` contains the correct `quantization_config`. Slime will automatically utilize INT4 quantization during weight updates.
+Next, use the `tools/convert_hf_to_hf_int4.py` script to convert BF16 weights to INT4 format. Ensure that the `--hf-checkpoint` parameter points to a directory where `config.json` contains the correct `quantization_config`. slime will automatically utilize INT4 quantization during weight updates.
 
 ```bash
 python tools/convert_hf_to_hf_int4.py \
