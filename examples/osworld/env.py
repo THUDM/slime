@@ -501,6 +501,8 @@ class OSWorldEnvWrapper:
             "multi_modal_data": {self.config.image_placeholder: [screenshot]},
             "image_path": image_path,
             "a11y_tree": a11y_tree_text,
+            "terminal": terminal,
+            "action_result": last_action_result,
         }
 
     def _parse_action(self, action_str: str) -> dict:

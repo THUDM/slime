@@ -231,7 +231,71 @@ class FSDPTrainRayActor(TrainRayActor):
 
         # Setup Ring Flash Attention with CP group from mesh (only when cp_size > 1)
         if self.cp_size > 1:
+            from transformers import modeling_flash_attention_utils as mfa
+
+            try:
+                from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+            except Exception:
+                ALL_ATTENTION_FUNCTIONS = None
+
+            orig_flash = mfa._flash_attention_forward
+            orig_attn = (
+                ALL_ATTENTION_FUNCTIONS.get("flash_attention_2")
+                if ALL_ATTENTION_FUNCTIONS
+                else None
+            )
+
             substitute_hf_flash_attn(self.cp_group, heads_k_stride=1)
+
+            patched_flash = mfa._flash_attention_forward
+            patched_attn = (
+                ALL_ATTENTION_FUNCTIONS.get("flash_attention_2")
+                if ALL_ATTENTION_FUNCTIONS
+                else None
+            )
+
+            def is_vision_module(module: torch.nn.Module) -> bool:
+                try:
+                    from transformers.models.qwen3_vl.modeling_qwen3_vl import (
+                        Qwen3VLVisionModel,
+                    )
+
+                    if isinstance(module, Qwen3VLVisionModel):
+                        return True
+                except Exception:
+                    pass
+                name = module.__class__.__name__
+                return "Qwen3VLVision" in name or "VisionAttention" in name
+
+            def guarded_flash_forward(*args, **kwargs):
+                is_causal = kwargs.get("is_causal", None)
+                if is_causal is False:
+                    return orig_flash(*args, **kwargs)
+                return patched_flash(*args, **kwargs)
+
+            def guarded_attn(module, *args, **kwargs):
+                if getattr(module, "is_causal", True) is False:
+                    return (
+                        orig_attn(module, *args, **kwargs)
+                        if orig_attn is not None
+                        else patched_attn(module, *args, **kwargs)
+                    )
+                if is_vision_module(module):
+                    return (
+                        orig_attn(module, *args, **kwargs)
+                        if orig_attn is not None
+                        else patched_attn(module, *args, **kwargs)
+                    )
+                return (
+                    patched_attn(module, *args, **kwargs)
+                    if patched_attn is not None
+                    else orig_attn(module, *args, **kwargs)
+                )
+
+            mfa._flash_attention_forward = guarded_flash_forward
+            if ALL_ATTENTION_FUNCTIONS and orig_attn and patched_attn:
+                ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = guarded_attn
+
             logger.info(f"[Rank {rank}] CP initialized via device mesh")
         else:
             logger.info(f"[Rank {rank}] Pure DP mode (cp_size=1)")

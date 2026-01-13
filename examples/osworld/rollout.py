@@ -166,9 +166,11 @@ def build_chat_messages(
         # Add observation as user message
         content = []
         multimodal = obs.get("multi_modal_data") or {}
-        for _, images in multimodal.items():
-            for image in images:
-                content.append({"type": "image", "image": image})
+        include_image = obs.get("include_image", True)
+        if include_image:
+            for _, images in multimodal.items():
+                for image in images:
+                    content.append({"type": "image", "image": image})
         content.append({"type": "text", "text": obs.get("obs_str", "")})
         messages.append({"role": "user", "content": content})
 
@@ -177,6 +179,41 @@ def build_chat_messages(
             messages.append({"role": "assistant", "content": response_history[i]})
 
     return messages
+
+
+def _summarize_observation(obs: dict) -> dict:
+    """Summarize older observations to reduce token budget while preserving key signals."""
+    summary_parts: list[str] = []
+    last_action = obs.get("last_action")
+    if last_action:
+        summary_parts.append(f"[Last Action]\n{last_action}")
+    action_result = obs.get("action_result")
+    if action_result:
+        summary_parts.append(f"[Last Action Result]\n{action_result}")
+    terminal = obs.get("terminal")
+    if terminal:
+        summary_parts.append(f"[Terminal Output]\n{terminal}")
+    screen_diff = obs.get("screen_diff")
+    if screen_diff is not None:
+        summary_parts.append(f"[Screen Diff]\n{screen_diff:.4f}")
+    summary = "\n\n".join(summary_parts) if summary_parts else obs.get("obs_str", "")
+    summarized = dict(obs)
+    summarized["obs_str"] = summary
+    return summarized
+
+
+def _compress_observation_history(observations: list[dict], keep_last: int) -> list[dict]:
+    """Keep full text for the first and last N turns; summarize older turns."""
+    if keep_last <= 0 or len(observations) <= keep_last + 1:
+        return observations
+    cutoff = max(1, len(observations) - keep_last)
+    compressed: list[dict] = []
+    for idx, obs in enumerate(observations):
+        if idx == 0 or idx >= cutoff:
+            compressed.append(obs)
+        else:
+            compressed.append(_summarize_observation(obs))
+    return compressed
 
 
 def _decode_replay_images(images: list[Any]) -> list[Image.Image]:
@@ -622,16 +659,21 @@ async def _generate_impl(
             formatted_obs = observation
             observation_history.append(formatted_obs)
 
-            # Extract ALL images from observation history for VLM call
+            obs_keep_last = int(os.environ.get("OSWORLD_OBS_KEEP_FULL_TURNS", "2"))
+            compressed_obs = _compress_observation_history(observation_history, obs_keep_last)
+
+            # Extract images from observation history for VLM call
             # SGLang needs image_data to match number of vision token blocks in prompt
             # build_chat_messages adds vision tokens for ALL observations in history
             all_images = []
-            for obs in observation_history:
+            for obs in compressed_obs:
+                if not obs.get("include_image", True):
+                    continue
                 multimodal = obs.get("multi_modal_data") or {}
                 for _, img_list in multimodal.items():
                     all_images.extend(img_list)
 
-            messages = build_chat_messages(system_prompt, observation_history, response_history)
+            messages = build_chat_messages(system_prompt, compressed_obs, response_history)
 
             response_text, response_tokens, _log_probs = await generate_vlm_response(
                 args, state, messages, all_images, sampling_params
@@ -640,6 +682,13 @@ async def _generate_impl(
             response_history.append(response_text)
 
             observation, done, step_info = env.step(response_text)
+            if step_info and "step_signal" in step_info:
+                step_signal = step_info["step_signal"]
+                screen_changed = step_signal.get("screen_changed")
+                observation["screen_changed"] = screen_changed
+                observation["screen_diff"] = step_signal.get("screen_diff")
+                observation["include_image"] = bool(screen_changed) if screen_changed is not None else True
+                observation["last_action"] = step_info.get("raw_action") or step_signal.get("action_type")
             if done:
                 break
 
@@ -654,7 +703,9 @@ async def _generate_impl(
         kept_turns = len(kept_responses)
         dropped_turns = len(response_history) - kept_turns
 
-        messages = build_chat_messages(system_prompt, kept_obs, kept_responses)
+        obs_keep_last = int(os.environ.get("OSWORLD_OBS_KEEP_FULL_TURNS", "2"))
+        compressed_kept_obs = _compress_observation_history(kept_obs, obs_keep_last)
+        messages = build_chat_messages(system_prompt, compressed_kept_obs, kept_responses)
         tokenizer_type = getattr(args, "loss_mask_type", "qwen")
         try:
             tokens, response_length, loss_mask, multimodal_inputs = _build_multimodal_training_inputs(
@@ -828,6 +879,7 @@ def generate_rollout(
         # Replay injection: inject successful trajectory if all online rollouts failed
         # Use RAW task rewards (0 or 1) for replay decision, not shaped rewards
         # Shaped rewards can be positive even when task fails due to partial scores
+        replay_debug = os.environ.get("OSWORLD_REPLAY_DEBUG", "0") == "1"
         if replay_buffer is not None:
             # Extract raw task rewards from metadata for replay decision
             raw_task_rewards = []
@@ -835,6 +887,14 @@ def generate_rollout(
                 osworld_meta = (s.metadata or {}).get("osworld", {})
                 raw = osworld_meta.get("task_reward", 0.0)
                 raw_task_rewards.append(raw)
+
+            if replay_debug:
+                has_task = replay_buffer.has_task(task_id)
+                logger.info(
+                    f"[REPLAY_DEBUG] task_id={task_id} raw_rewards={raw_task_rewards} "
+                    f"threshold={replay_buffer.success_threshold} has_task={has_task}"
+                )
+
             replay_sample = replay_buffer.maybe_inject(task_id, raw_task_rewards)
             if replay_sample:
                 tokenizer_type = getattr(args, "loss_mask_type", "qwen")

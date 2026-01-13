@@ -13,19 +13,22 @@ fi
 # Configuration
 MODEL_NAME="Qwen3-VL-4B-Instruct"
 NUM_GPUS=${SLIME_SCRIPT_NUM_GPUS:-4}
-CP_SIZE=${SLIME_SCRIPT_CP_SIZE:-2}
+CP_SIZE=${SLIME_SCRIPT_CP_SIZE:-1}
 TRAIN_GPUS=${SLIME_SCRIPT_TRAIN_GPUS:-2}
 INFER_GPUS=${SLIME_SCRIPT_INFER_GPUS:-1}
 
-# VLM memory safety: CP=2 required for long sequences (>8K tokens)
-# OSWorld trajectories can reach 20K+ tokens with multi-turn screenshots
-if [ "$CP_SIZE" -lt 2 ]; then
-    echo "WARNING: CP_SIZE=$CP_SIZE is risky for VLM training with long sequences"
-    echo "OSWorld trajectories can exceed 16K tokens. Recommend CP_SIZE=2"
-    echo "Set SLIME_SCRIPT_CP_SIZE=2 or expect OOM during backward pass"
+# VLM context parallelism note: CP=1 required for Qwen3-VL training
+# ring_flash_attn only supports causal attention, but VLM vision encoders
+# use bidirectional attention. CP>1 triggers ring attention globally,
+# causing assertion failures in vision encoder forward pass.
+if [ "$CP_SIZE" -gt 1 ]; then
+    echo "WARNING: CP_SIZE=$CP_SIZE incompatible with VLM vision encoder"
+    echo "ring_flash_attn requires causal attention; VisionAttention uses bidirectional"
+    echo "Set SLIME_SCRIPT_CP_SIZE=1 to avoid assertion errors"
 fi
 # Training turns (exported for Ray job) - max 8 based on trajectory data
-export OSWORLD_TRAIN_TRUNCATE_TURNS=${SLIME_SCRIPT_TRAIN_TRUNCATE_TURNS:-8}
+export OSWORLD_TRAIN_TRUNCATE_TURNS=${SLIME_SCRIPT_TRAIN_TRUNCATE_TURNS:-6}
+CUDA_VISIBLE_DEVICES_OVERRIDE=${SLIME_SCRIPT_CUDA_VISIBLE_DEVICES:-"0,1,2,3"}
 
 export OSWORLD_SCREEN_DIFF_THRESHOLD=${SLIME_SCRIPT_SCREEN_DIFF_THRESHOLD:-0.005}
 
@@ -79,14 +82,14 @@ ROLLOUT_ARGS=(
     --apply-chat-template
     --loss-mask-type qwen3
     --rollout-shuffle
-    --num-rollout 500
-    --rollout-batch-size 2
+    --num-rollout 16
+    --rollout-batch-size 1
     --n-samples-per-prompt 4
-    --rollout-max-response-len 512
-    --rollout-max-context-len 16384
+    --rollout-max-response-len 384
+    --rollout-max-context-len ${SLIME_SCRIPT_MAX_CONTEXT:-16384}
     --rollout-temperature "$ROLLOUT_TEMPERATURE"
     --rollout-top-p "$ROLLOUT_TOP_P"
-    --global-batch-size 8
+    --global-batch-size ${SLIME_SCRIPT_GLOBAL_BATCH:-2}
 )
 
 CUSTOM_ARGS=(
@@ -165,7 +168,7 @@ RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"TOKENIZERS_PARALLELISM\": \"false\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"CUDA_VISIBLE_DEVICES\": \"0,1,2,3\",
+    \"CUDA_VISIBLE_DEVICES\": \"${CUDA_VISIBLE_DEVICES_OVERRIDE}\",
     \"SGLANG_DISABLE_CUDNN_CHECK\": \"1\",
     \"SGLANG_VLM_CACHE_SIZE_MB\": \"8192\",
     \"OSWORLD_REWARD_ALPHA\": \"0.3\",
@@ -176,6 +179,7 @@ RUNTIME_ENV_JSON="{
     \"OSWORLD_TIMEOUT\": \"${OSWORLD_TIMEOUT}\",
     \"OSWORLD_REPLAY_BUFFER\": \"${OSWORLD_REPLAY_BUFFER}\",
     \"OSWORLD_REPLAY_THRESHOLD\": \"${OSWORLD_REPLAY_THRESHOLD}\",
+    \"OSWORLD_REPLAY_DEBUG\": \"1\",
     \"WANDB_API_KEY\": \"${WANDB_API_KEY}\"
   }
 }"
@@ -187,7 +191,7 @@ echo "=========================================="
 echo "Model: ${MODEL_NAME}"
 echo "Total GPUs: $NUM_GPUS | Train GPUs: $TRAIN_GPUS | Infer GPUs: $INFER_GPUS"
 echo "Context Parallel: $CP_SIZE | Data Parallel: $((TRAIN_GPUS / CP_SIZE))"
-echo "Global Batch: 8 | Max Context: 16384 | Max Turns: $OSWORLD_TRAIN_TRUNCATE_TURNS"
+echo "Global Batch: ${SLIME_SCRIPT_GLOBAL_BATCH:-2} | Max Context: ${SLIME_SCRIPT_MAX_CONTEXT:-16384} | Max Turns: $OSWORLD_TRAIN_TRUNCATE_TURNS"
 echo "Output: $OUTPUT_DIR"
 echo "=========================================="
 

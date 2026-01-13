@@ -62,7 +62,7 @@ def init_wandb_primary(args):
     if offline:
         init_kwargs["settings"] = wandb.Settings(mode="offline")
     else:
-        init_kwargs["settings"] = wandb.Settings(mode="shared", x_primary=True)
+        init_kwargs["settings"] = wandb.Settings(mode="shared", x_primary=True, init_timeout=300)
 
     # Add custom directory if specified
     if args.wandb_dir:

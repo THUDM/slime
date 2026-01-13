@@ -39,7 +39,7 @@ export OSWORLD_SERVER_URL=http://172.17.0.1:8100
 
 ## Environment Setup
 
-OSWorld requires KVM for VM acceleration. The training container and OSWorld server run separately due to torch version conflicts (`desktop-env` pins torch 2.5.1, sglang requires 2.9+).
+OSWorld requires KVM for VM acceleration. The training container and OSWorld server run separately due to torch version conflicts (`desktop-env` pins torch 2.5.1, sglang requires 2.9+). The HTTP bridge API described below is Slime’s wrapper around OSWorld, not the native OSWorld server API.
 
 ```
 Host (osworld_venv)              Container (slime_train)
