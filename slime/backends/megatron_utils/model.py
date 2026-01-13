@@ -28,9 +28,10 @@ from ..training_utils.ci_utils import check_grad_norm, check_kl
 from ..training_utils.data import DataIterator, get_batch
 from ..training_utils.log_utils import aggregate_forward_results, aggregate_train_losses, log_train_step
 from ..training_utils.loss import loss_function
+from ..training_utils.parallel import ParallelState
 from .checkpoint import load_checkpoint, save_checkpoint
 from .model_provider import get_model_provider_func
-from .parallel import MegatronParallelState, get_packed_seq_params
+from .parallel import get_packed_seq_params
 
 logger = logging.getLogger(__name__)
 
@@ -156,7 +157,7 @@ def forward_only(
     model: Sequence[DDP],
     data_iterator: Sequence[DataIterator],
     num_microbatches: Sequence[int],
-    parallel_state: MegatronParallelState,
+    parallel_state: ParallelState,
     store_prefix: str = "",
 ) -> dict[str, list[torch.Tensor]]:
     """Run forward passes only and collect non-loss outputs (e.g., logprobs).
@@ -296,7 +297,7 @@ def train_one_step(
     optimizer: MegatronOptimizer,
     opt_param_scheduler: OptimizerParamScheduler,
     num_microbatches: int,
-    parallel_state: MegatronParallelState,
+    parallel_state: ParallelState,
 ) -> tuple[dict[str, float], float]:
     """Execute a single pipeline-parallel training step.
 
@@ -481,7 +482,7 @@ def train(
     opt_param_scheduler: OptimizerParamScheduler,
     data_iterator: Sequence[DataIterator],
     num_microbatches: Sequence[int],
-    parallel_state: MegatronParallelState,
+    parallel_state: ParallelState,
 ) -> None:
     """Run training over a rollout consisting of multiple steps.
 

@@ -32,7 +32,7 @@ from ..training_utils.log_utils import (
 from ..training_utils.loss import compute_advantages_and_returns, get_log_probs_and_entropy, loss_function
 from . import checkpoint
 from .lr_scheduler import get_lr_scheduler
-from .parallel import FSDPParallelState
+from .parallel import create_fsdp_parallel_state
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
 logger = logging.getLogger(__name__)
@@ -56,7 +56,7 @@ class FSDPTrainRayActor(TrainRayActor):
         super().init(args, role, with_ref)
 
         # Setup ParallelState for both CP and non-CP cases
-        self.parallel_state = FSDPParallelState(args)
+        self.parallel_state = create_fsdp_parallel_state(args)
 
         torch.manual_seed(args.seed)
 
