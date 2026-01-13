@@ -1308,3 +1308,16 @@ index a702df4f8..61d9ae366 100644
              return
  
          Device2DraftCudaGraphRunner = {
+diff --git a/python/sglang/srt/utils/common.py b/python/sglang/srt/utils/common.py
+index 1aa46107b..4cc629b00 100644
+--- a/python/sglang/srt/utils/common.py
++++ b/python/sglang/srt/utils/common.py
+@@ -2179,6 +2179,8 @@ class SafeUnpickler(pickle.Unpickler):
+         "sglang.srt.model_executor.model_runner.",
+         "sglang.srt.layers.",
+         "sglang.srt.utils.",
++        # --- slime ---
++        "slime.",
+     }
+ 
+     DENY_CLASSES = {
