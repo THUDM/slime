@@ -3,7 +3,8 @@
 
 This script merges all OSWorld-related HF datasets into:
   - osworld_tasks_union_all.parquet: all base task_ids (with missing config flagged)
-  - osworld_tasks_union.parquet: only tasks with full task_config
+  - osworld_tasks_union.parquet: tasks with full task_config and replay overlap (Ubuntu)
+  - osworld_tasks_replay76.parquet: same as union (explicit replay overlap file)
   - osworld_replay_union.jsonl: expanded replay buffer with normalized system prompt
 """
 
@@ -369,10 +370,6 @@ def main() -> int:
     union_all_path = output_dir / "osworld_tasks_union_all.parquet"
     union_df.to_parquet(union_all_path, index=False)
 
-    ready_df = union_df[(union_df["has_task_config"]) & (union_df["platform"] != "windows")].reset_index(drop=True)
-    union_ready_path = output_dir / "osworld_tasks_union.parquet"
-    ready_df.to_parquet(union_ready_path, index=False)
-
     env = OSWorldEnvWrapper(OSWorldEnvConfig(), task_config={})
     replay_samples, replay_stats = build_replay_buffer(replay_sources, env)
     replay_path = output_dir / "osworld_replay_union.jsonl"
@@ -380,13 +377,24 @@ def main() -> int:
         for sample in replay_samples:
             f.write(json.dumps(sample, ensure_ascii=False) + "\n")
 
+    ready_df = union_df[(union_df["has_task_config"]) & (union_df["platform"] != "windows")].reset_index(drop=True)
+    replay_task_ids = {sample["task_id"] for sample in replay_samples}
+    replay_ready_df = ready_df[ready_df["task_id"].isin(replay_task_ids)].reset_index(drop=True)
+
+    union_ready_path = output_dir / "osworld_tasks_union.parquet"
+    replay_ready_df.to_parquet(union_ready_path, index=False)
+
+    replay_ready_path = output_dir / "osworld_tasks_replay76.parquet"
+    replay_ready_df.to_parquet(replay_ready_path, index=False)
+
     platform_counts = dict(Counter(union_df["platform"].tolist()))
     stats = {
         "union_task_ids": len(union_task_ids),
         "task_config_distill": len(distill_configs),
         "task_config_osworld": len(osworld_configs),
         "union_all_rows": len(union_df),
-        "union_ready_rows": len(ready_df),
+        "union_ready_rows": len(replay_ready_df),
+        "replay_ready_rows": len(replay_ready_df),
         "platform_counts": platform_counts,
         "replay_stats": replay_stats,
     }
@@ -395,6 +403,7 @@ def main() -> int:
 
     print(f"wrote {union_all_path}")
     print(f"wrote {union_ready_path}")
+    print(f"wrote {replay_ready_path}")
     print(f"wrote {replay_path}")
     print(f"wrote {stats_path}")
     print(json.dumps(stats, indent=2))

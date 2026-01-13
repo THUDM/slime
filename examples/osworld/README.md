@@ -141,13 +141,13 @@ OSWORLD_REWARD_DEBUG_LIMIT=10 bash examples/osworld/train_grpo.sh
 
 Primary artifacts (from `Jarrodbarnes/osworld-union-v1`):
 
-- `/ephemeral/osworld_union/osworld_tasks_union.parquet` (149 Ubuntu tasks with full task_config)
+- `/ephemeral/osworld_union/osworld_tasks_replay76.parquet` (66 Ubuntu tasks with replay overlap + full task_config; 76 total including Windows)
 - `/ephemeral/osworld_union/osworld_replay_union.jsonl` (expanded replay buffer, normalized system prompt)
 - `/ephemeral/osworld_union/osworld_union_stats.json`
 
 ### Task Coverage
 
-This cookbook uses a subset of OSWorld (149 Ubuntu tasks; ~40% of `test_all`). Windows tasks are excluded to avoid environment mismatches.
+This cookbook uses a subset of OSWorld (66 Ubuntu tasks with replay overlap; Windows tasks are excluded to avoid environment mismatches).
 
 ### Reproducibility (Rebuild from Sources)
 
