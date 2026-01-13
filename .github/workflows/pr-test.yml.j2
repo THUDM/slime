@@ -21,6 +21,7 @@
       'tests': [
         {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1'},
         {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8},
         {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
         {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
@@ -125,6 +126,8 @@ jobs:
       GITHUB_COMMIT_NAME: ${{ github.sha }}_${{ github.event.pull_request.number || 'non-pr' }}
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
       SLIME_TEST_ENABLE_INFINITE_RUN: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.infinite_run) || 'false' }}
+      SLIME_TEST_USE_DEEPEP: ${{ matrix.info.use_deepep || '0' }}
+      SLIME_TEST_USE_FP8_ROLLOUT: ${{ matrix.info.use_fp8_rollout || '0' }}
 
     steps:
       - name: Checkout repository

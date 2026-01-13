@@ -76,7 +76,8 @@ def execute():
         "--entropy-coef 0.00 "
         "--eps-clip 4e-4 "
         "--use-tis "
-        "--use-routing-replay "
+        "--use-rollout-routing-replay "
+        "--use-slime-router "
     )
 
     optimizer_args = (
