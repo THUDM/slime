@@ -645,7 +645,7 @@ async def _generate_impl(
     env: OSWorldEnvWrapper = build_env(sample, args, config_overrides=state.env_defaults)
 
     try:
-        observation, reset_info = env.reset()
+        observation, reset_info = await asyncio.to_thread(env.reset)
         sample.metadata = sample.metadata or {}
         sample.metadata.update(on_reset(env, observation, sample, reset_info))
 
@@ -681,7 +681,7 @@ async def _generate_impl(
 
             response_history.append(response_text)
 
-            observation, done, step_info = env.step(response_text)
+            observation, done, step_info = await asyncio.to_thread(env.step, response_text)
             if step_info and "step_signal" in step_info:
                 step_signal = step_info["step_signal"]
                 screen_changed = step_signal.get("screen_changed")
@@ -692,7 +692,8 @@ async def _generate_impl(
             if done:
                 break
 
-        sample.metadata.update(finalize_episode(env, observation, sample, response_history))
+        finalize_meta = await asyncio.to_thread(finalize_episode, env, observation, sample, response_history)
+        sample.metadata.update(finalize_meta)
 
         kept_obs = observation_history
         kept_responses = response_history
