@@ -945,7 +945,21 @@ def generate_rollout(
                     )
 
         # Drop aborted/invalid samples to avoid zero-length response issues in training.
-        group_results = [s for s in group_results if not getattr(s, "remove_sample", False)]
+        # Also drop samples missing multimodal inputs to prevent training crashes.
+        filtered_results = []
+        for sample in group_results:
+            if getattr(sample, "remove_sample", False):
+                continue
+            if getattr(sample, "multimodal_train_inputs", None) is None:
+                meta = sample.metadata if isinstance(sample.metadata, dict) else {}
+                task_id = meta.get("task_id", "unknown")
+                logger.warning(
+                    "Dropping sample with missing multimodal_train_inputs "
+                    f"(task_id={task_id})"
+                )
+                continue
+            filtered_results.append(sample)
+        group_results = filtered_results
         all_results.append(group_results)
 
     return RolloutFnTrainOutput(samples=all_results)
