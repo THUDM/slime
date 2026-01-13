@@ -420,6 +420,31 @@ def _build_multimodal_training_inputs(
     apply_chat_template_kwargs: dict | None = None,
 ) -> tuple[list[int], int, list[int], dict | None]:
     """Build multimodal tokens, loss masks, and multimodal inputs for training."""
+    def _validate_multimodal_tokens(token_ids: list[int], mm_inputs: dict | None):
+        if not mm_inputs:
+            return
+        has_images = any(k in mm_inputs for k in ("pixel_values", "image_grid_thw", "image_sizes"))
+        if not has_images:
+            return
+        image_token_ids: set[int] = set()
+        for attr in ("image_token_id", "image_token_ids"):
+            if hasattr(tokenizer, attr):
+                val = getattr(tokenizer, attr)
+                if isinstance(val, (list, tuple, set)):
+                    image_token_ids.update(int(v) for v in val)
+                elif val is not None:
+                    image_token_ids.add(int(val))
+        for tok in ("<image>", "<image_pad>", "<image_placeholder>"):
+            try:
+                tok_id = tokenizer.convert_tokens_to_ids(tok)
+                if tok_id is not None and tok_id != tokenizer.unk_token_id:
+                    image_token_ids.add(int(tok_id))
+            except Exception:
+                pass
+        if image_token_ids:
+            count = sum(1 for tid in token_ids if tid in image_token_ids)
+            if count == 0:
+                raise ValueError("Image features present but no image tokens in input_ids")
     chat_template_kwargs = {
         key: value for key, value in (apply_chat_template_kwargs or {}).items() if key != "add_generation_prompt"
     }
@@ -491,6 +516,7 @@ def _build_multimodal_training_inputs(
 
         if isinstance(multimodal_inputs, dict) and not multimodal_inputs:
             multimodal_inputs = None
+        _validate_multimodal_tokens(multimodal_token_ids, multimodal_inputs)
         return multimodal_token_ids, response_length, loss_mask, multimodal_inputs
     except Exception:
         logger.warning(
@@ -548,6 +574,7 @@ def _build_multimodal_training_inputs(
     multimodal_inputs = extra_info.get("multimodal_inputs")
     if isinstance(multimodal_inputs, dict) and not multimodal_inputs:
         multimodal_inputs = None
+    _validate_multimodal_tokens(multimodal_token_ids, multimodal_inputs)
     return multimodal_token_ids, response_length, loss_mask, multimodal_inputs
 
 
