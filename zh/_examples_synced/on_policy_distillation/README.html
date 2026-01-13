@@ -54,7 +54,7 @@
     <link rel="prev" title="Multi-Agent RL" href="../multi_agent/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
   </head>
   
   
@@ -459,7 +459,7 @@ document.write(`
                   
   <section class="tex2jax_ignore mathjax_ignore" id="on-policy-distillation-example">
 <h1>On-Policy Distillation Example<a class="headerlink" href="#on-policy-distillation-example" title="Link to this heading">#</a></h1>
-<p>This example shows how to run <strong>on-policy distillation</strong> using Slime. A small student (Qwen3-8B) is aligned to imitate a larger teacher (Qwen3-32B) by training only on the student's own rollouts and matching the teacher's token-level log-probabilities.</p>
+<p>This example shows how to run <strong>on-policy distillation</strong> using slime. A small student (Qwen3-8B) is aligned to imitate a larger teacher (Qwen3-32B) by training only on the student's own rollouts and matching the teacher's token-level log-probabilities.</p>
 <p>In this example, the teacher model acts as a reward model (RM) by providing teacher log probabilities as the supervision signal.</p>
 <section id="components">
 <h2>Components<a class="headerlink" href="#components" title="Link to this heading">#</a></h2>
@@ -527,7 +527,7 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 <h1>FAQ<a class="headerlink" href="#faq" title="Link to this heading">#</a></h1>
 <ol class="arabic simple">
 <li><p><strong>Why are teacher logits computed via a sglang server instead of inside the training backend?</strong>
-The teacher runs on an independent SGLang server that Slime treats as a reward model. Hosting it inside Megatron/FSDP would require maintaining a second, fully configured training stack for the teacher.</p></li>
+The teacher runs on an independent SGLang server that slime treats as a reward model. Hosting it inside Megatron/FSDP would require maintaining a second, fully configured training stack for the teacher.</p></li>
 </ol>
 </section>
 <section class="tex2jax_ignore mathjax_ignore" id="references">
@@ -626,7 +626,7 @@ The teacher runs on an independent SGLang server that Slime treats as a reward m
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 12 日.
+  最后更新于 2026 年 01 月 13 日.
   <br/>
 </p>
   </div>

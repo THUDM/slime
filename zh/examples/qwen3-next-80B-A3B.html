@@ -52,7 +52,7 @@
     <link rel="search" title="搜索" href="../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
   </head>
   
   
@@ -465,14 +465,14 @@ hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-Next-80B-A3
 </pre></div>
 </div>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>slime/
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
 
 <span class="c1"># (for acceleration) </span>
 <span class="nb">cd</span><span class="w"> </span>..<span class="w"> </span><span class="c1"># and find a proper folder</span>
 git<span class="w"> </span>clone<span class="w"> </span>https://github.com/fla-org/flash-linear-attention
 <span class="nb">cd</span><span class="w"> </span>flash-linear-attention
 git<span class="w"> </span>checkout<span class="w"> </span>9714c595
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
 
 wget<span class="w"> </span>https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.5.4/causal_conv1d-1.5.4+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
 pip<span class="w"> </span>install<span class="w"> </span>./causal_conv1d-1.5.4+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
@@ -612,7 +612,7 @@ bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B-fsdp.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 12 日.
+  最后更新于 2026 年 01 月 13 日.
   <br/>
 </p>
   </div>

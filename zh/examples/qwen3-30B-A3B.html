@@ -54,7 +54,7 @@
     <link rel="prev" title="8xH100 训练 GLM4-9B" href="glm4-9B.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
   </head>
   
   
@@ -462,7 +462,7 @@ document.write(`
 <p>搭建环境、下载模型、数据与 ckpt 转换均与 Qwen3-4B 模型相同，可以参考 <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">示例：Qwen3-4B</span></a>，将文中 Qwen3-4B 的部分转换为 Qwen3-30B-A3B 即可。</p>
 <p>可以用如下方法把 huggingface checkpoint 转化为 torch_dist 格式：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>slime/
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
 <span class="nb">source</span><span class="w"> </span>scripts/models/qwen3-30B-A3B.sh
 <span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM/<span class="w"> </span>torchrun<span class="w"> </span>--nproc-per-node<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
@@ -652,7 +652,7 @@ bash<span class="w"> </span>scripts/run-qwen3-30B-A3B.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 12 日.
+  最后更新于 2026 年 01 月 13 日.
   <br/>
 </p>
   </div>

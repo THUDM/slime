@@ -54,7 +54,7 @@
     <link rel="prev" title="Debugging" href="../developer_guide/debug.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Jan 12, 2026"/>
+    <meta name="docbuild:last-update" content="Jan 13, 2026"/>
   </head>
   
   
@@ -511,7 +511,7 @@ docker<span class="w"> </span>build<span class="w"> </span>-f<span class="w"> </
 <p>Then, download and install slime:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/THUDM/slime.git
 <span class="nb">cd</span><span class="w"> </span>slime
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
 </pre></div>
 </div>
 <p>Download the model and data:</p>
@@ -545,7 +545,7 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 </pre></div>
 </div>
 <p>Note: We implemented a dedicated AMD conversion script that forces a CPU-only conversion workflow using the Gloo backend to bypass hardware-specific issues. A GPU-based script for ROCm is currently in development.</p>
-<p>⚠️ If you encounter an issue where slime cannot be found, please run <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span></code> in the slime directory.</p>
+<p>⚠️ If you encounter an issue where slime cannot be found, please run <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span> <span class="pre">--no-deps</span></code> in the slime directory.</p>
 </section>
 </section>
 <section id="example-qwen3-4b">
@@ -836,7 +836,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jan 12, 2026.
+  Last updated on Jan 13, 2026.
   <br/>
 </p>
   </div>

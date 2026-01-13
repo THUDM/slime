@@ -54,7 +54,7 @@
     <link rel="prev" title="GLM4-9B with 8xH100" href="glm4-9B.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Jan 12, 2026"/>
+    <meta name="docbuild:last-update" content="Jan 13, 2026"/>
   </head>
   
   
@@ -466,7 +466,7 @@ document.write(`
 <p>The environment setup, model download, data, and checkpoint conversion are the same as for the Qwen3-4B model. You can refer to <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">Example: Qwen3-4B Model</span></a>, replacing mentions of Qwen3-4B with Qwen3-30B-A3B.</p>
 <p>To convert huggingface checkpoint to torch_dist, please try:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>slime/
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
 <span class="nb">source</span><span class="w"> </span>scripts/models/qwen3-30B-A3B.sh
 <span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM/<span class="w"> </span>torchrun<span class="w"> </span>--nproc-per-node<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
@@ -655,7 +655,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jan 12, 2026.
+  Last updated on Jan 13, 2026.
   <br/>
 </p>
   </div>

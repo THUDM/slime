@@ -52,7 +52,7 @@
     <link rel="search" title="搜索" href="../../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
   </head>
   
   
@@ -459,13 +459,13 @@ document.write(`
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/
 git<span class="w"> </span>clone<span class="w"> </span>https://github.com/THUDM/slime.git
 <span class="nb">cd</span><span class="w"> </span>slime
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
 <span class="c1"># for tau bench </span>
 <span class="nb">cd</span><span class="w"> </span>/root/
 git<span class="w"> </span>clone<span class="w"> </span>https://github.com/JD-ETH/tau-bench.git
 <span class="nb">cd</span><span class="w"> </span>tau-bench
 git<span class="w"> </span>checkout<span class="w"> </span>feature/litellm-retry
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps<span class="w"> </span>
 </pre></div>
 </div>
 <p>Use the following script to generate mock data for slime training.</p>
@@ -574,7 +574,7 @@ bash<span class="w"> </span>examples/tau-bench/run_qwen3_4B.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 12 日.
+  最后更新于 2026 年 01 月 13 日.
   <br/>
 </p>
   </div>

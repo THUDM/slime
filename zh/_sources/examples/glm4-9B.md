@@ -8,7 +8,7 @@
 cd /root/
 git clone https://github.com/THUDM/slime.git
 cd slime/
-pip install -e .
+pip install -e . --no-deps
 ```
 
 下载模型与数据：

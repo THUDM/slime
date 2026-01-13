@@ -52,7 +52,7 @@
     <link rel="search" title="搜索" href="../../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 12 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
   </head>
   
   
@@ -545,7 +545,7 @@ document.write(`
 <h4>1. Convert HuggingFace Weights to INT4<a class="headerlink" href="#convert-huggingface-weights-to-int4" title="Link to this heading">#</a></h4>
 <p>First, download the PTQ (Post-Training Quantization) calibration dataset from HuggingFace:
 <a class="reference external" href="https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1">https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1</a></p>
-<p>Next, use the <code class="docutils literal notranslate"><span class="pre">tools/convert_hf_to_hf_int4.py</span></code> script to convert BF16 weights to INT4 format. Ensure that the <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> parameter points to a directory where <code class="docutils literal notranslate"><span class="pre">config.json</span></code> contains the correct <code class="docutils literal notranslate"><span class="pre">quantization_config</span></code>. Slime will automatically utilize INT4 quantization during weight updates.</p>
+<p>Next, use the <code class="docutils literal notranslate"><span class="pre">tools/convert_hf_to_hf_int4.py</span></code> script to convert BF16 weights to INT4 format. Ensure that the <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> parameter points to a directory where <code class="docutils literal notranslate"><span class="pre">config.json</span></code> contains the correct <code class="docutils literal notranslate"><span class="pre">quantization_config</span></code>. slime will automatically utilize INT4 quantization during weight updates.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/convert_hf_to_hf_int4.py<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--input-dir<span class="w"> </span>/path/to/your/original/models<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--output-dir<span class="w"> </span>/path/to/your/save/models<span class="w"> </span><span class="se">\</span>
@@ -671,7 +671,7 @@ bash<span class="w"> </span>examples/low_precision/run-kimi-k2-Thinking-int4.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 12 日.
+  最后更新于 2026 年 01 月 13 日.
   <br/>
 </p>
   </div>

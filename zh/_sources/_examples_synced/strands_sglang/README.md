@@ -1,4 +1,4 @@
-# Slime x Strands-SGLang
+# slime x Strands-SGLang
 
 This example connects `slime` with [`strands-sglang`](https://github.com/horizon-rl/strands-sglang) (SGLang extension for the agentic scaffolding [`strands`](https://github.com/strands-agents/sdk-python)) for agentic RL training.
 
@@ -20,7 +20,7 @@ This example connects `slime` with [`strands-sglang`](https://github.com/horizon
 
 1. Pull the `slimerl/slime:latest` image and enter it
 2. Go to slime folder: `cd /root/slime`
-3. Install Slime: `pip install -e .`
+3. Install slime: `pip install -e . --no-deps`
 4. Go to the example folder: `cd /root/slime/examples/strands_sglang`
 5. Install other dependencies: `pip install -r requirements.txt`
 
