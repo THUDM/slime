@@ -839,6 +839,9 @@ def generate_rollout(
         task_id = _extract_task_id(base_sample.metadata)
 
         group_results: list[Sample] = []
+        sample_copies: list[Sample] = []
+        coros = []
+
         for sample_idx in range(n_samples):
             sample_copy = Sample(
                 prompt=base_sample.prompt,
@@ -846,22 +849,19 @@ def generate_rollout(
                 status=Sample.Status.PENDING,
                 metadata=dict(base_sample.metadata) if base_sample.metadata else {},
             )
+            sample_copies.append(sample_copy)
+            coros.append(generate(args, sample_copy, sampling_params, evaluation=evaluation))
 
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                try:
-                    result = loop.run_until_complete(
-                        generate(args, sample_copy, sampling_params, evaluation=evaluation)
-                    )
-                finally:
-                    loop.close()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            results = loop.run_until_complete(asyncio.gather(*coros, return_exceptions=True))
+        finally:
+            loop.close()
 
-                group_results.append(result)
-
-            except Exception as e:
-                logger.error(f"generate_rollout: Error generating sample {sample_idx}: {e}")
-                # Create failed sample
+        for sample_idx, (sample_copy, result) in enumerate(zip(sample_copies, results)):
+            if isinstance(result, Exception):
+                logger.error(f"generate_rollout: Error generating sample {sample_idx}: {result}")
                 sample_copy.status = Sample.Status.ABORTED
                 sample_copy.reward = 0.0
                 sample_copy.tokens = [0]
@@ -869,6 +869,8 @@ def generate_rollout(
                 sample_copy.loss_mask = [0]
                 sample_copy.remove_sample = True
                 group_results.append(sample_copy)
+                continue
+            group_results.append(result)
 
         # Compute shaped rewards for all samples before replay injection check
         # This is required because custom rollout functions bypass the standard RM flow
