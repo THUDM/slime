@@ -65,11 +65,6 @@ Currently, FP8 is far from being a complete feature and still has the following 
 
 The slime team will continue to collaborate with the NVIDIA team to contribute more complete FP8 training infrastructure to the community.
 
-
-Here is a polished and professional version of your documentation.
-
-I have corrected grammatical errors, improved the flow, standardizes the terminology (e.g., capitalizing "STE"), and clarified the instructions.
-
 ***
 
 ## INT4 Training Examples
