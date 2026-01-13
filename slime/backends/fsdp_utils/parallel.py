@@ -21,9 +21,7 @@ def create_fsdp_parallel_state(args: Namespace) -> ParallelState:
     dp_rank = rank // cp_size
     cp_rank = rank % cp_size
 
-    mesh = init_device_mesh(
-        "cuda", mesh_shape=(world_size // cp_size, cp_size), mesh_dim_names=("dp", "cp")
-    )
+    mesh = init_device_mesh("cuda", mesh_shape=(world_size // cp_size, cp_size), mesh_dim_names=("dp", "cp"))
 
     logger.info(
         f"[Rank {rank}] Device mesh (2D): world_size={world_size}, "
@@ -54,8 +52,7 @@ def create_fsdp_parallel_state(args: Namespace) -> ParallelState:
         tp_rank=0,
         tp_group=dist.new_group([rank]),
     )
-    
-    # Add FSDP-specific fields
+
     parallel_state.dp_mesh = mesh["dp"]
-    
+
     return parallel_state

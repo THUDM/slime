@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import torch.distributed as dist
 
 
@@ -7,6 +7,7 @@ class ParallelState:
     """Core parallel state shared across all backends.
     Required by the general training utils.
     """
+
     dp_rank: int
     dp_src_rank: int
     dp_size: int

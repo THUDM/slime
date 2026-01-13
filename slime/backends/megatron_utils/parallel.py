@@ -48,7 +48,7 @@ def create_megatron_parallel_state(
         vpp_size=vpp_size,
         microbatch_group_size_per_vp_stage=microbatch_group_size_per_vp_stage,
     )
-    
+
     return parallel_state
 
 
