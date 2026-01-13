@@ -120,14 +120,6 @@ MISC_ARGS=(
    --attention-backend flash
 )
 
-PRECISE_ARGS=(
-   --transformer-impl transformer_engine
-   --bf16
-   --fp8-format e4m3
-   --fp8-recipe blockwise
-   --fp8-param-gather
-)
-
 
 # launch the master node of ray in container
 export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
@@ -159,5 +151,4 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
-   ${MISC_ARGS[@]} \
-   ${PRECISE_ARGS[@]}
+   ${MISC_ARGS[@]}

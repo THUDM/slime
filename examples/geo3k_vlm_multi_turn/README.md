@@ -1,9 +1,14 @@
-# VLM Multi-Turn (FSDP backend, geo3k dataset)
-Training VLM with FSDP on [geo3k dataset](https://huggingface.co/datasets/hiyouga/geometry3k) with multi-turn reasoning with interactive environment feedback, using GRPO. For dataset, we used the [processed version](https://huggingface.co/datasets/VeraIsHere/geo3k_imgurl_processed).
+# VLM Multi-Turn (geo3k dataset)
+Training VLM on [geo3k dataset](https://huggingface.co/datasets/hiyouga/geometry3k) with multi-turn reasoning with interactive environment feedback, using GRPO. For the dataset, we used the [processed version](https://huggingface.co/datasets/VeraIsHere/geo3k_imgurl_processed).
 
-The multi-turn rollout is implemented through a custom generate function  `examples.geo3k_vlm_multi_turn.rollout.generate`, overriding the original generate function.
+Note: Please make sure the cudnn version in the environment is 9.16.0.29 to prevent severe performance regression in conv3d in torch 2.9 mentioned in https://github.com/pytorch/pytorch/issues/168167. Otherwise, you can reinstall cudnn with:
+```bash
+pip install nvidia-cudnn-cu12==9.16.0.29
+```
 
-In terms of the environment interaction, this example initializes a custom interactive environment in `examples/geo3k_vlm_multi_turn/env_geo3k.py` with the APIs below.
+The multi-turn rollout is implemented through a [custom generate function](rollout.py#L309), overriding the original generate function.
+
+In terms of the environment interaction, this example initializes a [custom interactive environment](env_geo3k.py) with the APIs below.
 <details>
 <summary>Environment API (geo3k)</summary>
 
@@ -16,7 +21,8 @@ In terms of the environment interaction, this example initializes a custom inter
 
 The reward model is the default math RM. 
 
-![VLM multi-turn geo3k reward](vlm_multi_turn_geo3k_reward.png)
+![VLM multi-turn geo3k reward](geo3k_vlm_multi_turn_reward.png)
+![Rollout megatron](rollout_experiment_result_megatron.png)
 
 ## Reproduce
 ```bash

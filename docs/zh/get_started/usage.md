@@ -373,7 +373,7 @@ hf download --repo-type dataset zhuzilin/aime-2024 \
 # 克隆代码并安装依赖
 git clone https://github.com/THUDM/slime.git
 cd slime
-pip install -e .
+pip install -e . --no-deps
 
 
 # FSDP不用进行权重转换，native 支持 huggingface 格式
