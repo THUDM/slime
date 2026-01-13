@@ -1,3 +1,20 @@
+diff --git a/python/sglang/srt/configs/model_config.py b/python/sglang/srt/configs/model_config.py
+index f807deedb..4c0407dec 100644
+--- a/python/sglang/srt/configs/model_config.py
++++ b/python/sglang/srt/configs/model_config.py
+@@ -269,6 +269,12 @@ class ModelConfig:
+         ):
+             self.hf_config.architectures[0] = "DeepseekV3ForCausalLMNextN"
+ 
++        if (
++            is_draft_model
++            and self.hf_config.architectures[0] == "DeepseekV32ForCausalLM"
++        ):
++            self.hf_config.architectures[0] = "DeepseekV3ForCausalLMNextN"
++
+         if is_draft_model and self.hf_config.architectures[0] == "Glm4MoeForCausalLM":
+             self.hf_config.architectures[0] = "Glm4MoeForCausalLMNextN"
+ 
 diff --git a/python/sglang/srt/disaggregation/decode.py b/python/sglang/srt/disaggregation/decode.py
 index 199885244..742ad0639 100644
 --- a/python/sglang/srt/disaggregation/decode.py
@@ -746,7 +763,7 @@ index 1f1875254..51d8651ce 100644
          parameter = self.model_runner.get_weights_by_name(
              recv_req.name, recv_req.truncate_size
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index 1d69c0582..c849913e9 100644
+index 1d69c0582..d984c2e12 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
 @@ -558,7 +558,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
@@ -784,7 +801,7 @@ index 1d69c0582..c849913e9 100644
  
          if self.eplb_manager is not None:
              self.eplb_manager.on_forward_pass_end()
-@@ -2436,6 +2445,42 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -2436,6 +2445,41 @@ class ModelRunner(ModelRunnerKVCacheMixin):
              logger.error(f"IPC weight update failed: {e}")
              return False, str(e)
  
@@ -809,7 +826,6 @@ index 1d69c0582..c849913e9 100644
 +                        quant_method.restore_weights_before_loading(module)
 +
 +        if recv_req.post_process_quantization:
-+
 +            # Iterate through all modules to apply specific post-loading processing
 +            for _, module in self.model.named_modules():
 +                quant_method = getattr(module, "quant_method", None)
