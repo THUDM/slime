@@ -1,19 +1,22 @@
 import os
+
 import slime.utils.external_utils.command_utils as U
+
 
 ENABLE_EVAL = bool(int(os.environ.get("SLIME_TEST_ENABLE_EVAL", "1")))
 TIGHT_HOST_MEMORY = bool(int(os.environ.get("SLIME_TEST_TIGHT_HOST_MEMORY", "1")))
+USE_DEEPEP = bool(int(os.environ.get("SLIME_TEST_USE_DEEPEP", "1")))
+USE_FP8_ROLLOUT = bool(int(os.environ.get("SLIME_TEST_USE_FP8_ROLLOUT", "1")))
 
-MODEL_NAME = "Moonlight-16B-A3B-Instruct"
-MODEL_TYPE = "moonlight"
+MODEL_NAME = "Qwen3-30B-A3B"
+MODEL_TYPE = "qwen3-30B-A3B"
 NUM_GPUS = 8
 
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
-    U.exec_command(
-        "hf download moonshotai/Moonlight-16B-A3B-Instruct --local-dir /root/models/Moonlight-16B-A3B-Instruct"
-    )
+    U.exec_command("hf download Qwen/Qwen3-30B-A3B --local-dir /root/models/Qwen3-30B-A3B")
+    U.exec_command("hf download Qwen/Qwen3-30B-A3B-FP8 --local-dir /root/models/Qwen3-30B-A3B-FP8")
     U.hf_download_dataset("zhuzilin/dapo-math-17k")
     U.hf_download_dataset("zhuzilin/aime-2024")
 
@@ -21,7 +24,10 @@ def prepare():
 
 
 def execute():
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} " f"--ref-load /root/{MODEL_NAME}_torch_dist "
+    if USE_FP8_ROLLOUT:
+        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}-FP8 " f"--ref-load /root/{MODEL_NAME}_torch_dist "
+    else:
+        ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME} " f"--ref-load /root/{MODEL_NAME}_torch_dist "
 
     rollout_args = (
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
@@ -29,25 +35,26 @@ def execute():
         "--label-key label "
         "--apply-chat-template "
         "--rollout-shuffle "
-        "--rm-type math "
+        "--rm-type deepscaler "
         "--num-rollout 3 "
         "--rollout-batch-size 8 "
         "--n-samples-per-prompt 8 "
-        "--rollout-max-response-len 4096 "
+        "--rollout-max-response-len 8192 "
         "--rollout-temperature 1 "
         "--global-batch-size 32 "
+        "--balance-data "
     )
 
     eval_args = (
         f"{'--eval-interval 20 ' if ENABLE_EVAL else ''}"
-        "--eval-prompt-data aime /root/datasets/aime-2024/aime-2024.jsonl "
+        "--eval-prompt-data aime24 /root/datasets/aime-2024/aime-2024.jsonl "
         "--n-samples-per-eval-prompt 1 "
-        "--eval-max-response-len 4096 "
+        "--eval-max-response-len 16384 "
         "--eval-top-k 1 "
     )
 
     perf_args = (
-        "--tensor-model-parallel-size 2 "
+        "--tensor-model-parallel-size 4 "
         "--sequence-parallel "
         "--pipeline-model-parallel-size 1 "
         "--context-parallel-size 2 "
@@ -57,7 +64,7 @@ def execute():
         "--recompute-method uniform "
         "--recompute-num-layers 1 "
         "--use-dynamic-batch-size "
-        f"--max-tokens-per-gpu {2048 if TIGHT_HOST_MEMORY else 2048} "
+        f"--max-tokens-per-gpu {2048 if TIGHT_HOST_MEMORY else 16384} "
     )
 
     grpo_args = (
@@ -68,6 +75,9 @@ def execute():
         "--kl-coef 0.00 "
         "--entropy-coef 0.00 "
         "--eps-clip 4e-4 "
+        "--use-tis "
+        "--use-rollout-routing-replay "
+        "--use-slime-router "
     )
 
     optimizer_args = (
@@ -77,24 +87,41 @@ def execute():
         "--weight-decay 0.1 "
         "--adam-beta1 0.9 "
         "--adam-beta2 0.98 "
+        "--optimizer-cpu-offload "
+        "--overlap-cpu-optimizer-d2h-h2d "
+        "--use-precision-aware-optimizer "
     )
 
     sglang_args = (
-        "--rollout-num-gpus-per-engine 2 " "--sglang-mem-fraction-static 0.8 " "--sglang-max-running-requests 512 "
+        "--rollout-num-gpus-per-engine 8 "
+        "--sglang-mem-fraction-static 0.8 "
+        "--sglang-max-running-requests 512 "
+        "--sglang-enable-metrics "
     )
+
+    if USE_DEEPEP:
+        sglang_args += "--sglang-moe-a2a-backend deepep --sglang-deepep-mode auto "
 
     ci_args = "--ci-test "
 
     misc_args = (
+        # default dropout in megatron is 0.1
         "--attention-dropout 0.0 "
         "--hidden-dropout 0.0 "
+        # should be good for model performance
         "--accumulate-allreduce-grads-in-fp32 "
         "--attention-softmax-in-fp32 "
+        # need to comment this when using model with MLA
         "--attention-backend flash "
         "--actor-num-nodes 1 "
         "--actor-num-gpus-per-node 8 "
         "--colocate "
     )
+
+    if USE_DEEPEP:
+        misc_args += "--moe-token-dispatcher-type flex --moe-enable-deepep "
+    else:
+        misc_args += "--moe-token-dispatcher-type alltoall "
 
     train_args = (
         f"{ckpt_args} "
@@ -117,6 +144,7 @@ def execute():
 
 
 if __name__ == "__main__":
+    # TODO also use typer
     prepare()
     for proxy_var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
         os.environ.pop(proxy_var, None)
