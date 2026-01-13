@@ -34,12 +34,12 @@ CUDA_VISIBLE_DEVICES_OVERRIDE=${SLIME_SCRIPT_CUDA_VISIBLE_DEVICES:-"0,1,2,3"}
 export OSWORLD_SCREEN_DIFF_THRESHOLD=${SLIME_SCRIPT_SCREEN_DIFF_THRESHOLD:-0.005}
 
 POLICY_CKPT=${SLIME_SCRIPT_SFT_CKPT:-"/ephemeral/osworld-vlm-sft-step25-hf"}
-TASK_DATA=${SLIME_SCRIPT_TASK_DATA:-"/ephemeral/osworld_union/osworld_tasks_replay76.parquet"}
+TASK_DATA=${SLIME_SCRIPT_TASK_DATA:-"/ephemeral/osworld_train/osworld_tasks_train.parquet"}
 EVAL_DATA=${SLIME_SCRIPT_EVAL_DATA:-"/ephemeral/osworld_tasks/test.parquet"}
 OUTPUT_DIR="/ephemeral/osworld-vlm-gspo-4b-replay"
 DISABLE_EVAL=${SLIME_SCRIPT_DISABLE_EVAL:-"true"}
 
-export OSWORLD_REPLAY_BUFFER=${SLIME_SCRIPT_REPLAY_BUFFER:-"/ephemeral/osworld_union/osworld_replay_union.jsonl"}
+export OSWORLD_REPLAY_BUFFER=${SLIME_SCRIPT_REPLAY_BUFFER:-"/ephemeral/osworld_train/osworld_replay_train.jsonl"}
 export OSWORLD_REPLAY_THRESHOLD=${SLIME_SCRIPT_REPLAY_THRESHOLD:-"0.5"}
 export OSWORLD_REWARD_DEBUG_LIMIT=${SLIME_SCRIPT_REWARD_DEBUG_LIMIT:-"5"}
 

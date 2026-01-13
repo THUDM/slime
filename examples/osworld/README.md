@@ -27,7 +27,7 @@ git clone https://github.com/THUDM/slime.git && cd /root/slime && pip install -e
 
 # Download checkpoints and union datasets (paths must match train_grpo.sh defaults)
 huggingface-cli download Jarrodbarnes/osworld-vlm-sft-step25 --local-dir /ephemeral/osworld-vlm-sft-step25-hf
-huggingface-cli download Jarrodbarnes/osworld-union-v1 --repo-type dataset --local-dir /ephemeral/osworld_union
+huggingface-cli download Jarrodbarnes/osworld-train-v1 --repo-type dataset --local-dir /ephemeral/osworld_train
 
 # Start OSWorld server on host (requires KVM)
 # See "Environment Setup" section below
@@ -93,7 +93,7 @@ Key configuration in `train_grpo.sh`:
 |-----------|-------|---------|
 | `--n-samples-per-prompt` | 4 | Within-prompt variance |
 | `--rollout-temperature` | 0.8 → 0.5 | Exploration → stability (two-phase) |
-| `OSWORLD_REPLAY_BUFFER` | osworld_replay_union.jsonl | Replay injection |
+| `OSWORLD_REPLAY_BUFFER` | osworld_replay_train.jsonl | Replay injection |
 | `--rollout-function-path` | examples.osworld.rollout.generate_rollout | Custom batch rollout |
 
 Recommended schedule:
@@ -139,11 +139,11 @@ OSWORLD_REWARD_DEBUG_LIMIT=10 bash examples/osworld/train_grpo.sh
 
 ### Datasets
 
-Primary artifacts (from `Jarrodbarnes/osworld-union-v1`):
+Primary artifacts (from `Jarrodbarnes/osworld-train-v1`):
 
-- `/ephemeral/osworld_union/osworld_tasks_replay76.parquet` (66 Ubuntu tasks with replay overlap + full task_config; 76 total including Windows)
-- `/ephemeral/osworld_union/osworld_replay_union.jsonl` (expanded replay buffer, normalized system prompt)
-- `/ephemeral/osworld_union/osworld_union_stats.json`
+- `/ephemeral/osworld_train/osworld_tasks_train.parquet` (66 Ubuntu tasks with replay overlap + full task_config; 76 total including Windows)
+- `/ephemeral/osworld_train/osworld_replay_train.jsonl` (expanded replay buffer, normalized system prompt)
+- `/ephemeral/osworld_train/osworld_train_stats.json`
 
 ### Task Coverage
 
@@ -158,7 +158,7 @@ git clone https://github.com/xlang-ai/OSWorld.git /root/OSWorld
 python examples/osworld/tools/build_union_datasets.py \
   --hf-root /ephemeral \
   --osworld-repo /root/OSWorld \
-  --output-dir /ephemeral/osworld_union
+  --output-dir /ephemeral/osworld_train
 ```
 
 This expects the HF datasets listed in `build_union_datasets.py` to be downloaded under `/ephemeral/osworld_datasets/`.

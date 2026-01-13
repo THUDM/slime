@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Build OSWorld union task registry and expanded replay buffer.
+"""Build OSWorld training task registry and replay buffer.
 
 This script merges all OSWorld-related HF datasets into:
-  - osworld_tasks_union_all.parquet: all base task_ids (with missing config flagged)
-  - osworld_tasks_union.parquet: tasks with full task_config and replay overlap (Ubuntu)
-  - osworld_tasks_replay76.parquet: same as union (explicit replay overlap file)
-  - osworld_replay_union.jsonl: expanded replay buffer with normalized system prompt
+  - osworld_tasks_all.parquet: all base task_ids (with missing config flagged)
+  - osworld_tasks_train.parquet: tasks with full task_config and replay overlap (Ubuntu)
+  - osworld_replay_train.jsonl: expanded replay buffer with normalized system prompt
+  - osworld_train_stats.json: summary stats for the train subset
 """
 
 from __future__ import annotations
@@ -367,12 +367,12 @@ def main() -> int:
     )
 
     union_df = build_union_tasks(union_task_ids, distill_configs, osworld_configs)
-    union_all_path = output_dir / "osworld_tasks_union_all.parquet"
+    union_all_path = output_dir / "osworld_tasks_all.parquet"
     union_df.to_parquet(union_all_path, index=False)
 
     env = OSWorldEnvWrapper(OSWorldEnvConfig(), task_config={})
     replay_samples, replay_stats = build_replay_buffer(replay_sources, env)
-    replay_path = output_dir / "osworld_replay_union.jsonl"
+    replay_path = output_dir / "osworld_replay_train.jsonl"
     with replay_path.open("w") as f:
         for sample in replay_samples:
             f.write(json.dumps(sample, ensure_ascii=False) + "\n")
@@ -381,11 +381,8 @@ def main() -> int:
     replay_task_ids = {sample["task_id"] for sample in replay_samples}
     replay_ready_df = ready_df[ready_df["task_id"].isin(replay_task_ids)].reset_index(drop=True)
 
-    union_ready_path = output_dir / "osworld_tasks_union.parquet"
+    union_ready_path = output_dir / "osworld_tasks_train.parquet"
     replay_ready_df.to_parquet(union_ready_path, index=False)
-
-    replay_ready_path = output_dir / "osworld_tasks_replay76.parquet"
-    replay_ready_df.to_parquet(replay_ready_path, index=False)
 
     platform_counts = dict(Counter(union_df["platform"].tolist()))
     stats = {
@@ -398,12 +395,11 @@ def main() -> int:
         "platform_counts": platform_counts,
         "replay_stats": replay_stats,
     }
-    stats_path = output_dir / "osworld_union_stats.json"
+    stats_path = output_dir / "osworld_train_stats.json"
     stats_path.write_text(json.dumps(stats, indent=2))
 
     print(f"wrote {union_all_path}")
     print(f"wrote {union_ready_path}")
-    print(f"wrote {replay_ready_path}")
     print(f"wrote {replay_path}")
     print(f"wrote {stats_path}")
     print(json.dumps(stats, indent=2))
