@@ -28,6 +28,7 @@ if [ "$CP_SIZE" -gt 1 ]; then
 fi
 # Training turns (exported for Ray job) - max 8 based on trajectory data
 export OSWORLD_TRAIN_TRUNCATE_TURNS=${SLIME_SCRIPT_TRAIN_TRUNCATE_TURNS:-6}
+export OSWORLD_MAX_TURNS=${SLIME_SCRIPT_MAX_TURNS:-""}
 CUDA_VISIBLE_DEVICES_OVERRIDE=${SLIME_SCRIPT_CUDA_VISIBLE_DEVICES:-"0,1,2,3"}
 
 export OSWORLD_SCREEN_DIFF_THRESHOLD=${SLIME_SCRIPT_SCREEN_DIFF_THRESHOLD:-0.005}
@@ -75,6 +76,9 @@ CKPT_ARGS=(
     --hf-checkpoint "$POLICY_CKPT"
 )
 
+NUM_ROLLOUT=${SLIME_SCRIPT_NUM_ROLLOUT:-16}
+ROLLOUT_MAX_RESPONSE_LEN=${SLIME_SCRIPT_ROLLOUT_MAX_RESPONSE_LEN:-384}
+
 ROLLOUT_ARGS=(
     --prompt-data "$TASK_DATA"
     --input-key prompt
@@ -82,10 +86,10 @@ ROLLOUT_ARGS=(
     --apply-chat-template
     --loss-mask-type qwen3
     --rollout-shuffle
-    --num-rollout 16
+    --num-rollout ${NUM_ROLLOUT}
     --rollout-batch-size 1
     --n-samples-per-prompt 4
-    --rollout-max-response-len 384
+    --rollout-max-response-len ${ROLLOUT_MAX_RESPONSE_LEN}
     --rollout-max-context-len ${SLIME_SCRIPT_MAX_CONTEXT:-16384}
     --rollout-temperature "$ROLLOUT_TEMPERATURE"
     --rollout-top-p "$ROLLOUT_TOP_P"
@@ -174,6 +178,7 @@ RUNTIME_ENV_JSON="{
     \"OSWORLD_REWARD_ALPHA\": \"0.3\",
     \"OSWORLD_REWARD_DEBUG_LIMIT\": \"3\",
     \"OSWORLD_TRAIN_TRUNCATE_TURNS\": \"${OSWORLD_TRAIN_TRUNCATE_TURNS}\",
+    \"OSWORLD_MAX_TURNS\": \"${OSWORLD_MAX_TURNS}\",
     \"OSWORLD_SCREEN_DIFF_THRESHOLD\": \"${OSWORLD_SCREEN_DIFF_THRESHOLD}\",
     \"OSWORLD_SERVER_URL\": \"${OSWORLD_SERVER_URL}\",
     \"OSWORLD_TIMEOUT\": \"${OSWORLD_TIMEOUT}\",

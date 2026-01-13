@@ -101,7 +101,15 @@ class OSWorldRolloutState:
         self.custom_config = _load_custom_config(getattr(args, "custom_config_path", None))
         self.env_defaults = dict(self.custom_config.get("env_defaults", {}) or {})
         self.reward_config = dict(self.custom_config.get("reward", {}) or {})
-        self.max_turns = int(self.custom_config.get("max_turns", getattr(args, "max_turns", 8)))
+        env_max_turns = os.environ.get("OSWORLD_MAX_TURNS")
+        if env_max_turns:
+            try:
+                self.max_turns = int(env_max_turns)
+            except ValueError:
+                logger.warning("OSWORLD_MAX_TURNS must be an int, got: %s", env_max_turns)
+                self.max_turns = int(self.custom_config.get("max_turns", getattr(args, "max_turns", 8)))
+        else:
+            self.max_turns = int(self.custom_config.get("max_turns", getattr(args, "max_turns", 8)))
         self._initialized = True
 
 
