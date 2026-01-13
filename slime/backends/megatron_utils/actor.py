@@ -228,7 +228,7 @@ class MegatronTrainRayActor(TrainRayActor):
             # TODO: maybe extract a common process function for here and get_batch?
             rollout_routed_experts = [slice_with_cp(r, pad_func, self.parallel_state) for r in rollout_routed_experts]
             rollout_routed_experts = torch.cat(rollout_routed_experts, dim=0)
-            pad_size = self.parallel_state.tp_size * self.args.data_pad_size_multiplier
+            pad_size = self.parallel_state.dp_size * self.args.data_pad_size_multiplier
             pad = (pad_size - rollout_routed_experts.size(0) % pad_size) % pad_size
             if pad != 0:
                 rollout_routed_experts = pad_func(rollout_routed_experts, pad)
