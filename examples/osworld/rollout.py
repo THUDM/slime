@@ -869,60 +869,69 @@ def generate_rollout(
     state = OSWorldRolloutState(args)
 
     batch_size = args.rollout_batch_size
-    n_samples = args.n_samples_per_prompt
 
     # Initialize replay buffer singleton (logs on first call)
     replay_buffer = get_replay_buffer()
 
     all_results: list[list[Sample]] = []
 
-    for _batch_idx in range(batch_size):
-        samples = data_buffer.get_samples(1)
-        if not samples or not samples[0]:
+    sample_groups = data_buffer.get_samples(batch_size)
+    if not sample_groups:
+        return RolloutFnTrainOutput(samples=all_results)
+
+    work_items: list[tuple[int, int, Sample]] = []
+    coros = []
+    for group_idx, group in enumerate(sample_groups):
+        if not group:
+            continue
+        for sample_idx, sample in enumerate(group):
+            sample.status = Sample.Status.PENDING
+            sample.metadata = dict(sample.metadata) if sample.metadata else {}
+            work_items.append((group_idx, sample_idx, sample))
+            coros.append(generate(args, sample, sampling_params, evaluation=evaluation))
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        results = loop.run_until_complete(asyncio.gather(*coros, return_exceptions=True))
+    finally:
+        loop.close()
+
+    group_results: list[list[Sample | None]] = [[None for _ in group] for group in sample_groups]
+
+    for (group_idx, sample_idx, sample), result in zip(work_items, results):
+        if isinstance(result, Exception):
+            logger.error(f"generate_rollout: Error generating sample {sample_idx}: {result}")
+            sample.status = Sample.Status.ABORTED
+            sample.reward = 0.0
+            sample.tokens = [0]
+            sample.response_length = 1
+            sample.loss_mask = [0]
+            sample.remove_sample = True
+            group_results[group_idx][sample_idx] = sample
+            continue
+        group_results[group_idx][sample_idx] = result
+
+    for group_idx, group in enumerate(group_results):
+        if not group:
+            all_results.append([])
             continue
 
-        base_sample = samples[0][0] if isinstance(samples[0], list) else samples[0]
-        task_id = _extract_task_id(base_sample.metadata)
+        if any(sample is None for sample in group):
+            logger.error("generate_rollout: Missing results for a sample group; dropping group.")
+            all_results.append([])
+            continue
 
-        group_results: list[Sample] = []
-        sample_copies: list[Sample] = []
-        coros = []
-
-        for sample_idx in range(n_samples):
-            sample_copy = Sample(
-                prompt=base_sample.prompt,
-                index=base_sample.index,
-                status=Sample.Status.PENDING,
-                metadata=dict(base_sample.metadata) if base_sample.metadata else {},
-            )
-            sample_copies.append(sample_copy)
-            coros.append(generate(args, sample_copy, sampling_params, evaluation=evaluation))
-
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            results = loop.run_until_complete(asyncio.gather(*coros, return_exceptions=True))
-        finally:
-            loop.close()
-
-        for sample_idx, (sample_copy, result) in enumerate(zip(sample_copies, results)):
-            if isinstance(result, Exception):
-                logger.error(f"generate_rollout: Error generating sample {sample_idx}: {result}")
-                sample_copy.status = Sample.Status.ABORTED
-                sample_copy.reward = 0.0
-                sample_copy.tokens = [0]
-                sample_copy.response_length = 1
-                sample_copy.loss_mask = [0]
-                sample_copy.remove_sample = True
-                group_results.append(sample_copy)
-                continue
-            group_results.append(result)
-
+        # At this point, the group is fully populated with Samples.
+        group = [sample for sample in group if sample is not None]
         # Compute shaped rewards for all samples before replay injection check
         # This is required because custom rollout functions bypass the standard RM flow
-        for sample in group_results:
+        for sample in group:
             if sample.reward is None:
                 sample.reward = compute_reward_from_metadata(sample, state.reward_config)
+
+        base_sample = sample_groups[group_idx][0]
+        task_id = _extract_task_id(base_sample.metadata)
 
         # Replay injection: inject successful trajectory if all online rollouts failed
         # Use RAW task rewards (0 or 1) for replay decision, not shaped rewards
@@ -931,7 +940,7 @@ def generate_rollout(
         if replay_buffer is not None:
             # Extract raw task rewards from metadata for replay decision
             raw_task_rewards = []
-            for s in group_results:
+            for s in group:
                 osworld_meta = (s.metadata or {}).get("osworld", {})
                 raw = osworld_meta.get("task_reward", 0.0)
                 raw_task_rewards.append(raw)
@@ -986,7 +995,7 @@ def generate_rollout(
                         reward=replay_sample.reward,
                         metadata=replay_metadata,
                     )
-                    group_results.append(injected)
+                    group.append(injected)
                     logger.info(
                         f"Injected replay for task {task_id}: "
                         f"raw_task_rewards={raw_task_rewards}, replay_reward={replay_sample.reward}"
@@ -995,7 +1004,7 @@ def generate_rollout(
         # Drop aborted/invalid samples to avoid zero-length response issues in training.
         # Also drop samples missing multimodal inputs to prevent training crashes.
         filtered_results = []
-        for sample in group_results:
+        for sample in group:
             if getattr(sample, "remove_sample", False):
                 continue
             if getattr(sample, "multimodal_train_inputs", None) is None:
@@ -1007,7 +1016,6 @@ def generate_rollout(
                 )
                 continue
             filtered_results.append(sample)
-        group_results = filtered_results
-        all_results.append(group_results)
+        all_results.append(filtered_results)
 
     return RolloutFnTrainOutput(samples=all_results)

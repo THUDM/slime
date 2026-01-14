@@ -58,13 +58,13 @@ python3 -m venv ~/osworld_venv && source ~/osworld_venv/bin/activate
 pip install desktop-env
 git clone https://github.com/xlang-ai/OSWorld.git ~/OSWorld && cd ~/OSWorld
 git clone https://github.com/THUDM/slime.git ~/slime
-sudo -E python quickstart.py --provider_name docker  # Downloads 11.4GB VM
+sudo -E ~/osworld_venv/bin/python quickstart.py --provider_name docker  # Downloads 11.4GB VM
 sudo chown -R "$USER:$USER" ~/OSWorld  # Fix permissions after sudo
 sudo rm -f /tmp/docker_port_allocation.lck  # Ensure port lock is writable
 
 # Start server (run in tmux)
-source ~/osworld_venv/bin/activate
-python ~/slime/examples/osworld/tools/osworld_env_server.py --port 8100
+cd ~/OSWorld
+sudo -E ~/osworld_venv/bin/python ~/slime/examples/osworld/tools/osworld_env_server.py --port 8100
 ```
 
 ### Parallel Rollouts
@@ -72,9 +72,9 @@ python ~/slime/examples/osworld/tools/osworld_env_server.py --port 8100
 Scale with multiple servers:
 
 ```bash
-# On host: start servers on different ports
+# On host: start servers on different ports (run from ~/OSWorld)
 for port in 8100 8101 8102 8103; do
-  python osworld_env_server.py --port $port &
+  sudo -E ~/osworld_venv/bin/python ~/slime/examples/osworld/tools/osworld_env_server.py --port $port &
 done
 
 # In container: comma-separated URLs
