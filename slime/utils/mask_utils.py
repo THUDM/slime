@@ -7,7 +7,7 @@ def get_response_lengths(loss_masks: list[list[int]]) -> list[int]:
 
 
 class MultiTurnLossMaskGenerator:
-    def __init__(self, tokenizer: AutoTokenizer, tokenizer_type: str = "qwen"):
+    def __init__(self, tokenizer: AutoTokenizer, tokenizer_type: str = "qwen25"):
         self.tokenizer = tokenizer
         self.system_message_length, self.gen_token_length = self.get_system_message_length()
         self.tokenizer_type = tokenizer_type
@@ -45,7 +45,7 @@ class MultiTurnLossMaskGenerator:
         system_message_length = idx_1 - ((idx_2 - idx_1) - end_interval - len(raw_token_ids))
         return system_message_length, gen_token_length
 
-    def gen_multi_turn_loss_mask_qwen(
+    def gen_multi_turn_loss_mask_qwen25(
         self, messages: list[dict], tools: list[dict] = None
     ) -> tuple[list[int], list[int]]:
         all_loss_masks = []
@@ -159,7 +159,7 @@ class MultiTurnLossMaskGenerator:
             if "<｜Assistant｜>" in self.tokenizer.get_added_vocab():
                 return self.gen_multi_turn_loss_mask_distill_qwen(messages, tools)
 
-            return self.gen_multi_turn_loss_mask_qwen(messages, tools)
+            return self.gen_multi_turn_loss_mask_qwen25(messages, tools)
         elif self.tokenizer_type == "qwen3":
             return self.gen_multi_turn_loss_mask_qwen3(messages, tools)
         elif self.tokenizer_type == "distill_qwen":
