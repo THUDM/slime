@@ -27,7 +27,7 @@ if [ "$CP_SIZE" -gt 1 ]; then
     echo "Set SLIME_SCRIPT_CP_SIZE=1 to avoid assertion errors"
 fi
 # Training turns (exported for Ray job) - max 8 based on trajectory data
-export OSWORLD_TRAIN_TRUNCATE_TURNS=${SLIME_SCRIPT_TRAIN_TRUNCATE_TURNS:-6}
+export OSWORLD_TRAIN_TRUNCATE_TURNS=${SLIME_SCRIPT_TRAIN_TRUNCATE_TURNS:-8}
 export OSWORLD_MAX_TURNS=${SLIME_SCRIPT_MAX_TURNS:-""}
 CUDA_VISIBLE_DEVICES_OVERRIDE=${SLIME_SCRIPT_CUDA_VISIBLE_DEVICES:-"0,1,2,3,4,5,6,7"}
 
@@ -78,7 +78,9 @@ CKPT_ARGS=(
 
 NUM_ROLLOUT=${SLIME_SCRIPT_NUM_ROLLOUT:-8}
 ROLLOUT_BATCH_SIZE=${SLIME_SCRIPT_ROLLOUT_BATCH_SIZE:-8}
-ROLLOUT_MAX_RESPONSE_LEN=${SLIME_SCRIPT_ROLLOUT_MAX_RESPONSE_LEN:-384}
+N_SAMPLES_PER_PROMPT=${SLIME_SCRIPT_N_SAMPLES_PER_PROMPT:-2}
+ROLLOUT_MAX_RESPONSE_LEN=${SLIME_SCRIPT_ROLLOUT_MAX_RESPONSE_LEN:-400}
+ROLLOUT_MAX_CONTEXT_LEN=${SLIME_SCRIPT_MAX_CONTEXT:-8192}
 
 ROLLOUT_ARGS=(
     --prompt-data "$TASK_DATA"
@@ -89,9 +91,9 @@ ROLLOUT_ARGS=(
     --rollout-shuffle
     --num-rollout ${NUM_ROLLOUT}
     --rollout-batch-size ${ROLLOUT_BATCH_SIZE}
-    --n-samples-per-prompt 4
+    --n-samples-per-prompt ${N_SAMPLES_PER_PROMPT}
     --rollout-max-response-len ${ROLLOUT_MAX_RESPONSE_LEN}
-    --rollout-max-context-len ${SLIME_SCRIPT_MAX_CONTEXT:-16384}
+    --rollout-max-context-len ${ROLLOUT_MAX_CONTEXT_LEN}
     --rollout-temperature "$ROLLOUT_TEMPERATURE"
     --rollout-top-p "$ROLLOUT_TOP_P"
     --global-batch-size ${SLIME_SCRIPT_GLOBAL_BATCH:-2}
@@ -197,7 +199,7 @@ echo "=========================================="
 echo "Model: ${MODEL_NAME}"
 echo "Total GPUs: $NUM_GPUS | Train GPUs: $TRAIN_GPUS | Infer GPUs: $INFER_GPUS"
 echo "Context Parallel: $CP_SIZE | Data Parallel: $((TRAIN_GPUS / CP_SIZE))"
-echo "Global Batch: ${SLIME_SCRIPT_GLOBAL_BATCH:-2} | Max Context: ${SLIME_SCRIPT_MAX_CONTEXT:-16384} | Max Turns: $OSWORLD_TRAIN_TRUNCATE_TURNS"
+echo "Global Batch: ${SLIME_SCRIPT_GLOBAL_BATCH:-2} | Max Context: ${ROLLOUT_MAX_CONTEXT_LEN} | Max Turns: $OSWORLD_TRAIN_TRUNCATE_TURNS"
 echo "Output: $OUTPUT_DIR"
 echo "=========================================="
 
