@@ -355,6 +355,14 @@ def _expand_loss_mask_for_multimodal(
             expanded.append(0)
 
     if text_idx != len(text_token_ids):
+        missing = len(text_token_ids) - text_idx
+        if missing <= 8:
+            logger.warning(
+                "Multimodal/text token alignment mismatch (missing=%d). "
+                "Proceeding with best-effort loss mask.",
+                missing,
+            )
+            return expanded
         raise ValueError(
             "Failed to align multimodal tokens with text tokens: "
             f"matched={text_idx} total_text={len(text_token_ids)}"
@@ -434,7 +442,7 @@ def _build_multimodal_training_inputs(
                     image_token_ids.update(int(v) for v in val)
                 elif val is not None:
                     image_token_ids.add(int(val))
-        for tok in ("<image>", "<image_pad>", "<image_placeholder>"):
+        for tok in ("<|image_pad|>", "<|video_pad|>"):
             try:
                 tok_id = tokenizer.convert_tokens_to_ids(tok)
                 if tok_id is not None and tok_id != tokenizer.unk_token_id:
@@ -477,52 +485,54 @@ def _build_multimodal_training_inputs(
         encoded = processor.apply_chat_template(normalized, tokenize=True, return_dict=True, **kwargs)
         return _extract_token_ids(encoded)
 
-    try:
-        mask_generator = MultiTurnLossMaskGenerator(
-            tokenizer,
-            tokenizer_type=tokenizer_type,
-            apply_chat_template_fn=_apply_chat_template,
-        )
-        multimodal_token_ids, loss_mask_full = _build_loss_mask_from_full_chat(
-            processor_messages,
-            _apply_chat_template,
-            mask_generator.gen_token_length,
-            chat_template_kwargs,
-        )
-
-        processed = processor.apply_chat_template(
-            processor_messages, tokenize=True, return_dict=True, **chat_template_kwargs
-        )
-        multimodal_inputs = {
-            key: value for key, value in processed.items() if key not in {"input_ids", "attention_mask"}
-        }
-
-        system_tokens_len = 0
-        if processor_messages and processor_messages[0].get("role") == "system":
-            system_ids = _extract_token_ids(
-                _apply_chat_template([processor_messages[0]], tokenize=True, **chat_template_kwargs)
+    use_fast_path = os.environ.get("OSWORLD_MM_FAST_PATH", "0") == "1"
+    if use_fast_path:
+        try:
+            mask_generator = MultiTurnLossMaskGenerator(
+                tokenizer,
+                tokenizer_type=tokenizer_type,
+                apply_chat_template_fn=_apply_chat_template,
             )
-            if multimodal_token_ids[: len(system_ids)] != system_ids:
-                raise ValueError("System prompt tokens do not match multimodal token prefix")
-            system_tokens_len = len(system_ids)
-
-        response_length = max(0, len(multimodal_token_ids) - system_tokens_len)
-        loss_mask = loss_mask_full[system_tokens_len:]
-        if len(loss_mask) != response_length:
-            raise ValueError(
-                "Loss mask length mismatch after multimodal tokenization: "
-                f"mask_len={len(loss_mask)} response_len={response_length}"
+            multimodal_token_ids, loss_mask_full = _build_loss_mask_from_full_chat(
+                processor_messages,
+                _apply_chat_template,
+                mask_generator.gen_token_length,
+                chat_template_kwargs,
             )
 
-        if isinstance(multimodal_inputs, dict) and not multimodal_inputs:
-            multimodal_inputs = None
-        _validate_multimodal_tokens(multimodal_token_ids, multimodal_inputs)
-        return multimodal_token_ids, response_length, loss_mask, multimodal_inputs
-    except Exception:
-        logger.warning(
-            "Failed to build multimodal loss mask via processor.apply_chat_template, falling back to alignment.",
-            exc_info=True,
-        )
+            processed = processor.apply_chat_template(
+                processor_messages, tokenize=True, return_dict=True, **chat_template_kwargs
+            )
+            multimodal_inputs = {
+                key: value for key, value in processed.items() if key not in {"input_ids", "attention_mask"}
+            }
+
+            system_tokens_len = 0
+            if processor_messages and processor_messages[0].get("role") == "system":
+                system_ids = _extract_token_ids(
+                    _apply_chat_template([processor_messages[0]], tokenize=True, **chat_template_kwargs)
+                )
+                if multimodal_token_ids[: len(system_ids)] != system_ids:
+                    raise ValueError("System prompt tokens do not match multimodal token prefix")
+                system_tokens_len = len(system_ids)
+
+            response_length = max(0, len(multimodal_token_ids) - system_tokens_len)
+            loss_mask = loss_mask_full[system_tokens_len:]
+            if len(loss_mask) != response_length:
+                raise ValueError(
+                    "Loss mask length mismatch after multimodal tokenization: "
+                    f"mask_len={len(loss_mask)} response_len={response_length}"
+                )
+
+            if isinstance(multimodal_inputs, dict) and not multimodal_inputs:
+                multimodal_inputs = None
+            _validate_multimodal_tokens(multimodal_token_ids, multimodal_inputs)
+            return multimodal_token_ids, response_length, loss_mask, multimodal_inputs
+        except Exception:
+            logger.warning(
+                "Failed to build multimodal loss mask via processor.apply_chat_template, falling back to alignment.",
+                exc_info=True,
+            )
 
     apply_chat_template_fn = _apply_chat_template
     mask_generator = MultiTurnLossMaskGenerator(

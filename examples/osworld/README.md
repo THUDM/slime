@@ -55,10 +55,14 @@ osworld_server.py :8100  <────>  HTTPRemoteDesktopEnv
 python3 -m venv ~/osworld_venv && source ~/osworld_venv/bin/activate
 pip install desktop-env
 git clone https://github.com/xlang-ai/OSWorld.git ~/OSWorld && cd ~/OSWorld
-python quickstart.py --provider_name docker  # Downloads 11.4GB VM
+git clone https://github.com/THUDM/slime.git ~/slime
+sudo -E python quickstart.py --provider_name docker  # Downloads 11.4GB VM
+sudo chown -R "$USER:$USER" ~/OSWorld  # Fix permissions after sudo
+sudo rm -f /tmp/docker_port_allocation.lck  # Ensure port lock is writable
 
 # Start server (run in tmux)
-python /path/to/slime/examples/osworld/tools/osworld_env_server.py --port 8100
+source ~/osworld_venv/bin/activate
+python ~/slime/examples/osworld/tools/osworld_env_server.py --port 8100
 ```
 
 ### Parallel Rollouts
