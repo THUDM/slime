@@ -77,6 +77,7 @@ CKPT_ARGS=(
 )
 
 NUM_ROLLOUT=${SLIME_SCRIPT_NUM_ROLLOUT:-8}
+ROLLOUT_BATCH_SIZE=${SLIME_SCRIPT_ROLLOUT_BATCH_SIZE:-8}
 ROLLOUT_MAX_RESPONSE_LEN=${SLIME_SCRIPT_ROLLOUT_MAX_RESPONSE_LEN:-384}
 
 ROLLOUT_ARGS=(
@@ -87,7 +88,7 @@ ROLLOUT_ARGS=(
     --loss-mask-type qwen3
     --rollout-shuffle
     --num-rollout ${NUM_ROLLOUT}
-    --rollout-batch-size 1
+    --rollout-batch-size ${ROLLOUT_BATCH_SIZE}
     --n-samples-per-prompt 4
     --rollout-max-response-len ${ROLLOUT_MAX_RESPONSE_LEN}
     --rollout-max-context-len ${SLIME_SCRIPT_MAX_CONTEXT:-16384}

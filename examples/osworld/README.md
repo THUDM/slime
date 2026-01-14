@@ -77,8 +77,8 @@ for port in 8100 8101 8102 8103; do
   sudo -E ~/osworld_venv/bin/python ~/slime/examples/osworld/tools/osworld_env_server.py --port $port &
 done
 
-# In container: comma-separated URLs
-export OSWORLD_SERVER_URL="http://172.17.0.1:8100,http://172.17.0.1:8101,http://172.17.0.1:8102,http://172.17.0.1:8103"
+# In container: comma-separated URLs (match rollout_batch_size)
+export OSWORLD_SERVER_URL="http://172.17.0.1:8100,http://172.17.0.1:8101,http://172.17.0.1:8102,http://172.17.0.1:8103,http://172.17.0.1:8104,http://172.17.0.1:8105,http://172.17.0.1:8106,http://172.17.0.1:8107"
 ```
 
 ## Training Pipeline
