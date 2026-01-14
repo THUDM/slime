@@ -51,6 +51,8 @@ osworld_server.py :8100  <────>  HTTPRemoteDesktopEnv
 
 ### Host Setup
 
+Stay in ~/OSWorld when using desktop-env to avoid VM re-downloads; run Qwen3-VL inference in the Slime container to avoid host dependency drift.
+
 ```bash
 python3 -m venv ~/osworld_venv && source ~/osworld_venv/bin/activate
 pip install desktop-env
