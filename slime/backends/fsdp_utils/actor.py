@@ -104,6 +104,10 @@ class FSDPTrainRayActor(TrainRayActor):
 
         model.train()
 
+        # Freeze vision encoder if requested (following Qwen3-VL SFT methodology)
+        if getattr(self.args, "freeze_vision_encoder", False):
+            self._freeze_vision_encoder(model)
+
         full_state = model.state_dict()
 
         model = apply_fsdp2(model, mesh=self.dp_mesh, cpu_offload=self.fsdp_cpu_offload, args=self.args)
@@ -116,6 +120,10 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if args.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
+
+        # Re-ensure vision encoder stays frozen after FSDP/gradient checkpointing
+        if getattr(self.args, "freeze_vision_encoder", False):
+            self._ensure_vision_encoder_frozen()
 
         if args.optimizer == "adam":
             self.optimizer = torch.optim.AdamW(
@@ -324,6 +332,71 @@ class FSDPTrainRayActor(TrainRayActor):
         else:
             logger.info(f"[Rank {dist.get_rank()}] tie_word_embeddings=True, loading full model to CPU on all ranks")
             return cpu_init_weights
+
+    def _freeze_vision_encoder(self, model) -> None:
+        """Freeze vision encoder parameters following Qwen3-VL SFT methodology.
+
+        Per Qwen3-VL technical report, freezing the vision encoder during SFT:
+        - Preserves pre-trained visual representations
+        - Prevents overfitting on small datasets
+        - Focuses learning on LLM adaptation to visual inputs
+
+        Supports multiple VLM architectures:
+        - Qwen3-VL/Qwen2-VL: model.visual
+        - LLaVA-style: model.vision_tower or model.vision_model
+        """
+        # Find vision encoder across different architectures
+        vision_module = None
+
+        # Qwen3-VL / Qwen2-VL use model.visual
+        if hasattr(model, "visual"):
+            vision_module = model.visual
+        # LLaVA-style models use model.vision_tower
+        elif hasattr(model, "vision_tower"):
+            vision_module = model.vision_tower
+        # Generic vision_model attribute
+        elif hasattr(model, "vision_model"):
+            vision_module = model.vision_model
+
+        if vision_module is not None:
+            # Freeze all parameters
+            for param in vision_module.parameters():
+                param.requires_grad = False
+            # Put in eval mode to disable dropout
+            vision_module.eval()
+
+            frozen_params = sum(p.numel() for p in vision_module.parameters())
+            logger.info(
+                f"[Rank {dist.get_rank()}] Frozen vision encoder: "
+                f"{frozen_params:,} parameters ({frozen_params / 1e6:.1f}M)"
+            )
+        else:
+            logger.warning(
+                f"[Rank {dist.get_rank()}] freeze_vision_encoder=True but no vision encoder found. "
+                "Model may not have visual capabilities or uses a different attribute name."
+            )
+
+    def _ensure_vision_encoder_frozen(self) -> None:
+        """Ensure vision encoder stays in eval mode after FSDP wrapping.
+
+        FSDP wrapping and gradient checkpointing may reset module modes.
+        This method re-applies eval mode to the vision encoder.
+        """
+        model = self.model
+
+        # Find vision encoder across different architectures
+        vision_module = None
+        if hasattr(model, "visual"):
+            vision_module = model.visual
+        elif hasattr(model, "vision_tower"):
+            vision_module = model.vision_tower
+        elif hasattr(model, "vision_model"):
+            vision_module = model.vision_model
+
+        if vision_module is not None:
+            vision_module.eval()
+            if dist.get_rank() == 0:
+                logger.info("Vision encoder confirmed in eval mode after FSDP wrapping")
 
     def _fsdp2_load_full_state_dict(self, model, full_state, device_mesh, cpu_offload):
         """Load full state dict into FSDP2 model with efficient broadcast from rank 0.

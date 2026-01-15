@@ -6,13 +6,13 @@ Train multi-turn computer-use agents on OSWorld using Slime's FSDP backend.
 
 ## Overview
 
-This cookbook demonstrates GSPO training with experience replay for sparse reward environments. The pipeline follows the standard VLM agent training approach:
+This cookbook demonstrates a stable, evergreen recipe for training multi-turn computer-use agents on OSWorld. The pipeline follows a practical VLM agent training approach:
 
 ```
-Data Generation → SFT Warmup → GSPO with Replay → Evaluation
+SFT Alignment → On-Policy Distillation → PPO/GRPO Fine-Tuning → Evaluation
 ```
 
-**Note on methodology**: On-policy distillation (UI-TARS-2, arXiv:2509.02544) achieves stronger results (47.5% on OSWorld) than off-policy approaches. This cookbook uses off-policy replay as a reproducible baseline; production deployments should consider on-policy methods with live annotator feedback.
+This sequence emphasizes format-correct tool calls, stable long-horizon behavior, and reward-aligned task success.
 
 ## Quick Start (4x H100, ~$50)
 
@@ -25,14 +25,17 @@ docker run --gpus all --ipc=host --shm-size=16g \
 # Inside container
 git clone https://github.com/THUDM/slime.git && cd /root/slime && pip install -e .
 
-# Download checkpoints and union datasets (paths must match train_grpo.sh defaults)
+# Option A: Train SFT from scratch (downloads dataset automatically)
+./examples/osworld/train_sft.sh
+
+# Option B: Use pre-trained SFT checkpoint for GRPO
 huggingface-cli download Jarrodbarnes/osworld-vlm-sft-step25 --local-dir /ephemeral/osworld-vlm-sft-step25-hf
 huggingface-cli download Jarrodbarnes/osworld-train-v1 --repo-type dataset --local-dir /ephemeral/osworld_train
 
 # Start OSWorld server on host (requires KVM)
 # See "Environment Setup" section below
 
-# Run training
+# Run GRPO training
 export OSWORLD_SERVER_URL=http://172.17.0.1:8100
 ./examples/osworld/train_grpo.sh
 ```
@@ -45,7 +48,7 @@ OSWorld requires KVM for VM acceleration. The training container and OSWorld ser
 Host (osworld_venv)              Container (slime_train)
 ────────────────────             ─────────────────────────
 torch 2.5.1                      torch 2.9.1
-desktop-env + KVM                sglang + GSPO
+desktop-env + KVM                sglang + PPO/GRPO
 osworld_server.py :8100  <────>  HTTPRemoteDesktopEnv
 ```
 
@@ -83,36 +86,55 @@ export OSWORLD_SERVER_URL="http://172.17.0.1:8100,http://172.17.0.1:8101,http://
 
 ## Training Pipeline
 
-### 1. SFT Warmup
+### 1. SFT Alignment (format + reasoning)
 
-Pre-trained checkpoint: `Jarrodbarnes/osworld-vlm-sft-step25`
+**Dataset**: [`Jarrodbarnes/osworld-reasoning-sft-v1`](https://huggingface.co/datasets/Jarrodbarnes/osworld-reasoning-sft-v1) (339 samples)
+- 273 original ground-truth successful demonstrations
+- 66 Claude Opus 4.5 reasoning trajectories with rich `<thinking>` blocks
 
-Teaches format-correct tool calls. Reduces malformed actions from 43% to 4%.
+**Pre-trained checkpoint**: `Jarrodbarnes/osworld-vlm-sft-step25`
 
-### 2. GSPO with Experience Replay
-
-GSPO requires within-prompt variance for advantage computation. When all rollouts fail, advantages collapse. Experience replay injects successful trajectories when online samples all fail.
-
-Key configuration in `train_grpo.sh`:
-
-| Parameter | Value | Purpose |
-|-----------|-------|---------|
-| `--n-samples-per-prompt` | 4 | Within-prompt variance |
-| `--rollout-temperature` | 0.8 → 0.5 | Exploration → stability (two-phase) |
-| `OSWORLD_REPLAY_BUFFER` | osworld_replay_train.jsonl | Replay injection |
-| `--rollout-function-path` | examples.osworld.rollout.generate_rollout | Custom batch rollout |
-
-Recommended schedule:
+Teaches **both** format-correct tool calls **and** reasoning patterns. The reasoning trajectories teach the model to observe, think, and act—not just produce correct syntax. Following Qwen3-VL SFT methodology, the vision encoder is frozen to preserve visual representations while the LLM learns to reason about GUI states.
 
 ```bash
-# Phase 1: exploration
-SLIME_SCRIPT_ROLLOUT_TEMPERATURE=0.8 bash examples/osworld/train_grpo.sh
+# Run SFT training (4x H100, ~30 min)
+./examples/osworld/train_sft.sh
 
-# Phase 2: stability (reduce repeated actions)
-SLIME_SCRIPT_ROLLOUT_TEMPERATURE=0.5 bash examples/osworld/train_grpo.sh
+# Or with custom settings
+SLIME_SCRIPT_NUM_GPUS=8 SLIME_SCRIPT_OUTPUT_DIR=/path/to/output ./examples/osworld/train_sft.sh
 ```
 
-### 3. Reward Shaping
+**Note**: The SFT checkpoint alone achieves limited task success—it is a warmup that teaches format compliance and reasoning patterns. Task success comes from the data flywheel (Phase 2) and PPO/GRPO fine-tuning (Phase 3).
+
+### 2. On-Policy Distillation (data flywheel)
+
+Unlike offline SFT (which trains on fixed, pre-collected data), on-policy distillation trains on the **student's own successful rollouts**. This ensures:
+
+- **Distribution matching**: Student learns from states it actually visits
+- **No compounding errors**: No mismatch from teacher-only trajectories
+- **Self-improvement**: Each iteration improves data quality
+
+**The Data Flywheel**
+
+The flywheel iterates: generate rollouts → filter by task success → SFT on filtered data → repeat.
+
+| Iteration | Input | Process | Output |
+|-----------|-------|---------|--------|
+| Bootstrap (optional) | SFT checkpoint | Teacher-guided rollouts or curated seed set | Initial successful trajectories |
+| 1 | SFT or bootstrap | Student rollouts, filter by `task_reward >= 0.5` | Filtered trajectories → SFT |
+| 2+ | Iter N-1 output | Student rollouts, filter by success | Repeat until success rate plateaus |
+
+**Bootstrap Stage (Optional)**: If the SFT checkpoint achieves 0 task success, bootstrap the flywheel with teacher-guided rollouts (e.g., Claude API demonstrations) or a small curated set of successful trajectories.
+
+**Filtering Criterion**: Filter by **task reward** (binary 0/1), not shaped reward. Shaped rewards are for PPO/GRPO optimization, not trajectory filtering.
+
+**Why Not Pre-Collected Teacher Data?** Pre-collected teacher trajectories (without the flywheel) are offline SFT—they suffer from distribution mismatch and compounding errors. The flywheel avoids these by always training on student-generated data (after optional bootstrap).
+
+### 3. PPO/GRPO Fine-Tuning
+
+After 3-5 flywheel iterations produce stable multi-turn behavior, PPO/GRPO optimizes for task success, efficiency, and shaped rewards. Partial signals (parse validity, execution, a11y grounding, screen change) provide dense feedback while task success remains the main objective.
+
+### 4. Reward Shaping
 
 ```
 shaped_reward = task_reward + 0.3 * partial_score - penalties
@@ -130,23 +152,29 @@ OSWORLD_REWARD_DEBUG_LIMIT=10 bash examples/osworld/train_grpo.sh
 
 ## Methods
 
-**SFT**: Grounds the model in OSWorld's action space. Desktop GUI automation requires precise coordinate clicks, keyboard input, and multi-step workflows. SFT teaches format compliance (reduces malformed actions from 43% to 4%) before RL exploration.
+**SFT**: Grounds the model in OSWorld's action space. Desktop GUI automation requires precise coordinate clicks, keyboard input, and multi-step workflows. SFT teaches format compliance before RL exploration.
 
-**GSPO with Replay**: Reinforcement learning for task completion. Experience replay addresses sparse rewards by injecting successful trajectories when online rollouts fail. Cross-app and browser tasks enable diverse action paths; single-step tasks benefit from replay variance.
+**On-policy distillation (data flywheel)**: The student generates rollouts in OSWorld, successful trajectories are filtered by task reward, and the student is trained (SFT) on its own successful behavior. An optional bootstrap with teacher demonstrations seeds the flywheel for weak starting checkpoints. This self-improvement loop (UI-TARS-2 style) avoids distribution mismatch. Typically 3-5 iterations until success rate plateaus.
 
-**On-policy distillation** (recommended for production): UI-TARS-2 achieves 47.5% using live annotator feedback with 7B+ models. This cookbook provides the OSWorld integration; scale model size and consider on-policy methods for deployment.
+**PPO/GRPO**: A reliable multi-turn RL baseline for GUI agents. Shaped rewards provide dense feedback while task success remains the primary objective.
+
+**Terminology**: Documentation uses "PPO/GRPO" to describe the policy gradient phase. The `train_grpo.sh` script uses GSPO (Group-Sampled Policy Optimization) as the concrete implementation.
 
 ## Artifacts
 
 ### Checkpoints
 
 - `Jarrodbarnes/osworld-vlm-sft-step25` - SFT warmup
-- `Jarrodbarnes/osworld-vlm-gspo-step25` - After GSPO
+- `Jarrodbarnes/osworld-vlm-gspo-step25` - After PPO/GRPO fine-tuning
 
 ### Datasets
 
-Primary artifacts (from `Jarrodbarnes/osworld-train-v1`):
+**SFT Dataset**: [`Jarrodbarnes/osworld-reasoning-sft-v1`](https://huggingface.co/datasets/Jarrodbarnes/osworld-reasoning-sft-v1)
+- 339 samples (273 original demos + 66 reasoning trajectories)
+- Format: `<thinking>...</thinking>\nAction: ...\n<tool_call>...</tool_call>`
+- Turn-aware masking applied to failed reasoning trajectories
 
+**GRPO Artifacts** (from `Jarrodbarnes/osworld-train-v1`):
 - `/ephemeral/osworld_train/osworld_tasks_train.parquet` (66 Ubuntu tasks with replay overlap + full task_config; 76 total including Windows)
 - `/ephemeral/osworld_train/osworld_replay_train.jsonl` (expanded replay buffer, normalized system prompt)
 - `/ephemeral/osworld_train/osworld_train_stats.json`
@@ -180,13 +208,19 @@ examples/osworld/
 ├── env.py              # OSWorld wrapper + HTTP client
 ├── rollout.py          # Multi-turn VLM rollout + replay injection
 ├── reward.py           # Shaped reward computation
-├── replay_buffer.py    # Experience replay buffer
-├── train_grpo.sh       # Training launcher
-├── grpo_config.yaml    # GSPO hyperparameters
+├── replay_buffer.py    # Experience replay (optional, PPO/GRPO phase only)
+├── train_sft.sh        # SFT training (Phase 1)
+├── train_grpo.sh       # GRPO training (Phase 3)
+├── grpo_config.yaml    # PPO/GRPO hyperparameters
 └── tools/
-    ├── osworld_env_server.py  # HTTP server (host)
-    ├── build_union_datasets.py  # Build union task registry + replay buffer
+    ├── osworld_env_server.py         # HTTP server (host)
+    ├── build_union_datasets.py       # Build union task registry + replay buffer
+    ├── curate_reasoning_sft.py       # Curate reasoning SFT dataset
+    ├── process_reasoning_trajectories.py  # Process Claude trajectories
+    ├── collect_reasoning_trajectories.py  # Collect reasoning trajectories
 ```
+
+**Note on replay_buffer.py**: This is for experience replay during PPO/GRPO training, NOT for on-policy distillation. It injects successful trajectories when all online rollouts fail, preventing gradient vanishing in sparse reward settings. The data flywheel (distillation) is a separate, earlier phase.
 
 ## Evaluation
 
