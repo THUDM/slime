@@ -1,4 +1,4 @@
-ARG SGLANG_IMAGE_TAG=nightly-dev-20260103-24c91001
+ARG SGLANG_IMAGE_TAG=nightly-dev-20260107-dce8b060
 FROM lmsysorg/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
