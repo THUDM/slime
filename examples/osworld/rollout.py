@@ -31,6 +31,7 @@ from slime.utils.processing_utils import (
     encode_image_for_rollout_engine,
     load_processor,
     load_tokenizer,
+    process_vision_info,
     prepare_model_inputs,
 )
 from slime.utils.types import Sample
@@ -428,6 +429,19 @@ def _build_multimodal_training_inputs(
     apply_chat_template_kwargs: dict | None = None,
 ) -> tuple[list[int], int, list[int], dict | None]:
     """Build multimodal tokens, loss masks, and multimodal inputs for training."""
+    def _expected_image_tokens(mm_inputs: dict) -> int | None:
+        grid = mm_inputs.get("image_grid_thw") if isinstance(mm_inputs, dict) else None
+        if grid is None:
+            return None
+        if hasattr(grid, "tolist"):
+            grid = grid.tolist()
+        total = 0
+        for item in grid:
+            if not item or len(item) < 3:
+                continue
+            total += int(item[0]) * int(item[1]) * int(item[2])
+        return total
+
     def _validate_multimodal_tokens(token_ids: list[int], mm_inputs: dict | None):
         if not mm_inputs:
             return
@@ -453,6 +467,9 @@ def _build_multimodal_training_inputs(
             count = sum(1 for tid in token_ids if tid in image_token_ids)
             if count == 0:
                 raise ValueError("Image features present but no image tokens in input_ids")
+            expected = _expected_image_tokens(mm_inputs)
+            if expected is not None and count != expected:
+                raise ValueError(f"Image features and image tokens do not match: tokens: {count}, features {expected}")
     chat_template_kwargs = {
         key: value for key, value in (apply_chat_template_kwargs or {}).items() if key != "add_generation_prompt"
     }
@@ -485,103 +502,49 @@ def _build_multimodal_training_inputs(
         encoded = processor.apply_chat_template(normalized, tokenize=True, return_dict=True, **kwargs)
         return _extract_token_ids(encoded)
 
-    use_fast_path = os.environ.get("OSWORLD_MM_FAST_PATH", "0") == "1"
-    if use_fast_path:
-        try:
-            mask_generator = MultiTurnLossMaskGenerator(
-                tokenizer,
-                tokenizer_type=tokenizer_type,
-                apply_chat_template_fn=_apply_chat_template,
-            )
-            multimodal_token_ids, loss_mask_full = _build_loss_mask_from_full_chat(
-                processor_messages,
-                _apply_chat_template,
-                mask_generator.gen_token_length,
-                chat_template_kwargs,
-            )
+    def _encode_with_processor(prefix_messages: list[dict], tools: list[dict] | None = None) -> tuple[list[int], dict]:
+        normalized = _normalize_messages_for_processor(prefix_messages)
+        prompt_text = processor.apply_chat_template(normalized, tokenize=False, **chat_template_kwargs, tools=tools)
+        multimodal_inputs = process_vision_info(normalized, processor)
+        processor_output = processor(text=prompt_text, **multimodal_inputs)
+        token_ids = _extract_token_ids(processor_output)
+        extra = {k: v for k, v in processor_output.items() if k not in {"input_ids", "attention_mask"}}
+        return token_ids, extra
 
-            processed = processor.apply_chat_template(
-                processor_messages, tokenize=True, return_dict=True, **chat_template_kwargs
-            )
-            multimodal_inputs = {
-                key: value for key, value in processed.items() if key not in {"input_ids", "attention_mask"}
-            }
+    def _tokenize_with_processor(prefix_messages: list[dict], tools: list[dict] | None = None) -> list[int]:
+        token_ids, _ = _encode_with_processor(prefix_messages, tools=tools)
+        return token_ids
 
-            system_tokens_len = 0
-            if processor_messages and processor_messages[0].get("role") == "system":
-                system_ids = _extract_token_ids(
-                    _apply_chat_template([processor_messages[0]], tokenize=True, **chat_template_kwargs)
-                )
-                if multimodal_token_ids[: len(system_ids)] != system_ids:
-                    raise ValueError("System prompt tokens do not match multimodal token prefix")
-                system_tokens_len = len(system_ids)
-
-            response_length = max(0, len(multimodal_token_ids) - system_tokens_len)
-            loss_mask = loss_mask_full[system_tokens_len:]
-            if len(loss_mask) != response_length:
-                raise ValueError(
-                    "Loss mask length mismatch after multimodal tokenization: "
-                    f"mask_len={len(loss_mask)} response_len={response_length}"
-                )
-
-            if isinstance(multimodal_inputs, dict) and not multimodal_inputs:
-                multimodal_inputs = None
-            _validate_multimodal_tokens(multimodal_token_ids, multimodal_inputs)
-            return multimodal_token_ids, response_length, loss_mask, multimodal_inputs
-        except Exception:
-            logger.warning(
-                "Failed to build multimodal loss mask via processor.apply_chat_template, falling back to alignment.",
-                exc_info=True,
-            )
-
-    apply_chat_template_fn = _apply_chat_template
     mask_generator = MultiTurnLossMaskGenerator(
         tokenizer,
         tokenizer_type=tokenizer_type,
-        apply_chat_template_fn=apply_chat_template_fn,
+        apply_chat_template_fn=_apply_chat_template,
     )
-    text_token_ids, text_loss_mask = _build_loss_mask_from_full_chat(
+    multimodal_token_ids, loss_mask_full = mask_generator.get_loss_mask_with_tokenizer_fn(
         processor_messages,
-        apply_chat_template_fn or tokenizer.apply_chat_template,
-        mask_generator.gen_token_length,
-        chat_template_kwargs,
+        _tokenize_with_processor,
+        tools=None,
     )
 
-    multimodal_token_ids, extra_info = prepare_model_inputs(
-        processor_messages,
-        tokenizer,
-        processor,
-        metadata=None,
-        apply_chat_template=True,
-        apply_chat_template_kwargs=chat_template_kwargs,
-    )
-
-    gen_len = mask_generator.gen_token_length
-    if gen_len > 0 and len(multimodal_token_ids) > gen_len:
-        multimodal_token_ids = multimodal_token_ids[:-gen_len]
-
-    expanded_loss_mask = _expand_loss_mask_for_multimodal(text_token_ids, text_loss_mask, multimodal_token_ids)
+    full_token_ids, multimodal_inputs = _encode_with_processor(processor_messages)
+    if full_token_ids != multimodal_token_ids:
+        raise ValueError("Processor tokenization mismatch between loss mask and model inputs")
 
     system_tokens_len = 0
     if processor_messages and processor_messages[0].get("role") == "system":
-        system_ids = _extract_token_ids(
-            (apply_chat_template_fn or tokenizer.apply_chat_template)(
-                [processor_messages[0]], tokenize=True, **chat_template_kwargs
-            )
-        )
+        system_ids = _tokenize_with_processor([processor_messages[0]])
         if multimodal_token_ids[: len(system_ids)] != system_ids:
             raise ValueError("System prompt tokens do not match multimodal token prefix")
         system_tokens_len = len(system_ids)
 
     response_length = max(0, len(multimodal_token_ids) - system_tokens_len)
-    loss_mask = expanded_loss_mask[system_tokens_len:]
+    loss_mask = loss_mask_full[system_tokens_len:]
     if len(loss_mask) != response_length:
         raise ValueError(
             "Loss mask length mismatch after multimodal expansion: "
             f"mask_len={len(loss_mask)} response_len={response_length}"
         )
 
-    multimodal_inputs = extra_info.get("multimodal_inputs")
     if isinstance(multimodal_inputs, dict) and not multimodal_inputs:
         multimodal_inputs = None
     _validate_multimodal_tokens(multimodal_token_ids, multimodal_inputs)

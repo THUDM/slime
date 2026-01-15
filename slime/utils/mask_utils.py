@@ -141,6 +141,41 @@ class MultiTurnLossMaskGenerator:
         else:
             raise ValueError(f"Unsupported tokenizer type: {self.tokenizer_type}")
 
+    def get_loss_mask_with_tokenizer_fn(
+        self,
+        messages: list[dict],
+        tokenizer_fn,
+        tools: list[dict] | None = None,
+    ) -> tuple[list[int], list[int]]:
+        """Build loss mask using a custom tokenizer function (must match model input tokens)."""
+        full_ids = tokenizer_fn(messages, tools=tools)
+        loss_mask = [0] * len(full_ids)
+        prev_ids: list[int] = []
+
+        for idx, msg in enumerate(messages):
+            if idx == 0:
+                current_ids = tokenizer_fn(messages[: idx + 1], tools=tools)
+            else:
+                current_ids = tokenizer_fn(messages[: idx + 1])
+
+            span_len = len(current_ids) - len(prev_ids)
+            if span_len < 0:
+                raise ValueError("Tokenization is not monotonic across prefixes.")
+
+            if msg["role"] == "assistant":
+                prefix_len = min(self.gen_token_length, span_len)
+                span_loss = [0] * prefix_len + [1] * (span_len - prefix_len)
+            else:
+                span_loss = [0] * span_len
+
+            if msg.get("step_loss_mask", 1) != 1:
+                span_loss = [0] * span_len
+
+            loss_mask[len(prev_ids) : len(prev_ids) + span_len] = span_loss
+            prev_ids = current_ids
+
+        return full_ids, loss_mask
+
     def get_loss_mask_with_multimodal_alignment(
         self, messages: list[dict], input_ids: list[int], tools: list[dict] = None
     ) -> tuple[list[int], list[int]]:

@@ -64,7 +64,7 @@ def prepare_model_inputs(
 
     if processor is None:
         input_ids = tokenizer.encode(text, add_special_tokens=False)
-        return input_ids, {"multimodal_inputs": None}
+        return input_ids, {"multimodal_inputs": None, "prompt_text": text, "processor_input_ids": input_ids}
 
     multimodal_inputs = process_vision_info(messages, processor)
     if metadata and "images" in metadata and not multimodal_inputs.get("images"):
@@ -76,7 +76,7 @@ def prepare_model_inputs(
         input_ids = input_ids.tolist()
 
     extra = {k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]}
-    return input_ids, {"multimodal_inputs": extra}
+    return input_ids, {"multimodal_inputs": extra, "prompt_text": text, "processor_input_ids": input_ids}
 
 
 def encode_image_for_rollout_engine(image) -> str:
