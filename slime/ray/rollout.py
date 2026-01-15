@@ -129,85 +129,93 @@ class RolloutManager:
             # === Step 3: Log buffer stats ===
             buffer_stats = self.data_source.get_buffer_stats()
             if buffer_stats["enabled"]:
-                print(f"[Buffer] Added {len(data)} samples. Stats: {buffer_stats}")
-                # Optional: log to wandb with comprehensive off-policy metrics
+                # print(f"[Buffer] Added {len(data)} samples. Stats: {buffer_stats}") # 原有的简单打印
+
+                # ================= 修复开始 =================
+                # 1. 无论 wandb 状态如何，先构建完整的 metrics 字典
+                wandb_metrics = {
+                    "buffer/size": buffer_stats["buffer_size"],
+                    "buffer/utilization": buffer_stats["buffer_utilization"],
+                    "rollout_id": rollout_id,
+                }
+
+                # === NEW: Off-policy metrics ===
+                # Policy version tracking
+                if "current_policy_version" in buffer_stats:
+                    wandb_metrics["buffer/current_policy_version"] = buffer_stats["current_policy_version"]
+
+                if "min_policy_version" in buffer_stats:
+                    wandb_metrics["buffer/min_policy_version"] = buffer_stats["min_policy_version"]
+                    wandb_metrics["buffer/max_policy_version"] = buffer_stats["max_policy_version"]
+                    wandb_metrics["buffer/avg_policy_version"] = buffer_stats["avg_policy_version"]
+
+                # Staleness metrics
+                if "min_staleness" in buffer_stats:
+                    wandb_metrics["buffer/min_staleness"] = buffer_stats["min_staleness"]
+                    wandb_metrics["buffer/max_staleness"] = buffer_stats["max_staleness"]
+                    wandb_metrics["buffer/avg_staleness"] = buffer_stats["avg_staleness"]
+
+                # Sample reuse metrics
+                if "avg_reuse_count" in buffer_stats:
+                    wandb_metrics["buffer/avg_reuse_count"] = buffer_stats["avg_reuse_count"]
+                    wandb_metrics["buffer/max_reuse_count_observed"] = buffer_stats["max_reuse_count_observed"]
+
+                # Sampling strategy metrics
+                if "strategy_strategy" in buffer_stats:
+                    wandb_metrics["buffer/strategy"] = buffer_stats["strategy_strategy"]
+
+                # === NEW: Priority sampling specific metrics ===
+                # Priority configuration
+                if "strategy_priority_metric" in buffer_stats:
+                    wandb_metrics["buffer/priority_metric"] = buffer_stats["strategy_priority_metric"]
+                    wandb_metrics["buffer/priority_weight"] = buffer_stats["strategy_priority_weight"]
+                    wandb_metrics["buffer/staleness_penalty"] = buffer_stats["strategy_staleness_penalty"]
+
+                # Base score statistics (raw)
+                if "strategy_base_score_mean" in buffer_stats:
+                    wandb_metrics["buffer/base_score_mean"] = buffer_stats["strategy_base_score_mean"]
+                    wandb_metrics["buffer/base_score_min"] = buffer_stats["strategy_base_score_min"]
+                    wandb_metrics["buffer/base_score_max"] = buffer_stats["strategy_base_score_max"]
+
+                # Staleness statistics (raw)
+                if "strategy_staleness_mean" in buffer_stats:
+                    wandb_metrics["buffer/staleness_stat_mean"] = buffer_stats["strategy_staleness_mean"]
+                    wandb_metrics["buffer/staleness_stat_min"] = buffer_stats["strategy_staleness_min"]
+                    wandb_metrics["buffer/staleness_stat_max"] = buffer_stats["strategy_staleness_max"]
+
+                # Latest sampling round statistics
+                if "strategy_latest_base_score_raw_mean" in buffer_stats:
+                    wandb_metrics["buffer/latest_base_score_raw_mean"] = buffer_stats["strategy_latest_base_score_raw_mean"]
+                    wandb_metrics["buffer/latest_base_score_raw_std"] = buffer_stats["strategy_latest_base_score_raw_std"]
+                    wandb_metrics["buffer/latest_base_score_normalized_mean"] = buffer_stats["strategy_latest_base_score_normalized_mean"]
+
+                if "strategy_latest_staleness_raw_mean" in buffer_stats:
+                    wandb_metrics["buffer/latest_staleness_raw_mean"] = buffer_stats["strategy_latest_staleness_raw_mean"]
+                    wandb_metrics["buffer/latest_staleness_raw_std"] = buffer_stats["strategy_latest_staleness_raw_std"]
+                    wandb_metrics["buffer/latest_staleness_normalized_mean"] = buffer_stats["strategy_latest_staleness_normalized_mean"]
+
+                if "strategy_latest_final_score_mean" in buffer_stats:
+                    wandb_metrics["buffer/latest_final_score_mean"] = buffer_stats["strategy_latest_final_score_mean"]
+                    wandb_metrics["buffer/latest_final_score_std"] = buffer_stats["strategy_latest_final_score_std"]
+                    wandb_metrics["buffer/latest_final_score_min"] = buffer_stats["strategy_latest_final_score_min"]
+                    wandb_metrics["buffer/latest_final_score_max"] = buffer_stats["strategy_latest_final_score_max"]
+
+                # Normalization configuration
+                if "strategy_normalize_scores" in buffer_stats:
+                    wandb_metrics["buffer/normalize_scores"] = 1 if buffer_stats["strategy_normalize_scores"] else 0
+                    if buffer_stats.get("strategy_normalization_method"):
+                        wandb_metrics["buffer/normalization_method"] = buffer_stats["strategy_normalization_method"]
+
+                # 2. 强制打印到控制台 (Stdout Log)
+                # 这样即使在 Offline 模式或未启用 WandB 时，你也能在日志文件中看到这些数据
+                print(f"[Buffer] Added {len(data)} samples.")
+                print(f"[Buffer Metrics] {wandb_metrics}")
+
+                # 3. 安全地记录到 WandB
+                # 只要 wandb 被初始化（无论是 online 还是 offline 模式），run 都不为 None
                 if wandb.run is not None:
-                    # Basic buffer metrics
-                    wandb_metrics = {
-                        "buffer/size": buffer_stats["buffer_size"],
-                        "buffer/utilization": buffer_stats["buffer_utilization"],
-                        "rollout_id": rollout_id,
-                    }
-
-                    # === NEW: Off-policy metrics ===
-                    # Policy version tracking
-                    if "current_policy_version" in buffer_stats:
-                        wandb_metrics["buffer/current_policy_version"] = buffer_stats["current_policy_version"]
-
-                    if "min_policy_version" in buffer_stats:
-                        wandb_metrics["buffer/min_policy_version"] = buffer_stats["min_policy_version"]
-                        wandb_metrics["buffer/max_policy_version"] = buffer_stats["max_policy_version"]
-                        wandb_metrics["buffer/avg_policy_version"] = buffer_stats["avg_policy_version"]
-
-                    # Staleness metrics
-                    if "min_staleness" in buffer_stats:
-                        wandb_metrics["buffer/min_staleness"] = buffer_stats["min_staleness"]
-                        wandb_metrics["buffer/max_staleness"] = buffer_stats["max_staleness"]
-                        wandb_metrics["buffer/avg_staleness"] = buffer_stats["avg_staleness"]
-
-                    # Sample reuse metrics
-                    if "avg_reuse_count" in buffer_stats:
-                        wandb_metrics["buffer/avg_reuse_count"] = buffer_stats["avg_reuse_count"]
-                        wandb_metrics["buffer/max_reuse_count_observed"] = buffer_stats["max_reuse_count_observed"]
-
-                    # Sampling strategy metrics
-                    if "strategy_strategy" in buffer_stats:
-                        wandb_metrics["buffer/strategy"] = buffer_stats["strategy_strategy"]
-
-                    # === NEW: Priority sampling specific metrics ===
-                    # Priority configuration
-                    if "strategy_priority_metric" in buffer_stats:
-                        wandb_metrics["buffer/priority_metric"] = buffer_stats["strategy_priority_metric"]
-                        wandb_metrics["buffer/priority_weight"] = buffer_stats["strategy_priority_weight"]
-                        wandb_metrics["buffer/staleness_penalty"] = buffer_stats["strategy_staleness_penalty"]
-
-                    # Base score statistics (raw)
-                    if "strategy_base_score_mean" in buffer_stats:
-                        wandb_metrics["buffer/base_score_mean"] = buffer_stats["strategy_base_score_mean"]
-                        wandb_metrics["buffer/base_score_min"] = buffer_stats["strategy_base_score_min"]
-                        wandb_metrics["buffer/base_score_max"] = buffer_stats["strategy_base_score_max"]
-
-                    # Staleness statistics (raw)
-                    if "strategy_staleness_mean" in buffer_stats:
-                        wandb_metrics["buffer/staleness_stat_mean"] = buffer_stats["strategy_staleness_mean"]
-                        wandb_metrics["buffer/staleness_stat_min"] = buffer_stats["strategy_staleness_min"]
-                        wandb_metrics["buffer/staleness_stat_max"] = buffer_stats["strategy_staleness_max"]
-
-                    # Latest sampling round statistics
-                    if "strategy_latest_base_score_raw_mean" in buffer_stats:
-                        wandb_metrics["buffer/latest_base_score_raw_mean"] = buffer_stats["strategy_latest_base_score_raw_mean"]
-                        wandb_metrics["buffer/latest_base_score_raw_std"] = buffer_stats["strategy_latest_base_score_raw_std"]
-                        wandb_metrics["buffer/latest_base_score_normalized_mean"] = buffer_stats["strategy_latest_base_score_normalized_mean"]
-
-                    if "strategy_latest_staleness_raw_mean" in buffer_stats:
-                        wandb_metrics["buffer/latest_staleness_raw_mean"] = buffer_stats["strategy_latest_staleness_raw_mean"]
-                        wandb_metrics["buffer/latest_staleness_raw_std"] = buffer_stats["strategy_latest_staleness_raw_std"]
-                        wandb_metrics["buffer/latest_staleness_normalized_mean"] = buffer_stats["strategy_latest_staleness_normalized_mean"]
-
-                    if "strategy_latest_final_score_mean" in buffer_stats:
-                        wandb_metrics["buffer/latest_final_score_mean"] = buffer_stats["strategy_latest_final_score_mean"]
-                        wandb_metrics["buffer/latest_final_score_std"] = buffer_stats["strategy_latest_final_score_std"]
-                        wandb_metrics["buffer/latest_final_score_min"] = buffer_stats["strategy_latest_final_score_min"]
-                        wandb_metrics["buffer/latest_final_score_max"] = buffer_stats["strategy_latest_final_score_max"]
-
-                    # Normalization configuration
-                    if "strategy_normalize_scores" in buffer_stats:
-                        wandb_metrics["buffer/normalize_scores"] = 1 if buffer_stats["strategy_normalize_scores"] else 0
-                        if buffer_stats.get("strategy_normalization_method"):
-                            # Log as config string (wandb will handle it)
-                            wandb_metrics["buffer/normalization_method"] = buffer_stats["strategy_normalization_method"]
-
                     wandb.log(wandb_metrics)
+                # ================= 修复结束 =================
 
             # === Step 4: Sample data for training (mixes buffer + new data automatically) ===
             # 🔧 IMPORTANT: Use get_training_samples() for training to avoid getting incomplete prompts
@@ -354,10 +362,102 @@ class RolloutManager:
                 num_samples=num_groups_needed
             )
 
+            # === Step 1.5: Log buffer stats after sampling (just like in generate()) ===
+            buffer_stats = self.data_source.get_buffer_stats()
+            if buffer_stats["enabled"]:
+                wandb_metrics = {
+                    "buffer/size": buffer_stats["buffer_size"],
+                    "buffer/utilization": buffer_stats["buffer_utilization"],
+                    "rollout_id": rollout_id,
+                    "train_iter": train_iter,
+                }
+
+                # Policy version tracking
+                if "current_policy_version" in buffer_stats:
+                    wandb_metrics["buffer/current_policy_version"] = buffer_stats["current_policy_version"]
+
+                if "min_policy_version" in buffer_stats:
+                    wandb_metrics["buffer/min_policy_version"] = buffer_stats["min_policy_version"]
+                    wandb_metrics["buffer/max_policy_version"] = buffer_stats["max_policy_version"]
+                    wandb_metrics["buffer/avg_policy_version"] = buffer_stats["avg_policy_version"]
+
+                # Staleness metrics
+                if "min_staleness" in buffer_stats:
+                    wandb_metrics["buffer/min_staleness"] = buffer_stats["min_staleness"]
+                    wandb_metrics["buffer/max_staleness"] = buffer_stats["max_staleness"]
+                    wandb_metrics["buffer/avg_staleness"] = buffer_stats["avg_staleness"]
+
+                # Sample reuse metrics
+                if "avg_reuse_count" in buffer_stats:
+                    wandb_metrics["buffer/avg_reuse_count"] = buffer_stats["avg_reuse_count"]
+                    wandb_metrics["buffer/max_reuse_count_observed"] = buffer_stats["max_reuse_count_observed"]
+
+                # Sampling strategy metrics
+                if "strategy_strategy" in buffer_stats:
+                    wandb_metrics["buffer/strategy"] = buffer_stats["strategy_strategy"]
+
+                # Priority sampling specific metrics
+                if "strategy_priority_metric" in buffer_stats:
+                    wandb_metrics["buffer/priority_metric"] = buffer_stats["strategy_priority_metric"]
+                    wandb_metrics["buffer/priority_weight"] = buffer_stats["strategy_priority_weight"]
+                    wandb_metrics["buffer/staleness_penalty"] = buffer_stats["strategy_staleness_penalty"]
+
+                # Base score statistics (raw)
+                if "strategy_base_score_mean" in buffer_stats:
+                    wandb_metrics["buffer/base_score_mean"] = buffer_stats["strategy_base_score_mean"]
+                    wandb_metrics["buffer/base_score_min"] = buffer_stats["strategy_base_score_min"]
+                    wandb_metrics["buffer/base_score_max"] = buffer_stats["strategy_base_score_max"]
+
+                # Staleness statistics (raw)
+                if "strategy_staleness_mean" in buffer_stats:
+                    wandb_metrics["buffer/staleness_stat_mean"] = buffer_stats["strategy_staleness_mean"]
+                    wandb_metrics["buffer/staleness_stat_min"] = buffer_stats["strategy_staleness_min"]
+                    wandb_metrics["buffer/staleness_stat_max"] = buffer_stats["strategy_staleness_max"]
+
+                # Latest sampling round statistics
+                if "strategy_latest_base_score_raw_mean" in buffer_stats:
+                    wandb_metrics["buffer/latest_base_score_raw_mean"] = buffer_stats["strategy_latest_base_score_raw_mean"]
+                    wandb_metrics["buffer/latest_base_score_raw_std"] = buffer_stats["strategy_latest_base_score_raw_std"]
+                    wandb_metrics["buffer/latest_base_score_normalized_mean"] = buffer_stats["strategy_latest_base_score_normalized_mean"]
+
+                if "strategy_latest_staleness_raw_mean" in buffer_stats:
+                    wandb_metrics["buffer/latest_staleness_raw_mean"] = buffer_stats["strategy_latest_staleness_raw_mean"]
+                    wandb_metrics["buffer/latest_staleness_raw_std"] = buffer_stats["strategy_latest_staleness_raw_std"]
+                    wandb_metrics["buffer/latest_staleness_normalized_mean"] = buffer_stats["strategy_latest_staleness_normalized_mean"]
+
+                if "strategy_latest_final_score_mean" in buffer_stats:
+                    wandb_metrics["buffer/latest_final_score_mean"] = buffer_stats["strategy_latest_final_score_mean"]
+                    wandb_metrics["buffer/latest_final_score_std"] = buffer_stats["strategy_latest_final_score_std"]
+                    wandb_metrics["buffer/latest_final_score_min"] = buffer_stats["strategy_latest_final_score_min"]
+                    wandb_metrics["buffer/latest_final_score_max"] = buffer_stats["strategy_latest_final_score_max"]
+
+                # Normalization configuration
+                if "strategy_normalize_scores" in buffer_stats:
+                    wandb_metrics["buffer/normalize_scores"] = 1 if buffer_stats["strategy_normalize_scores"] else 0
+                    if buffer_stats.get("strategy_normalization_method"):
+                        wandb_metrics["buffer/normalization_method"] = buffer_stats["strategy_normalization_method"]
+
+                # Print to console for debugging
+                print(f"[Multi-Train] Sampled {len(train_data_samples)} groups from buffer.")
+                print(f"[Buffer Metrics] {wandb_metrics}")
+
+                # Log to WandB
+                if wandb.run is not None:
+                    wandb.log(wandb_metrics)
+
             # If buffer is empty/exhausted, skip this training iteration
             if len(train_data_samples) == 0:
                 print(f"[Multi-Train] Buffer exhausted, no samples available for training iteration {train_iter + 1}.")
                 print(f"[Multi-Train] Skipping remaining training iterations.")
+
+                # Log exhaustion event to WandB
+                if wandb.run is not None:
+                    wandb.log({
+                        "buffer/exhausted": 1,
+                        "rollout_id": rollout_id,
+                        "train_iter": train_iter,
+                    })
+
                 return None
 
             # === Step 2: Defensive checks (reuse from generate()) ===
