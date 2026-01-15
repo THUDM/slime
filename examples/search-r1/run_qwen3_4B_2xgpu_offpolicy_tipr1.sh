@@ -43,8 +43,8 @@ ROLLOUT_ARGS=(
    --apply-chat-template
    --rollout-shuffle
    --num-rollout 3000
-   # --rollout-batch-size 64
-   --rollout-batch-size 32
+   --rollout-batch-size 64
+   # --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 512
    --rollout-temperature 1
@@ -56,12 +56,8 @@ ROLLOUT_ARGS=(
    # --eval-label-key reward_model
    # --n-samples-per-eval-prompt 1
 
-   # --global-batch-size 512
    --global-batch-size 256
    --balance-data
-
-   # --train_iters_per_rollout 2
-   # --update_policy_version_every_train_iter
 )
 
 PERF_ARGS=(
@@ -99,8 +95,11 @@ OFFPOLICY_GRPO_ARGS=(
    # - Allows using samples from versions [current-5, current]
    # - Balanced off-policy: not too aggressive, not too conservative
    # - Combined with LIFO sampling, ensures newest data is prioritized
-   # --max-staleness 8
    --max-staleness 4
+   # --max-staleness 8
+   # --max-staleness 16
+   # --max-staleness 32
+
 
 
    # === PPO Clipping Parameters ===
@@ -127,9 +126,6 @@ OFFPOLICY_GRPO_ARGS=(
    # - More conservative but much more stable
    --importance-weight-clip-min 0.5
    --importance-weight-clip-max 2.0
-
-   --train-iters-per-rollout 2
-   --update-policy-version-every-train-iter
 )
 
 
@@ -146,7 +142,20 @@ BUFFER_SAMPLING_ARGS=(
    # - Prioritizes samples where π_behave ≈ π_theta
    # - Minimizes importance weight variance
    # - See slime/utils/buffer_sampling_strategies.py:369
-   --buffer-sampling-strategy lifo_staleness
+
+   # --buffer-sampling-strategy lifo_staleness
+
+   # --buffer-sampling-strategy random
+
+   # --buffer-sampling-strategy priority
+   # --buffer-priority-metric reward \  
+
+
+   --buffer-sampling-strategy hybrid \                            
+   --buffer-hybrid-lifo-ratio 0.8 \                               
+   --buffer-hybrid-priority-ratio 0.2 \                           
+   --buffer-priority-metric reward \  
+
 
    # Allow sample reuse but don't remove on sample
    --buffer-remove-on-sample false
@@ -158,8 +167,8 @@ BUFFER_SAMPLING_ARGS=(
    # - With reuse=3 and staleness=5, effective max age = 5+3×0.5 ≈ 6.5 steps
    --buffer-reuse-samples 4
    # --buffer-reuse-samples 8
-   # --buffer-reuse-samples 10
-
+   # --buffer-reuse-samples 16
+   # --buffer-reuse-samples 32
 
 )
 
@@ -180,7 +189,8 @@ export WANDB_KEY="968275bc822c87ac741ecce2f06cdfb54dbc1608"  # Replace with your
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-project slime-search-r1-offpolicy-stale-0108
+   --wandb-project slime-search-r1-offpolicy-stale-0116 # TODO===========
+   # --wandb-group qwen3-4B-2xgpu-offpolicy-random
    --wandb-group qwen3-4B-2xgpu-offpolicy
    --wandb-key ${WANDB_KEY}
 )
@@ -221,23 +231,6 @@ RUNTIME_ENV_JSON="{
   }
 }"
 
-echo "========================================"
-echo "🔧 FIXED OFF-POLICY GRPO CONFIGURATION"
-echo "========================================"
-echo "✅ buffer_sampling_strategy: lifo_staleness (was: random)"
-echo "✅ buffer_reuse_samples: 3 (was: 1000)"
-echo "✅ buffer_max_size: 256 (was: 1024)"
-echo "✅ max_staleness: 5 (was: 1)"
-echo "✅ importance_weight_clip: [0.5, 2.0] (was: [0.1, 10.0])"
-echo ""
-echo "Expected improvements:"
-echo "1. Effective sample size should stay > 400 (was dropping to ~240)"
-echo "2. Grad norm should stay < 5.0 (was exploding to 20+)"
-echo "3. KL loss growth should be slower and more stable"
-echo "4. Version distribution: newest samples dominate the batch"
-echo "5. Training convergence should be smooth without sudden drops"
-echo "========================================"
-echo ""
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \

@@ -962,6 +962,187 @@ class ReservoirSamplingStrategy(BaseSamplingStrategy):
         return sampled
 
 
+class HybridSamplingStrategy(BaseSamplingStrategy):
+    """
+    Hybrid sampling strategy combining multiple sampling methods.
+
+    Default: 80% LIFO (stability) + 20% Priority (high-quality replay)
+
+    This strategy addresses the overfitting problem of pure priority sampling
+    while still leveraging high-quality samples for improved learning.
+
+    Key benefits:
+    - Stable training from LIFO component (fresh, low-variance samples)
+    - Targeted learning from Priority component (high-reward samples)
+    - Configurable ratio to balance exploration vs exploitation
+    - Prevents overfitting on a small set of high-reward trajectories
+
+    Recommended for:
+    - Production training where stability + quality both matter
+    - Preventing priority sampling overfitting
+    - Curriculum learning with safety guarantees
+
+    Configuration:
+    - buffer_hybrid_lifo_ratio: Fraction for LIFO (default 0.8)
+    - buffer_hybrid_priority_ratio: Fraction for Priority (default 0.2)
+    - Can also mix other strategies via buffer_hybrid_strategies
+    """
+
+    def __init__(self, args, current_policy_version: int):
+        super().__init__(args, current_policy_version)
+
+        # Hybrid configuration
+        self.lifo_ratio = getattr(args, 'buffer_hybrid_lifo_ratio', 0.8)
+        self.priority_ratio = getattr(args, 'buffer_hybrid_priority_ratio', 0.2)
+
+        # Validate ratios
+        total_ratio = self.lifo_ratio + self.priority_ratio
+        if abs(total_ratio - 1.0) > 1e-6:
+            raise ValueError(
+                f"Hybrid sampling ratios must sum to 1.0, got {total_ratio} "
+                f"(lifo_ratio={self.lifo_ratio}, priority_ratio={self.priority_ratio})"
+            )
+
+        # Initialize sub-strategies
+        self.lifo_strategy = LIFOWithStalenessStrategy(args, current_policy_version)
+        self.priority_strategy = PrioritySamplingStrategy(args, current_policy_version)
+
+        # Share staleness/reuse settings with sub-strategies
+        self.lifo_strategy.remove_on_sample = False  # We handle removal at top level
+        self.priority_strategy.remove_on_sample = False
+
+        # Statistics
+        self.lifo_sampled = 0
+        self.priority_sampled = 0
+
+    def get_name(self) -> str:
+        return f"hybrid_lifo{int(self.lifo_ratio*100)}_priority{int(self.priority_ratio*100)}"
+
+    def sample(
+        self,
+        buffer: List[List[Sample]],
+        num_samples: int
+    ) -> List[List[Sample]]:
+        """
+        Sample using hybrid strategy.
+
+        Algorithm:
+        1. Filter by staleness and reuse count (shared filtering)
+        2. Split num_samples according to configured ratios
+        3. Sample LIFO component (newest samples)
+        4. Sample Priority component from remaining buffer (highest priority)
+        5. Combine and handle buffer updates
+
+        Args:
+            buffer: List of sample groups (modified in-place if remove_on_sample=True)
+            num_samples: Total number of groups to sample
+
+        Returns:
+            Combined list of sampled groups
+        """
+        if len(buffer) == 0:
+            return []
+
+        # === Step 1: Shared filtering (staleness + reuse) ===
+        valid_groups, stale_groups = self.filter_by_staleness(buffer)
+        valid_groups = self.filter_by_reuse_count(valid_groups)
+
+        if len(valid_groups) == 0:
+            print(f"[Hybrid Sampling] No valid groups after filtering (buffer_size={len(buffer)}, "
+                  f"stale={len(stale_groups)})")
+            # Remove stale groups
+            if stale_groups:
+                self.remove_from_buffer(buffer, stale_groups)
+            return []
+
+        # === Step 2: Calculate component quotas ===
+        num_lifo = int(num_samples * self.lifo_ratio)
+        num_priority = num_samples - num_lifo
+
+        # Ensure we don't request more than available
+        if num_lifo + num_priority > len(valid_groups):
+            # Scale down proportionally
+            available = len(valid_groups)
+            num_lifo = int(available * self.lifo_ratio)
+            num_priority = available - num_lifo
+
+        # === Step 3: Sample LIFO component (newest samples) ===
+        # LIFO takes from the end of the buffer (most recent)
+        lifo_sampled = []
+        if num_lifo > 0:
+            # Create a copy for LIFO sampling (to avoid modifying original buffer)
+            lifo_buffer = valid_groups.copy()
+            lifo_sampled = self.lifo_strategy.sample(lifo_buffer, num_lifo)
+            self.lifo_sampled += len(lifo_sampled)
+
+        # === Step 4: Sample Priority component (highest priority from remaining) ===
+        priority_sampled = []
+        if num_priority > 0:
+            # Create remaining pool excluding LIFO-selected samples
+            lifo_set = set(id(g) for g in lifo_sampled)
+            remaining_groups = [g for g in valid_groups if id(g) not in lifo_set]
+
+            if len(remaining_groups) > 0:
+                # Create a copy for Priority sampling
+                priority_buffer = remaining_groups.copy()
+                priority_sampled = self.priority_strategy.sample(priority_buffer, num_priority)
+                self.priority_sampled += len(priority_sampled)
+
+        # === Step 5: Combine samples ===
+        sampled = lifo_sampled + priority_sampled
+
+        if len(sampled) == 0:
+            print(f"[Hybrid Sampling] No samples selected (lifo={len(lifo_sampled)}, "
+                  f"priority={len(priority_sampled)})")
+            return []
+
+        # === Step 6: Update buffer ===
+        if not self.remove_on_sample:
+            # Increment reuse count for sampled groups
+            self.increment_reuse_count(sampled)
+        else:
+            # Remove sampled groups from buffer
+            self.remove_from_buffer(buffer, sampled)
+
+        # Remove stale groups
+        if stale_groups:
+            self.remove_from_buffer(buffer, stale_groups)
+
+        self.total_sampled += len(sampled)
+
+        # === Step 7: Log sampling breakdown ===
+        print(f"[Hybrid Sampling] Sampled {len(sampled)} groups: "
+              f"{len(lifo_sampled)} LIFO ({self.lifo_ratio:.1%}) + "
+              f"{len(priority_sampled)} Priority ({self.priority_ratio:.1%}) "
+              f"from {len(valid_groups)} valid groups")
+
+        return sampled
+
+    def get_statistics(self) -> dict:
+        """Return hybrid sampling statistics."""
+        stats = {
+            'strategy': self.get_name(),
+            'lifo_ratio': self.lifo_ratio,
+            'priority_ratio': self.priority_ratio,
+            'total_sampled': self.total_sampled,
+            'lifo_sampled': self.lifo_sampled,
+            'priority_sampled': self.priority_sampled,
+        }
+
+        # Add sub-strategy statistics with prefixes
+        lifo_stats = self.lifo_strategy.get_statistics()
+        for k, v in lifo_stats.items():
+            if k != 'strategy':  # Avoid duplicate strategy key
+                stats[f'lifo_{k}'] = v
+
+        priority_stats = self.priority_strategy.get_statistics()
+        for k, v in priority_stats.items():
+            if k != 'strategy':
+                stats[f'priority_{k}'] = v
+
+        return stats
+
+
 # ============================================================================
 # Strategy Factory
 # ============================================================================
@@ -992,6 +1173,7 @@ def get_sampling_strategy(
         'lifo': LIFOWithStalenessStrategy,  # NEW: Newest-first sampling
         'lifo_staleness': LIFOWithStalenessStrategy,  # Alias
         'priority': PrioritySamplingStrategy,
+        'hybrid': HybridSamplingStrategy,  # NEW: LIFO + Priority hybrid
         'random': RandomSamplingStrategy,
         'reservoir': ReservoirSamplingStrategy,
     }

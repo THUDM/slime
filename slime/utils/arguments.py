@@ -333,21 +333,45 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
 
-            # === NEW: Buffer Sampling Strategy Configuration ===
-
+            # === Buffer Sampling Strategy Configuration ===
             parser.add_argument(
                 "--buffer-sampling-strategy",
                 type=str,
-                choices=["lifo_staleness", "fifo_staleness", "priority", "random", "reservoir", "custom"],
+                choices=["lifo_staleness", "fifo_staleness", "priority", "hybrid", "random", "reservoir", "custom"],
                 default="lifo_staleness",
                 help=(
                     "Buffer sampling strategy: "
                     "'lifo_staleness': LIFO with staleness filtering (DEFAULT, recommended for most cases); "
                     "'fifo_staleness': FIFO with staleness filtering; "
                     "'priority': Priority-based sampling using reward/advantage metrics; "
+                    "'hybrid': Hybrid strategy combining LIFO + Priority (prevents overfitting); "
                     "'random': Random sampling with staleness filtering; "
                     "'reservoir': Reservoir sampling for uniform distribution; "
                     "'custom': Custom strategy (requires --buffer-sampling-custom-path)"
+                ),
+            )
+
+            # === Hybrid Sampling Configuration ===
+            parser.add_argument(
+                "--buffer-hybrid-lifo-ratio",
+                type=float,
+                default=0.8,
+                help=(
+                    "Ratio of LIFO samples in hybrid sampling strategy. "
+                    "LIFO component provides training stability with fresh samples. "
+                    "Default: 0.8 (80%% LIFO, 20%% Priority)"
+                ),
+            )
+
+            parser.add_argument(
+                "--buffer-hybrid-priority-ratio",
+                type=float,
+                default=0.2,
+                help=(
+                    "Ratio of Priority samples in hybrid sampling strategy. "
+                    "Priority component enables targeted learning on high-quality samples. "
+                    "Must sum to 1.0 with --buffer-hybrid-lifo-ratio. "
+                    "Default: 0.2 (20%% Priority, 80%% LIFO)"
                 ),
             )
 

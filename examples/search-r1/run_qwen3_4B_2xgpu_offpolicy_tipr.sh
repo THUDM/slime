@@ -43,6 +43,7 @@ ROLLOUT_ARGS=(
    --apply-chat-template
    --rollout-shuffle
    --num-rollout 3000
+   # --rollout-batch-size 64
    --rollout-batch-size 32
    --n-samples-per-prompt 8
    --rollout-max-response-len 512
@@ -55,8 +56,12 @@ ROLLOUT_ARGS=(
    # --eval-label-key reward_model
    # --n-samples-per-eval-prompt 1
 
+   # --global-batch-size 512
    --global-batch-size 256
    --balance-data
+
+   # --train_iters_per_rollout 2
+   # --update_policy_version_every_train_iter
 )
 
 PERF_ARGS=(
@@ -94,7 +99,9 @@ OFFPOLICY_GRPO_ARGS=(
    # - Allows using samples from versions [current-5, current]
    # - Balanced off-policy: not too aggressive, not too conservative
    # - Combined with LIFO sampling, ensures newest data is prioritized
-   --max-staleness 5
+   # --max-staleness 8
+   --max-staleness 4
+
 
    # === PPO Clipping Parameters ===
    # Asymmetric clipping: allows more aggressive positive updates
@@ -120,6 +127,9 @@ OFFPOLICY_GRPO_ARGS=(
    # - More conservative but much more stable
    --importance-weight-clip-min 0.5
    --importance-weight-clip-max 2.0
+
+   --train-iters-per-rollout 2 # NOTE ============
+   --update-policy-version-every-train-iter
 )
 
 
@@ -128,7 +138,8 @@ BUFFER_SAMPLING_ARGS=(
    # - Smaller buffer means old samples are evicted faster
    # - Ensures buffer contains mostly recent data
    # - Reduces memory footprint
-   --buffer-max-size 256
+   # --buffer-max-size 256
+   --buffer-max-size 1024
 
    # 🔧 CRITICAL FIX: Changed from random to lifo_staleness
    # - LIFO = Last-In-First-Out (newest samples first)
@@ -145,7 +156,11 @@ BUFFER_SAMPLING_ARGS=(
    # - Ensures policy_version accurately reflects sample age
    # - Key insight: reuse_count acts as "hidden staleness"
    # - With reuse=3 and staleness=5, effective max age = 5+3×0.5 ≈ 6.5 steps
-   --buffer-reuse-samples 3
+   --buffer-reuse-samples 4
+   # --buffer-reuse-samples 8
+   # --buffer-reuse-samples 10
+
+
 )
 
 
@@ -165,8 +180,8 @@ export WANDB_KEY="968275bc822c87ac741ecce2f06cdfb54dbc1608"  # Replace with your
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-project slime-search-r1-offpolicy-stale-0107
-   --wandb-group qwen3-4B-2xgpu-offpolicy-FIXED
+   --wandb-project slime-search-r1-offpolicy-stale-0108
+   --wandb-group qwen3-4B-2xgpu-offpolicy
    --wandb-key ${WANDB_KEY}
 )
 
