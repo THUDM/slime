@@ -26,6 +26,7 @@ from prompting import build_tau2_agent_system_prompt
 logger = logging.getLogger(__name__)
 
 DEFAULT_DOMAINS = ("airline", "retail", "telecom")
+PASS_AT_K_NOTE = "pass@k = any success among k attempts (not pass^k leaderboard estimate)"
 
 
 def _parse_csv(value: str) -> list[str]:
@@ -250,7 +251,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--top-k", type=int, default=20)
     parser.add_argument("--repetition-penalty", type=float, default=1.0)
     parser.add_argument("--max-new-tokens", type=int, default=1200)
-    parser.add_argument("--user-model", default=os.environ.get("TAU2_USER_MODEL", "gpt-4.1-2025-04-14"))
+    parser.add_argument("--user-model", default=os.environ.get("TAU2_USER_MODEL", "gpt-4.1-mini"))
     parser.add_argument("--user-temperature", type=float, default=float(os.environ.get("TAU2_USER_TEMPERATURE", "0.7")))
     return parser
 
@@ -345,6 +346,7 @@ async def main_async() -> None:
             "task_split": args.task_split,
             "domains": domains,
             "k": args.num_samples,
+            "metric_note": PASS_AT_K_NOTE,
             "summary": _summarize(all_results, k=args.num_samples),
             "by_domain": {d: _summarize(rs, k=args.num_samples) for d, rs in sorted(by_domain.items())},
             "results": [asdict(r) for r in all_results],

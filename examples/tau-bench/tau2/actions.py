@@ -8,12 +8,12 @@ We standardize on Qwen3 native function calling:
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any
 
 
-_TOOL_CALL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", flags=re.DOTALL)
+_TOOL_CALL_START = "<tool_call>"
+_TOOL_CALL_END = "</tool_call>"
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,14 +51,36 @@ def _to_functional_call(name: str, arguments: dict[str, Any]) -> str:
     return f"{name}({', '.join(parts)})"
 
 
+def _find_tool_call_blocks(text: str) -> list[tuple[str, int, int]]:
+    blocks: list[tuple[str, int, int]] = []
+    cursor = 0
+    while True:
+        start = text.find(_TOOL_CALL_START, cursor)
+        if start == -1:
+            break
+        end = text.find(_TOOL_CALL_END, start + len(_TOOL_CALL_START))
+        if end == -1:
+            raise ValueError("Missing </tool_call> for <tool_call> block")
+        content = text[start + len(_TOOL_CALL_START) : end].strip()
+        blocks.append((content, start, end + len(_TOOL_CALL_END)))
+        cursor = end + len(_TOOL_CALL_END)
+    return blocks
+
+
 def parse_action(text: str) -> ParsedAction:
-    matches = list(_TOOL_CALL_RE.finditer(text))
-    if not matches:
+    blocks = _find_tool_call_blocks(text)
+    if not blocks:
         raise ValueError("Missing <tool_call>...</tool_call> block")
-    if len(matches) > 1:
+    if len(blocks) > 1:
         raise ValueError("Multiple <tool_call> blocks found; expected exactly one")
 
-    data = json.loads(matches[0].group(1))
+    content, start, end = blocks[0]
+    prefix = text[:start].strip()
+    suffix = text[end:].strip()
+    if prefix or suffix:
+        raise ValueError("Unexpected text outside <tool_call> block")
+
+    data = json.loads(content)
     name = data.get("name")
     arguments = data.get("arguments") or {}
 

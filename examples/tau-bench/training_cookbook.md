@@ -28,7 +28,7 @@ CUDA_VISIBLE_DEVICES=0,1 python3 -m sglang.launch_server \
   --model-path Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
   --host 0.0.0.0 --port 30000 --tp 2 --mem-fraction-static 0.70
 
-# Terminal 2: Run evaluation (uses GPT-4.1-2025-04-14 as user simulator; requires OPENAI_API_KEY)
+# Terminal 2: Run evaluation (uses GPT-4.1-mini as user simulator; requires OPENAI_API_KEY)
 python3 examples/tau-bench/tau2/eval.py \
   --hf-checkpoint Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \
   --sglang-url http://127.0.0.1:30000/generate \
@@ -242,15 +242,18 @@ Tau2-bench provides `reward_info` with turn-level evaluation:
 We extract a `partial_score` from these signals:
 
 ```python
-partial_score = 0.7 * (correct_actions / total_expected) +
-                0.2 * (env_assertions_met / total_assertions) +
-                0.1 * (communication_checks / total_checks)
+partial_score = 0.5 * (correct_actions / total_expected) +
+                0.35 * (env_assertions_met / total_assertions) +
+                0.15 * (communication_checks / total_checks)
 ```
 
 The final shaped reward becomes:
 ```python
-shaped_reward = task_reward + 0.3 * partial_score
+shaped_reward = task_reward + alpha * partial_score
 ```
+
+Default `alpha` is 0.25 (domain-adaptive scaling applies a 1.6× multiplier in telecom).
+When `TAU2_TELECOM_COMMUNICATION_BOOST=1`, telecom uses 0.35/0.35/0.30 (action/communication/env) weights.
 
 This provides gradient at every turn, not just at task completion. Research on [turn-level credit assignment](https://arxiv.org/html/2505.11821v1) shows this is critical for multi-turn learning. Trajectory-level rewards fail to distinguish which *turns* contributed to success.
 
@@ -286,7 +289,7 @@ User: "Done. Still no data."
 
 **Chat templates**: Training on multi-turn conversations requires `--apply-chat-template` flag.
 
-**User simulator**: Training uses a local instruct model on port 30001 (`TAU2_USER_API_BASE=http://127.0.0.1:30001/v1`). Evaluation defaults to GPT-4.1-2025-04-14 (OpenAI) for cleaner signal (fewer function calling errors); set `TAU2_USER_MODEL=gpt-4.1-mini` if you want the smaller model used for the reported numbers above.
+**User simulator**: Training uses a local instruct model on port 30001 (`TAU2_USER_API_BASE=http://127.0.0.1:30001/v1`). Evaluation defaults to GPT-4.1-mini (OpenAI); set `TAU2_USER_MODEL=gpt-4.1-2025-04-14` if you want the larger model.
 
 ## Quickstart: Reproduce Pass@4
 
@@ -299,7 +302,7 @@ CUDA_VISIBLE_DEVICES=0,1 python3 -m sglang.launch_server \
   --host 0.0.0.0 --port 30000 --tp 2 --mem-fraction-static 0.70
 ```
 
-**2. Run evaluation** (uses GPT-4.1-2025-04-14 as user simulator; requires `OPENAI_API_KEY`):
+**2. Run evaluation** (uses GPT-4.1-mini as user simulator; requires `OPENAI_API_KEY`):
 ```bash
 python3 examples/tau-bench/tau2/eval.py \
   --hf-checkpoint Jarrodbarnes/Qwen3-4B-tau2-grpo-v1 \

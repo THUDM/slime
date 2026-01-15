@@ -1,6 +1,8 @@
 import pathlib
 import sys
 
+import pytest
+
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TAU2_DIR = ROOT / "examples" / "tau-bench" / "tau2"
 sys.path.insert(0, str(TAU2_DIR))
@@ -20,3 +22,19 @@ def test_parse_action_rejects_multiple_tool_calls():
         assert "Multiple <tool_call>" in str(exc)
     else:
         raise AssertionError("Expected ValueError for multiple tool calls")
+
+
+def test_parse_action_handles_nested_arguments():
+    text = (
+        '<tool_call>{"name": "book", "arguments": {"passengers": [{"name": "Ada", "age": 30}]}}</tool_call>'
+    )
+    action = parse_action(text)
+    assert action.arguments["passengers"][0]["name"] == "Ada"
+
+
+def test_parse_action_rejects_extra_text():
+    text = (
+        'oops <tool_call>{"name": "respond", "arguments": {"content": "hi"}}</tool_call>'
+    )
+    with pytest.raises(ValueError, match="Unexpected text"):
+        parse_action(text)

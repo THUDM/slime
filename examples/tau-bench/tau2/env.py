@@ -118,9 +118,9 @@ def parse_reward_info_value(reward_info: Any) -> dict[str, Any]:
 
 @dataclass(frozen=True, slots=True)
 class PartialScoreWeights:
-    action: float = 0.7
-    communicate: float = 0.1
-    env_assertion: float = 0.2
+    action: float = 0.5
+    communicate: float = 0.15
+    env_assertion: float = 0.35
     db: float = 0.0
 
 
