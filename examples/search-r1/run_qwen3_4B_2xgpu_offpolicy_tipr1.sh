@@ -211,6 +211,48 @@ MISC_ARGS=(
    --attention-backend flash
 )
 
+# ==================== FORMAT REWARD CONFIGURATION ====================
+# 🆕 CONFIGURABLE: Enable fine-grained format rewards for better training signal
+#
+# Background:
+#   By default, the reward function only checks answer correctness (0 or 1).
+#   This ignores output format quality, retrieval quality, etc.
+#   Enabling format rewards provides richer learning signals.
+#
+# Reward Structure (when enabled):
+#   - Correct answer + correct format:           1.0
+#   - Correct answer + wrong format:             0.8  (penalty -0.2)
+#   - Wrong answer + correct format + retrieval: 0.3  (format 0.2 + retrieval 0.1)
+#   - Wrong answer + correct format:             0.2  (format bonus)
+#   - Wrong answer + wrong format + attempt:     0.1  (minimal encouragement)
+#   - Complete failure:                          0.0
+#
+# Benefits:
+#   - Model learns proper output format (<think>, <search>, <answer> tags)
+#   - Priority sampling can differentiate failed samples by quality
+#   - Faster convergence with richer training signals
+#
+# Backward Compatibility:
+#   - Default: --enable-format-reward is OFF (preserves original behavior)
+#   - Enable explicitly for new experiments
+#
+# Recommendation:
+#   - Enable for new training runs
+#   - Compare with baseline (disabled) to measure impact
+
+FORMAT_REWARD_ARGS=(
+   # Enable format reward (uncomment to activate)
+   --enable-format-reward
+
+   # Fine-grained reward configuration (only used when enabled)
+   --structure-format-score 0.2   # Reward for correct format
+   --retrieval-score 0.1          # Bonus for successful retrieval
+   --final-format-score 0.1       # Minimal reward for attempting
+)
+
+# To disable format reward (backward compatible mode):
+# Comment out the entire FORMAT_REWARD_ARGS or remove --enable-format-reward
+
 CUSTOM_ARGS=(
    --custom-generate-function-path generate_with_search.generate
    --custom-rm-path generate_with_search.reward_func
@@ -249,6 +291,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${PERF_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
    ${MISC_ARGS[@]} \
+   ${FORMAT_REWARD_ARGS[@]} \
    ${CUSTOM_ARGS[@]}
 
 

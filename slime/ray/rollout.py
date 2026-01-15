@@ -1096,9 +1096,27 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
     # Also log reward metrics at the top level for easier access in logs
     reward_metrics = {k: v for k, v in log_dict.items() if "generated_reward" in k}
 
+    # Extract format metrics for console logging when format rewards are enabled
+    format_metrics = {k: v for k, v in log_dict.items() if k.startswith("rollout/format/")}
+
     print(f"perf {rollout_id}: {log_dict}")
     if reward_metrics:
         print(f"rollout {rollout_id} generated rewards: {reward_metrics}")
+
+    # Print format statistics if format rewards are enabled and metrics exist
+    if getattr(args, 'enable_format_reward', False) and format_metrics:
+        # Format for better readability
+        format_summary = {}
+        for k, v in format_metrics.items():
+            # Remove 'rollout/format/' prefix for cleaner display
+            clean_key = k.replace('rollout/format/', '')
+            # Round ratio values to 3 decimal places
+            if 'ratio' in clean_key:
+                format_summary[clean_key] = round(v, 3)
+            else:
+                format_summary[clean_key] = v
+
+        print(f"rollout {rollout_id} format statistics: {format_summary}")
     step = (
         rollout_id
         if not args.wandb_always_use_train_step
@@ -1128,6 +1146,9 @@ def _compute_metrics_from_samples(args, samples):
 
     # Add reward statistics for newly generated samples
     log_dict |= _compute_reward_metrics(args, samples)
+
+    # Add format reward statistics when format rewards are enabled
+    log_dict |= _compute_format_reward_metrics(args, samples)
 
     return log_dict
 
@@ -1210,3 +1231,83 @@ def _compute_reward_metrics(args, all_samples: List[Sample]):
     metrics = dict_add_prefix(compute_statistics(raw_rewards), f"generated_reward/")
 
     return metrics
+
+
+def _compute_format_reward_metrics(args, all_samples: List[Sample]):
+    """
+    Compute format validation statistics when format rewards are enabled.
+
+    Tracks format correctness, answer accuracy, retrieval success, and reward distribution.
+    Only active when --enable-format-reward is set.
+
+    Returns:
+        dict: Format metrics including:
+            - format/valid_format_ratio: Percentage of samples with correct format
+            - format/answer_correct_ratio: Percentage of samples with correct answers
+            - format/retrieval_success_ratio: Percentage of samples with successful retrieval
+            - format/reward_X.X_count: Distribution of reward values
+    """
+    # Only compute format metrics if format rewards are enabled
+    if not getattr(args, 'enable_format_reward', False):
+        return {}
+
+    # Collect format validation statistics
+    format_stats = {
+        'valid_format': 0,
+        'invalid_format': 0,
+        'answer_correct': 0,
+        'retrieval_success': 0,
+        'total': 0,
+    }
+
+    # Track reward distribution for fine-grained analysis
+    reward_distribution = {}
+
+    for sample in all_samples:
+        # Check if sample has format validation metadata
+        format_validation = sample.metadata.get('format_validation', None)
+        if format_validation is None:
+            continue
+
+        format_stats['total'] += 1
+
+        # Count format correctness
+        if format_validation.get('is_valid_format', False):
+            format_stats['valid_format'] += 1
+        else:
+            format_stats['invalid_format'] += 1
+
+        # Count answer correctness
+        if format_validation.get('answer_correct', False):
+            format_stats['answer_correct'] += 1
+
+        # Count retrieval success
+        if format_validation.get('retrieval_correct', False):
+            format_stats['retrieval_success'] += 1
+
+        # Track reward distribution
+        reward_value = sample.get_reward_value(args)
+        if reward_value is not None:
+            # Round to 1 decimal place for grouping
+            reward_key = round(reward_value, 1)
+            reward_distribution[reward_key] = reward_distribution.get(reward_key, 0) + 1
+
+    # Return empty dict if no format validation data found
+    if format_stats['total'] == 0:
+        return {}
+
+    # Compute ratios
+    metrics = {
+        'format/valid_format_ratio': format_stats['valid_format'] / format_stats['total'],
+        'format/invalid_format_ratio': format_stats['invalid_format'] / format_stats['total'],
+        'format/answer_correct_ratio': format_stats['answer_correct'] / format_stats['total'],
+        'format/retrieval_success_ratio': format_stats['retrieval_success'] / format_stats['total'],
+    }
+
+    # Add reward distribution counts
+    for reward_value, count in reward_distribution.items():
+        metrics[f'format/reward_{reward_value}_count'] = count
+        metrics[f'format/reward_{reward_value}_ratio'] = count / format_stats['total']
+
+    return metrics
+

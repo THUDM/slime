@@ -250,16 +250,61 @@ async def reward_func(args, sample, **kwargs):
     """The reward function for retrieval-based question answering.
 
     Args:
-        args: the arguments
+        args: the arguments (now includes format reward settings)
         sample: the sample to evaluate
+
+    Returns:
+        Reward score based on answer correctness and optionally format quality
     """
     if not isinstance(sample, Sample):
         raise TypeError("Sample must be an instance of Sample class.")
 
-    score = compute_score_em(
-        solution_str=sample.prompt + sample.response,
-        ground_truth=sample.label["ground_truth"],
-        format_score=SEARCH_R1_CONFIGS["format_score"],
-    )
+    # Check if format reward is enabled via command-line args
+    enable_format_reward = getattr(args, 'enable_format_reward', False)
+
+    # === Compute format validation details ===
+    from qa_em_format import is_valid_sequence, extract_solution, em_check, is_retrieval_correct
+
+    solution_str = sample.prompt + sample.response
+    ground_truth = sample.label["ground_truth"]
+
+    # Validate format and extract components
+    is_valid_format, format_reason = is_valid_sequence(solution_str)
+    answer = extract_solution(solution_str)
+    retrieval_correct = is_retrieval_correct(solution_str, ground_truth["target"]) if is_valid_format else False
+    answer_correct = em_check(answer, ground_truth["target"]) if answer else False
+
+    # Store format validation details in metadata for monitoring
+    if enable_format_reward:
+        sample.metadata['format_validation'] = {
+            'is_valid_format': is_valid_format,
+            'format_reason': format_reason,
+            'has_answer': answer is not None,
+            'answer_correct': answer_correct,
+            'retrieval_correct': retrieval_correct,
+        }
+
+    # === Compute reward score ===
+    if enable_format_reward:
+        # Use fine-grained format reward from command-line args
+        score = compute_score_em(
+            solution_str=solution_str,
+            ground_truth=ground_truth,
+            structure_format_score=getattr(args, 'structure_format_score', 0.2),
+            retrieval_score=getattr(args, 'retrieval_score', 0.1),
+            final_format_score=getattr(args, 'final_format_score', 0.1),
+            score=1.0,
+        )
+    else:
+        # Backward compatible: use default behavior (no format reward)
+        # This matches the original buggy behavior for comparison
+        score = compute_score_em(
+            solution_str=solution_str,
+            ground_truth=ground_truth,
+            structure_format_score=0,  # No format reward
+            retrieval_score=0,         # No retrieval reward
+            final_format_score=0,      # No attempt reward
+            score=1.0,
+        )
 
     return score

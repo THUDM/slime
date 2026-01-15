@@ -1299,6 +1299,45 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Path to the custom function that will post process reward, by default it will be the normalization for grpo. "
                 ),
             )
+            # Format reward arguments for Search-R1 and similar tasks
+            parser.add_argument(
+                "--enable-format-reward",
+                action="store_true",
+                default=False,
+                help=(
+                    "Enable format reward for structured generation tasks (e.g., Search-R1). "
+                    "When enabled, rewards are given not just for correct answers but also for "
+                    "proper output format, retrieval quality, etc. Default: False (backward compatible)."
+                ),
+            )
+            parser.add_argument(
+                "--structure-format-score",
+                type=float,
+                default=0.2,
+                help=(
+                    "Reward score for correct output format (e.g., proper use of <think>, <search>, <answer> tags). "
+                    "Only used when --enable-format-reward is set. Default: 0.2"
+                ),
+            )
+            parser.add_argument(
+                "--retrieval-score",
+                type=float,
+                default=0.1,
+                help=(
+                    "Additional reward score for successful retrieval of correct information. "
+                    "Only used when --enable-format-reward is set. Default: 0.1"
+                ),
+            )
+            parser.add_argument(
+                "--final-format-score",
+                type=float,
+                default=0.1,
+                help=(
+                    "Minimal reward score for attempting to answer (even with wrong format/answer). "
+                    "Encourages exploration and prevents complete failure. "
+                    "Only used when --enable-format-reward is set. Default: 0.1"
+                ),
+            )
             return parser
 
         def add_rollout_buffer_arguments(parser):
