@@ -139,7 +139,9 @@ def quantize_params_compressed_tensors(converted_named_params, quantization_conf
     results = []
 
     for name, param in converted_named_params:
-        is_ignored = any((r.startswith("re:") and re.match(r[3:], name)) or r == name for r in ignore_rules)
+        is_ignored = any(
+            (r.startswith("re:") and re.match(r[3:], name)) or r == name or name.startswith(r) for r in ignore_rules
+        )
 
         if is_ignored or not name.endswith(".weight") or param.dim() < 2:
             results.append((name, param))
