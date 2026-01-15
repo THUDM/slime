@@ -435,11 +435,18 @@ def _build_multimodal_training_inputs(
             return None
         if hasattr(grid, "tolist"):
             grid = grid.tolist()
+        merge_size = 1
+        if hasattr(processor, "image_processor") and hasattr(processor.image_processor, "spatial_merge_size"):
+            merge_size = int(getattr(processor.image_processor, "spatial_merge_size") or 1)
+        elif hasattr(processor, "config") and hasattr(processor.config, "vision_config"):
+            merge_size = int(getattr(processor.config.vision_config, "spatial_merge_size", 1) or 1)
         total = 0
         for item in grid:
             if not item or len(item) < 3:
                 continue
             total += int(item[0]) * int(item[1]) * int(item[2])
+        if merge_size > 1:
+            total = total // (merge_size**2)
         return total
 
     def _validate_multimodal_tokens(token_ids: list[int], mm_inputs: dict | None):
