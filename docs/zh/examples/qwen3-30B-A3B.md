@@ -8,7 +8,7 @@
 
 ```bash
 cd slime/
-pip install -e .
+pip install -e . --no-deps
 source scripts/models/qwen3-30B-A3B.sh
 PYTHONPATH=/root/Megatron-LM/ torchrun --nproc-per-node 8 \
    tools/convert_hf_to_torch_dist.py \

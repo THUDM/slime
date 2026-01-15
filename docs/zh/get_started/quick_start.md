@@ -44,7 +44,7 @@ slime 已经安装在该 Docker 镜像中。如需更新到最新版本，请在
 # 路径可根据实际情况调整
 cd /root/slime
 git pull
-pip install -e .
+pip install -e . --no-deps
 ```
 
 ## 模型与数据集下载

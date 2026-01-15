@@ -1,8 +1,0 @@
-[submodule "examples/swe-agent/nemo-gym"]
-	path = examples/swe-agent/nemo-gym
-	url = https://github.com/yueming-yuan/Gym
-	branch = slime-swe-agent
-[submodule "examples/swe-agent/mini-swe-agent"]
-	path = examples/swe-agent/mini-swe-agent
-	url = https://github.com/yueming-yuan/nv-mini-swe-agent
-	branch = slime-swe-agent
