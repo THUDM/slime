@@ -96,6 +96,11 @@ OFFPOLICY_GRPO_ARGS=(
    # - Balanced off-policy: not too aggressive, not too conservative
    # - Combined with LIFO sampling, ensures newest data is prioritized
    --max-staleness 4
+   # --max-staleness 8
+   # --max-staleness 16
+   # --max-staleness 32
+
+
 
    # === PPO Clipping Parameters ===
    # Asymmetric clipping: allows more aggressive positive updates
@@ -138,7 +143,9 @@ BUFFER_SAMPLING_ARGS=(
    # - Minimizes importance weight variance
    # - See slime/utils/buffer_sampling_strategies.py:369
    # --buffer-sampling-strategy lifo_staleness
-   --buffer-sampling-strategy random
+   # --buffer-sampling-strategy random
+   --buffer-sampling-strategy priority
+
 
 
    # Allow sample reuse but don't remove on sample
@@ -149,9 +156,10 @@ BUFFER_SAMPLING_ARGS=(
    # - Ensures policy_version accurately reflects sample age
    # - Key insight: reuse_count acts as "hidden staleness"
    # - With reuse=3 and staleness=5, effective max age = 5+3×0.5 ≈ 6.5 steps
-   # --buffer-reuse-samples 3
    --buffer-reuse-samples 4
-   # --buffer-reuse-samples 10
+   # --buffer-reuse-samples 8
+   # --buffer-reuse-samples 16
+   # --buffer-reuse-samples 32
 
 
 )
@@ -173,8 +181,9 @@ export WANDB_KEY="968275bc822c87ac741ecce2f06cdfb54dbc1608"  # Replace with your
 
 WANDB_ARGS=(
    --use-wandb
-   --wandb-project slime-search-r1-offpolicy-stale-0108
-   --wandb-group qwen3-4B-2xgpu-offpolicy-random
+   --wandb-project slime-search-r1-offpolicy-stale-0113
+   # --wandb-group qwen3-4B-2xgpu-offpolicy-random
+   --wandb-group qwen3-4B-2xgpu-offpolicy-rewardpriority
    --wandb-key ${WANDB_KEY}
 )
 

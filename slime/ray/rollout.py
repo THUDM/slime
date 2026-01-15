@@ -992,7 +992,13 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
         log_dict["perf/longest_sample_tokens_per_sec"] = max(response_lengths) / rollout_time
 
     log_dict |= dict_add_prefix(_compute_metrics_from_samples(args, samples), f"rollout/")
+
+    # Also log reward metrics at the top level for easier access in logs
+    reward_metrics = {k: v for k, v in log_dict.items() if "generated_reward" in k}
+
     print(f"perf {rollout_id}: {log_dict}")
+    if reward_metrics:
+        print(f"rollout {rollout_id} generated rewards: {reward_metrics}")
     step = (
         rollout_id
         if not args.wandb_always_use_train_step
@@ -1019,6 +1025,10 @@ def _compute_metrics_from_samples(args, samples):
     log_dict |= _compute_reward_cat_metrics(args, samples)
     log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
     log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
+
+    # Add reward statistics for newly generated samples
+    log_dict |= _compute_reward_metrics(args, samples)
+
     return log_dict
 
 
@@ -1061,3 +1071,42 @@ def _compute_reward_cat_metrics(args, all_samples: List[Sample]):
     samples_of_reward_cat = group_by(all_samples, lambda s: s.reward[reward_cat_key])
 
     return {f"error_cat/{reward_cat}": len(s) / len(all_samples) for reward_cat, s in samples_of_reward_cat.items()}
+
+
+def _compute_reward_metrics(args, all_samples: List[Sample]):
+    """
+    Compute reward statistics from newly generated samples during rollout.
+
+    This records the TRUE rewards produced by the reward model during rollout,
+    BEFORE any normalization or post-processing is applied.
+
+    Returns:
+        dict: Metrics including:
+            - generated_reward/mean: Mean of raw rewards from reward model
+            - generated_reward/std: Standard deviation of raw rewards
+            - generated_reward/min: Minimum raw reward
+            - generated_reward/max: Maximum raw reward
+            - generated_reward/median: Median raw reward
+    """
+    # Extract raw rewards from samples
+    raw_rewards = []
+    for sample in all_samples:
+        try:
+            reward_value = sample.get_reward_value(args)
+            if reward_value is not None:
+                raw_rewards.append(reward_value)
+        except Exception as e:
+            # Handle cases where reward might not be available
+            continue
+
+    # If no valid rewards, return empty dict
+    if len(raw_rewards) == 0:
+        return {}
+
+    # Convert to numpy array for statistics
+    rewards_array = np.array(raw_rewards)
+
+    # Compute statistics using the same compute_statistics function
+    metrics = dict_add_prefix(compute_statistics(raw_rewards), f"generated_reward/")
+
+    return metrics
