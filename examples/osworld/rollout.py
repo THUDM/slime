@@ -436,8 +436,12 @@ def _build_multimodal_training_inputs(
         if hasattr(grid, "tolist"):
             grid = grid.tolist()
         merge_size = 1
-        if hasattr(processor, "image_processor") and hasattr(processor.image_processor, "spatial_merge_size"):
-            merge_size = int(getattr(processor.image_processor, "spatial_merge_size") or 1)
+        if hasattr(processor, "image_processor"):
+            merge_size = int(
+                getattr(processor.image_processor, "merge_size", None)
+                or getattr(processor.image_processor, "spatial_merge_size", None)
+                or 1
+            )
         elif hasattr(processor, "config") and hasattr(processor.config, "vision_config"):
             merge_size = int(getattr(processor.config.vision_config, "spatial_merge_size", 1) or 1)
         total = 0
