@@ -395,7 +395,9 @@ async def generate_rollout_async(
 
     assert len(data) == args.rollout_batch_size, f"Got {len(data)} samples, expected {args.rollout_batch_size}"
     data = sorted(data, key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)
-    all_samples = sorted(data, key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)
+    all_samples = sorted(
+        all_data, key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index
+    )
 
     # reset the global state to prevent effects on the next rollout or eval.
     state.reset()

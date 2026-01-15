@@ -15,14 +15,14 @@ hf download Qwen/Qwen3-Next-80B-A3B-Thinking --local-dir ${BASE_FOLDER}/Qwen3-Ne
 
 ```shell
 cd slime/
-pip install -e .
+pip install -e . --no-deps
 
 # (for acceleration) 
 cd .. # and find a proper folder
 git clone https://github.com/fla-org/flash-linear-attention
 cd flash-linear-attention
 git checkout 9714c595
-pip install -e .
+pip install -e . --no-deps
 
 wget https://github.com/Dao-AILab/causal-conv1d/releases/download/v1.5.4/causal_conv1d-1.5.4+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl
 pip install ./causal_conv1d-1.5.4+cu12torch2.8cxx11abiTRUE-cp312-cp312-linux_x86_64.whl

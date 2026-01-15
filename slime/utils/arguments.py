@@ -1416,6 +1416,8 @@ def parse_args(add_custom_arguments=None):
         args.rank = 0  # Primary process rank for wandb initialization
         args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
 
+        assert args.context_parallel_size == 1, "Context parallelism is not supported for FSDP backend."
+
     slime_validate_args(args)
 
     if backend == "megatron":
