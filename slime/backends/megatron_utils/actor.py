@@ -330,17 +330,28 @@ class MegatronTrainRayActor(TrainRayActor):
                             print(f"[Off-Policy GRPO] Initializing proximal policy from current actor at rollout {rollout_id}")
                         self.weights_backuper.backup("proximal")
 
-                    # Compute proximal policy log probs
-                    if is_megatron_main_rank():
-                        print(f"[Off-Policy GRPO] Computing proximal policy log probs at rollout {rollout_id}")
-                    rollout_data.update(
-                        self.compute_log_prob(
-                            "proximal",
-                            data_iterator,
-                            num_microbatches,
-                            store_prefix="proximal_",
+                    # Decide whether to compute proximal policy log probs based on approximation method
+                    prox_logp_method = getattr(self.args, "prox_logp_method", "recompute")
+
+                    if prox_logp_method == "recompute":
+                        # Traditional approach: full forward pass through proximal policy
+                        if is_megatron_main_rank():
+                            print(f"[Off-Policy GRPO] Computing proximal policy log probs at rollout {rollout_id} (method: recompute)")
+                        rollout_data.update(
+                            self.compute_log_prob(
+                                "proximal",
+                                data_iterator,
+                                num_microbatches,
+                                store_prefix="proximal_",
+                            )
                         )
-                    )
+                    else:
+                        # Approximation approach: skip forward pass, compute in loss.py
+                        if is_megatron_main_rank():
+                            print(f"[Off-Policy GRPO] Skipping proximal policy forward pass (method: {prox_logp_method})")
+                            print(f"[Off-Policy GRPO] Proximal log probs will be approximated in loss computation")
+                        # Set a flag so loss.py knows to use approximation
+                        rollout_data["use_proximal_logp_approximation"] = True
 
                 if self.args.use_routing_replay:
                     if self.args.use_rollout_routing_replay:

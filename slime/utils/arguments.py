@@ -1050,6 +1050,65 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
 
+            # === Proximal Log-Probability Approximation (from AReaL) ===
+            parser.add_argument(
+                "--prox-logp-method",
+                type=str,
+                choices=["recompute", "loglinear", "linear", "metrics"],
+                default="recompute",
+                help=(
+                    "Method for computing proximal policy log-probabilities: "
+                    "'recompute': Standard method via forward pass (default, accurate but expensive); "
+                    "'loglinear': Log-linear approximation using version interpolation (fast, ~50%% compute savings); "
+                    "'linear': Linear approximation in probability space (experimental); "
+                    "'metrics': Recompute + evaluate all approximation methods for comparison."
+                ),
+            )
+
+            parser.add_argument(
+                "--enable-m2po-filtering",
+                action="store_true",
+                default=False,
+                help=(
+                    "Enable M2PO (Second-Momentum PPO) filtering to reduce gradient variance. "
+                    "Filters out tokens with high divergence between behavior and proximal policies. "
+                    "Improves training stability in off-policy settings."
+                ),
+            )
+
+            parser.add_argument(
+                "--m2po-threshold",
+                type=float,
+                default=0.1,
+                help=(
+                    "M2PO filtering threshold for second-momentum (squared log-prob difference). "
+                    "Lower values = more aggressive filtering. Typical range: 0.05-0.5. "
+                    "Only used when --enable-m2po-filtering is set. Default: 0.1"
+                ),
+            )
+
+            parser.add_argument(
+                "--log-proximal-approximation-metrics",
+                action="store_true",
+                default=False,
+                help=(
+                    "Log detailed metrics for proximal log-prob approximation quality. "
+                    "Includes approximation errors, importance weight distributions, etc. "
+                    "Useful for debugging and evaluating approximation methods."
+                ),
+            )
+
+            parser.add_argument(
+                "--log-version-staleness-stats",
+                action="store_true",
+                default=False,
+                help=(
+                    "Log statistics about sample staleness based on policy versions. "
+                    "Tracks how old samples are relative to proximal and current policies. "
+                    "Useful for understanding off-policy data distribution."
+                ),
+            )
+
             parser.add_argument(
                 "--use-routing-replay",
                 action="store_true",

@@ -710,8 +710,39 @@ def decoupled_policy_loss_function(
     log_probs = log_probs_and_entropy["log_probs"]
     entropy = log_probs_and_entropy["entropy"]
 
-    # === 2. Get proximal policy log probs (pre-computed) ===
-    proximal_log_probs = batch["proximal_log_probs"]
+    # === 2. Get proximal policy log probs ===                                                                                                                           
+    if batch.get("use_proximal_logp_approximation", False):                                                                                                              
+        # Use approximation method                                                                                                                                       
+        from slime.utils.proximal_logp_utils import approximate_proximal_log_probs                                                                                       
+                                                                                                                                                                        
+        prox_logp_method = getattr(args, "prox_logp_method", "recompute")                                                                                                
+                                                                                                                                                                        
+        # Get required inputs based on method                                                                                                                            
+        if prox_logp_method == "old_actor":                                                                                                                              
+            # Use old_actor log probs as proximal approximation                                                                                                          
+            old_actor_log_probs = batch["log_probs"]                                                                                                                     
+            proximal_log_probs = old_actor_log_probs                                                                                                                     
+        else:                                                                                                                                                            
+            # Use approximation formula: prox ≈ rollout + α * (old - rollout)                                                                                            
+            rollout_log_probs = batch["rollout_log_probs"]                                                                                                               
+            old_actor_log_probs = batch["log_probs"]                                                                                                                     
+            alpha = getattr(args, "prox_logp_alpha", 0.5)                                                                                                                
+                                                                                                                                                                        
+            proximal_log_probs = approximate_proximal_log_probs(                                                                                                         
+                rollout_log_probs=rollout_log_probs,                                                                                                                     
+                old_actor_log_probs=old_actor_log_probs,                                                                                                                 
+                method=prox_logp_method,                                                                                                                                 
+                alpha=alpha                                                                                                                                              
+            )                                                                                                                                                                                                                                                                                                                                   
+    else:                                                                                                                                                                
+        # Use pre-computed proximal policy log probs (traditional approach)                                                                                              
+        if "proximal_log_probs" not in batch:                                                                                                                            
+            raise ValueError(                                                                                                                                                                                                                                                                                                                   
+                "batch must contain 'proximal_log_probs' for decoupled_policy_loss. "                                                                                    
+                "Make sure to compute proximal policy log probs in train_actor() before training."                                                                       
+            )                                                                                                                                                                                                                                                                                                                                   
+        proximal_log_probs = batch["proximal_log_probs"]  
+
 
     # === 3. Get behavior log probs ===
     # Try to use pre-computed behavior_log_probs if available
@@ -766,6 +797,57 @@ def decoupled_policy_loss_function(
     #   ratio = exp(-(log(π_prox) - log(π_θ))) = exp(log(π_θ) - log(π_prox)) = π_θ/π_prox
     log_ratio_intermediate = proximal_log_probs - log_probs
 
+    # === 6.5. Apply M2PO filtering if enabled ===                                                                                                                       
+    if getattr(args, "enable_m2po_filtering", False):                                                                                                                    
+        # Check if we have policy version information                                                                                                                    
+        if batch.get("policy_versions") is not None and batch.get("current_policy_version") is not None:                                                                 
+            from slime.utils.offpolicy_utils import apply_m2po_filtering                                                                                                 
+                                                                                                                                                                        
+            current_version = batch["current_policy_version"][0] if isinstance(batch["current_policy_version"], list) else batch["current_policy_version"]               
+            policy_versions = batch["policy_versions"]                                                                                                                   
+                                                                                                                                                                        
+            # Calculate policy version gap for each sample                                                                                                               
+            if isinstance(policy_versions, list):                                                                                                                        
+                policy_version_gaps = [current_version - v for v in policy_versions]                                                                                     
+                max_gap = max(policy_version_gaps)                                                                                                                       
+            else:                                                                                                                                                        
+                policy_version_gaps = current_version - policy_versions                                                                                                  
+                max_gap = policy_version_gaps.max().item()                                                                                                               
+                                                                                                                                                                        
+            # Only apply M2PO filtering when policy_version_gap >= 2                                                                                                     
+            if max_gap >= 2:                                                                                                                                             
+                # Compute importance weights for filtering: exp(log_ratio_intermediate)                                                                                  
+                # Note: log_ratio_intermediate = log(π_prox) - log(π_θ)                                                                                                  
+                # So importance_weight = exp(log_ratio) = π_prox / π_θ                                                                                                   
+                filtering_importance_weights = torch.exp(-log_ratio_intermediate)  # π_θ / π_prox                                                                        
+                                                                                                                                                                        
+                # Apply M2PO filtering to loss masks                                                                                                                     
+                m2po_threshold = getattr(args, "m2po_threshold", 0.1)                                                                                                    
+                modified_loss_masks, num_filtered = apply_m2po_filtering(                                                                                                
+                    importance_weights=filtering_importance_weights,                                                                                                     
+                    loss_masks=batch["loss_masks"],                                                                                                                      
+                    threshold=m2po_threshold,                                                                                                                            
+                    policy_version_gaps=policy_version_gaps,                                                                                                                                                                                                                                                                                    
+                    min_gap_for_filtering=2                                                                                                                              
+                )                                                                                                                                                        
+                                                                                                                                                                        
+                # Update batch with filtered masks                                                                                                                                                                                                                                                                                              
+                batch["loss_masks"] = modified_loss_masks                                                                                                                
+
+                # [FIX 2] 重建 sum_of_sample_mean，否则过滤无效！
+                from .cp_utils import get_sum_of_sample_mean
+                sum_of_sample_mean = get_sum_of_sample_mean(
+                    total_lengths,
+                    response_lengths,
+                    modified_loss_masks, # 使用新的 mask
+                    args.calculate_per_token_loss
+                )      
+                                                                                                                                                      
+                if is_megatron_main_rank():                                                                                                                                                                                                                                                                                                     
+                    total_tokens = sum(m.sum().item() for m in batch["loss_masks"])                                                                                      
+                    print(f"[M2PO] Filtered {num_filtered} tokens out of {total_tokens + num_filtered} "                                                                                                                                                                                                                                        
+                            f"(max_gap={max_gap}, threshold={m2po_threshold})")          
+                        
     # === 7. Compute decoupled policy loss ===
     pg_loss, pg_clipfrac = compute_decoupled_policy_loss(
         log_ratio_intermediate,

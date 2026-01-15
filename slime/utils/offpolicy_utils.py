@@ -307,3 +307,125 @@ def aggregate_importance_weights(
             return torch.tensor(0.0, device=importance_weights.device)
     else:
         raise ValueError(f"Unknown aggregation method: {method}")
+
+
+def approximate_proximal_log_probs(
+    rollout_log_probs: List[torch.Tensor],
+    old_actor_log_probs: List[torch.Tensor],
+    method: str = "linear",
+    alpha: float = 0.5,
+) -> List[torch.Tensor]:
+    """
+    Approximate proximal policy log probs without forward pass.
+
+    This function approximates π_prox based on existing log probs to save computation.
+
+    Supported methods:
+    - "linear": π_prox ≈ π_rollout + α * (π_old - π_rollout)
+    - "old_actor": π_prox ≈ π_old (use old_actor as proximal policy)
+    - "rollout": π_prox ≈ π_rollout (use rollout policy as proximal policy)
+
+    Args:
+        rollout_log_probs: Log probs from rollout policy (behavior policy) [list of tensors]
+        old_actor_log_probs: Log probs from old actor (previous training policy) [list of tensors]
+        method: Approximation method
+        alpha: Interpolation coefficient for linear method (0 = rollout, 1 = old_actor)
+
+    Returns:
+        Approximated proximal log probs [list of tensors]
+    """
+    if method == "old_actor":
+        # Simple: use old_actor as proximal policy
+        return old_actor_log_probs
+    elif method == "rollout":
+        # Simple: use rollout policy as proximal policy
+        return rollout_log_probs
+    elif method == "linear":
+        # Linear interpolation: π_prox ≈ π_rollout + α * (π_old - π_rollout)
+        proximal_log_probs = []
+        for rollout_logp, old_logp in zip(rollout_log_probs, old_actor_log_probs):
+            # Ensure same device and dtype
+            if rollout_logp.device != old_logp.device:
+                old_logp = old_logp.to(device=rollout_logp.device)
+            if rollout_logp.dtype != old_logp.dtype:
+                old_logp = old_logp.to(dtype=rollout_logp.dtype)
+
+            # Linear interpolation in log space
+            approx_logp = rollout_logp + alpha * (old_logp - rollout_logp)
+            proximal_log_probs.append(approx_logp)
+        return proximal_log_probs
+    else:
+        raise ValueError(f"Unknown approximation method: {method}. "
+                        f"Supported methods: 'linear', 'old_actor', 'rollout'")
+
+
+def apply_m2po_filtering(
+    importance_weights: torch.Tensor,
+    loss_masks: List[torch.Tensor],
+    threshold: float = 0.1,
+    policy_version_gaps: Optional[List[int]] = None,
+    min_gap_for_filtering: int = 2,
+) -> Tuple[List[torch.Tensor], int]:
+    """
+    Apply M2PO (Mixed Policy Optimization) filtering to remove high-variance samples.
+
+    M2PO filters out samples with importance weights that deviate too much from 1,
+    as these samples can introduce high variance in gradient estimation.
+
+    Filtering criterion: |1 - importance_weight| > threshold
+
+    Only applies filtering when policy_version_gap >= min_gap_for_filtering.
+
+    Args:
+        importance_weights: Importance weights π_θ / π_prox [num_tokens]
+        loss_masks: Loss masks for each sample [list of tensors]
+        threshold: Filtering threshold (default: 0.1 from AReaL paper)
+        policy_version_gaps: Policy version gap for each sample [list of ints]
+        min_gap_for_filtering: Minimum policy version gap to trigger filtering (default: 2)
+
+    Returns:
+        modified_loss_masks: Updated loss masks with filtered tokens set to 0
+        num_filtered: Number of tokens that were filtered out
+    """
+    # Flatten all masks to match importance_weights shape
+    all_masks_flat = torch.cat(loss_masks, dim=0)
+
+    # Validate shapes
+    if importance_weights.shape[0] != all_masks_flat.shape[0]:
+        raise ValueError(
+            f"Shape mismatch: importance_weights {importance_weights.shape} "
+            f"vs loss_masks {all_masks_flat.shape}"
+        )
+
+    # Compute filtering mask: |1 - w| > threshold
+    filter_mask = torch.abs(1.0 - importance_weights) > threshold
+
+    # If policy_version_gaps is provided, only filter samples with gap >= min_gap
+    if policy_version_gaps is not None:
+        # Create per-token gap tensor
+        token_gaps = []
+        for gap, mask in zip(policy_version_gaps, loss_masks):
+            token_gaps.append(torch.full_like(mask, gap, dtype=torch.long))
+        token_gaps_flat = torch.cat(token_gaps, dim=0)
+
+        # Only apply filtering where gap >= min_gap_for_filtering
+        gap_condition = token_gaps_flat >= min_gap_for_filtering
+        filter_mask = filter_mask & gap_condition
+
+    # Count how many tokens will be filtered
+    num_filtered = (filter_mask & all_masks_flat.bool()).sum().item()
+
+    # Apply filtering: set mask to 0 where filter_mask is True
+    filtered_masks_flat = all_masks_flat.clone()
+    filtered_masks_flat[filter_mask] = 0
+
+    # Split back into list of tensors with original shapes
+    modified_loss_masks = []
+    offset = 0
+    for mask in loss_masks:
+        mask_len = mask.shape[0]
+        modified_mask = filtered_masks_flat[offset:offset + mask_len]
+        modified_loss_masks.append(modified_mask)
+        offset += mask_len
+
+    return modified_loss_masks, num_filtered
