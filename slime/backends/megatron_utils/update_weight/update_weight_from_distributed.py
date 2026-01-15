@@ -118,6 +118,7 @@ class UpdateWeightFromDistributed:
         if named_tensors:
             self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
 
+        dist.barrier(group=get_gloo_group())
         if dist.get_rank() == 0:
             ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
             # int4/fp4 post_process
