@@ -71,7 +71,6 @@ SFT_ARGS=(
     --rollout-function-path slime.rollout.sft_rollout.generate_rollout
     --prompt-data "${DATASET_LOCAL}/osworld_reasoning_sft_v1.jsonl"
     --input-key messages
-    --apply-chat-template
     --rollout-shuffle
 
     # Training schedule - conservative for small dataset
