@@ -1,6 +1,6 @@
 # Low Precision Training
 
-- [FP8 rollout and FP8 training](#FP8-rollout-and-FP8-training)
+- [FP8 rollout and FP8 training](#FP8-rollout-and-BF16-training)
 - [FP8 rollout and FP8 training](#FP8-rollout-and-FP8-training)
 - [INT4 QAT Training](#INT4-QAT-Training)
 
