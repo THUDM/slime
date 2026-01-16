@@ -67,7 +67,8 @@ def get_responses(
         assert max_seq_lens is not None
         logits = logits.view(-1, logits.size(-1))
 
-    logits = logits.div(args.rollout_temperature)
+    if args.rollout_temperature != 1.0:
+        logits = logits.div(args.rollout_temperature)
 
     cp_size = parallel_state.cp_size
     end = 0
