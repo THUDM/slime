@@ -734,6 +734,20 @@ index 49f63a198..e4cd0ff2b 100644
      def get_weights_by_name(self, recv_req: GetWeightsByNameReqInput):
          parameter = self.model_runner.get_weights_by_name(
              recv_req.name, recv_req.truncate_size
+diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
+index 65d562a27..b00a20e95 100644
+--- a/python/sglang/srt/mem_cache/memory_pool.py
++++ b/python/sglang/srt/mem_cache/memory_pool.py
+@@ -1678,7 +1678,8 @@ class NSATokenToKVPool(MLATokenToKVPool):
+         with (
+             torch.cuda.use_mem_pool(self.custom_mem_pool)
+             if self.custom_mem_pool
+-            else nullcontext()
++            else nullcontext(),
++            self.memory_saver_adapter.region(GPU_MEMORY_TYPE_KV_CACHE),
+         ):
+             self.index_k_with_scale_buffer = [
+                 torch.zeros(
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
 index 1d69c0582..d984c2e12 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
