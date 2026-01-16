@@ -1,50 +1,61 @@
-# FP8 training examples
+# Low Precision Training
 
-This is an example of FP8 training and FP8 inference. Under FP8 training and inference, it can achieve more efficient inference throughput and lower training-inference mismatch, resulting in more stable training. More details can be found in [this blog](https://lmsys.org/blog/2025-11-25-fp8-rl/).
+- [FP8 rollout and FP8 training](#FP8-rollout-and-FP8-training)
+- [FP8 rollout and FP8 training](#FP8-rollout-and-FP8-training)
+- [INT4 QAT Training](#INT4-QAT-Training)
 
-## Files
+## FP8 rollout and BF16 training
 
-* `run-qwen3-4b-fp8.sh`: example launch script with Qwen3‑4B in FP8.
+You can run FP8 rollout simply by setting `--hf-checkpoint` with an blockwise quantized huggingface checkpoint, which can be converted by:
 
-* `run-qwen3-30b-a3b-fp8-two-nodes.sh`: example launch script for running Qwen3‑30B‑A3B in FP8 across two nodes.
+```bash
+python tools/convert_hf_to_fp8.py \
+    --model-dir $BF16_MODEL \
+    --save-dir $FP8_model \
+    --strategy block --block-size 128 128 \
+    --max-workers 4
+```
 
-## Quick Start
+Please ensure that the converted checkpoint points to a directory where the `config.json` contains the correct `quantization_config` so that slime can automatically use FP8 quantization during weight updates.
 
-1. Check if your training script is properly configured. 
+## FP8 rollout and FP8 training
+
+We also observed that under FP8 training and inference, it can achieve more efficient inference throughput and lower training-inference mismatch, resulting in more stable training. More details can be found in [this blog](https://lmsys.org/blog/2025-11-25-fp8-rl/).
+
+### Quick Start
+
+1. Convert your HuggingFace model weights to FP8 format using the above `tools/convert_hf_to_fp8.py`.
+
+2. Setting up the running script: 
 
 For training tasks, we need to add these flags:
+
 ```bash
 --fp8-format e4m3
 --fp8-recipe blockwise
 # --fp8-param-gather # [optional] Currently incompatible with CPU Adam
 ```
+
 Then ensure the `NVTE_FP8_BLOCK_SCALING_FP32_SCALES` environment variable is enabled.
 
 Note that only `Linear` and `GroupLinear` layers in TransformerEngine use fp8 format. `embedding` and `lm_head` remain in their original precision. If `--fp8-param-gather` is not enabled, weights in TransformerEngine remain in bf16 format, only being cast to fp8 format during `GEMM` or `GroupGEMM` operations.
 
-2. Convert your HuggingFace model weights to FP8 format. 
+3. Start FP8 training with
 
-You can use `tools/convert_hf_to_fp8.py` to convert bf16 weights to fp8 format. Ensure that the `--hf-checkpoint` parameter points to a directory where the `config.json` contains the correct `quantization_config`. slime will automatically use FP8 quantization during weight updates. 
+```bash
+# Qwen3-4B Int4 training
+bash scripts/low_precision/run-qwen3-4b-fp8.sh
 
-3. Start FP8 training.
-
+# Qwen3-30B-A3B (2 nodes)
+bash scripts/low_precision/run-qwen3-30b-a3b-fp8.sh
 ```
-cd slime
-
-# Qwen3‑4B FP8 training (single node)
-bash examples/low_precision/run-qwen3-4b-fp8.sh
-
-# Qwen3‑30B‑A3B FP8 training (two nodes)
-bash examples/low_precision/run-qwen3-30b-a3b-fp8-two-nodes.sh
-```
-Following the above command will launch FP8 training. 
 
 4. Use the saved checkpoint for evaluation. 
 
 Note that TransformerEngine does not specifically save FP8 quantized weights; the saved torch dist remains in original precision (usually bf16). If you want to evaluate under FP8, you need to convert the checkpoint from `torch_dist` to HuggingFace format, then convert to FP8 HuggingFace format.
 
 
-## Quick Explanation
+### Quick Explanation
 
 Here's a quick explanation of how FP8 training is currently implemented in slime:
 
@@ -57,43 +68,34 @@ Here's a quick explanation of how FP8 training is currently implemented in slime
 4. Save checkpoint: Similar to weight updates, if checkpoints need to be saved from the training engine, they will also be dequantized back to bf16 and saved to `torch_dist` format checkpoints.
 
 
-## TODO
+### TODO
 
 Currently, FP8 is far from being a complete feature and still has the following bugs, for examples:
 
 - FP8 weights (`--fp8-param-gather`) can provide memory savings benefits, but currently FP8 weights must be used with TransformerEngine's FusedAdam, which conflicts with the commonly used Adam CPU offload technique in Megatron-LM.
 
-The slime team will continue to collaborate with the NVIDIA team to contribute more complete FP8 training infrastructure to the community.
-
-***
-
-## INT4 Training Examples
+## INT4 QAT Training
 
 This guide provides examples for INT4 STE (Straight-Through Estimator) training and INT4 inference. Utilizing INT4 inference significantly improves throughput, thereby accelerating the training pipeline (specifically during the rollout generation phase).
 
-### Files
-
-*   `run-moonlight-16B-A3B-int4.sh`: Launch script for **Moonlight-16B-A3B** (INT4) on 4x H200 GPUs.
-*   `run-qwen3‑30B‑A3B-int4.sh`: Launch script for **Qwen3‑30B‑A3B** (INT4) on 8x H200 GPUs.
-*   `run-qwen3-235B-A22B-int4.sh`: Launch script for **Qwen3-235B-A22B** (INT4) on 64x H200 GPUs.
-*   `run-kimi-k2-Thinking-int4.sh`: Launch script for **Kimi-k2-Thinking** (INT4) on 256x H200 GPUs.
-
 ### Quick Start
 
-#### 1. Convert HuggingFace Weights to INT4
+1. Convert HuggingFace Weights to INT4
 First, download the PTQ (Post-Training Quantization) calibration dataset from HuggingFace:
 [https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1](https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1)
 
-Next, use the `tools/convert_hf_to_hf_int4.py` script to convert BF16 weights to INT4 format. Ensure that the `--hf-checkpoint` parameter points to a directory where `config.json` contains the correct `quantization_config`. slime will automatically utilize INT4 quantization during weight updates.
+Next, use the `tools/convert_hf_to_int4.py` script to convert BF16 weights to INT4 format. Ensure that the `--hf-checkpoint` parameter points to a directory where `config.json` contains the correct `quantization_config`. slime will automatically utilize INT4 quantization during weight updates.
 
 ```bash
-python tools/convert_hf_to_hf_int4.py \
+python tools/convert_hf_to_int4.py \
   --input-dir /path/to/your/original/models \
   --output-dir /path/to/your/save/models \
   --data-dir /path/to/your/wikitext
 ```
 
-#### 2. Start INT4 Training
+Note: If you only hope to run with INT4 rollout, you only need to set the `--hf-checkpoint` to the converted INT4 checkpoint.
+
+2. Start INT4 QAT Training
 
 You need to configure the specific environment variables for quantization settings.
 
@@ -120,16 +122,16 @@ RUNTIME_ENV_JSON="{
 
 ```bash
 # Moonlight-16B-A3B Int4 training
-bash examples/low_precision/run-moonlight-16B-A3B-int4.sh
+bash scripts/low_precision/run-moonlight-16B-A3B-int4.sh
 
 # Qwen3‑30B‑A3B Int4 training
-bash examples/low_precision/run-qwen3‑30B‑A3B-int4.sh
+bash scripts/low_precision/run-qwen3‑30B‑A3B-int4.sh
 
 # Qwen3-235B-A22B Int4 training (8 nodes)
-bash examples/low_precision/run-qwen3-235B-A22B-int4.sh
+bash scripts/low_precision/run-qwen3-235B-A22B-int4.sh
 
 # Kimi-k2-Thinking Int4 training (32 nodes)
-bash examples/low_precision/run-kimi-k2-Thinking-int4.sh
+bash scripts/low_precision/run-kimi-k2-Thinking-int4.sh
 ```
 
 - For multi-node environments, please start the Ray service according to your cluster configuration.

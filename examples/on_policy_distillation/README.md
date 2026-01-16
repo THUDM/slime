@@ -50,7 +50,7 @@ Using Qwen3-8B-Base model sfted on part of the [OpenThoughts3-1.2M](https://hugg
 
 # FAQ
 1. **Why are teacher logits computed via a sglang server instead of inside the training backend?**
-The teacher runs on an independent SGLang server that slime treats as a reward model. Hosting it inside Megatron/FSDP would require maintaining a second, fully configured training stack for the teacher.
+The teacher runs on an independent SGLang server that slime treats as a reward model. Hosting it inside Megatron would require maintaining a second, fully configured training stack for the teacher.
 
 
 # References

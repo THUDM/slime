@@ -24,64 +24,57 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/models/kimi-k2.sh"
+source "${SCRIPT_DIR}/../scripts/models/qwen3-4B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint $BASE_DIR/Kimi-K2-Instruct/
-   # --hf-checkpoint $BASE_DIR/Kimi-K2-bf16/
-   --ref-load $BASE_DIR/Kimi-K2_torch_dist/
-   --load $BASE_DIR/Kimi-K2_slime/
-   --save $BASE_DIR/Kimi-K2_slime/
+   --hf-checkpoint /root/Qwen3-4B-FP8
+   #--hf-checkpoint /root/Qwen3-4B-FP8
+   --ref-load /root/Qwen3-4B_torch_dist
+   --load /root/qwen3-4b_cp8_fp8
+   --save /root/rl-model/qwen3-4b_cp8_fp8
    --save-interval 20
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data $BASE_DIR/dapo-math-17k/dapo-math-17k.jsonl
+   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
    --apply-chat-template
    --rollout-shuffle
-
-   --rm-type math
-
-   --num-rollout 100
-   --rollout-batch-size 128
+   --rm-type deepscaler
+   --num-rollout 3000
+   --rollout-batch-size 32
    --n-samples-per-prompt 8
-   --rollout-max-response-len 32768
+   --rollout-max-response-len 8192
    --rollout-temperature 1
 
-   # --global-batch-size 1024
-
-   --over-sampling-batch-size 256
-   --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
-
-   --num-steps-per-rollout 4
+   --global-batch-size 256
    --balance-data
 )
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data aime $BASE_DIR/rl_data/aime-2024.jsonl
-   --n-samples-per-eval-prompt 8
-   --eval-max-response-len 32768
+   --eval-prompt-data aime /root/data/aime-2024.jsonl
+   --n-samples-per-eval-prompt 16
+   --eval-max-response-len 16384
    --eval-top-p 1
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 8
+   --tensor-model-parallel-size 2
    --sequence-parallel
-   --pipeline-model-parallel-size 8
-   --context-parallel-size 4
-   --expert-model-parallel-size 32
+   --pipeline-model-parallel-size 1
+   --context-parallel-size 1
+   --expert-model-parallel-size 1
    --expert-tensor-parallel-size 1
-   --decoder-last-pipeline-num-layers 5
 
    --recompute-granularity full
    --recompute-method uniform
    --recompute-num-layers 1
 
+   # --micro-batch-size 1
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 16384
+   --max-tokens-per-gpu 9216
 )
 
 GRPO_ARGS=(
@@ -97,44 +90,24 @@ GRPO_ARGS=(
 OPTIMIZER_ARGS=(
    --optimizer adam
    --lr 1e-6
-
    --lr-decay-style constant
    --weight-decay 0.1
    --adam-beta1 0.9
    --adam-beta2 0.98
 
-   --optimizer-cpu-offload
-   --overlap-cpu-optimizer-d2h-h2d
-   --use-precision-aware-optimizer
 )
 
 WANDB_ARGS=(
    # --use-wandb
    # --wandb-project slime-dev
-   # --wandb-group kimi-k2-test
+   # --wandb-group qwen3-4B-test
    # --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 16
+   --rollout-num-gpus-per-engine 2
    --sglang-mem-fraction-static 0.7
-
-   # dp attention
-   --sglang-enable-dp-attention
-   --sglang-dp-size 8
-   --sglang-moe-dense-tp-size 1
-   --sglang-enable-dp-lm-head
-
-   --sglang-ep-size 16
-
-   # enable deepep for sglang
-#    --sglang-enable-deepep-moe
-#    --sglang-deepep-mode auto
-
-   # make every dp rank has 128 concurrency
-   --sglang-server-concurrency 1024
 )
-
 
 MISC_ARGS=(
    # default dropout in megatron is 0.1
@@ -145,30 +118,30 @@ MISC_ARGS=(
    --attention-softmax-in-fp32
    # need to comment this when using model with MLA
    --attention-backend flash
-
-   # use deepep for megatron
-   --moe-enable-deepep
-   --moe-token-dispatcher-type flex
 )
 
+
+# launch the master node of ray in container
+export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+
 # Build the runtime environment JSON with proper variable substitution
+# you should enable NVTE_FP8_BLOCK_SCALING_FP32_SCALES to use fp32 scales in fp8 training
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
-    \"PYTHONPATH\": \"/root/Megatron-LM/\",
+    \"PYTHONPATH\": \"/root/Megatron-LM/:${SCRIPT_DIR}\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
-    \"no_proxy\": \"${no_proxy}\",
-    \"MASTER_ADDR\": \"${MASTER_ADDR}\"
+    \"NVTE_FP8_BLOCK_SCALING_FP32_SCALES\": \"1\"
   }
 }"
 
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
-   --actor-num-nodes 32 \
+   --actor-num-nodes 1 \
    --actor-num-gpus-per-node 8 \
    --colocate \
-   --update-weight-buffer-size $(( 4 * 512 * 1024 * 1024))
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
