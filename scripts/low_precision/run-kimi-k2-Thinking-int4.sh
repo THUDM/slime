@@ -24,13 +24,13 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/../../models/qwen3-235B-A22B.sh"
+source "${SCRIPT_DIR}/../models/kimi-k2-thinking.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint /root/Qwen3-235B-A22B-INT4/
-   --ref-load /root/Qwen3-235B-A22B_torch_dist/
-   --load /root/Qwen3-235B-A22B-slime/ 
-   --save /root/Qwen3-235B-A22B-slime/ 
+   --hf-checkpoint /root/Kimi-K2-Thinking/
+   --ref-load /root/Kimi-K2_thinking_torch_dist/
+   --load /root/Kimi-K2-thinking_slime/
+   --save /root/Kimi-K2-thinking_slime/
    --save-interval 20
 )
 
@@ -41,15 +41,20 @@ ROLLOUT_ARGS=(
    --apply-chat-template
    --rollout-shuffle
 
-   --rm-type deepscaler
+   --rm-type math
 
-   --num-rollout 300
-   --rollout-batch-size 32
+   --num-rollout 100
+   --rollout-batch-size 128
    --n-samples-per-prompt 8
-   --rollout-max-response-len 8192
+   --rollout-max-response-len 16384
    --rollout-temperature 0.8
 
-   --global-batch-size 256
+   # --global-batch-size 256
+
+   --over-sampling-batch-size 256
+   --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
+
+   --num-steps-per-rollout 4
    --balance-data
 )
 
@@ -62,19 +67,18 @@ EVAL_ARGS=(
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 4
+   --tensor-model-parallel-size 8
    --sequence-parallel
-   --pipeline-model-parallel-size 4
-   --context-parallel-size 2
-   --expert-model-parallel-size 16
+   --pipeline-model-parallel-size 8
+   --context-parallel-size 4
+   --expert-model-parallel-size 32
    --expert-tensor-parallel-size 1
-   --decoder-last-pipeline-num-layers 22
+   --decoder-last-pipeline-num-layers 5
 
    --recompute-granularity full
    --recompute-method uniform
    --recompute-num-layers 1
 
-   # --micro-batch-size 1
    --use-dynamic-batch-size
    --max-tokens-per-gpu 16384
 )
@@ -94,6 +98,7 @@ GRPO_ARGS=(
 OPTIMIZER_ARGS=(
    --optimizer adam
    --lr 1e-6
+
    --lr-decay-style constant
    --weight-decay 0.1
    --adam-beta1 0.9
@@ -107,18 +112,29 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=(
    # --use-wandb
    # --wandb-project slime-dev
-   # --wandb-group qwen3-235B-A22B-test
+   # --wandb-group kimi-k2-thinking-test
    # --wandb-key ${WANDB_KEY}
 )
-
 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 8
    --sglang-mem-fraction-static 0.7
-  #  --sglang-enable-dp-attention
-  #  --sglang-dp-size 4
+
+   # dp attention
+   # --sglang-enable-dp-attention
+   # --sglang-dp-size 8
+   # --sglang-moe-dense-tp-size 1
+   # --sglang-enable-dp-lm-head
+   # --sglang-disable-radix-cache
+
    --sglang-ep-size 8
-   --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
+
+   # enable deepep for sglang
+   #--sglang-enable-deepep-moe
+   #--sglang-deepep-mode auto
+
+   # make every dp rank has 128 concurrency
+   --sglang-server-concurrency 1024
    --use-slime-router
 )
 
@@ -132,11 +148,11 @@ MISC_ARGS=(
    --attention-softmax-in-fp32
    # need to comment this when using model with MLA
    --attention-backend flash
-   --no-check-for-nan-in-loss-and-grad
 
    # use deepep for megatron
-   # --moe-enable-deepep
-   # --moe-token-dispatcher-type flex
+  #  --moe-enable-deepep
+  #  --moe-token-dispatcher-type flex
+   --no-check-for-nan-in-loss-and-grad
 )
 
 # Build the runtime environment JSON with proper variable substitution
@@ -149,16 +165,18 @@ RUNTIME_ENV_JSON="{
     \"no_proxy\": \"${no_proxy}\",
     \"MASTER_ADDR\": \"${MASTER_ADDR}\",
     \"OPEN_TRAINING_INT4_FAKE_QAT_FLAG\": \"1\",
-    \"OPEN_TRAINING_INT4_GROUP_SIZE\": \"128\"
+    \"OPEN_TRAINING_INT4_GROUP_SIZE\": \"32\"
   }
 }"
 
+
 ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
-   -- python3 train.py \
-   --actor-num-nodes 8 \
+   -- python3 /personal/slime/slime/train.py \
+   --actor-num-nodes 32 \
    --actor-num-gpus-per-node 8 \
    --colocate \
+   --update-weight-buffer-size $(( 4 * 512 * 1024 * 1024)) \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \

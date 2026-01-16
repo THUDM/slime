@@ -42,9 +42,10 @@ slime is the RL-framework behind GLM-4.7, GLM-4.6 and GLM-4.5. Apart from models
 
    _examples_synced/reproducibility/README.md
    advanced/speculative-decoding.md
+   advanced/low-precision.md
    advanced/fault-tolerance.md
-   advanced/arch-support-beyond-megatron.md
    advanced/pd-disaggregation.md
+   advanced/arch-support-beyond-megatron.md
 
 .. toctree::
    :maxdepth: 1

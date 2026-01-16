@@ -1,15 +1,15 @@
 #!/bin/bash
 
 # for rerun the task
-# pkill -9 sglang
-# sleep 3
-# ray stop --force
-# pkill -9 ray
-# pkill -9 python
-# sleep 3
-# pkill -9 ray
-# pkill -9 python
-# pkill -9 redis
+pkill -9 sglang
+sleep 3
+ray stop --force
+pkill -9 ray
+pkill -9 python
+sleep 3
+pkill -9 ray
+pkill -9 python
+pkill -9 redis
 
 set -ex
 
@@ -25,48 +25,49 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/../../scripts/models/qwen3-30B-A3B.sh"
-
-# Base directory for checkpoints and related files (adjust if necessary)
-BASE_DIR="/root" 
+source "${SCRIPT_DIR}/../models/moonlight.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint "${BASE_DIR}/Qwen3-30B-A3B-FP8/"
-   --ref-load "${BASE_DIR}/Qwen3-30B-A3B_torch_dist/"
-   --load "${BASE_DIR}/Qwen3-30B-A3B_slime/"
-   --save "${BASE_DIR}/Qwen3-30B-A3B_slime/"
+   --hf-checkpoint /root/Moonlight-16B-A3B-Instruct-INT4
+   --ref-load /root/Moonlight-16B-A3B-Instruct-INT4_torch_dist
+   --load /root/Moonlight-16B-A3B_slime/
+   --save /root/Moonlight-16B-A3B_slime/
    --save-interval 20
 )
 
 ROLLOUT_ARGS=(
-   --prompt-data "${BASE_DIR}/dapo-math-17k.jsonl"
+   --prompt-data /root/dapo-math-17k/dapo-math-17k.jsonl
    --input-key prompt
    --label-key label
    --apply-chat-template
    --rollout-shuffle
    --rm-type math
-   --num-rollout 200
-   --rollout-batch-size 16
+   --num-rollout 3000
+   --rollout-batch-size 128
    --n-samples-per-prompt 8
-   --rollout-max-response-len 8192
-   --rollout-temperature 1
+   --rollout-max-response-len 4096
+   --rollout-temperature 0.8
 
-   --global-batch-size 128
-   --balance-data
+   --over-sampling-batch-size 256
+   --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
+
+   --num-steps-per-rollout 4
+   # --global-batch-size 256
+   --balance-data   
 )
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data aime "${BASE_DIR}/aime-2024.jsonl"
-   --n-samples-per-eval-prompt 16
-   --eval-max-response-len 16384
-   --eval-top-p 1
+   --eval-prompt-data aime /root/aime-2024/aime-2024.jsonl
+   --n-samples-per-eval-prompt 8
+   --eval-max-response-len 4096
+   --eval-top-p 0.7
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 1
+   --tensor-model-parallel-size 2
    --sequence-parallel
-   --pipeline-model-parallel-size 4
+   --pipeline-model-parallel-size 1
    --context-parallel-size 1
    --expert-model-parallel-size 4
    --expert-tensor-parallel-size 1
@@ -77,18 +78,7 @@ PERF_ARGS=(
 
    # --micro-batch-size 1
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 20480
-
-   # use deepep for megatron
-   --moe-enable-deepep
-   --moe-token-dispatcher-type flex
-
-   # fp8
-   --transformer-impl transformer_engine
-   --bf16
-   --fp8-format e4m3
-   --fp8-recipe blockwise
-   # --fp8-param-gather
+   --max-tokens-per-gpu 8192
 )
 
 GRPO_ARGS=(
@@ -99,7 +89,6 @@ GRPO_ARGS=(
    --entropy-coef 0.00
    --eps-clip 0.2
    --eps-clip-high 0.28
-   --use-tis
 )
 
 OPTIMIZER_ARGS=(
@@ -116,19 +105,16 @@ OPTIMIZER_ARGS=(
 )
 
 WANDB_ARGS=(
-   #--use-wandb
+   # --use-wandb
    # --wandb-project slime-dev
-   # --wandb-group qwen3-30B-A3B-test
+   # --wandb-group moomlight-16B-A3B-test
    # --wandb-key ${WANDB_KEY}
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 8
-   --sglang-mem-fraction-static 0.6
+   --rollout-num-gpus-per-engine 4
+   --sglang-mem-fraction-static 0.7
    --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
-   --sglang-expert-parallel-size 8
-   --use-slime-router
-   # --use-rollout-routing-replay
 )
 
 MISC_ARGS=(
@@ -139,34 +125,33 @@ MISC_ARGS=(
    --accumulate-allreduce-grads-in-fp32
    --attention-softmax-in-fp32
    # need to comment this when using model with MLA
-   --attention-backend flash
+   # --attention-backend flash
+
+   # use deepep for megatron
+   --moe-enable-deepep
+   --moe-token-dispatcher-type flex
 )
 
-# Get Ray Head node info automatically
-ip=$(ps aux | grep dashboard | grep -oP '(?<=--node-ip-address=)[0-9\.]+' | head -1)
-port=$(ps aux | grep dashboard | grep -oP '(?<=dashboard-port=)\d+' | head -1)
-export HEAD_NODE_ADDRESS="$ip"
-export DASHBOARD_PORT="$port"
-echo "Detected Ray Head IP: $HEAD_NODE_ADDRESS, Port: $DASHBOARD_PORT"
+# launch the master node of ray in container
+export MASTER_ADDR=${MASTER_ADDR:-"127.0.0.1"}
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 4 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
 
-export RAY_ADDRESS="http://${HEAD_NODE_ADDRESS}:${DASHBOARD_PORT}"
-
-# You should enable NVTE_FP8_BLOCK_SCALING_FP32_SCALES to use fp32 scales in fp8 training
+# Build the runtime environment JSON with proper variable substitution
 RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"PYTHONPATH\": \"/root/Megatron-LM/\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
     \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
-    \"NVTE_FP8_BLOCK_SCALING_FP32_SCALES\": \"1\",
-    \"NCCL_TIMEOUT_MS\":\"36000000\"
+    \"OPEN_TRAINING_INT4_FAKE_QAT_FLAG\": \"1\",
+    \"OPEN_TRAINING_INT4_GROUP_SIZE\": \"128\"
   }
 }"
 
-ray job submit --address="${RAY_ADDRESS}" \
+ray job submit --address="http://127.0.0.1:8265" \
    --runtime-env-json="${RUNTIME_ENV_JSON}" \
    -- python3 train.py \
-   --actor-num-nodes 2 \
-   --actor-num-gpus-per-node 8 \
+   --actor-num-nodes 1 \
+   --actor-num-gpus-per-node 4 \
    --colocate \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
