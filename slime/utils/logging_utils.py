@@ -1,5 +1,10 @@
 import logging
 
+import wandb
+
+from . import wandb_utils
+from .tensorboard_utils import _TensorboardAdapter
+
 _LOGGER_CONFIGURED = False
 
 
@@ -17,12 +22,6 @@ def configure_logger(prefix: str = ""):
         datefmt="%Y-%m-%d %H:%M:%S",
         force=True,
     )
-
-
-import wandb
-from slime.utils.tensorboard_utils import _TensorboardAdapter
-
-from . import wandb_utils
 
 
 def init_tracking(args, primary: bool = True, **kwargs):
