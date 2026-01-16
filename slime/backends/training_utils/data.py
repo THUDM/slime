@@ -11,7 +11,7 @@ from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.types import RolloutBatch
 
 from ...utils.data import process_rollout_data
-from ...utils.ray_utils import Box
+from ...utils.misc import Box
 from .cp_utils import slice_log_prob_with_cp, slice_with_cp
 from .parallel import ParallelState
 
