@@ -52,8 +52,6 @@ Specifically, slime currently provides the following parameters for separate deb
 
 ## Debug sglang illegal memory access (IMA)
 
-在进行大规模 RL 时，时常会遇到 SGLang IMA 的问题，以下是我们的一些 debug 建议：
-
 When running large scale RL, we will occationally meet the IMA in SGLang, there are some debug suggestions based on our experience:
 
 1. Enable `CUDA_LAUNCH_BLOCKING=1`
