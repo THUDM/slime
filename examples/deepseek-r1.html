@@ -613,7 +613,7 @@ bash<span class="w"> </span>scripts/run-deepseek-r1.sh
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SGLANG_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--rollout-num-gpus-per-engine<span class="w"> </span><span class="m">64</span>
 <span class="w">   </span>--sglang-mem-fraction-static<span class="w"> </span><span class="m">0</span>.7
-<span class="w">   </span>--sglang-enable-ep-moe
+<span class="w">   </span>----sglang-ep-size<span class="w"> </span><span class="m">64</span>
 
 <span class="w">   </span><span class="c1"># dp attention</span>
 <span class="w">   </span>--sglang-enable-dp-attention
@@ -622,7 +622,7 @@ bash<span class="w"> </span>scripts/run-deepseek-r1.sh
 <span class="w">   </span>--sglang-enable-dp-lm-head
 
 <span class="w">   </span><span class="c1"># enable deepep for sglang</span>
-<span class="w">   </span>--sglang-enable-deepep-moe
+<span class="w">   </span>--sglang-moe-a2a-backend<span class="w"> </span>deepep
 <span class="w">   </span>--sglang-deepep-mode<span class="w"> </span>auto
 
 <span class="w">   </span><span class="c1"># make every dp rank have 128 concurrency</span>
