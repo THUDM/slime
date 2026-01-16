@@ -23,4 +23,27 @@ def set_default_megatron_args(args):
         print(f"--tokenizer-model not set, use --hf-checkpoint as tokenizer model.")
         args.tokenizer_model = args.hf_checkpoint
         args.tokenizer_type = "HuggingFaceTokenizer"
+
+    # === Off-Policy GRPO: M2PO Filtering Defaults ===
+    # M2PO (Multi-step Off-Policy Optimization) filters tokens with low importance weights
+    # to reduce gradient variance from stale samples
+    if not hasattr(args, "enable_m2po_filtering"):
+        args.enable_m2po_filtering = False  # Default: disabled for backward compatibility
+
+    if not hasattr(args, "m2po_threshold"):
+        args.m2po_threshold = 0.1  # Filter tokens where π_θ/π_prox < 0.1
+
+    # === Off-Policy GRPO: Proximal Logprob Approximation Defaults ===
+    # Approximation methods can skip expensive forward passes through proximal policy
+    if not hasattr(args, "use_proximal_logp_approximation"):
+        args.use_proximal_logp_approximation = False  # Default: use full recomputation
+
+    if not hasattr(args, "prox_logp_method"):
+        # Options: "recompute" (full forward), "old_actor" (use old_actor as proxy),
+        #          "linear" (interpolate between rollout and old_actor)
+        args.prox_logp_method = "recompute"
+
+    if not hasattr(args, "prox_logp_alpha"):
+        args.prox_logp_alpha = 0.5  # Interpolation weight for linear approximation
+
     return args
