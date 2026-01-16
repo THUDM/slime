@@ -11,7 +11,7 @@ from slime.utils.flops_utils import calculate_fwd_flops
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step
 from slime.utils.types import RolloutBatch
 
-from ...utils import tracking_utils
+from ...utils import logging_utils
 from .cp_utils import get_sum_of_sample_mean
 from .data import DataIterator
 from .parallel import ParallelState
@@ -54,7 +54,7 @@ def gather_log_data(
         # Calculate step once to avoid duplication
         step = compute_rollout_step(args, rollout_id)
         reduced_log_dict["rollout/step"] = step
-        tracking_utils.log(args, reduced_log_dict, step_key="rollout/step")
+        logging_utils.log(args, reduced_log_dict, step_key="rollout/step")
 
         return reduced_log_dict
     else:
@@ -402,7 +402,7 @@ def log_train_step(
         should_log = dist.get_rank() == 0
 
     if should_log:
-        tracking_utils.log(args, log_dict_out, step_key="train/step")
+        logging_utils.log(args, log_dict_out, step_key="train/step")
         logger.info(f"{role_tag}step {accumulated_step_id}: {log_dict_out}")
 
     return log_dict_out

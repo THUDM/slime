@@ -2,7 +2,7 @@ import re
 
 import torch
 
-from slime.utils.fp8_kernel import blockwise_cast_to_fp8_triton
+from slime.backends.megatron_utils.kernels.fp8_kernel import blockwise_cast_to_fp8_triton
 
 from ...sglang import quant_weight_ue8m0, should_deepgemm_weight_requant_ue8m0, transform_scale_ue8m0
 

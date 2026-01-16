@@ -15,14 +15,13 @@ from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import train_dump_utils
-from slime.utils.context_utils import with_defer
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
+from slime.utils.logging_utils import init_tracking
 from slime.utils.memory_utils import clear_memory, print_memory
-from slime.utils.ray_utils import Box
+from slime.utils.misc import Box
 from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
 from slime.utils.routing_replay import RoutingReplay
-from slime.utils.timer import Timer, inverse_timer, timer
-from slime.utils.tracking_utils import init_tracking
+from slime.utils.timer import Timer, inverse_timer, timer, with_defer
 from slime.utils.types import RolloutBatch
 
 from ...utils.profile_utils import TrainProfiler
