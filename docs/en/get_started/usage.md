@@ -6,7 +6,7 @@
 When using slime, parameters are primarily passed for the following purposes:
 
 1.  To allocate a portion of the GPUs in the cluster for training and another portion for inference.
-2.  To load Megatron or FSDP for the training portion.
+2.  To load Megatron for the training portion.
 3.  To load SGLang for the inference portion.
 4.  To configure the hyperparameters required for RL training.
 
@@ -35,7 +35,7 @@ Additionally, slime supports Prefill and Decode disaggregation (PD Disaggregatio
 slime supports multiple training backends, which can be selected via the `--train-backend` parameter:
 
 - `megatron` (default): Uses Megatron-LM as the training backend, supporting efficient training of large-scale models.
-- `fsdp`: Uses PyTorch FSDP as the training backend, allowing direct loading of HuggingFace format weights without conversion.
+- `fsdp` (experimental): Uses PyTorch FSDP as the training backend, allowing direct loading of HuggingFace format weights without conversion.
 
 ### Loading Megatron
 
@@ -322,63 +322,3 @@ In some customized Megatron implementations, special operations need to be perfo
   - `--custom-megatron-init-path`: Adds some initialization calls.
   - `--custom-megatron-before-log-prob-hook-path`: Is called before calculating the log probability.
   - `--custom-megatron-before-train-step-hook-path`: Is called before each training step. You could use this to mix in special training losses, for example.
-
-## How to Use FSDP
-
-slime also support FSDP2 as the training backend, docs [here](https://lmsys.org/blog/2025-12-03-miles-fsdp/). 
-
-> FSDP automatically reads all architecture information via `AutoModelForCausalLM.from_pretrained()`, without manual specification. Megatron requires manual configuration of parameters to read model architecture information. FSDP can read entirely from `config.json`, directly avoiding the weight format conversion step.
-
-To run FSDP as the training backend, pass `--train-backend fsdp` to enable.
-
-### Parameters
-
-Parameters that FSDP used are shown as below in comparison to Megatron, more supports are coming on the way.
-
-| Configuration Category | Megatron Parameter | FSDP Parameter | Description |
-| --- | --- | --- | --- |
-| **Model Loading**         | `--load` (Megatron checkpoint) + architecture args (`--num-layers`, `--hidden-size` etc.) | `--hf-checkpoint` (Required)                           | **FSDP**: Directly uses HuggingFace format, no weight conversion needed, architecture inferred via `AutoConfig` |
-| **Tensor Parallel**       | `--tensor-model-parallel-size`                               | Coming Soon                                            |                                                              |
-| **Pipeline Parallel**     | `--pipeline-model-parallel-size`                             | Coming Soon                                            |                                                              |
-| **Expert Parallel**       | `--expert-model-parallel-size`                               | Coming Soon                                            |                                                              |
-| **Context Parallel**      | `--context-parallel-size`                                    | `--context-parallel-size`                              | Both support CP                                              |
-| **Initial Learning Rate** | `--lr`                                                       | `--lr`                                                 | Same parameter                                               |
-| **Learning Rate Decay**   | `--lr-decay-style` (linear/cosine etc.)                      | `--lr-decay-style`                     | Same parameter |
-| **Warmup**                | `--lr-warmup-iters` (steps)                                  | `--lr-warmup-iters`                   | Same parameter |
-| **Min Learning Rate**     | `--min-lr`                                                   | `--min-lr`                                  | Same parameter |
-| **Optimizer Type**        | `--optimizer` (adam/sgd etc.)                                | `--optimizer` (default adam)                           | Basically same                                               |
-| **Distributed Optimizer** | `--use-distributed-optimizer`                                | Built-in to FSDP                                       | FSDP uses distributed optimizer by default                   |
-| **Gradient Checkpoint**   | `--recompute-granularity`, `--recompute-method`              | `--gradient-checkpointing`                             | **FSDP**: Simplified to boolean switch                       |
-| **CPU Offload**           | Implemented via distributed optimizer                        | `--fsdp-cpu-offload`                                   | **FSDP**: Offload parameters/gradients/optimizer states to CPU |
-| **CPU Backend**           | Implemented via distributed optimizer | `--fsdp-cpu-backend`                                   | **FSDP**: Specify CPU backend and use hybrid backend when CPU offload is enabled |
-| **Attention Backend**     | Decided by Megatron Core                                     | `--attn-implementation` (flash_attention_2/sdpa/eager) | **FSDP**: Directly passed to HuggingFace                     |
-| **Mixed Precision**       | `--fp16` or `--bf16`                                         | `--fp16` (bf16 inferred automatically)                 | Basically same                                               |
-| **Training Backend**      | Default or `--train-backend megatron`                        | `--train-backend fsdp` (Required)                      | Used to switch backend                                       |
-| **Config**      |                         | `--config`                     | **FSDP**: Set additional parameters for FSDP backend |
-
-### Quick Start
-
-```bash
-# If you need to use WANDB, you need to set the environment variable WANDB_API_KEY in advance
-# Download model weights (Qwen3-4B)
-hf download Qwen/Qwen3-4B --local-dir /root/Qwen3-4B
-
-# Download training dataset (dapo-math-17k)
-hf download --repo-type dataset zhuzilin/dapo-math-17k \
-  --local-dir /root/dapo-math-17k
-
-# Download evaluation dataset (aime-2024)
-hf download --repo-type dataset zhuzilin/aime-2024 \
-  --local-dir /root/aime-2024
-  
-# Clone code and install dependencies
-git clone https://github.com/THUDM/slime.git
-cd slime
-pip install -e . --no-deps
-
-
-# FSDP does not require weight conversion, natively supports huggingface format
-# Enable reference model, train Qwen3-4B in colocate mode
-source /root/slime/scripts/run-qwen3-4B-fsdp.sh
-```
-
