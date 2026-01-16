@@ -1,8 +1,25 @@
+diff --git a/python/sglang/srt/configs/model_config.py b/python/sglang/srt/configs/model_config.py
+index aa10cb08d..d41c31a09 100644
+--- a/python/sglang/srt/configs/model_config.py
++++ b/python/sglang/srt/configs/model_config.py
+@@ -268,6 +268,12 @@ class ModelConfig:
+         ):
+             self.hf_config.architectures[0] = "DeepseekV3ForCausalLMNextN"
+ 
++        if (
++            is_draft_model
++            and self.hf_config.architectures[0] == "DeepseekV32ForCausalLM"
++        ):
++            self.hf_config.architectures[0] = "DeepseekV3ForCausalLMNextN"
++
+         if is_draft_model and self.hf_config.architectures[0] == "Glm4MoeForCausalLM":
+             self.hf_config.architectures[0] = "Glm4MoeForCausalLMNextN"
+ 
 diff --git a/python/sglang/srt/disaggregation/decode.py b/python/sglang/srt/disaggregation/decode.py
-index 199885244..742ad0639 100644
+index 51af67636..54716de5c 100644
 --- a/python/sglang/srt/disaggregation/decode.py
 +++ b/python/sglang/srt/disaggregation/decode.py
-@@ -314,6 +314,13 @@ class DecodePreallocQueue:
+@@ -315,6 +315,13 @@ class DecodePreallocQueue:
          )
          return kv_manager
  
@@ -41,10 +58,10 @@ index 32e8c0b69..df913da7b 100644
  class MooncakeKVSender(CommonKVSender):
  
 diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
-index ac11013f8..478e469f6 100644
+index a6eed743a..0124d8917 100644
 --- a/python/sglang/srt/disaggregation/prefill.py
 +++ b/python/sglang/srt/disaggregation/prefill.py
-@@ -309,6 +309,13 @@ class PrefillBootstrapQueue:
+@@ -306,6 +306,13 @@ class PrefillBootstrapQueue:
          else:
              return bootstrapped_reqs, failed_reqs
  
@@ -74,8 +91,120 @@ index 0478526ef..cfb1aa669 100644
  
  
  def get_pipeline_model_parallel_world_size():
+diff --git a/python/sglang/srt/entrypoints/engine.py b/python/sglang/srt/entrypoints/engine.py
+index 6f69fd19b..da20ac2ed 100644
+--- a/python/sglang/srt/entrypoints/engine.py
++++ b/python/sglang/srt/entrypoints/engine.py
+@@ -49,6 +49,7 @@ from sglang.srt.managers.io_struct import (
+     InitWeightsUpdateGroupReqInput,
+     LoadLoRAAdapterReqInput,
+     MultimodalDataInputFormat,
++    PostProcessWeightsReqInput,
+     ReleaseMemoryOccupationReqInput,
+     ResumeMemoryOccupationReqInput,
+     RpcReqInput,
+@@ -593,6 +594,24 @@ class Engine(EngineBase):
+             self.tokenizer_manager.update_weights_from_ipc(obj, None)
+         )
+ 
++    def post_process_weights(
++        self,
++        restore_weights_before_load: bool = False,
++        post_process_quantization: bool = False,
++    ):
++        """
++        Optional post-processing for updated weights (e.g., Marlin conversion).
++        Should be called after weight update is finished.
++        """
++        obj = PostProcessWeightsReqInput(
++            restore_weights_before_load=restore_weights_before_load,
++            post_process_quantization=post_process_quantization,
++        )
++
++        return self.loop.run_until_complete(
++            self.tokenizer_manager.post_process_weights(obj, None)
++        )
++
+     def get_weights_by_name(self, name: str, truncate_size: int = 100):
+         """Get weights by parameter name."""
+         obj = GetWeightsByNameReqInput(name=name, truncate_size=truncate_size)
+diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/entrypoints/http_server.py
+index 88705cc35..c8dc052f1 100644
+--- a/python/sglang/srt/entrypoints/http_server.py
++++ b/python/sglang/srt/entrypoints/http_server.py
+@@ -107,6 +107,7 @@ from sglang.srt.managers.io_struct import (
+     OpenSessionReqInput,
+     ParseFunctionCallReq,
+     PauseGenerationReqInput,
++    PostProcessWeightsReqInput,
+     ProfileReqInput,
+     ReleaseMemoryOccupationReqInput,
+     ResumeMemoryOccupationReqInput,
+@@ -957,6 +958,21 @@ async def update_weights_from_ipc(obj: UpdateWeightsFromIPCReqInput, request: Re
+     else:
+         return ORJSONResponse(content, status_code=HTTPStatus.BAD_REQUEST)
+ 
++@app.post("/post_process_weights")
++async def post_process_weights(req: PostProcessWeightsReqInput, request: Request):
++    """
++    Optional post-processing for updated weights (e.g., Marlin conversion).
++    This should be called selectively after `update_weights_from_distributed/update_weights_from_tensor`.
++    """
++    success, message = await _global_state.tokenizer_manager.post_process_weights(
++        req, request
++    )
++
++    content = {"success": success, "message": message}
++    return ORJSONResponse(
++        content, status_code=200 if success else HTTPStatus.BAD_REQUEST
++    )
++
+ 
+ @app.post("/update_weight_version")
+ async def update_weight_version(obj: UpdateWeightVersionReqInput, request: Request):
+diff --git a/python/sglang/srt/layers/attention/nsa/nsa_indexer.py b/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
+index c9e82e4b1..f2584546a 100644
+--- a/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
++++ b/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
+@@ -3,6 +3,7 @@ from __future__ import annotations
+ from abc import ABC, abstractmethod
+ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+ 
++import os
+ import torch
+ from einops import rearrange
+ 
+@@ -178,7 +179,7 @@ class Indexer(MultiPlatformOp):
+             max_position=max_position_embeddings,
+             base=rope_theta,  # type: ignore
+             rope_scaling=rope_scaling,
+-            is_neox_style=True,
++            is_neox_style=True if os.environ.get("INDEXER_ROPE_NEOX_STYLE", "1") == "1" else False,
+             device=get_global_server_args().device,
+         )
+         self.block_size = block_size
+@@ -188,6 +189,9 @@ class Indexer(MultiPlatformOp):
+     @torch.compile(dynamic=True)
+     def _get_logits_head_gate(self, x: torch.Tensor, q_scale: torch.Tensor):
+         weights, _ = self.weights_proj(x.float())
++        if weights.shape[1] < 32:
++            assert 32 % weights.shape[1] == 0
++            weights = weights.repeat_interleave(32 // weights.shape[1], dim=1)
+         weights = weights * self.n_heads**-0.5
+         weights = weights.unsqueeze(-1) * q_scale * self.softmax_scale
+         return weights
+@@ -837,6 +841,9 @@ class Indexer(MultiPlatformOp):
+         query, key = self._get_q_k_bf16(
+             q_lora, x, positions, enable_dual_stream, forward_batch=forward_batch
+         )
++        if query.shape[1] < 32:
++            assert 32 % query.shape[1] == 0
++            query = query.repeat_interleave(32//query.shape[1], dim=1)
+ 
+         if enable_dual_stream:
+             current_stream = torch.cuda.current_stream()
 diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
-index b07164c53..8e6722ce0 100644
+index 7bef9d2ab..f588cbdb0 100644
 --- a/python/sglang/srt/layers/layernorm.py
 +++ b/python/sglang/srt/layers/layernorm.py
 @@ -83,15 +83,12 @@ class RMSNorm(MultiPlatformOp):
@@ -96,7 +225,7 @@ index b07164c53..8e6722ce0 100644
          self.variance_epsilon = eps
          self.hidden_size = hidden_size
          self.variance_size_override = (
-@@ -194,10 +191,22 @@ class RMSNorm(MultiPlatformOp):
+@@ -193,10 +190,22 @@ class RMSNorm(MultiPlatformOp):
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          if not x.is_contiguous():
              x = x.contiguous()
@@ -121,7 +250,7 @@ index b07164c53..8e6722ce0 100644
              x = (
                  x
                  + residual.to(torch.float32)
-@@ -207,10 +216,7 @@ class RMSNorm(MultiPlatformOp):
+@@ -206,10 +215,7 @@ class RMSNorm(MultiPlatformOp):
                      else 0.0
                  )
              )
@@ -244,11 +373,106 @@ index 00bd68755..5a3ca8a67 100644
          self.device_cache.capture_fwd_routed_experts(layer_id, topk_ids)
  
      def get_routed_experts(
+diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors_moe.py b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors_moe.py
+index c5e5a11fc..dd321fa13 100644
+--- a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors_moe.py
++++ b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors_moe.py
+@@ -1016,13 +1016,37 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
+         layer.a2_scale = None
+         layer.marlin_state = GPTQMarlinState.REPACK
+ 
++        if not hasattr(layer, "_original_shapes"):
++            layer._original_shapes = {}
++
++        # Force record: these are the target GPTQ shapes for rollback.
++        layer._original_shapes["w13_weight_packed"] = tuple(w13_weight.shape)
++        layer._original_shapes["w2_weight_packed"] = tuple(w2_weight.shape)
++
++        # Also record the shapes of the scales.
++        layer._original_shapes["w2_weight_scale"] = tuple(w2_scale.shape)
++        layer._original_shapes["w13_weight_scale"] = tuple(w13_scale.shape)
++
+     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
++        # Skip if the layer is already converted to Marlin format to prevent double-packing.
++        if getattr(layer, "is_marlin_converted", False):
++            return
++
++        if not hasattr(layer, "_original_shapes"):
++            layer._original_shapes = {}
+ 
+         def replace_tensor(name, new_t):
++            target_attr = getattr(layer, name)
++
++            # Only save if the key doesn't exist to prevent overwriting with Marlin shapes.
++            if name not in layer._original_shapes:
++                # This is a safety check; `create_weights` usually handles this already.
++                layer._original_shapes[name] = tuple(target_attr.shape)
++
+             # It is important to use resize_() here since it ensures
+             # the same buffer is reused
+-            getattr(layer, name).resize_(new_t.shape)
+-            getattr(layer, name).copy_(new_t)
++            target_attr.resize_(new_t.shape)
++            target_attr.copy_(new_t)
+             del new_t
+ 
+         num_experts = layer.w13_weight_g_idx.shape[0]
+@@ -1078,7 +1102,7 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
+             layer.w13_weight_packed.shape[2],
+             self.num_bits,
+         )
+-        replace_parameter(layer, "w13_weight_packed", marlin_w13_qweight)
++        replace_tensor("w13_weight_packed", marlin_w13_qweight)
+         marlin_w2_qweight = gptq_marlin_moe_repack(
+             layer.w2_weight_packed,
+             layer.w2_g_idx_sort_indices,
+@@ -1086,7 +1110,7 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
+             layer.w2_weight_packed.shape[2],
+             self.num_bits,
+         )
+-        replace_parameter(layer, "w2_weight_packed", marlin_w2_qweight)
++        replace_tensor("w2_weight_packed", marlin_w2_qweight)
+         # Repack scales
+         marlin_w13_scales = marlin_moe_permute_scales(
+             layer.w13_weight_scale,
+@@ -1094,7 +1118,7 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
+             layer.w13_weight_scale.shape[2],
+             self.group_size,
+         )
+-        replace_parameter(layer, "w13_weight_scale", marlin_w13_scales)
++        replace_tensor("w13_weight_scale", marlin_w13_scales)
+ 
+         marlin_w2_scales = marlin_moe_permute_scales(
+             layer.w2_weight_scale,
+@@ -1103,7 +1127,22 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
+             layer.w2_weight_scale.shape[2],
+             self.group_size,
+         )
+-        replace_parameter(layer, "w2_weight_scale", marlin_w2_scales)
++        replace_tensor("w2_weight_scale", marlin_w2_scales)
++
++        layer.is_marlin_converted = True
++
++    def restore_weights_before_loading(self, layer: torch.nn.Module):
++        """Forcibly resize parameters back to their original shapes (e.g., GPTQ format) before loading weights."""
++        if not hasattr(layer, "_original_shapes"):
++            return
++
++        for name, orig_shape in layer._original_shapes.items():
++            param = getattr(layer, name, None)
++
++            if param is not None and param.shape != orig_shape:
++                param.resize_(orig_shape)
++
++        layer.is_marlin_converted = False
+ 
+     def create_moe_runner(
+         self, layer: torch.nn.Module, moe_runner_config: MoeRunnerConfig
 diff --git a/python/sglang/srt/layers/rotary_embedding.py b/python/sglang/srt/layers/rotary_embedding.py
-index 56516b41b..cb2ebca60 100644
+index 480579e01..dd8ca7d4f 100644
 --- a/python/sglang/srt/layers/rotary_embedding.py
 +++ b/python/sglang/srt/layers/rotary_embedding.py
-@@ -135,9 +135,7 @@ class RotaryEmbedding(MultiPlatformOp):
+@@ -136,9 +136,7 @@ class RotaryEmbedding(MultiPlatformOp):
  
          if get_global_server_args().rl_on_policy_target is not None:
              self._forward_method = self.forward_native
@@ -259,7 +483,7 @@ index 56516b41b..cb2ebca60 100644
          self.position_cos, self.position_sin = None, None
  
      def _compute_inv_freq(self, base: Union[int, float]) -> torch.Tensor:
-@@ -1577,6 +1575,9 @@ class MRotaryEmbedding(RotaryEmbedding):
+@@ -1578,6 +1576,9 @@ class MRotaryEmbedding(RotaryEmbedding):
          key: torch.Tensor,
          fused_set_kv_buffer_arg: Optional[FusedSetKVBufferArg] = None,
      ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -293,11 +517,35 @@ index 55bef5652..35ad68b1c 100644
              # For ascend backend, softmax is not needed before sampling
              if not get_global_server_args().sampling_backend == "ascend" or (
                  return_logprob and not SGLANG_RETURN_ORIGINAL_LOGPROB
+diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
+index 2ecd8542f..89ef8200d 100644
+--- a/python/sglang/srt/managers/io_struct.py
++++ b/python/sglang/srt/managers/io_struct.py
+@@ -1292,6 +1292,19 @@ class UpdateWeightsFromIPCReqOutput(BaseReq):
+     success: bool
+     message: str
+ 
++@dataclass
++class PostProcessWeightsReqInput(BaseReq):
++    # Whether to restore weights before loading new weights
++    restore_weights_before_load: bool = False
++    # Whether to enable quantization post-processing
++    post_process_quantization: bool = False
++
++
++@dataclass
++class PostProcessWeightsReqOutput(BaseReq):
++    success: bool
++    message: str
++
+ 
+ @dataclass
+ class InitWeightsSendGroupForRemoteInstanceReqOutput(BaseReq):
 diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
-index 468d8fb8a..229a9a2dc 100644
+index d423e61d7..9156d543c 100644
 --- a/python/sglang/srt/managers/schedule_batch.py
 +++ b/python/sglang/srt/managers/schedule_batch.py
-@@ -2181,7 +2181,8 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+@@ -2186,7 +2186,8 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
      def __str__(self):
          return (
              f"ScheduleBatch(forward_mode={self.forward_mode.name if self.forward_mode else 'None'}, "
@@ -307,6 +555,26 @@ index 468d8fb8a..229a9a2dc 100644
          )
  
  
+diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
+index 92d286897..43bfab691 100644
+--- a/python/sglang/srt/managers/scheduler.py
++++ b/python/sglang/srt/managers/scheduler.py
+@@ -98,6 +98,7 @@ from sglang.srt.managers.io_struct import (
+     OpenSessionReqInput,
+     OpenSessionReqOutput,
+     PauseGenerationReqInput,
++    PostProcessWeightsReqInput,
+     ProfileReq,
+     ReleaseMemoryOccupationReqInput,
+     ResumeMemoryOccupationReqInput,
+@@ -1060,6 +1061,7 @@ class Scheduler(
+                 ),
+                 (UpdateWeightsFromTensorReqInput, self.update_weights_from_tensor),
+                 (UpdateWeightsFromIPCReqInput, self.update_weights_from_ipc),
++                (PostProcessWeightsReqInput, self.post_process_weights),
+                 (GetWeightsByNameReqInput, self.get_weights_by_name),
+                 (ReleaseMemoryOccupationReqInput, self.release_memory_occupation),
+                 (ResumeMemoryOccupationReqInput, self.resume_memory_occupation),
 diff --git a/python/sglang/srt/managers/scheduler_output_processor_mixin.py b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
 index e40586c24..32d98aee4 100644
 --- a/python/sglang/srt/managers/scheduler_output_processor_mixin.py
@@ -320,7 +588,7 @@ index e40586c24..32d98aee4 100644
      AbortReq,
      BatchEmbeddingOutput,
 diff --git a/python/sglang/srt/managers/scheduler_update_weights_mixin.py b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
-index 293a84350..0947f77e0 100644
+index 293a84350..c3a618bcc 100644
 --- a/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 @@ -1,6 +1,7 @@
@@ -341,7 +609,28 @@ index 293a84350..0947f77e0 100644
  from sglang.srt.managers.io_struct import (
      CheckWeightsReqInput,
      CheckWeightsReqOutput,
-@@ -137,6 +141,13 @@ class SchedulerUpdateWeightsMixin:
+@@ -21,6 +25,8 @@ from sglang.srt.managers.io_struct import (
+     GetWeightsByNameReqOutput,
+     InitWeightsUpdateGroupReqInput,
+     InitWeightsUpdateGroupReqOutput,
++    PostProcessWeightsReqInput,
++    PostProcessWeightsReqOutput,
+     ReleaseMemoryOccupationReqInput,
+     ReleaseMemoryOccupationReqOutput,
+     ResumeMemoryOccupationReqInput,
+@@ -114,6 +120,11 @@ class SchedulerUpdateWeightsMixin:
+         torch.distributed.barrier(group=self.tp_cpu_group)
+         return UpdateWeightsFromIPCReqOutput(success, message)
+ 
++    def post_process_weights(self, recv_req: PostProcessWeightsReqInput):
++        """Optional post-processing for updated weights (e.g., Marlin conversion)."""
++        success, message = self.tp_worker.post_process_weights(recv_req)
++        return PostProcessWeightsReqOutput(success, message)
++
+     def get_weights_by_name(self: Scheduler, recv_req: GetWeightsByNameReqInput):
+         parameter = self.tp_worker.get_weights_by_name(recv_req)
+         return GetWeightsByNameReqOutput(parameter)
+@@ -137,6 +148,13 @@ class SchedulerUpdateWeightsMixin:
              self.memory_saver_adapter.pause(GPU_MEMORY_TYPE_KV_CACHE)
              self.flush_cache()
  
@@ -355,7 +644,7 @@ index 293a84350..0947f77e0 100644
          if GPU_MEMORY_TYPE_WEIGHTS in tags:
              self.stashed_model_static_state = _export_static_state(
                  self.tp_worker.model_runner.model
-@@ -177,6 +188,13 @@ class SchedulerUpdateWeightsMixin:
+@@ -177,6 +195,13 @@ class SchedulerUpdateWeightsMixin:
          if GPU_MEMORY_TYPE_KV_CACHE in tags:
              self.memory_saver_adapter.resume(GPU_MEMORY_TYPE_KV_CACHE)
  
@@ -369,32 +658,98 @@ index 293a84350..0947f77e0 100644
          return ResumeMemoryOccupationReqOutput()
  
      def check_weights(self: Scheduler, recv_req: CheckWeightsReqInput):
-diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
-index f4fc29e29..5ef12cca6 100644
---- a/python/sglang/srt/managers/tokenizer_manager.py
-+++ b/python/sglang/srt/managers/tokenizer_manager.py
-@@ -1652,12 +1652,13 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
-             return
- 
-         if len(recv_obj.input_token_logprobs_val) > 0:
--            state.input_token_logprobs_val.extend(
--                recv_obj.input_token_logprobs_val[recv_obj_index]
--            )
--            state.input_token_logprobs_idx.extend(
--                recv_obj.input_token_logprobs_idx[recv_obj_index]
--            )
-+            if recv_obj.input_token_logprobs_val[recv_obj_index]:
-+                state.input_token_logprobs_val.extend(
-+                    recv_obj.input_token_logprobs_val[recv_obj_index]
-+                )
-+                state.input_token_logprobs_idx.extend(
-+                    recv_obj.input_token_logprobs_idx[recv_obj_index]
-+                )
-         state.output_token_logprobs_val.extend(
-             recv_obj.output_token_logprobs_val[recv_obj_index]
+diff --git a/python/sglang/srt/managers/tokenizer_communicator_mixin.py b/python/sglang/srt/managers/tokenizer_communicator_mixin.py
+index e5d42bed8..412293b30 100644
+--- a/python/sglang/srt/managers/tokenizer_communicator_mixin.py
++++ b/python/sglang/srt/managers/tokenizer_communicator_mixin.py
+@@ -49,6 +49,8 @@ from sglang.srt.managers.io_struct import (
+     LoadLoRAAdapterReqOutput,
+     LoRAUpdateOutput,
+     OpenSessionReqInput,
++    PostProcessWeightsReqInput,
++    PostProcessWeightsReqOutput,
+     ProfileReq,
+     ProfileReqOutput,
+     ProfileReqType,
+@@ -177,6 +179,9 @@ class TokenizerCommunicatorMixin:
+         self.update_weights_from_ipc_communicator = _Communicator(
+             self.send_to_scheduler, server_args.dp_size
          )
++        self.post_process_weights_communicator = _Communicator(
++            self.send_to_scheduler, server_args.dp_size
++        )
+         self.get_weights_by_name_communicator = _Communicator(
+             self.send_to_scheduler, server_args.dp_size
+         )
+@@ -250,6 +255,10 @@ class TokenizerCommunicatorMixin:
+                     UpdateWeightsFromIPCReqOutput,
+                     self.update_weights_from_ipc_communicator.handle_recv,
+                 ),
++                (
++                    PostProcessWeightsReqOutput,
++                    self.post_process_weights_communicator.handle_recv,
++                ),
+                 (
+                     GetWeightsByNameReqOutput,
+                     self.get_weights_by_name_communicator.handle_recv,
+@@ -433,6 +442,17 @@ class TokenizerCommunicatorMixin:
+ 
+         return success, message
+ 
++    async def post_process_weights(
++        self: TokenizerManager,
++        obj: PostProcessWeightsReqInput,
++        request: Optional[fastapi.Request] = None,
++    ) -> Tuple[bool, str]:
++        """Trigger post-processing hooks for weights after loading (e.g., Marlin conversion)."""
++        self.auto_create_handle_loop()
++        async with self.model_update_lock.writer_lock:
++            results = await self.post_process_weights_communicator(obj)
++            return _Communicator.merge_results(results)
++
+     async def init_weights_send_group_for_remote_instance(
+         self,
+         obj: InitWeightsSendGroupForRemoteInstanceReqInput,
+diff --git a/python/sglang/srt/managers/tp_worker.py b/python/sglang/srt/managers/tp_worker.py
+index 49f63a198..e4cd0ff2b 100644
+--- a/python/sglang/srt/managers/tp_worker.py
++++ b/python/sglang/srt/managers/tp_worker.py
+@@ -27,6 +27,7 @@ from sglang.srt.managers.io_struct import (
+     InitWeightsSendGroupForRemoteInstanceReqInput,
+     InitWeightsUpdateGroupReqInput,
+     LoadLoRAAdapterReqInput,
++    PostProcessWeightsReqInput,
+     SendWeightsToRemoteInstanceReqInput,
+     UnloadLoRAAdapterReqInput,
+     UpdateWeightFromDiskReqInput,
+@@ -175,6 +176,11 @@ class BaseTpWorker(ABC):
+         success, message = self.model_runner.update_weights_from_ipc(recv_req)
+         return success, message
+ 
++    def post_process_weights(self, recv_req: PostProcessWeightsReqInput):
++        """Perform optional post-processing on the updated model weights (e.g., Marlin conversion)."""
++        success, message = self.model_runner.post_process_weights(recv_req)
++        return success, message
++
+     def get_weights_by_name(self, recv_req: GetWeightsByNameReqInput):
+         parameter = self.model_runner.get_weights_by_name(
+             recv_req.name, recv_req.truncate_size
+diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
+index 65d562a27..b00a20e95 100644
+--- a/python/sglang/srt/mem_cache/memory_pool.py
++++ b/python/sglang/srt/mem_cache/memory_pool.py
+@@ -1678,7 +1678,8 @@ class NSATokenToKVPool(MLATokenToKVPool):
+         with (
+             torch.cuda.use_mem_pool(self.custom_mem_pool)
+             if self.custom_mem_pool
+-            else nullcontext()
++            else nullcontext(),
++            self.memory_saver_adapter.region(GPU_MEMORY_TYPE_KV_CACHE),
+         ):
+             self.index_k_with_scale_buffer = [
+                 torch.zeros(
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index 1d69c0582..9027374be 100644
+index 1d69c0582..d984c2e12 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
 @@ -558,7 +558,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
@@ -407,7 +762,7 @@ index 1d69c0582..9027374be 100644
  
          if self.device == "cuda":
              self.init_cublas()
-@@ -2224,11 +2225,12 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -2224,11 +2225,19 @@ class ModelRunner(ModelRunnerKVCacheMixin):
          output.expert_distribution_metrics = recorder_outputs.get("metrics")
  
          # Copy cached routing experts' buffers back to CPU cache
@@ -417,16 +772,65 @@ index 1d69c0582..9027374be 100644
 -            cuda_graph_batch=getattr(self.graph_runner, "bs", None),
 -        )
 +        if not self.is_draft_worker:
++            # In speculative decoding, num_tokens_per_bs > 1, so we need to pass
++            # the actual number of tokens per dp rank in cuda graph, not batch size.
++            cuda_graph_num_tokens = None
++            if getattr(self.graph_runner, "bs", None):
++                cuda_graph_num_tokens = (
++                    self.graph_runner.bs * self.graph_runner.num_tokens_per_bs
++                )
 +            get_global_experts_capturer().on_forward_end(
 +                forward_batch=forward_batch,
 +                can_run_graph=output.can_run_graph,
-+                cuda_graph_batch=getattr(self.graph_runner, "bs", None),
++                cuda_graph_batch=cuda_graph_num_tokens,
 +            )
  
          if self.eplb_manager is not None:
              self.eplb_manager.on_forward_pass_end()
+@@ -2436,6 +2445,41 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+             logger.error(f"IPC weight update failed: {e}")
+             return False, str(e)
+ 
++    def post_process_weights(self, recv_req):
++        """
++        Execute post-processing logic for model weights, such as Marlin quantization format conversion.
++        """
++        from sglang.srt.model_loader.loader import device_loading_context
++
++        target_device = torch.device("cuda", torch.cuda.current_device())
++
++        if recv_req.restore_weights_before_load:
++            for _, module in self.model.named_modules():
++                quant_method = getattr(module, "quant_method", None)
++
++                # Check if the module supports restoring weights
++                if quant_method is not None and hasattr(
++                    quant_method, "restore_weights_before_loading"
++                ):
++
++                    with device_loading_context(module, target_device):
++                        quant_method.restore_weights_before_loading(module)
++
++        if recv_req.post_process_quantization:
++            # Iterate through all modules to apply specific post-loading processing
++            for _, module in self.model.named_modules():
++                quant_method = getattr(module, "quant_method", None)
++
++                # Check if the module supports quantization post-processing
++                if quant_method is not None and hasattr(
++                    quant_method, "process_weights_after_loading"
++                ):
++
++                    # Apply the post-processing (e.g., repacking weights for Marlin kernel)
++                    with device_loading_context(module, target_device):
++                        quant_method.process_weights_after_loading(module)
++
++        return True, "Success"
+ 
+ def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tensor]]):
+     params_dict = dict(model.named_parameters())
 diff --git a/python/sglang/srt/models/deepseek_v2.py b/python/sglang/srt/models/deepseek_v2.py
-index 2918461d3..2bcc67087 100644
+index ed8cc7ada..d44c8aaa0 100644
 --- a/python/sglang/srt/models/deepseek_v2.py
 +++ b/python/sglang/srt/models/deepseek_v2.py
 @@ -2704,7 +2704,11 @@ class DeepseekV2AttentionMLA(nn.Module):
@@ -640,7 +1044,7 @@ index e11678a9e..e277d46f2 100644
  
          self.layer_communicator = LayerCommunicator(
 diff --git a/python/sglang/srt/models/qwen3_vl.py b/python/sglang/srt/models/qwen3_vl.py
-index 891913078..c9dbecd23 100644
+index 079f45843..218e32362 100644
 --- a/python/sglang/srt/models/qwen3_vl.py
 +++ b/python/sglang/srt/models/qwen3_vl.py
 @@ -397,28 +397,68 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
@@ -731,7 +1135,7 @@ index 891913078..c9dbecd23 100644
              patch_pos_embeds_permute.append(pos_embed)
          return torch.cat(patch_pos_embeds_permute)
  
-@@ -607,14 +647,19 @@ class Qwen3LLMModel(Qwen3Model):
+@@ -610,14 +650,19 @@ class Qwen3LLMModel(Qwen3Model):
                      hidden_states + residual if residual is not None else hidden_states
                  )
  
@@ -756,10 +1160,10 @@ index 891913078..c9dbecd23 100644
                  positions,
                  hidden_states,
 diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
-index 54d4e415a..de7620c20 100644
+index a2b26e0e0..72db29801 100644
 --- a/python/sglang/srt/server_args.py
 +++ b/python/sglang/srt/server_args.py
-@@ -523,6 +523,7 @@ class ServerArgs:
+@@ -527,6 +527,7 @@ class ServerArgs:
      cuda_graph_max_bs: Optional[int] = None
      cuda_graph_bs: Optional[List[int]] = None
      disable_cuda_graph: bool = False
@@ -767,7 +1171,7 @@ index 54d4e415a..de7620c20 100644
      disable_cuda_graph_padding: bool = False
      enable_profile_cuda_graph: bool = False
      enable_cudagraph_gc: bool = False
-@@ -3951,6 +3952,11 @@ class ServerArgs:
+@@ -3980,6 +3981,11 @@ class ServerArgs:
              action="store_true",
              help="Disable cuda graph.",
          )
@@ -862,3 +1266,16 @@ index a702df4f8..61d9ae366 100644
              return
  
          Device2DraftCudaGraphRunner = {
+diff --git a/python/sglang/srt/utils/common.py b/python/sglang/srt/utils/common.py
+index 8560246c6..13db860dc 100644
+--- a/python/sglang/srt/utils/common.py
++++ b/python/sglang/srt/utils/common.py
+@@ -2224,6 +2224,8 @@ class SafeUnpickler(pickle.Unpickler):
+         "sglang.srt.model_executor.model_runner.",
+         "sglang.srt.layers.",
+         "sglang.srt.utils.",
++        # --- slime ---
++        "slime.",
+     }
+ 
+     DENY_CLASSES = {

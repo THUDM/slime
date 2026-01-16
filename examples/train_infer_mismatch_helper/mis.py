@@ -2,6 +2,8 @@ from typing import Any
 
 import torch
 
+from slime.backends.training_utils.parallel import ParallelState
+
 # NOTE:
 # - `compute_mis_weights` is a lightweight, standalone function that is useful to unit-test on CPU.
 # - `compute_mis_weights_with_cp` depends on Megatron context-parallel utilities, which are heavy and may not be
@@ -316,6 +318,7 @@ def compute_mis_weights_with_cp(
     loss_masks: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
+    parallel_state: ParallelState,
     **kwargs: Any,
 ) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
     """
@@ -332,17 +335,17 @@ def compute_mis_weights_with_cp(
         is_metrics: The metrics for the importance sampling weights, a dict of flattened tensors.
     """
     # Lazy import to avoid importing Megatron dependencies when only `compute_mis_weights` is used.
-    from slime.backends.megatron_utils.cp_utils import all_gather_with_cp, slice_log_prob_with_cp
+    from slime.backends.training_utils.cp_utils import all_gather_with_cp, slice_log_prob_with_cp
 
     # Gather cp slice from other cp ranks
     full_rollout_log_probs = [
-        all_gather_with_cp(log_prob, total_length, response_length)
+        all_gather_with_cp(log_prob, total_length, response_length, parallel_state)
         for log_prob, total_length, response_length in zip(
             rollout_log_probs, total_lengths, response_lengths, strict=False
         )
     ]
     full_old_log_probs = [
-        all_gather_with_cp(old_log_prob, total_length, response_length)
+        all_gather_with_cp(old_log_prob, total_length, response_length, parallel_state)
         for old_log_prob, total_length, response_length in zip(
             train_log_probs, total_lengths, response_lengths, strict=False
         )
@@ -362,7 +365,7 @@ def compute_mis_weights_with_cp(
     ) -> torch.Tensor:
         values = [
             # TODO: A rename of this function?
-            slice_log_prob_with_cp(values[i], total_lengths[i], response_lengths[i])
+            slice_log_prob_with_cp(values[i], total_lengths[i], response_lengths[i], parallel_state)
             for i in range(len(values))
         ]
         return torch.cat(values, dim=0)

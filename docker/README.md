@@ -5,7 +5,7 @@ We will publish 2 kinds of docker images:
 2. latest version, which aligns to `lmsysorg/sglang:latest`.
 
 current stable version is:
-- sglang v0.5.7 nightly-dev-20260103-24c91001 (24c91001cf99ba642be791e099d358f4dfe955f5), megatron dev 3714d81d418c9f1bca4594fc35f9e8289f652862
+- sglang v0.5.7 nightly-dev-20260107-dce8b060 (dce8b0606c06d3a191a24c7b8cbe8e238ab316c9), megatron dev 3714d81d418c9f1bca4594fc35f9e8289f652862
 
 history versions:
 - sglang v0.5.6 nightly-dev-20251208-5e2cda61 (5e2cda6158e670e64b926a9985d65826c537ac82), megatron v0.14.0 (23e00ed0963c35382dfe8a5a94fb3cda4d21e133)

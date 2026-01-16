@@ -49,3 +49,21 @@ Specifically, slime currently provides the following parameters for separate deb
 4.  `--load-debug-rollout-data /your/saved/debug/data_{rollout_id}.pt`
 
     When enabled, data will be loaded from `args.load_debug_rollout_data.format(rollout_id=rollout_id)`, and SGLang will not be initialized (automatically setting `debug_train_only=True`). This method allows you to fix the input for the training part to tune it, for example, by switching between different parallelization strategies.
+
+## Debug sglang illegal memory access (IMA)
+
+When running large scale RL, we will occationally meet the IMA in SGLang, there are some debug suggestions based on our experience:
+
+1. Enable `CUDA_LAUNCH_BLOCKING=1`
+
+2. Enable or disable speculative decoding and cuda graph to see if anything changed
+
+   IMA always appears in the padding in cuda graph replay, or the difference between draft model and main model. We can minimize the scope by tuning them.
+
+3. Turn off deepep
+
+   If you are using deepep during training or inference, you can try turn it off.
+
+4. Try CUDA Core Dump to find the error kernel
+
+   We recommend reading the blog from the vLLM team: [CUDA Core Dump: An Effective Tool to Debug Memory Access Issues and Beyond](https://blog.vllm.ai/2025/08/11/cuda-debugging.html)

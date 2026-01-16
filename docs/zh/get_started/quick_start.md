@@ -44,7 +44,7 @@ slime 已经安装在该 Docker 镜像中。如需更新到最新版本，请在
 # 路径可根据实际情况调整
 cd /root/slime
 git pull
-pip install -e .
+pip install -e . --no-deps
 ```
 
 ## 模型与数据集下载
@@ -103,15 +103,6 @@ PYTHONPATH=/root/Megatron-LM python tools/convert_torch_dist_to_hf.py \
 ```
 
 由于 Megatron 会对 embedding 做 padding，可能会出现转换出来的权重的 embedding 形状不匹配的问题。这时需要在转换时设置 `--vocab-size`。
-
-对于使用 FSDP 后端训练并保存的检查点（目录中没有 `common.pt` 的情况），请使用专门的转换脚本。将 `--input-dir` 指向检查点目录（例如 `iter_xxx` 或 `iter_xxx/model`），并提供原始 Hugging Face 模型路径：
-
-```bash
-python tools/convert_fsdp_to_hf.py \
-  --input-dir /path/to/fsdp_ckpt/iter_xxx \
-  --output-dir /root/fsdp-converted \
-  --origin-hf-dir /root/GLM-Z1-9B-0414
-```
 
 ## 训练脚本与参数概览
 

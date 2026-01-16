@@ -8,7 +8,7 @@
 
 ```bash
 cd slime/
-pip install -e .
+pip install -e . --no-deps
 source scripts/models/qwen3-30B-A3B.sh
 PYTHONPATH=/root/Megatron-LM/ torchrun --nproc-per-node 8 \
    tools/convert_hf_to_torch_dist.py \
@@ -61,7 +61,7 @@ bash scripts/run-qwen3-30B-A3B.sh
    SGLANG_ARGS=(
       --rollout-num-gpus-per-engine 8
       --sglang-mem-fraction-static 0.7
-      --sglang-enable-ep-moe
+      --sglang-ep-size 8
       --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
    )
    ```
@@ -107,7 +107,7 @@ hf download Qwen/Qwen3-30B-A3B-FP8 --local-dir /root/Qwen3-30B-A3B-FP8
    SGLANG_ARGS=(
       --rollout-num-gpus-per-engine 24
       --sglang-mem-fraction-static 0.7
-      --sglang-enable-ep-moe
+      --sglang-ep-size 24
       --sglang-enable-dp-attention
       --sglang-dp-size 3
 

@@ -13,15 +13,19 @@
         {'test_file': 'test_qwen3_4B_fsdp_true_on_policy.py', 'num_gpus': 2},
         {'test_file': 'test_qwen3_vl_4B_fsdp.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_0.6B_fsdp_distributed.py', 'num_gpus': 2},
+        {'test_file': 'test_qwen3_0.6B_megatron_fsdp_align.py', 'num_gpus': 4},
       ],
     },
     'e2e-test-megatron': {
       'label': 'run-ci-megatron',
       'tests': [
         {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1'},
+        {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'use_deepep': '1', 'use_fp8_rollout': '1', 'enable_eval': '0'},
+        {'test_file': 'test_qwen3_30B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0'},
         {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8},
         {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
+        {'test_file': 'test_moonlight_16B_A3B_r3.py', 'num_gpus': 8, 'enable_eval': '0'},
         {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
       ],
     },
@@ -29,6 +33,7 @@
       'label': 'run-ci-precision',
       'tests': [
         {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_0.6B_megatron_fsdp_align.py', 'num_gpus': 4},
       ],
     },
     'e2e-test-ckpt': {
@@ -61,6 +66,7 @@
         {'test_file': 'test_moonlight_16B_A3B.py', 'num_gpus': 8},
         {'test_file': 'test_mimo_7B_mtp_only_grad.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_0.6B_parallel_check.py', 'num_gpus': 8},
+        {'test_file': 'test_qwen3_0.6B_megatron_fsdp_align.py', 'num_gpus': 4},
         {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ckpt.py --async-save', 'num_gpus': 8},
         {'test_file': 'test_qwen2.5_0.5B_gsm8k.py', 'num_gpus': 2},
@@ -122,6 +128,9 @@ jobs:
       GITHUB_COMMIT_NAME: ${{ github.sha }}_${{ github.event.pull_request.number || 'non-pr' }}
       WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
       SLIME_TEST_ENABLE_INFINITE_RUN: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.infinite_run) || 'false' }}
+      SLIME_TEST_USE_DEEPEP: ${{ matrix.info.use_deepep || '0' }}
+      SLIME_TEST_USE_FP8_ROLLOUT: ${{ matrix.info.use_fp8_rollout || '0' }}
+      SLIME_TEST_ENABLE_EVAL: ${{ matrix.info.enable_eval || '1' }}
 
     steps:
       - name: Checkout repository

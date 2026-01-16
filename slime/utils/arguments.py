@@ -1473,6 +1473,10 @@ def parse_args(add_custom_arguments=None):
         args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
         args = set_default_megatron_args(args)
     else:
+        logger.warning(
+            "🚧 🚧 🚧 FSDP backend is being rewritten, please use Megatron backend for better stability. 🚧 🚧 🚧"
+        )
+
         from slime.backends.fsdp_utils.arguments import load_fsdp_args
 
         args = load_fsdp_args(extra_args_provider=add_slime_arguments)
@@ -1492,6 +1496,12 @@ def parse_args(add_custom_arguments=None):
                 "please use alltoall dispatcher instead."
             )
             args.moe_token_dispatcher_type = "alltoall"
+
+        if args.pipeline_model_parallel_size == 1:
+            assert args.decoder_first_pipeline_num_layers is None and args.decoder_last_pipeline_num_layers is None, (
+                "decoder_first_pipeline_num_layers and decoder_last_pipeline_num_layers should be None when "
+                "pipeline_model_parallel_size is 1."
+            )
 
     sglang_validate_args(args)
 
