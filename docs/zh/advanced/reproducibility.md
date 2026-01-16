@@ -45,7 +45,7 @@ PYTHONPATH=/root/Megatron-LM/ python \
 And to run training,
 
 ```bash
-bash examples/reproducibility/run-qwen2.5-0.5B-gsm8k.sh
+bash script/run-qwen2.5-0.5B-reproducibility.sh
 ```
 
 For screen shots of the wandb, please refer to [pull#370](https://github.com/THUDM/slime/pull/370).
