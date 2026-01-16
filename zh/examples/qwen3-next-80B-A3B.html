@@ -39,8 +39,8 @@
   <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -52,7 +52,7 @@
     <link rel="search" title="搜索" href="../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -440,7 +440,6 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">环境准备</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#optional-fix-a-bug-in-triton-compilation-on-blackwell-sm100">[Optional] Fix a bug in triton compilation on Blackwell (sm100)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron">执行训练 (Megatron)</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fsdp">执行训练 (FSDP)</a></li>
 </ul>
             </nav>
         </div>
@@ -453,9 +452,9 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="xh100-qwen3-30b-a3b">
-<h1>8xH100 训练 Qwen3-30B-A3B<a class="headerlink" href="#xh100-qwen3-30b-a3b" title="Link to this heading">#</a></h1>
+<h1>8xH100 训练 Qwen3-30B-A3B<a class="headerlink" href="#xh100-qwen3-30b-a3b" title="链接到此标题。">#</a></h1>
 <section id="id1">
-<h2>环境准备<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<h2>环境准备<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <p>搭建环境、下载模型、数据与 ckpt 转换均与 Qwen3-4B 模型相同，可以参考 <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">示例：Qwen3-4B</span></a>，将文中 Qwen3-4B 的部分转换为
 Qwen3-next-80B-A3B-Instruct 即可。</p>
 <p>可以用如下完整方法把 huggingface checkpoint 转化为 torch_dist 格式：</p>
@@ -480,7 +479,7 @@ pip<span class="w"> </span>install<span class="w"> </span>./causal_conv1d-1.5.4+
 </div>
 </section>
 <section id="optional-fix-a-bug-in-triton-compilation-on-blackwell-sm100">
-<h2>[Optional] Fix a bug in triton compilation on Blackwell (sm100)<a class="headerlink" href="#optional-fix-a-bug-in-triton-compilation-on-blackwell-sm100" title="Link to this heading">#</a></h2>
+<h2>[Optional] Fix a bug in triton compilation on Blackwell (sm100)<a class="headerlink" href="#optional-fix-a-bug-in-triton-compilation-on-blackwell-sm100" title="链接到此标题。">#</a></h2>
 <p>see discussion here https://github.com/triton-lang/triton/issues/8695
 and https://github.com/fla-org/flash-linear-attention/issues/638</p>
 <p>We need to apply a patch to fix the bug.
@@ -510,7 +509,7 @@ Go to the flash-linear-attention folder you just installed, and apply the follow
 <p>save it as <code class="docutils literal notranslate"><span class="pre">patch.diff</span></code> (Please remember to copy the last empty line to the file!) and do <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">apply</span> <span class="pre">patch.diff</span></code></p>
 </section>
 <section id="megatron">
-<h2>执行训练 (Megatron)<a class="headerlink" href="#megatron" title="Link to this heading">#</a></h2>
+<h2>执行训练 (Megatron)<a class="headerlink" href="#megatron" title="链接到此标题。">#</a></h2>
 <p><strong>当前暂不支持Blackwell</strong></p>
 <p>转换模型权重：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span>scripts/models/qwen3-next-80B-A3B.sh
@@ -534,15 +533,6 @@ bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B-8gpus.sh<span class="
 <span class="nb">export</span><span class="w"> </span><span class="nv">BASE_FOLDER</span><span class="o">=</span>/root
 <span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_ADDR</span><span class="o">=</span>your_master_addr
 bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B.sh<span class="w"> </span>
-</pre></div>
-</div>
-</section>
-<section id="fsdp">
-<h2>执行训练 (FSDP)<a class="headerlink" href="#fsdp" title="Link to this heading">#</a></h2>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">BASE_FOLDER</span><span class="o">=</span>./models/
-<span class="nb">export</span><span class="w"> </span><span class="nv">MASTER_ADDR</span><span class="o">=</span><span class="m">127</span>.0.0.1
-
-bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B-fsdp.sh
 </pre></div>
 </div>
 </section>
@@ -578,7 +568,6 @@ bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B-fsdp.sh
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">环境准备</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#optional-fix-a-bug-in-triton-compilation-on-blackwell-sm100">[Optional] Fix a bug in triton compilation on Blackwell (sm100)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#megatron">执行训练 (Megatron)</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fsdp">执行训练 (FSDP)</a></li>
 </ul>
   </nav></div>
 
@@ -612,7 +601,7 @@ bash<span class="w"> </span>scripts/run-qwen3-next-80B-A3B-fsdp.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

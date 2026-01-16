@@ -39,8 +39,8 @@
   <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -54,7 +54,7 @@
     <link rel="prev" title="Debug 指南" href="../developer_guide/debug.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -460,7 +460,7 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="v0-1-0-rl">
-<h1>v0.1.0: 重新定义高性能 RL 训练框架<a class="headerlink" href="#v0-1-0-rl" title="Link to this heading">#</a></h1>
+<h1>v0.1.0: 重新定义高性能 RL 训练框架<a class="headerlink" href="#v0-1-0-rl" title="链接到此标题。">#</a></h1>
 <blockquote>
 <div><p>本文首发于<a class="reference external" href="https://zhuanlan.zhihu.com/p/1945237948166547268">知乎</a>.</p>
 </div></blockquote>
@@ -496,7 +496,7 @@ document.write(`
 <p>接下来，我将展开介绍上述功能背后的设计思路。</p>
 <hr class="docutils" />
 <section id="rl">
-<h2>性能优化：提升 RL 训练速度上限<a class="headerlink" href="#rl" title="Link to this heading">#</a></h2>
+<h2>性能优化：提升 RL 训练速度上限<a class="headerlink" href="#rl" title="链接到此标题。">#</a></h2>
 <p>在传统的深度学习训练中，有一个万能的提速方案：<strong>加卡</strong>。通过降低每张卡上的计算数据，可以显著降低端到端的训练延迟。</p>
 <p>然而，这个方法在 RL 训练中却行不通，因为<strong>推理的延迟无法通过增加 GPU 来降低</strong>。即使我们有再多的 GPU，也只能等待最长的样本解码（decode）结束。虽然可以通过增加吞吐量来提升每个 rollout 的训练数据量，但过大的推理 batch size 带来的 off-policy 问题目前来看仍有一些局限性。</p>
 <p>我认为这是当前 RL 范式下对基础设施（Infra）的最大挑战，即：</p>
@@ -514,7 +514,7 @@ document.write(`
 <p>slime 也会在监控推理的吞吐之外，监控 <code class="docutils literal notranslate"><span class="pre">perf/longest_sample_tokens_per_sec</span></code>，从而更好地掌握推理部分的性能优化空间。</p>
 </section>
 <section id="offload-megatron">
-<h2>用更少的卡做更多的实验：充分 Offload Megatron<a class="headerlink" href="#offload-megatron" title="Link to this heading">#</a></h2>
+<h2>用更少的卡做更多的实验：充分 Offload Megatron<a class="headerlink" href="#offload-megatron" title="链接到此标题。">#</a></h2>
 <p>在对上限进行优化后，我们注意到 RL 训练的另外一个特性：只要 <strong>KV Cache 不溢出</strong>，推理 batch size 的提升并不会明显影响训练的延迟。</p>
 <p><strong>KV Cache 溢出</strong>指的是推理过程中，当数据的回复长度都很长时，KV Cache 空间不足，需要将某些生成到一半的数据先踢出队列，等其他数据推理完并腾出空间后，再重新进行 prefill 和后续的推理。如果一条回复长度为 64k 的数据在推理过程中等待了其他数据解码 32k token，相当于它的总时长对应了解码 96k token，这对 RL 训练速度影响很大。</p>
 <p>因此，一个比较合适的训练配置是根据推理部分的 batch size、数据的平均回复长度和单个 server 能预留的 KV Cache 空间，计算一个在 KV Cache 不溢出情况下的最少 GPU 数量，并以这些 GPU 为一组进行训练。例如，我们有 512 张卡，计算出来 256 卡的 KV Cache 就已经充足，那么就应该并行运行 2 个实验，而不是用 512 卡一起启动实验。</p>
@@ -524,7 +524,7 @@ document.write(`
 <li><p><strong>提升每个 SGLang Server 能预留的 KV Cache</strong>，也就是开大 <code class="docutils literal notranslate"><span class="pre">--mem-fraction</span></code>。对于现在更为常见的训推一体的训练任务，限制 <code class="docutils literal notranslate"><span class="pre">mem_fraction</span></code> 的主要是将训练部分 offload 至 CPU 后的残留显存。因此，我们需要找到一个通用的方法，将 Megatron 部分占用的显存 offload 到 GPU。</p></li>
 </ol>
 <section id="offload-gpu-tensor">
-<h3>如何通用地 Offload GPU Tensor<a class="headerlink" href="#offload-gpu-tensor" title="Link to this heading">#</a></h3>
+<h3>如何通用地 Offload GPU Tensor<a class="headerlink" href="#offload-gpu-tensor" title="链接到此标题。">#</a></h3>
 <p>一个比较粗暴的方式是找到 Megatron 分配的所有 GPU Tensor，然后把它们全部 <code class="docutils literal notranslate"><span class="pre">.to(&quot;cpu&quot;)</span></code>。这种做法有 3 个难点：</p>
 <ul class="simple">
 <li><p>很难捕获 Megatron 分配的全部 GPU Tensor。</p></li>
@@ -540,7 +540,7 @@ document.write(`
 <p>在 SGLang 社区的帮助下，我们针对 slime 的需求更新了 <code class="docutils literal notranslate"><span class="pre">torch_memory_saver</span></code>，实现了这个 offload 方案。</p>
 </section>
 <section id="offload-nccl">
-<h3>如何 Offload NCCL<a class="headerlink" href="#offload-nccl" title="Link to this heading">#</a></h3>
+<h3>如何 Offload NCCL<a class="headerlink" href="#offload-nccl" title="链接到此标题。">#</a></h3>
 <p>在彻底 offload 了 Megatron 中的 GPU Tensor 后，我们发现还会有大量的显存残留，这是 <strong>NCCL</strong> 导致的。在 PyTorch 中，每个参与通信的 NCCL group 都会分配一份不小的 buffer。对于较大的 MoE 模型，由于引入了各种并行策略，这个问题尤为明显，可能会占到 <strong>10GB 以上</strong>。</p>
 <p>上述 <code class="docutils literal notranslate"><span class="pre">LD_PRELOAD</span></code> 的方案不太好处理 NCCL 的问题，我们也不想去修改 NCCL 源码，以免在维护 slime 之余还要维护一个 NCCL fork。所以 slime 采用的方案是在 offload Megatron 的时候利用 <code class="docutils literal notranslate"><span class="pre">destroy_process_group</span></code> 来销毁 NCCL group，然后在 load Megatron 之前重建。为此，我们模仿 VMM API，对 <code class="docutils literal notranslate"><span class="pre">dist.new_group</span></code> 进行了 <code class="docutils literal notranslate"><span class="pre">monkey</span> <span class="pre">patch</span></code>，增加了一层 <code class="docutils literal notranslate"><span class="pre">ReloadableProcessGroup</span></code>。</p>
 <p>这样，我们就实现了通用的 <strong>NCCL offload</strong>。不过，因为我们需要重建 NCCL group，这样的操作会对每轮训练的第一次通信速度有一定影响。但我们认为从可维护性以及节省的显存上，这个方案有很大的优势。</p>
@@ -548,7 +548,7 @@ document.write(`
 </section>
 </section>
 <section id="id1">
-<h2>参数更新优化<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<h2>参数更新优化<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <p>参数更新是另外一个 RL 训练中特殊的环节。在这方面，slime v0.1.0 提供了训练推理在不同进程条件下的最佳优化方案。这部分工作由 Biao He 老师进行了大量优化，推荐阅读他的这篇博文：</p>
 <ul class="simple">
 <li><p><a class="reference external" href="https://hebiao064.github.io/rl-weight-sync">高效强化学习训练 - 优化 slime 中的权重同步</a></p></li>
@@ -556,12 +556,12 @@ document.write(`
 <p>目前 slime 可以做到 <strong>48s</strong> 完成训推一体下 GLM4.5 355B-A32B 模型 bf16 权重的参数同步，以及 <strong>100s</strong> 完成 fp8 blockwise 量化 + 参数更新（fp8 分支还在优化中）。</p>
 </section>
 <section id="id2">
-<h2>训练优化<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<h2>训练优化<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
 <p>对于 slime 的纯训练部分，我们认为 Megatron 已经提供了充足的优化，所以我们主要是<strong>保证了对 Megatron 全部并行策略的适配</strong>。</p>
 <p>适配过程中有一个有趣的 bugfix：我们发现在 SGLang 开启 mtp 后，Megatron 部分无法启动 DeepEP。后来发现是因为在开启 mtp 时，SGLang 会 disable overlap schedule，导致在被 offload 到 CPU 后仍用 nccl 而非 gloo 进行某个 metadata 的通信，并与 DeepEP 产生了冲突。</p>
 </section>
 <section id="check-list">
-<h2>性能优化 Check List<a class="headerlink" href="#check-list" title="Link to this heading">#</a></h2>
+<h2>性能优化 Check List<a class="headerlink" href="#check-list" title="链接到此标题。">#</a></h2>
 <p>slime 发布以来，我经常被问到它与其他框架的性能对比。</p>
 <p>我对基准测试（benchmark）的理解是，benchmark 不应该成为框架之间相互攻击的武器，而应该成为<strong>查缺补漏的工具</strong>。为此，我们会逐渐推出 slime 关注的性能 benchmark，用于自我提升。</p>
 <p>同时，我也认为在跑分之前，可以从很多定性的角度来分析一个框架对性能的重视程度。这里提供一个基础优化的 feature check list：</p>
@@ -576,11 +576,11 @@ document.write(`
 <p>slime v0.1.0 对上述的所有优化都进行了初步的尝试，当然提升空间依然很大。我们也希望这个版本能成为未来 slime 版本或者不同框架之间性能对比的基准。我们更欢迎所有在性能上和我们有相同追求的朋友来试用 slime，参与 slime 社区！</p>
 </section>
 <section id="id3">
-<h2>新算法支持<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<h2>新算法支持<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
 <p>为了更好地训练 MoE 模型以及进行 fp8 rollout，我们实现了 <strong>GSPO</strong> 与 <strong>TIS</strong>。同时，社区的大佬也帮忙实现了例如 reinforce++、reinforce++ baseline 这样的算法。</p>
 </section>
 <section id="id4">
-<h2>正确性验证<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
+<h2>正确性验证<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
 <p>slime v0.1.0 增加了<strong>端到端 CI</strong>：我们会对每个 PR 运行单机的 GLM4 9B 和 Qwen3 30B-A3B 训练，通过一些严格的检查来保证更新的正确性。例如，我们会明确要求：</p>
 <ul class="simple">
 <li><p>第一个 rollout 的重算 log prob 和 reference model 的 log prob 完全相等。</p></li>
@@ -682,7 +682,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

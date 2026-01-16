@@ -39,8 +39,8 @@
   <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -54,7 +54,7 @@
     <link rel="prev" title="使用文档" href="usage.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -481,10 +481,10 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="id1">
-<h1>自定义指南<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
+<h1>自定义指南<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h1>
 <p>slime 通过函数路径参数提供了广泛的自定义能力。这些参数允许你在训练和推理流程的各个阶段注入自定义逻辑，而无需修改核心代码库。</p>
 <section id="id2">
-<h2>自定义接口概览<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<h2>自定义接口概览<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
 <p>下表总结了所有可用的自定义接口及其用途。</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
@@ -561,9 +561,9 @@ document.write(`
 </div>
 </section>
 <section id="id3">
-<h2>详细接口参考<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<h2>详细接口参考<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
 <section id="rollout-rollout-function-path">
-<h3>1. Rollout 函数 (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)<a class="headerlink" href="#rollout-rollout-function-path" title="Link to this heading">#</a></h3>
+<h3>1. Rollout 函数 (<code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code>)<a class="headerlink" href="#rollout-rollout-function-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.sglang_rollout.generate_rollout</span></code></p>
 <p><strong>用途</strong>: 覆盖整个 rollout 生成逻辑。</p>
 <p><strong>函数签名</strong>:</p>
@@ -580,7 +580,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="custom-generate-function-path">
-<h3>2. 自定义生成函数 (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)<a class="headerlink" href="#custom-generate-function-path" title="Link to this heading">#</a></h3>
+<h3>2. 自定义生成函数 (<code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code>)<a class="headerlink" href="#custom-generate-function-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（使用内置生成函数）</p>
 <p><strong>用途</strong>: 仅覆盖默认 rollout 函数中的生成步骤。</p>
 <p><strong>函数签名</strong>:</p>
@@ -597,7 +597,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="custom-rm-path">
-<h3>3. 奖励模型 (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)<a class="headerlink" href="#custom-rm-path" title="Link to this heading">#</a></h3>
+<h3>3. 奖励模型 (<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>)<a class="headerlink" href="#custom-rm-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（基于 <code class="docutils literal notranslate"><span class="pre">--rm-type</span></code> 使用内置奖励模型）</p>
 <p><strong>用途</strong>: 实现自定义奖励计算逻辑。</p>
 <p><strong>函数签名</strong>（单样本模式）:</p>
@@ -627,7 +627,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="dynamic-sampling-filter-path">
-<h3>4. 动态采样过滤器 (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)<a class="headerlink" href="#dynamic-sampling-filter-path" title="Link to this heading">#</a></h3>
+<h3>4. 动态采样过滤器 (<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>)<a class="headerlink" href="#dynamic-sampling-filter-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>用途</strong>: 在动态采样过程中过滤样本（例如 DAPO 风格的过滤）。</p>
 <p><strong>函数签名</strong>:</p>
@@ -651,7 +651,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="buffer-buffer-filter-path">
-<h3>5. Buffer 过滤器 (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)<a class="headerlink" href="#buffer-buffer-filter-path" title="Link to this heading">#</a></h3>
+<h3>5. Buffer 过滤器 (<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>)<a class="headerlink" href="#buffer-buffer-filter-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>用途</strong>: 在训练前过滤 rollout buffer 中的样本。</p>
 <p><strong>函数签名</strong>:</p>
@@ -667,7 +667,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="rollout-rollout-sample-filter-path">
-<h3>6. Rollout 样本过滤器 (<code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code>)<a class="headerlink" href="#rollout-rollout-sample-filter-path" title="Link to this heading">#</a></h3>
+<h3>6. Rollout 样本过滤器 (<code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code>)<a class="headerlink" href="#rollout-rollout-sample-filter-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>用途</strong>: 决定单个样本是否参与损失计算。</p>
 <p><strong>函数签名</strong>:</p>
@@ -683,7 +683,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="rollout-rollout-all-samples-process-path">
-<h3>7. Rollout 全样本处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>)<a class="headerlink" href="#rollout-rollout-all-samples-process-path" title="Link to this heading">#</a></h3>
+<h3>7. Rollout 全样本处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code>)<a class="headerlink" href="#rollout-rollout-all-samples-process-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>用途</strong>: 在 rollout 后处理所有样本（包括被过滤的样本）。</p>
 <p><strong>函数签名</strong>:</p>
@@ -698,7 +698,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="rollout-rollout-data-postprocess-path">
-<h3>8. Rollout 数据后处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code>)<a class="headerlink" href="#rollout-rollout-data-postprocess-path" title="Link to this heading">#</a></h3>
+<h3>8. Rollout 数据后处理 (<code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code>)<a class="headerlink" href="#rollout-rollout-data-postprocess-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>用途</strong>: 在计算 log probabilities 后对 rollout 数据进行后处理。</p>
 <p><strong>函数签名</strong>:</p>
@@ -713,7 +713,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="custom-loss-function-path">
-<h3>9. 自定义损失函数 (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)<a class="headerlink" href="#custom-loss-function-path" title="Link to this heading">#</a></h3>
+<h3>9. 自定义损失函数 (<code class="docutils literal notranslate"><span class="pre">--custom-loss-function-path</span></code>)<a class="headerlink" href="#custom-loss-function-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（需要 <code class="docutils literal notranslate"><span class="pre">--loss-type</span> <span class="pre">custom_loss</span></code>）</p>
 <p><strong>用途</strong>: 实现自定义训练损失计算。</p>
 <p><strong>使用场景</strong>:</p>
@@ -725,7 +725,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="tis-rs-custom-tis-function-path">
-<h3>10. 自定义 TIS/RS 函数 (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)<a class="headerlink" href="#tis-rs-custom-tis-function-path" title="Link to this heading">#</a></h3>
+<h3>10. 自定义 TIS/RS 函数 (<code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code>)<a class="headerlink" href="#tis-rs-custom-tis-function-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>用途</strong>: 实现用于离策略（off-policy）校正的自定义重要性采样。</p>
 <p><strong>使用场景</strong>:</p>
@@ -737,7 +737,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="pg-loss-reducer-custom-pg-loss-reducer-function-path">
-<h3>11. 自定义 pg_loss Reducer (<code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code>)<a class="headerlink" href="#pg-loss-reducer-custom-pg-loss-reducer-function-path" title="Link to this heading">#</a></h3>
+<h3>11. 自定义 pg_loss Reducer (<code class="docutils literal notranslate"><span class="pre">--custom-pg-loss-reducer-function-path</span></code>)<a class="headerlink" href="#pg-loss-reducer-custom-pg-loss-reducer-function-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>用途</strong>: 自定义 pg_loss 的归约方式，其他指标（pg_clipfrac、ppo_kl、entropy_loss 等）仍使用默认的 sum_of_sample_mean。</p>
 <p><strong>函数签名</strong>:</p>
@@ -758,7 +758,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="custom-reward-post-process-path">
-<h3>12. 奖励后处理 (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)<a class="headerlink" href="#custom-reward-post-process-path" title="Link to this heading">#</a></h3>
+<h3>12. 奖励后处理 (<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>)<a class="headerlink" href="#custom-reward-post-process-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（使用默认的 GRPO 归一化）</p>
 <p><strong>用途</strong>: 在优势计算前对奖励进行自定义后处理。</p>
 <p><strong>使用场景</strong>:</p>
@@ -769,7 +769,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="custom-convert-samples-to-train-data-path">
-<h3>13. 样本转训练数据 (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)<a class="headerlink" href="#custom-convert-samples-to-train-data-path" title="Link to this heading">#</a></h3>
+<h3>13. 样本转训练数据 (<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>)<a class="headerlink" href="#custom-convert-samples-to-train-data-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code>（使用内置转换逻辑）</p>
 <p><strong>用途</strong>: 覆盖样本到训练数据格式的转换逻辑。</p>
 <p><strong>函数签名</strong>:</p>
@@ -806,9 +806,9 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="id4">
-<h3>14. 日志函数<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<h3>14. 日志函数<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h3>
 <section id="rollout-custom-rollout-log-function-path">
-<h4>训练 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)<a class="headerlink" href="#rollout-custom-rollout-log-function-path" title="Link to this heading">#</a></h4>
+<h4>训练 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>)<a class="headerlink" href="#rollout-custom-rollout-log-function-path" title="链接到此标题。">#</a></h4>
 <p><strong>函数签名</strong>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">log_rollout_data</span><span class="p">(</span><span class="n">rollout_id</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">samples</span><span class="p">,</span> <span class="n">rollout_extra_metrics</span><span class="p">,</span> <span class="n">rollout_time</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
 </pre></div>
@@ -816,7 +816,7 @@ document.write(`
 <p><strong>返回值</strong>: <code class="docutils literal notranslate"><span class="pre">True</span></code> 跳过默认日志，<code class="docutils literal notranslate"><span class="pre">False</span></code> 继续默认日志。</p>
 </section>
 <section id="rollout-custom-eval-rollout-log-function-path">
-<h4>评估 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>)<a class="headerlink" href="#rollout-custom-eval-rollout-log-function-path" title="Link to this heading">#</a></h4>
+<h4>评估 Rollout 日志 (<code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>)<a class="headerlink" href="#rollout-custom-eval-rollout-log-function-path" title="链接到此标题。">#</a></h4>
 <p><strong>函数签名</strong>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">log_eval_rollout_data</span><span class="p">(</span><span class="n">rollout_id</span><span class="p">,</span> <span class="n">args</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">extra_metrics</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">bool</span>
 </pre></div>
@@ -826,7 +826,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="data-source-path">
-<h3>15. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)<a class="headerlink" href="#data-source-path" title="Link to this heading">#</a></h3>
+<h3>15. 数据源 (<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>)<a class="headerlink" href="#data-source-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.RolloutDataSourceWithBuffer</span></code></p>
 <p><strong>用途</strong>: 覆盖 rollout 提示词的数据源。</p>
 <p><strong>基类</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.data_source.DataSource</span></code></p>
@@ -848,7 +848,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="eval-function-path">
-<h3>16. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)<a class="headerlink" href="#eval-function-path" title="Link to this heading">#</a></h3>
+<h3>16. 评估函数 (<code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>)<a class="headerlink" href="#eval-function-path" title="链接到此标题。">#</a></h3>
 <p><strong>默认值</strong>: 与 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> 相同</p>
 <p><strong>用途</strong>: 专门为评估覆盖 rollout 函数。</p>
 <p><strong>使用场景</strong>:</p>
@@ -859,9 +859,9 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="megatron-hook">
-<h3>17. Megatron Hook<a class="headerlink" href="#megatron-hook" title="Link to this heading">#</a></h3>
+<h3>17. Megatron Hook<a class="headerlink" href="#megatron-hook" title="链接到此标题。">#</a></h3>
 <section id="megatron-custom-megatron-init-path">
-<h4>Megatron 初始化 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)<a class="headerlink" href="#megatron-custom-megatron-init-path" title="Link to this heading">#</a></h4>
+<h4>Megatron 初始化 (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>)<a class="headerlink" href="#megatron-custom-megatron-init-path" title="链接到此标题。">#</a></h4>
 <p><strong>函数签名</strong>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">custom_init</span><span class="p">(</span><span class="n">args</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </pre></div>
@@ -869,7 +869,7 @@ document.write(`
 <p><strong>用途</strong>: Megatron 设置后的自定义初始化。</p>
 </section>
 <section id="log-prob-hook-custom-megatron-before-log-prob-hook-path">
-<h4>Log Prob 前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)<a class="headerlink" href="#log-prob-hook-custom-megatron-before-log-prob-hook-path" title="Link to this heading">#</a></h4>
+<h4>Log Prob 前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>)<a class="headerlink" href="#log-prob-hook-custom-megatron-before-log-prob-hook-path" title="链接到此标题。">#</a></h4>
 <p><strong>函数签名</strong>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">custom_hook</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">store_prefix</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </pre></div>
@@ -877,7 +877,7 @@ document.write(`
 <p><strong>用途</strong>: log probability 计算前的自定义逻辑。</p>
 </section>
 <section id="hook-custom-megatron-before-train-step-hook-path">
-<h4>训练步骤前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)<a class="headerlink" href="#hook-custom-megatron-before-train-step-hook-path" title="Link to this heading">#</a></h4>
+<h4>训练步骤前 Hook (<code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>)<a class="headerlink" href="#hook-custom-megatron-before-train-step-hook-path" title="链接到此标题。">#</a></h4>
 <p><strong>函数签名</strong>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">custom_hook</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">step_id</span><span class="p">,</span> <span class="n">model</span><span class="p">,</span> <span class="n">optimizer</span><span class="p">,</span> <span class="n">opt_param_scheduler</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </pre></div>
@@ -887,7 +887,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="slime-router-slime-router-middleware-paths">
-<h3>18. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)<a class="headerlink" href="#slime-router-slime-router-middleware-paths" title="Link to this heading">#</a></h3>
+<h3>18. slime Router 中间件 (<code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>)<a class="headerlink" href="#slime-router-slime-router-middleware-paths" title="链接到此标题。">#</a></h3>
 <p><strong>用途</strong>: 向 slime router 添加自定义中间件用于请求处理。</p>
 <p><strong>使用场景</strong>:</p>
 <ul class="simple">
@@ -898,7 +898,7 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="moe">
-<h3>19. MoE 路由重放<a class="headerlink" href="#moe" title="Link to this heading">#</a></h3>
+<h3>19. MoE 路由重放<a class="headerlink" href="#moe" title="链接到此标题。">#</a></h3>
 <p>通过记录和重放专家路由决策来稳定 MoE RL 训练。</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
@@ -1030,7 +1030,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

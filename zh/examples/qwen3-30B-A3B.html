@@ -39,8 +39,8 @@
   <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -54,7 +54,7 @@
     <link rel="prev" title="8xH100 训练 GLM4-9B" href="glm4-9B.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -456,9 +456,9 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="xh100-qwen3-30b-a3b">
-<h1>8xH100 训练 Qwen3-30B-A3B<a class="headerlink" href="#xh100-qwen3-30b-a3b" title="Link to this heading">#</a></h1>
+<h1>8xH100 训练 Qwen3-30B-A3B<a class="headerlink" href="#xh100-qwen3-30b-a3b" title="链接到此标题。">#</a></h1>
 <section id="id1">
-<h2>环境准备<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<h2>环境准备<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <p>搭建环境、下载模型、数据与 ckpt 转换均与 Qwen3-4B 模型相同，可以参考 <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">示例：Qwen3-4B</span></a>，将文中 Qwen3-4B 的部分转换为 Qwen3-30B-A3B 即可。</p>
 <p>可以用如下方法把 huggingface checkpoint 转化为 torch_dist 格式：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>slime/
@@ -473,14 +473,14 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </div>
 </section>
 <section id="id2">
-<h2>执行训练<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<h2>执行训练<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
 <p>执行训练：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 bash<span class="w"> </span>scripts/run-qwen3-30B-A3B.sh
 </pre></div>
 </div>
 <section id="id3">
-<h3>参数简介<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<h3>参数简介<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
 <p>这里我们简单介绍一下脚本 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-30B-A3B.sh">run-qwen3-30B-A3B.sh</a> 中与 MoE 相关的部分。</p>
 <ol class="arabic">
 <li><p>为了支持在 8xH800 环境中运行 Qwen3-30B-A3B，我们需要开启 megatron 的 CPU Adam 以节省显存，对应配置为：</p>
@@ -524,7 +524,7 @@ bash<span class="w"> </span>scripts/run-qwen3-30B-A3B.sh
 </ol>
 </section>
 <section id="bf16-fp8">
-<h3>bf16 训练 fp8 推理<a class="headerlink" href="#bf16-fp8" title="Link to this heading">#</a></h3>
+<h3>bf16 训练 fp8 推理<a class="headerlink" href="#bf16-fp8" title="链接到此标题。">#</a></h3>
 <p>slime 还支持 bf16 训练，fp8 推理。对于 Qwen3-30B-A3B 模型，只需要下载如下模型：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-30B-A3B-FP8<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-30B-A3B-FP8
 </pre></div>
@@ -538,7 +538,7 @@ bash<span class="w"> </span>scripts/run-qwen3-30B-A3B.sh
 <p>⚠️  训练的 megatron checkpoint 还需要是最开始用 bf16 的 huggingface 转换的。</p>
 </section>
 <section id="id4">
-<h3>多机支持<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<h3>多机支持<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h3>
 <p>对于多机环境，需要进行如下的几点修改：</p>
 <ul class="simple">
 <li><p>将训练模型，数据放在所有机器都可以访问到的路径上；</p></li>
@@ -652,7 +652,7 @@ bash<span class="w"> </span>scripts/run-qwen3-30B-A3B.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

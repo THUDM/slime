@@ -39,8 +39,8 @@
   <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -54,7 +54,7 @@
     <link rel="prev" title="PD 分离" href="../advanced/pd-disaggregation.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -454,9 +454,9 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="sft-qwen3-4b-base">
-<h1>SFT Qwen3-4B-Base<a class="headerlink" href="#sft-qwen3-4b-base" title="Link to this heading">#</a></h1>
+<h1>SFT Qwen3-4B-Base<a class="headerlink" href="#sft-qwen3-4b-base" title="链接到此标题。">#</a></h1>
 <section id="id1">
-<h2>环境准备<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<h2>环境准备<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <p>首先需要我们仿照 <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">示例：Qwen3-4B 模型</span></a> 创建镜像环境与转换 <code class="docutils literal notranslate"><span class="pre">Qwen3-4B-Base</span></code> 模型。</p>
 <p>之后，我们处理 sft 数据。这里我们以经典的 <a class="reference external" href="https://huggingface.co/datasets/teknium/OpenHermes-2.5">OpenHermes-2.5</a> 为例，首先把数据处理成适合 slime 加载的格式，可以用如下的脚本进行处理，增加一个符合 openai message 格式的列，并保存在 <code class="docutils literal notranslate"><span class="pre">/root/openhermes2_5.parquet</span></code>。</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">datasets</span><span class="w"> </span><span class="kn">import</span> <span class="n">load_dataset</span>
@@ -492,14 +492,14 @@ document.write(`
 </div>
 </section>
 <section id="id2">
-<h2>执行训练<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<h2>执行训练<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
 <p>执行训练：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 bash<span class="w"> </span>script/run-qwen3-4B-base-sft.sh
 </pre></div>
 </div>
 <section id="id3">
-<h3>参数简介<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<h3>参数简介<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
 <p>可以将 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B-base-sft.sh">run-qwen3-4B-base-sft.sh</a> 与 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-qwen3-4B.sh">run-qwen3-4B.sh</a> 进行对比。会发现除了我们将模型由 instruct 模型换为了 base 模型之外，主要进行了如下的几个调整：</p>
 <ol class="arabic">
 <li><p>移除了 <code class="docutils literal notranslate"><span class="pre">SGLANG_ARGS</span></code> 和 <code class="docutils literal notranslate"><span class="pre">GRPO_ARGS</span></code>。这是因为 sft 的过程中不需要启动 sglang 或者做 grpo 相关的配置；</p></li>
@@ -615,7 +615,7 @@ bash<span class="w"> </span>script/run-qwen3-4B-base-sft.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

@@ -39,8 +39,8 @@
   <script src="../../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -52,7 +52,7 @@
     <link rel="search" title="搜索" href="../../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -461,7 +461,7 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="vlm-single-turn-rl-fsdp-megatron">
-<h1>VLM Single-Turn RL (FSDP &amp; Megatron)<a class="headerlink" href="#vlm-single-turn-rl-fsdp-megatron" title="Link to this heading">#</a></h1>
+<h1>VLM Single-Turn RL (FSDP &amp; Megatron)<a class="headerlink" href="#vlm-single-turn-rl-fsdp-megatron" title="链接到此标题。">#</a></h1>
 <p>Training VLMs with FSDP or Megatron on single-turn reasoning task using GRPO on the <a class="reference external" href="https://huggingface.co/datasets/hiyouga/geometry3k">GEO3K dataset</a>. We used processed version <a class="reference external" href="https://huggingface.co/datasets/chenhegu/geo3k_imgurl">here</a>.</p>
 <p>Note: Please make sure the cudnn version in the environment is 9.16.0.29 to prevent severe performance regression in conv3d in torch 2.9 mentioned in https://github.com/pytorch/pytorch/issues/168167. Otherwise, you can reinstall cudnn with:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>nvidia-cudnn-cu12<span class="o">==</span><span class="m">9</span>.16.0.29
@@ -471,7 +471,7 @@ document.write(`
   <img src="fsdp_vs_megatron.png" alt="FSDP vs Megatron Reward Plot" width="800">
 </p>
 <section id="data-preparation-for-sft-training">
-<h2>Data Preparation (For SFT Training)<a class="headerlink" href="#data-preparation-for-sft-training" title="Link to this heading">#</a></h2>
+<h2>Data Preparation (For SFT Training)<a class="headerlink" href="#data-preparation-for-sft-training" title="链接到此标题。">#</a></h2>
 <p>The <a class="reference external" href="https://huggingface.co/datasets/chenhegu/geo3k_imgurl">geo3k_imgurl</a> dataset contains:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">problem</span></code>: The math problem text (string)</p></li>
@@ -503,7 +503,7 @@ document.write(`
 </div>
 </section>
 <section id="reproduce">
-<h2>Reproduce<a class="headerlink" href="#reproduce" title="Link to this heading">#</a></h2>
+<h2>Reproduce<a class="headerlink" href="#reproduce" title="链接到此标题。">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">WANDB_API_KEY</span><span class="o">=</span>your_wandb_api_key
 
 <span class="c1"># Megatron backend (default -&gt; Qwen3-VL-8B-Instruct + Megatron)</span>
@@ -520,7 +520,7 @@ document.write(`
 </pre></div>
 </div>
 <section id="configuration">
-<h3>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">#</a></h3>
+<h3>Configuration<a class="headerlink" href="#configuration" title="链接到此标题。">#</a></h3>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
 <tr class="row-odd"><th class="head"><p>Environment Variable</p></th>
@@ -554,7 +554,7 @@ document.write(`
 </div>
 </section>
 <section id="supported-models">
-<h3>Supported Models<a class="headerlink" href="#supported-models" title="Link to this heading">#</a></h3>
+<h3>Supported Models<a class="headerlink" href="#supported-models" title="链接到此标题。">#</a></h3>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">Qwen3-VL-2B-Instruct</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">Qwen3-VL-4B-Instruct</span></code></p></li>
@@ -570,9 +570,9 @@ document.write(`
 </section>
 </section>
 <section id="notes">
-<h2>Notes<a class="headerlink" href="#notes" title="Link to this heading">#</a></h2>
+<h2>Notes<a class="headerlink" href="#notes" title="链接到此标题。">#</a></h2>
 <section id="reward-model-configuration">
-<h3>Reward Model Configuration<a class="headerlink" href="#reward-model-configuration" title="Link to this heading">#</a></h3>
+<h3>Reward Model Configuration<a class="headerlink" href="#reward-model-configuration" title="链接到此标题。">#</a></h3>
 <p>We experimented with three reward model configurations:</p>
 <ol class="arabic simple">
 <li><p>A geo3k-specific RM with tolerance=0.05 (to handle rounding in ground truth labels)</p></li>
@@ -582,13 +582,13 @@ document.write(`
 <p>All three performed similarly, so we use the default math RM for simplicity.</p>
 </section>
 <section id="numerical-precision-with-non-binary-rewards">
-<h3>Numerical Precision with Non-Binary Rewards<a class="headerlink" href="#numerical-precision-with-non-binary-rewards" title="Link to this heading">#</a></h3>
+<h3>Numerical Precision with Non-Binary Rewards<a class="headerlink" href="#numerical-precision-with-non-binary-rewards" title="链接到此标题。">#</a></h3>
 <p>Our initial geo3k-specific verifier produced &quot;format scores&quot; (<strong>0 and 0.9</strong>) instead of clean binary rewards. Under <strong>fp32</strong>, fractional values like 0.9 can't be exactly represented, so when all samples in a group have the same reward, <code class="docutils literal notranslate"><span class="pre">reward</span> <span class="pre">-</span> <span class="pre">mean</span></code> doesn't equal zero—creating spurious gradient signal.</p>
 <p>We fixed this by switching to the default math RM with clean <strong>binary 0/1 rewards</strong>. If you encounter similar precision issues with non-binary rewards, you can change the reward tensor dtype from <code class="docutils literal notranslate"><span class="pre">torch.float</span></code> to <code class="docutils literal notranslate"><span class="pre">torch.float16</span></code> in <code class="docutils literal notranslate"><span class="pre">slime/ray/rollout.py</span></code> (<code class="docutils literal notranslate"><span class="pre">_post_process_rewards</span></code> method) to truncate precision artifacts.</p>
 </section>
 </section>
 <section id="b200">
-<h2>B200<a class="headerlink" href="#b200" title="Link to this heading">#</a></h2>
+<h2>B200<a class="headerlink" href="#b200" title="链接到此标题。">#</a></h2>
 <p>Blackwell currently does not support fa3, we need to use  <code class="docutils literal notranslate"><span class="pre">--sglang-mm-attention-backend</span> <span class="pre">sdpa</span></code> and <code class="docutils literal notranslate"><span class="pre">--attn-implementation</span> <span class="pre">flash_attention_2</span></code></p>
 </section>
 </section>
@@ -665,7 +665,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

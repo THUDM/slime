@@ -39,8 +39,8 @@
   <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -54,7 +54,7 @@
     <link rel="prev" title="快速使用" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -462,11 +462,6 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">自定义参数</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fsdp">FSDP 使用方法</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">参数</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id13">FSDP 一键启动</a></li>
-</ul>
-</li>
 </ul>
             </nav>
         </div>
@@ -479,19 +474,19 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="id1">
-<h1>使用文档<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
+<h1>使用文档<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h1>
 <section id="slime">
-<h2>slime 参数简介<a class="headerlink" href="#slime" title="Link to this heading">#</a></h2>
+<h2>slime 参数简介<a class="headerlink" href="#slime" title="链接到此标题。">#</a></h2>
 <p>在使用 slime 时，传参主要是为了如下几件事：</p>
 <ol class="arabic simple">
 <li><p>把集群中一部分 GPU 分配做训练，一部分分配做推理；</p></li>
-<li><p>训练的部分加载 megatron或者FSDP；</p></li>
+<li><p>训练的部分加载 megatron；</p></li>
 <li><p>推理部分加载 sglang；</p></li>
 <li><p>配置 RL 训练需要的超参。</p></li>
 </ol>
 <p>按照这个顺序，我们需要配置这些参数：</p>
 <section id="id2">
-<h3>集群资源分配<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
+<h3>集群资源分配<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h3>
 <p>集群资源分配主要有这样的 4 个参数：</p>
 <ul>
 <li><p><code class="docutils literal notranslate"><span class="pre">--actor-num-nodes</span></code>：RL 的 actor 训练需要多少节点；</p></li>
@@ -509,15 +504,15 @@ document.write(`
 <p>此外，slime 支持 Prefill 和 Decode 的分离部署 (PD Disaggregation)，可以通过设置 <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code> 参数来指定用于 Prefill 的服务器数量。</p>
 </section>
 <section id="id3">
-<h3>选择训练后端<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<h3>选择训练后端<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
 <p>slime 支持多种训练后端，可以通过 <code class="docutils literal notranslate"><span class="pre">--train-backend</span></code> 参数进行选择：</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">megatron</span></code>（默认）：使用 Megatron-LM 作为训练后端，支持大规模模型的高效训练；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">fsdp</span></code>：使用 PyTorch FSDP 作为训练后端，可以直接加载 HuggingFace 格式权重，无需转换。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">fsdp</span></code>（实验性）：使用 PyTorch FSDP 作为训练后端，可以直接加载 HuggingFace 格式权重，无需转换。</p></li>
 </ul>
 </section>
 <section id="megatron">
-<h3>加载 megatron<a class="headerlink" href="#megatron" title="Link to this heading">#</a></h3>
+<h3>加载 megatron<a class="headerlink" href="#megatron" title="链接到此标题。">#</a></h3>
 <p>megatron 与 sglang, vllm 或者 huggingface trainer 之类的工具不同，他不能直接读取 huggingface ckpt，而是需要用户配置好要训练的模型的参数，并且加载 megatron 自己的 ckpt。</p>
 <p>一般来说，我们需要做 3 点准备：</p>
 <ul class="simple">
@@ -527,7 +522,7 @@ document.write(`
 </ul>
 <p>对于一些 megatron 的自定义以及 slime 引入 megatron 的原理，请见 megatron 使用方法一节。</p>
 <section id="id4">
-<h4>配置模型参数<a class="headerlink" href="#id4" title="Link to this heading">#</a></h4>
+<h4>配置模型参数<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h4>
 <p>这里以 qwen3 4B 为例，我们需要这些参数：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">MODEL_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--num-layers<span class="w"> </span><span class="m">36</span>
@@ -559,7 +554,7 @@ document.write(`
 </ul>
 </section>
 <section id="id5">
-<h4>设置各种并行与重计算<a class="headerlink" href="#id5" title="Link to this heading">#</a></h4>
+<h4>设置各种并行与重计算<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h4>
 <p>megatron 是目前优化最为齐全的训练框架，大家使用 megatron 的一个主要目的就是追求其卓越的性能，这里简单介绍一些 megatron 的并行和重计算的配置方法。</p>
 <ul class="simple">
 <li><p>这里我们简单陈列 megatron 的并行策略，关于这些并行策略之间的 trade-off 请参考更专业的一些讨论：</p>
@@ -582,7 +577,7 @@ document.write(`
 </ul>
 </section>
 <section id="megatron-ckpt">
-<h4>加载 megatron ckpt<a class="headerlink" href="#megatron-ckpt" title="Link to this heading">#</a></h4>
+<h4>加载 megatron ckpt<a class="headerlink" href="#megatron-ckpt" title="链接到此标题。">#</a></h4>
 <p>megatron 支持多种其自定义的 ckpt 格式，这里介绍 2 种比较主流的格式，</p>
 <ul class="simple">
 <li><p>曾经比较主流的 torch 格式（对应 <code class="docutils literal notranslate"><span class="pre">--ckpt-format</span> <span class="pre">torch</span></code>）；</p></li>
@@ -616,7 +611,7 @@ document.write(`
 </section>
 </section>
 <section id="sglang">
-<h3>加载 sglang<a class="headerlink" href="#sglang" title="Link to this heading">#</a></h3>
+<h3>加载 sglang<a class="headerlink" href="#sglang" title="链接到此标题。">#</a></h3>
 <p>sglang 的加载非常简单，只需要：</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code>：初始化 sglang 用的 huggingface ckpt；</p></li>
@@ -631,7 +626,7 @@ document.write(`
 <p>对于一些 sglang 的自定义以及 slime 引入 sglang 的原理，请见 sglang 使用方法一节。</p>
 </section>
 <section id="id6">
-<h3>数据格式<a class="headerlink" href="#id6" title="Link to this heading">#</a></h3>
+<h3>数据格式<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
 <p>目前 slime 只支持加载 <code class="docutils literal notranslate"><span class="pre">.jsonl</span></code> 格式文件，即文件的每一行都是一个 json，一行数据的样例（展开后）为：</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
 <span class="w">  </span><span class="nt">&quot;prompt&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
@@ -655,7 +650,7 @@ document.write(`
 另外我们还提供了一个 metadata_key，默认为 <code class="docutils literal notranslate"><span class="pre">&quot;metadata&quot;</span></code>，读取后我们会把数据中的 metadata 加载进 slime，可能会对自定义数据生成或者自定义 reward model 有帮助。</p>
 </section>
 <section id="rl">
-<h3>RL 训练需要的超参<a class="headerlink" href="#rl" title="Link to this heading">#</a></h3>
+<h3>RL 训练需要的超参<a class="headerlink" href="#rl" title="链接到此标题。">#</a></h3>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span></code>: 当前训练需要的 RL 算法，目前支持：</p>
 <ul>
@@ -673,7 +668,7 @@ document.write(`
 </section>
 </section>
 <section id="rollout">
-<h2>自定义 rollout 函数<a class="headerlink" href="#rollout" title="Link to this heading">#</a></h2>
+<h2>自定义 rollout 函数<a class="headerlink" href="#rollout" title="链接到此标题。">#</a></h2>
 <p>slime 支持不同程度的自定义数据生成（rollout）。</p>
 <ul>
 <li><p>默认会使用 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py">slime/rollout/sglang_rollout.py</a> 中的 <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> 函数进行数据生成。这个文件中实现了基于 sglang 的异步（asyncio）数据生成流程，并支持了例如 dynamic sampling，partial rollout 等功能；</p></li>
@@ -747,10 +742,10 @@ document.write(`
 </ul>
 </section>
 <section id="id7">
-<h2>sglang 使用方法<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
+<h2>sglang 使用方法<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h2>
 <p>slime 通过 <code class="docutils literal notranslate"><span class="pre">HttpServerEngineAdapter</span></code> 作为中介，实现了基于 sglang 的 server based engine。</p>
 <section id="id8">
-<h3>参数配置<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
+<h3>参数配置<a class="headerlink" href="#id8" title="链接到此标题。">#</a></h3>
 <p>slime 通过引入 sglang 的 <code class="docutils literal notranslate"><span class="pre">ServerArgs.add_cli_args</span></code>，从而引入了几乎所有的 sglang 参数，在设置一个 sglang 参数的时候，需要在参数前加上 <code class="docutils literal notranslate"><span class="pre">--sglang</span></code> 的前缀，例如：</p>
 <ul class="simple">
 <li><p>在训推一体的训练时，往往需要限制 <code class="docutils literal notranslate"><span class="pre">--mem-fraction-static</span></code>，这个参数需要转变为 <code class="docutils literal notranslate"><span class="pre">--sglang-mem-fraction-static</span></code>；</p></li>
@@ -765,17 +760,17 @@ document.write(`
 <p>sglang 参数引入 slime 的方式可以参考 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/backends/sglang_utils/arguments.py">slime/backends/sglang_utils/arguments.py</a>。</p>
 </section>
 <section id="router">
-<h3>router 使用方法<a class="headerlink" href="#router" title="Link to this heading">#</a></h3>
+<h3>router 使用方法<a class="headerlink" href="#router" title="链接到此标题。">#</a></h3>
 <p>slime 会用 <a class="reference external" href="https://github.com/sgl-project/sglang/tree/main/sgl-router">sglang-router</a> 来管理训练过程中的 sglang server。可以通过 <code class="docutils literal notranslate"><span class="pre">--sglang-router-ip</span></code> 与 <code class="docutils literal notranslate"><span class="pre">--sglang-router-port</span></code> 来配置 <a class="reference external" href="https://github.com/sgl-project/sglang/tree/main/sgl-router">sglang-router</a> 的地址。如果不进行配置，则会在集群中默认启动一个 router。</p>
 <p>所有的 sglang server 在启动后，会通过 <code class="docutils literal notranslate"><span class="pre">/add_worker</span></code> 申请加入 router。在实际进行数据生成的时候，只需要向 router 发送 http 请求，router 会进行 load balancing 操作，将请求转发给 server 们。</p>
 <p>当通过 <code class="docutils literal notranslate"><span class="pre">--sglang-router-ip</span></code> 与 <code class="docutils literal notranslate"><span class="pre">--sglang-router-port</span></code> 来配置传入一个外部的 router，此时 slime 不再会在内部启动一个 router，而是会把所有的 server 都注册在这个外部 router 上。这时可以利用这个外部的 router 地址来实现更复杂的数据生成流程。注意 router 是支持 openai compatible api 的。</p>
 </section>
 </section>
 <section id="id9">
-<h2>megatron 使用方法<a class="headerlink" href="#id9" title="Link to this heading">#</a></h2>
+<h2>megatron 使用方法<a class="headerlink" href="#id9" title="链接到此标题。">#</a></h2>
 <p>slime 通过复用 <code class="docutils literal notranslate"><span class="pre">megatron.training</span></code> 目录下的常规函数，如 <code class="docutils literal notranslate"><span class="pre">parse_args</span></code>， <code class="docutils literal notranslate"><span class="pre">save_checkpoint</span></code>，<code class="docutils literal notranslate"><span class="pre">load_checkpoint</span></code>，从而实现对不同版本以及轻度魔改的 megatron 的支持。所以在使用时，需要保证 <code class="docutils literal notranslate"><span class="pre">PYTHONPATH</span></code> 中能访问到 megatron，例如在运行时加入 <code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">PYTHONPATH=/root/Megatron-LM</span></code>。</p>
 <section id="id10">
-<h3>参数配置<a class="headerlink" href="#id10" title="Link to this heading">#</a></h3>
+<h3>参数配置<a class="headerlink" href="#id10" title="链接到此标题。">#</a></h3>
 <p>slime 通过直接引入 <code class="docutils literal notranslate"><span class="pre">from</span> <span class="pre">megatron.training.arguments</span> <span class="pre">import</span> <span class="pre">parse_args</span></code> 引入了当前环境中 megatron 的所有参数。如果当前使用的 megatron 有在 <code class="docutils literal notranslate"><span class="pre">parse_args</span></code> 之外的参数，可以通过像 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/train.py">train.py</a> 中传入参数来进行配置，例如：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">if</span> <span class="vm">__name__</span> <span class="o">==</span> <span class="s2">&quot;__main__&quot;</span><span class="p">:</span>
     <span class="k">try</span><span class="p">:</span>
@@ -788,153 +783,13 @@ document.write(`
 </div>
 </section>
 <section id="id11">
-<h3>自定义参数<a class="headerlink" href="#id11" title="Link to this heading">#</a></h3>
+<h3>自定义参数<a class="headerlink" href="#id11" title="链接到此标题。">#</a></h3>
 <p>在一些定制版 megatron 的实现中，需要在初始化，或者训练步的前后进行特殊的操作。目前我们加入如下的插件：</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--custom-megatron-init-path</span></code>：会增加一些 init 的调用；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-log-prob-hook-path</span></code>：会在计算 log prob 之前调用；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--custom-megatron-before-train-step-hook-path</span></code>：会在每个训练步之前调用。可以考虑用这种方式混入特殊的训练 loss 之类的。</p></li>
 </ul>
-</section>
-</section>
-<section id="fsdp">
-<h2>FSDP 使用方法<a class="headerlink" href="#fsdp" title="Link to this heading">#</a></h2>
-<p>slime 同样也支持FSDP2作为训练后端，可以参考<a class="reference external" href="https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/slime/fsdp/readme.md">文档</a>。</p>
-<blockquote>
-<div><p>FSDP 通过 <code class="docutils literal notranslate"><span class="pre">AutoModelForCausalLM.from_pretrained()</span></code> 自动读取所有架构信息，无需手动指定。Megatron 需要手动配置参数读取 model 架构信息，FSDP可以全部从 <code class="docutils literal notranslate"><span class="pre">config.json</span></code> 自动读取，可以直接避免权重格式转换步骤。</p>
-</div></blockquote>
-<p>可以通过在命令行传递 <code class="docutils literal notranslate"><span class="pre">--train-backend</span> <span class="pre">fsdp</span></code> 来启动 FSDP 作为训练后端。</p>
-<section id="id12">
-<h3>参数<a class="headerlink" href="#id12" title="Link to this heading">#</a></h3>
-<p>FSDP和Megatron后端支持的参数的对比如下表所示，接下来FSDP会有更多的支持。</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>配置类别</p></th>
-<th class="head"><p>Megatron 参数</p></th>
-<th class="head"><p>FSDP 参数</p></th>
-<th class="head"><p>说明</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><strong>模型加载</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--load</span></code> (Megatron checkpoint) + 架构参数 (<code class="docutils literal notranslate"><span class="pre">--num-layers</span></code>, <code class="docutils literal notranslate"><span class="pre">--hidden-size</span></code> 等)</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> (必需)</p></td>
-<td><p><strong>FSDP</strong>: 直接使用 HuggingFace 格式，无需转换权重，通过 <code class="docutils literal notranslate"><span class="pre">AutoConfig</span></code> 自动推断架构</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>张量并行</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--tensor-model-parallel-size</span></code></p></td>
-<td><p>Coming Soon</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><strong>流水线并行</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--pipeline-model-parallel-size</span></code></p></td>
-<td><p>Coming Soon</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>专家并行</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--expert-model-parallel-size</span></code></p></td>
-<td><p>Coming Soon</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><strong>上下文并行</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--context-parallel-size</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--context-parallel-size</span></code></p></td>
-<td><p>两者都支持 CP</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>初始学习率</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--lr</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--lr</span></code></p></td>
-<td><p>参数相同</p></td>
-</tr>
-<tr class="row-even"><td><p><strong>学习率衰减</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--lr-decay-style</span></code> (linear/cosine 等)</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--lr-decay-style</span></code></p></td>
-<td><p>参数相同</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>Warmup</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--lr-warmup-iters</span></code> (步数)</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--lr-warmup-iters</span></code></p></td>
-<td><p>参数相同</p></td>
-</tr>
-<tr class="row-even"><td><p><strong>最小学习率</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--min-lr</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--min-lr</span></code></p></td>
-<td><p>参数相同</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>优化器类型</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--optimizer</span></code> (adam/sgd 等)</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--optimizer</span></code> (默认 adam)</p></td>
-<td><p>基本相同</p></td>
-</tr>
-<tr class="row-even"><td><p><strong>分布式优化器</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--use-distributed-optimizer</span></code></p></td>
-<td><p>内置于 FSDP</p></td>
-<td><p>FSDP 默认使用分布式优化器</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>梯度检查点</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--recompute-granularity</span></code>, <code class="docutils literal notranslate"><span class="pre">--recompute-method</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--gradient-checkpointing</span></code></p></td>
-<td><p><strong>FSDP</strong>: 简化为布尔开关</p></td>
-</tr>
-<tr class="row-even"><td><p><strong>CPU Offload</strong></p></td>
-<td><p>通过分布式优化器实现</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--fsdp-cpu-offload</span></code></p></td>
-<td><p><strong>FSDP</strong>: 将参数/梯度/优化器状态卸载到 CPU</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>CPU 后端</strong></p></td>
-<td><p>通过分布式优化器实现</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--fsdp-cpu-backend</span></code></p></td>
-<td><p><strong>FSDP</strong>: 指定CPU的后端并且当CPU offload时使用混合后端</p></td>
-</tr>
-<tr class="row-even"><td><p><strong>Attention 后端</strong></p></td>
-<td><p>由 Megatron Core 决定</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--attn-implementation</span></code> (flash_attention_2/sdpa/eager)</p></td>
-<td><p><strong>FSDP</strong>: 直接透传给 HuggingFace</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>混合精度</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--fp16</span></code> 或 <code class="docutils literal notranslate"><span class="pre">--bf16</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--fp16</span></code> (bf16 自动推断)</p></td>
-<td><p>基本相同</p></td>
-</tr>
-<tr class="row-even"><td><p><strong>训练后端</strong></p></td>
-<td><p>默认或 <code class="docutils literal notranslate"><span class="pre">--train-backend</span> <span class="pre">megatron</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--train-backend</span> <span class="pre">fsdp</span></code> (必需)</p></td>
-<td><p>用于切换后端</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>参数配置</strong></p></td>
-<td><p></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--config</span></code></p></td>
-<td><p><strong>FSDP</strong>: 为FSDP设置额外的参数</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-</section>
-<section id="id13">
-<h3>FSDP 一键启动<a class="headerlink" href="#id13" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 如果需要使用 WANDB，需要提前设置好环境变量 WANDB_API_KEY</span>
-<span class="c1"># 下载模型权重 (Qwen3-4B)</span>
-hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-4B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-4B
-
-<span class="c1"># 下载训练数据集 (dapo-math-17k)</span>
-hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/dapo-math-17k<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--local-dir<span class="w"> </span>/root/dapo-math-17k
-
-<span class="c1"># 下载评估数据集 (aime-2024)</span>
-hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/aime-2024<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--local-dir<span class="w"> </span>/root/aime-2024
-<span class="w">  </span>
-<span class="c1"># 克隆代码并安装依赖</span>
-git<span class="w"> </span>clone<span class="w"> </span>https://github.com/THUDM/slime.git
-<span class="nb">cd</span><span class="w"> </span>slime
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
-
-
-<span class="c1"># FSDP不用进行权重转换，native 支持 huggingface 格式</span>
-<span class="c1"># 开启 reference model，在 colocated 模式下训练 Qwen3-4B</span>
-<span class="nb">source</span><span class="w"> </span>/root/slime/scripts/run-qwen3-4B-fsdp.sh
-</pre></div>
-</div>
 </section>
 </section>
 </section>
@@ -1009,11 +864,6 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">自定义参数</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fsdp">FSDP 使用方法</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">参数</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id13">FSDP 一键启动</a></li>
-</ul>
-</li>
 </ul>
   </nav></div>
 
@@ -1047,7 +897,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

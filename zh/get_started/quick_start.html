@@ -39,8 +39,8 @@
   <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -54,7 +54,7 @@
     <link rel="prev" title="slime 文档" href="../index.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -490,13 +490,13 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="id1">
-<h1>快速使用<a class="headerlink" href="#id1" title="Link to this heading">#</a></h1>
+<h1>快速使用<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h1>
 <p>本文档从搭建环境开始，在一小时内带您快速上手 slime，涵盖环境配置，数据准备，训练启动和关键代码解析和魔改。</p>
 <section id="id2">
-<h2>基础环境搭建<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<h2>基础环境搭建<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
 <p>由于 slime 可能会包含针对 sglang/megatron 的临时补丁（patch）。为避免潜在的环境配置问题，强烈建议<strong>用户使用我们提供的最新 Docker 镜像</strong>，它已预置好所有依赖。</p>
 <section id="id3">
-<h3>硬件支持说明<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<h3>硬件支持说明<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
 <p><strong>slime</strong> 支持多种 NVIDIA GPU 硬件平台：</p>
 <ul class="simple">
 <li><p><strong>B200 系列</strong>：完全支持，运行步骤与 H 系列完全相同</p></li>
@@ -513,7 +513,7 @@ document.write(`
 </ul>
 </section>
 <section id="docker">
-<h3>拉取并启动 Docker 容器<a class="headerlink" href="#docker" title="Link to this heading">#</a></h3>
+<h3>拉取并启动 Docker 容器<a class="headerlink" href="#docker" title="链接到此标题。">#</a></h3>
 <p>请执行以下命令，拉取最新镜像并启动一个交互式容器：</p>
 <div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="c1"># 拉取最新镜像</span>
 docker<span class="w"> </span>pull<span class="w"> </span>slimerl/slime:latest
@@ -526,7 +526,7 @@ docker<span class="w"> </span>run<span class="w"> </span>--rm<span class="w"> </
 </div>
 </section>
 <section id="slime">
-<h3>安装 slime<a class="headerlink" href="#slime" title="Link to this heading">#</a></h3>
+<h3>安装 slime<a class="headerlink" href="#slime" title="链接到此标题。">#</a></h3>
 <p>slime 已经安装在该 Docker 镜像中。如需更新到最新版本，请在 Docker 容器中执行以下命令：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 路径可根据实际情况调整</span>
 <span class="nb">cd</span><span class="w"> </span>/root/slime
@@ -537,7 +537,7 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 </section>
 </section>
 <section id="id4">
-<h2>模型与数据集下载<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
+<h2>模型与数据集下载<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
 <p>可以从 Hugging Face、ModelScope 等平台下载所需的模型和数据集。以下是使用 <code class="docutils literal notranslate"><span class="pre">huggingface_hub</span></code> 下载示例资源的命令：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 下载模型权重 (GLM-Z1-9B)</span>
 hf<span class="w"> </span>download<span class="w"> </span>zai-org/GLM-Z1-9B-0414<span class="w"> </span>--local-dir<span class="w"> </span>/root/GLM-Z1-9B-0414
@@ -553,9 +553,9 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 </div>
 </section>
 <section id="id5">
-<h2>模型权重转换<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
+<h2>模型权重转换<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h2>
 <section id="hugging-face-megatron">
-<h3>Hugging Face 格式 转换为 Megatron 格式<a class="headerlink" href="#hugging-face-megatron" title="Link to this heading">#</a></h3>
+<h3>Hugging Face 格式 转换为 Megatron 格式<a class="headerlink" href="#hugging-face-megatron" title="链接到此标题。">#</a></h3>
 <p>当使用 Megatron 作为训练后端时，需要先将 Hugging Face 格式的模型权重转换为 Megatron <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> 格式。</p>
 <p>首先，加载目标模型的配置文件。<code class="docutils literal notranslate"><span class="pre">slime/scripts/models</span></code> 目录下包含了支持模型的配置文件。需要 <code class="docutils literal notranslate"><span class="pre">source</span></code> 对应模型的脚本，将配置参数加载到当前环境中。此处我们以 GLM4-9B 模型为例子，对于 Qwen3-4B，Qwen3-30B-A3B，是类似的。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
@@ -577,7 +577,7 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 注意：kimi-k2模型权重转换时，需打开模型路径中的config.json，将&quot;model_type&quot;: &quot;kimi_k2&quot;修改为&quot;model_type&quot;: &quot;deepseek_v3&quot;。</p>
 </section>
 <section id="megatron-hugging-face">
-<h3>Megatron 格式 转换为 Hugging Face 格式<a class="headerlink" href="#megatron-hugging-face" title="Link to this heading">#</a></h3>
+<h3>Megatron 格式 转换为 Hugging Face 格式<a class="headerlink" href="#megatron-hugging-face" title="链接到此标题。">#</a></h3>
 <p>可以通过这样的方式将训练过程中保存的 Megatron 格式的权重转换回 Huggingface 格式：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM<span class="w"> </span>python<span class="w"> </span>tools/convert_torch_dist_to_hf.py<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--input-dir<span class="w"> </span>/path/to/torch_dist_ckpt/iter_xxx/<span class="w"> </span><span class="se">\</span>
@@ -586,17 +586,10 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 </pre></div>
 </div>
 <p>由于 Megatron 会对 embedding 做 padding，可能会出现转换出来的权重的 embedding 形状不匹配的问题。这时需要在转换时设置 <code class="docutils literal notranslate"><span class="pre">--vocab-size</span></code>。</p>
-<p>对于使用 FSDP 后端训练并保存的检查点（目录中没有 <code class="docutils literal notranslate"><span class="pre">common.pt</span></code> 的情况），请使用专门的转换脚本。将 <code class="docutils literal notranslate"><span class="pre">--input-dir</span></code> 指向检查点目录（例如 <code class="docutils literal notranslate"><span class="pre">iter_xxx</span></code> 或 <code class="docutils literal notranslate"><span class="pre">iter_xxx/model</span></code>），并提供原始 Hugging Face 模型路径：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/convert_fsdp_to_hf.py<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--input-dir<span class="w"> </span>/path/to/fsdp_ckpt/iter_xxx<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--output-dir<span class="w"> </span>/root/fsdp-converted<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--origin-hf-dir<span class="w"> </span>/root/GLM-Z1-9B-0414
-</pre></div>
-</div>
 </section>
 </section>
 <section id="id6">
-<h2>训练脚本与参数概览<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
+<h2>训练脚本与参数概览<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h2>
 <p>完成上述准备工作后，即可运行训练脚本。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 bash<span class="w"> </span>scripts/run-glm4-9B.sh
@@ -604,7 +597,7 @@ bash<span class="w"> </span>scripts/run-glm4-9B.sh
 </div>
 <p>我们还是以 run-glm4-9B.sh 脚本为例，简单分析主要参数的作用。</p>
 <section id="model-args">
-<h3>MODEL_ARGS: 模型配置参数<a class="headerlink" href="#model-args" title="Link to this heading">#</a></h3>
+<h3>MODEL_ARGS: 模型配置参数<a class="headerlink" href="#model-args" title="链接到此标题。">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SCRIPT_DIR</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>dirname<span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">&amp;</span>&gt;/dev/null<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">&quot;</span>
 <span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4-9B.sh&quot;</span>
 </pre></div>
@@ -620,7 +613,7 @@ bash<span class="w"> </span>scripts/run-glm4-9B.sh
 </div></blockquote>
 </section>
 <section id="ckpt-args">
-<h3>CKPT_ARGS: 检查点与路径参数<a class="headerlink" href="#ckpt-args" title="Link to this heading">#</a></h3>
+<h3>CKPT_ARGS: 检查点与路径参数<a class="headerlink" href="#ckpt-args" title="链接到此标题。">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CKPT_ARGS</span><span class="o">=(</span>
 <span class="w">   </span><span class="c1"># 用于加载 tokenizer 等其他信息，实际上不会使用 hf 路径中的模型权重参数</span>
 <span class="w">   </span>--hf-checkpoint<span class="w"> </span>/root/GLM-Z1-9B-0414
@@ -637,7 +630,7 @@ bash<span class="w"> </span>scripts/run-glm4-9B.sh
 </div>
 </section>
 <section id="rollout-args-rollout">
-<h3>ROLLOUT_ARGS: 数据生成（Rollout）参数<a class="headerlink" href="#rollout-args-rollout" title="Link to this heading">#</a></h3>
+<h3>ROLLOUT_ARGS: 数据生成（Rollout）参数<a class="headerlink" href="#rollout-args-rollout" title="链接到此标题。">#</a></h3>
 <p>整个训练流程可视为一个 <strong>“数据采样 → 权重更新”</strong> 的闭环。</p>
 <p><strong>阶段一：数据采样 (Rollout)</strong></p>
 <ul class="simple">
@@ -698,7 +691,7 @@ bash<span class="w"> </span>scripts/run-glm4-9B.sh
 </div>
 </section>
 <section id="eval-args">
-<h3>EVAL_ARGS: 评估参数<a class="headerlink" href="#eval-args" title="Link to this heading">#</a></h3>
+<h3>EVAL_ARGS: 评估参数<a class="headerlink" href="#eval-args" title="链接到此标题。">#</a></h3>
 <p>评估过程会继承大部分 Rollout 参数，但您可以通过以下参数进行覆盖，以实现与训练不同的评估策略。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">EVAL_ARGS</span><span class="o">=(</span>
 <span class="w">   </span><span class="c1"># 评估间隔（Rollout 数）</span>
@@ -716,7 +709,7 @@ bash<span class="w"> </span>scripts/run-glm4-9B.sh
 </div>
 </section>
 <section id="perf-args">
-<h3>PERF_ARGS: 性能与并行参数<a class="headerlink" href="#perf-args" title="Link to this heading">#</a></h3>
+<h3>PERF_ARGS: 性能与并行参数<a class="headerlink" href="#perf-args" title="链接到此标题。">#</a></h3>
 <p>这部分主要包含 Megatron 的并行配置。<code class="docutils literal notranslate"><span class="pre">--use-dynamic-batch-size</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--max-tokens-per-gpu</span></code> 是 slime 添加的特有优化。</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--max-tokens-per-gpu</span></code>: 每张 GPU 处理的最大 Token 数。启用动态批处理（<code class="docutils literal notranslate"><span class="pre">use_dynamic_batch_size</span></code>）后，系统会智能地将长短不一的样本打包，使每个 micro-batch 的总 Token 数接近此限制，从而提升训练效率。如果单个样本长度超过该值，它将独立形成一个 batch。在上下文并行（CP）模式下，<code class="docutils literal notranslate"><span class="pre">N</span></code> 张 CP 卡共享 <code class="docutils literal notranslate"><span class="pre">N</span> <span class="pre">*</span> <span class="pre">max_tokens_per_gpu</span></code> 的总长度。</p></li>
@@ -746,7 +739,7 @@ slime 总是会通过 data packing 的方法训练模型，并且严格保证 pe
 </div>
 </section>
 <section id="grpo-args-grpo">
-<h3>GRPO_ARGS: GRPO 算法参数<a class="headerlink" href="#grpo-args-grpo" title="Link to this heading">#</a></h3>
+<h3>GRPO_ARGS: GRPO 算法参数<a class="headerlink" href="#grpo-args-grpo" title="链接到此标题。">#</a></h3>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--use-kl-loss</span></code>: 启用此选项将加载一个参考模型（Reference Model），并计算当前模型与参考模型之间的 KL 散度（KL Divergence）作为一项监控指标。KL 散度是否被计入最终的训练损失（Loss），取决于 <code class="docutils literal notranslate"><span class="pre">--kl-loss-coef</span></code> 参数。若该参数设置为 0，则 KL 散度仅作为观测指标显示，而不会参与损失计算。</p></li>
 </ul>
@@ -768,7 +761,7 @@ slime 总是会通过 data packing 的方法训练模型，并且严格保证 pe
 </ul>
 </section>
 <section id="optimizer-args">
-<h3>OPTIMIZER_ARGS: 优化器参数<a class="headerlink" href="#optimizer-args" title="Link to this heading">#</a></h3>
+<h3>OPTIMIZER_ARGS: 优化器参数<a class="headerlink" href="#optimizer-args" title="链接到此标题。">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">OPTIMIZER_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--optimizer<span class="w"> </span>adam
 <span class="w">   </span>--lr<span class="w"> </span>1e-6
@@ -781,7 +774,7 @@ slime 总是会通过 data packing 的方法训练模型，并且严格保证 pe
 </div>
 </section>
 <section id="sglang-args-sglang">
-<h3>SGLANG_ARGS: SGLang 服务参数<a class="headerlink" href="#sglang-args-sglang" title="Link to this heading">#</a></h3>
+<h3>SGLANG_ARGS: SGLang 服务参数<a class="headerlink" href="#sglang-args-sglang" title="链接到此标题。">#</a></h3>
 <p>这部分参数用于配置 SGLang 推理服务。</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus-per-engine</span></code>: 基本等同于 SGLang 的 <code class="docutils literal notranslate"><span class="pre">tp_size</span></code>。</p></li>
@@ -799,9 +792,9 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 </section>
 </section>
 <section id="id7">
-<h2>特性介绍<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
+<h2>特性介绍<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h2>
 <section id="colocated-actor-and-rollout">
-<h3>Colocated Actor and Rollout<a class="headerlink" href="#colocated-actor-and-rollout" title="Link to this heading">#</a></h3>
+<h3>Colocated Actor and Rollout<a class="headerlink" href="#colocated-actor-and-rollout" title="链接到此标题。">#</a></h3>
 <p>在默认的配置下，训练（Actor）和推理（Rollout）的资源是分开指定的，通过 ray 给训练部分分配 <code class="docutils literal notranslate"><span class="pre">actor_num_nodes</span> <span class="pre">*</span> <span class="pre">actor_num_gpus_per_node</span></code> 张 GPU，给推理分配 <code class="docutils literal notranslate"><span class="pre">rollout_num_gpus</span></code> 张 GPU，也即训推分离。</p>
 <p><strong>标准（分离）配置</strong>：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>...<span class="w"> </span><span class="se">\</span>
@@ -833,7 +826,7 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 </div></blockquote>
 </section>
 <section id="dynamic-sampling">
-<h3>Dynamic Sampling<a class="headerlink" href="#dynamic-sampling" title="Link to this heading">#</a></h3>
+<h3>Dynamic Sampling<a class="headerlink" href="#dynamic-sampling" title="链接到此标题。">#</a></h3>
 <p>slime 支持更复杂的采样策略，例如 <a class="reference external" href="https://dapo-sia.github.io/">DAPO</a> 中使用的动态采样。要启用此功能，需配置以下参数：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="w">   </span>--over-sampling-batch-size<span class="w"> </span><span class="m">64</span><span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--dynamic-sampling-filter-path<span class="w"> </span><span class="se">\</span>
@@ -856,7 +849,7 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 <p>如果过滤函数非常严格，导致大量 prompt 组被丢弃，系统会监控 <code class="docutils literal notranslate"> <span class="pre">remaining_batch_size</span></code> 中待处理的任务数量。一旦待处理的任务数因丢弃过多而降至目标数 (32) 以下，系统会自动触发新一轮的过采样，再次请求  <code class="docutils literal notranslate"><span class="pre">over_sampling_batch_size</span></code> (64) 个新的 prompt 重复上述流程。</p>
 </section>
 <section id="partial-rollout">
-<h3>Partial Rollout<a class="headerlink" href="#partial-rollout" title="Link to this heading">#</a></h3>
+<h3>Partial Rollout<a class="headerlink" href="#partial-rollout" title="链接到此标题。">#</a></h3>
 <p>在动态采样过程中，大量请求可能会被提前中止（abort），造成计算资源浪费。通过启用 <code class="docutils literal notranslate"><span class="pre">--partial-rollout</span></code> 参数，可以将这些生成到一半的样本缓存起来，在下一个 Rollout 阶段继续生成，从而提升性能。</p>
 <p>您还可以通过 <code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code> 自定义从缓存中提取数据的策略。默认策略是 <code class="docutils literal notranslate"><span class="pre">pop_first</span></code>，即按先进先出的顺序提取所需数量的样本。</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">pop_first</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">buffer</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]],</span> <span class="n">num_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]:</span>
@@ -873,7 +866,7 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 </div></blockquote>
 </section>
 <section id="bf16-fp8">
-<h3>bf16 训练 fp8 推理<a class="headerlink" href="#bf16-fp8" title="Link to this heading">#</a></h3>
+<h3>bf16 训练 fp8 推理<a class="headerlink" href="#bf16-fp8" title="链接到此标题。">#</a></h3>
 <p>slime 直接支持 bf16 训练，fp8 推理。对于 Qwen3-4B 模型，只需要下载如下模型：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-4B-FP8<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-4B-FP8
 </pre></div>
@@ -891,11 +884,11 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 </section>
 </section>
 <section id="multiturn">
-<h2>Multiturn 适配<a class="headerlink" href="#multiturn" title="Link to this heading">#</a></h2>
+<h2>Multiturn 适配<a class="headerlink" href="#multiturn" title="链接到此标题。">#</a></h2>
 <p>slime 框架高度可扩展，支持复杂的 Agent 场景（如多轮交互与工具调用）。其核心机制是通过自定义函数，重写默认的数据生成 (Rollout) 与奖励计算 (Reward) 逻辑。</p>
 <p>本部分以一个基于 <a class="reference external" href="https://github.com/PeterGriffinJin/Search-R1">Search-R1</a> 的实现为例，说明如何适配 slime 以支持多轮交互。</p>
 <section id="id8">
-<h3>适配思路总结<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
+<h3>适配思路总结<a class="headerlink" href="#id8" title="链接到此标题。">#</a></h3>
 <p>适配 slime 以支持多轮交互主要包含三个步骤：</p>
 <ol class="arabic simple">
 <li><p><strong>数据准备</strong>：将多轮交互数据集适配为 slime 的 <code class="docutils literal notranslate"><span class="pre">Sample</span></code> 对象。将对话历史、真实标签等映射到 <code class="docutils literal notranslate"><span class="pre">prompt</span></code> 和 <code class="docutils literal notranslate"><span class="pre">label</span></code> 字段，并将工具定义、中间状态等额外信息存入 <code class="docutils literal notranslate"><span class="pre">metadata</span></code> 字段，供后续函数调用。</p></li>
@@ -904,12 +897,12 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 </ol>
 </section>
 <section id="id9">
-<h3>数据准备与映射<a class="headerlink" href="#id9" title="Link to this heading">#</a></h3>
+<h3>数据准备与映射<a class="headerlink" href="#id9" title="链接到此标题。">#</a></h3>
 <p>为了向自定义函数传递复杂的上下文信息，您需要在<strong>数据预处理阶段</strong>就将所有相关的额外字段聚合起来。</p>
 <p><strong>核心思想</strong>：将数据集中除 <code class="docutils literal notranslate"><span class="pre">prompt</span></code> 和 <code class="docutils literal notranslate"><span class="pre">label</span></code> 之外的所有附加信息（如 <code class="docutils literal notranslate"><span class="pre">session_id</span></code>, <code class="docutils literal notranslate"><span class="pre">user_profile</span></code>, <code class="docutils literal notranslate"><span class="pre">tool_code</span></code> 等）合并，构造成一个<strong>单一的、结构化的字段</strong>（例如，一个名为 <code class="docutils literal notranslate"><span class="pre">metadata</span></code> 的列，其内容为 JSON 字符串）。</p>
 </section>
 <section id="metadata">
-<h3>步骤一：在数据集中构造 <code class="docutils literal notranslate"><span class="pre">metadata</span></code> 字段<a class="headerlink" href="#metadata" title="Link to this heading">#</a></h3>
+<h3>步骤一：在数据集中构造 <code class="docutils literal notranslate"><span class="pre">metadata</span></code> 字段<a class="headerlink" href="#metadata" title="链接到此标题。">#</a></h3>
 <p>在训练开始前，您需要对原始数据集进行处理。例如，您的原始数据可能如下：</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
@@ -946,7 +939,7 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 </div>
 </section>
 <section id="id10">
-<h3>步骤二：在训练脚本中指定映射<a class="headerlink" href="#id10" title="Link to this heading">#</a></h3>
+<h3>步骤二：在训练脚本中指定映射<a class="headerlink" href="#id10" title="链接到此标题。">#</a></h3>
 <p>完成数据准备后，在训练脚本中，通过 <code class="docutils literal notranslate"><span class="pre">ROLLOUT_ARGS</span></code> 将这个预处理好的 <code class="docutils literal notranslate"><span class="pre">metadata</span></code> 列映射到 slime 的 <code class="docutils literal notranslate"><span class="pre">Sample.metadata</span></code> 字段。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">ROLLOUT_ARGS</span><span class="o">=(</span>
 <span class="w">   </span><span class="c1"># 1. 指定预处理后的数据集文件</span>
@@ -967,7 +960,7 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 <p>通过这种方式，您就可以在自定义的 <code class="docutils literal notranslate"><span class="pre">generate</span></code> 或 <code class="docutils literal notranslate"><span class="pre">reward</span></code> 函数中，通过 <code class="docutils literal notranslate"><span class="pre">sample.metadata['session_id']</span></code> 等方式，方便地访问到所有预先准备好的结构化信息。</p>
 </section>
 <section id="id11">
-<h3>编写自定义生成函数<a class="headerlink" href="#id11" title="Link to this heading">#</a></h3>
+<h3>编写自定义生成函数<a class="headerlink" href="#id11" title="链接到此标题。">#</a></h3>
 <p>首先，通过 <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code> 参数指定一个自定义的异步 Python 函数。</p>
 <p><strong>函数签名</strong>: <code class="docutils literal notranslate"><span class="pre">async</span> <span class="pre">def</span> <span class="pre">generate(args,</span> <span class="pre">sample:</span> <span class="pre">Sample,</span> <span class="pre">sampling_params)</span> <span class="pre">-&gt;</span> <span class="pre">Sample:</span></code></p>
 <p><strong>核心实现要点</strong>:</p>
@@ -1019,13 +1012,13 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 </div>
 </section>
 <section id="id12">
-<h3>编写自定义奖励函数<a class="headerlink" href="#id12" title="Link to this heading">#</a></h3>
+<h3>编写自定义奖励函数<a class="headerlink" href="#id12" title="链接到此标题。">#</a></h3>
 <p>类似地，通过 <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code> 指定自定义奖励函数。</p>
 <p><strong>函数签名</strong>: <code class="docutils literal notranslate"><span class="pre">async</span> <span class="pre">def</span> <span class="pre">reward_func(args,</span> <span class="pre">sample:</span> <span class="pre">Sample,</span> <span class="pre">**kwargs)</span> <span class="pre">-&gt;</span> <span class="pre">float:</span></code></p>
 <p>该函数接收完整的 <code class="docutils literal notranslate"><span class="pre">Sample</span></code> 对象，根据最终交互结果计算得分。可以在此实现自定义计分逻辑，或调用外部的 Reward Model 服务。</p>
 </section>
 <section id="id13">
-<h3>在训练脚本中配置<a class="headerlink" href="#id13" title="Link to this heading">#</a></h3>
+<h3>在训练脚本中配置<a class="headerlink" href="#id13" title="链接到此标题。">#</a></h3>
 <p>最后，在训练脚本中，通过以下参数启用上述自定义函数：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CUSTOM_ARGS</span><span class="o">=(</span>
 <span class="w">   </span><span class="c1"># 指定自定义生成函数的路径 (格式: path.to.your.file:function_name)</span>
@@ -1039,7 +1032,7 @@ slime 使用 <code class="docutils literal notranslate"><span class="pre">sgl-ro
 </section>
 </section>
 <section id="moe">
-<h2>大规模 MOE 模型的多机训练<a class="headerlink" href="#moe" title="Link to this heading">#</a></h2>
+<h2>大规模 MOE 模型的多机训练<a class="headerlink" href="#moe" title="链接到此标题。">#</a></h2>
 <p>为了启动多机任务，首先需要启动一个 ray 集群，即在 node 0 运行：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Node0（HEAD）</span>
 ray<span class="w"> </span>start<span class="w"> </span>--head<span class="w"> </span>--node-ip-address<span class="w"> </span><span class="si">${</span><span class="nv">MASTER_ADDR</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
@@ -1188,7 +1181,7 @@ ray<span class="w"> </span>start<span class="w"> </span>--address<span class="o"
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

@@ -39,8 +39,8 @@
   <script src="../../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -54,7 +54,7 @@
     <link rel="prev" title="SFT Qwen3-4B-Base" href="../../examples/qwen3-4b-base-openhermes.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -471,11 +471,11 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="search-r1-lite">
-<h1>Search-R1 lite<a class="headerlink" href="#search-r1-lite" title="Link to this heading">#</a></h1>
+<h1>Search-R1 lite<a class="headerlink" href="#search-r1-lite" title="链接到此标题。">#</a></h1>
 <p><a class="reference internal" href="#"><span class="std std-doc">English</span></a></p>
 <p>这里是一个对 <a class="reference external" href="https://github.com/PeterGriffinJin/Search-R1">Search-R1</a> 的简单复现，以及是一个在 slime 中使用多轮对话和工具调用的样例。</p>
 <section id="id1">
-<h2>配置环境<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<h2>配置环境<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <p>使用 <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code> 镜像，并初始化 Search-R1 需要的环境：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/
 git<span class="w"> </span>clone<span class="w"> </span>https://github.com/THUDM/slime.git
@@ -523,9 +523,9 @@ huggingface-cli<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen
 </div>
 </section>
 <section id="id2">
-<h2>配置说明<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<h2>配置说明<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
 <section id="id3">
-<h3>搜索后端配置<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<h3>搜索后端配置<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">generate_with_search.py</span></code> 文件支持<strong>本地搜索</strong>和 <strong>Google 搜索</strong>两种后端。通过 <code class="docutils literal notranslate"><span class="pre">SEARCH_R1_CONFIGS</span></code> 字典进行配置：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">SEARCH_R1_CONFIGS</span> <span class="o">=</span> <span class="p">{</span>
     <span class="c1"># ============== 通用配置 ==============</span>
@@ -560,7 +560,7 @@ huggingface-cli<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen
 </pre></div>
 </div>
 <section id="id4">
-<h4>使用本地搜索<a class="headerlink" href="#id4" title="Link to this heading">#</a></h4>
+<h4>使用本地搜索<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h4>
 <ol class="arabic simple">
 <li><p>设置 <code class="docutils literal notranslate"><span class="pre">&quot;search_backend&quot;:</span> <span class="pre">&quot;local&quot;</span></code></p></li>
 <li><p>在 <code class="docutils literal notranslate"><span class="pre">&quot;local&quot;</span></code> 部分配置本地检索服务器 URL</p></li>
@@ -568,7 +568,7 @@ huggingface-cli<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen
 </ol>
 </section>
 <section id="google">
-<h4>使用 Google 搜索<a class="headerlink" href="#google" title="Link to this heading">#</a></h4>
+<h4>使用 Google 搜索<a class="headerlink" href="#google" title="链接到此标题。">#</a></h4>
 <ol class="arabic simple">
 <li><p>设置 <code class="docutils literal notranslate"><span class="pre">&quot;search_backend&quot;:</span> <span class="pre">&quot;google&quot;</span></code></p></li>
 <li><p>在 <code class="docutils literal notranslate"><span class="pre">&quot;google&quot;</span></code> 部分配置你的 serper.dev API key</p></li>
@@ -577,7 +577,7 @@ huggingface-cli<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen
 </section>
 </section>
 <section id="tis">
-<h3>启用 TIS（轨迹重要性采样）<a class="headerlink" href="#tis" title="Link to this heading">#</a></h3>
+<h3>启用 TIS（轨迹重要性采样）<a class="headerlink" href="#tis" title="链接到此标题。">#</a></h3>
 <p>TIS 需要收集日志概率。启用 TIS 的步骤：</p>
 <p><strong>1. 在 <code class="docutils literal notranslate"><span class="pre">generate_with_search.py</span></code> 中：</strong></p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">SEARCH_R1_CONFIGS</span> <span class="o">=</span> <span class="p">{</span>
@@ -622,14 +622,14 @@ huggingface-cli<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen
 </section>
 </section>
 <section id="id5">
-<h2>运行脚本<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
+<h2>运行脚本<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>slime/
 bash<span class="w"> </span>examples/search-r1/run_qwen2.5_3B.sh
 </pre></div>
 </div>
 </section>
 <section id="id6">
-<h2>代码结构<a class="headerlink" href="#id6" title="Link to this heading">#</a></h2>
+<h2>代码结构<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h2>
 <p>为了实现多轮 + 工具调用，在 slime 中只需要实现一个自定义的数据生成函数，以及一个任务所需的 reward model，对应启动脚本中的这 2 个配置项：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CUSTOM_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--custom-generate-function-path<span class="w"> </span>generate_with_search.generate
@@ -640,14 +640,14 @@ bash<span class="w"> </span>examples/search-r1/run_qwen2.5_3B.sh
 <p>也就是 <code class="docutils literal notranslate"><span class="pre">generate_with_search.py</span></code> 中的 <code class="docutils literal notranslate"><span class="pre">generate</span></code> 和 <code class="docutils literal notranslate"><span class="pre">reward_func</span></code> 两个函数。</p>
 </section>
 <section id="id7">
-<h2>附录：配置本地检索器<a class="headerlink" href="#id7" title="Link to this heading">#</a></h2>
+<h2>附录：配置本地检索器<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h2>
 <p>本节提供详细的本地密集检索器设置说明，用于本地搜索后端。</p>
 <section id="id8">
-<h3>前置条件<a class="headerlink" href="#id8" title="Link to this heading">#</a></h3>
+<h3>前置条件<a class="headerlink" href="#id8" title="链接到此标题。">#</a></h3>
 <p>本地检索器需要单独的 conda 环境，以避免与训练环境冲突。它使用 GPU 进行高效检索。</p>
 </section>
 <section id="conda">
-<h3>步骤 1：安装 Conda<a class="headerlink" href="#conda" title="Link to this heading">#</a></h3>
+<h3>步骤 1：安装 Conda<a class="headerlink" href="#conda" title="链接到此标题。">#</a></h3>
 <p>如果您还没有安装 conda，运行以下命令：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 下载并安装 conda</span>
 wget<span class="w"> </span>https://repo.anaconda.com/miniconda/Miniconda3-latest-Linux-x86_64.sh<span class="w"> </span>-O<span class="w"> </span>~/miniconda.sh
@@ -663,7 +663,7 @@ conda<span class="w"> </span>tos<span class="w"> </span>accept<span class="w"> <
 </div>
 </section>
 <section id="id9">
-<h3>步骤 2：创建检索器环境<a class="headerlink" href="#id9" title="Link to this heading">#</a></h3>
+<h3>步骤 2：创建检索器环境<a class="headerlink" href="#id9" title="链接到此标题。">#</a></h3>
 <p>创建并激活一个 Python 3.10 的 conda 环境：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 创建环境</span>
 conda<span class="w"> </span>create<span class="w"> </span>-n<span class="w"> </span>retriever<span class="w"> </span><span class="nv">python</span><span class="o">=</span><span class="m">3</span>.10<span class="w"> </span>-y
@@ -680,7 +680,7 @@ pip<span class="w"> </span>install<span class="w"> </span>uvicorn<span class="w"
 </div>
 </section>
 <section id="id10">
-<h3>步骤 3：下载索引和语料库<a class="headerlink" href="#id10" title="Link to this heading">#</a></h3>
+<h3>步骤 3：下载索引和语料库<a class="headerlink" href="#id10" title="链接到此标题。">#</a></h3>
 <p><strong>注意：</strong> 本地检索文件体积较大。下载需要约 <strong>60-70 GB</strong> 空间，解压后约 <strong>132 GB</strong>。请确保有足够的磁盘空间。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 设置保存路径</span>
 <span class="nv">save_path</span><span class="o">=</span>/root/Index
@@ -697,7 +697,7 @@ gzip<span class="w"> </span>-d<span class="w"> </span><span class="nv">$save_pat
 </div>
 </section>
 <section id="id11">
-<h3>步骤 4：启动本地检索服务器<a class="headerlink" href="#id11" title="Link to this heading">#</a></h3>
+<h3>步骤 4：启动本地检索服务器<a class="headerlink" href="#id11" title="链接到此标题。">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 如果遇到 &quot;conda not found&quot; 错误，运行：</span>
 <span class="c1"># source ~/miniconda3/etc/profile.d/conda.sh</span>
 <span class="c1"># conda init</span>
@@ -733,7 +733,7 @@ python<span class="w"> </span>/root/slime/examples/search-r1/local_dense_retriev
 </ul>
 </section>
 <section id="id12">
-<h3>步骤 5：启动训练<a class="headerlink" href="#id12" title="Link to this heading">#</a></h3>
+<h3>步骤 5：启动训练<a class="headerlink" href="#id12" title="链接到此标题。">#</a></h3>
 <p>确保您<strong>不在</strong> retriever conda 环境中。如果在，请运行 <code class="docutils literal notranslate"><span class="pre">conda</span> <span class="pre">deactivate</span></code>。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 
@@ -750,7 +750,7 @@ bash<span class="w"> </span>/root/slime/examples/search-r1/run_qwen2.5_3B.sh
 </div>
 </section>
 <section id="id13">
-<h3>故障排查<a class="headerlink" href="#id13" title="Link to this heading">#</a></h3>
+<h3>故障排查<a class="headerlink" href="#id13" title="链接到此标题。">#</a></h3>
 <p><strong>Ray 进程卡住：</strong></p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>rm<span class="w"> </span>-rf<span class="w"> </span>/root/.cache
 <span class="c1"># 如果仍然卡住：</span>
@@ -872,7 +872,7 @@ rm<span class="w"> </span>-rf<span class="w"> </span>/root/.*
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

@@ -39,8 +39,8 @@
   <script src="../../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -52,7 +52,7 @@
     <link rel="search" title="搜索" href="../../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -462,17 +462,17 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="fp8-training-examples">
-<h1>FP8 training examples<a class="headerlink" href="#fp8-training-examples" title="Link to this heading">#</a></h1>
+<h1>FP8 training examples<a class="headerlink" href="#fp8-training-examples" title="链接到此标题。">#</a></h1>
 <p>This is an example of FP8 training and FP8 inference. Under FP8 training and inference, it can achieve more efficient inference throughput and lower training-inference mismatch, resulting in more stable training. More details can be found in <a class="reference external" href="https://lmsys.org/blog/2025-11-25-fp8-rl/">this blog</a>.</p>
 <section id="files">
-<h2>Files<a class="headerlink" href="#files" title="Link to this heading">#</a></h2>
+<h2>Files<a class="headerlink" href="#files" title="链接到此标题。">#</a></h2>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">run-qwen3-4b-fp8.sh</span></code>: example launch script with Qwen3‑4B in FP8.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-qwen3-30b-a3b-fp8-two-nodes.sh</span></code>: example launch script for running Qwen3‑30B‑A3B in FP8 across two nodes.</p></li>
 </ul>
 </section>
 <section id="quick-start">
-<h2>Quick Start<a class="headerlink" href="#quick-start" title="Link to this heading">#</a></h2>
+<h2>Quick Start<a class="headerlink" href="#quick-start" title="链接到此标题。">#</a></h2>
 <ol class="arabic simple">
 <li><p>Check if your training script is properly configured.</p></li>
 </ol>
@@ -507,7 +507,7 @@ document.write(`
 <p>Note that TransformerEngine does not specifically save FP8 quantized weights; the saved torch dist remains in original precision (usually bf16). If you want to evaluate under FP8, you need to convert the checkpoint from <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> to HuggingFace format, then convert to FP8 HuggingFace format.</p>
 </section>
 <section id="quick-explanation">
-<h2>Quick Explanation<a class="headerlink" href="#quick-explanation" title="Link to this heading">#</a></h2>
+<h2>Quick Explanation<a class="headerlink" href="#quick-explanation" title="链接到此标题。">#</a></h2>
 <p>Here's a quick explanation of how FP8 training is currently implemented in slime:</p>
 <ol class="arabic simple">
 <li><p>Initialization: If FP8 recipe is enabled, layers will be built in FP8 context.</p></li>
@@ -517,7 +517,7 @@ document.write(`
 </ol>
 </section>
 <section id="todo">
-<h2>TODO<a class="headerlink" href="#todo" title="Link to this heading">#</a></h2>
+<h2>TODO<a class="headerlink" href="#todo" title="链接到此标题。">#</a></h2>
 <p>Currently, FP8 is far from being a complete feature and still has the following bugs, for examples:</p>
 <ul class="simple">
 <li><p>FP8 weights (<code class="docutils literal notranslate"><span class="pre">--fp8-param-gather</span></code>) can provide memory savings benefits, but currently FP8 weights must be used with TransformerEngine's FusedAdam, which conflicts with the commonly used Adam CPU offload technique in Megatron-LM.</p></li>
@@ -526,10 +526,10 @@ document.write(`
 </section>
 <hr class="docutils" />
 <section id="int4-training-examples">
-<h2>INT4 Training Examples<a class="headerlink" href="#int4-training-examples" title="Link to this heading">#</a></h2>
+<h2>INT4 Training Examples<a class="headerlink" href="#int4-training-examples" title="链接到此标题。">#</a></h2>
 <p>This guide provides examples for INT4 STE (Straight-Through Estimator) training and INT4 inference. Utilizing INT4 inference significantly improves throughput, thereby accelerating the training pipeline (specifically during the rollout generation phase).</p>
 <section id="id1">
-<h3>Files<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
+<h3>Files<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h3>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">run-moonlight-16B-A3B-int4.sh</span></code>: Launch script for <strong>Moonlight-16B-A3B</strong> (INT4) on 4x H200 GPUs.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-qwen3‑30B‑A3B-int4.sh</span></code>: Launch script for <strong>Qwen3‑30B‑A3B</strong> (INT4) on 8x H200 GPUs.</p></li>
@@ -538,9 +538,9 @@ document.write(`
 </ul>
 </section>
 <section id="id2">
-<h3>Quick Start<a class="headerlink" href="#id2" title="Link to this heading">#</a></h3>
+<h3>Quick Start<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h3>
 <section id="convert-huggingface-weights-to-int4">
-<h4>1. Convert HuggingFace Weights to INT4<a class="headerlink" href="#convert-huggingface-weights-to-int4" title="Link to this heading">#</a></h4>
+<h4>1. Convert HuggingFace Weights to INT4<a class="headerlink" href="#convert-huggingface-weights-to-int4" title="链接到此标题。">#</a></h4>
 <p>First, download the PTQ (Post-Training Quantization) calibration dataset from HuggingFace:
 <a class="reference external" href="https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1">https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1</a></p>
 <p>Next, use the <code class="docutils literal notranslate"><span class="pre">tools/convert_hf_to_hf_int4.py</span></code> script to convert BF16 weights to INT4 format. Ensure that the <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> parameter points to a directory where <code class="docutils literal notranslate"><span class="pre">config.json</span></code> contains the correct <code class="docutils literal notranslate"><span class="pre">quantization_config</span></code>. slime will automatically utilize INT4 quantization during weight updates.</p>
@@ -552,7 +552,7 @@ document.write(`
 </div>
 </section>
 <section id="start-int4-training">
-<h4>2. Start INT4 Training<a class="headerlink" href="#start-int4-training" title="Link to this heading">#</a></h4>
+<h4>2. Start INT4 Training<a class="headerlink" href="#start-int4-training" title="链接到此标题。">#</a></h4>
 <p>You need to configure the specific environment variables for quantization settings.</p>
 <p><strong>Environment Variables:</strong></p>
 <ul class="simple">
@@ -669,7 +669,7 @@ bash<span class="w"> </span>examples/low_precision/run-kimi-k2-Thinking-int4.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

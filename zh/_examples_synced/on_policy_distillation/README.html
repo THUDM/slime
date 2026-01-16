@@ -39,8 +39,8 @@
   <script src="../../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -54,7 +54,7 @@
     <link rel="prev" title="Multi-Agent RL" href="../multi_agent/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -458,11 +458,11 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="on-policy-distillation-example">
-<h1>On-Policy Distillation Example<a class="headerlink" href="#on-policy-distillation-example" title="Link to this heading">#</a></h1>
+<h1>On-Policy Distillation Example<a class="headerlink" href="#on-policy-distillation-example" title="链接到此标题。">#</a></h1>
 <p>This example shows how to run <strong>on-policy distillation</strong> using slime. A small student (Qwen3-8B) is aligned to imitate a larger teacher (Qwen3-32B) by training only on the student's own rollouts and matching the teacher's token-level log-probabilities.</p>
 <p>In this example, the teacher model acts as a reward model (RM) by providing teacher log probabilities as the supervision signal.</p>
 <section id="components">
-<h2>Components<a class="headerlink" href="#components" title="Link to this heading">#</a></h2>
+<h2>Components<a class="headerlink" href="#components" title="链接到此标题。">#</a></h2>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">on_policy_distillation.py</span></code> implements::</p>
 <ul>
@@ -474,7 +474,7 @@ document.write(`
 </ul>
 </section>
 <section id="running-the-example">
-<h2>Running the example<a class="headerlink" href="#running-the-example" title="Link to this heading">#</a></h2>
+<h2>Running the example<a class="headerlink" href="#running-the-example" title="链接到此标题。">#</a></h2>
 <ol class="arabic simple">
 <li><p>Download or prepare the required checkpoints and data.</p></li>
 </ol>
@@ -504,7 +504,7 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 </section>
 </section>
 <section class="tex2jax_ignore mathjax_ignore" id="preliminary-results">
-<h1>Preliminary Results<a class="headerlink" href="#preliminary-results" title="Link to this heading">#</a></h1>
+<h1>Preliminary Results<a class="headerlink" href="#preliminary-results" title="链接到此标题。">#</a></h1>
 <p>Using Qwen3-8B-Base model sfted on part of the <a class="reference external" href="https://huggingface.co/datasets/open-thoughts/OpenThoughts3-1.2M">OpenThoughts3-1.2M</a> dataset, we performed on-policy distillation with a Qwen3-32B teacher on the remaining data. Evaluation on Math500 shows:</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
@@ -524,14 +524,14 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 </div>
 </section>
 <section class="tex2jax_ignore mathjax_ignore" id="faq">
-<h1>FAQ<a class="headerlink" href="#faq" title="Link to this heading">#</a></h1>
+<h1>FAQ<a class="headerlink" href="#faq" title="链接到此标题。">#</a></h1>
 <ol class="arabic simple">
 <li><p><strong>Why are teacher logits computed via a sglang server instead of inside the training backend?</strong>
-The teacher runs on an independent SGLang server that slime treats as a reward model. Hosting it inside Megatron/FSDP would require maintaining a second, fully configured training stack for the teacher.</p></li>
+The teacher runs on an independent SGLang server that slime treats as a reward model. Hosting it inside Megatron would require maintaining a second, fully configured training stack for the teacher.</p></li>
 </ol>
 </section>
 <section class="tex2jax_ignore mathjax_ignore" id="references">
-<h1>References<a class="headerlink" href="#references" title="Link to this heading">#</a></h1>
+<h1>References<a class="headerlink" href="#references" title="链接到此标题。">#</a></h1>
 <ol class="arabic simple">
 <li><p>https://thinkingmachines.ai/blog/on-policy-distillation/</p></li>
 <li><p>https://arxiv.org/abs/2306.13649</p></li>
@@ -626,7 +626,7 @@ The teacher runs on an independent SGLang server that slime treats as a reward m
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

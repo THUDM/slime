@@ -39,8 +39,8 @@
   <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -54,7 +54,7 @@
     <link rel="prev" title="8xH100 训练 Qwen3-4B" href="qwen3-4B.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -467,9 +467,9 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="xh100-glm4-9b">
-<h1>8xH100 训练 GLM4-9B<a class="headerlink" href="#xh100-glm4-9b" title="Link to this heading">#</a></h1>
+<h1>8xH100 训练 GLM4-9B<a class="headerlink" href="#xh100-glm4-9b" title="链接到此标题。">#</a></h1>
 <section id="id1">
-<h2>环境准备<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<h2>环境准备<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <p>拉取 <code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code> 镜像后，用如下方式初始化镜像环境：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/
 git<span class="w"> </span>clone<span class="w"> </span>https://github.com/THUDM/slime.git
@@ -502,17 +502,17 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 </div>
 </section>
 <section id="id2">
-<h2>执行训练<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<h2>执行训练<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
 <p>执行训练：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 bash<span class="w"> </span>script/run-glm4-9B.sh
 </pre></div>
 </div>
 <section id="id3">
-<h3>参数简介<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<h3>参数简介<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
 <p>这里我们简单介绍一下脚本 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4-9B.sh">run-glm4-9B.sh</a> 中的各个组成部分：</p>
 <section id="model-args">
-<h4>MODEL_ARGS<a class="headerlink" href="#model-args" title="Link to this heading">#</a></h4>
+<h4>MODEL_ARGS<a class="headerlink" href="#model-args" title="链接到此标题。">#</a></h4>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SCRIPT_DIR</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>dirname<span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">&amp;</span>&gt;/dev/null<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">&quot;</span>
 <span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/glm4-9B.sh&quot;</span>
 </pre></div>
@@ -526,7 +526,7 @@ bash<span class="w"> </span>script/run-glm4-9B.sh
 </div>
 </section>
 <section id="ckpt-args">
-<h4>CKPT_ARGS<a class="headerlink" href="#ckpt-args" title="Link to this heading">#</a></h4>
+<h4>CKPT_ARGS<a class="headerlink" href="#ckpt-args" title="链接到此标题。">#</a></h4>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CKPT_ARGS</span><span class="o">=(</span>
 <span class="w">   </span><span class="c1"># sglang 需要的 hf ckpt，我们也会从这里读 tokenizer</span>
 <span class="w">   </span>--hf-checkpoint<span class="w"> </span>/root/GLM-Z1-9B-0414
@@ -541,7 +541,7 @@ bash<span class="w"> </span>script/run-glm4-9B.sh
 </div>
 </section>
 <section id="rollout-args">
-<h4>ROLLOUT_ARGS<a class="headerlink" href="#rollout-args" title="Link to this heading">#</a></h4>
+<h4>ROLLOUT_ARGS<a class="headerlink" href="#rollout-args" title="链接到此标题。">#</a></h4>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">ROLLOUT_ARGS</span><span class="o">=(</span>
 <span class="w">   </span><span class="c1"># prompt 数据集，每行是个 json</span>
 <span class="w">   </span>--prompt-data<span class="w"> </span>/root/dapo-math-17k/dapo-math-17k.jsonl
@@ -577,7 +577,7 @@ bash<span class="w"> </span>script/run-glm4-9B.sh
 </div>
 </section>
 <section id="eval-args">
-<h4>EVAL_ARGS<a class="headerlink" href="#eval-args" title="Link to this heading">#</a></h4>
+<h4>EVAL_ARGS<a class="headerlink" href="#eval-args" title="链接到此标题。">#</a></h4>
 <p>eval 的时候基本上是会继承所有 rollout 的参数，但是我们提供了一些可以 rollout 配置覆盖的参数，从而实现训练和 eval 用不同的采样策略。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">EVAL_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--eval-interval<span class="w"> </span><span class="m">5</span>
@@ -590,7 +590,7 @@ bash<span class="w"> </span>script/run-glm4-9B.sh
 </div>
 </section>
 <section id="perf-args">
-<h4>PERF_ARGS<a class="headerlink" href="#perf-args" title="Link to this heading">#</a></h4>
+<h4>PERF_ARGS<a class="headerlink" href="#perf-args" title="链接到此标题。">#</a></h4>
 <p>一堆 megatron 的并行参数，只有 <code class="docutils literal notranslate"><span class="pre">--use-dynamic-batch-size</span></code> 与 <code class="docutils literal notranslate"><span class="pre">--max-tokens-per-gpu</span></code> 是 slime 添加的。</p>
 <p><code class="docutils literal notranslate"><span class="pre">max_tokens_per_gpu</span></code> 是指每张卡最多跑多少 token，在开启 <code class="docutils literal notranslate"><span class="pre">use_dynamic_batch_size</span></code> 之后，会尽可能将一个 batch 内部长短不一的数据拼到 <code class="docutils literal notranslate"><span class="pre">max_tokens_per_gpu</span></code>，从而组成动态的 micro batch size，如果有一条数据长度超过了 <code class="docutils literal notranslate"><span class="pre">max_tokens_per_gpu</span></code>，则自成一条，不会对数据进行截断。在开启 context parallel (CP) 时，会让 CP 张卡去上的数据去共享总长为 <code class="docutils literal notranslate"><span class="pre">CP</span> <span class="pre">*</span> <span class="pre">max_tokens_per_gpu</span></code> 的 token。</p>
 <p>在开启 dynamic_batch_size，会忽略传统的 <code class="docutils literal notranslate"><span class="pre">micro_batch_size</span></code>。</p>
@@ -615,7 +615,7 @@ bash<span class="w"> </span>script/run-glm4-9B.sh
 </div>
 </section>
 <section id="grpo-args">
-<h4>GRPO_ARGS<a class="headerlink" href="#grpo-args" title="Link to this heading">#</a></h4>
+<h4>GRPO_ARGS<a class="headerlink" href="#grpo-args" title="链接到此标题。">#</a></h4>
 <p>目前 slime 这是一些 grpo 相关的参数：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">GRPO_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--advantage-estimator<span class="w"> </span>grpo
@@ -630,7 +630,7 @@ bash<span class="w"> </span>script/run-glm4-9B.sh
 </div>
 </section>
 <section id="optimizer-args">
-<h4>OPTIMIZER_ARGS<a class="headerlink" href="#optimizer-args" title="Link to this heading">#</a></h4>
+<h4>OPTIMIZER_ARGS<a class="headerlink" href="#optimizer-args" title="链接到此标题。">#</a></h4>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">OPTIMIZER_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--optimizer<span class="w"> </span>adam
 <span class="w">   </span>--lr<span class="w"> </span>1e-6
@@ -643,7 +643,7 @@ bash<span class="w"> </span>script/run-glm4-9B.sh
 </div>
 </section>
 <section id="sglang-args">
-<h4>SGLANG_ARGS<a class="headerlink" href="#sglang-args" title="Link to this heading">#</a></h4>
+<h4>SGLANG_ARGS<a class="headerlink" href="#sglang-args" title="链接到此标题。">#</a></h4>
 <p>sglang 所需的参数，这里 <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus-per-engine</span></code> 基本对应 sglang 的 <code class="docutils literal notranslate"><span class="pre">tp_size</span></code>，除此之外的 sglang 参数均通过添加 <code class="docutils literal notranslate"><span class="pre">--sglang-</span></code> 的前缀来传给 slime。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SGLANG_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--rollout-num-gpus-per-engine<span class="w"> </span><span class="m">2</span>
@@ -654,7 +654,7 @@ bash<span class="w"> </span>script/run-glm4-9B.sh
 </section>
 </section>
 <section id="id4">
-<h3>训推一体<a class="headerlink" href="#id4" title="Link to this heading">#</a></h3>
+<h3>训推一体<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h3>
 <p>在原始的脚本中，资源配置如下：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>ray<span class="w"> </span>job<span class="w"> </span>submit<span class="w"> </span>...<span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--<span class="w"> </span>python3<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
@@ -678,7 +678,7 @@ bash<span class="w"> </span>script/run-glm4-9B.sh
 <p>⚠️  在训推一体的训练时，megatron 始终会占据一些显存，所以需要通过调整 <code class="docutils literal notranslate"><span class="pre">--sglang-mem-fraction-static</span></code> 来降低 sglang 占据的显存比例。</p>
 </section>
 <section id="dynamic-sampling">
-<h3>dynamic sampling<a class="headerlink" href="#dynamic-sampling" title="Link to this heading">#</a></h3>
+<h3>dynamic sampling<a class="headerlink" href="#dynamic-sampling" title="链接到此标题。">#</a></h3>
 <p>slime 支持了更复杂的 sampling 方案，例如 <a class="reference external" href="https://dapo-sia.github.io/">DAPO</a> 中的 dynamic sampling。如果要开启 dynamic sampling，需要配置：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="w">   </span>--over-sampling-batch-size<span class="w"> </span><span class="si">${</span><span class="nv">OVER_SAMPLING_BS</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
 <span class="w">   </span>--dynamic-sampling-filter-path<span class="w"> </span><span class="se">\</span>
@@ -700,7 +700,7 @@ bash<span class="w"> </span>script/run-glm4-9B.sh
 <p>当我们收到了 32 * 8 条数据时，我们会立刻停止采样，而不会等剩余的数据采样完成。如果删除的数据超过了 32 条 prompt（剩余的小于 32 条 prompt），那么我们会再采样 64 条 prompt。</p>
 </section>
 <section id="partial-rollout">
-<h3>partial rollout<a class="headerlink" href="#partial-rollout" title="Link to this heading">#</a></h3>
+<h3>partial rollout<a class="headerlink" href="#partial-rollout" title="链接到此标题。">#</a></h3>
 <p>在进行 dynamic sampling 的过程中，会提前终止（abort）大量请求，我们可以通过配置 <code class="docutils literal notranslate"><span class="pre">--partial-rollout</span></code> 参数来将生成到一半的请求保存至 data buffer，在下一个 rollout 中取出来继续进行数据生成，从而进一步优化性能。</p>
 <p>可以通过配置 <code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code> 来自定义如何从 buffer 中取出数据，默认的函数为：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">pop_first</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">buffer</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]],</span> <span class="n">num_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]:</span>
@@ -812,7 +812,7 @@ bash<span class="w"> </span>script/run-glm4-9B.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

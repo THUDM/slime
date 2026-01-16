@@ -39,8 +39,8 @@
   <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -54,7 +54,7 @@
     <link rel="prev" title="容灾" href="fault-torlance.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -451,12 +451,12 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="megatron-lm">
-<h1>在 Megatron-LM 中快速支持新模型架构<a class="headerlink" href="#megatron-lm" title="Link to this heading">#</a></h1>
+<h1>在 Megatron-LM 中快速支持新模型架构<a class="headerlink" href="#megatron-lm" title="链接到此标题。">#</a></h1>
 <p>Megatron-LM 框架虽然并行效率高，但在支持日新月异的新模型架构（如 Qwen3Next）时，其灵活性有所欠缺。若要原生支持这些模型的特殊结构（例如 Gated-Delta-Net），往往需要对 Megatron 的核心代码进行侵入性较大、开发周期较长的改造。</p>
 <p>为了能快速跟进这些前沿模型，<code class="docutils literal notranslate"><span class="pre">slime</span></code> 提出了一种更敏捷的方案：<strong>与其深度改造 Megatron，不如直接引入并封装模型官方的 HuggingFace 实现</strong>，将其作为一个“黑盒模块”无缝嵌入到 Megatron 的并行训练流程中。</p>
 <p>本文以 Qwen3Next 80B-A3B 为例，介绍这一实现思路。</p>
 <section id="id1">
-<h2>实现原理与核心组件<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<h2>实现原理与核心组件<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <p>Megatron 的模型实例化分为两步：首先根据配置生成“层规格”（<code class="docutils literal notranslate"><span class="pre">ModuleSpec</span></code>），再依据该规格实例化具体的 PyTorch 模块。</p>
 <p><code class="docutils literal notranslate"><span class="pre">slime</span></code> 正是利用这一机制，在<strong>生成 Spec 的阶段“劫持”并替换掉 Megatron 的原生模块</strong>，从而将外部实现（此处为 HuggingFace 模块）无缝嵌入。这一过程主要涉及三个核心组件的协同：</p>
 <ol class="arabic simple">
@@ -483,7 +483,7 @@ document.write(`
 <p>通过这三层协同，我们成功地将一个 Megatron 原本不支持的复杂模型结构（以其 HuggingFace 实现为载体），运行在了 Megatron 的并行框架之上，并完整保留了模型并行、MoE 加速、流水线调度等全部关键能力。</p>
 </section>
 <section id="id2">
-<h2>当前限制<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<h2>当前限制<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
 <ul class="simple">
 <li><p>本方案暂不支持被替换模块（如此处的 Attention 层）自身的张量并行（TP）。</p></li>
 <li><p><strong>影响</strong>：在大多数大规模 MoE 模型中，Attention 层的参数量占比较小，因此该限制对显存占用和训练吞吐的影响通常有限。</p></li>
@@ -572,7 +572,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

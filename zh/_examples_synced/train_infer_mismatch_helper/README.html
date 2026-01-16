@@ -39,14 +39,15 @@
   <script src="../../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
     <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>window.MathJax = {"options": {"processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
     <script>window.MathJax = {"tex": {"inlineMath": [["$", "$"], ["\\(", "\\)"]], "processEscapes": true}, "options": {"ignoreHtmlClass": "tex2jax_ignore|mathjax_ignore|document", "processHtmlClass": "tex2jax_process|mathjax_process|math|output_area"}}</script>
-    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script defer="defer" src="https://cdn.jsdelivr.net/npm/mathjax@4/tex-mml-chtml.js"></script>
     <script>DOCUMENTATION_OPTIONS.pagename = '_examples_synced/train_infer_mismatch_helper/README';</script>
     <script src="../../_static/js/lang-toggle.js?v=8d03b7be"></script>
     <link rel="icon" href="../../_static/logo.ico"/>
@@ -54,7 +55,7 @@
     <link rel="search" title="搜索" href="../../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -471,10 +472,10 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="rollout-correction-methods">
-<h1>Rollout Correction Methods<a class="headerlink" href="#rollout-correction-methods" title="Link to this heading">#</a></h1>
+<h1>Rollout Correction Methods<a class="headerlink" href="#rollout-correction-methods" title="链接到此标题。">#</a></h1>
 <p>Rollout correction (e.g, TIS, MIS) through algorithmic methods.</p>
 <section id="quick-takeaway">
-<h2>Quick Takeaway<a class="headerlink" href="#quick-takeaway" title="Link to this heading">#</a></h2>
+<h2>Quick Takeaway<a class="headerlink" href="#quick-takeaway" title="链接到此标题。">#</a></h2>
 <p>This function is used to solve offline scenarios through algorithmic adaptations, e.g. TIS/MIS.</p>
 <p>We included 3 rollout correction algorithms:</p>
 <ol class="arabic simple">
@@ -488,10 +489,10 @@ You may specify the <strong>IS/RS configs</strong> with a config file using <cod
 <p><code class="docutils literal notranslate"><span class="pre">--get-mismatch-metrics</span></code>: When you don't want to add TIS/MIS, but still want to monitor the mismatch-related metrics (e.g. rollout-training KL). It will <strong>only return mismatch metrics</strong> but not change the loss in any way.</p>
 </section>
 <section id="algorithms">
-<h2>Algorithms<a class="headerlink" href="#algorithms" title="Link to this heading">#</a></h2>
+<h2>Algorithms<a class="headerlink" href="#algorithms" title="链接到此标题。">#</a></h2>
 <p>We give examples of the algorithms for solving the training-inference mismatch issue.</p>
 <section id="baseline-no-mismatch-correction-standard-ppo">
-<h3>[Baseline: No Mismatch Correction] Standard PPO<a class="headerlink" href="#baseline-no-mismatch-correction-standard-ppo" title="Link to this heading">#</a></h3>
+<h3>[Baseline: No Mismatch Correction] Standard PPO<a class="headerlink" href="#baseline-no-mismatch-correction-standard-ppo" title="链接到此标题。">#</a></h3>
 <p>This is the basic PPO algorithm with potentially training-inference mismatch issue when the output of SGLang and Megatron does not exactly match.</p>
 <div class="math notranslate nohighlight">
 \[
@@ -509,7 +510,7 @@ L_{\text{PPO}}(\theta)
 \]</div>
 </section>
 <section id="bypassing-ppo-importance-sampling">
-<h3>Bypassing PPO importance sampling<a class="headerlink" href="#bypassing-ppo-importance-sampling" title="Link to this heading">#</a></h3>
+<h3>Bypassing PPO importance sampling<a class="headerlink" href="#bypassing-ppo-importance-sampling" title="链接到此标题。">#</a></h3>
 <p>Like REINFORCE, we directly use the rollout engine's log probs as the old policy in offline PPO's importance sampling, rather than the recomputed log-probs from the training engine.</p>
 <div class="math notranslate nohighlight">
 \[
@@ -531,7 +532,7 @@ L_{\text{PPO-bypass}}(\theta)
 </ul>
 </section>
 <section id="decoupled-3-policy-ppo-importance-sampling">
-<h3>Decoupled, 3-policy PPO Importance Sampling<a class="headerlink" href="#decoupled-3-policy-ppo-importance-sampling" title="Link to this heading">#</a></h3>
+<h3>Decoupled, 3-policy PPO Importance Sampling<a class="headerlink" href="#decoupled-3-policy-ppo-importance-sampling" title="链接到此标题。">#</a></h3>
 <p><a class="reference external" href="https://arxiv.org/pdf/2110.00641">Decoupled PPO</a> achieves batch-independent PPO by decoupling two roles: Proximal Policy (anchor policy for PPO clipping, control update size) and Behavior Policy (for off-policy correction in importance sampling). Therefore, there are totally 3 roles engaged in this mode, <strong>target policy</strong> <span class="math notranslate nohighlight">\(\pi_\theta\)</span>, <strong>proximal policy</strong> <span class="math notranslate nohighlight">\(\pi_{\textcolor{blue}{\text{old}}}\)</span>, and <strong>behavior policy</strong> <span class="math notranslate nohighlight">\(\pi_{\textcolor{red}{\text{SGLang}}}\)</span>. <span class="math notranslate nohighlight">\(\pi_{\textcolor{blue}{\text{old}}}\)</span> is recomputed with Megatron at the beginning of each training step.</p>
 <div class="math notranslate nohighlight">
 \[
@@ -556,7 +557,7 @@ L_{\text{PPO-decoupled}}(\theta)
 </section>
 </section>
 <section id="apis-of-algorithms">
-<h2>APIs of Algorithms<a class="headerlink" href="#apis-of-algorithms" title="Link to this heading">#</a></h2>
+<h2>APIs of Algorithms<a class="headerlink" href="#apis-of-algorithms" title="链接到此标题。">#</a></h2>
 <p>You may choose from above algorithms by specifying arguments below:</p>
 <p><code class="docutils literal notranslate"><span class="pre">--use-rollout-logprobs</span></code>: True if only use <code class="docutils literal notranslate"><span class="pre">rollout_log_probs</span></code> to compute the loss, bypassing old_log_probs calculated by training engine;</p>
 <p><code class="docutils literal notranslate"><span class="pre">--use-rollout-correction</span></code>: True if apply importance sampling/rejection sampling to loss.</p>
@@ -601,10 +602,10 @@ L_{\text{PPO-decoupled}}(\theta)
 </div>
 </section>
 <section id="configs-and-recommended-settings">
-<h2>Configs and Recommended Settings<a class="headerlink" href="#configs-and-recommended-settings" title="Link to this heading">#</a></h2>
+<h2>Configs and Recommended Settings<a class="headerlink" href="#configs-and-recommended-settings" title="链接到此标题。">#</a></h2>
 <p>When choosing to use importance sampling or rejection sampling for mismatch correction (<code class="docutils literal notranslate"><span class="pre">use-rollout-correction</span></code> enabled, Algorithm 2 &amp; 3), you may specify the IS modes and applied levels.</p>
 <section id="arguments">
-<h3>Arguments<a class="headerlink" href="#arguments" title="Link to this heading">#</a></h3>
+<h3>Arguments<a class="headerlink" href="#arguments" title="链接到此标题。">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">use-tis</span></code>: Enable importance sampling. The IS weight will be multiplied by the policy gradient loss.</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--tis-mode</span></code>: Mode for IS. Allowed mode: <strong>truncate</strong>, <strong>clip</strong>.</p></li>
@@ -620,7 +621,7 @@ L_{\text{PPO-decoupled}}(\theta)
 </ul>
 </section>
 <section id="importance-sampling">
-<h3>Importance Sampling<a class="headerlink" href="#importance-sampling" title="Link to this heading">#</a></h3>
+<h3>Importance Sampling<a class="headerlink" href="#importance-sampling" title="链接到此标题。">#</a></h3>
 <p>For both IS and RS, we provided 3 levels: <strong>token</strong>, <strong>sequence</strong>, <strong>geometric</strong>.</p>
 <p><strong>Token Level (default)</strong>:</p>
 <p>Computes importance weights independently for each token:
@@ -636,7 +637,7 @@ L_{\text{PPO-decoupled}}(\theta)
 <p>Characteristics: Biased but low variance, balances bias and variance</p>
 </section>
 <section id="rejection-sampling">
-<h3>Rejection Sampling<a class="headerlink" href="#rejection-sampling" title="Link to this heading">#</a></h3>
+<h3>Rejection Sampling<a class="headerlink" href="#rejection-sampling" title="链接到此标题。">#</a></h3>
 <p><strong>Token Level</strong>: Reject tokens with IS weight out of threshold</p>
 <p><strong>Sequence Level:</strong> Reject sequences with mean IS weight out of threshold</p>
 <p><strong>Geometric Level:</strong> Reject sequences with geometric mean IS weight out of threshold</p>
@@ -655,10 +656,10 @@ Reject entire sequence if <span class="math notranslate nohighlight">\(\exists t
 </section>
 </section>
 <section id="mismatch-metrics">
-<h2>Mismatch Metrics<a class="headerlink" href="#mismatch-metrics" title="Link to this heading">#</a></h2>
+<h2>Mismatch Metrics<a class="headerlink" href="#mismatch-metrics" title="链接到此标题。">#</a></h2>
 <p>When rollout log probabilities are available, SLIME automatically tracks comprehensive metrics to monitor training-inference mismatch and importance sampling weights. These metrics help diagnose policy divergence and guide hyperparameter tuning.</p>
 <section id="mismatch-monitoring-metrics">
-<h3>Mismatch Monitoring Metrics<a class="headerlink" href="#mismatch-monitoring-metrics" title="Link to this heading">#</a></h3>
+<h3>Mismatch Monitoring Metrics<a class="headerlink" href="#mismatch-monitoring-metrics" title="链接到此标题。">#</a></h3>
 <p>These metrics quantify the difference between training and rollout policies. They are computed automatically when <code class="docutils literal notranslate"><span class="pre">rollout_log_probs</span></code> are provided, regardless of whether TIS/MIS correction is enabled.</p>
 <div class="pst-scrollable-table-container"><table class="table">
 <thead>
@@ -703,7 +704,7 @@ Reject entire sequence if <span class="math notranslate nohighlight">\(\exists t
 <p><strong>Usage</strong>: These metrics help you monitor policy drift. Large values indicate a significant mismatch between the training and rollout engines.</p>
 </section>
 <section id="is-rs-correction-metrics">
-<h3>IS/RS Correction Metrics<a class="headerlink" href="#is-rs-correction-metrics" title="Link to this heading">#</a></h3>
+<h3>IS/RS Correction Metrics<a class="headerlink" href="#is-rs-correction-metrics" title="链接到此标题。">#</a></h3>
 <p>These metrics track importance sampling weights and corrections. They are only computed when <code class="docutils literal notranslate"><span class="pre">--use-tis</span></code> is enabled.</p>
 <p>When using <code class="docutils literal notranslate"><span class="pre">--custom-tis-function-path</span></code> pointing to MIS implementation (e.g., <code class="docutils literal notranslate"><span class="pre">mis.py</span></code>), additional fine-grained metrics become available:</p>
 <div class="pst-scrollable-table-container"><table class="table">
@@ -776,7 +777,7 @@ Reject entire sequence if <span class="math notranslate nohighlight">\(\exists t
 </section>
 </section>
 <section id="reference">
-<h2>Reference<a class="headerlink" href="#reference" title="Link to this heading">#</a></h2>
+<h2>Reference<a class="headerlink" href="#reference" title="链接到此标题。">#</a></h2>
 <p>We thank the materials below for their excellent findings and theories.</p>
 <ol class="arabic simple">
 <li><p><a class="reference external" href="https://github.com/szrlee/verl/blob/yingru/rollout_correction/docs/advance/rollout_corr_math.md">Mathematical Formulations of Rollout Correction Methods in verl (Yingru Li)</a>.</p></li>
@@ -866,7 +867,7 @@ Reject entire sequence if <span class="math notranslate nohighlight">\(\exists t
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

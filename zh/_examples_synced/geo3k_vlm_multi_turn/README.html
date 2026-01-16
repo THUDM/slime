@@ -39,8 +39,8 @@
   <script src="../../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -52,7 +52,7 @@
     <link rel="search" title="搜索" href="../../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -451,7 +451,7 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="vlm-multi-turn-geo3k-dataset">
-<h1>VLM Multi-Turn (geo3k dataset)<a class="headerlink" href="#vlm-multi-turn-geo3k-dataset" title="Link to this heading">#</a></h1>
+<h1>VLM Multi-Turn (geo3k dataset)<a class="headerlink" href="#vlm-multi-turn-geo3k-dataset" title="链接到此标题。">#</a></h1>
 <p>Training VLM on <a class="reference external" href="https://huggingface.co/datasets/hiyouga/geometry3k">geo3k dataset</a> with multi-turn reasoning with interactive environment feedback, using GRPO. For the dataset, we used the <a class="reference external" href="https://huggingface.co/datasets/VeraIsHere/geo3k_imgurl_processed">processed version</a>.</p>
 <p>Note: Please make sure the cudnn version in the environment is 9.16.0.29 to prevent severe performance regression in conv3d in torch 2.9 mentioned in https://github.com/pytorch/pytorch/issues/168167. Otherwise, you can reinstall cudnn with:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>nvidia-cudnn-cu12<span class="o">==</span><span class="m">9</span>.16.0.29
@@ -472,7 +472,7 @@ document.write(`
 <p><img alt="VLM multi-turn geo3k reward" src="_examples_synced/geo3k_vlm_multi_turn/geo3k_vlm_multi_turn_reward.png" />
 <img alt="Rollout megatron" src="_examples_synced/geo3k_vlm_multi_turn/rollout_experiment_result_megatron.png" /></p>
 <section id="reproduce">
-<h2>Reproduce<a class="headerlink" href="#reproduce" title="Link to this heading">#</a></h2>
+<h2>Reproduce<a class="headerlink" href="#reproduce" title="链接到此标题。">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 1) Set environment variable</span>
 <span class="nb">export</span><span class="w"> </span><span class="nv">WANDB_API_KEY</span><span class="o">=</span>...
 <span class="nb">export</span><span class="w"> </span><span class="nv">SLIME_SCRIPT_MODEL_NAME</span><span class="o">=</span>Qwen3-VL-2B-Instruct
@@ -489,7 +489,7 @@ python<span class="w"> </span>examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_
 </div>
 </section>
 <section id="what-each-file-does">
-<h2>What each file does<a class="headerlink" href="#what-each-file-does" title="Link to this heading">#</a></h2>
+<h2>What each file does<a class="headerlink" href="#what-each-file-does" title="链接到此标题。">#</a></h2>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_turn.py</span></code>: downloads model, sets training/rollout args, and launches the run.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">examples/geo3k_vlm_multi_turn/geo3k_vlm_multi_turn_config.yaml</span></code>: specifies <code class="docutils literal notranslate"><span class="pre">max_turns</span></code> and <code class="docutils literal notranslate"><span class="pre">rollout_interaction_env_path</span></code> for the multi-turn rollout.</p></li>
@@ -561,7 +561,7 @@ python<span class="w"> </span>examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

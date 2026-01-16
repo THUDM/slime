@@ -39,8 +39,8 @@
   <script src="../../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -54,7 +54,7 @@
     <link rel="prev" title="Search-R1 lite" href="../search-r1/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -455,21 +455,21 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="fully-asynchronous-rollout-example">
-<h1>Fully Asynchronous Rollout Example<a class="headerlink" href="#fully-asynchronous-rollout-example" title="Link to this heading">#</a></h1>
+<h1>Fully Asynchronous Rollout Example<a class="headerlink" href="#fully-asynchronous-rollout-example" title="链接到此标题。">#</a></h1>
 <p>This example shows a simple way to make rollout generation <strong>fully asynchronous</strong>: a single global worker is created once and then keeps running in the background, continuously pulling prompts and launching generation tasks. Training only needs to fetch already finished results. This removes the per‑step wait that happens in the normal synchronous style.</p>
 <section id="files">
-<h2>Files<a class="headerlink" href="#files" title="Link to this heading">#</a></h2>
+<h2>Files<a class="headerlink" href="#files" title="链接到此标题。">#</a></h2>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">fully_async_rollout.py</span></code>: global async worker + <code class="docutils literal notranslate"><span class="pre">generate_rollout_fully_async</span></code> entry.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-qwen3-4b-fully_async.sh</span></code>: example launch script with Qwen3‑4B.</p></li>
 </ul>
 </section>
 <section id="prerequisite">
-<h2>Prerequisite<a class="headerlink" href="#prerequisite" title="Link to this heading">#</a></h2>
+<h2>Prerequisite<a class="headerlink" href="#prerequisite" title="链接到此标题。">#</a></h2>
 <p>First set up model &amp; environment following the Qwen3-4B example.</p>
 </section>
 <section id="quick-start">
-<h2>Quick Start<a class="headerlink" href="#quick-start" title="Link to this heading">#</a></h2>
+<h2>Quick Start<a class="headerlink" href="#quick-start" title="链接到此标题。">#</a></h2>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>slime
 bash<span class="w"> </span>examples/fully_async/run-qwen3-4b-fully_async.sh
 </pre></div>
@@ -481,7 +481,7 @@ bash<span class="w"> </span>examples/fully_async/run-qwen3-4b-fully_async.sh
 </div>
 </section>
 <section id="how-it-works-very-short">
-<h2>How It Works (Very Short)<a class="headerlink" href="#how-it-works-very-short" title="Link to this heading">#</a></h2>
+<h2>How It Works (Very Short)<a class="headerlink" href="#how-it-works-very-short" title="链接到此标题。">#</a></h2>
 <ul class="simple">
 <li><p>First call: create <code class="docutils literal notranslate"><span class="pre">AsyncRolloutWorker</span></code> (thread + asyncio loop).</p></li>
 <li><p>Loop keeps up to <code class="docutils literal notranslate"><span class="pre">--rollout-batch-size</span></code> tasks in flight using <code class="docutils literal notranslate"><span class="pre">generate_and_rm_group</span></code>.</p></li>
@@ -490,7 +490,7 @@ bash<span class="w"> </span>examples/fully_async/run-qwen3-4b-fully_async.sh
 </ul>
 </section>
 <section id="limitations">
-<h2>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">#</a></h2>
+<h2>Limitations<a class="headerlink" href="#limitations" title="链接到此标题。">#</a></h2>
 <ul class="simple">
 <li><p>No evaluation mode.</p></li>
 <li><p>Ordering is best effort (sorted at the end by index).</p></li>
@@ -498,7 +498,7 @@ bash<span class="w"> </span>examples/fully_async/run-qwen3-4b-fully_async.sh
 </ul>
 </section>
 <section id="config-differences-2-key-points">
-<h2>Config Differences (2 Key Points)<a class="headerlink" href="#config-differences-2-key-points" title="Link to this heading">#</a></h2>
+<h2>Config Differences (2 Key Points)<a class="headerlink" href="#config-differences-2-key-points" title="链接到此标题。">#</a></h2>
 <p>To enable the fully async pattern there are only two changes compared to a normal run:</p>
 <ol class="arabic">
 <li><p>Use the async training driver: <code class="docutils literal notranslate"><span class="pre">train_async.py</span></code> (not <code class="docutils literal notranslate"><span class="pre">train.py</span></code>).</p></li>
@@ -597,7 +597,7 @@ bash<span class="w"> </span>examples/fully_async/run-qwen3-4b-fully_async.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

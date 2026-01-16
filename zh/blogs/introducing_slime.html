@@ -39,8 +39,8 @@
   <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -53,7 +53,7 @@
     <link rel="prev" title="v0.1.0: 重新定义高性能 RL 训练框架" href="release_v0.1.0.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -453,12 +453,12 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="slime-rl-scaling-sglang-native">
-<h1>slime：为 RL Scaling 设计的 SGLang-Native 后训练框架<a class="headerlink" href="#slime-rl-scaling-sglang-native" title="Link to this heading">#</a></h1>
+<h1>slime：为 RL Scaling 设计的 SGLang-Native 后训练框架<a class="headerlink" href="#slime-rl-scaling-sglang-native" title="链接到此标题。">#</a></h1>
 <blockquote>
 <div><p>本文由英文版翻译而来，首发于 <a class="reference external" href="https://lmsys.org/blog/2025-07-09-slime/">lmsys.org</a>。</p>
 </div></blockquote>
 <section id="id1">
-<h2>愿景<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<h2>愿景<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <p>我们相信强化学习。我们相信强化学习是通往 AGI 的最后一块拼图。</p>
 <p>所以我们相信：</p>
 <ul class="simple">
@@ -476,7 +476,7 @@ document.write(`
 <p>以下是我们如何实现这一切的。</p>
 </section>
 <section id="id2">
-<h2>自定义才能自由<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<h2>自定义才能自由<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
 <blockquote>
 <div><p>我们应该停止尝试用简单的方式来思考心智的内容，例如简单地思考空间、物体、多智能体或对称性。</p>
 <p>— <em>The Bitter Lesson</em></p>
@@ -489,7 +489,7 @@ document.write(`
 <p>凭借 Ray 通过 <code class="docutils literal notranslate"><span class="pre">.remote()</span></code> 实现的异步执行，slime 自然支持异步训练。改变同步行为就像移动 <code class="docutils literal notranslate"><span class="pre">ray.get</span></code> 操作一样简单。为了便于尝试不同的策略，我们没有将代码封装在训练器类中，而是简单地将训练循环暴露在入口文件 <code class="docutils literal notranslate"><span class="pre">train.py</span></code> 中。</p>
 </section>
 <section id="id3">
-<h2>为性能而生<a class="headerlink" href="#id3" title="Link to this heading">#</a></h2>
+<h2>为性能而生<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
 <p><strong>一个合格的强化学习框架必须既快，又持续地快。</strong></p>
 <p><strong>快</strong>意味着要利用最快的推理和训练框架。</p>
 <p>与预训练不同，强化学习工作负载在训练过程中涉及大量的在线采样，这使得推理性能至关重要。因此，slime 专门集成了 SGLang，并刻意提供了 SGLang 原生体验。</p>
@@ -523,7 +523,7 @@ document.write(`
 <p>这些功能在 <a class="reference external" href="https://github.com/sgl-project/sglang/pull/6698">#6698</a>、<a class="reference external" href="https://github.com/sgl-project/sglang/pull/6855">#6855</a>、<a class="reference external" href="https://github.com/sgl-project/sglang/pull/6184">#6184</a>、<a class="reference external" href="https://github.com/sgl-project/sglang/pull/5966">#5966</a> 中实现。</p>
 </section>
 <section id="id4">
-<h2>轻量且可扩展<a class="headerlink" href="#id4" title="Link to this heading">#</a></h2>
+<h2>轻量且可扩展<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
 <p>slime 专注于可定制性和性能：</p>
 <ol class="arabic simple">
 <li><p>提供了一个可定制的推理接口。</p></li>
@@ -543,7 +543,7 @@ document.write(`
 <p>统一的管道将我们从繁琐的“胶水代码”中解放出来，让我们能够专注于真正重要的事情：更好的强化学习。太棒了！</p>
 </section>
 <section id="id5">
-<h2>发展蓝图<a class="headerlink" href="#id5" title="Link to this heading">#</a></h2>
+<h2>发展蓝图<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h2>
 <p>强化学习扩展的旅程才刚刚开始，slime 也在不断演进。在下一阶段，我们将专注于：</p>
 <ol class="arabic simple">
 <li><p>与 SGLang 团队合作，探索大规模 MoE 模型的最佳强化学习训练策略。</p></li>
@@ -629,7 +629,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>

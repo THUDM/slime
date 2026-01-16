@@ -96,13 +96,3 @@ export BASE_FOLDER=/root
 export MASTER_ADDR=your_master_addr
 bash scripts/run-qwen3-next-80B-A3B.sh 
 ```
-
-## 执行训练 (FSDP)
-
-```bash
-export BASE_FOLDER=./models/
-export MASTER_ADDR=127.0.0.1
-
-bash scripts/run-qwen3-next-80B-A3B-fsdp.sh
-```
-

@@ -39,8 +39,8 @@
   <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../_static/documentation_options.js?v=e645c8fa"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -54,7 +54,7 @@
     <link rel="prev" title="Quick Start" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Jan 13, 2026"/>
+    <meta name="docbuild:last-update" content="Jan 16, 2026"/>
   </head>
   
   
@@ -466,11 +466,6 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-parameters">Custom Parameters</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-fsdp">How to Use FSDP</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parameters">Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-start">Quick Start</a></li>
-</ul>
-</li>
 </ul>
             </nav>
         </div>
@@ -489,7 +484,7 @@ document.write(`
 <p>When using slime, parameters are primarily passed for the following purposes:</p>
 <ol class="arabic simple">
 <li><p>To allocate a portion of the GPUs in the cluster for training and another portion for inference.</p></li>
-<li><p>To load Megatron or FSDP for the training portion.</p></li>
+<li><p>To load Megatron for the training portion.</p></li>
 <li><p>To load SGLang for the inference portion.</p></li>
 <li><p>To configure the hyperparameters required for RL training.</p></li>
 </ol>
@@ -516,7 +511,7 @@ The reason for not using a parameter like <code class="docutils literal notransl
 <p>slime supports multiple training backends, which can be selected via the <code class="docutils literal notranslate"><span class="pre">--train-backend</span></code> parameter:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">megatron</span></code> (default): Uses Megatron-LM as the training backend, supporting efficient training of large-scale models.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">fsdp</span></code>: Uses PyTorch FSDP as the training backend, allowing direct loading of HuggingFace format weights without conversion.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">fsdp</span></code> (experimental): Uses PyTorch FSDP as the training backend, allowing direct loading of HuggingFace format weights without conversion.</p></li>
 </ul>
 </section>
 <section id="loading-megatron">
@@ -800,146 +795,6 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 </ul>
 </section>
 </section>
-<section id="how-to-use-fsdp">
-<h2>How to Use FSDP<a class="headerlink" href="#how-to-use-fsdp" title="Link to this heading">#</a></h2>
-<p>slime also support FSDP2 as the training backend, docs <a class="reference external" href="https://lmsys.org/blog/2025-12-03-miles-fsdp/">here</a>.</p>
-<blockquote>
-<div><p>FSDP automatically reads all architecture information via <code class="docutils literal notranslate"><span class="pre">AutoModelForCausalLM.from_pretrained()</span></code>, without manual specification. Megatron requires manual configuration of parameters to read model architecture information. FSDP can read entirely from <code class="docutils literal notranslate"><span class="pre">config.json</span></code>, directly avoiding the weight format conversion step.</p>
-</div></blockquote>
-<p>To run FSDP as the training backend, pass <code class="docutils literal notranslate"><span class="pre">--train-backend</span> <span class="pre">fsdp</span></code> to enable.</p>
-<section id="parameters">
-<h3>Parameters<a class="headerlink" href="#parameters" title="Link to this heading">#</a></h3>
-<p>Parameters that FSDP used are shown as below in comparison to Megatron, more supports are coming on the way.</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>Configuration Category</p></th>
-<th class="head"><p>Megatron Parameter</p></th>
-<th class="head"><p>FSDP Parameter</p></th>
-<th class="head"><p>Description</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p><strong>Model Loading</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--load</span></code> (Megatron checkpoint) + architecture args (<code class="docutils literal notranslate"><span class="pre">--num-layers</span></code>, <code class="docutils literal notranslate"><span class="pre">--hidden-size</span></code> etc.)</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> (Required)</p></td>
-<td><p><strong>FSDP</strong>: Directly uses HuggingFace format, no weight conversion needed, architecture inferred via <code class="docutils literal notranslate"><span class="pre">AutoConfig</span></code></p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>Tensor Parallel</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--tensor-model-parallel-size</span></code></p></td>
-<td><p>Coming Soon</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><strong>Pipeline Parallel</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--pipeline-model-parallel-size</span></code></p></td>
-<td><p>Coming Soon</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>Expert Parallel</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--expert-model-parallel-size</span></code></p></td>
-<td><p>Coming Soon</p></td>
-<td><p></p></td>
-</tr>
-<tr class="row-even"><td><p><strong>Context Parallel</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--context-parallel-size</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--context-parallel-size</span></code></p></td>
-<td><p>Both support CP</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>Initial Learning Rate</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--lr</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--lr</span></code></p></td>
-<td><p>Same parameter</p></td>
-</tr>
-<tr class="row-even"><td><p><strong>Learning Rate Decay</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--lr-decay-style</span></code> (linear/cosine etc.)</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--lr-decay-style</span></code></p></td>
-<td><p>Same parameter</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>Warmup</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--lr-warmup-iters</span></code> (steps)</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--lr-warmup-iters</span></code></p></td>
-<td><p>Same parameter</p></td>
-</tr>
-<tr class="row-even"><td><p><strong>Min Learning Rate</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--min-lr</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--min-lr</span></code></p></td>
-<td><p>Same parameter</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>Optimizer Type</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--optimizer</span></code> (adam/sgd etc.)</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--optimizer</span></code> (default adam)</p></td>
-<td><p>Basically same</p></td>
-</tr>
-<tr class="row-even"><td><p><strong>Distributed Optimizer</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--use-distributed-optimizer</span></code></p></td>
-<td><p>Built-in to FSDP</p></td>
-<td><p>FSDP uses distributed optimizer by default</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>Gradient Checkpoint</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--recompute-granularity</span></code>, <code class="docutils literal notranslate"><span class="pre">--recompute-method</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--gradient-checkpointing</span></code></p></td>
-<td><p><strong>FSDP</strong>: Simplified to boolean switch</p></td>
-</tr>
-<tr class="row-even"><td><p><strong>CPU Offload</strong></p></td>
-<td><p>Implemented via distributed optimizer</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--fsdp-cpu-offload</span></code></p></td>
-<td><p><strong>FSDP</strong>: Offload parameters/gradients/optimizer states to CPU</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>CPU Backend</strong></p></td>
-<td><p>Implemented via distributed optimizer</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--fsdp-cpu-backend</span></code></p></td>
-<td><p><strong>FSDP</strong>: Specify CPU backend and use hybrid backend when CPU offload is enabled</p></td>
-</tr>
-<tr class="row-even"><td><p><strong>Attention Backend</strong></p></td>
-<td><p>Decided by Megatron Core</p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--attn-implementation</span></code> (flash_attention_2/sdpa/eager)</p></td>
-<td><p><strong>FSDP</strong>: Directly passed to HuggingFace</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>Mixed Precision</strong></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--fp16</span></code> or <code class="docutils literal notranslate"><span class="pre">--bf16</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--fp16</span></code> (bf16 inferred automatically)</p></td>
-<td><p>Basically same</p></td>
-</tr>
-<tr class="row-even"><td><p><strong>Training Backend</strong></p></td>
-<td><p>Default or <code class="docutils literal notranslate"><span class="pre">--train-backend</span> <span class="pre">megatron</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--train-backend</span> <span class="pre">fsdp</span></code> (Required)</p></td>
-<td><p>Used to switch backend</p></td>
-</tr>
-<tr class="row-odd"><td><p><strong>Config</strong></p></td>
-<td><p></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">--config</span></code></p></td>
-<td><p><strong>FSDP</strong>: Set additional parameters for FSDP backend</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-</section>
-<section id="quick-start">
-<h3>Quick Start<a class="headerlink" href="#quick-start" title="Link to this heading">#</a></h3>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># If you need to use WANDB, you need to set the environment variable WANDB_API_KEY in advance</span>
-<span class="c1"># Download model weights (Qwen3-4B)</span>
-hf<span class="w"> </span>download<span class="w"> </span>Qwen/Qwen3-4B<span class="w"> </span>--local-dir<span class="w"> </span>/root/Qwen3-4B
-
-<span class="c1"># Download training dataset (dapo-math-17k)</span>
-hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/dapo-math-17k<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--local-dir<span class="w"> </span>/root/dapo-math-17k
-
-<span class="c1"># Download evaluation dataset (aime-2024)</span>
-hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class="w"> </span>dataset<span class="w"> </span>zhuzilin/aime-2024<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--local-dir<span class="w"> </span>/root/aime-2024
-<span class="w">  </span>
-<span class="c1"># Clone code and install dependencies</span>
-git<span class="w"> </span>clone<span class="w"> </span>https://github.com/THUDM/slime.git
-<span class="nb">cd</span><span class="w"> </span>slime
-pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
-
-
-<span class="c1"># FSDP does not require weight conversion, natively supports huggingface format</span>
-<span class="c1"># Enable reference model, train Qwen3-4B in colocate mode</span>
-<span class="nb">source</span><span class="w"> </span>/root/slime/scripts/run-qwen3-4B-fsdp.sh
-</pre></div>
-</div>
-</section>
-</section>
 </section>
 
 
@@ -1012,11 +867,6 @@ pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </s
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#custom-parameters">Custom Parameters</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-fsdp">How to Use FSDP</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parameters">Parameters</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#quick-start">Quick Start</a></li>
-</ul>
-</li>
 </ul>
   </nav></div>
 
@@ -1050,7 +900,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jan 13, 2026.
+  Last updated on Jan 16, 2026.
   <br/>
 </p>
   </div>

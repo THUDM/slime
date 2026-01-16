@@ -39,8 +39,8 @@
   <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
 
     <script src="../_static/documentation_options.js?v=30c3115b"></script>
-    <script src="../_static/doctools.js?v=9bcbadda"></script>
-    <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
     <script src="../_static/copybutton.js?v=ccdb6887"></script>
     <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
@@ -54,7 +54,7 @@
     <link rel="prev" title="64xH100 训练 GLM-4.5" href="glm4.5-355B-A32B.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 16 日"/>
   </head>
   
   
@@ -462,13 +462,13 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="xh100-deepseek-r1">
-<h1>128xH100 训练 DeepSeek R1<a class="headerlink" href="#xh100-deepseek-r1" title="Link to this heading">#</a></h1>
+<h1>128xH100 训练 DeepSeek R1<a class="headerlink" href="#xh100-deepseek-r1" title="链接到此标题。">#</a></h1>
 <p>这里是使用 128xH100 进行 DeepSeek R1 RL 训练的示例。</p>
 <p>我们会使用 bf16 进行训练，128x128 blockwise quant 的 fp8 格式进行推理，模型最大回复长度为 32k，并训练中会使用 dynamic sampling 对数据进行筛选。</p>
 <p>在并行上，sglang 方面我们会启用 ep64，开启 dp attention 与 deepep；megatron 部分我们采用 tp8、pp4、ep32、cp4。</p>
 <p>⚠️  为了节省 GPU 显存，我们会使用 CPU Adam，每个 node（8xH100）会占用 1.4~1.5B 内存。如果单机的内存不够，可以通过增加 GPU，扩大并行的方式解决。</p>
 <section id="id1">
-<h2>环境准备<a class="headerlink" href="#id1" title="Link to this heading">#</a></h2>
+<h2>环境准备<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <p>搭建环境与下载数据的方法可以参考 <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">示例：Qwen3-4B</span></a>。</p>
 <p>准备 DeepSeek R1 的 ckpt 首先需要在多机均可访问到的地址（下记为 <code class="docutils literal notranslate"><span class="pre">$BASE_DIR</span></code>）上下载 DeepSeek-R1：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>deepseek-ai/DeepSeek-R1<span class="w"> </span>--local-dir<span class="w"> </span><span class="nv">$BASE_DIR</span>/DeepSeek-R1
@@ -501,7 +501,7 @@ python<span class="w"> </span>tools/fp8_cast_bf16.py<span class="w"> </span>--in
 <p>其中 <code class="docutils literal notranslate"><span class="pre">MASTER_ADDR</span></code> 为 node0 的 ip，<code class="docutils literal notranslate"><span class="pre">NODE_RANK</span></code> 表示这是第几台机器，这两者就像是在多机 <code class="docutils literal notranslate"><span class="pre">torchrun</span></code> 的时候进行的配置。</p>
 </section>
 <section id="id2">
-<h2>执行训练<a class="headerlink" href="#id2" title="Link to this heading">#</a></h2>
+<h2>执行训练<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
 <p>在 node0 运行：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>slime/
 bash<span class="w"> </span>scripts/run-deepseek-r1.sh
@@ -524,14 +524,14 @@ bash<span class="w"> </span>scripts/run-deepseek-r1.sh
 </pre></div>
 </div>
 <section id="id3">
-<h3>参数简介<a class="headerlink" href="#id3" title="Link to this heading">#</a></h3>
+<h3>参数简介<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SCRIPT_DIR</span><span class="o">=</span><span class="s2">&quot;</span><span class="k">$(</span><span class="nb">cd</span><span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="k">$(</span>dirname<span class="w"> </span>--<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">BASH_SOURCE</span><span class="p">[0]</span><span class="si">}</span><span class="s2">&quot;</span><span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="p">&amp;</span>&gt;/dev/null<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">pwd</span><span class="k">)</span><span class="s2">&quot;</span>
 <span class="nb">source</span><span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">SCRIPT_DIR</span><span class="si">}</span><span class="s2">/models/deepseek-v3.sh&quot;</span>
 </pre></div>
 </div>
 <p>从 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/models/deepseek-v3.sh">scripts/models/deepseek-v3.sh</a> 读取模型的 config。这些 config 都是 megatron 的参数。在使用 megatron 进行训练的时候，megatron 无法从 ckpt 中读取模型 config，需要我们自行配置。我们在 <a class="reference external" href="https://github.com/THUDM/slime/tree/main/scripts/models/">scripts/models</a> 中提供了一些样例。</p>
 <section id="ckpt-args">
-<h4>CKPT_ARGS<a class="headerlink" href="#ckpt-args" title="Link to this heading">#</a></h4>
+<h4>CKPT_ARGS<a class="headerlink" href="#ckpt-args" title="链接到此标题。">#</a></h4>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">CKPT_ARGS</span><span class="o">=(</span>
 <span class="w">   </span><span class="c1"># sglang 需要的 hf ckpt，我们也会从这里读 tokenizer</span>
 <span class="w">   </span>--hf-checkpoint<span class="w"> </span><span class="nv">$BASE_DIR</span>/DeepSeek-R1/
@@ -547,7 +547,7 @@ bash<span class="w"> </span>scripts/run-deepseek-r1.sh
 <p>slime 会根据 <code class="docutils literal notranslate"><span class="pre">hf_checkpoint</span></code> 中的量化配置从而在训练中进行在线量化。例如当前的例子中，我们使用的是 DeepSeek R1 的 fp8 ckpt，那么在进行参数更新的时候，我们会首先将参数进行 blockwise quant，再传至 sglang。</p>
 </section>
 <section id="perf-args">
-<h4>PERF_ARGS<a class="headerlink" href="#perf-args" title="Link to this heading">#</a></h4>
+<h4>PERF_ARGS<a class="headerlink" href="#perf-args" title="链接到此标题。">#</a></h4>
 <p>一堆 megatron 的并行参数，只有 <code class="docutils literal notranslate"><span class="pre">--use-dynamic-batch-size</span></code> 与 <code class="docutils literal notranslate"><span class="pre">--max-tokens-per-gpu</span></code> 是 slime 添加的。</p>
 <p>megatron 的部分，我们配置了 tp8、pp4、cp4、ep32，由于 DeepSeek-R1 有 61 层，不能被 4 整除，所以我们专门配置最后一个 pp stage 为 13 层。</p>
 <p><code class="docutils literal notranslate"><span class="pre">max_tokens_per_gpu</span></code> 是指每张卡最多跑多少 token，在开启 <code class="docutils literal notranslate"><span class="pre">use_dynamic_batch_size</span></code> 之后，会尽可能将一个 batch 内部长短不一的数据拼到 <code class="docutils literal notranslate"><span class="pre">max_tokens_per_gpu</span></code>，从而组成动态的 micro batch size，如果有一条数据长度超过了 <code class="docutils literal notranslate"><span class="pre">max_tokens_per_gpu</span></code>，则自成一条，不会对数据进行截断。在开启 context parallel (CP) 时，会让 CP 张卡去上的数据去共享总长为 <code class="docutils literal notranslate"><span class="pre">CP</span> <span class="pre">*</span> <span class="pre">max_tokens_per_gpu</span></code> 的 token。</p>
@@ -573,7 +573,7 @@ bash<span class="w"> </span>scripts/run-deepseek-r1.sh
 </div>
 </section>
 <section id="grpo-args">
-<h4>GRPO_ARGS<a class="headerlink" href="#grpo-args" title="Link to this heading">#</a></h4>
+<h4>GRPO_ARGS<a class="headerlink" href="#grpo-args" title="链接到此标题。">#</a></h4>
 <p>目前 slime 这是一些 grpo 相关的参数：</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">GRPO_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>--advantage-estimator<span class="w"> </span>grpo
@@ -589,7 +589,7 @@ bash<span class="w"> </span>scripts/run-deepseek-r1.sh
 <p>如果希望训练时不加载 reference model，需要去掉 <code class="docutils literal notranslate"><span class="pre">--use-kl-loss</span></code> 并设置 <code class="docutils literal notranslate"><span class="pre">--kl-coef</span> <span class="pre">0.00</span></code>（默认值为 0）。</p>
 </section>
 <section id="optimizer-args">
-<h4>OPTIMIZER_ARGS<a class="headerlink" href="#optimizer-args" title="Link to this heading">#</a></h4>
+<h4>OPTIMIZER_ARGS<a class="headerlink" href="#optimizer-args" title="链接到此标题。">#</a></h4>
 <p>我们通过了如下几个参数配置了 CPU Adam，用来节省显存。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">OPTIMIZER_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>...
@@ -602,7 +602,7 @@ bash<span class="w"> </span>scripts/run-deepseek-r1.sh
 </div>
 </section>
 <section id="sglang-args">
-<h4>SGLANG_ARGS<a class="headerlink" href="#sglang-args" title="Link to this heading">#</a></h4>
+<h4>SGLANG_ARGS<a class="headerlink" href="#sglang-args" title="链接到此标题。">#</a></h4>
 <p>sglang 所需的参数，这里 <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus-per-engine</span></code> 基本对应 sglang 的 <code class="docutils literal notranslate"><span class="pre">tp_size</span></code>，除此之外的 sglang 参数均通过添加 <code class="docutils literal notranslate"><span class="pre">--sglang-</span></code> 的前缀来传给 slime。为了充分利用 sglang 的大 EP 推理能力，我们加上了 ep64、dp_attention dp8、deepep mode auto 等配置。</p>
 <p>最后的 <code class="docutils literal notranslate"><span class="pre">--sglang-server-concurrency</span></code> 是 slime 的特有参数，是为了方式同时发给 sglang server 的并发太大打爆 http server，默认为 512。但是我们现在是 8 机一个 server，为了保证每个 dp rank 能有 128 的并发，我们调整为 1024。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SGLANG_ARGS</span><span class="o">=(</span>
@@ -627,7 +627,7 @@ bash<span class="w"> </span>scripts/run-deepseek-r1.sh
 </div>
 </section>
 <section id="misc-args">
-<h4>MISC_ARGS<a class="headerlink" href="#misc-args" title="Link to this heading">#</a></h4>
+<h4>MISC_ARGS<a class="headerlink" href="#misc-args" title="链接到此标题。">#</a></h4>
 <p>一些额外的 megatron 配置。注意这里配置了 megatron 的 deepep。</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">MISC_ARGS</span><span class="o">=(</span>
 <span class="w">   </span>...
@@ -734,7 +734,7 @@ bash<span class="w"> </span>scripts/run-deepseek-r1.sh
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 13 日.
+  最后更新于 2026 年 01 月 16 日.
   <br/>
 </p>
   </div>
