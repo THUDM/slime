@@ -440,6 +440,7 @@ document.write(`
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">对齐精度</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">训练推理单独 debug</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-sglang-illegal-memory-access-ima">Debug sglang illegal memory access (IMA)</a></li>
 </ul>
             </nav>
         </div>
@@ -523,6 +524,22 @@ document.write(`
 </li>
 </ol>
 </section>
+<section id="debug-sglang-illegal-memory-access-ima">
+<h2>Debug sglang illegal memory access (IMA)<a class="headerlink" href="#debug-sglang-illegal-memory-access-ima" title="链接到此标题。">#</a></h2>
+<p>在进行大规模 RL 时，不时会遇到 SGLang IMA 的问题，以下是我们的一些 debug 建议：</p>
+<ol class="arabic">
+<li><p>开启 <code class="docutils literal notranslate"><span class="pre">CUDA_LAUNCH_BLOCKING=1</span></code></p></li>
+<li><p>开启关闭投机采样、 cuda graph 来查看问题是否消除</p>
+<p>IMA 经常出现在 cuda graph replay 的 padding 中，或者是投机采样与主模型的区别。经常可以通过两者的各种开关组合来缩小问题。</p>
+</li>
+<li><p>关闭 deepep</p>
+<p>如果训练和推理中开启了 deepep，可以关闭查看有没有差别</p>
+</li>
+<li><p>尝试 CUDA Core Dump 确定报错 kernel</p>
+<p>这里推荐 vllm 团队的这一文档：<a class="reference external" href="https://blog.vllm.ai/2025/08/11/cuda-debugging.html">CUDA Core Dump: An Effective Tool to Debug Memory Access Issues and Beyond</a></p>
+</li>
+</ol>
+</section>
 </section>
 
 
@@ -572,6 +589,7 @@ document.write(`
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">对齐精度</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">训练推理单独 debug</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-sglang-illegal-memory-access-ima">Debug sglang illegal memory access (IMA)</a></li>
 </ul>
   </nav></div>
 
