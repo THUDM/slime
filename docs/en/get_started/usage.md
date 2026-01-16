@@ -280,7 +280,7 @@ slime incorporates almost all SGLang parameters by using SGLang's `ServerArgs.ad
 
   - In co-located training and inference, you often need to limit `--mem-fraction-static`. This parameter should be changed to `--sglang-mem-fraction-static`.
   - During training, if you want SGLang to infer beyond the maximum context length specified in the Hugging Face checkpoint's `config.json`, you need to use `--context-length`, which becomes `--sglang-context-length` in slime.
-  - For multi-node large EP inference, you might need `--enable-ep-moe`, `--enable-dp-attention`, `--dp-size`, `--enable-deepep-moe`, etc. These can be passed as `--sglang-enable-ep-moe`, `--sglang-enable-dp-attention`, `--sglang-dp-size`, and `--sglang-enable-deepep-moe` respectively.
+  - For multi-node large EP inference, you might need `--ep-size`, `--enable-dp-attention`, `--dp-size`, `--moe-a2a-backend deepep`, etc. These can be passed as `--sglang-ep-size`, `--sglang-enable-dp-attention`, `--sglang-dp-size`, and `--sglang-moe-a2a-backend deepep` respectively.
 
 Some parameters related to slime's resource scheduling are configured by slime itself, for example:
 
