@@ -52,42 +52,120 @@ class RolloutDataSource(DataSource):
         # TODO remove this
         self.metadata = {}
 
+        self._dataset = None
+        self._tokenizer = None
+        self._processor = None
+        self._use_hf_datasets = getattr(args, "use_hf_datasets", False)
+
+        # Initialize dataset if using global dataset
         if args.rollout_global_dataset:
-            tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
-            processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
+            self._tokenizer = load_tokenizer(args.hf_checkpoint, trust_remote_code=True)
+            self._processor = load_processor(args.hf_checkpoint, trust_remote_code=True)
 
             # TODO move (during the refactor)
             if (d := args.dump_details) is not None:
-                tokenizer.save_pretrained(Path(d) / "tokenizer")
-                if processor:
-                    processor.save_pretrained(Path(d) / "processor")
+                self._tokenizer.save_pretrained(Path(d) / "tokenizer")
+                if self._processor:
+                    self._processor.save_pretrained(Path(d) / "processor")
 
-            self.dataset = Dataset(
-                args.prompt_data,
-                tokenizer=tokenizer,
-                processor=processor,
-                max_length=args.rollout_max_prompt_len,
-                prompt_key=args.input_key,
-                multimodal_keys=args.multimodal_keys,
-                label_key=args.label_key,
-                metadata_key=args.metadata_key,
-                tool_key=args.tool_key,
-                apply_chat_template=args.apply_chat_template,
-                apply_chat_template_kwargs=args.apply_chat_template_kwargs,
-                seed=args.rollout_seed,
+            # Create dataset immediately
+            self._create_dataset()
+
+    def _create_dataset(self):
+        """Create dataset based on configuration.
+
+        Selects the appropriate dataset implementation based on args:
+        - HF Datasets (streaming mode) if --use-hf-datasets is set
+        - Legacy Dataset otherwise
+
+        Note: RolloutManager is a single instance, so we do NOT shard by dp_rank.
+        Data sharding happens in RolloutManager._split_train_data_by_dp().
+        """
+        if self._use_hf_datasets:
+            # Use HuggingFace Datasets streaming mode
+            from slime.utils.hf_dataset import HFIterableDatasetAdapter
+
+            # Get dataset size (required for proper epoch tracking)
+            dataset_size = getattr(self.args, "hf_datasets_num_samples", None)
+            if dataset_size is None:
+                raise ValueError(
+                    "--hf-datasets-num-samples is required when using --use-hf-datasets. "
+                    "This specifies the number of samples for proper epoch tracking and __len__() support."
+                )
+
+            logger.info(f"Creating HFIterableDatasetAdapter (streaming mode, dataset_size={dataset_size})")
+            self._dataset = HFIterableDatasetAdapter(
+                path=self.args.prompt_data,
+                dataset_size=dataset_size,
+                tokenizer=self._tokenizer,
+                processor=self._processor,
+                max_length=self.args.rollout_max_prompt_len,
+                prompt_key=self.args.input_key,
+                label_key=self.args.label_key,
+                tool_key=self.args.tool_key,
+                metadata_key=self.args.metadata_key,
+                multimodal_keys=self.args.multimodal_keys,
+                seed=self.args.rollout_seed,
+                apply_chat_template=self.args.apply_chat_template,
+                apply_chat_template_kwargs=self.args.apply_chat_template_kwargs,
+                num_workers=getattr(self.args, "hf_dataset_num_proc", 4),
+                prefetch_factor=2,
+                shuffle_buffer_size=getattr(self.args, "hf_dataset_shuffle_buffer", 10000),
+                do_shuffle=self.args.rollout_shuffle,
+                split=getattr(self.args, "hf_dataset_split", "train"),
             )
-            if self.args.rollout_shuffle:
-                self.dataset.shuffle(self.epoch_id)
+
+            # Note: shuffle is handled by do_shuffle parameter, no need to call shuffle() separately
+
         else:
-            self.dataset = None
+            # Use legacy Dataset implementation
+            logger.info("Creating legacy Dataset")
+            self._dataset = Dataset(
+                self.args.prompt_data,
+                tokenizer=self._tokenizer,
+                processor=self._processor,
+                max_length=self.args.rollout_max_prompt_len,
+                prompt_key=self.args.input_key,
+                multimodal_keys=self.args.multimodal_keys,
+                label_key=self.args.label_key,
+                metadata_key=self.args.metadata_key,
+                tool_key=self.args.tool_key,
+                apply_chat_template=self.args.apply_chat_template,
+                apply_chat_template_kwargs=self.args.apply_chat_template_kwargs,
+                seed=self.args.rollout_seed,
+            )
+
+            # Apply initial shuffle if requested
+            if self.args.rollout_shuffle:
+                self._dataset.shuffle(self.epoch_id)
+
+    @property
+    def dataset(self):
+        """Accessor for dataset."""
+        return self._dataset
 
     def get_samples(self, num_samples):
-        # TODO further improve code
-        if self.dataset is not None:
+        # Mixed mode: auto-detect dataset type using duck typing
+        if self.dataset is None:
+            # Case 1: No dataset (--disable-rollout-global-dataset)
+            prompt_samples = [Sample() for _ in range(num_samples)]
+
+        elif hasattr(self.dataset, "get_next_batch"):
+            # Case 2: HF adapters - use streaming interface
+            # Note: HF adapters handle epoch switching internally
+            prompt_samples = self.dataset.get_next_batch(num_samples)
+
+            # Sync epoch_id from HF adapter (it handles epoch switching internally)
+            if hasattr(self.dataset, "epoch_id"):
+                self.epoch_id = self.dataset.epoch_id
+
+        else:
+            # Case 3: Legacy Dataset - use array access
             if self.sample_offset + num_samples <= len(self.dataset):
                 prompt_samples = self.dataset.samples[self.sample_offset : self.sample_offset + num_samples]
                 self.sample_offset += num_samples
             else:
+                # Handle epoch boundary
                 prompt_samples = self.dataset.samples[self.sample_offset :]
                 num_samples -= len(prompt_samples)
                 self.epoch_id += 1
@@ -95,9 +173,8 @@ class RolloutDataSource(DataSource):
                     self.dataset.shuffle(self.epoch_id)
                 prompt_samples += self.dataset.samples[:num_samples]
                 self.sample_offset = num_samples
-        else:
-            prompt_samples = [Sample() for _ in range(num_samples)]
 
+        # Common processing: wrap prompt_samples into groups
         samples = []
         for prompt_sample in prompt_samples:
             group = []
@@ -125,6 +202,11 @@ class RolloutDataSource(DataSource):
             "sample_index": self.sample_index,
             "metadata": self.metadata,
         }
+
+        # Save HF adapter state if using HF Datasets
+        if self.dataset is not None and hasattr(self.dataset, "get_checkpoint_state"):
+            state_dict["hf_adapter_state"] = self.dataset.get_checkpoint_state()
+
         path = os.path.join(self.args.save, f"rollout/global_dataset_state_dict_{rollout_id}.pt")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         torch.save(state_dict, path)
@@ -142,7 +224,6 @@ class RolloutDataSource(DataSource):
             return
 
         logger.info(f"load metadata from {path}")
-        logger.info(f"load metadata: {self.metadata}")
         state_dict = torch.load(path)
         self.sample_offset = state_dict.get("sample_offset", 0)
         self.epoch_id = state_dict.get("epoch_id", 0)
@@ -150,8 +231,19 @@ class RolloutDataSource(DataSource):
         self.sample_index = state_dict.get("sample_index", 0)
         self.metadata = state_dict.get("metadata", {})
 
-        if self.args.rollout_global_dataset and self.args.rollout_shuffle:
-            self.dataset.shuffle(self.epoch_id)
+        # Restore dataset state based on type (mixed mode)
+        if self.dataset is not None:
+            if hasattr(self.dataset, "load_checkpoint_state"):
+                # HF adapters: use dedicated checkpoint API
+                hf_state = state_dict.get("hf_adapter_state")
+                if hf_state:
+                    logger.info(
+                        f"Restoring HF adapter state: epoch={hf_state.get('epoch_id')}, consumed={hf_state.get('consumed_count')}"
+                    )
+                    self.dataset.load_checkpoint_state(hf_state)  # type: ignore[attr-defined]
+            elif self.args.rollout_shuffle:
+                # Legacy Dataset: manual shuffle
+                self.dataset.shuffle(self.epoch_id)
 
 
 class RolloutDataSourceWithBuffer(RolloutDataSource):
