@@ -464,6 +464,11 @@ document.write(`
   <section class="tex2jax_ignore mathjax_ignore" id="vlm-single-turn-rl-fsdp-megatron">
 <h1>VLM Single-Turn RL (FSDP &amp; Megatron)<a class="headerlink" href="#vlm-single-turn-rl-fsdp-megatron" title="链接到此标题。">#</a></h1>
 <p>Training VLMs with FSDP or Megatron on single-turn reasoning task using GRPO on the <a class="reference external" href="https://huggingface.co/datasets/hiyouga/geometry3k">GEO3K dataset</a>. We used processed version <a class="reference external" href="https://huggingface.co/datasets/chenhegu/geo3k_imgurl">here</a>.</p>
+<p>Supported models:</p>
+<ul class="simple">
+<li><p>Qwen2.5-VL</p></li>
+<li><p>Qwen3-VL (Dense and Moe)</p></li>
+</ul>
 <p>Note: Please make sure the cudnn version in the environment is 9.16.0.29 to prevent severe performance regression in conv3d in torch 2.9 mentioned in https://github.com/pytorch/pytorch/issues/168167. Otherwise, you can reinstall cudnn with:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>nvidia-cudnn-cu12<span class="o">==</span><span class="m">9</span>.16.0.29
 </pre></div>
