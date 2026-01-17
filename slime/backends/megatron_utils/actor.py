@@ -33,7 +33,7 @@ from ..training_utils.loss import compute_advantages_and_returns, get_log_probs_
 from .checkpoint import load_checkpoint
 from .initialize import init, is_megatron_main_rank
 from .model import forward_only, initialize_model_and_optimizer, save, train
-from .parallel import create_megatron_parallel_state
+from .parallel import MegatronParallelState
 from .update_weight.common import named_params_and_buffers
 from .update_weight.update_weight_from_distributed import UpdateWeightFromDistributed
 from .update_weight.update_weight_from_tensor import UpdateWeightFromTensor
@@ -92,7 +92,7 @@ class MegatronTrainRayActor(TrainRayActor):
             args, role
         )
 
-        self.parallel_state = create_megatron_parallel_state(model=self.model)
+        self.parallel_state = MegatronParallelState(model=self.model)
 
         if role == "critic":
             if self.args.offload_train:
