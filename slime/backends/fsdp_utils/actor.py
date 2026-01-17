@@ -11,25 +11,18 @@ from tqdm import tqdm
 from transformers import AutoConfig
 
 from slime.ray.train_actor import TrainRayActor
-from slime.utils import train_dump_utils, train_metric_utils
+from slime.utils import logging_utils, train_dump_utils, train_metric_utils
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.logging_utils import init_tracking
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.metric_utils import compute_rollout_step
-from slime.utils.misc import Box, load_function
-from slime.utils.ppo_utils import (
-    compute_approx_kl,
-    compute_gspo_kl,
-    compute_opsm_mask,
-    compute_policy_loss,
-    vanilla_tis_function,
-)
+from slime.utils.misc import Box
+from slime.utils.ppo_utils import compute_approx_kl, compute_gspo_kl, compute_opsm_mask, compute_policy_loss
 from slime.utils.processing_utils import load_processor, load_tokenizer
+from slime.utils.profile_utils import TrainProfiler
 from slime.utils.timer import Timer, inverse_timer, timer, with_defer
 
-from ...utils import logging_utils
-from ...utils.profile_utils import TrainProfiler
 from . import checkpoint
 from .data_packing import pack_sequences, unpack_sequences
 from .lr_scheduler import get_lr_scheduler
@@ -621,30 +614,6 @@ class FSDPTrainRayActor(TrainRayActor):
             else None
         )
 
-        # Apply off-policy correction using importance sampling if enabled
-        if self.args.use_tis:
-            assert (
-                has_rollout_log_probs and rollout_log_probs is not None
-            ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS/MIS"
-
-            train_log_probs_list = list(log_probs.split(response_lengths, dim=0))
-            rollout_log_probs_list = list(rollout_log_probs.split(response_lengths, dim=0))
-            ois = (-ppo_kl).exp()
-            tis_kwargs = {
-                "args": self.args,
-                "pg_loss": pg_loss,
-                "train_log_probs": train_log_probs_list,
-                "rollout_log_probs": rollout_log_probs_list,
-                "loss_masks": loss_masks,
-                "response_lengths": response_lengths,
-            }
-
-            if self.args.custom_tis_function_path is not None:
-                tis_func = load_function(self.args.custom_tis_function_path)
-            else:
-                tis_func = vanilla_tis_function
-            pg_loss, loss_masks, tis_metrics = tis_func(**tis_kwargs)
-
         if self.args.calculate_per_token_loss:
             pg_loss = sum_of_token(pg_loss, response_lengths, loss_masks)
             pg_clipfrac = sum_of_token(pg_clipfrac, response_lengths, loss_masks)
@@ -698,14 +667,6 @@ class FSDPTrainRayActor(TrainRayActor):
 
         if self.args.use_opsm:
             reported["opsm_clipfrac"] = opsm_clipfrac
-
-        if self.args.use_tis and tis_metrics:
-            reported["ois"] = sum_of_sample_mean(ois, response_lengths, loss_masks).detach()
-            for k, v in tis_metrics.items():
-                if self.args.calculate_per_token_loss:
-                    reported[k] = sum_of_token(v, response_lengths, loss_masks).detach()
-                else:
-                    reported[k] = sum_of_sample_mean(v, response_lengths, loss_masks).detach()
 
         # Scale loss for gradient accumulation
         loss = loss * self.dp_size / self.args.global_batch_size
