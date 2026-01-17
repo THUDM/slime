@@ -87,7 +87,6 @@ def execute():
         "--train-backend fsdp "
         "--attn-implementation flash_attention_2 "
         "--gradient-checkpointing "
-        f"--context-parallel-size {CP_SIZE} "
         f"--update-weight-buffer-size {512 * 1024 * 1024} "
         """--train-env-vars '{"PYTORCH_CUDA_ALLOC_CONF":"expandable_segments:True"}' """
     )
