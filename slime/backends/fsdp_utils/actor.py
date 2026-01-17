@@ -16,6 +16,7 @@ from slime.ray.train_actor import TrainRayActor
 from slime.utils import train_dump_utils, train_metric_utils
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.logging_utils import init_tracking
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.metric_utils import compute_rollout_step
 from slime.utils.misc import Box, load_function
@@ -28,9 +29,8 @@ from slime.utils.ppo_utils import (
 )
 from slime.utils.processing_utils import load_processor, load_tokenizer
 from slime.utils.timer import Timer, inverse_timer, timer, with_defer
-from slime.utils.tracking_utils import init_tracking
 
-from ...utils import tracking_utils
+from ...utils import logging_utils
 from ...utils.profile_utils import TrainProfiler
 from . import checkpoint
 from .data_packing import pack_sequences, pad_packed_sequence_with_cp, unpack_sequences
@@ -528,7 +528,7 @@ class FSDPTrainRayActor(TrainRayActor):
         if dist.get_rank() == 0:
             logger.info(f"rollout {rollout_id}: {log_dict}")
             log_dict["rollout/step"] = compute_rollout_step(self.args, rollout_id)
-            tracking_utils.log(self.args, log_dict, step_key="rollout/step")
+            logging_utils.log(self.args, log_dict, step_key="rollout/step")
 
         if self.args.ci_test and self.args.true_on_policy_mode:
             assert log_dict["rollout/log_probs"] == log_dict["rollout/rollout_log_probs"], (
@@ -797,7 +797,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 logger.info(f"step {self.global_step}: {log_dict}")
 
                 log_dict["train/step"] = self.global_step
-                tracking_utils.log(self.args, log_dict, step_key="train/step")
+                logging_utils.log(self.args, log_dict, step_key="train/step")
             self.global_step += 1
 
     @timer
