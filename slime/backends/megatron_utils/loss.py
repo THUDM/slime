@@ -3,6 +3,7 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import torch
+from megatron.core import mpu
 from torch.utils.checkpoint import checkpoint
 
 from slime.utils.distributed_utils import distributed_masked_whiten
@@ -21,14 +22,12 @@ from slime.utils.ppo_utils import (
 from slime.utils.types import RolloutBatch
 
 from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
-from .parallel import ParallelState
 
 
 def get_responses(
     logits: torch.Tensor,
     *,
     args: Namespace,
-    parallel_state: ParallelState,
     unconcat_tokens: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
@@ -70,7 +69,7 @@ def get_responses(
     if args.rollout_temperature != 1.0:
         logits = logits.div(args.rollout_temperature)
 
-    cp_size = parallel_state.cp_size
+    cp_size = mpu.get_context_parallel_world_size()
     end = 0
     for i, (tokens, total_length, response_length) in enumerate(
         zip(unconcat_tokens, total_lengths, response_lengths, strict=False)
@@ -89,7 +88,7 @@ def get_responses(
         else:
             # TODO: this is super ugly... do better abstraction.
             chunk_size, chunks_offset, logits_offset, tokens_offset = get_logits_and_tokens_offset_with_cp(
-                total_length, response_length, parallel_state, qkv_format, max_seq_len
+                total_length, response_length, qkv_format, max_seq_len
             )
 
             logits_0, logits_1 = logits[end : end + chunk_size], logits[end + chunk_size : end + 2 * chunk_size]
@@ -114,7 +113,6 @@ def get_log_probs_and_entropy(
     logits: torch.Tensor,
     *,
     args: Namespace,
-    parallel_state: ParallelState,
     unconcat_tokens: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
@@ -150,7 +148,6 @@ def get_log_probs_and_entropy(
     for logits_chunk, tokens_chunk in get_responses(
         logits,
         args=args,
-        parallel_state=parallel_state,
         unconcat_tokens=unconcat_tokens,
         total_lengths=total_lengths,
         response_lengths=response_lengths,
@@ -159,7 +156,7 @@ def get_log_probs_and_entropy(
         log_prob, entropy = calculate_log_probs_and_entropy(
             logits_chunk,
             tokens_chunk,
-            parallel_state.tp_group,
+            mpu.get_tensor_model_parallel_group(),
             with_entropy=with_entropy,
             chunk_size=args.log_probs_chunk_size,
         )
@@ -179,7 +176,6 @@ def get_values(
     logits: torch.Tensor,
     *,
     args: Namespace,
-    parallel_state: ParallelState,
     unconcat_tokens: list[torch.Tensor],
     total_lengths: list[int],
     response_lengths: list[int],
@@ -210,7 +206,6 @@ def get_values(
     for logits_chunk, _ in get_responses(
         logits,
         args=args,
-        parallel_state=parallel_state,
         unconcat_tokens=unconcat_tokens,
         total_lengths=total_lengths,
         response_lengths=response_lengths,
@@ -224,7 +219,7 @@ def get_values(
     }
 
 
-def compute_advantages_and_returns(args: Namespace, parallel_state: ParallelState, rollout_data: RolloutBatch) -> None:
+def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) -> None:
     """Compute advantages and returns in-place based on `args.advantage_estimator`.
 
     This function extracts rewards, log-probs, values, and masks from
@@ -282,14 +277,14 @@ def compute_advantages_and_returns(args: Namespace, parallel_state: ParallelStat
         old_rewards = rewards
         rewards = []
         kl_coef = -args.kl_coef
-        cp_rank = parallel_state.cp_rank
+        cp_rank = mpu.get_context_parallel_rank()
         for reward, k in zip(old_rewards, kl, strict=False):
             k *= kl_coef
             if cp_rank == 0:
                 k[-1] += reward
             rewards.append(k)
         advantages, returns = get_advantages_and_returns_batch(
-            total_lengths, response_lengths, values, rewards, args.gamma, args.lambd, parallel_state
+            total_lengths, response_lengths, values, rewards, args.gamma, args.lambd
         )
 
     elif args.advantage_estimator == "reinforce_plus_plus":
@@ -302,7 +297,6 @@ def compute_advantages_and_returns(args: Namespace, parallel_state: ParallelStat
             total_lengths=total_lengths,
             kl_coef=args.kl_coef,
             gamma=args.gamma,
-            parallel_state=parallel_state,
         )
         advantages = [r for r in returns]
 
@@ -338,7 +332,7 @@ def compute_advantages_and_returns(args: Namespace, parallel_state: ParallelStat
     # TODO: OpenRLHF always does advantages normalization but veRL doesn't seem to do it.
     if args.normalize_advantages:
         all_advs = torch.cat(advantages)
-        cp_size = parallel_state.cp_size
+        cp_size = mpu.get_context_parallel_world_size()
         if cp_size == 1:
             all_masks = torch.cat(loss_masks)
         else:
@@ -350,7 +344,7 @@ def compute_advantages_and_returns(args: Namespace, parallel_state: ParallelStat
                 max_seq_len = max_seq_lens[i] if max_seq_lens is not None else None
 
                 _, _, _, token_offsets = get_logits_and_tokens_offset_with_cp(
-                    total_len, response_len, parallel_state, args.qkv_format, max_seq_len
+                    total_len, response_len, args.qkv_format, max_seq_len
                 )
 
                 # Convert global offsets to response-space offsets
@@ -380,7 +374,7 @@ def compute_advantages_and_returns(args: Namespace, parallel_state: ParallelStat
             assert (
                 all_advs.size() == all_masks.size()
             ), f"Shape mismatch before whitening: advantages {all_advs.size()}, masks {all_masks.size()}"
-            dp_group = parallel_state.dp_group
+            dp_group = mpu.get_data_parallel_group()
 
             whitened_advs_flat = distributed_masked_whiten(
                 all_advs,
@@ -447,7 +441,6 @@ def icepop_function(
 
 def policy_loss_function(
     args: Namespace,
-    parallel_state: ParallelState,
     batch: RolloutBatch,
     logits: torch.Tensor,
     sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
@@ -486,7 +479,6 @@ def policy_loss_function(
     log_probs_and_entropy = get_log_probs_and_entropy(
         logits,
         args=args,
-        parallel_state=parallel_state,
         unconcat_tokens=batch["unconcat_tokens"],
         total_lengths=total_lengths,
         response_lengths=response_lengths,
@@ -503,13 +495,13 @@ def policy_loss_function(
     full_old_log_probs = None
     if need_full_log_probs:
         full_log_probs = [
-            all_gather_with_cp(log_prob, total_length, response_length, parallel_state)
+            all_gather_with_cp(log_prob, total_length, response_length)
             for log_prob, total_length, response_length in zip(
                 log_probs, total_lengths, response_lengths, strict=False
             )
         ]
         full_old_log_probs = [
-            all_gather_with_cp(old_log_prob, total_length, response_length, parallel_state)
+            all_gather_with_cp(old_log_prob, total_length, response_length)
             for old_log_prob, total_length, response_length in zip(
                 old_log_probs, total_lengths, response_lengths, strict=False
             )
@@ -568,7 +560,6 @@ def policy_loss_function(
             "loss_masks": batch["loss_masks"],
             "total_lengths": total_lengths,
             "response_lengths": response_lengths,
-            "parallel_state": parallel_state,
         }
 
         if args.custom_tis_function_path is not None:
@@ -583,7 +574,6 @@ def policy_loss_function(
             total_lengths,
             response_lengths,
             modified_response_masks,
-            parallel_state,
             args.calculate_per_token_loss,
             args.qkv_format,
             max_seq_lens,
@@ -667,7 +657,6 @@ def policy_loss_function(
 
 def value_loss_function(
     args: Namespace,
-    parallel_state: ParallelState,
     batch: RolloutBatch,
     logits: torch.Tensor,
     sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
@@ -694,7 +683,6 @@ def value_loss_function(
     values = get_values(
         logits,
         args=args,
-        parallel_state=parallel_state,
         unconcat_tokens=batch["unconcat_tokens"],
         total_lengths=batch["total_lengths"],
         response_lengths=batch["response_lengths"],
@@ -727,7 +715,6 @@ def value_loss_function(
 
 def sft_loss_function(
     args: Namespace,
-    parallel_state: ParallelState,
     batch: RolloutBatch,
     logits: torch.Tensor,
     sum_of_sample_mean: Callable[[torch.Tensor], torch.Tensor],
@@ -754,7 +741,6 @@ def sft_loss_function(
     log_probs_and_entropy = get_log_probs_and_entropy(
         logits,
         args=args,
-        parallel_state=parallel_state,
         unconcat_tokens=batch["unconcat_tokens"],
         total_lengths=total_lengths,
         response_lengths=response_lengths,
@@ -780,11 +766,9 @@ def sft_loss_function(
 
 def loss_function(
     args: Namespace,
-    parallel_state: ParallelState,
     batch: RolloutBatch,
     num_microbatches: int,
     logits: torch.Tensor,
-    apply_megatron_loss_scaling: bool = False,
 ) -> tuple[torch.Tensor, int | torch.Tensor, dict[str, list[str] | torch.Tensor]]:
     """Dispatch to the configured loss and rescale for Megatron integration.
 
@@ -816,7 +800,6 @@ def loss_function(
         batch["total_lengths"],
         batch["response_lengths"],
         batch["loss_masks"],
-        parallel_state,
         args.calculate_per_token_loss,
         args.qkv_format,
         batch.get("max_seq_lens", None),
@@ -835,27 +818,18 @@ def loss_function(
             raise ValueError(f"Unknown loss type: {args.loss_type}")
 
     if args.recompute_loss_function:
-        loss, log = checkpoint(
-            func,
-            args,
-            parallel_state,
-            batch,
-            logits,
-            sum_of_sample_mean,
-        )
+        loss, log = checkpoint(func, args, batch, logits, sum_of_sample_mean)
     else:
-        loss, log = func(args, parallel_state, batch, logits, sum_of_sample_mean)
+        loss, log = func(args, batch, logits, sum_of_sample_mean)
 
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
     global_batch_size = batch.get("dynamic_global_batch_size", args.global_batch_size)
     if not args.calculate_per_token_loss:
-        if apply_megatron_loss_scaling:
-            loss = loss * num_microbatches / global_batch_size * parallel_state.dp_cp_size
-        else:
-            loss = loss / global_batch_size * parallel_state.dp_size
+        loss = (
+            loss * num_microbatches / global_batch_size * mpu.get_data_parallel_world_size(with_context_parallel=True)
+        )
     else:
-        if apply_megatron_loss_scaling:
-            loss = loss * parallel_state.cp_size
+        loss = loss * mpu.get_context_parallel_world_size()
 
     return (
         loss,
