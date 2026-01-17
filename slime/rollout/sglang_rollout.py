@@ -169,6 +169,11 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.response_length += len(new_response_tokens)
         sample.response += output["text"]
 
+        # When partial rollout and masking off policy is enabled, update the loss mask
+        if sample.loss_mask is not None:
+            assert args.partial_rollout and args.mask_offpolicy_in_partial_rollout
+            sample.loss_mask += [1] * len(new_response_tokens)
+
         if sample.rollout_log_probs is None:
             sample.rollout_log_probs = []
         sample.rollout_log_probs += new_response_log_probs
