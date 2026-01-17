@@ -3,7 +3,6 @@
 import math
 
 import torch
-import torch.nn.functional as F
 
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 
@@ -193,26 +192,3 @@ def unpack_sequences(packed_batch: dict) -> list[dict]:
         instances.append(instance)
 
     return instances
-
-
-def pad_packed_sequence_with_cp(packed_sequence: dict, cp_size: int) -> dict:
-    """Pad packed sequence to make total length divisible by cp_size.
-
-    Args:
-        packed_sequence: Packed sequence dict containing tokens, position_ids, cu_seqlens, etc.
-        cp_size: Context parallelism world size
-
-    Returns:
-        Padded packed sequence
-    """
-    seq_length = len(packed_sequence["tokens"])
-    # Calculate padding needed: (cp_size - seq_length % cp_size) % cp_size
-    remainder = seq_length % cp_size
-    pad_length = (cp_size - remainder) % cp_size
-
-    if pad_length > 0:
-        packed_sequence["tokens"] = F.pad(packed_sequence["tokens"], (0, pad_length), value=0)
-        packed_sequence["position_ids"] = F.pad(packed_sequence["position_ids"], (0, pad_length), value=0)
-        packed_sequence["loss_masks"] = F.pad(packed_sequence["loss_masks"], (0, pad_length), value=0)
-        packed_sequence["cu_seqlens"][-1] += pad_length
-    return packed_sequence

@@ -47,8 +47,6 @@ class FSDPArgs:
 
     deterministic_mode: bool = False  # This name must be the same as Megatron's
 
-    # Context Parallelism
-    context_parallel_size: int = 1  # Context Parallelism size
     # Profile
     record_memory_history: bool = False
     memory_snapshot_path: str = "snapshot.pickle"
