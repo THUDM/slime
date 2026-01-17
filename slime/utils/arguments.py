@@ -1223,8 +1223,8 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--loss-mask-type",
                 type=str,
-                default="qwen",
-                choices=["qwen", "qwen3", "distill_qwen"],
+                default="qwen3",
+                choices=["qwen25", "qwen3", "distill_qwen"],
                 help="Loss mask type",
             )
             parser.add_argument(

@@ -7,7 +7,7 @@ def get_response_lengths(loss_masks: list[list[int]]) -> list[int]:
 
 
 class MultiTurnLossMaskGenerator:
-    def __init__(self, tokenizer: AutoTokenizer, tokenizer_type: str = "qwen"):
+    def __init__(self, tokenizer: AutoTokenizer, tokenizer_type: str = "qwen25"):
         self.tokenizer = tokenizer
         self.system_message_length, self.gen_token_length = self.get_system_message_length()
         self.tokenizer_type = tokenizer_type
@@ -45,7 +45,7 @@ class MultiTurnLossMaskGenerator:
         system_message_length = idx_1 - ((idx_2 - idx_1) - end_interval - len(raw_token_ids))
         return system_message_length, gen_token_length
 
-    def gen_multi_turn_loss_mask_qwen(
+    def gen_multi_turn_loss_mask_qwen25(
         self, messages: list[dict], tools: list[dict] = None
     ) -> tuple[list[int], list[int]]:
         all_loss_masks = []
@@ -111,27 +111,55 @@ class MultiTurnLossMaskGenerator:
     def gen_multi_turn_loss_mask_distill_qwen(
         self, messages: list[dict], tools: list[dict] = None
     ) -> tuple[list[int], list[int]]:
-        prompt = self.tokenizer.apply_chat_template(
-            messages[:1], tokenize=False, add_generation_prompt=True, tools=tools
-        )
-        response = messages[-1]["content"]
-        prompt_tokens = self.tokenizer(prompt, add_special_tokens=False)["input_ids"]
-        response_tokens = self.tokenizer(response, add_special_tokens=False)["input_ids"]
+        all_loss_masks = []
+        all_token_ids = []
 
-        response_length = len(response_tokens)
-        token_ids = prompt_tokens + response_tokens
-        loss_mask = [0] * len(prompt_tokens) + [1] * response_length
+        prefix_message = {"role": "user", "content": "FOR CALCULATING LOSS MASK ONLY"}
+        prefix_token_ids = self.tokenizer.apply_chat_template([prefix_message], tokenize=True)
+        assistant_token_id = self.tokenizer.convert_tokens_to_ids("<｜Assistant｜>")
+        unknown_token_id = getattr(self.tokenizer, "unk_token_id", None)
 
-        if messages[-1].get("step_loss_mask", 1) != 1:
-            loss_mask = [0] * len(token_ids)
-        return token_ids, loss_mask
+        for i, message in enumerate(messages):
+            if i == 0:
+                tailed_message_ids = self.tokenizer.apply_chat_template(
+                    [message, prefix_message], tokenize=True, tools=tools
+                )
+                message_ids = tailed_message_ids[: -len(prefix_token_ids)] if prefix_token_ids else tailed_message_ids
+            else:
+                prefixed_message_ids = self.tokenizer.apply_chat_template([prefix_message, message], tokenize=True)
+                message_ids = prefixed_message_ids[len(prefix_token_ids) :] if prefix_token_ids else prefixed_message_ids
+
+            if message["role"] == "assistant":
+                start_index = 0
+                if assistant_token_id is not None and assistant_token_id != unknown_token_id:
+                    if assistant_token_id in message_ids:
+                        start_index = message_ids.index(assistant_token_id) + 1
+                if start_index == 0:
+                    content = message.get("content", "") or ""
+                    content_token_ids = self.tokenizer(content, add_special_tokens=False)["input_ids"]
+                    if content_token_ids:
+                        indices = self.find_all_sublist_indices(message_ids, content_token_ids)
+                        if indices:
+                            start_index = indices[0]
+
+                loss_mask = [0] * start_index + [1] * (len(message_ids) - start_index)
+            else:
+                loss_mask = [0] * len(message_ids)
+
+            if message.get("step_loss_mask", 1) != 1:
+                loss_mask = [0] * len(message_ids)
+
+            all_loss_masks.extend(loss_mask)
+            all_token_ids.extend(message_ids)
+
+        return all_token_ids, all_loss_masks
 
     def get_loss_mask(self, messages: list[dict], tools: list[dict] = None) -> tuple[list[int], list[int]]:
-        if self.tokenizer_type == "qwen":
+        if self.tokenizer_type == "qwen25":
             if "<｜Assistant｜>" in self.tokenizer.get_added_vocab():
                 return self.gen_multi_turn_loss_mask_distill_qwen(messages, tools)
 
-            return self.gen_multi_turn_loss_mask_qwen(messages, tools)
+            return self.gen_multi_turn_loss_mask_qwen25(messages, tools)
         elif self.tokenizer_type == "qwen3":
             return self.gen_multi_turn_loss_mask_qwen3(messages, tools)
         elif self.tokenizer_type == "distill_qwen":
