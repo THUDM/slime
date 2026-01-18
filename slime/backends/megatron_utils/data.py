@@ -170,9 +170,17 @@ def gather_log_data(
             group=mpu.get_data_parallel_group_gloo(with_context_parallel=True),
         )
 
-        reduced_log_dict = {
-            f"{metric_name}/{key}": sum([d[key] for d in gathered_log_dict]) / dp_size for key in log_dict
-        }
+        all_keys = set()
+        for d in gathered_log_dict:
+            if d is not None:
+                all_keys.update(d.keys())
+
+        reduced_log_dict = {}
+        for key in all_keys:
+            values = [d[key] for d in gathered_log_dict if d is not None and key in d]
+            if values:
+                reduced_log_dict[f"{metric_name}/{key}"] = sum(values) / len(values)
+
         logger.info(f"{metric_name} {rollout_id}: {reduced_log_dict}")
 
         # Calculate step once to avoid duplication
@@ -366,48 +374,83 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
     if mpu.get_tensor_model_parallel_rank() == 0 and mpu.is_pipeline_last_stage():
         cp_size = mpu.get_context_parallel_world_size()
         log_dict = {}
-        response_lengths = rollout_data["response_lengths"]
-        loss_masks = rollout_data["loss_masks"]
-        total_lengths = rollout_data["total_lengths"]
-        max_seq_lens = rollout_data.get("max_seq_lens", None)
 
-        for key, val in rollout_data.items():
-            if key in [
-                "tokens",
-                "multimodal_train_inputs",
-                "loss_masks",
-                "sample_indices",
-                "rollout_routed_experts",
-                "max_seq_lens",
-                "dynamic_global_batch_size",
-            ]:
-                continue
-            # Upload per sample mean for each rollout value
-            # There are the following assumptions:
-            # - Each dp rank has the same number of samples
-            if isinstance(val, (list, tuple)):
-                if isinstance(val[0], torch.Tensor):
-                    # NOTE: Here we have to do the clone().detach(), otherwise the tensor will be
-                    # modified in place and will cause problem for the next rollout.
-                    val = torch.cat(val).clone().detach()
-                    if key in ["log_probs", "ref_log_probs", "rollout_log_probs", "returns", "advantages", "values"]:
-                        sum_of_sample_mean = get_sum_of_sample_mean(
-                            total_lengths,
-                            response_lengths,
-                            loss_masks,
-                            qkv_format=args.qkv_format,
-                            max_seq_lens=max_seq_lens,
-                        )
-                        val = cp_size * sum_of_sample_mean(val) / len(loss_masks)
+        task_types = rollout_data.get("task_type", None)
+        n_samples = len(rollout_data["response_lengths"])
+        groups = {"": list(range(n_samples))}
+        if task_types:
+            for i, t in enumerate(task_types):
+                if t not in groups:
+                    groups[t] = []
+                groups[t].append(i)
+
+        for group_name, indices in groups.items():
+
+            def subset(vals):
+                if isinstance(vals, (list, tuple)):
+                    return [vals[i] for i in indices]
+                elif isinstance(vals, torch.Tensor):
+                    if vals.shape and vals.shape[0] == n_samples:
+                        return vals[indices]
+                    return vals
+                raise ValueError(f"Unsupported type {type(vals)}")
+
+            s_response_lengths = subset(rollout_data["response_lengths"])
+            s_loss_masks = subset(rollout_data["loss_masks"])
+            s_total_lengths = subset(rollout_data["total_lengths"])
+            s_max_seq_lens = subset(rollout_data["max_seq_lens"]) if "max_seq_lens" in rollout_data else None
+
+            for key, val in rollout_data.items():
+                if key in [
+                    "tokens",
+                    "multimodal_train_inputs",
+                    "loss_masks",
+                    "sample_indices",
+                    "rollout_routed_experts",
+                    "max_seq_lens",
+                    "dynamic_global_batch_size",
+                    "task_type",
+                ]:
+                    continue
+
+                val_subset = subset(val)
+                if isinstance(val_subset, list) and not val_subset:
+                    continue
+
+                computed_val = None
+                if isinstance(val_subset, (list, tuple)):
+                    if isinstance(val_subset[0], torch.Tensor):
+                        v_tensor = torch.cat(val_subset).clone().detach()
+                        if key in [
+                            "log_probs",
+                            "ref_log_probs",
+                            "rollout_log_probs",
+                            "returns",
+                            "advantages",
+                            "values",
+                        ]:
+                            sum_of_sample_mean = get_sum_of_sample_mean(
+                                s_total_lengths,
+                                s_response_lengths,
+                                s_loss_masks,
+                                qkv_format=args.qkv_format,
+                                max_seq_lens=s_max_seq_lens,
+                            )
+                            computed_val = cp_size * sum_of_sample_mean(v_tensor) / len(s_loss_masks)
+                        else:
+                            computed_val = v_tensor.mean() * cp_size
                     else:
-                        val = val.mean() * cp_size
+                        computed_val = sum(val_subset) / len(val_subset)
+                elif isinstance(val_subset, torch.Tensor):
+                    computed_val = val_subset.float().mean()
                 else:
-                    val = sum(val) / len(val)
-            elif isinstance(val, torch.Tensor):
-                val = val.float().mean()
-            else:
-                raise ValueError(f"Unsupported type: {type(val)} for key: {key}")
-            log_dict[key] = val.item() if isinstance(val, torch.Tensor) else val
+                    raise ValueError(f"Unsupported type: {type(val_subset)} for key: {key}")
+
+                if computed_val is not None:
+                    final_key = f"{group_name}/{key}" if group_name else key
+                    log_dict[final_key] = (
+                        computed_val.item() if isinstance(computed_val, torch.Tensor) else computed_val
+                    )
 
         reduced_log_dict = gather_log_data("rollout", args, rollout_id, log_dict)
         if args.ci_test and reduced_log_dict is not None:
