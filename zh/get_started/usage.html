@@ -54,7 +54,7 @@
     <link rel="prev" title="快速使用" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 01 月 17 日"/>
+    <meta name="docbuild:last-update" content="2026 年 01 月 18 日"/>
   </head>
   
   
@@ -449,7 +449,11 @@ document.write(`
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang">加载 sglang</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">数据格式</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rl">RL 训练需要的超参</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rl">RL 训练需要的超参</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#grpo">GRPO 算法</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#ppo">PPO 算法</a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout">自定义 rollout 函数</a></li>
@@ -666,6 +670,65 @@ document.write(`
 <li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--true-on-policy-mode</span></code>：开启 True On-Policy 模式，即在训练过程中严格保证数据是当前策略生成的。</p></li>
 </ul>
+<section id="grpo">
+<h4>GRPO 算法<a class="headerlink" href="#grpo" title="链接到此标题。">#</a></h4>
+<p>GRPO（Group Relative Policy Optimization）是 DeepSeek-Math 中提出的一种 RL 算法，其核心思想是通过组内相对比较来计算 advantage，而不需要额外的 critic 模型。</p>
+<p>使用 GRPO 时，需要设置：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--advantage-estimator<span class="w"> </span>grpo
+</pre></div>
+</div>
+<p>GRPO 的主要特点：</p>
+<ul class="simple">
+<li><p><strong>无需 Critic 模型</strong>：GRPO 通过对同一 prompt 采样多个 response，然后在组内计算相对 reward 来估计 advantage，避免了训练和维护 critic 模型的开销；</p></li>
+<li><p><strong>资源高效</strong>：由于不需要 critic 模型，GPU 资源可以完全用于 actor 训练和推理；</p></li>
+<li><p><strong>简单易用</strong>：配置简单，只需要设置 <code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span> <span class="pre">grpo</span></code> 即可。</p></li>
+</ul>
+<p>相关参数：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--n-samples-per-prompt</span></code>：每个 prompt 采样的 response 数量，用于组内比较；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--normalize-advantages</span></code>：是否对 advantage 进行归一化；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--eps-clip</span></code>：PPO 风格的 clip 范围。</p></li>
+</ul>
+</section>
+<section id="ppo">
+<h4>PPO 算法<a class="headerlink" href="#ppo" title="链接到此标题。">#</a></h4>
+<p>PPO（Proximal Policy Optimization）是经典的 RL 算法，使用 critic 模型来估计 value function，从而计算 advantage。</p>
+<p>使用 PPO 时，需要设置：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--advantage-estimator<span class="w"> </span>ppo
+</pre></div>
+</div>
+<p><strong>注意：PPO 的 Critic 和 Actor 是并列申请 GPU 的</strong>，在资源分配时需要考虑这一点。具体来说：</p>
+<ul class="simple">
+<li><p>Critic 模型会独立占用一组 GPU，与 Actor 的 GPU 资源分开；</p></li>
+<li><p>可以通过 <code class="docutils literal notranslate"><span class="pre">--critic-num-nodes</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--critic-num-gpus-per-node</span></code> 来配置 critic 使用的资源；</p></li>
+<li><p>如果不配置 critic 的资源参数，默认会使用与 actor 相同的资源配置。</p></li>
+</ul>
+<p>集群资源分配示例：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Actor 使用 1 个节点，4 张 GPU</span>
+--actor-num-nodes<span class="w"> </span><span class="m">1</span>
+--actor-num-gpus-per-node<span class="w"> </span><span class="m">4</span>
+
+<span class="c1"># Critic 使用 1 个节点，4 张 GPU（与 Actor 并列）</span>
+--critic-num-nodes<span class="w"> </span><span class="m">1</span>
+--critic-num-gpus-per-node<span class="w"> </span><span class="m">4</span>
+
+<span class="c1"># Rollout 使用 8 张 GPU</span>
+--rollout-num-gpus<span class="w"> </span><span class="m">8</span>
+</pre></div>
+</div>
+<p>在上述配置下，总共需要 <code class="docutils literal notranslate"><span class="pre">4</span> <span class="pre">(actor)</span> <span class="pre">+</span> <span class="pre">4</span> <span class="pre">(critic)</span> <span class="pre">+</span> <span class="pre">8</span> <span class="pre">(rollout)</span> <span class="pre">=</span> <span class="pre">16</span></code> 张 GPU。</p>
+<p>PPO 相关参数：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--critic-load</span></code>：critic 模型的 checkpoint 路径；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--critic-save</span></code>：critic 模型的保存路径；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--critic-lr</span></code>：critic 模型的学习率；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--critic-lr-warmup-iters</span></code>：critic 模型的 warmup 步数；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--num-critic-only-steps</span></code>：训练开始时只训练 critic 的步数；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--eps-clip</span></code>：PPO clip 范围；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--value-clip</span></code>：value loss 的 clip 范围；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--kl-coef</span></code>：KL penalty 系数，用于 reward shaping。</p></li>
+</ul>
+</section>
 </section>
 </section>
 <section id="rollout">
@@ -851,7 +914,11 @@ document.write(`
 </li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang">加载 sglang</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">数据格式</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rl">RL 训练需要的超参</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rl">RL 训练需要的超参</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#grpo">GRPO 算法</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#ppo">PPO 算法</a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout">自定义 rollout 函数</a></li>
@@ -898,7 +965,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 01 月 17 日.
+  最后更新于 2026 年 01 月 18 日.
   <br/>
 </p>
   </div>

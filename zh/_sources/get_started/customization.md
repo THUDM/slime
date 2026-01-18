@@ -346,10 +346,10 @@ class CustomDataSource(DataSource):
         """将样本添加回数据源"""
         
     def save(self, rollout_id):
-        """保存状态用于检查点"""
+        """保存状态用于 ckpt"""
         
     def load(self, rollout_id=None):
-        """从检查点加载状态"""
+        """从 ckpt 加载状态"""
 ```
 
 ---

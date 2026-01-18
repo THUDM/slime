@@ -47,7 +47,7 @@ bash scripts/low_precision/run-qwen3-4b-fp8.sh
 bash scripts/low_precision/run-qwen3-30b-a3b-fp8.sh
 ```
 
-4. 使用保存的 ckpt：TransformerEngine 不会专门保存 FP8 量化后的权重；保存的 `torch_dist` 检查点仍为原始精度（通常是 BF16）。如果你想在 FP8 下进行评估，需要先将 `torch_dist` 转换为 HuggingFace 格式，然后再转换为 FP8 HuggingFace 格式。
+4. 使用保存的 ckpt：TransformerEngine 不会专门保存 FP8 量化后的权重；保存的 `torch_dist` ckpt 仍为原始精度（通常是 BF16）。如果你想在 FP8 下进行评估，需要先将 `torch_dist` 转换为 HuggingFace 格式，然后再转换为 FP8 HuggingFace 格式。
 
 ### 原理简述
 
@@ -56,7 +56,7 @@ bash scripts/low_precision/run-qwen3-30b-a3b-fp8.sh
 1. **初始化**：如果启用了 FP8 方案，相关层将在 FP8 上下文中构建。
 2. **训练过程**：在训练期间，权重和激活值会在线量化为 `nvfp8` 格式，并在前向和反向传播中调用 `cuBLAS FP8 GEMM` 进行计算。
 3. **权重更新**：在强化学习（RL）权重更新期间，Megatron 首先将 FP8 权重反量化为 BF16 格式，然后 slime 再将这些 BF16 权重重新量化为 FP8 并发送给 sglang。（这种“反量化+再量化”的操作虽然不够优雅，但为了框架兼容性，目前尚未修改接口。）
-4. **保存检查点**：与权重更新类似，从训练引擎保存检查点时，也会反量化回 BF16 并以 `torch_dist` 格式保存。
+4. **保存 ckpt**：与权重更新类似，从训练引擎保存 ckpt 时，也会反量化回 BF16 并以 `torch_dist` 格式保存。
 
 ### 待办事项 (TODO)
 
