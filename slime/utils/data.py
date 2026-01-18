@@ -80,13 +80,13 @@ def _parse_generalized_path(s: str):
 
 def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_length: int | None) -> list[Sample]:
     if max_length is None:
-        return False
+        return origin_samples
 
     if not isinstance(origin_samples[0].prompt, str):
         logger.warning(
             "Skipping max_length check for list prompt. Set apply_chat_template=True to enable length filtering."
         )
-        return False
+        return origin_samples
 
     if processor:
         filtered_samples = []

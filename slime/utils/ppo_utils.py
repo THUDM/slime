@@ -251,9 +251,10 @@ def get_reinforce_plus_plus_returns(
             full_kl_response = local_kl_chunk
 
         # Step 3: Compute returns on full response kl tensor.
-        token_level_rewards = -kl_coef * full_kl_response
         full_mask = loss_masks[i]
         assert full_mask.sum().item() > 0, f"Sequence at index {i} is fully masked."
+        masked_kl = full_kl_response * full_mask
+        token_level_rewards = -kl_coef * masked_kl
         last_idx = full_mask.nonzero(as_tuple=True)[0][-1]
         token_level_rewards[last_idx] += rewards[i]
 

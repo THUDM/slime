@@ -576,7 +576,7 @@ index 92d286897..43bfab691 100644
                  (ReleaseMemoryOccupationReqInput, self.release_memory_occupation),
                  (ResumeMemoryOccupationReqInput, self.resume_memory_occupation),
 diff --git a/python/sglang/srt/managers/scheduler_output_processor_mixin.py b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
-index e40586c24..32d98aee4 100644
+index e40586c24..243e2b0c2 100644
 --- a/python/sglang/srt/managers/scheduler_output_processor_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
 @@ -10,6 +10,7 @@ from sglang.srt.disaggregation.utils import DisaggregationMode
@@ -587,6 +587,15 @@ index e40586c24..32d98aee4 100644
  from sglang.srt.managers.io_struct import (
      AbortReq,
      BatchEmbeddingOutput,
+@@ -1070,7 +1071,7 @@ class SchedulerOutputProcessorMixin:
+                 req.log_time_stats()
+ 
+         # Send to detokenizer
+-        if reqs or is_idle_batch:
++        if rids or is_idle_batch:
+             if self.model_config.is_multimodal_gen:
+                 return
+ 
 diff --git a/python/sglang/srt/managers/scheduler_update_weights_mixin.py b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 index 293a84350..c3a618bcc 100644
 --- a/python/sglang/srt/managers/scheduler_update_weights_mixin.py

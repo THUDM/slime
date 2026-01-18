@@ -1,5 +1,5 @@
 ARG SGLANG_IMAGE_TAG=nightly-dev-20260107-dce8b060
-FROM lmsysorg/sglang:${SGLANG_IMAGE_TAG} AS sglang
+FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
 
