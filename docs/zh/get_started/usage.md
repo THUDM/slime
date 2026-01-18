@@ -195,6 +195,72 @@ sglang 的加载非常简单，只需要：
 - `--use-tis`：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；
 - `--true-on-policy-mode`：开启 True On-Policy 模式，即在训练过程中严格保证数据是当前策略生成的。
 
+#### GRPO 算法
+
+GRPO（Group Relative Policy Optimization）是 DeepSeek-Math 中提出的一种 RL 算法，其核心思想是通过组内相对比较来计算 advantage，而不需要额外的 critic 模型。
+
+使用 GRPO 时，需要设置：
+
+```bash
+--advantage-estimator grpo
+```
+
+GRPO 的主要特点：
+
+- **无需 Critic 模型**：GRPO 通过对同一 prompt 采样多个 response，然后在组内计算相对 reward 来估计 advantage，避免了训练和维护 critic 模型的开销；
+- **资源高效**：由于不需要 critic 模型，GPU 资源可以完全用于 actor 训练和推理；
+- **简单易用**：配置简单，只需要设置 `--advantage-estimator grpo` 即可。
+
+相关参数：
+
+- `--n-samples-per-prompt`：每个 prompt 采样的 response 数量，用于组内比较；
+- `--normalize-advantages`：是否对 advantage 进行归一化；
+- `--eps-clip`：PPO 风格的 clip 范围。
+
+#### PPO 算法
+
+PPO（Proximal Policy Optimization）是经典的 RL 算法，使用 critic 模型来估计 value function，从而计算 advantage。
+
+使用 PPO 时，需要设置：
+
+```bash
+--advantage-estimator ppo
+```
+
+**注意：PPO 的 Critic 和 Actor 是并列申请 GPU 的**，在资源分配时需要考虑这一点。具体来说：
+
+- Critic 模型会独立占用一组 GPU，与 Actor 的 GPU 资源分开；
+- 可以通过 `--critic-num-nodes` 和 `--critic-num-gpus-per-node` 来配置 critic 使用的资源；
+- 如果不配置 critic 的资源参数，默认会使用与 actor 相同的资源配置。
+
+集群资源分配示例：
+
+```bash
+# Actor 使用 1 个节点，4 张 GPU
+--actor-num-nodes 1
+--actor-num-gpus-per-node 4
+
+# Critic 使用 1 个节点，4 张 GPU（与 Actor 并列）
+--critic-num-nodes 1
+--critic-num-gpus-per-node 4
+
+# Rollout 使用 8 张 GPU
+--rollout-num-gpus 8
+```
+
+在上述配置下，总共需要 `4 (actor) + 4 (critic) + 8 (rollout) = 16` 张 GPU。
+
+PPO 相关参数：
+
+- `--critic-load`：critic 模型的 checkpoint 路径；
+- `--critic-save`：critic 模型的保存路径；
+- `--critic-lr`：critic 模型的学习率；
+- `--critic-lr-warmup-iters`：critic 模型的 warmup 步数；
+- `--num-critic-only-steps`：训练开始时只训练 critic 的步数；
+- `--eps-clip`：PPO clip 范围；
+- `--value-clip`：value loss 的 clip 范围；
+- `--kl-coef`：KL penalty 系数，用于 reward shaping。
+
 ## 自定义 rollout 函数
 
 slime 支持不同程度的自定义数据生成（rollout）。
