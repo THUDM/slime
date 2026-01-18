@@ -1,13 +1,10 @@
 # Examples
 
-These examples provide concrete examples to leverage Slime in your own RL workflow. Some examples are just demonstrative, but most of them are verifiable with a concrete performance score.
+These examples provide concrete examples to leverage slime in your own RL workflow. Some examples are just demonstrative, but most of them are verifiable with a concrete performance score.
 
 ## Directory Structure
 
-- **[DrGRPO](./DrGRPO)**: Custom reducer for Dr.GRPO algorithm.
-- **[eval](./eval)**: Documentation and setup for evaluation environments using NeMo-Skills.
-- **[eval_multi_task](./eval_multi_task)**: Example for supporting OOD evaluation tasks, e.g., GPQA, IFBench.
-- **[formal_math](./formal_math)**: Examples related to formal math reasoning tasks, including a single round demo.
+- **[eval_multi_task](./eval_multi_task)**: Example for supporting evaluation multiple tasks with different configs.
 - **[fully_async](./fully_async)**: Demonstrates fully asynchronous rollout generation for higher efficiency.
 - **[geo3k_vlm](./geo3k_vlm)**: Training VLMs with FSDP on a single-turn reasoning task using GRPO on the GEO3K dataset.
 - **[geo3k_vlm_multi_turn](./geo3k_vlm_multi_turn)**: VLM multi-turn training (FSDP backend) on Geo3k dataset.

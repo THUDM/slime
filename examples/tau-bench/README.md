@@ -9,13 +9,13 @@ Use the `zhuzilin/slime:latest` image and initialize the environment required fo
 cd /root/
 git clone https://github.com/THUDM/slime.git
 cd slime
-pip install -e .
+pip install -e . --no-deps
 # for tau bench 
 cd /root/
 git clone https://github.com/JD-ETH/tau-bench.git
 cd tau-bench
 git checkout feature/litellm-retry
-pip install -e . 
+pip install -e . --no-deps 
 ```
 
 Use the following script to generate mock data for slime training. 

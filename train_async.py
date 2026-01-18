@@ -2,9 +2,8 @@ import ray
 
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
-from slime.utils.logging_utils import configure_logger
+from slime.utils.logging_utils import configure_logger, init_tracking
 from slime.utils.misc import should_run_periodic_action
-from slime.utils.tracking_utils import init_tracking
 
 
 # The framework supports other asynchronous approaches such as fully async (which is shown in examples/full_async).

@@ -115,6 +115,9 @@ class EvalDatasetConfig:
     stop_token_ids: list[int] | None = None
     min_new_tokens: int | None = None
 
+    # per-dataset custom generate function (e.g., for tool calling)
+    custom_generate_function_path: str | None = None
+
     metadata_overrides: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:

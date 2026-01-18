@@ -149,6 +149,7 @@ def compute_policy_loss(
 
 
 def compute_log_probs(logits: torch.Tensor, tokens: torch.Tensor, process_group: dist.ProcessGroup | None):
+    # TODO: when megatron is not installed, fall back to naive implementation
     from megatron.core.fusions.fused_cross_entropy import fused_vocab_parallel_cross_entropy
 
     # convert to [seq_len, batch_size, vocab_size] as expected by fused_vocab_parallel_cross_entropy
@@ -250,9 +251,10 @@ def get_reinforce_plus_plus_returns(
             full_kl_response = local_kl_chunk
 
         # Step 3: Compute returns on full response kl tensor.
-        token_level_rewards = -kl_coef * full_kl_response
         full_mask = loss_masks[i]
         assert full_mask.sum().item() > 0, f"Sequence at index {i} is fully masked."
+        masked_kl = full_kl_response * full_mask
+        token_level_rewards = -kl_coef * masked_kl
         last_idx = full_mask.nonzero(as_tuple=True)[0][-1]
         token_level_rewards[last_idx] += rewards[i]
 
@@ -676,40 +678,3 @@ def calculate_log_probs_and_entropy(logits, tokens, tp_group, with_entropy: bool
             entropy = logits.new_zeros((0,))
 
     return log_prob, entropy
-
-
-def vanilla_tis_function(
-    args,
-    *,
-    pg_loss: torch.Tensor,
-    train_log_probs: list[torch.Tensor],
-    rollout_log_probs: list[torch.Tensor],
-    loss_masks: list[torch.Tensor],
-    **kwargs,
-) -> tuple[torch.Tensor, list[torch.Tensor], dict[str, torch.Tensor]]:
-    """Apply TIS off-policy correction using importance sampling.
-
-    Parameters:
-        args: Arguments containing TIS settings.
-        pg_loss: Policy gradient loss tensor of shape [total_seq_len - 1].
-        train_log_probs: List of tensors containing training log-probabilities
-            for each sequence.
-        rollout_log_probs: List of tensors containing rollout log-probabilities
-            for each sequence.
-        loss_masks: List of tensors containing loss masks for each sequence.
-    """
-    rollout_log_probs = torch.cat(rollout_log_probs, dim=0)
-    old_log_probs = torch.cat(train_log_probs, dim=0)
-    tis = torch.exp(old_log_probs - rollout_log_probs)
-    tis_abs = (tis - 1).abs()
-    tis_clip_low = args.tis_clip_low if args.tis_clip_low is not None else 0.1
-    tis_clip_high = args.tis_clip if args.tis_clip is not None else 2.0
-    tis_weights = torch.clamp(tis, min=tis_clip_low, max=tis_clip_high)
-    tis_clipfrac = (tis_weights != tis).float()
-    metrics = {
-        "tis": tis.clone().detach(),
-        "tis_clipfrac": tis_clipfrac.clone().detach(),
-        "tis_abs": tis_abs.clone().detach(),
-    }
-    pg_loss = pg_loss * tis_weights
-    return pg_loss, loss_masks, metrics

@@ -3,7 +3,7 @@ from argparse import Namespace
 from collections.abc import Callable
 from copy import deepcopy
 
-from slime.utils import tracking_utils
+from slime.utils import logging_utils
 from slime.utils.metric_utils import compute_rollout_step
 from slime.utils.timer import Timer
 
@@ -45,4 +45,4 @@ def log_perf_data_raw(
 
     step = compute_rollout_step(args, rollout_id)
     log_dict["rollout/step"] = step
-    tracking_utils.log(args, log_dict, step_key="rollout/step")
+    logging_utils.log(args, log_dict, step_key="rollout/step")

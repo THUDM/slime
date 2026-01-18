@@ -11,7 +11,7 @@
 ```bash
 cd /root/
 git clone https://github.com/THUDM/slime.git
-pip install -e .
+pip install -e . --no-deps
 # for Search R1
 pip install chardet
 ```

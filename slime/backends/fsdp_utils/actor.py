@@ -7,35 +7,24 @@ from itertools import accumulate
 import ray
 import torch
 import torch.distributed as dist
-import torch.nn.functional as F
-from ring_flash_attn import substitute_hf_flash_attn, update_ring_flash_attn_params
 from tqdm import tqdm
 from transformers import AutoConfig
 
 from slime.ray.train_actor import TrainRayActor
-from slime.utils import train_dump_utils, train_metric_utils
-from slime.utils.context_utils import with_defer
+from slime.utils import logging_utils, train_dump_utils, train_metric_utils
 from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.logging_utils import init_tracking
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.metric_utils import compute_rollout_step
-from slime.utils.misc import load_function
-from slime.utils.ppo_utils import (
-    compute_approx_kl,
-    compute_gspo_kl,
-    compute_opsm_mask,
-    compute_policy_loss,
-    vanilla_tis_function,
-)
+from slime.utils.misc import Box
+from slime.utils.ppo_utils import compute_approx_kl, compute_gspo_kl, compute_opsm_mask, compute_policy_loss
 from slime.utils.processing_utils import load_processor, load_tokenizer
-from slime.utils.ray_utils import Box
-from slime.utils.timer import Timer, inverse_timer, timer
-from slime.utils.tracking_utils import init_tracking
+from slime.utils.profile_utils import TrainProfiler
+from slime.utils.timer import Timer, inverse_timer, timer, with_defer
 
-from ...utils import tracking_utils
-from ...utils.profile_utils import TrainProfiler
 from . import checkpoint
-from .data_packing import pack_sequences, pad_packed_sequence_with_cp, unpack_sequences
+from .data_packing import pack_sequences, unpack_sequences
 from .lr_scheduler import get_lr_scheduler
 from .update_weight_utils import UpdateWeightFromDistributed, UpdateWeightFromTensor
 
@@ -59,7 +48,7 @@ class FSDPTrainRayActor(TrainRayActor):
     def init(self, args: Namespace, role: str, with_ref: bool = False) -> int:  # type: ignore[override]
         super().init(args, role, with_ref)
 
-        # Setup device mesh for parallelism (handles both CP and non-CP cases)
+        # Setup device mesh for data parallelism
         self._setup_device_mesh()
         torch.manual_seed(args.seed)
 
@@ -190,51 +179,22 @@ class FSDPTrainRayActor(TrainRayActor):
             apply_fsdp_moe_patch()
 
     def _setup_device_mesh(self) -> None:
-        """Setup device mesh for parallelism (always called, handles both CP and non-CP cases).
-
-        Creates 2D mesh (dp_size, cp_size) for all cases:
-        - When context_parallel_size > 1: hybrid CP + DP
-        - When context_parallel_size = 1: pure DP (equivalent to 1D mesh)
-
-        This ensures consistent group management across all parallelism modes.
-        """
+        """Setup device mesh for data parallelism."""
         from torch.distributed.device_mesh import init_device_mesh
 
         world_size = dist.get_world_size()
         rank = dist.get_rank()
 
-        # Use context_parallel_size directly (defaults to 1 for pure DP)
-        self.cp_size = self.args.context_parallel_size
-        self.dp_size = world_size // self.cp_size
+        # Pure data parallelism
+        self.dp_size = world_size
+        self.dp_rank = rank
 
-        # Create 2D device mesh: (dp_size, cp_size)
-        # Ranks laid out in row-major: mesh[dp_idx, cp_idx] = dp_idx * cp_size + cp_idx
-        # - CP groups: consecutive ranks along dim 1, e.g., [0,1], [2,3], [4,5], [6,7]
-        # - DP groups: striped ranks along dim 0, e.g., [0,2,4,6], [1,3,5,7]
-        # When cp_size=1, this degenerates to pure DP
-        self.mesh = init_device_mesh("cuda", mesh_shape=(self.dp_size, self.cp_size), mesh_dim_names=("dp", "cp"))
+        # Create 1D device mesh for data parallelism
+        self.mesh = init_device_mesh("cuda", mesh_shape=(self.dp_size,), mesh_dim_names=("dp",))
+        self.dp_group = self.mesh.get_group("dp")
+        self.dp_mesh = self.mesh
 
-        # Extract process groups from mesh
-        self.dp_group = self.mesh.get_group("dp")  # For FSDP gradient sync, metric reduction
-        self.cp_group = self.mesh.get_group("cp")  # For Ring Flash Attention, logit gathering
-        self.dp_mesh = self.mesh["dp"]  # For FSDP
-
-        # Compute local ranks within each dimension
-        self.dp_rank = rank // self.cp_size
-        self.cp_rank = rank % self.cp_size
-
-        logger.info(
-            f"[Rank {rank}] Device mesh (2D): world_size={world_size}, "
-            f"cp_size={self.cp_size}, dp_size={self.dp_size}"
-        )
-        logger.info(f"[Rank {rank}] Mesh shape: {self.mesh.shape}, " f"dp_rank={self.dp_rank}, cp_rank={self.cp_rank}")
-
-        # Setup Ring Flash Attention with CP group from mesh (only when cp_size > 1)
-        if self.cp_size > 1:
-            substitute_hf_flash_attn(self.cp_group, heads_k_stride=1)
-            logger.info(f"[Rank {rank}] CP initialized via device mesh")
-        else:
-            logger.info(f"[Rank {rank}] Pure DP mode (cp_size=1)")
+        logger.info(f"[Rank {rank}] Device mesh (1D): world_size={world_size}, dp_size={self.dp_size}")
 
     def _get_init_weight_context_manager(self):
         """Get context manager for model initialization.
@@ -377,13 +337,9 @@ class FSDPTrainRayActor(TrainRayActor):
                 ):
                     model_args = self._get_model_inputs_args(batch)
                     logits = active_model(**model_args).logits.squeeze(0).float()
-                    log_probs_result, entropy_result = get_logprob_and_entropy_with_cp(
+                    log_probs_result, entropy_result = get_logprob_and_entropy(
                         logits=logits,
                         target_tokens=batch["tokens"],
-                        cp_rank=self.cp_rank,
-                        cp_size=self.cp_size,
-                        cp_group=self.cp_group,
-                        model_input_ids=model_args["input_ids"],
                         allow_compile=not self.args.true_on_policy_mode,
                         temperature=self.args.rollout_temperature,
                     )
@@ -428,10 +384,7 @@ class FSDPTrainRayActor(TrainRayActor):
         ), f"global_batch_size {self.args.global_batch_size} is not divisible by dp_world_size {self.dp_size}"
         # Use global_batch_size for splitting when max_tokens_per_gpu is enabled
         if self.args.use_dynamic_batch_size:
-            # In CP mode, CP group shares sequences, so total capacity is max_tokens_per_gpu * cp_size
             max_tokens = self.args.max_tokens_per_gpu
-            if self.cp_size > 1:
-                max_tokens = max_tokens * self.cp_size
 
             for i in range(0, len(tokens), local_batch_size):
                 mbs_size_list.append(
@@ -530,7 +483,7 @@ class FSDPTrainRayActor(TrainRayActor):
         if dist.get_rank() == 0:
             logger.info(f"rollout {rollout_id}: {log_dict}")
             log_dict["rollout/step"] = compute_rollout_step(self.args, rollout_id)
-            tracking_utils.log(self.args, log_dict, step_key="rollout/step")
+            logging_utils.log(self.args, log_dict, step_key="rollout/step")
 
         if self.args.ci_test and self.args.true_on_policy_mode:
             assert log_dict["rollout/log_probs"] == log_dict["rollout/rollout_log_probs"], (
@@ -595,14 +548,10 @@ class FSDPTrainRayActor(TrainRayActor):
         model_args = self._get_model_inputs_args(packed_batch)
         logits = self.model(**model_args).logits.squeeze(0).float()
 
-        # Compute log probs and entropy (unified for both CP and non-CP modes)
-        log_probs, entropy_result = get_logprob_and_entropy_with_cp(
+        # Compute log probs and entropy
+        log_probs, entropy_result = get_logprob_and_entropy(
             logits=logits,
             target_tokens=packed_batch["tokens"],
-            cp_rank=self.cp_rank,
-            cp_size=self.cp_size,
-            cp_group=self.cp_group,
-            model_input_ids=model_args["input_ids"],
             allow_compile=not self.args.true_on_policy_mode,
             temperature=self.args.rollout_temperature,
         )
@@ -665,33 +614,6 @@ class FSDPTrainRayActor(TrainRayActor):
             else None
         )
 
-        # Apply off-policy correction using importance sampling if enabled
-        if self.args.use_tis:
-            assert (
-                has_rollout_log_probs and rollout_log_probs is not None
-            ), "rollout_log_probs must be provided as non-empty torch.Tensor for TIS/MIS"
-
-            train_log_probs_list = list(log_probs.split(response_lengths, dim=0))
-            rollout_log_probs_list = list(rollout_log_probs.split(response_lengths, dim=0))
-            ois = (-ppo_kl).exp()
-            tis_kwargs = {
-                "args": self.args,
-                "pg_loss": pg_loss,
-                "train_log_probs": train_log_probs_list,
-                "rollout_log_probs": rollout_log_probs_list,
-                "loss_masks": loss_masks,
-                "response_lengths": response_lengths,
-                "cp_rank": self.cp_rank,
-                "cp_size": self.cp_size,
-                "cp_group": self.cp_group,
-            }
-
-            if self.args.custom_tis_function_path is not None:
-                tis_func = load_function(self.args.custom_tis_function_path)
-            else:
-                tis_func = vanilla_tis_function
-            pg_loss, loss_masks, tis_metrics = tis_func(**tis_kwargs)
-
         if self.args.calculate_per_token_loss:
             pg_loss = sum_of_token(pg_loss, response_lengths, loss_masks)
             pg_clipfrac = sum_of_token(pg_clipfrac, response_lengths, loss_masks)
@@ -746,14 +668,6 @@ class FSDPTrainRayActor(TrainRayActor):
         if self.args.use_opsm:
             reported["opsm_clipfrac"] = opsm_clipfrac
 
-        if self.args.use_tis and tis_metrics:
-            reported["ois"] = sum_of_sample_mean(ois, response_lengths, loss_masks).detach()
-            for k, v in tis_metrics.items():
-                if self.args.calculate_per_token_loss:
-                    reported[k] = sum_of_token(v, response_lengths, loss_masks).detach()
-                else:
-                    reported[k] = sum_of_sample_mean(v, response_lengths, loss_masks).detach()
-
         # Scale loss for gradient accumulation
         loss = loss * self.dp_size / self.args.global_batch_size
         loss.backward()
@@ -799,7 +713,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 logger.info(f"step {self.global_step}: {log_dict}")
 
                 log_dict["train/step"] = self.global_step
-                tracking_utils.log(self.args, log_dict, step_key="train/step")
+                logging_utils.log(self.args, log_dict, step_key="train/step")
             self.global_step += 1
 
     @timer
@@ -877,17 +791,6 @@ class FSDPTrainRayActor(TrainRayActor):
     def _get_model_inputs_args(self, packed_sequence: dict) -> dict:
         input_ids = packed_sequence["tokens"].unsqueeze(0)
         position_ids = packed_sequence["position_ids"].unsqueeze(0)
-        if self.cp_size > 1:
-
-            packed_sequence = pad_packed_sequence_with_cp(packed_sequence, self.cp_size)
-
-            if not packed_sequence["cu_seqlens"].is_cuda:
-                packed_sequence["cu_seqlens"] = packed_sequence["cu_seqlens"].cuda()
-            cu_seqlens = packed_sequence["cu_seqlens"]
-            update_ring_flash_attn_params(cu_seqlens, self.cp_group)
-
-            input_ids = torch.chunk(packed_sequence["tokens"].unsqueeze(0), self.cp_size, dim=1)[self.cp_rank]
-            position_ids = torch.chunk(packed_sequence["position_ids"].unsqueeze(0), self.cp_size, dim=1)[self.cp_rank]
 
         model_args = {
             "input_ids": input_ids,
@@ -953,96 +856,32 @@ def gather_log_probs_packed(
     return selective_log_softmax(shifted_logits, targets)
 
 
-def get_logprob_and_entropy_with_cp(
+def get_logprob_and_entropy(
     logits: torch.Tensor,
     target_tokens: torch.Tensor,
-    cp_rank: int,
-    cp_size: int,
-    cp_group,
-    model_input_ids: torch.Tensor,
     allow_compile: bool,
     temperature: float | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """Compute log probabilities and entropy in Context Parallel mode.
+    """Compute log probabilities and entropy.
 
     Parameters:
-        logits: Model output logits with shape [chunk_size, vocab_size]
-        target_tokens: Target tokens with shape [total_seq_len]
-        cp_rank: Current CP rank
-        cp_size: CP world size
-        cp_group: CP communication group
-        model_input_ids: Model input_ids (used for the last rank)
+        logits: Model output logits with shape [seq_len, vocab_size]
+        target_tokens: Target tokens with shape [seq_len]
         allow_compile: Whether to allow compilation
         temperature: Temperature parameter (optional)
 
     Returns:
-        log_probs: Aggregated log probabilities with shape [total_seq_len - 1]
-        entropy: Aggregated entropy with shape [total_seq_len - 1]
+        log_probs: Log probabilities with shape [seq_len - 1]
+        entropy: Entropy with shape [seq_len - 1]
     """
-    # Fast path for non-CP mode (cp_size=1): avoid unnecessary communication
-    if cp_size == 1:
-        shifted_logits = logits[:-1, :]
-        local_log_probs = gather_log_probs_packed(
-            shifted_logits, target_tokens, allow_compile=allow_compile, temperature=temperature
-        )
-        log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
-        probs = torch.softmax(shifted_logits, dim=-1)
-        entropy = -(probs * log_probs_full).sum(dim=-1)
-        return local_log_probs, entropy
-
-    chunk_size = logits.shape[0]
-    tokens_start_index = chunk_size * cp_rank
-    tokens_end_index = (
-        tokens_start_index + chunk_size + 1 if cp_rank < cp_size - 1 else tokens_start_index + chunk_size
+    shifted_logits = logits[:-1, :]
+    log_probs = gather_log_probs_packed(
+        shifted_logits, target_tokens, allow_compile=allow_compile, temperature=temperature
     )
-
-    # For the last rank, remove the last logit
-    logits = logits if cp_rank < cp_size - 1 else logits[:-1, :]
-
-    # Get local tokens for current rank
-    local_tokens = (
-        target_tokens[tokens_start_index:tokens_end_index] if cp_rank < cp_size - 1 else model_input_ids.squeeze(0)
-    )
-
-    # Compute local log probs
-    local_log_probs = gather_log_probs_packed(
-        logits, local_tokens, allow_compile=allow_compile, temperature=temperature
-    )
-
-    # Pad for the last rank
-    if cp_rank == cp_size - 1:
-        local_log_probs = F.pad(local_log_probs, (0, chunk_size - local_log_probs.shape[0]), value=0)
-
-    # Compute entropy
-    shifted_logits = logits[:-1, :] if cp_rank == cp_size - 1 else logits
     log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
     probs = torch.softmax(shifted_logits, dim=-1)
     entropy = -(probs * log_probs_full).sum(dim=-1)
-
-    # Pad entropy for the last rank
-    if cp_rank == cp_size - 1:
-        entropy = F.pad(entropy, (0, chunk_size - entropy.shape[0]), value=0)
-
-    # Merge with a single all_gather: stack as [2, chunk_size]
-    stacked_local = torch.stack([local_log_probs, entropy], dim=0)
-    gathered_stacked = torch.distributed.nn.functional.all_gather(stacked_local, group=cp_group)
-
-    # Concatenate by effective length (non-last rank=chunk_size, last rank=chunk_size-1)
-    lp_parts, ent_parts = [], []
-    for r in range(cp_size):
-        eff_len = chunk_size if r < cp_size - 1 else max(0, chunk_size - 1)
-        if eff_len > 0:
-            lp_parts.append(gathered_stacked[r][0][:eff_len])
-            ent_parts.append(gathered_stacked[r][1][:eff_len])
-
-    log_probs = torch.cat(lp_parts, dim=0) if lp_parts else local_log_probs.new_zeros((0,))
-    entropy_result = torch.cat(ent_parts, dim=0) if ent_parts else entropy.new_zeros((0,))
-
-    # Truncate to global effective length T-1 (packed tokens length is T)
-    log_probs = log_probs[: len(target_tokens) - 1]
-    entropy_result = entropy_result[: len(target_tokens) - 1]
-
-    return log_probs, entropy_result
+    return log_probs, entropy
 
 
 def sum_of_sample_mean(x: torch.Tensor, response_lengths: list[int], loss_masks: list[torch.Tensor]) -> torch.Tensor:

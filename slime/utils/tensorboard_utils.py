@@ -8,6 +8,8 @@ try:
 except ImportError:
     SummaryWriter = None
 
+__all__ = ["_TensorboardAdapter"]
+
 logger = logging.getLogger(__name__)
 
 

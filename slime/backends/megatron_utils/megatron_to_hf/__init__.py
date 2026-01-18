@@ -3,8 +3,7 @@ from .glm4 import convert_glm4_to_hf
 from .glm4moe import convert_glm4moe_to_hf
 from .llama import convert_llama_to_hf
 from .mimo import convert_mimo_to_hf
-from .processors.padding_remover import remove_padding
-from .processors.quantizer import quantize_params
+from .processors import quantize_params, remove_padding
 from .qwen2 import convert_qwen2_to_hf
 from .qwen3_next import convert_qwen3_next_to_hf
 from .qwen3moe import convert_qwen3moe_to_hf
@@ -22,9 +21,6 @@ def convert_to_hf(args, model_name, name, param, quantization_config=None):
     param = remove_padding(name, param, args.vocab_size)
 
     converted_named_tensors = _convert_to_hf_core(args, model_name, name, param)
-
-    if not quantization_config:
-        return converted_named_tensors
 
     return quantize_params(args, name, converted_named_tensors, quantization_config)
 

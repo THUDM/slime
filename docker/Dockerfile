@@ -1,5 +1,5 @@
-ARG SGLANG_IMAGE_TAG=nightly-dev-20260103-24c91001
-FROM lmsysorg/sglang:${SGLANG_IMAGE_TAG} AS sglang
+ARG SGLANG_IMAGE_TAG=nightly-dev-20260107-dce8b060
+FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
 
@@ -78,7 +78,6 @@ RUN pip install nvidia-cudnn-cu12==9.16.0.29
 # reinstall numpy 1.x for megatron
 RUN pip install "numpy<2"
 
-RUN rm /root/.tmux.conf
 RUN rm -rf /root/.cache/pip /root/flash-attention
 
 # ====================================== Patches ============================================

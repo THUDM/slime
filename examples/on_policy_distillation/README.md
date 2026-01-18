@@ -1,6 +1,6 @@
 # On-Policy Distillation Example
 
-This example shows how to run **on-policy distillation** using Slime. A small student (Qwen3-8B) is aligned to imitate a larger teacher (Qwen3-32B) by training only on the student's own rollouts and matching the teacher's token-level log-probabilities.
+This example shows how to run **on-policy distillation** using slime. A small student (Qwen3-8B) is aligned to imitate a larger teacher (Qwen3-32B) by training only on the student's own rollouts and matching the teacher's token-level log-probabilities.
 
 In this example, the teacher model acts as a reward model (RM) by providing teacher log probabilities as the supervision signal.
 
@@ -50,7 +50,7 @@ Using Qwen3-8B-Base model sfted on part of the [OpenThoughts3-1.2M](https://hugg
 
 # FAQ
 1. **Why are teacher logits computed via a sglang server instead of inside the training backend?**
-The teacher runs on an independent SGLang server that Slime treats as a reward model. Hosting it inside Megatron/FSDP would require maintaining a second, fully configured training stack for the teacher.
+The teacher runs on an independent SGLang server that slime treats as a reward model. Hosting it inside Megatron would require maintaining a second, fully configured training stack for the teacher.
 
 
 # References

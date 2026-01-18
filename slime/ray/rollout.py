@@ -14,17 +14,19 @@ from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
-from slime.utils import tracking_utils
+from slime.utils import logging_utils
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
-from slime.utils.iter_utils import group_by
-from slime.utils.logging_utils import configure_logger
-from slime.utils.metric_checker import MetricChecker
-from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
-from slime.utils.misc import load_function
-from slime.utils.ray_utils import Box
+from slime.utils.logging_utils import configure_logger, init_tracking
+from slime.utils.metric_utils import (
+    MetricChecker,
+    compute_pass_rate,
+    compute_rollout_step,
+    compute_statistics,
+    dict_add_prefix,
+)
+from slime.utils.misc import Box, group_by, load_function
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
-from slime.utils.tracking_utils import init_tracking
 from slime.utils.types import Sample
 
 from ..utils.metric_utils import has_repetition
@@ -698,7 +700,7 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
 
     step = compute_rollout_step(args, rollout_id)
     log_dict["eval/step"] = step
-    tracking_utils.log(args, log_dict, step_key="eval/step")
+    logging_utils.log(args, log_dict, step_key="eval/step")
 
     return log_dict
 
@@ -718,7 +720,7 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
     logger.info(f"perf {rollout_id}: {log_dict}")
     step = compute_rollout_step(args, rollout_id)
     log_dict["rollout/step"] = step
-    tracking_utils.log(args, log_dict, step_key="rollout/step")
+    logging_utils.log(args, log_dict, step_key="rollout/step")
 
 
 def compute_metrics_from_samples(args, samples):

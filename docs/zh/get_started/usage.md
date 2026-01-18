@@ -5,7 +5,7 @@
 在使用 slime 时，传参主要是为了如下几件事：
 
 1. 把集群中一部分 GPU 分配做训练，一部分分配做推理；
-2. 训练的部分加载 megatron或者FSDP；
+2. 训练的部分加载 megatron；
 3. 推理部分加载 sglang；
 4. 配置 RL 训练需要的超参。
 
@@ -38,7 +38,7 @@
 slime 支持多种训练后端，可以通过 `--train-backend` 参数进行选择：
 
 - `megatron`（默认）：使用 Megatron-LM 作为训练后端，支持大规模模型的高效训练；
-- `fsdp`：使用 PyTorch FSDP 作为训练后端，可以直接加载 HuggingFace 格式权重，无需转换。
+- `fsdp`（实验性）：使用 PyTorch FSDP 作为训练后端，可以直接加载 HuggingFace 格式权重，无需转换。
 
 ### 加载 megatron
 
@@ -195,6 +195,72 @@ sglang 的加载非常简单，只需要：
 - `--use-tis`：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；
 - `--true-on-policy-mode`：开启 True On-Policy 模式，即在训练过程中严格保证数据是当前策略生成的。
 
+#### GRPO 算法
+
+GRPO（Group Relative Policy Optimization）是 DeepSeek-Math 中提出的一种 RL 算法，其核心思想是通过组内相对比较来计算 advantage，而不需要额外的 critic 模型。
+
+使用 GRPO 时，需要设置：
+
+```bash
+--advantage-estimator grpo
+```
+
+GRPO 的主要特点：
+
+- **无需 Critic 模型**：GRPO 通过对同一 prompt 采样多个 response，然后在组内计算相对 reward 来估计 advantage，避免了训练和维护 critic 模型的开销；
+- **资源高效**：由于不需要 critic 模型，GPU 资源可以完全用于 actor 训练和推理；
+- **简单易用**：配置简单，只需要设置 `--advantage-estimator grpo` 即可。
+
+相关参数：
+
+- `--n-samples-per-prompt`：每个 prompt 采样的 response 数量，用于组内比较；
+- `--normalize-advantages`：是否对 advantage 进行归一化；
+- `--eps-clip`：PPO 风格的 clip 范围。
+
+#### PPO 算法
+
+PPO（Proximal Policy Optimization）是经典的 RL 算法，使用 critic 模型来估计 value function，从而计算 advantage。
+
+使用 PPO 时，需要设置：
+
+```bash
+--advantage-estimator ppo
+```
+
+**注意：PPO 的 Critic 和 Actor 是并列申请 GPU 的**，在资源分配时需要考虑这一点。具体来说：
+
+- Critic 模型会独立占用一组 GPU，与 Actor 的 GPU 资源分开；
+- 可以通过 `--critic-num-nodes` 和 `--critic-num-gpus-per-node` 来配置 critic 使用的资源；
+- 如果不配置 critic 的资源参数，默认会使用与 actor 相同的资源配置。
+
+集群资源分配示例：
+
+```bash
+# Actor 使用 1 个节点，4 张 GPU
+--actor-num-nodes 1
+--actor-num-gpus-per-node 4
+
+# Critic 使用 1 个节点，4 张 GPU（与 Actor 并列）
+--critic-num-nodes 1
+--critic-num-gpus-per-node 4
+
+# Rollout 使用 8 张 GPU
+--rollout-num-gpus 8
+```
+
+在上述配置下，总共需要 `4 (actor) + 4 (critic) + 8 (rollout) = 16` 张 GPU。
+
+PPO 相关参数：
+
+- `--critic-load`：critic 模型的 checkpoint 路径；
+- `--critic-save`：critic 模型的保存路径；
+- `--critic-lr`：critic 模型的学习率；
+- `--critic-lr-warmup-iters`：critic 模型的 warmup 步数；
+- `--num-critic-only-steps`：训练开始时只训练 critic 的步数；
+- `--eps-clip`：PPO clip 范围；
+- `--value-clip`：value loss 的 clip 范围；
+- `--kl-coef`：KL penalty 系数，用于 reward shaping。
+
 ## 自定义 rollout 函数
 
 slime 支持不同程度的自定义数据生成（rollout）。
@@ -279,7 +345,7 @@ slime 通过引入 sglang 的 `ServerArgs.add_cli_args`，从而引入了几乎�
 
 - 在训推一体的训练时，往往需要限制 `--mem-fraction-static`，这个参数需要转变为 `--sglang-mem-fraction-static`；
 - 在训练中，希望 sglang 能推理超过 huggingface checkpoint 的 `config.json` 中标识的最长 context length，需要使用 `--context-length`，那么在 slime 中需要使用 `--sglang-context-length`；
-- 在进行多机大 ep 推理的时候，需要 `--enable-ep-moe`、`--enable-dp-attention`、`--dp-size`、`--enable-deepep-moe` 等，则可以对应地传入 `--sglang-enable-ep-moe`、`--sglang-enable-dp-attention`、`--sglang-dp-size`、`--sglang-enable-deepep-moe` 。
+- 在进行多机大 ep 推理的时候，需要 `--ep-size`、`--enable-dp-attention`、`--dp-size`、`--moe-a2a-backend deepep` 等，则可以对应地传入 `--sglang-ep-size`、`--sglang-enable-dp-attention`、`--sglang-dp-size`、`--sglang-moe-a2a-backend deepep` 。
 
 有部分参与和 slime 的资源调度相关，会由 slime 自行配置，例如：
 
@@ -321,61 +387,3 @@ if __name__ == "__main__":
 - `--custom-megatron-init-path`：会增加一些 init 的调用；
 - `--custom-megatron-before-log-prob-hook-path`：会在计算 log prob 之前调用；
 - `--custom-megatron-before-train-step-hook-path`：会在每个训练步之前调用。可以考虑用这种方式混入特殊的训练 loss 之类的。
-
-## FSDP 使用方法
-
-slime 同样也支持FSDP2作为训练后端，可以参考[文档](https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/main/rlhf/slime/fsdp/readme.md)。
-
-> FSDP 通过 `AutoModelForCausalLM.from_pretrained()` 自动读取所有架构信息，无需手动指定。Megatron 需要手动配置参数读取 model 架构信息，FSDP可以全部从 `config.json` 自动读取，可以直接避免权重格式转换步骤。
-
-可以通过在命令行传递 `--train-backend fsdp` 来启动 FSDP 作为训练后端。
-
-### 参数
-
-FSDP和Megatron后端支持的参数的对比如下表所示，接下来FSDP会有更多的支持。
-
-| 配置类别 | Megatron 参数 | FSDP 参数 | 说明 |
-| --- | --- | --- | --- |
-| **模型加载** | `--load` (Megatron checkpoint) + 架构参数 (`--num-layers`, `--hidden-size` 等) | `--hf-checkpoint` (必需) | **FSDP**: 直接使用 HuggingFace 格式，无需转换权重，通过 `AutoConfig` 自动推断架构 |
-| **张量并行** | `--tensor-model-parallel-size` | Coming Soon |  |
-| **流水线并行** | `--pipeline-model-parallel-size` | Coming Soon |  |
-| **专家并行** | `--expert-model-parallel-size` | Coming Soon |  |
-| **上下文并行** | `--context-parallel-size` | `--context-parallel-size` | 两者都支持 CP |
-| **初始学习率** | `--lr` | `--lr` | 参数相同 |
-| **学习率衰减** | `--lr-decay-style` (linear/cosine 等) | `--lr-decay-style` | 参数相同 |
-| **Warmup** | `--lr-warmup-iters` (步数) | `--lr-warmup-iters` | 参数相同 |
-| **最小学习率** | `--min-lr` | `--min-lr` | 参数相同 |
-| **优化器类型** | `--optimizer` (adam/sgd 等) | `--optimizer` (默认 adam) | 基本相同 |
-| **分布式优化器** | `--use-distributed-optimizer` | 内置于 FSDP | FSDP 默认使用分布式优化器 |
-| **梯度检查点** | `--recompute-granularity`, `--recompute-method` | `--gradient-checkpointing` | **FSDP**: 简化为布尔开关 |
-| **CPU Offload** | 通过分布式优化器实现 | `--fsdp-cpu-offload` | **FSDP**: 将参数/梯度/优化器状态卸载到 CPU |
-| **CPU 后端** | 通过分布式优化器实现 | `--fsdp-cpu-backend` | **FSDP**: 指定CPU的后端并且当CPU offload时使用混合后端 |
-| **Attention 后端** | 由 Megatron Core 决定 | `--attn-implementation` (flash_attention_2/sdpa/eager) | **FSDP**: 直接透传给 HuggingFace |
-| **混合精度** | `--fp16` 或 `--bf16` | `--fp16` (bf16 自动推断) | 基本相同 |
-| **训练后端** | 默认或 `--train-backend megatron` | `--train-backend fsdp` (必需) | 用于切换后端 |
-| **参数配置** | | `--config` | **FSDP**: 为FSDP设置额外的参数 |
-
-### FSDP 一键启动
-
-```bash
-# 如果需要使用 WANDB，需要提前设置好环境变量 WANDB_API_KEY
-# 下载模型权重 (Qwen3-4B)
-hf download Qwen/Qwen3-4B --local-dir /root/Qwen3-4B
-
-# 下载训练数据集 (dapo-math-17k)
-hf download --repo-type dataset zhuzilin/dapo-math-17k \
-  --local-dir /root/dapo-math-17k
-
-# 下载评估数据集 (aime-2024)
-hf download --repo-type dataset zhuzilin/aime-2024 \
-  --local-dir /root/aime-2024
-  
-# 克隆代码并安装依赖
-git clone https://github.com/THUDM/slime.git
-cd slime
-pip install -e .
-
-
-# FSDP不用进行权重转换，native 支持 huggingface 格式
-# 开启 reference model，在 colocated 模式下训练 Qwen3-4B
-source /root/slime/scripts/run-qwen3-4B-fsdp.sh

@@ -62,7 +62,7 @@ slime 以不同的方式看待强化学习中的数据采样。我们在 slime �
   - slime 支持**所有 Megatron 并行策略**（TP, PP, EP, CP），并监控训练 MFU。
   - slime 提供了**仅限 Megatron 的调试模式** (`--debug-train-only`)，并支持存储采样数据以供重现。
 
-Megatron 可能非常复杂，因此我们还提供了检查点转换工具来简化其使用。
+Megatron 可能非常复杂，因此我们还提供了 ckpt 转换工具来简化其使用。
 
 **持续地快**意味着要跟上不断发展的推理和训练框架。
 

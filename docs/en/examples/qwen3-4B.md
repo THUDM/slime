@@ -8,7 +8,7 @@ After pulling the `slimerl/slime:latest` image, initialize the image environment
 cd /root/
 git clone https://github.com/THUDM/slime.git
 cd slime/
-pip install -e .
+pip install -e . --no-deps
 ```
 
 Download the model and data:

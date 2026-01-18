@@ -47,3 +47,21 @@ slime 支持将训练部分和推理部分分开进行调试，从而实现：
 3. `--load-debug-rollout-data /your/saved/debug/data_{rollout_id}.pt`
 
    开启后，会从 `args.load_debug_rollout_data.format(rollout_id=rollout_id)` 来加载数据，并且不会初始化 sglang（自动设置 `debug_train_only=True`）。可以以这种方式来固定训练部分的输入，对训练部分进行调优，例如切换各种并行。
+
+## Debug sglang illegal memory access (IMA)
+
+在进行大规模 RL 时，不时会遇到 SGLang IMA 的问题，以下是我们的一些 debug 建议：
+
+1. 开启 `CUDA_LAUNCH_BLOCKING=1`
+
+2. 开启关闭投机采样、 cuda graph 来查看问题是否消除
+
+   IMA 经常出现在 cuda graph replay 的 padding 中，或者是投机采样与主模型的区别。经常可以通过两者的各种开关组合来缩小问题。
+
+3. 关闭 deepep
+
+   如果训练和推理中开启了 deepep，可以关闭查看有没有差别
+
+4. 尝试 CUDA Core Dump 确定报错 kernel
+
+   这里推荐 vllm 团队的这一文档：[CUDA Core Dump: An Effective Tool to Debug Memory Access Issues and Beyond](https://blog.vllm.ai/2025/08/11/cuda-debugging.html)

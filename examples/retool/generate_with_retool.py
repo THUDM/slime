@@ -321,7 +321,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
                 sample.rollout_log_probs
             ), f"Token/logp length mismatch at turn {turn}: {len(response_token_ids)} tokens vs {len(sample.rollout_log_probs)} logps"
 
-        if turn >= TOOL_CONFIGS["max_tool_calls"]:
+        if tool_call_count >= TOOL_CONFIGS["max_tool_calls"]:
             break
 
     # Set sample attributes

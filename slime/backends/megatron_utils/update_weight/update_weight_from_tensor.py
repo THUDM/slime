@@ -112,18 +112,15 @@ class UpdateWeightFromTensor:
 
         rank = dist.get_rank()
         if rank == 0:
+            ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
-        dist.barrier(group=get_gloo_group())
-
-        if self.args.int4_params_rollout:
-            ray.get(
+            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
                 post_process_weights(
                     restore_weights_before_load=True,
                     post_process_quantization=False,
                     rollout_engines=self.rollout_engines,
                 )
-            )
-            dist.barrier(group=get_gloo_group())
+        dist.barrier(group=get_gloo_group())
 
         megatron_local_weights = self.weights_getter()
 
@@ -135,15 +132,15 @@ class UpdateWeightFromTensor:
         dist.barrier(group=get_gloo_group())
 
         # int4/fp4 post_process
-        if self.args.int4_params_rollout:
-            ray.get(
+        if rank == 0:
+            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
                 post_process_weights(
                     restore_weights_before_load=False,
                     post_process_quantization=True,
                     rollout_engines=self.rollout_engines,
                 )
-            )
-            dist.barrier(group=get_gloo_group())
+            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
+        dist.barrier(group=get_gloo_group())
 
     def _send_hf_params(self, hf_named_tensors) -> tuple[list[ObjectRef], Any]:
         all_refs = []
