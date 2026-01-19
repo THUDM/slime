@@ -203,8 +203,55 @@ index c9e82e4b1..f2584546a 100644
  
          if enable_dual_stream:
              current_stream = torch.cuda.current_stream()
+diff --git a/python/sglang/srt/layers/communicator.py b/python/sglang/srt/layers/communicator.py
+index 15df851eb..1636ed706 100644
+--- a/python/sglang/srt/layers/communicator.py
++++ b/python/sglang/srt/layers/communicator.py
+@@ -371,10 +371,13 @@ class LayerCommunicator:
+         residual: torch.Tensor,
+         forward_batch: ForwardBatch,
+         captured_last_layer_outputs: Optional[List[torch.Tensor]] = None,
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ):
+         hidden_states, residual = self.prepare_attn(
+-            hidden_states, residual, forward_batch, **kwargs
++            hidden_states,
++            residual,
++            forward_batch,
++            post_residual_addition=post_residual_addition,
+         )
+         if captured_last_layer_outputs is not None:
+             gathered_last_layer_output = self._communicate_simple_fn(
+@@ -394,7 +397,7 @@ class LayerCommunicator:
+         residual: torch.Tensor,
+         forward_batch: ForwardBatch,
+         quant_format: str = "",
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ):
+         if get_attn_tp_context().input_scattered:
+             hidden_states, residual = self._tp_reduce_scatter(
+@@ -444,7 +447,7 @@ class LayerCommunicator:
+                         )
+ 
+                     else:
+-                        hidden_states = self.input_layernorm(hidden_states, **kwargs)
++                        hidden_states = self.input_layernorm(hidden_states)
+                 else:
+ 
+                     if _use_aiter and _is_gfx95_supported and ("mxfp4" in quant_format):
+@@ -478,7 +481,7 @@ class LayerCommunicator:
+                         hidden_states, residual = self.input_layernorm(
+                             hidden_states,
+                             residual,
+-                            **kwargs,
++                            post_residual_addition,
+                         )
+ 
+         hidden_states = self._communicate_simple_fn(
 diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
-index 7bef9d2ab..f588cbdb0 100644
+index 7bef9d2ab..5926ff7f5 100644
 --- a/python/sglang/srt/layers/layernorm.py
 +++ b/python/sglang/srt/layers/layernorm.py
 @@ -83,15 +83,12 @@ class RMSNorm(MultiPlatformOp):
@@ -225,43 +272,348 @@ index 7bef9d2ab..f588cbdb0 100644
          self.variance_epsilon = eps
          self.hidden_size = hidden_size
          self.variance_size_override = (
-@@ -193,10 +190,22 @@ class RMSNorm(MultiPlatformOp):
+@@ -104,16 +101,16 @@ class RMSNorm(MultiPlatformOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if self.variance_size_override is not None:
+-            return self.forward_native(x, residual, **kwargs)
++            return self.forward_native(x, residual, post_residual_addition)
+         if is_batch_invariant_mode_enabled():
+             if (
+                 residual is not None
+                 or get_global_server_args().rl_on_policy_target == "fsdp"
+             ):
+-                return self.forward_native(x, residual, **kwargs)
++                return self.forward_native(x, residual, post_residual_addition)
+             return rms_norm_batch_invariant(
+                 x,
+                 self.weight.data,
+@@ -124,7 +121,6 @@ class RMSNorm(MultiPlatformOp):
+             # but right now we can only have hidden_states+(residual+post_residual_addition).
+             # (hidden_states+residual)+post_residual_addition != hidden_states+(residual+post_residual_addition),
+             # we probably need to add another parameter to fused_add_rmsnorm
+-            post_residual_addition = kwargs.get("post_residual_addition")
+             if post_residual_addition is not None:
+                 residual = residual + post_residual_addition
+             fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
+@@ -136,9 +132,11 @@ class RMSNorm(MultiPlatformOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if residual is not None:
++            if post_residual_addition is not None:
++                residual = residual + post_residual_addition
+             out, _, residual_out = torch_npu.npu_add_rms_norm(
+                 residual, x, self.weight.data, self.variance_epsilon
+             )
+@@ -149,9 +147,11 @@ class RMSNorm(MultiPlatformOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if residual is not None:
++            if post_residual_addition is not None:
++                residual = residual + post_residual_addition
+             residual_out = torch.empty_like(x)
+             output = torch.empty_like(x)
+             fused_add_rms_norm(
+@@ -169,12 +169,14 @@ class RMSNorm(MultiPlatformOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if not x.is_contiguous():
+             # NOTE: Remove this if aiter kernel supports discontinuous input
+             x = x.contiguous()
+         if residual is not None:
++            if post_residual_addition is not None:
++                residual = residual + post_residual_addition
+             out = torch.empty_like(x)
+             residual_out = torch.empty_like(x)
+             fused_add_rms_norm(
+@@ -189,27 +191,23 @@ class RMSNorm(MultiPlatformOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          if not x.is_contiguous():
              x = x.contiguous()
 -        orig_dtype = self.override_orig_dtype or x.dtype
+-        post_residual_addition = kwargs.get("post_residual_addition")
 +        orig_dtype = x.dtype
-         post_residual_addition = kwargs.get("post_residual_addition")
 +
 +        if residual is not None and not self.fp32_residual:
-+            x = (
-+                x
-+                + residual
-+                + (
-+                    post_residual_addition
-+                    if post_residual_addition is not None
-+                    else 0.0
-+                )
-+            )
++            x = x + residual
++            if post_residual_addition is not None:
++                x = x + post_residual_addition
 +            residual = x.clone()
          x = x.to(torch.float32)
 -        if residual is not None:
-+        if residual is not None and self.fp32_residual:
-             x = (
-                 x
-                 + residual.to(torch.float32)
-@@ -206,10 +215,7 @@ class RMSNorm(MultiPlatformOp):
-                     else 0.0
-                 )
-             )
+-            x = (
+-                x
+-                + residual.to(torch.float32)
+-                + (
+-                    post_residual_addition.to(torch.float32)
+-                    if post_residual_addition is not None
+-                    else 0.0
+-                )
+-            )
 -            if self.fp32_residual:
 -                residual = x.clone()
 -            else:
 -                residual = x.to(orig_dtype)
++        if residual is not None and self.fp32_residual:
++            x = x + residual.to(torch.float32)
++            if post_residual_addition is not None:
++                x = x + post_residual_addition.to(torch.float32)
 +            residual = x.to(orig_dtype)
  
          hidden_size = x.shape[-1]
          if hidden_size != self.hidden_size:
+@@ -246,10 +244,12 @@ class RMSNorm(MultiPlatformOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if _is_cpu_amx_available:
+             if residual is not None:
++                if post_residual_addition is not None:
++                    residual = residual + post_residual_addition
+                 torch.ops.sgl_kernel.fused_add_rmsnorm_cpu(
+                     x, residual, self.weight.data, self.variance_epsilon
+                 )
+@@ -258,17 +258,19 @@ class RMSNorm(MultiPlatformOp):
+                 x, self.weight.data, self.variance_epsilon
+             )
+         else:
+-            return self.forward_native(x, residual, **kwargs)
++            return self.forward_native(x, residual, post_residual_addition)
+ 
+     def forward_xpu(
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if self.variance_size_override is not None:
+-            return self.forward_native(x, residual, **kwargs)
++            return self.forward_native(x, residual, post_residual_addition)
+         if residual is not None:
++            if post_residual_addition is not None:
++                residual = residual + post_residual_addition
+             fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
+             return x, residual
+         out = rmsnorm(x, self.weight.data, self.variance_epsilon)
+@@ -278,6 +280,7 @@ class RMSNorm(MultiPlatformOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         """
+         Forward method with allreduce fusion, prioritizing flashinfer fused operations
+@@ -289,6 +292,8 @@ class RMSNorm(MultiPlatformOp):
+             )
+ 
+             if get_tensor_model_parallel_world_size() > 1:
++                if post_residual_addition is not None:
++                    x = x + post_residual_addition
+                 fused_result = flashinfer_allreduce_residual_rmsnorm(
+                     input_tensor=x,
+                     residual=residual,
+@@ -298,7 +303,7 @@ class RMSNorm(MultiPlatformOp):
+                 if fused_result[0] is not None:
+                     return fused_result
+ 
+-        return self.forward(x, residual)
++        return self.forward(x, residual, post_residual_addition)
+ 
+ 
+ class LayerNorm(MultiPlatformOp):
+@@ -323,7 +328,6 @@ class LayerNorm(MultiPlatformOp):
+     def forward_cuda(
+         self,
+         x: torch.Tensor,
+-        **kwargs,
+     ) -> torch.Tensor:
+         if (
+             _flashinfer_layernorm_available
+@@ -332,12 +336,11 @@ class LayerNorm(MultiPlatformOp):
+         ):
+             return layernorm(x, self.weight, self.bias, self.variance_epsilon)
+         else:
+-            return self.forward_native(x, **kwargs)
++            return self.forward_native(x)
+ 
+     def forward_native(
+         self,
+         x: torch.Tensor,
+-        **kwargs,
+     ) -> torch.Tensor:
+         weight = self.weight if self.elementwise_affine else None
+         bias = self.bias if self.use_bias else None
+@@ -354,28 +357,25 @@ class LayerNorm(MultiPlatformOp):
+     def forward_hip(
+         self,
+         x: torch.Tensor,
+-        **kwargs,
+     ) -> torch.Tensor:
+-        return self.forward_native(x, **kwargs)
++        return self.forward_native(x)
+ 
+     def forward_npu(
+         self,
+         x: torch.Tensor,
+-        **kwargs,
+     ) -> torch.Tensor:
+-        return self.forward_native(x, **kwargs)
++        return self.forward_native(x)
+ 
+     def forward_cpu(
+         self,
+         x: torch.Tensor,
+-        **kwargs,
+     ) -> torch.Tensor:
+         if _is_cpu_amx_available:
+             return torch.ops.sgl_kernel.layernorm_cpu(
+                 x, self.weight.data, self.variance_epsilon
+             )
+         else:
+-            return self.forward_native(x, **kwargs)
++            return self.forward_native(x)
+ 
+ 
+ class GemmaRMSNorm(MultiPlatformOp):
+@@ -396,9 +396,11 @@ class GemmaRMSNorm(MultiPlatformOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if residual is not None:
++            if post_residual_addition is not None:
++                residual = residual + post_residual_addition
+             gemma_fused_add_rmsnorm(
+                 x, residual, self.weight.data, self.variance_epsilon
+             )
+@@ -410,11 +412,13 @@ class GemmaRMSNorm(MultiPlatformOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         orig_dtype = x.dtype
+         if residual is not None:
+             x = x + residual
++            if post_residual_addition is not None:
++                x = x + post_residual_addition
+             residual = x
+ 
+         x = x.float()
+@@ -428,18 +432,20 @@ class GemmaRMSNorm(MultiPlatformOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+-        return self._forward_impl(x, residual, **kwargs)
++        return self._forward_impl(x, residual, post_residual_addition)
+ 
+     def forward_cpu(
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if _is_cpu_amx_available:
+             if residual is not None:
++                if post_residual_addition is not None:
++                    residual = residual + post_residual_addition
+                 torch.ops.sgl_kernel.gemma_fused_add_rmsnorm_cpu(
+                     x, residual, self.weight.data, self.variance_epsilon
+                 )
+@@ -447,16 +453,18 @@ class GemmaRMSNorm(MultiPlatformOp):
+             return torch.ops.sgl_kernel.gemma_rmsnorm_cpu(
+                 x, self.weight.data, self.variance_epsilon
+             )
+-        return self.forward_native(x, residual, **kwargs)
++        return self.forward_native(x, residual, post_residual_addition)
+ 
+     def forward_npu(
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+         if residual is not None:
+             x = x + residual
++            if post_residual_addition is not None:
++                x = x + post_residual_addition
+             residual = x
+ 
+         x, _ = torch_npu.npu_gemma_rms_norm(x, self.weight, self.variance_epsilon)
+@@ -466,9 +474,9 @@ class GemmaRMSNorm(MultiPlatformOp):
+         self,
+         x: torch.Tensor,
+         residual: Optional[torch.Tensor] = None,
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+-        return self._forward_impl(x, residual, **kwargs)
++        return self._forward_impl(x, residual, post_residual_addition)
+ 
+ 
+ class Gemma3RMSNorm(MultiPlatformOp):
+@@ -481,22 +489,22 @@ class Gemma3RMSNorm(MultiPlatformOp):
+     def _norm(self, x):
+         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+ 
+-    def forward_native(self, x, **kwargs):
++    def forward_native(self, x):
+         output = self._norm(x.float())
+         # Llama does x.to(float16) * w whilst Gemma3 is (x * w).to(float16)
+         # See https://github.com/huggingface/transformers/pull/29402
+         output = output * (1.0 + self.weight.float())
+         return output.type_as(x)
+ 
+-    def forward_cpu(self, x, **kwargs):
++    def forward_cpu(self, x):
+         if _is_cpu_amx_available and x.stride(-1) == 1:
+             return torch.ops.sgl_kernel.gemma3_rmsnorm_cpu(x, self.weight, self.eps)
+-        return self.forward_native(x, **kwargs)
++        return self.forward_native(x)
+ 
+-    def forward_cuda(self, x, **kwargs):
+-        return self.forward_native(x, **kwargs)
++    def forward_cuda(self, x):
++        return self.forward_native(x)
+ 
+-    def forward_npu(self, x, **kwargs):
++    def forward_npu(self, x):
+         output, _ = torch_npu.npu_gemma_rms_norm(x, self.weight, self.eps)
+         return output
+ 
 diff --git a/python/sglang/srt/layers/logits_processor.py b/python/sglang/srt/layers/logits_processor.py
 index fa7431048..cd33ea735 100644
 --- a/python/sglang/srt/layers/logits_processor.py
@@ -917,7 +1269,7 @@ index 3ad9f6736..0b9c7f499 100644
              self.norm = PPMissingLayer(return_tuple=True)
  
 diff --git a/python/sglang/srt/models/qwen3.py b/python/sglang/srt/models/qwen3.py
-index 9220831f6..47a1a4e4c 100644
+index 9220831f6..2b8303b54 100644
 --- a/python/sglang/srt/models/qwen3.py
 +++ b/python/sglang/srt/models/qwen3.py
 @@ -90,8 +90,8 @@ class Qwen3Attention(nn.Module):
@@ -942,6 +1294,23 @@ index 9220831f6..47a1a4e4c 100644
              )
              if get_global_server_args().rl_on_policy_target is not None
              else {}
+@@ -276,14 +274,14 @@ class Qwen3DecoderLayer(nn.Module):
+         hidden_states: torch.Tensor,
+         forward_batch: ForwardBatch,
+         residual: Optional[torch.Tensor],
+-        **kwargs,
++        post_residual_addition: Optional[torch.Tensor] = None,
+     ) -> Tuple[torch.Tensor, torch.Tensor]:
+         # Self Attention
+         hidden_states, residual = self.layer_communicator.prepare_attn(
+             hidden_states,
+             residual,
+             forward_batch,
+-            **kwargs,
++            post_residual_addition=post_residual_addition,
+         )
+         if hidden_states.shape[0] != 0:
+             hidden_states = self.self_attn(
 diff --git a/python/sglang/srt/models/qwen3_moe.py b/python/sglang/srt/models/qwen3_moe.py
 index e11678a9e..e277d46f2 100644
 --- a/python/sglang/srt/models/qwen3_moe.py
