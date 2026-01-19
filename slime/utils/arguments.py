@@ -1347,8 +1347,14 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         def add_sglang_tp_size():
             temp_parser = argparse.ArgumentParser(add_help=False)
             temp_parser.add_argument("--rollout-num-gpus-per-engine", type=int, default=1)
+            temp_parser.add_argument("--sglang-pp-size", type=int, default=1)
+            temp_parser.add_argument("--sglang-pipeline-parallel-size", type=int, default=1)
             temp_args, _ = temp_parser.parse_known_args()
-            sglang_tp_size = temp_args.rollout_num_gpus_per_engine
+            # Use sglang_pp_size if set (non-default), otherwise use sglang_pipeline_parallel_size
+            pp_size = (
+                temp_args.sglang_pp_size if temp_args.sglang_pp_size != 1 else temp_args.sglang_pipeline_parallel_size
+            )
+            sglang_tp_size = temp_args.rollout_num_gpus_per_engine // pp_size
             return sglang_tp_size
 
         # Add custom arguments in front to prevent overwritten some slime arguments.
