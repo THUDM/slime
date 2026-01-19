@@ -68,13 +68,13 @@ def execute():
         "--sglang-mem-fraction-static 0.6 "
         "--sglang-decode-log-interval 1000 "
         "--sglang-enable-metrics "
-        # "--sglang-enable-deterministic-inference "
-        # "--sglang-rl-on-policy-target fsdp "
+        "--sglang-enable-deterministic-inference "
+        "--sglang-rl-on-policy-target fsdp "
         "--sglang-attention-backend fa3 "
         "--attn-implementation flash_attention_3 "
         "--sglang-cuda-graph-bs 1 2 4 8 16 24 32 40 48 56 64 "
-        # "--deterministic-mode "
-        # "--true-on-policy-mode "
+        "--deterministic-mode "
+        "--true-on-policy-mode "
     )
 
     ci_args = "--ci-test "
@@ -96,9 +96,9 @@ def execute():
     )
 
     extra_env_vars = {
-        # "NCCL_ALGO": "allreduce:tree",
-        # "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
-        # "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
+        "NCCL_ALGO": "allreduce:tree",
+        "NVTE_ALLOW_NONDETERMINISTIC_ALGO": "0",
+        "CUBLAS_WORKSPACE_CONFIG": ":4096:8",
         "CUDA_DEVICE_MAX_CONNECTIONS": "1",
     }
 
