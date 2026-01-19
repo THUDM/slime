@@ -34,7 +34,7 @@ RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
 
 RUN pip install git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c --no-deps
 
-RUN pip install flash-linear-attention==0.4.0
+RUN pip install flash-linear-attention==0.4.1
 RUN pip install tilelang -f https://tile-ai.github.io/whl/nightly/cu128/
 
 # TE does not have wheel on cuda 13 yet, thus need to install from source
