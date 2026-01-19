@@ -404,6 +404,29 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Interval for updating the weights",
             )
             parser.add_argument(
+                "--weight-update-mode",
+                type=str,
+                choices=["full", "delta"],
+                default="full",
+                help="Weight update mode for rollout engines (full or delta).",
+            )
+            parser.add_argument(
+                "--delta-block-size",
+                type=int,
+                nargs="*",
+                default=None,
+                help=(
+                    "Block size for delta compression (e.g., --delta-block-size 128 128). "
+                    "Defaults to the FP8 quantization block size when available."
+                ),
+            )
+            parser.add_argument(
+                "--delta-threshold",
+                type=float,
+                default=0.3,
+                help="Fallback to full update when delta block ratio exceeds this value.",
+            )
+            parser.add_argument(
                 "--keep-old-actor",
                 action="store_true",
                 help="Whether to keep the rollout model on training process",

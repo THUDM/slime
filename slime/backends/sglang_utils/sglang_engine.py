@@ -1,4 +1,5 @@
 import dataclasses
+import math
 import ipaddress
 import logging
 import multiprocessing
@@ -7,6 +8,7 @@ import time
 from urllib.parse import quote
 
 import requests
+import torch
 import sglang_router
 from packaging.version import parse
 from sglang.srt.server_args import ServerArgs
@@ -15,6 +17,12 @@ from urllib3.exceptions import NewConnectionError
 
 from slime.ray.ray_actor import RayActor
 from slime.utils.http_utils import get_host_info
+from sglang.srt.utils import MultiprocessingSerializer
+
+try:
+    from sglang.srt.weight_sync.tensor_bucket import FlattenedTensorBucket  # type: ignore[import]
+except ImportError:
+    from sglang.srt.model_executor.model_runner import FlattenedTensorBucket  # type: ignore[import]
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +120,7 @@ class SGLangEngine(RayActor):
         self.rank = rank
         self.worker_type = worker_type
         self.base_gpu_id = base_gpu_id
+        self._delta_weight_cache: list[dict[str, dict[str, torch.Tensor | tuple | str]]] = []
 
     def init(self, dist_init_addr, port, nccl_port, host=None, disaggregation_bootstrap_port=None):
         self.router_ip = self.args.sglang_router_ip
@@ -271,6 +280,145 @@ class SGLangEngine(RayActor):
             "update_weights_from_tensor",
             payload,
         )
+
+    def update_weights_from_tensor_delta(
+        self,
+        serialized_delta_payloads: list[str],
+        weight_version: str | None = None,
+    ):
+        if self.node_rank != 0:
+            return
+        if not serialized_delta_payloads:
+            return
+
+        delta_payloads = [MultiprocessingSerializer.deserialize(payload) for payload in serialized_delta_payloads]
+        if all(not payload or not payload.get("deltas") for payload in delta_payloads):
+            return
+
+        cache = self._get_delta_weight_cache(len(delta_payloads))
+        serialized_by_dtype: dict[str, list[str]] = {}
+        empty_serialized = None
+
+        for rank_idx, payload in enumerate(delta_payloads):
+            named_tensors = []
+            for delta in payload.get("deltas", []) if payload else []:
+                updated = self._apply_fp8_delta(cache[rank_idx], delta)
+                if updated is None:
+                    continue
+                weight_name, qweight, scale_name, scale = updated
+                named_tensors.append((weight_name, qweight))
+                if scale_name and scale is not None:
+                    named_tensors.append((scale_name, scale))
+
+            serialized_map = self._serialize_named_tensors_by_dtype(named_tensors)
+            if not serialized_map:
+                if empty_serialized is None:
+                    empty_serialized = self._serialize_named_tensors_by_dtype([])
+                serialized_map = empty_serialized
+            for dtype_key, serialized in serialized_map.items():
+                serialized_by_dtype.setdefault(dtype_key, [None] * len(delta_payloads))
+                serialized_by_dtype[dtype_key][rank_idx] = serialized
+
+        if not serialized_by_dtype:
+            return
+
+        if empty_serialized is None:
+            empty_serialized = self._serialize_named_tensors_by_dtype([])
+        empty_fallback = next(iter(empty_serialized.values()))
+        for dtype_key, per_rank in serialized_by_dtype.items():
+            for idx in range(len(per_rank)):
+                if per_rank[idx] is None:
+                    per_rank[idx] = empty_serialized.get(dtype_key, empty_fallback)
+            payload = {
+                "serialized_named_tensors": per_rank,
+                "load_format": "flattened_bucket",
+            }
+            if weight_version is not None:
+                payload["weight_version"] = weight_version
+            self._make_request("update_weights_from_tensor", payload)
+
+    def _get_delta_weight_cache(self, rank_count: int):
+        while len(self._delta_weight_cache) < rank_count:
+            self._delta_weight_cache.append({})
+        return self._delta_weight_cache
+
+    def _apply_fp8_delta(self, cache: dict[str, dict[str, torch.Tensor | tuple | str]], delta: dict):
+        weight_name = delta["weight_name"]
+        scale_name = delta.get("scale_name")
+        block_size = tuple(delta["block_size"]) if delta.get("block_size") else None
+        block_indices = delta.get("block_indices", [])
+        block_shapes = delta.get("block_shapes", [])
+        qweight_blocks = delta.get("qweight_blocks", [])
+        scale_blocks = delta.get("scale_blocks")
+        full_shape = tuple(delta.get("full_shape", ()))
+        scale_shape = tuple(delta.get("scale_shape", ()))
+
+        if weight_name not in cache:
+            if not delta.get("full_update"):
+                return None
+            qweight_full = torch.empty(full_shape, dtype=qweight_blocks[0].dtype, device="cpu")
+            scale_full = torch.empty(scale_shape, dtype=scale_blocks.dtype, device="cpu") if scale_blocks is not None else None
+            cache[weight_name] = {
+                "qweight": qweight_full,
+                "scale": scale_full,
+                "block_size": block_size,
+                "scale_name": scale_name,
+            }
+
+        entry = cache[weight_name]
+        qweight_full = entry["qweight"]
+        scale_full = entry["scale"]
+        if (
+            tuple(qweight_full.shape) != full_shape
+            or tuple(scale_full.shape) != scale_shape
+            or entry.get("block_size") != block_size
+        ):
+            return None
+
+        if block_size is None:
+            if not qweight_blocks:
+                return None
+            qweight_full = qweight_blocks[0].clone()
+            scale_full = scale_blocks.clone() if isinstance(scale_blocks, torch.Tensor) else scale_full
+        else:
+            block_m, block_n = block_size
+            grid_n = math.ceil(full_shape[1] / block_n) if full_shape else 0
+            for i, block_index in enumerate(block_indices):
+                block_row = block_index // grid_n
+                block_col = block_index % grid_n
+                row_start = block_row * block_m
+                col_start = block_col * block_n
+                row_end = row_start + block_shapes[i][0]
+                col_end = col_start + block_shapes[i][1]
+                qweight_full[row_start:row_end, col_start:col_end] = qweight_blocks[i]
+                if scale_blocks is not None:
+                    scale_full[block_row, block_col] = scale_blocks[i]
+
+        cache[weight_name] = {
+            "qweight": qweight_full.clone(),
+            "scale": scale_full.clone(),
+            "block_size": block_size,
+            "scale_name": scale_name,
+        }
+        return weight_name, qweight_full, scale_name, scale_full
+
+    def _serialize_named_tensors_by_dtype(self, named_tensors):
+        if not named_tensors:
+            return {"dtype": self._serialize_flattened_bucket(named_tensors)}
+        if getattr(FlattenedTensorBucket, "supports_multi_dtypes", False):
+            return {"dtype": self._serialize_flattened_bucket(named_tensors)}
+        grouped = {}
+        for name, tensor in named_tensors:
+            grouped.setdefault(tensor.dtype, []).append((name, tensor))
+        return {str(dtype): self._serialize_flattened_bucket(tensors) for dtype, tensors in grouped.items()}
+
+    def _serialize_flattened_bucket(self, named_tensors):
+        flattened_tensor_bucket = FlattenedTensorBucket(named_tensors=named_tensors)
+        flattened_tensor_data = {
+            "flattened_tensor": flattened_tensor_bucket.get_flattened_tensor(),
+            "metadata": flattened_tensor_bucket.get_metadata(),
+        }
+        return MultiprocessingSerializer.serialize(flattened_tensor_data, output_str=True)
 
     def flush_cache(self):
         """Flush the cache of the server."""
