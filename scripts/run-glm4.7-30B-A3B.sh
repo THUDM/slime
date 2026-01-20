@@ -24,11 +24,11 @@ fi
 echo "HAS_NVLINK: $HAS_NVLINK (detected $NVLINK_COUNT NVLink references)"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
-source "${SCRIPT_DIR}/models/glm4.5-355B-A32B.sh"
+source "${SCRIPT_DIR}/../scripts/models/glm4.7-30B-A3B.sh"
 
 CKPT_ARGS=(
-   --hf-checkpoint $BASE_DIR/GLM-4.5-355B-A32B
-   --ref-load $BASE_DIR/GLM-4.5-355B-A32B_torch_dist/
+   --hf-checkpoint $BASE_DIR/GLM-4.7-Flash
+   --ref-load $BASE_DIR/GLM-4.7-Flash_torch_dist/
 )
 
 ROLLOUT_ARGS=(
@@ -37,56 +37,53 @@ ROLLOUT_ARGS=(
    --label-key label
    --apply-chat-template
    --rollout-shuffle
+
    --rm-type deepscaler
+
    --num-rollout 3000
    --rollout-batch-size 128
+   #--over-sampling-batch-size 256
    --n-samples-per-prompt 8
    --rollout-max-response-len 32768
-   --rollout-temperature 1
+   --rollout-temperature 1.0
 
-   --over-sampling-batch-size 256
-   --dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
-
-   --num-steps-per-rollout 4
-   --balance-data
-   --rollout-stop-token-ids 151329 151336 151338
+   --global-batch-size 1024
+   #--balance-data
 )
 
 EVAL_ARGS=(
    --eval-interval 20
-   --eval-prompt-data aime $BASE_DIR/rl_data/aime-2024.jsonl
-   --n-samples-per-eval-prompt 8
-   --eval-max-response-len 32768
-   --eval-top-p 1
+   --eval-prompt-data aime24 $BASE_DIR/rl_data/aime-2024.jsonl
+   --n-samples-per-eval-prompt 2
+   --eval-max-response-len 16384
+   --eval-temperature 0.6
+   --eval-top-p 0.95
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 8
+   --tensor-model-parallel-size 4
    --sequence-parallel
-   --pipeline-model-parallel-size 4
+   --pipeline-model-parallel-size 2
    --context-parallel-size 2
-   --expert-model-parallel-size 16
+   --expert-model-parallel-size 8
    --expert-tensor-parallel-size 1
+   --decoder-last-pipeline-num-layers 23
 
    --recompute-granularity full
    --recompute-method uniform
    --recompute-num-layers 1
 
    --use-dynamic-batch-size
-   --max-tokens-per-gpu 16384
+   --max-tokens-per-gpu 32768
 )
 
 GRPO_ARGS=(
-   --advantage-estimator gspo
-   #--use-kl-loss
+   --advantage-estimator grpo
+   --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
    --kl-coef 0.00
    --entropy-coef 0.00
-   --eps-clip 1e-4
-   --eps-clip-high 2e-4
-
-   --use-tis
 )
 
 OPTIMIZER_ARGS=(
@@ -105,15 +102,14 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=(
    # --use-wandb
    # --wandb-project slime-dev
-   # --wandb-group qwen3-235B-sft
+   # --wandb-group glm4.7-flash
 )
 
 SGLANG_ARGS=(
-   --rollout-num-gpus-per-engine 32
-   --sglang-mem-fraction-static 0.7
+   --rollout-num-gpus-per-engine 8
+   --sglang-mem-fraction-static 0.8
    --sglang-enable-dp-attention
-   --sglang-dp-size 4
-   --sglang-ep-size 32
+   --sglang-dp-size 8
    --sglang-enable-dp-lm-head
    --sglang-moe-dense-tp-size 1
 
@@ -123,6 +119,9 @@ SGLANG_ARGS=(
    --sglang-speculative-eagle-topk 1
    --sglang-speculative-num-draft-tokens 3
 
+   --sglang-cuda-graph-max-bs 64
+
+   --sglang-max-running-requests 512
 )
 
 MISC_ARGS=(
@@ -142,14 +141,15 @@ MISC_ARGS=(
 # launch the master node of ray in container
 export MASTER_ADDR=${MLP_WORKER_0_HOST}
 export no_proxy="127.0.0.1,${MASTER_ADDR}"
-ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
+ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats
+
 for WORKER_IP in $(awk '{print $1}' /root/mpi_rack_hostfile); do
   if [[ "$WORKER_IP" == "$MLP_WORKER_0_HOST" ]]; then
     continue
   fi
   echo "Starting Ray worker on ${WORKER_IP}"
   ssh root@"${WORKER_IP}" \
-    "pkill -9 sglang ; ray stop --force ; pkill -9 python ; ray start --address=${MASTER_ADDR}:6379 --num-gpus 8 --node-ip-address ${WORKER_IP} --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265" &
+    "pkill -9 sglang ; ray stop --force ; pkill -9 python ; ray start --address=${MASTER_ADDR}:6379 --num-gpus 8 --node-ip-address ${WORKER_IP} --disable-usage-stats" &
 done
 wait
 
@@ -185,10 +185,10 @@ ray job submit --address="http://127.0.0.1:8265" \
      }
    }' \
    -- python3 train.py \
-   --actor-num-nodes 8 \
+   --actor-num-nodes 2 \
    --actor-num-gpus-per-node 8 \
    --colocate \
-   --save-debug-rollout-data data.pt \
+   --save-debug-rollout-data "data.pt" \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \
