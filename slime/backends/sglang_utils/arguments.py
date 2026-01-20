@@ -25,6 +25,18 @@ def add_sglang_router_arguments(parser):
         default=14400,
         help="Timeout for requests to the SGLang router in seconds",
     )
+    parser.add_argument(
+        "--sglang-router-balance-abs-threshold",
+        type=int,
+        default=10,
+        help="Absolute threshold for balance in the SGLang router",
+    )
+    parser.add_argument(
+        "--sglang-router-balance-rel-threshold",
+        type=float,
+        default=1.2,
+        help="Relative threshold for balance in the SGLang router",
+    )
     return parser
 
 
