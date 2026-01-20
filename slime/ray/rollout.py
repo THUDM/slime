@@ -659,7 +659,7 @@ def _start_router(args):
             router_args.pd_disaggregation = True
 
         logger.info(f"Launch router with args: {router_args}")
-
+    print("!!!", router_args.balance_abs_threshold)
     process = multiprocessing.Process(
         target=run_router,
         args=(router_args,),
