@@ -17,6 +17,12 @@ from slime.utils.types import Sample
 
 DEFAULT_ENV_MODULE = "examples.vlm_multi_turn.env_geo3k"
 
+# Dummy messages used for calculating trim length in chat template encoding
+DUMMY_MESSAGES = [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "I am a user."},
+]
+
 
 def _load_env_module(env_path: str | None):
     """Load the interaction environment module from a module path or a file path."""
@@ -61,21 +67,17 @@ def _encode_observation_for_generation(
     apply_kwargs = apply_chat_template_kwargs or {}
 
     trim_length = 0
-    dummy_messages = [
-        {"role": "system", "content": "You are a helpful assistant."},
-        {"role": "user", "content": "I am a user."},
-    ]
 
     if apply_chat_template:
         dummy_prompt = tokenizer.apply_chat_template(
-            dummy_messages,
+            DUMMY_MESSAGES,
             tools=tools,
             tokenize=False,
             add_generation_prompt=False,
             **apply_kwargs,
         )
         formatted_prompt = tokenizer.apply_chat_template(
-            dummy_messages + [message],
+            DUMMY_MESSAGES + [message],
             tools=tools,
             tokenize=False,
             add_generation_prompt=True,
@@ -343,7 +345,7 @@ async def generate(args: Any, sample: Sample, sampling_params) -> Sample:
                 sample.status = Sample.Status.COMPLETED
                 break
 
-            obs_log_probs = [float("-inf")] * len(obs_prompt_ids)
+            obs_log_probs = [0.0] * len(obs_prompt_ids)
             _append_to_sample(sample, response_tokens, obs_prompt_ids, obs_log_probs, loss_mask_val=0)
             budget = _update_budget(budget, len(obs_prompt_ids))
 

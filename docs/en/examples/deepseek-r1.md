@@ -177,7 +177,7 @@ The final `--sglang-server-concurrency` is a parameter specific to slime. It is 
 SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 64
    --sglang-mem-fraction-static 0.7
-   --sglang-enable-ep-moe
+   ----sglang-ep-size 64
 
    # dp attention
    --sglang-enable-dp-attention
@@ -186,7 +186,7 @@ SGLANG_ARGS=(
    --sglang-enable-dp-lm-head
 
    # enable deepep for sglang
-   --sglang-enable-deepep-moe
+   --sglang-moe-a2a-backend deepep
    --sglang-deepep-mode auto
 
    # make every dp rank have 128 concurrency

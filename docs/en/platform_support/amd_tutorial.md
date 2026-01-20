@@ -54,7 +54,7 @@ Then, download and install slime:
 ```bash
 git clone https://github.com/THUDM/slime.git
 cd slime
-pip install -e .
+pip install -e . --no-deps
 ```
 
 Download the model and data:
@@ -93,7 +93,7 @@ PYTHONPATH=${MEGATRON_LM_PATH} python tools/convert_hf_to_torch_dist.py \
 
 Note: We implemented a dedicated AMD conversion script that forces a CPU-only conversion workflow using the Gloo backend to bypass hardware-specific issues. A GPU-based script for ROCm is currently in development.
 
-⚠️ If you encounter an issue where slime cannot be found, please run `pip install -e .` in the slime directory.
+⚠️ If you encounter an issue where slime cannot be found, please run `pip install -e . --no-deps` in the slime directory.
 
 
 ### Example: Qwen3-4B

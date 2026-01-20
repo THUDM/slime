@@ -1,5 +1,5 @@
-ARG SGLANG_IMAGE_TAG=nightly-dev-20260103-24c91001
-FROM lmsysorg/sglang:${SGLANG_IMAGE_TAG} AS sglang
+ARG SGLANG_IMAGE_TAG=nightly-dev-20260107-dce8b060
+FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
 
@@ -34,7 +34,8 @@ RUN git clone https://github.com/Dao-AILab/flash-attention.git && \
 
 RUN pip install git+https://github.com/ISEEKYAN/mbridge.git@89eb10887887bc74853f89a4de258c0702932a1c --no-deps
 
-RUN pip install flash-linear-attention==0.4.0
+RUN pip install flash-linear-attention==0.4.1
+RUN pip install tilelang -f https://tile-ai.github.io/whl/nightly/cu128/
 
 # TE does not have wheel on cuda 13 yet, thus need to install from source
 RUN if [ "${ENABLE_CUDA_13}" = "1" ]; then \
@@ -77,7 +78,6 @@ RUN pip install nvidia-cudnn-cu12==9.16.0.29
 # reinstall numpy 1.x for megatron
 RUN pip install "numpy<2"
 
-RUN rm /root/.tmux.conf
 RUN rm -rf /root/.cache/pip /root/flash-attention
 
 # ====================================== Patches ============================================

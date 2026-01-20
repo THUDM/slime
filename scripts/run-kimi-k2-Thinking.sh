@@ -130,7 +130,7 @@ SGLANG_ARGS=(
    --sglang-ep-size 16
 
    # enable deepep for sglang
-   # --sglang-enable-deepep-moe
+   # --sglang-moe-a2a-backend deepep
    # --sglang-deepep-mode auto
 
    # make every dp rank has 128 concurrency

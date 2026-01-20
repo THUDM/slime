@@ -22,7 +22,7 @@ from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
-from slime.utils import tracking_utils
+from slime.utils import logging_utils
 from slime.utils.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
@@ -650,7 +650,7 @@ def train(
                 log_dict[f"train/{role_tag}lr-pg_{param_group_id}"] = opt_param_scheduler.get_lr(param_group)
 
             log_dict["train/step"] = accumulated_step_id
-            tracking_utils.log(args, log_dict, step_key="train/step")
+            logging_utils.log(args, log_dict, step_key="train/step")
 
             if args.ci_test and not args.ci_disable_kl_checker:
                 if step_id == 0 and "train/ppo_kl" in log_dict and "train/pg_clipfrac" in log_dict:

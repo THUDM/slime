@@ -57,7 +57,7 @@
 
 11. **Sglang shows an `an illegal memory access was encountered` error.**
 
-    According to the sglang documentation ([https://docs.sglang.ai/references/troubleshooting.html](https://docs.sglang.ai/references/troubleshooting.html)), this could be an OOM error. Consider reducing the value of `--sglang-mem-fraction-static`.
+    According to [SGLang documentation](https://docs.sglang.io/references/faq.html), this could be an OOM error. Consider reducing the value of `--sglang-mem-fraction-static`.
 
 12. **A `JSONDecodeError` occurs related to torch compile/inductor.**
 

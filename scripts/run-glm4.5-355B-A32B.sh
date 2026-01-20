@@ -119,10 +119,9 @@ SGLANG_ARGS=(
 
    # mtp
    --sglang-speculative-algorithm EAGLE
-   --sglang-speculative-num-steps 1
+   --sglang-speculative-num-steps 2
    --sglang-speculative-eagle-topk 1
-   --sglang-speculative-num-draft-tokens 2
-   --sglang-enable-draft-weights-cpu-backup
+   --sglang-speculative-num-draft-tokens 3
 
 )
 
@@ -189,7 +188,7 @@ ray job submit --address="http://127.0.0.1:8265" \
    --actor-num-nodes 8 \
    --actor-num-gpus-per-node 8 \
    --colocate \
-   --save-debug-rollout-data /mnt/zhuzilin/github-slime/data.pt \
+   --save-debug-rollout-data data.pt \
    ${MODEL_ARGS[@]} \
    ${CKPT_ARGS[@]} \
    ${ROLLOUT_ARGS[@]} \

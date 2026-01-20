@@ -1,7 +1,10 @@
+import logging
 import math
 from typing import Any, Literal
 
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 def dict_add_prefix(d: dict[str, Any], prefix: str) -> dict[str, Any]:
@@ -118,3 +121,28 @@ def compute_rollout_step(args, rollout_id):
     if args.wandb_always_use_train_step:
         return rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
     return rollout_id
+
+
+class MetricChecker:
+    @staticmethod
+    def maybe_create(args):
+        if args.ci_test and (args.ci_metric_checker_key is not None):
+            return MetricChecker(args)
+        return None
+
+    def __init__(self, args):
+        self.args = args
+        self._exists_check_success = False
+
+    def on_eval(self, metrics: dict[str, float]):
+        actual_value = metrics.get(self.args.ci_metric_checker_key)
+        assert actual_value is not None, f"{metrics=} {self.args.ci_metric_checker_key=}"
+
+        check_success = actual_value >= self.args.ci_metric_checker_threshold
+        logger.info(f"[MetricChecker] {check_success=} {actual_value=} {self.args.ci_metric_checker_threshold=}")
+
+        self._exists_check_success |= check_success
+
+    def dispose(self):
+        assert self._exists_check_success, "[MetricChecker] accuracy check failed"
+        logger.info("[MetricChecker] pass dispose check")

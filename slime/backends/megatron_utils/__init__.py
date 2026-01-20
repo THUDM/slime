@@ -39,4 +39,4 @@ try:
 except ImportError:
     pass
 
-logging.getLogger().setLevel(logging.WARNING)
+logging.getLogger("megatron").setLevel(logging.WARNING)

@@ -65,7 +65,7 @@ def block_fp8(weight, block_size):
         .to(torch.float8_e4m3fn)
     )
     qweight = qweight[:shape_0, :shape_1].clone().detach()
-    scale = scale.squeeze()
+    scale = scale.reshape(n_tiles, k_tiles)
 
     return qweight, scale
 
@@ -101,12 +101,15 @@ class ConversionResult:
         self.weight_map = {}
         self.param_count = 0
         self.modules_to_not_convert = []
+        self.has_dsa_layers = False
 
     def add_result(self, filename, q_weights, module_names):
         with self.lock:
             for k, v in q_weights.items():
                 self.weight_map[k] = filename
                 self.param_count += len(v)
+                if "indexer" in k:
+                    self.has_dsa_layers = True
             self.modules_to_not_convert.extend(module_names)
 
 
@@ -133,6 +136,7 @@ def process_file(input_path, output_path, filename, strategy, block_size, result
             and "norm" not in key
             and "lm_head" not in key
             and "eh_proj" not in key
+            and "weights_proj" not in key
         ):
             qw, s = quant_fp8(weights[key], strategy, block_size)
             q_weights[key] = qw
@@ -181,6 +185,8 @@ def convert_fp8(input_path, output_path, strategy, block_size=None, max_workers=
         }
         if block_size:
             quantization_config["weight_block_size"] = block_size
+            if result_collector.has_dsa_layers:
+                quantization_config["scale_fmt"] = "ue8m0"
         if len(result_collector.modules_to_not_convert) > 0:
             quantization_config["modules_to_not_convert"] = list(set(result_collector.modules_to_not_convert))
     else:

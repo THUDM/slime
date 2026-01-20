@@ -6,6 +6,10 @@ DATASET_LOCAL_NAME=$(basename "$DATASET_NAME")
 
 # Validate MODEL_NAME
 VALID_MODELS="
+  Qwen2.5-VL-3B-Instruct
+  Qwen2.5-VL-7B-Instruct
+  Qwen2.5-VL-32B-Instruct
+  Qwen2.5-VL-72B-Instruct
   Qwen3-VL-2B-Instruct
   Qwen3-VL-4B-Instruct
   Qwen3-VL-8B-Instruct

@@ -1,0 +1,4 @@
+camel-ai
+strands-agents
+strands-agents-tools
+strands-sglang

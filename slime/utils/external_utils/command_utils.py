@@ -10,8 +10,8 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from slime.utils.external_utils.typer_utils import dataclass_cli
 from slime.utils.misc import exec_command
-from slime.utils.typer_utils import dataclass_cli
 
 _ = exec_command, dataclass_cli
 

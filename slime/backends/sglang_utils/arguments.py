@@ -1,5 +1,3 @@
-import sglang
-from packaging.version import parse
 from sglang.srt.server_args import ServerArgs
 from slime.utils.http_utils import _wrap_ipv6
 
@@ -114,13 +112,19 @@ def add_sglang_arguments(parser):
 
 
 def validate_args(args):
-    if parse(sglang.__version__) == parse("0.4.10") and getattr(args, "sglang_enable_ep_moe", False):
-        args.sglang_expert_parallel_size = args.rollout_num_gpus_per_engine
-
-    args.sglang_tp_size = args.rollout_num_gpus_per_engine
     args.sglang_dp_size = args.sglang_data_parallel_size
     args.sglang_pp_size = args.sglang_pipeline_parallel_size
     args.sglang_ep_size = args.sglang_expert_parallel_size
+
+    # Compute effective TP size considering PP size
+    if args.sglang_pp_size > 1:
+        assert args.rollout_num_gpus_per_engine % args.sglang_pp_size == 0, (
+            f"rollout_num_gpus_per_engine ({args.rollout_num_gpus_per_engine}) must be divisible by "
+            f"sglang_pipeline_parallel_size ({args.sglang_pp_size})"
+        )
+        args.sglang_tp_size = args.rollout_num_gpus_per_engine // args.sglang_pp_size
+    else:
+        args.sglang_tp_size = args.rollout_num_gpus_per_engine
 
     if args.sglang_dp_size > 1:
         assert args.sglang_enable_dp_attention

@@ -2,6 +2,15 @@
 
 Training VLMs with FSDP or Megatron on single-turn reasoning task using GRPO on the [GEO3K dataset](https://huggingface.co/datasets/hiyouga/geometry3k). We used processed version [here](https://huggingface.co/datasets/chenhegu/geo3k_imgurl).
 
+Supported models:
+* Qwen2.5-VL
+* Qwen3-VL (Dense and Moe)
+
+Note: Please make sure the cudnn version in the environment is 9.16.0.29 to prevent severe performance regression in conv3d in torch 2.9 mentioned in https://github.com/pytorch/pytorch/issues/168167. Otherwise, you can reinstall cudnn with:
+```bash
+pip install nvidia-cudnn-cu12==9.16.0.29
+```
+
 <p align="center">
   <img src="fsdp_vs_megatron.png" alt="FSDP vs Megatron Reward Plot" width="800">
 </p>
@@ -43,7 +52,7 @@ ds.to_parquet("/root/datasets/geo3k_imgurl/train_formatted.parquet")
 ```bash
 export WANDB_API_KEY=your_wandb_api_key
 
-# Megatron backend (default -> Qwen3-VL-2B-Instruct + Megatron)
+# Megatron backend (default -> Qwen3-VL-8B-Instruct + Megatron)
 ./examples/geo3k_vlm/run_geo3k_vlm.sh
 
 # FSDP backend

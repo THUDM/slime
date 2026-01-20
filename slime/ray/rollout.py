@@ -10,20 +10,23 @@ import numpy as np
 import ray
 import torch
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
-from slime.utils import tracking_utils
+from slime.utils import logging_utils
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
-from slime.utils.iter_utils import group_by
-from slime.utils.logging_utils import configure_logger
-from slime.utils.metric_checker import MetricChecker
-from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
-from slime.utils.misc import load_function
-from slime.utils.ray_utils import Box
+from slime.utils.logging_utils import configure_logger, init_tracking
+from slime.utils.metric_utils import (
+    MetricChecker,
+    compute_pass_rate,
+    compute_rollout_step,
+    compute_statistics,
+    dict_add_prefix,
+)
+from slime.utils.misc import Box, group_by, load_function
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
-from slime.utils.tracking_utils import init_tracking
 from slime.utils.types import Sample
 
 from ..utils.metric_utils import has_repetition
@@ -74,14 +77,41 @@ class RolloutManager:
         self.num_new_engines = init_rollout_engines(args, pg, self.all_rollout_engines)
         self.nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
+        self.rollout_id = -1
 
         self._metric_checker = MetricChecker.maybe_create(args)
+        self._health_monitor = None
         if self.args.use_fault_tolerance:
             self._health_monitor = RolloutHealthMonitor(self, args)
+            self._health_monitor.start()  # Start the monitor thread (in paused state)
+            self._ci_fault_injection_pending = self.args.ci_test  # Flag for CI fault injection
+
+    def _try_ci_fault_injection(self):
+        """Try to inject fault during generate (when health monitor is running)."""
+        if not self._ci_fault_injection_pending:
+            return
+
+        # Only inject fault once
+        self._ci_fault_injection_pending = False
+
+        if self.all_rollout_engines and self.all_rollout_engines[0]:
+            logger.info("CI Fault Injection: Simulating crash on engine 0 during generate")
+            try:
+                # This will cause the ray actor to exit
+                self.all_rollout_engines[0].simulate_crash.remote()
+                # Wait for health monitor to detect the crash and mark engine as None
+                # health_check_interval + health_check_timeout + buffer
+                wait_time = self.args.rollout_health_check_interval + self.args.rollout_health_check_timeout + 5
+                logger.info(f"CI Fault Injection: Waiting {wait_time}s for health monitor to detect crash")
+                time.sleep(wait_time)
+            except Exception as e:
+                logger.warning(f"CI Fault Injection failed: {e}")
 
     def dispose(self):
         if self._metric_checker is not None:
             self._metric_checker.dispose()
+        if self._health_monitor is not None:
+            self._health_monitor.stop()
 
     # TODO maybe rename "rollout_engines" and "all_rollout_engines" later
     @property
@@ -97,25 +127,22 @@ class RolloutManager:
         return len(self.data_source.dataset) // self.args.rollout_batch_size
 
     def generate(self, rollout_id):
-        monitor_started = self.args.use_fault_tolerance and self._health_monitor.start()
         start_time = time.time()
-        try:
-            data, metrics = self._get_rollout_data(rollout_id=rollout_id)
-            self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
-            _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
-            data = self._convert_samples_to_train_data(data)
-            return self._split_train_data_by_dp(data, self.train_parallel_config["dp_size"])
-        finally:
-            if monitor_started:
-                self._health_monitor.stop()
-                self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
-            else:
-                self.num_new_engines = 0
+        self.rollout_id = rollout_id
+        self.health_monitoring_resume()
+        if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
+            self._try_ci_fault_injection()
+        data, metrics = self._get_rollout_data(rollout_id=rollout_id)
+        self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
+        _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
+        data = self._convert_samples_to_train_data(data)
+        return self._split_train_data_by_dp(data, self.train_parallel_config["dp_size"])
 
     def eval(self, rollout_id):
         if self.args.debug_train_only:
             # if debug train only, we don't generate evaluation data
             return
+        self.health_monitoring_resume()
 
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
         data = result.data
@@ -131,10 +158,54 @@ class RolloutManager:
         self.data_source.load(rollout_id)
 
     def offload(self):
-        return ray.get([engine.release_memory_occupation.remote() for engine in self.rollout_engines])
+        self.health_monitoring_pause()
+        return ray.get(
+            [engine.release_memory_occupation.remote() for engine in self.rollout_engines if engine is not None]
+        )
 
-    def onload(self, tags: list[str] = None):
-        return ray.get([engine.resume_memory_occupation.remote(tags=tags) for engine in self.rollout_engines])
+    def onload(self, tags: list[str] | None = None):
+        return ray.get(
+            [
+                engine.resume_memory_occupation.remote(tags=tags)
+                for engine in self.rollout_engines
+                if engine is not None
+            ]
+        )
+
+    def onload_weights(self):
+        self.onload(tags=[GPU_MEMORY_TYPE_WEIGHTS])
+
+    def onload_kv(self):
+        self.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH])
+
+    def recover_rollout_engines(self):
+        """Restart any dead rollout engines and update num_new_engines for update_weights detection."""
+        self.health_monitoring_pause()
+        if self.rollout_id == -1:
+            return self.rollout_engines, self.rollout_engine_lock, self.num_new_engines
+
+        dead_indices = [i for i, engine in enumerate(self.all_rollout_engines) if engine is None]
+        self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
+        logger.info(f"Recovered {self.num_new_engines} dead rollout engines")
+        assert self.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
+        if self.args.offload_rollout and dead_indices:
+            new_engines = [self.all_rollout_engines[i] for i in dead_indices]
+            ray.get([engine.release_memory_occupation.remote() for engine in new_engines])
+            ray.get([engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]) for engine in new_engines])
+
+        return self.rollout_engines, self.rollout_engine_lock, self.num_new_engines
+
+    def clear_num_new_engines(self):
+        # when fault tolerance is not enabled, we need to manually clear num_new_engines after update_weights
+        self.num_new_engines = 0
+
+    def health_monitoring_pause(self) -> None:
+        if self._health_monitor is not None:
+            self._health_monitor.pause()
+
+    def health_monitoring_resume(self) -> None:
+        if self._health_monitor is not None:
+            self._health_monitor.resume()
 
     def check_weights(self, action: str):
         return ray.get([engine.check_weights.remote(action=action) for engine in self.rollout_engines])
@@ -171,7 +242,7 @@ class RolloutManager:
                     global_batch_size = self._dynamic_global_batch_size
 
                 if len(data) % global_batch_size != 0:
-                    trim_len = (len(data) // self.args.global_batch_size) * global_batch_size
+                    trim_len = (len(data) // global_batch_size) * global_batch_size
                     if trim_len == 0:
                         raise ValueError(f"Not enough samples {len(data)} for global_batch_size {global_batch_size}")
                     origin_data_length = len(data)
@@ -582,12 +653,10 @@ def _start_router(args):
         router_args.port = args.sglang_router_port
         router_args.prometheus_port = find_available_port(random.randint(4000, 5000))
         router_args.log_level = "warn"
+        router_args.request_timeout_secs = args.sglang_router_request_timeout_secs
 
         if args.prefill_num_servers is not None:
             router_args.pd_disaggregation = True
-
-        if hasattr(router_args, "request_timeout_secs"):
-            router_args.request_timeout_secs = args.sglang_router_request_timeout_secs
 
         logger.info(f"Launch router with args: {router_args}")
 
@@ -631,7 +700,7 @@ def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any]
 
     step = compute_rollout_step(args, rollout_id)
     log_dict["eval/step"] = step
-    tracking_utils.log(args, log_dict, step_key="eval/step")
+    logging_utils.log(args, log_dict, step_key="eval/step")
 
     return log_dict
 
@@ -651,7 +720,7 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
     logger.info(f"perf {rollout_id}: {log_dict}")
     step = compute_rollout_step(args, rollout_id)
     log_dict["rollout/step"] = step
-    tracking_utils.log(args, log_dict, step_key="rollout/step")
+    logging_utils.log(args, log_dict, step_key="rollout/step")
 
 
 def compute_metrics_from_samples(args, samples):

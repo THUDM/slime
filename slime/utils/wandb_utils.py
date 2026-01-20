@@ -157,16 +157,3 @@ def _init_wandb_common():
     wandb.define_metric("eval/step")
     wandb.define_metric("eval/*", step_metric="eval/step")
     wandb.define_metric("perf/*", step_metric="rollout/step")
-
-
-def get_wandb_offline_dir(args):
-    """Get the directory where offline W&B data is stored."""
-    if _is_offline_mode(args):
-        if args and hasattr(args, "wandb_dir") and args.wandb_dir:
-            # Use custom directory if specified
-            return args.wandb_dir
-        else:
-            # Default offline directory is ~/wandb/offline-run-<timestamp>
-            # This will be created automatically by wandb
-            return os.path.expanduser("~/wandb")
-    return None

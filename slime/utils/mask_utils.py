@@ -2,7 +2,8 @@ from transformers import AutoTokenizer
 
 
 def get_response_lengths(loss_masks: list[list[int]]) -> list[int]:
-    return [mask.count(1) if 1 in mask else 0 for mask in loss_masks]
+    # return the lengths starting from the first occurrence of 1 to the end of each loss mask
+    return [len(mask[mask.index(1) :]) if 1 in mask else 0 for mask in loss_masks]
 
 
 class MultiTurnLossMaskGenerator:

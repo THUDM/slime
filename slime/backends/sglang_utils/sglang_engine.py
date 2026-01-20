@@ -401,6 +401,25 @@ class SGLangEngine(RayActor):
         response.raise_for_status()
         return response
 
+    def post_process_weights(
+        self,
+        restore_weights_before_load: bool = False,
+        post_process_quantization: bool = False,
+    ):
+        """
+        Update model weights from tensor data. The HTTP server will only post meta data, and the real weights will be copied directly from GPUs.
+        Note: The model should be on GPUs rather than CPU for this functionality to work properly.
+        If you encounter issues, ensure your model is loaded on GPU devices rather than CPU.
+        """
+
+        return self._make_request(
+            "post_process_weights",
+            {
+                "restore_weights_before_load": restore_weights_before_load,
+                "post_process_quantization": post_process_quantization,
+            },
+        )
+
     def start_profile(
         self,
         # The output directory
@@ -435,6 +454,17 @@ class SGLangEngine(RayActor):
         response.raise_for_status()
         return response
 
+    def simulate_crash(self):
+        if self.args.rollout_external or not getattr(self, "process", None):
+            logger.info(
+                "simulate_crash called but no local engine process exists (rollout_external=%s); skip kill",
+                self.args.rollout_external,
+            )
+            return
+
+        logger.info(f"Simulating crash on engine {self.server_host}:{self.server_port}...")
+        self.shutdown()
+
 
 def _compute_server_args(
     args,
@@ -467,7 +497,7 @@ def _compute_server_args(
         "gpu_id_step": 1,
         "base_gpu_id": base,
         # parallel
-        "tp_size": args.rollout_num_gpus_per_engine,
+        "tp_size": args.rollout_num_gpus_per_engine // args.sglang_pp_size,
         "dp_size": args.sglang_dp_size,
         "pp_size": args.sglang_pp_size,
         "ep_size": args.sglang_ep_size,

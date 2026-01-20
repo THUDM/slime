@@ -15,15 +15,14 @@ from transformers import AutoConfig, AutoTokenizer
 
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import train_dump_utils
-from slime.utils.context_utils import with_defer
 from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
+from slime.utils.logging_utils import init_tracking
 from slime.utils.memory_utils import clear_memory, print_memory
-from slime.utils.ray_utils import Box
+from slime.utils.misc import Box
 from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
 from slime.utils.routing_replay import RoutingReplay
-from slime.utils.timer import Timer, inverse_timer, timer
-from slime.utils.tracking_utils import init_tracking
+from slime.utils.timer import Timer, inverse_timer, timer, with_defer
 from slime.utils.types import RolloutBatch
 
 from ...utils.profile_utils import TrainProfiler
@@ -214,8 +213,10 @@ class MegatronTrainRayActor(TrainRayActor):
 
             rollout_data["max_seq_lens"] = [max_seq_len] * len(rollout_data["tokens"])
 
-        if "rollout_log_probs" in rollout_data:
-            rollout_data["rollout_log_probs"] = [
+        for key in ["rollout_log_probs", "teacher_log_probs"]:
+            if key not in rollout_data:
+                continue
+            rollout_data[key] = [
                 torch.tensor(
                     slice_log_prob_with_cp(
                         log_prob,
@@ -229,7 +230,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 )
                 for i, (log_prob, total_length, response_length) in enumerate(
                     zip(
-                        rollout_data["rollout_log_probs"],
+                        rollout_data[key],
                         rollout_data["total_lengths"],
                         rollout_data["response_lengths"],
                         strict=False,
@@ -509,15 +510,23 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_train_only or self.args.debug_rollout_only:
             return
 
-        if self.args.offload_train:
-            reload_process_groups()
+        if self.args.use_fault_tolerance:
+            if dist.get_rank() == 0:
+                ray.get(self.rollout_manager.recover_rollout_engines.remote())
+            dist.barrier(group=get_gloo_group())
 
         rollout_engines, rollout_engine_lock, num_new_engines = ray.get(
             self.rollout_manager.get_rollout_engines_and_lock.remote()
         )
+
+        if self.args.offload_train:
+            reload_process_groups()
+
         if num_new_engines > 0:
             self.weight_updater.connect_rollout_engines(rollout_engines, rollout_engine_lock)
             dist.barrier(group=get_gloo_group())
+            if dist.get_rank() == 0:
+                ray.get(self.rollout_manager.clear_num_new_engines.remote())
 
         with torch_memory_saver.disable() if self.args.offload_train else nullcontext():
             print_memory("before update_weights")
