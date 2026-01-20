@@ -1,6 +1,84 @@
 from transformers import AutoTokenizer
 
 
+# Run-length encoding (RLE) for compressing binary loss masks.
+# Reference: https://en.wikipedia.org/wiki/Run-length_encoding
+# Type alias for compressed loss mask: (run_lengths, starting_value)
+# Example: [0,0,0,1,1,1,1,1] -> ([3, 5], 0) meaning "3 zeros, then 5 ones"
+CompressedLossMask = tuple[list[int], int]
+
+
+def compress_loss_mask(mask: list[int]) -> CompressedLossMask:
+    """Compress a binary loss mask using run-length encoding.
+
+    Args:
+        mask: A list of 0s and 1s representing the loss mask.
+
+    Returns:
+        A tuple of (run_lengths, starting_value) where:
+        - run_lengths: list of consecutive run lengths
+        - starting_value: the value (0 or 1) of the first run
+
+    Examples:
+        >>> compress_loss_mask([0, 0, 0, 1, 1, 1, 1, 1])
+        ([3, 5], 0)
+        >>> compress_loss_mask([1, 1, 1, 1])
+        ([4], 1)
+        >>> compress_loss_mask([0, 0, 0, 0, 1, 1, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1])
+        ([4, 4, 4, 7], 0)
+        >>> compress_loss_mask([])
+        ([], 0)
+    """
+    if not mask:
+        return ([], 0)
+
+    runs = []
+    starting_value = mask[0]
+    current_value = starting_value
+    current_run = 0
+
+    for val in mask:
+        if val == current_value:
+            current_run += 1
+        else:
+            runs.append(current_run)
+            current_value = val
+            current_run = 1
+
+    runs.append(current_run)
+    return (runs, starting_value)
+
+
+def decompress_loss_mask(compressed: CompressedLossMask) -> list[int]:
+    """Decompress a run-length encoded loss mask back to a list of 0s and 1s.
+
+    Args:
+        compressed: A tuple of (run_lengths, starting_value).
+
+    Returns:
+        The original loss mask as a list of 0s and 1s.
+
+    Examples:
+        >>> decompress_loss_mask(([3, 5], 0))
+        [0, 0, 0, 1, 1, 1, 1, 1]
+        >>> decompress_loss_mask(([4], 1))
+        [1, 1, 1, 1]
+        >>> decompress_loss_mask(([], 0))
+        []
+    """
+    runs, starting_value = compressed
+    if not runs:
+        return []
+
+    mask = []
+    current_value = starting_value
+    for run_length in runs:
+        mask.extend([current_value] * run_length)
+        current_value = 1 - current_value  # Toggle between 0 and 1
+
+    return mask
+
+
 def get_response_lengths(loss_masks: list[list[int]]) -> list[int]:
     # return the lengths starting from the first occurrence of 1 to the end of each loss mask
     return [len(mask[mask.index(1) :]) if 1 in mask else 0 for mask in loss_masks]
