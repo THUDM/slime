@@ -174,6 +174,12 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
         if num_samples == 0:
             return samples
 
+        if self.dataset is None:
+            raise RuntimeError(
+                f"Buffer only has {len(samples)} samples but {num_samples + len(samples)} were requested. "
+                "Either add more samples to the buffer or enable --rollout-global-dataset."
+            )
+
         samples += super().get_samples(num_samples=num_samples)
         return samples
 
