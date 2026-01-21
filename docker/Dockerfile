@@ -108,9 +108,11 @@ fi
 
 # ====================================== Install main package ============================================
 
-# TODO may improve
 ARG SLIME_COMMIT=main
 RUN git clone https://github.com/THUDM/slime.git /root/slime && \
     cd /root/slime && \
     git checkout ${SLIME_COMMIT} && \
     pip install -e . --no-deps
+
+RUN cd /root/slime/slime/backends/megatron_utils/kernels/int4_qat && \
+    pip install . --no-build-isolation
