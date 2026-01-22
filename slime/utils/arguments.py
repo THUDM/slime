@@ -292,6 +292,15 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=("Whether to shuffle the prompts during rollout."),
             )
             parser.add_argument(
+                "--rollout-concurrency",
+                type=int,
+                default=None,
+                help=(
+                    "The maximum number of concurrent tasks during rollout. "
+                    "If not set, it will default to rollout_batch_size."
+                ),
+            )
+            parser.add_argument(
                 "--rollout-seed",
                 type=int,
                 default=42,
