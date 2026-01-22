@@ -20,6 +20,7 @@ from slime.utils.types import RolloutBatch
 
 from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
 from .initialize import is_megatron_main_rank
+from slime.utils.offpolicy_utils import apply_m2po_filtering
 
 
 def get_responses(
@@ -794,73 +795,80 @@ def decoupled_policy_loss_function(
 
     # === 6.5. Apply M2PO filtering if enabled ===
     m2po_metrics = {}  # Initialize M2PO metrics dictionary
+    # print(f"args.enable_m2po_filtering:{args.enable_m2po_filtering}")   
+     
     if getattr(args, "enable_m2po_filtering", False):
+        # if is_megatron_main_rank():
+        #     print(f"[M2PO] entered!")   
         # Check if we have policy version information
-        if batch.get("policy_versions") is not None and batch.get("current_policy_version") is not None:
-            from slime.utils.offpolicy_utils import apply_m2po_filtering
+        # if batch.get("policy_versions") is not None and batch.get("current_policy_version") is not None:
+            # if is_megatron_main_rank():
+            #     print(f"[M2PO] entered! ch.get("policy_versions") is not None and batch.get("current_policy_version") is not Non")   
+            # from slime.utils.offpolicy_utils import apply_m2po_filtering
 
-            current_version = batch["current_policy_version"][0] if isinstance(batch["current_policy_version"], list) else batch["current_policy_version"]
-            policy_versions = batch["policy_versions"]
+            # current_version = batch["current_policy_version"][0] if isinstance(batch["current_policy_version"], list) else batch["current_policy_version"]
+            # policy_versions = batch["policy_versions"]
 
-            # Calculate policy version gap for each sample
-            if isinstance(policy_versions, list):
-                policy_version_gaps = [current_version - v for v in policy_versions]
-                max_gap = max(policy_version_gaps)
-            else:
-                policy_version_gaps = current_version - policy_versions
-                max_gap = policy_version_gaps.max().item()
+            # # Calculate policy version gap for each sample
+            # if isinstance(policy_versions, list):
+            #     policy_version_gaps = [current_version - v for v in policy_versions]
+            #     max_gap = max(policy_version_gaps)
+            # else:
+            #     policy_version_gaps = current_version - policy_versions
+            #     max_gap = policy_version_gaps.max().item()
 
-            # Track max gap metric
-            m2po_metrics["m2po_max_gap"] = torch.tensor(max_gap, dtype=torch.float32, device=log_probs.device)
+        # Track max gap metric
+        # m2po_metrics["m2po_max_gap"] = torch.tensor(max_gap, dtype=torch.float32, device=log_probs.device)
 
-            # Apply M2PO filtering (removed gap >= 2 restriction)
-            # M2PO filtering now always executes when enabled in off-policy mode
-            # When gap = 0 or 1, m2 values will be small and filtering will be minimal/none
-            # When gap >= 2, m2 values will be larger and filtering will be more aggressive
+        # Apply M2PO filtering (removed gap >= 2 restriction)
+        # M2PO filtering now always executes when enabled in off-policy mode
+        # When gap = 0 or 1, m2 values will be small and filtering will be minimal/none
+        # When gap >= 2, m2 values will be larger and filtering will be more aggressive
 
-            # Compute second-momentum (m2) for M2PO filtering
-            # M2PO filters based on (log(π_behave) - log(π_prox))^2
-            # This measures the divergence between behavior and proximal policies
-            # CRITICAL FIX: Use behavior_log_probs instead of log_probs (current policy)
-            delta = behavior_log_probs - proximal_log_probs  # log(π_behave) - log(π_prox)
-            m2 = delta * delta  # second-momentum
+        # Compute second-momentum (m2) for M2PO filtering
+        # M2PO filters based on (log(π_behave) - log(π_prox))^2
+        # This measures the divergence between behavior and proximal policies
+        # CRITICAL FIX: Use behavior_log_probs instead of log_probs (current policy)
+        delta = behavior_log_probs - proximal_log_probs  # log(π_behave) - log(π_prox)
+        m2 = delta * delta  # second-momentum
 
-            # Calculate total tokens before filtering
-            total_tokens_before = sum(m.sum().item() for m in batch["loss_masks"])
+        # Calculate total tokens before filtering
+        total_tokens_before = sum(m.sum().item() for m in batch["loss_masks"])
 
-            # Apply M2PO filtering to loss masks
-            m2po_threshold = getattr(args, "m2po_threshold", 0.1)
-            modified_loss_masks, num_filtered = apply_m2po_filtering(
-                m2=m2,  # Pass m2 instead of importance_weights
-                loss_masks=batch["loss_masks"],
-                threshold=m2po_threshold,
-                policy_version_gaps=policy_version_gaps,
-                min_gap_for_filtering=0  # Changed from 2 to 0: no gap restriction
-            )
+        # Apply M2PO filtering to loss masks
+        m2po_threshold = getattr(args, "m2po_threshold", 0.04)
+        modified_loss_masks, num_filtered = apply_m2po_filtering(
+            m2=m2,  # Pass m2 instead of importance_weights
+            loss_masks=batch["loss_masks"],
+            threshold=m2po_threshold,
+            # policy_version_gaps=policy_version_gaps,
+            policy_version_gaps=None,
+            min_gap_for_filtering=0  # Changed from 2 to 0: no gap restriction
+        )
 
-            # Update batch with filtered masks
-            batch["loss_masks"] = modified_loss_masks
+        # Update batch with filtered masks
+        batch["loss_masks"] = modified_loss_masks
 
-            # [FIX 2] 重建 sum_of_sample_mean，否则过滤无效！
-            from .cp_utils import get_sum_of_sample_mean
-            sum_of_sample_mean = get_sum_of_sample_mean(
-                total_lengths,
-                response_lengths,
-                modified_loss_masks,  # 使用新的 mask
-                args.calculate_per_token_loss
-            )
+        # [FIX 2] 重建 sum_of_sample_mean，否则过滤无效！
+        from .cp_utils import get_sum_of_sample_mean
+        sum_of_sample_mean = get_sum_of_sample_mean(
+            total_lengths,
+            response_lengths,
+            modified_loss_masks,  # 使用新的 mask
+            args.calculate_per_token_loss
+        )
 
-            # Track M2PO filtering metrics
-            total_tokens_after = sum(m.sum().item() for m in batch["loss_masks"])
-            filter_rate = num_filtered / max(total_tokens_before, 1)
+        # Track M2PO filtering metrics
+        total_tokens_after = sum(m.sum().item() for m in batch["loss_masks"])
+        filter_rate = num_filtered / max(total_tokens_before, 1)
 
-            m2po_metrics["m2po_num_filtered_tokens"] = torch.tensor(num_filtered, dtype=torch.float32, device=log_probs.device)
-            m2po_metrics["m2po_total_tokens"] = torch.tensor(total_tokens_before, dtype=torch.float32, device=log_probs.device)
-            m2po_metrics["m2po_filter_rate"] = torch.tensor(filter_rate, dtype=torch.float32, device=log_probs.device)
+        m2po_metrics["m2po_num_filtered_tokens"] = torch.tensor(num_filtered, dtype=torch.float32, device=log_probs.device)
+        m2po_metrics["m2po_total_tokens"] = torch.tensor(total_tokens_before, dtype=torch.float32, device=log_probs.device)
+        m2po_metrics["m2po_filter_rate"] = torch.tensor(filter_rate, dtype=torch.float32, device=log_probs.device)
 
-            if is_megatron_main_rank():
-                print(f"[M2PO] Filtered {num_filtered} tokens out of {total_tokens_before} "
-                      f"({filter_rate*100:.1f}%, max_gap={max_gap}, threshold={m2po_threshold})")          
+        if is_megatron_main_rank():
+            print(f"[M2PO] Filtered {num_filtered} tokens out of {total_tokens_before} "
+                    f"({filter_rate*100:.1f}%, threshold={m2po_threshold})")          
                         
     # === 7. Compute decoupled policy loss ===
     pg_loss, pg_clipfrac = compute_decoupled_policy_loss(
@@ -929,6 +937,10 @@ def decoupled_policy_loss_function(
     # Check both key existence AND non-None values
     if (batch.get("policy_versions") is not None and
         batch.get("current_policy_version") is not None):
+        
+        if is_megatron_main_rank():
+            print(f"batch policy_versions is not None")  # TODO
+        
         from slime.utils.offpolicy_utils import compute_policy_version_staleness
 
         # current_policy_version is a list with the same value for all samples

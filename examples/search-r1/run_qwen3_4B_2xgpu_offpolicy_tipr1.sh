@@ -79,6 +79,7 @@ PERF_ARGS=(
 
 # ==================== OFF-POLICY GRPO CONFIGURATION ====================
 # 🔧 FIXED: Optimized for stable training with version diversity
+export MAX_STALENESS=16
 
 OFFPOLICY_GRPO_ARGS=(
    # Advantage estimator: GRPO
@@ -96,7 +97,7 @@ OFFPOLICY_GRPO_ARGS=(
    # - Balanced off-policy: not too aggressive, not too conservative
    # - Combined with LIFO sampling, ensures newest data is prioritized
    # --max-staleness 4
-   --max-staleness 8
+   --max-staleness ${MAX_STALENESS}
    # --max-staleness 16
    # --max-staleness 32
 
@@ -145,15 +146,15 @@ BUFFER_SAMPLING_ARGS=(
 
    # --buffer-sampling-strategy lifo_staleness
 
-   # --buffer-sampling-strategy random
+   --buffer-sampling-strategy random
 
    # --buffer-sampling-strategy priority
    # --buffer-priority-metric reward \  
 
-   --buffer-sampling-strategy hybrid \                            
-   --buffer-hybrid-lifo-ratio 0.8 \                               
-   --buffer-hybrid-priority-ratio 0.2 \                           
-   --buffer-priority-metric reward \  
+   # --buffer-sampling-strategy hybrid \                            
+   # --buffer-hybrid-lifo-ratio 0.8 \                               
+   # --buffer-hybrid-priority-ratio 0.2 \                           
+   # --buffer-priority-metric reward \  
 
 
    # Allow sample reuse but don't remove on sample
@@ -165,7 +166,7 @@ BUFFER_SAMPLING_ARGS=(
    # - Key insight: reuse_count acts as "hidden staleness"
    # - With reuse=3 and staleness=5, effective max age = 5+3×0.5 ≈ 6.5 steps
    # --buffer-reuse-samples 4
-   --buffer-reuse-samples 8
+   --buffer-reuse-samples ${MAX_STALENESS}
    # --buffer-reuse-samples 16
    # --buffer-reuse-samples 32
 

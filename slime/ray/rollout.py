@@ -1140,11 +1140,18 @@ def _compute_metrics_from_samples(args, samples):
     log_dict = {}
 
     # Simplified response length metrics (flatten structure)
-    response_stats = compute_statistics(response_lengths)
-    log_dict["response_len_mean"] = response_stats["mean"]
-    log_dict["response_len_std"] = response_stats["std"]
-    log_dict["response_len_max"] = response_stats["max"]
-    log_dict["response_len_min"] = response_stats["min"]
+    # Compute statistics manually to avoid KeyError
+    if len(response_lengths) > 0:
+        response_lengths_array = np.array(response_lengths)
+        log_dict["response_len_mean"] = np.mean(response_lengths_array).item()
+        log_dict["response_len_std"] = np.std(response_lengths_array).item()
+        log_dict["response_len_max"] = np.max(response_lengths_array).item()
+        log_dict["response_len_min"] = np.min(response_lengths_array).item()
+    else:
+        log_dict["response_len_mean"] = 0.0
+        log_dict["response_len_std"] = 0.0
+        log_dict["response_len_max"] = 0.0
+        log_dict["response_len_min"] = 0.0
 
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_spec_metrics(args, samples)
@@ -1235,8 +1242,14 @@ def _compute_reward_metrics(args, all_samples: List[Sample]):
     # Convert to numpy array for statistics
     rewards_array = np.array(raw_rewards)
 
-    # Compute statistics with clean naming (prefix will be added by caller)
-    metrics = compute_statistics(raw_rewards)
+    # Compute statistics manually to match docstring and avoid KeyError
+    metrics = {
+        "mean": np.mean(rewards_array).item(),
+        "std": np.std(rewards_array).item(),
+        "min": np.min(rewards_array).item(),
+        "max": np.max(rewards_array).item(),
+        "median": np.median(rewards_array).item(),
+    }
 
     return metrics
 
