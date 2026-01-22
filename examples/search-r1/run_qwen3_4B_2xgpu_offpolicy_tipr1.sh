@@ -95,8 +95,8 @@ OFFPOLICY_GRPO_ARGS=(
    # - Allows using samples from versions [current-5, current]
    # - Balanced off-policy: not too aggressive, not too conservative
    # - Combined with LIFO sampling, ensures newest data is prioritized
-   --max-staleness 4
-   # --max-staleness 8
+   # --max-staleness 4
+   --max-staleness 8
    # --max-staleness 16
    # --max-staleness 32
 
@@ -145,16 +145,15 @@ BUFFER_SAMPLING_ARGS=(
 
    # --buffer-sampling-strategy lifo_staleness
 
-   --buffer-sampling-strategy random
+   # --buffer-sampling-strategy random
 
    # --buffer-sampling-strategy priority
    # --buffer-priority-metric reward \  
 
-
-   # --buffer-sampling-strategy hybrid \                            
-   # --buffer-hybrid-lifo-ratio 0.8 \                               
-   # --buffer-hybrid-priority-ratio 0.2 \                           
-   # --buffer-priority-metric reward \  
+   --buffer-sampling-strategy hybrid \                            
+   --buffer-hybrid-lifo-ratio 0.8 \                               
+   --buffer-hybrid-priority-ratio 0.2 \                           
+   --buffer-priority-metric reward \  
 
 
    # Allow sample reuse but don't remove on sample
@@ -165,10 +164,13 @@ BUFFER_SAMPLING_ARGS=(
    # - Ensures policy_version accurately reflects sample age
    # - Key insight: reuse_count acts as "hidden staleness"
    # - With reuse=3 and staleness=5, effective max age = 5+3×0.5 ≈ 6.5 steps
-   --buffer-reuse-samples 4
-   # --buffer-reuse-samples 8
+   # --buffer-reuse-samples 4
+   --buffer-reuse-samples 8
    # --buffer-reuse-samples 16
    # --buffer-reuse-samples 32
+
+   --enable-m2po-filtering # TODO
+   --m2po-threshold 0.04 # TODO
 
 )
 

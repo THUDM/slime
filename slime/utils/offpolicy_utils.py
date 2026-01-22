@@ -360,26 +360,29 @@ def approximate_proximal_log_probs(
 
 
 def apply_m2po_filtering(
-    importance_weights: torch.Tensor,
+    m2: torch.Tensor,
     loss_masks: List[torch.Tensor],
     threshold: float = 0.1,
     policy_version_gaps: Optional[List[int]] = None,
     min_gap_for_filtering: int = 2,
 ) -> Tuple[List[torch.Tensor], int]:
     """
-    Apply M2PO (Mixed Policy Optimization) filtering to remove high-variance samples.
+    Apply M2PO (Second-Momentum PPO) filtering to remove high-variance tokens.
 
-    M2PO filters out samples with importance weights that deviate too much from 1,
-    as these samples can introduce high variance in gradient estimation.
+    M2PO filters out tokens with high second-momentum (squared difference between
+    behavior and proximal log-probabilities) to reduce gradient variance.
 
-    Filtering criterion: |1 - importance_weight| > threshold
+    Filtering logic (from AReaL):
+    1. Sort tokens by m2 in descending order
+    2. Find cutoff point where average m2 of remaining tokens < threshold
+    3. Filter out tokens with highest m2 values
 
     Only applies filtering when policy_version_gap >= min_gap_for_filtering.
 
     Args:
-        importance_weights: Importance weights π_θ / π_prox [num_tokens]
+        m2: Second-momentum values (log(π_behave) - log(π_prox))^2 [num_tokens]
         loss_masks: Loss masks for each sample [list of tensors]
-        threshold: Filtering threshold (default: 0.1 from AReaL paper)
+        threshold: M2 threshold (default: 0.1 from AReaL paper)
         policy_version_gaps: Policy version gap for each sample [list of ints]
         min_gap_for_filtering: Minimum policy version gap to trigger filtering (default: 2)
 
@@ -387,20 +390,17 @@ def apply_m2po_filtering(
         modified_loss_masks: Updated loss masks with filtered tokens set to 0
         num_filtered: Number of tokens that were filtered out
     """
-    # Flatten all masks to match importance_weights shape
+    # Flatten all masks to match m2 shape
     all_masks_flat = torch.cat(loss_masks, dim=0)
 
     # Validate shapes
-    if importance_weights.shape[0] != all_masks_flat.shape[0]:
+    if m2.shape[0] != all_masks_flat.shape[0]:
         raise ValueError(
-            f"Shape mismatch: importance_weights {importance_weights.shape} "
-            f"vs loss_masks {all_masks_flat.shape}"
+            f"Shape mismatch: m2 {m2.shape} vs loss_masks {all_masks_flat.shape}"
         )
 
-    # Compute filtering mask: |1 - w| > threshold
-    filter_mask = torch.abs(1.0 - importance_weights) > threshold
-
-    # If policy_version_gaps is provided, only filter samples with gap >= min_gap
+    # Create per-token gap condition if provided
+    gap_condition = None
     if policy_version_gaps is not None:
         # Create per-token gap tensor
         token_gaps = []
@@ -410,14 +410,44 @@ def apply_m2po_filtering(
 
         # Only apply filtering where gap >= min_gap_for_filtering
         gap_condition = token_gaps_flat >= min_gap_for_filtering
-        filter_mask = filter_mask & gap_condition
 
-    # Count how many tokens will be filtered
-    num_filtered = (filter_mask & all_masks_flat.bool()).sum().item()
+    # Apply M2PO filtering logic (from AReaL)
+    mask_flat = all_masks_flat.bool()
+    m2_selected = m2.view(-1)[mask_flat]
 
-    # Apply filtering: set mask to 0 where filter_mask is True
+    if m2_selected.numel() == 0:
+        # No valid tokens to filter
+        return loss_masks, 0
+
+    # Sort m2 values in descending order
+    sorted_m2, indices = torch.sort(m2_selected, descending=True)
+    restored_indices = torch.argsort(indices)
+
+    # Get M2PO loss mask based on threshold
+    sorted_m2_loss_mask = _get_m2po_loss_mask(
+        sorted_m2=sorted_m2,
+        m2_threshold=threshold
+    )
+
+    # Restore original order
+    m2_selected_mask = sorted_m2_loss_mask[restored_indices]
+
+    # Create full mask
+    m2_full_flat = torch.ones_like(mask_flat, dtype=torch.bool, device=m2.device)
+    m2_full_flat[mask_flat] = m2_selected_mask
+
+    # Apply gap condition if provided
+    if gap_condition is not None:
+        # Only filter tokens where gap >= min_gap_for_filtering
+        # For tokens with gap < min_gap, keep them (set mask to True)
+        m2_full_flat = m2_full_flat | (~gap_condition)
+
+    # Count filtered tokens
+    num_filtered = ((~m2_full_flat) & mask_flat).sum().item()
+
+    # Apply filtering: convert bool mask to float (True=1, False=0)
     filtered_masks_flat = all_masks_flat.clone()
-    filtered_masks_flat[filter_mask] = 0
+    filtered_masks_flat[~m2_full_flat] = 0
 
     # Split back into list of tensors with original shapes
     modified_loss_masks = []
@@ -429,3 +459,54 @@ def apply_m2po_filtering(
         offset += mask_len
 
     return modified_loss_masks, num_filtered
+
+
+def _get_m2po_loss_mask(
+    sorted_m2: torch.Tensor,
+    m2_threshold: float,
+) -> torch.Tensor:
+    """
+    Get the mask for M2PO loss based on the second-momentum threshold.
+
+    Mask the tokens whose second-momentum is the largest, until the average
+    second-momentum of remaining tokens is below the threshold.
+
+    This is a direct port from AReaL's implementation.
+
+    Args:
+        sorted_m2: M2 values sorted in descending order [num_tokens]
+        m2_threshold: Threshold for average m2
+
+    Returns:
+        Boolean mask where True means keep the token, False means filter it out
+    """
+    n = sorted_m2.numel()
+    if n == 0:
+        return torch.ones_like(sorted_m2, dtype=torch.bool)
+
+    # Suffix sums: S[i] = sum(sorted_m2[i:])
+    suffix_sums = sorted_m2.flip(0).cumsum(0).flip(0)
+
+    # Number of elements in suffix: N[i] = n - i
+    counts = torch.arange(n, 0, -1, device=sorted_m2.device, dtype=sorted_m2.dtype)
+
+    # Average of suffix: A[i] = S[i] / N[i]
+    avg_m2_suffix = suffix_sums / counts
+
+    # Find the first index `k` where the average of the rest is below threshold
+    below_threshold_indices = torch.where(avg_m2_suffix < m2_threshold)[0]
+
+    if len(below_threshold_indices) > 0:
+        num_to_mask = below_threshold_indices[0].item()
+    else:
+        # All suffix averages are >= threshold. Mask all but one to satisfy assertion.
+        num_to_mask = n - 1
+
+    loss_mask = torch.ones_like(sorted_m2, dtype=torch.bool)
+    if num_to_mask > 0:
+        loss_mask[:num_to_mask] = False
+
+    if loss_mask.sum() == 0:
+        raise RuntimeError("All tokens are masked out when getting the m2po loss mask.")
+
+    return loss_mask

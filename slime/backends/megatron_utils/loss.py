@@ -815,10 +815,12 @@ def decoupled_policy_loss_function(
 
             # Only apply M2PO filtering when policy_version_gap >= 2
             if max_gap >= 2:
-                # Compute importance weights for filtering: exp(log_ratio_intermediate)
-                # Note: log_ratio_intermediate = log(π_prox) - log(π_θ)
-                # So importance_weight = exp(log_ratio) = π_prox / π_θ
-                filtering_importance_weights = torch.exp(-log_ratio_intermediate)  # π_θ / π_prox
+                # Compute second-momentum (m2) for M2PO filtering
+                # M2PO filters based on (log(π_behave) - log(π_prox))^2
+                # This measures the divergence between behavior and proximal policies
+                # CRITICAL FIX: Use behavior_log_probs instead of log_probs (current policy)
+                delta = behavior_log_probs - proximal_log_probs  # log(π_behave) - log(π_prox)
+                m2 = delta * delta  # second-momentum
 
                 # Calculate total tokens before filtering
                 total_tokens_before = sum(m.sum().item() for m in batch["loss_masks"])
@@ -826,7 +828,7 @@ def decoupled_policy_loss_function(
                 # Apply M2PO filtering to loss masks
                 m2po_threshold = getattr(args, "m2po_threshold", 0.1)
                 modified_loss_masks, num_filtered = apply_m2po_filtering(
-                    importance_weights=filtering_importance_weights,
+                    m2=m2,  # Pass m2 instead of importance_weights
                     loss_masks=batch["loss_masks"],
                     threshold=m2po_threshold,
                     policy_version_gaps=policy_version_gaps,
