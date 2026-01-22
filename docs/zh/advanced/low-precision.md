@@ -75,6 +75,7 @@ bash scripts/low_precision/run-qwen3-30b-a3b-fp8.sh
 [wikitext-2-raw-v1](https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1)
 接着，使用 `tools/convert_hf_to_int4.py` 脚本进行转换。确保 `--hf-checkpoint` 指向的目录中 `config.json` 包含正确的 `quantization_config`。
 ```bash
+pip install llmcompressor
 python tools/convert_hf_to_int4.py \
   --input-dir /path/to/your/original/models \
   --output-dir /path/to/your/save/models \

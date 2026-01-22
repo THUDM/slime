@@ -87,6 +87,7 @@ First, download the PTQ (Post-Training Quantization) calibration dataset from Hu
 Next, use the `tools/convert_hf_to_int4.py` script to convert BF16 weights to INT4 format. Ensure that the `--hf-checkpoint` parameter points to a directory where `config.json` contains the correct `quantization_config`. slime will automatically utilize INT4 quantization during weight updates.
 
 ```bash
+pip install llmcompressor
 python tools/convert_hf_to_int4.py \
   --input-dir /path/to/your/original/models \
   --output-dir /path/to/your/save/models \

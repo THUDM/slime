@@ -77,6 +77,7 @@ def main():
         "re:.*embed.*",
         "re:.*self_attn.*",
         "re:.*shared_experts.*",
+        "re:.*mlp\\.gate.*",
         "re:.*mlp\\.(gate|up|gate_up|down)_proj.*",
     ]
 
