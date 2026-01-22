@@ -1093,30 +1093,31 @@ def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_
 
     log_dict |= dict_add_prefix(_compute_metrics_from_samples(args, samples), f"rollout/")
 
-    # Also log reward metrics at the top level for easier access in logs
-    reward_metrics = {k: v for k, v in log_dict.items() if "generated_reward" in k}
-
-    # Extract format metrics for console logging when format rewards are enabled
+    # Extract key metrics for cleaner console logging
+    reward_metrics = {k: v for k, v in log_dict.items() if k.startswith("rollout/reward/")}
     format_metrics = {k: v for k, v in log_dict.items() if k.startswith("rollout/format/")}
 
-    print(f"perf {rollout_id}: {log_dict}")
-    if reward_metrics:
-        print(f"rollout {rollout_id} generated rewards: {reward_metrics}")
+    # Print performance metrics
+    perf_metrics = {k: v for k, v in log_dict.items() if k.startswith("perf/")}
+    if perf_metrics:
+        print(f"[Perf {rollout_id}] {perf_metrics}")
 
-    # Print format statistics if format rewards are enabled and metrics exist
+    # Print reward statistics (always show if available)
+    if reward_metrics:
+        reward_summary = {k.replace('rollout/reward/', ''): round(v, 4) for k, v in reward_metrics.items()}
+        print(f"[Reward {rollout_id}] {reward_summary}")
+
+    # Print format statistics (only when format rewards are enabled)
     if getattr(args, 'enable_format_reward', False) and format_metrics:
-        # Format for better readability
         format_summary = {}
         for k, v in format_metrics.items():
-            # Remove 'rollout/format/' prefix for cleaner display
             clean_key = k.replace('rollout/format/', '')
-            # Round ratio values to 3 decimal places
-            if 'ratio' in clean_key:
+            # Round ratio/distribution values to 3 decimal places
+            if isinstance(v, float):
                 format_summary[clean_key] = round(v, 3)
             else:
                 format_summary[clean_key] = v
-
-        print(f"rollout {rollout_id} format statistics: {format_summary}")
+        print(f"[Format {rollout_id}] {format_summary}")
     step = (
         rollout_id
         if not args.wandb_always_use_train_step
@@ -1137,18 +1138,25 @@ def _compute_metrics_from_samples(args, samples):
     response_lengths = [sample.effective_response_length for sample in samples]
 
     log_dict = {}
-    log_dict |= dict_add_prefix(compute_statistics(response_lengths), f"response_len/")
+
+    # Simplified response length metrics (flatten structure)
+    response_stats = compute_statistics(response_lengths)
+    log_dict["response_len_mean"] = response_stats["mean"]
+    log_dict["response_len_std"] = response_stats["std"]
+    log_dict["response_len_max"] = response_stats["max"]
+    log_dict["response_len_min"] = response_stats["min"]
+
     log_dict |= _compute_zero_std_metrics(args, samples)
     log_dict |= _compute_spec_metrics(args, samples)
     log_dict |= _compute_reward_cat_metrics(args, samples)
     log_dict["repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
     log_dict["truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
 
-    # Add reward statistics for newly generated samples
-    log_dict |= _compute_reward_metrics(args, samples)
+    # Add reward statistics with clear prefix
+    log_dict |= dict_add_prefix(_compute_reward_metrics(args, samples), "reward/")
 
-    # Add format reward statistics when format rewards are enabled
-    log_dict |= _compute_format_reward_metrics(args, samples)
+    # Add format reward statistics with clear prefix (only when enabled)
+    log_dict |= dict_add_prefix(_compute_format_reward_metrics(args, samples), "format/")
 
     return log_dict
 
@@ -1227,8 +1235,8 @@ def _compute_reward_metrics(args, all_samples: List[Sample]):
     # Convert to numpy array for statistics
     rewards_array = np.array(raw_rewards)
 
-    # Compute statistics using the same compute_statistics function
-    metrics = dict_add_prefix(compute_statistics(raw_rewards), f"generated_reward/")
+    # Compute statistics with clean naming (prefix will be added by caller)
+    metrics = compute_statistics(raw_rewards)
 
     return metrics
 
@@ -1294,20 +1302,24 @@ def _compute_format_reward_metrics(args, all_samples: List[Sample]):
 
     # Return empty dict if no format validation data found
     if format_stats['total'] == 0:
+        # Add warning if format rewards are enabled but no data found
+        if getattr(args, 'enable_format_reward', False):
+            print(f"[WARNING] Format rewards enabled but no format_validation data found in {len(all_samples)} samples")
+            print(f"[WARNING] Check if reward function sets sample.metadata['format_validation']")
         return {}
 
-    # Compute ratios
+    # Compute ratios with cleaner naming (prefix will be added by caller)
     metrics = {
-        'format/valid_format_ratio': format_stats['valid_format'] / format_stats['total'],
-        'format/invalid_format_ratio': format_stats['invalid_format'] / format_stats['total'],
-        'format/answer_correct_ratio': format_stats['answer_correct'] / format_stats['total'],
-        'format/retrieval_success_ratio': format_stats['retrieval_success'] / format_stats['total'],
+        'valid_ratio': format_stats['valid_format'] / format_stats['total'],
+        'invalid_ratio': format_stats['invalid_format'] / format_stats['total'],
+        'answer_correct_ratio': format_stats['answer_correct'] / format_stats['total'],
+        'retrieval_success_ratio': format_stats['retrieval_success'] / format_stats['total'],
     }
 
-    # Add reward distribution counts
+    # Add reward distribution as ratios only (cleaner than separate count + ratio)
     for reward_value, count in reward_distribution.items():
-        metrics[f'format/reward_{reward_value}_count'] = count
-        metrics[f'format/reward_{reward_value}_ratio'] = count / format_stats['total']
+        # Use reward_dist_ prefix for clarity
+        metrics[f'reward_dist_{reward_value}'] = count / format_stats['total']
 
     return metrics
 

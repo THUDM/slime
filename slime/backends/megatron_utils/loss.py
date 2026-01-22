@@ -813,51 +813,54 @@ def decoupled_policy_loss_function(
             # Track max gap metric
             m2po_metrics["m2po_max_gap"] = torch.tensor(max_gap, dtype=torch.float32, device=log_probs.device)
 
-            # Only apply M2PO filtering when policy_version_gap >= 2
-            if max_gap >= 2:
-                # Compute second-momentum (m2) for M2PO filtering
-                # M2PO filters based on (log(π_behave) - log(π_prox))^2
-                # This measures the divergence between behavior and proximal policies
-                # CRITICAL FIX: Use behavior_log_probs instead of log_probs (current policy)
-                delta = behavior_log_probs - proximal_log_probs  # log(π_behave) - log(π_prox)
-                m2 = delta * delta  # second-momentum
+            # Apply M2PO filtering (removed gap >= 2 restriction)
+            # M2PO filtering now always executes when enabled in off-policy mode
+            # When gap = 0 or 1, m2 values will be small and filtering will be minimal/none
+            # When gap >= 2, m2 values will be larger and filtering will be more aggressive
 
-                # Calculate total tokens before filtering
-                total_tokens_before = sum(m.sum().item() for m in batch["loss_masks"])
+            # Compute second-momentum (m2) for M2PO filtering
+            # M2PO filters based on (log(π_behave) - log(π_prox))^2
+            # This measures the divergence between behavior and proximal policies
+            # CRITICAL FIX: Use behavior_log_probs instead of log_probs (current policy)
+            delta = behavior_log_probs - proximal_log_probs  # log(π_behave) - log(π_prox)
+            m2 = delta * delta  # second-momentum
 
-                # Apply M2PO filtering to loss masks
-                m2po_threshold = getattr(args, "m2po_threshold", 0.1)
-                modified_loss_masks, num_filtered = apply_m2po_filtering(
-                    m2=m2,  # Pass m2 instead of importance_weights
-                    loss_masks=batch["loss_masks"],
-                    threshold=m2po_threshold,
-                    policy_version_gaps=policy_version_gaps,
-                    min_gap_for_filtering=2
-                )
+            # Calculate total tokens before filtering
+            total_tokens_before = sum(m.sum().item() for m in batch["loss_masks"])
 
-                # Update batch with filtered masks
-                batch["loss_masks"] = modified_loss_masks
+            # Apply M2PO filtering to loss masks
+            m2po_threshold = getattr(args, "m2po_threshold", 0.1)
+            modified_loss_masks, num_filtered = apply_m2po_filtering(
+                m2=m2,  # Pass m2 instead of importance_weights
+                loss_masks=batch["loss_masks"],
+                threshold=m2po_threshold,
+                policy_version_gaps=policy_version_gaps,
+                min_gap_for_filtering=0  # Changed from 2 to 0: no gap restriction
+            )
 
-                # [FIX 2] 重建 sum_of_sample_mean，否则过滤无效！
-                from .cp_utils import get_sum_of_sample_mean
-                sum_of_sample_mean = get_sum_of_sample_mean(
-                    total_lengths,
-                    response_lengths,
-                    modified_loss_masks,  # 使用新的 mask
-                    args.calculate_per_token_loss
-                )
+            # Update batch with filtered masks
+            batch["loss_masks"] = modified_loss_masks
 
-                # Track M2PO filtering metrics
-                total_tokens_after = sum(m.sum().item() for m in batch["loss_masks"])
-                filter_rate = num_filtered / max(total_tokens_before, 1)
+            # [FIX 2] 重建 sum_of_sample_mean，否则过滤无效！
+            from .cp_utils import get_sum_of_sample_mean
+            sum_of_sample_mean = get_sum_of_sample_mean(
+                total_lengths,
+                response_lengths,
+                modified_loss_masks,  # 使用新的 mask
+                args.calculate_per_token_loss
+            )
 
-                m2po_metrics["m2po_num_filtered_tokens"] = torch.tensor(num_filtered, dtype=torch.float32, device=log_probs.device)
-                m2po_metrics["m2po_total_tokens"] = torch.tensor(total_tokens_before, dtype=torch.float32, device=log_probs.device)
-                m2po_metrics["m2po_filter_rate"] = torch.tensor(filter_rate, dtype=torch.float32, device=log_probs.device)
+            # Track M2PO filtering metrics
+            total_tokens_after = sum(m.sum().item() for m in batch["loss_masks"])
+            filter_rate = num_filtered / max(total_tokens_before, 1)
 
-                if is_megatron_main_rank():
-                    print(f"[M2PO] Filtered {num_filtered} tokens out of {total_tokens_before} "
-                          f"({filter_rate*100:.1f}%, max_gap={max_gap}, threshold={m2po_threshold})")          
+            m2po_metrics["m2po_num_filtered_tokens"] = torch.tensor(num_filtered, dtype=torch.float32, device=log_probs.device)
+            m2po_metrics["m2po_total_tokens"] = torch.tensor(total_tokens_before, dtype=torch.float32, device=log_probs.device)
+            m2po_metrics["m2po_filter_rate"] = torch.tensor(filter_rate, dtype=torch.float32, device=log_probs.device)
+
+            if is_megatron_main_rank():
+                print(f"[M2PO] Filtered {num_filtered} tokens out of {total_tokens_before} "
+                      f"({filter_rate*100:.1f}%, max_gap={max_gap}, threshold={m2po_threshold})")          
                         
     # === 7. Compute decoupled policy loss ===
     pg_loss, pg_clipfrac = compute_decoupled_policy_loss(

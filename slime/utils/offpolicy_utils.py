@@ -364,7 +364,7 @@ def apply_m2po_filtering(
     loss_masks: List[torch.Tensor],
     threshold: float = 0.1,
     policy_version_gaps: Optional[List[int]] = None,
-    min_gap_for_filtering: int = 2,
+    min_gap_for_filtering: int = 0,  # Changed from 2 to 0: no gap restriction by default
 ) -> Tuple[List[torch.Tensor], int]:
     """
     Apply M2PO (Second-Momentum PPO) filtering to remove high-variance tokens.
@@ -384,7 +384,7 @@ def apply_m2po_filtering(
         loss_masks: Loss masks for each sample [list of tensors]
         threshold: M2 threshold (default: 0.1 from AReaL paper)
         policy_version_gaps: Policy version gap for each sample [list of ints]
-        min_gap_for_filtering: Minimum policy version gap to trigger filtering (default: 2)
+        min_gap_for_filtering: Minimum policy version gap to trigger filtering (default: 0, no restriction)
 
     Returns:
         modified_loss_masks: Updated loss masks with filtered tokens set to 0
@@ -401,7 +401,7 @@ def apply_m2po_filtering(
 
     # Create per-token gap condition if provided
     gap_condition = None
-    if policy_version_gaps is not None:
+    if policy_version_gaps is not None and min_gap_for_filtering > 0:
         # Create per-token gap tensor
         token_gaps = []
         for gap, mask in zip(policy_version_gaps, loss_masks):
@@ -417,6 +417,12 @@ def apply_m2po_filtering(
 
     if m2_selected.numel() == 0:
         # No valid tokens to filter
+        return loss_masks, 0
+
+    # Early exit optimization: if all m2 values are very small, skip filtering
+    # This handles the case when gap = 0 or 1 where m2 ≈ 0
+    if m2_selected.max() < threshold * 0.1:
+        # All m2 values are far below threshold, no need to filter
         return loss_masks, 0
 
     # Sort m2 values in descending order
