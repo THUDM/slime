@@ -408,6 +408,14 @@ class MegatronTrainRayActor(TrainRayActor):
                     num_microbatches,
                 )
 
+            # === CRITICAL FIX: Update proximal policy after training ===
+            # For off-policy GRPO, proximal policy should be updated to current actor
+            # after each training step to serve as the regularization target for next iteration
+            if self.args.loss_type == "decoupled_policy_loss":
+                if is_megatron_main_rank():
+                    print(f"[Off-Policy GRPO] Updating proximal policy to current actor at rollout {rollout_id}")
+                self.weights_backuper.backup("proximal")
+
             self.prof.step(rollout_id=rollout_id)
 
         train_dump_utils.save_debug_train_data(self.args, rollout_id=rollout_id, rollout_data=rollout_data)

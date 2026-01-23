@@ -758,15 +758,21 @@ def decoupled_policy_loss_function(
     if "behavior_log_probs" in batch and batch["behavior_log_probs"] is not None:
         behavior_log_probs = batch["behavior_log_probs"]
     else:
-        # Fallback: use old_actor log_probs or rollout_log_probs
-        if "log_probs" in batch and batch["log_probs"] is not None:
-            # Use old_actor log probs (computed in train_actor) as behavior policy
-            behavior_log_probs = batch["log_probs"]
-        elif "rollout_log_probs" in batch and batch["rollout_log_probs"] is not None:
+        # CRITICAL FIX: Prioritize rollout_log_probs (behavior policy that generated the data)
+        # over log_probs (old_actor, which may be same as proximal policy)
+        if "rollout_log_probs" in batch and batch["rollout_log_probs"] is not None:
+            # Use rollout log probs (behavior policy that generated trajectories)
             behavior_log_probs = batch["rollout_log_probs"]
+            if is_megatron_main_rank():
+                print(f"[Off-Policy] Using rollout_log_probs as behavior policy")
+        elif "log_probs" in batch and batch["log_probs"] is not None:
+            # Fallback: use old_actor log probs (computed in train_actor) as behavior policy
+            behavior_log_probs = batch["log_probs"]
+            if is_megatron_main_rank():
+                print(f"[Off-Policy] Using log_probs (old_actor) as behavior policy")
         else:
             raise ValueError(
-                "batch must contain either 'behavior_log_probs', 'log_probs', or 'rollout_log_probs' "
+                "batch must contain either 'behavior_log_probs', 'rollout_log_probs', or 'log_probs' "
                 "for off-policy importance sampling"
             )
 
