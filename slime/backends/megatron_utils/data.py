@@ -299,7 +299,13 @@ def get_data_iterator(
 
 def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -> None:
     """
-    Summarize rollout fields and log reduced metrics on PP last stage, TP rank 0.
+    Log training batch metrics from MegatronTrainRayActor.
+
+    IMPORTANT: Despite the function name, this logs TRAINING BATCH data, not rollout generation data.
+    This function is called during training (actor.py:396) with the training batch data.
+
+    The metrics are logged with "train_batch" prefix to distinguish from actual rollout generation
+    metrics (which are logged by RolloutManager with "rollout" prefix).
 
     - Tensor-valued lists are concatenated and averaged. For token-level metrics
       like log-probs/returns/advantages/values, computes a CP-correct sample mean
@@ -343,18 +349,20 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                 raise ValueError(f"Unsupported type: {type(val)}")
             log_dict[key] = val.item() if isinstance(val, torch.Tensor) else val
 
-        reduced_log_dict = gather_log_data("rollout", args, rollout_id, log_dict)
+        # CRITICAL FIX: Use "train_batch" prefix instead of "rollout"
+        # This data comes from the training batch, not rollout generation
+        reduced_log_dict = gather_log_data("train_batch", args, rollout_id, log_dict)
         if args.ci_test and reduced_log_dict is not None:
             if (
                 rollout_id == 0
-                and "rollout/log_probs" in reduced_log_dict
-                and "rollout/ref_log_probs" in reduced_log_dict
+                and "train_batch/log_probs" in reduced_log_dict
+                and "train_batch/ref_log_probs" in reduced_log_dict
             ):
-                assert reduced_log_dict["rollout/log_probs"] == reduced_log_dict["rollout/ref_log_probs"]
-            if "rollout/log_probs" in reduced_log_dict:
-                assert -0.5 < reduced_log_dict["rollout/log_probs"] < 0
-            if "rollout/entropy" in reduced_log_dict:
-                assert 0 < reduced_log_dict["rollout/entropy"] < 0.5
+                assert reduced_log_dict["train_batch/log_probs"] == reduced_log_dict["train_batch/ref_log_probs"]
+            if "train_batch/log_probs" in reduced_log_dict:
+                assert -0.5 < reduced_log_dict["train_batch/log_probs"] < 0
+            if "train_batch/entropy" in reduced_log_dict:
+                assert 0 < reduced_log_dict["train_batch/entropy"] < 0.5
 
     if args.log_multi_turn:
         log_multi_turn_data(rollout_id, args, rollout_data)
