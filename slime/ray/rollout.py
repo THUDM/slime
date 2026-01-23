@@ -222,6 +222,8 @@ class RolloutManager:
             # get_training_samples() ONLY returns complete samples from buffer, no fallback to dataset
             # get_samples() is used for rollout generation and may return PENDING prompts
 
+            train_batch_samples = None  # Track training batch samples for metrics logging
+
             if hasattr(self.data_source, 'get_training_samples') and self.data_source.buffer_enabled:
                 # === FIX 4: Calculate correct sample count for off-policy mode ===
                 # In off-policy mode, we need to sample enough groups to satisfy global_batch_size
@@ -283,6 +285,9 @@ class RolloutManager:
                     flattened_samples.extend(group)
                 train_data_samples = flattened_samples
 
+            # Store for metrics logging before trimming
+            train_batch_samples = train_data_samples.copy() if train_data_samples else []
+
             # === FIX 5: Trim training data to exact global_batch_size ===
             # In off-policy mode, we might sample slightly more than global_batch_size
             # (due to rounding up to complete groups). Trim to exact size to ensure
@@ -311,6 +316,12 @@ class RolloutManager:
                     train_data_samples[idx].reward = 1e-8
 
             train_data = self._convert_samples_to_train_data(train_data_samples)
+
+            # === NEW: Log training batch metrics ===
+            # Log metrics for the samples actually used for training
+            # This is DIFFERENT from rollout metrics (which are for newly generated samples)
+            if train_batch_samples and len(train_batch_samples) > 0:
+                _log_train_batch_metrics(rollout_id, self.args, train_batch_samples)
 
             # === Step 7: Record generated batch in staleness controller ===
             if self.staleness_controller is not None:
@@ -1067,7 +1078,175 @@ def _log_eval_rollout_data(rollout_id, args, data):
     return log_dict
 
 
+def _log_train_batch_metrics(rollout_id, args, samples):
+    """
+    Log metrics for the TRAINING BATCH samples (may include samples from buffer).
+
+    This is DIFFERENT from rollout metrics:
+    - Rollout metrics: newly generated samples from current policy
+    - Train batch metrics: samples used for training (may be from old policies in buffer)
+
+    In off-policy mode, these metrics help monitor:
+    - Data staleness (how old are the training samples)
+    - Reward distribution of training data vs newly generated data
+    - Buffer sampling effectiveness
+    """
+    if len(samples) == 0:
+        return
+
+    log_dict = {}
+
+    # === Reward Statistics ===
+    rewards = []
+    for sample in samples:
+        try:
+            reward_value = sample.get_reward_value(args)
+            if reward_value is not None:
+                rewards.append(reward_value)
+        except:
+            continue
+
+    if len(rewards) > 0:
+        rewards_array = np.array(rewards)
+        log_dict["train_batch/reward/mean"] = np.mean(rewards_array).item()
+        log_dict["train_batch/reward/std"] = np.std(rewards_array).item()
+        log_dict["train_batch/reward/min"] = np.min(rewards_array).item()
+        log_dict["train_batch/reward/max"] = np.max(rewards_array).item()
+        log_dict["train_batch/reward/median"] = np.median(rewards_array).item()
+
+    # === Response Length Statistics ===
+    response_lengths = [sample.effective_response_length for sample in samples]
+    if len(response_lengths) > 0:
+        response_lengths_array = np.array(response_lengths)
+        log_dict["train_batch/response_len_mean"] = np.mean(response_lengths_array).item()
+        log_dict["train_batch/response_len_std"] = np.std(response_lengths_array).item()
+        log_dict["train_batch/response_len_max"] = np.max(response_lengths_array).item()
+        log_dict["train_batch/response_len_min"] = np.min(response_lengths_array).item()
+
+    # === Format Reward Statistics (if enabled) ===
+    if getattr(args, 'enable_format_reward', False):
+        format_stats = {
+            'valid_format': 0,
+            'invalid_format': 0,
+            'answer_correct': 0,
+            'answer_incorrect': 0,
+            'retrieval_success': 0,
+            'retrieval_fail': 0,
+        }
+
+        reward_distribution = {}
+
+        for sample in samples:
+            if hasattr(sample, 'metadata') and sample.metadata:
+                # Format validation
+                if 'format_valid' in sample.metadata:
+                    if sample.metadata['format_valid']:
+                        format_stats['valid_format'] += 1
+                    else:
+                        format_stats['invalid_format'] += 1
+
+                # Answer correctness
+                if 'answer_correct' in sample.metadata:
+                    if sample.metadata['answer_correct']:
+                        format_stats['answer_correct'] += 1
+                    else:
+                        format_stats['answer_incorrect'] += 1
+
+                # Retrieval success
+                if 'retrieval_success' in sample.metadata:
+                    if sample.metadata['retrieval_success']:
+                        format_stats['retrieval_success'] += 1
+                    else:
+                        format_stats['retrieval_fail'] += 1
+
+                # Reward distribution
+                if 'raw_reward' in sample.metadata:
+                    reward_key = f"reward_{sample.metadata['raw_reward']:.1f}"
+                    reward_distribution[reward_key] = reward_distribution.get(reward_key, 0) + 1
+
+        total_samples = len(samples)
+        if total_samples > 0:
+            log_dict["train_batch/format/valid_format_ratio"] = format_stats['valid_format'] / total_samples
+            log_dict["train_batch/format/answer_correct_ratio"] = format_stats['answer_correct'] / total_samples
+            log_dict["train_batch/format/retrieval_success_ratio"] = format_stats['retrieval_success'] / total_samples
+
+            # Log reward distribution
+            for reward_key, count in reward_distribution.items():
+                log_dict[f"train_batch/format/{reward_key}_ratio"] = count / total_samples
+
+    # === Off-Policy Specific Metrics ===
+    if args.loss_type == "decoupled_policy_loss":
+        # Policy version statistics
+        policy_versions = []
+        for sample in samples:
+            pv = getattr(sample, 'policy_version', None)
+            if pv is not None:
+                policy_versions.append(pv)
+
+        if len(policy_versions) > 0:
+            policy_versions_array = np.array(policy_versions)
+            log_dict["train_batch/policy_version/mean"] = np.mean(policy_versions_array).item()
+            log_dict["train_batch/policy_version/min"] = np.min(policy_versions_array).item()
+            log_dict["train_batch/policy_version/max"] = np.max(policy_versions_array).item()
+            log_dict["train_batch/policy_version/std"] = np.std(policy_versions_array).item()
+
+            # Staleness (current_version - sample_version)
+            current_version = rollout_id
+            staleness = [current_version - pv for pv in policy_versions]
+            staleness_array = np.array(staleness)
+            log_dict["train_batch/staleness/mean"] = np.mean(staleness_array).item()
+            log_dict["train_batch/staleness/min"] = np.min(staleness_array).item()
+            log_dict["train_batch/staleness/max"] = np.max(staleness_array).item()
+            log_dict["train_batch/staleness/std"] = np.std(staleness_array).item()
+
+        # Reuse count statistics (if available)
+        reuse_counts = []
+        for sample in samples:
+            rc = getattr(sample, 'reuse_count', None)
+            if rc is not None:
+                reuse_counts.append(rc)
+
+        if len(reuse_counts) > 0:
+            reuse_counts_array = np.array(reuse_counts)
+            log_dict["train_batch/reuse_count/mean"] = np.mean(reuse_counts_array).item()
+            log_dict["train_batch/reuse_count/max"] = np.max(reuse_counts_array).item()
+            log_dict["train_batch/reuse_count/min"] = np.min(reuse_counts_array).item()
+
+    # === Truncation and Repetition ===
+    log_dict["train_batch/truncated_ratio"] = np.mean([int(s.status == Sample.Status.TRUNCATED) for s in samples]).item()
+    log_dict["train_batch/repetition_frac"] = np.mean([int(has_repetition(s.response)) for s in samples]).item()
+
+    # === Log to WandB ===
+    if args.use_wandb:
+        # Use train step for consistency with train/ metrics
+        step = rollout_id * args.rollout_batch_size * args.n_samples_per_prompt // args.global_batch_size
+        log_dict["train/step"] = step
+        wandb.log(log_dict)
+
+    # === Print Summary ===
+    # Extract key metrics for console logging
+    summary = {}
+    if "train_batch/reward/mean" in log_dict:
+        summary["reward_mean"] = round(log_dict["train_batch/reward/mean"], 4)
+        summary["reward_std"] = round(log_dict["train_batch/reward/std"], 4)
+    if "train_batch/staleness/mean" in log_dict:
+        summary["staleness_mean"] = round(log_dict["train_batch/staleness/mean"], 2)
+        summary["staleness_max"] = round(log_dict["train_batch/staleness/max"], 2)
+    if "train_batch/reuse_count/mean" in log_dict:
+        summary["reuse_mean"] = round(log_dict["train_batch/reuse_count/mean"], 2)
+    if "train_batch/format/valid_format_ratio" in log_dict:
+        summary["format_valid"] = round(log_dict["train_batch/format/valid_format_ratio"], 3)
+        summary["answer_correct"] = round(log_dict["train_batch/format/answer_correct_ratio"], 3)
+
+    print(f"[Train Batch {rollout_id}] {summary}")
+
+
 def _log_rollout_data(rollout_id, args, samples, rollout_extra_metrics, rollout_time):
+    """
+    Log metrics for NEWLY GENERATED samples during rollout.
+
+    These metrics reflect the quality of samples generated by the current policy.
+    """
     if args.load_debug_rollout_data:
         return
 

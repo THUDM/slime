@@ -79,7 +79,7 @@ PERF_ARGS=(
 
 # ==================== OFF-POLICY GRPO CONFIGURATION ====================
 # 🔧 FIXED: Optimized for stable training with version diversity
-export MAX_STALENESS=16
+export MAX_STALENESS=8
 
 OFFPOLICY_GRPO_ARGS=(
    # Advantage estimator: GRPO

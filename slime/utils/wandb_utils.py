@@ -175,20 +175,24 @@ def _init_wandb_common():
     """Define metrics for custom plotting."""
     wandb.define_metric("train/step")
     wandb.define_metric("train/*", step_metric="train/step")
-    
+
     wandb.define_metric("rollout/step")
     wandb.define_metric("rollout/*", step_metric="rollout/step")
-    
+
+    # Train batch metrics (samples used for training, may be from buffer)
+    # Use train/step for consistency with train/ metrics
+    wandb.define_metric("train_batch/*", step_metric="train/step")
+
     wandb.define_metric("multi_turn/*", step_metric="rollout/step")
     wandb.define_metric("passrate/*", step_metric="rollout/step")
-    
+
     wandb.define_metric("eval/step")
     wandb.define_metric("eval/*", step_metric="eval/step")
-    
+
     wandb.define_metric("perf/*", step_metric="rollout/step")
-    
-    # 【新增】确保 Buffer 指标也有对应的 step
-    wandb.define_metric("buffer/*", step_metric="rollout/step") 
+
+    # Buffer metrics (use train/step for consistency)
+    wandb.define_metric("buffer/*", step_metric="train/step") 
 
 def get_wandb_offline_dir(args):
     """Get the directory where offline W&B data is stored."""
