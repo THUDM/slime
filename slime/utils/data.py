@@ -4,9 +4,11 @@ import logging
 import os
 import random
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import numpy as np
 import ray
+from tqdm import tqdm
 
 try:
     import pyarrow.parquet as pq
@@ -181,9 +183,14 @@ class Dataset:
         seed=42,
         apply_chat_template=False,
         apply_chat_template_kwargs=None,
+        data_loading_workers=1,
     ):
-        origin_samples = []
-        for data in read_file(path):
+        # Phase 1: Read raw data (sequential, fast)
+        raw_data_list = list(read_file(path))
+        logger.info(f"Read {len(raw_data_list)} raw samples from {path}")
+
+        # Define per-sample processing function
+        def process_single_sample(data):
             # Both chat templates and multimodal inputs require conversation format (list of message dicts)
             as_conversation = apply_chat_template or (multimodal_keys is not None)
             prompt = _build_messages(data, prompt_key, as_conversation, multimodal_keys)
@@ -220,14 +227,27 @@ class Dataset:
             else:
                 multimodal_inputs = None
 
-            origin_samples.append(
-                Sample(
-                    prompt=output_prompt,
-                    label=data[label_key] if label_key is not None else None,
-                    metadata=metadata,
-                    multimodal_inputs=multimodal_inputs,
-                )
+            return Sample(
+                prompt=output_prompt,
+                label=data[label_key] if label_key is not None else None,
+                metadata=metadata,
+                multimodal_inputs=multimodal_inputs,
             )
+
+        # Phase 2: Process samples in parallel (default to 1 worker if not specified)
+        logger.info(f"Loading data with {data_loading_workers} workers...")
+        origin_samples = [None] * len(raw_data_list)
+        with ThreadPoolExecutor(max_workers=data_loading_workers) as executor:
+            future_to_idx = {
+                executor.submit(process_single_sample, data): idx for idx, data in enumerate(raw_data_list)
+            }
+            for future in tqdm(as_completed(future_to_idx), total=len(raw_data_list), desc="Loading data"):
+                idx = future_to_idx[future]
+                try:
+                    origin_samples[idx] = future.result()
+                except Exception as e:
+                    logger.error(f"Error processing sample {idx}: {e}")
+                    raise
 
         if max_length is not None:
             self.origin_samples = filter_long_prompt(origin_samples, tokenizer, processor, max_length)
