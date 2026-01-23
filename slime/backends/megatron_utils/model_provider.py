@@ -90,6 +90,10 @@ def get_model_provider_func(
         provider.expert_model_parallel_size = args.expert_model_parallel_size
         provider.expert_tensor_parallel_size = args.expert_tensor_parallel_size
         provider.sequence_parallel = args.sequence_parallel
+        if getattr(args, "decoder_first_pipeline_num_layers", None) is not None:
+            provider.num_layers_in_first_pipeline_stage = args.decoder_first_pipeline_num_layers
+        if getattr(args, "decoder_last_pipeline_num_layers", None) is not None:
+            provider.num_layers_in_last_pipeline_stage = args.decoder_last_pipeline_num_layers
         provider.finalize()
         return provider.provide
 
