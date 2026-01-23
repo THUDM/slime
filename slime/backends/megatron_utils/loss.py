@@ -706,7 +706,20 @@ def decoupled_policy_loss_function(
     log_probs = log_probs_and_entropy["log_probs"]
     entropy = log_probs_and_entropy["entropy"]
 
-    # === 2. Get proximal policy log probs ===                                                                                                                           
+    # === 2. Get proximal policy log probs ===
+    # DEBUG: Print what's in batch
+    if is_megatron_main_rank():
+        print(f"[BATCH DEBUG] Keys in batch: {list(batch.keys())}")
+        print(f"[BATCH DEBUG] use_proximal_logp_approximation: {batch.get('use_proximal_logp_approximation', False)}")
+        if "proximal_log_probs" in batch:
+            print(f"[BATCH DEBUG] proximal_log_probs exists, length: {len(batch['proximal_log_probs'])}")
+        if "behavior_log_probs" in batch:
+            print(f"[BATCH DEBUG] behavior_log_probs exists, length: {len(batch['behavior_log_probs'])}")
+        if "rollout_log_probs" in batch:
+            print(f"[BATCH DEBUG] rollout_log_probs exists, length: {len(batch['rollout_log_probs'])}")
+        if "log_probs" in batch:
+            print(f"[BATCH DEBUG] log_probs exists, length: {len(batch['log_probs'])}")
+
     if batch.get("use_proximal_logp_approximation", False):                                                                                                              
         # Use approximation method                                                                                                                                       
         from slime.utils.proximal_logp_utils import approximate_proximal_log_probs                                                                                       
@@ -831,6 +844,14 @@ def decoupled_policy_loss_function(
         # CRITICAL FIX: Use behavior_log_probs instead of log_probs (current policy)
         delta = behavior_log_probs - proximal_log_probs  # log(π_behave) - log(π_prox)
         m2 = delta * delta  # second-momentum
+
+        # DEBUG: Print m2 statistics
+        if is_megatron_main_rank():
+            print(f"[M2PO DEBUG] m2 shape: {m2.shape}")
+            print(f"[M2PO DEBUG] m2 min/max/mean: {m2.min().item():.6f} / {m2.max().item():.6f} / {m2.mean().item():.6f}")
+            print(f"[M2PO DEBUG] delta min/max/mean: {delta.min().item():.6f} / {delta.max().item():.6f} / {delta.mean().item():.6f}")
+            print(f"[M2PO DEBUG] behavior_log_probs sample: {behavior_log_probs[:5].tolist()}")
+            print(f"[M2PO DEBUG] proximal_log_probs sample: {proximal_log_probs[:5].tolist()}")
 
         # Calculate total tokens before filtering
         total_tokens_before = sum(m.sum().item() for m in batch["loss_masks"])

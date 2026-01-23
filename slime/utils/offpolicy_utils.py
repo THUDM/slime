@@ -415,14 +415,22 @@ def apply_m2po_filtering(
     mask_flat = all_masks_flat.bool()
     m2_selected = m2.view(-1)[mask_flat]
 
+    # DEBUG: Print filtering statistics
+    print(f"[M2PO FILTER DEBUG] Total tokens: {m2.numel()}, Valid tokens (mask=1): {m2_selected.numel()}")
+    if m2_selected.numel() > 0:
+        print(f"[M2PO FILTER DEBUG] m2_selected min/max/mean: {m2_selected.min().item():.6f} / {m2_selected.max().item():.6f} / {m2_selected.mean().item():.6f}")
+        print(f"[M2PO FILTER DEBUG] threshold: {threshold}, threshold*0.1: {threshold*0.1}")
+
     if m2_selected.numel() == 0:
         # No valid tokens to filter
+        print(f"[M2PO FILTER DEBUG] Early exit: no valid tokens")
         return loss_masks, 0
 
     # Early exit optimization: if all m2 values are very small, skip filtering
     # This handles the case when gap = 0 or 1 where m2 ≈ 0
     if m2_selected.max() < threshold * 0.1:
         # All m2 values are far below threshold, no need to filter
+        print(f"[M2PO FILTER DEBUG] Early exit: max m2 ({m2_selected.max().item():.6f}) < threshold*0.1 ({threshold*0.1:.6f})")
         return loss_masks, 0
 
     # Sort m2 values in descending order
@@ -434,6 +442,12 @@ def apply_m2po_filtering(
         sorted_m2=sorted_m2,
         m2_threshold=threshold
     )
+
+    # DEBUG: Print mask statistics
+    num_to_filter = (~sorted_m2_loss_mask).sum().item()
+    print(f"[M2PO FILTER DEBUG] After _get_m2po_loss_mask: will filter {num_to_filter}/{sorted_m2_loss_mask.numel()} tokens")
+    print(f"[M2PO FILTER DEBUG] sorted_m2 top 5: {sorted_m2[:5].tolist()}")
+    print(f"[M2PO FILTER DEBUG] sorted_m2_loss_mask top 5: {sorted_m2_loss_mask[:5].tolist()}")
 
     # Restore original order
     m2_selected_mask = sorted_m2_loss_mask[restored_indices]
