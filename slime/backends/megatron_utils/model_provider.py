@@ -33,6 +33,8 @@ class LinearForLastLayer(torch.nn.Linear):
         self.sequence_parallel = config.sequence_parallel
         if self.sequence_parallel:
             self.weight.sequence_parallel = True
+            if bias:
+                self.bias.sequence_parallel = True
 
         self.weight.data.normal_(mean=0.0, std=0.02)
         if bias:
