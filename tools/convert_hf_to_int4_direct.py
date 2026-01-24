@@ -239,7 +239,7 @@ def convert_int4(input_path, output_path, group_size, is_symmetric, ignore_rules
                 process_file, input_path, output_path, filename, group_size, is_symmetric, ignore_rules, result_collector
             )
             futures.append(future)
-            
+
         for future in tqdm(futures, desc="Processing files"):
             future.result()
     
@@ -266,6 +266,7 @@ def convert_int4(input_path, output_path, group_size, is_symmetric, ignore_rules
         "config_groups": quant_group,
         "format": "pack-quantized",
         "ignore": ignore_rules,
+        "kv_cache_scheme": None,
         "quant_method": "compressed-tensors",
         "quantization_status": "compressed",
     }
