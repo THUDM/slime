@@ -1,7 +1,7 @@
 """
 python tools/convert_hf_to_int4_direct.py [-h] [--model-dir MODEL_DIR] [--save-dir SAVE_DIR]
                            [--group-size GROUP_SIZE] [--is-symmetric IS_SYMMETRIC] [--ignore-rules IGNORE_RULES]
-
+                           [--max-workers MAX_WORKERS]
 options:
   -h, --help            show this help message and exit
 """
@@ -217,7 +217,7 @@ def process_file(
 
     
 
-def convert_int4(input_path, output_path, group_size, is_symmetric, ignore_rules):
+def convert_int4(input_path, output_path, group_size, is_symmetric, ignore_rules, max_workers):
     input_path = os.path.abspath(input_path)
     os.makedirs(output_path, exist_ok=True)
     for filename in os.listdir(input_path):
@@ -228,9 +228,20 @@ def convert_int4(input_path, output_path, group_size, is_symmetric, ignore_rules
 
     result_collector = ConversionResult()
     # debug in single thread
-    for filename in safetensors_files:
-        process_file(input_path, output_path, filename, group_size, is_symmetric, ignore_rules, result_collector)
-
+    # for filename in safetensors_files:
+    #     process_file(input_path, output_path, filename, group_size, is_symmetric, ignore_rules, result_collector)
+    
+    # multi thread
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
+        for filename in safetensors_files:
+            future = executor.submit(
+                process_file, input_path, output_path, filename, group_size, is_symmetric, ignore_rules, result_collector
+            )
+            futures.append(future)
+            
+        for future in tqdm(futures, desc="Processing files"):
+            future.result()
     
     quant_group = {
         "group_0": {
@@ -289,6 +300,8 @@ def parse_args():
         "re:.*mlp\\.(gate|up|gate_up|down)_proj.*",
         "re:.*mlp\\.gate\\.*",
     ], help="Ignore Rules")
+    parser.add_argument("--max-workers", type=int, default=1, help="Number of worker threads for parallel processing")
+
     return parser.parse_args()
 
 def main():
@@ -300,7 +313,7 @@ def main():
     elif not os.path.isdir(args.save_dir):
         raise ValueError("The save_dir should be a directory.")
     
-    convert_int4(args.model_dir, args.save_dir, args.group_size, args.is_symmetric, args.ignore_rules)
+    convert_int4(args.model_dir, args.save_dir, args.group_size, args.is_symmetric, args.ignore_rules, args.max_workers)
     print(f"Conversion complete, output saved to {args.save_dir}")
 
 if __name__ == "__main__":
