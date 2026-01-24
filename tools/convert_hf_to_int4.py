@@ -78,6 +78,7 @@ def main():
         "re:.*self_attn.*",
         "re:.*shared_experts.*",
         "re:.*mlp\\.(gate|up|gate_up|down)_proj.*",
+        "re:.*mlp\\.gate\\.*",
     ]
 
     recipe = GPTQModifier(
