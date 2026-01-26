@@ -1,6 +1,85 @@
 from transformers import AutoTokenizer
 
-from slime.utils.mask_utils import MultiTurnLossMaskGenerator
+from slime.utils.mask_utils import (
+    MultiTurnLossMaskGenerator,
+    compress_loss_mask,
+    decompress_loss_mask,
+)
+
+
+def test_compress_decompress_all_ones():
+    """Test compression/decompression with all 1s (common default case)."""
+    mask = [1] * 1000
+    compressed = compress_loss_mask(mask)
+    assert compressed == ([1000], 1), f"Expected ([1000], 1), got {compressed}"
+    decompressed = decompress_loss_mask(compressed)
+    assert decompressed == mask, "Decompressed mask doesn't match original"
+
+
+def test_compress_decompress_all_zeros():
+    """Test compression/decompression with all 0s (remove_sample case)."""
+    mask = [0] * 500
+    compressed = compress_loss_mask(mask)
+    assert compressed == ([500], 0), f"Expected ([500], 0), got {compressed}"
+    decompressed = decompress_loss_mask(compressed)
+    assert decompressed == mask, "Decompressed mask doesn't match original"
+
+
+def test_compress_decompress_prefix_zeros():
+    """Test compression/decompression with prefix zeros (common multi-turn pattern)."""
+    mask = [0] * 100 + [1] * 200
+    compressed = compress_loss_mask(mask)
+    assert compressed == ([100, 200], 0), f"Expected ([100, 200], 0), got {compressed}"
+    decompressed = decompress_loss_mask(compressed)
+    assert decompressed == mask, "Decompressed mask doesn't match original"
+
+
+def test_compress_decompress_alternating():
+    """Test compression/decompression with alternating pattern."""
+    mask = [0, 0, 0, 1, 1, 1, 1, 1, 0, 0, 1, 1, 1]
+    compressed = compress_loss_mask(mask)
+    assert compressed == ([3, 5, 2, 3], 0), f"Expected ([3, 5, 2, 3], 0), got {compressed}"
+    decompressed = decompress_loss_mask(compressed)
+    assert decompressed == mask, "Decompressed mask doesn't match original"
+
+
+def test_compress_decompress_empty():
+    """Test compression/decompression with empty mask."""
+    mask = []
+    compressed = compress_loss_mask(mask)
+    assert compressed == ([], 0), f"Expected ([], 0), got {compressed}"
+    decompressed = decompress_loss_mask(compressed)
+    assert decompressed == mask, "Decompressed mask doesn't match original"
+
+
+def test_compress_decompress_single_element():
+    """Test compression/decompression with single element masks."""
+    mask_one = [1]
+    compressed = compress_loss_mask(mask_one)
+    assert compressed == ([1], 1), f"Expected ([1], 1), got {compressed}"
+    assert decompress_loss_mask(compressed) == mask_one
+
+    mask_zero = [0]
+    compressed = compress_loss_mask(mask_zero)
+    assert compressed == ([1], 0), f"Expected ([1], 0), got {compressed}"
+    assert decompress_loss_mask(compressed) == mask_zero
+
+
+def test_compression_efficiency():
+    """Test that compression actually reduces size for typical patterns."""
+    import sys
+
+    # All 1s case (8192 tokens)
+    mask = [1] * 8192
+    compressed = compress_loss_mask(mask)
+    # Compressed: ([8192], 1) - just 2 elements
+    assert len(compressed[0]) == 1, f"Expected 1 run, got {len(compressed[0])}"
+
+    # Prefix zeros case (common in multi-turn)
+    mask = [0] * 2000 + [1] * 6000
+    compressed = compress_loss_mask(mask)
+    # Compressed: ([2000, 6000], 0) - just 2 elements
+    assert len(compressed[0]) == 2, f"Expected 2 runs, got {len(compressed[0])}"
 
 
 def test_loss_mask_qwen3_simple(model_name: str = "Qwen/Qwen3-8B"):

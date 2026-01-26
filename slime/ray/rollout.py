@@ -16,6 +16,7 @@ from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
 from slime.utils.health_monitor import RolloutHealthMonitor
+from slime.utils.mask_utils import compress_loss_mask
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
 from slime.utils.metric_utils import (
@@ -350,8 +351,7 @@ class RolloutManager:
             "sample_indices": [sample.index for sample in samples],
         }
 
-        # loss mask
-        # TODO: compress the loss mask
+        # loss mask - compressed using run-length encoding to reduce memory and network overhead
         loss_masks = []
         for sample in samples:
             # always instantiate loss_mask if not provided
@@ -363,7 +363,7 @@ class RolloutManager:
             ), f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
             if sample.remove_sample:
                 sample.loss_mask = [0] * sample.response_length
-            loss_masks.append(sample.loss_mask)
+            loss_masks.append(compress_loss_mask(sample.loss_mask))
         train_data["loss_masks"] = loss_masks
 
         # overwriting the raw reward

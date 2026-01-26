@@ -4,12 +4,13 @@ import math
 
 import torch
 
+from slime.utils.mask_utils import CompressedLossMask, decompress_loss_mask
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 
 
 def pack_sequences(
     tokens: list[list[int]],
-    loss_masks: list[list[int]],
+    loss_masks: list[CompressedLossMask],
     rewards: list[float],
     raw_rewards: list,
     response_lengths: list[int],
@@ -25,7 +26,7 @@ def pack_sequences(
 
     Args:
         tokens: List of token sequences
-        loss_masks: List of loss masks
+        loss_masks: List of compressed loss masks (run-length encoded)
         rewards: List of rewards per sequence
         raw_rewards: List of raw rewards per sequence
         response_lengths: List of response lengths per sequence
@@ -72,7 +73,7 @@ def pack_sequences(
 
         for i in indices:
             seq_tokens = tokens[i]
-            seq_mask = loss_masks[i]
+            seq_mask = decompress_loss_mask(loss_masks[i])
             seq_positionids = list(range(len(seq_tokens)))
 
             flat_tokens.extend(seq_tokens)
