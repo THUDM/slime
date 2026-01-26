@@ -129,6 +129,7 @@ class RolloutManager:
     def generate(self, rollout_id):
         start_time = time.time()
         self.rollout_id = rollout_id
+        self.recover_rollout_engines()
         self.health_monitoring_resume()
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
