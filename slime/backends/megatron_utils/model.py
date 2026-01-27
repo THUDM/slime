@@ -435,7 +435,7 @@ def train_one_step(
     )
 
     valid_step = True
-    # FP16 mode does not perform NaN validation on loss and gradients, as this validation process would result in duplicate gradient scaling (grad scale).
+    # FP16 mode does not perform NaN validation on loss and gradients, as this validation process would result in duplicate gradient scaling.
     if not getattr(args, "check_for_nan_in_loss_and_grad", True) and not args.fp16:
         found_inf_flag = optimizer.prepare_grads()
         if found_inf_flag:
