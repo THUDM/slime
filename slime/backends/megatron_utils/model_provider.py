@@ -68,8 +68,6 @@ def get_model_provider_func(
             config: TransformerConfig | None = None,
             pg_collection: ProcessGroupCollection | None = None,
         ) -> GPTModel:
-            # Note: config and pg_collection are passed by Megatron-LM's get_model()
-            # but we build our own config from args. These parameters are accepted but not used.
             custom_model_provider = load_function(args.custom_model_provider_path)
             # Check if the custom provider supports vp_stage parameter
             sig_params = inspect.signature(custom_model_provider).parameters
