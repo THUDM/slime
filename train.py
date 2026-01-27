@@ -162,11 +162,11 @@ def train(args):
             if args.enable_weights_backuper:
                 offload_train()
                 onload_rollout()
-                actor_model.update_weights()
+                actor_model.update_weights() # 单步训练这里是正常的
             else:
                 actor_model.clear_memory()
                 onload_rollout()
-                actor_model.update_weights()
+                actor_model.update_weights() # 单步训练这里是正常的
                 offload_train()
 
             if args.offload_rollout:
@@ -175,17 +175,20 @@ def train(args):
                 ray.get(rollout_manager.onload.remote(tags=[GPU_MEMORY_TYPE_KV_CACHE]))
         else:
             # 🔧 FIX: Multi-train with per-iteration updates
-            # Weights were already updated in the last train iteration loop (line 131-136)
-            # But we still need to switch from training model to rollout engine for next rollout cycle
-            # CRITICAL: Must onload WEIGHTS + CUDA_GRAPH + KV_CACHE, not just CUDA_GRAPH + KV_CACHE!
             print(f"[Multi-Train] Preparing rollout engine for next rollout cycle after {train_iters_per_rollout} training iterations")
+            
+            # ================== 修改开始 ==================
+            # 必须在这里显式调用 update_weights()，因为循环内的最后一次迭代跳过了更新
             if args.enable_weights_backuper:
                 offload_train()
-                onload_rollout()  # ✅ onload WEIGHTS
+                onload_rollout()
+                actor_model.update_weights()  # <--- 【新增】 关键修复：同步最后一次训练的权重
             else:
                 actor_model.clear_memory()
-                onload_rollout()  # ✅ onload WEIGHTS
+                onload_rollout()
+                actor_model.update_weights()  # <--- 【新增】 关键修复：同步最后一次训练的权重
                 offload_train()
+            # ================== 修改结束 ==================
 
             if args.offload_rollout:
                 if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
