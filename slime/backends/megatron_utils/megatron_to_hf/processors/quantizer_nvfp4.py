@@ -5,10 +5,7 @@ import re
 import torch
 import torch.nn as nn
 
-try:
-    import fake_int4_quant_cuda
-except ImportError:
-    fake_int4_quant_cuda = None
+from typing import List, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -166,11 +163,11 @@ def quantize_params_nvfp4(converted_named_params, quantization_config):
         scale_2 = amax / (448.0 * 6.0)
 
         input_scale_name = name.replace(".weight", ".input_scale")
-        input_scale = torch.tensor([1.0])
+        input_scale = torch.tensor([1.0]).to('cuda')
 
-        results.append((name, qw))
-        results.append((scale_name, scale))
-        results.append((scale_2_name, scale_2))
+        results.append((name, qw.to('cuda')))
+        results.append((scale_name, scale.to('cuda')))
+        results.append((scale_2_name, scale_2.to('cuda')))
         results.append((input_scale_name, input_scale))
 
     return results
