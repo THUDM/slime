@@ -68,7 +68,7 @@ Slime 侧消费路由数据，并在训练中完成 replay：
 
 #### 为什么需要 SlimeRouter
 
-这依赖 SlimeRouter 的 passthrough 行为；细节见第 3 节。
+我们需要 SlimeRouter，是因为当请求设置 `return_routed_experts=true` 时，SGLang worker 会在响应里返回路由信息（`meta_info.routed_experts`），而 SlimeRouter 会端到端保留这个字段。SGLang Model Gateway 会用固定 schema 重建响应，可能会丢掉这类额外 metadata（细节见第 3 节）。
 
 ---
 

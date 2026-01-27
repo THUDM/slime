@@ -68,7 +68,7 @@ Slime consumes the routing data and replays it during training:
 
 #### Why SlimeRouter is needed
 
-This requires SlimeRouter's passthrough behavior; see section 3 for details.
+We need SlimeRouter because the SGLang worker returns routed experts in the response (`meta_info.routed_experts`) when the request sets `return_routed_experts=true`, and SlimeRouter preserves this field end-to-end. SGLang Model Gateway may drop this extra metadata when it reconstructs responses with a fixed schema (see section 3).
 
 ---
 
