@@ -147,6 +147,12 @@ MISC_ARGS=(
    --moe-enable-deepep
 )
 
+SPEC_ARGS={
+   # --mtp-num-layers 1
+   # --enable-mtp-training
+   # --mtp-loss-scaling-factor 0.2
+}
+
 # launch the master node of ray in container
 export no_proxy="127.0.0.1,${MASTER_ADDR}"
 ray start --head --node-ip-address ${MASTER_ADDR} --num-gpus 8 --disable-usage-stats --dashboard-host=0.0.0.0 --dashboard-port=8265
@@ -186,4 +192,5 @@ ray job submit --address="http://127.0.0.1:8265" \
    ${PERF_ARGS[@]} \
    ${EVAL_ARGS[@]} \
    ${SGLANG_ARGS[@]} \
-   ${MISC_ARGS[@]}
+   ${MISC_ARGS[@]} \
+   ${SPEC_ARGS[@]}

@@ -3,7 +3,62 @@ import re
 import torch
 
 
+def _convert_mtp_layer(args, name, param, layer_idx):
+    """Convert MTP layer parameters from Megatron to HuggingFace format.
+
+    Handles both wrapper layers (enorm, hnorm, final_layernorm, eh_proj) and
+    inner transformer layers for any number of MTP layers.
+    """
+    # MTP wrapper layers (layer index independent in HF format)
+    if "enorm.weight" in name:
+        return [("mtp.pre_fc_norm_embedding.weight", param)]
+    if "hnorm.weight" in name:
+        return [("mtp.pre_fc_norm_hidden.weight", param)]
+    if "final_layernorm.weight" in name:
+        return [("mtp.norm.weight", param)]
+    if "eh_proj.weight" in name:
+        if param.dim() < 2:
+            raise ValueError(f"eh_proj weight expects 2D tensor, got {param.shape}")
+        first_half, second_half = param.chunk(2, dim=1)
+        new_param = torch.cat([second_half, first_half], dim=1)
+        return [("mtp.fc.weight", new_param)]
+
+    # MTP inner transformer layers (keep layer index)
+    if "transformer_layer" in name:
+        proxy_name = name.replace(
+            f"mtp.layers.{layer_idx}.transformer_layer",
+            f"decoder.layers.{layer_idx}"
+        )
+        mapped_params = convert_qwen3_next_to_hf(args, proxy_name, param)
+
+        final_params = []
+        for hf_name, tensor in mapped_params:
+            target_prefix = f"mtp.layers.{layer_idx}"
+            if f"model.layers.{layer_idx}" in hf_name:
+                new_hf_name = hf_name.replace(f"model.layers.{layer_idx}", target_prefix)
+                final_params.append((new_hf_name, tensor))
+            else:
+                final_params.append((hf_name, tensor))
+        return final_params
+
+    return None
+
+
 def convert_qwen3_next_to_hf(args, name, param):
+    """Convert Qwen3 Next model parameters from Megatron to HuggingFace format."""
+    # Handle MTP layers
+    if "mtp.layers" in name:
+        parts = name.split(".")
+        try:
+            layer_idx_loc = parts.index("layers") + 1
+            layer_idx = parts[layer_idx_loc]
+        except (ValueError, IndexError):
+            raise ValueError(f"Invalid MTP layer name format: {name}")
+
+        result = _convert_mtp_layer(args, name, param, layer_idx)
+        if result is not None:
+            return result
+
     if name == "module.module.embedding.word_embeddings.weight":
         return [("model.embed_tokens.weight", param)]
     if name == "module.module.output_layer.weight":
