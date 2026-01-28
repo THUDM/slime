@@ -257,7 +257,6 @@ def forward_only(
     forward_data_store = []
     num_steps_per_rollout = len(num_microbatches)
     for step_id in range(num_steps_per_rollout):
-        # collect_non_loss_data
         forward_data_store += forward_backward_func(
             forward_step_func=forward_step,
             data_iterator=data_iterator,
@@ -266,7 +265,6 @@ def forward_only(
             seq_length=args.seq_length,
             micro_batch_size=args.micro_batch_size,
             forward_only=True,
-            collect_non_loss_data=True,
         )
 
     # Move model back to the train mode.
