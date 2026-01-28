@@ -31,6 +31,8 @@ Unlike production inference, RL rollout needs to capture additional metadata for
 
 ### 2.1 Radix-tree cache (transparent token management)
 
+> Use this when your rollout pipeline is text-in/text-out and you cannot reliably persist token IDs; if you already control token-in/token-out (e.g. search r1, multiturn VLM examples), you likely don't need the radix-tree cache.
+
 Text-in text-out interfaces can cause token retokenization mismatches - re-tokenizing text at training time may produce different token sequences than rollout, breaking per-token alignment needed for PPO/GRPO losses.
 
 The radix-tree cache solves this transparently: it intercepts text-based requests, tokenizes them, and stores trajectories (text, token IDs, logprobs, loss masks) keyed by the text prefix. After rollout finishes, calling `/retrieve_from_text` returns the exact token sequence with aligned metadata, without requiring any changes to your rollout code.

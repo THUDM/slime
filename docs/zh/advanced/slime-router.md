@@ -31,6 +31,8 @@ SlimeRouter 是一个小型 FastAPI 服务，主要能力包括：
 
 ### 2.1 Radix-tree cache（透明的 token 管理）
 
+> 当你的 rollout 流程是 text-in/text-out、并且很难可靠地保存 token IDs 时，适合用 radix-tree cache；如果你已经能自己控制 token-in/token-out（例如 search r1、multiturn VLM 这些 example），通常不需要 radix-tree cache。
+
 text-in text-out 接口可能导致 token retokenization mismatches：训练阶段重新 tokenize 文本，得到的 token 序列可能与 rollout 阶段不同，从而破坏 PPO/GRPO 这类方法所需的 per-token alignment。
 
 radix-tree cache 可以透明地解决这个问题：它拦截 text-based request，对其进行 tokenize，并将 trajectory（text、token IDs、logprobs、loss masks）按文本前缀作为 key 存储。rollout 结束后，调用 `/retrieve_from_text` 就能取回与 rollout 完全一致的 token 序列及其对齐的 metadata，无需修改现有 rollout 代码。
