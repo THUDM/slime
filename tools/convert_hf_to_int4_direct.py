@@ -7,23 +7,18 @@ options:
 """
 
 import argparse
-import os
-import math
-import re
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
 import gc
 import json
+import math
+import os
+import re
 import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import safetensors
 import safetensors.torch
-
+import torch
 from tqdm import tqdm
 
 try:
@@ -123,7 +118,6 @@ def quantize(
     return output
 
 
-
 def pack_layer(weight, group_size, sym=True):
     w, scale, zp = fake_int4_quant_cuda.fake_int4_quant_cuda(weight, (1, group_size), sym)
     w = w.view(weight.shape[0], 1, weight.shape[1] // group_size, group_size)
@@ -169,15 +163,8 @@ class ConversionResult:
                 self.weight_map[k] = filename
                 self.param_count += len(v)
 
-def process_file(
-        input_path, 
-        output_path, 
-        filename, 
-        group_size,
-        is_symmetric, 
-        ignore_rules, 
-        result_collector
-    ):
+
+def process_file(input_path, output_path, filename, group_size, is_symmetric, ignore_rules, result_collector):
 
     print(f"Processing {filename}, memory usage: {torch.cuda.memory_allocated()}")
     weights = {}
@@ -186,7 +173,6 @@ def process_file(
     with safetensors.safe_open(os.path.join(input_path, filename), framework="pt", device="cuda") as f:
         for k in f.keys():
             weights[k] = f.get_tensor(k)
-
 
     for name, weight in weights.items():
         is_ignored = any(
@@ -215,7 +201,6 @@ def process_file(
 
     result_collector.add_result(filename, q_weights)
 
-    
 
 def convert_int4(input_path, output_path, group_size, is_symmetric, ignore_rules, max_workers):
     input_path = os.path.abspath(input_path)
@@ -230,19 +215,26 @@ def convert_int4(input_path, output_path, group_size, is_symmetric, ignore_rules
     # debug in single thread
     # for filename in safetensors_files:
     #     process_file(input_path, output_path, filename, group_size, is_symmetric, ignore_rules, result_collector)
-    
+
     # multi thread
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for filename in safetensors_files:
             future = executor.submit(
-                process_file, input_path, output_path, filename, group_size, is_symmetric, ignore_rules, result_collector
+                process_file,
+                input_path,
+                output_path,
+                filename,
+                group_size,
+                is_symmetric,
+                ignore_rules,
+                result_collector,
             )
             futures.append(future)
 
         for future in tqdm(futures, desc="Processing files"):
             future.result()
-    
+
     quant_group = {
         "group_0": {
             "input_activations": None,
@@ -292,18 +284,24 @@ def parse_args():
     parser.add_argument("--save-dir", type=str, required=True)
     parser.add_argument("--group-size", type=int, default=32, help="Group Size")
     parser.add_argument("--is-symmetric", type=bool, default=True, help="Is Symmetric")
-    parser.add_argument("--ignore-rules", nargs="+", default=[
-        "re:.*lm_head.*",
-        "re:.*norm.*",
-        "re:.*embed.*",
-        "re:.*self_attn.*",
-        "re:.*shared_experts.*",
-        "re:.*mlp\\.(gate|up|gate_up|down)_proj.*",
-        "re:.*mlp\\.gate\\.*",
-    ], help="Ignore Rules")
+    parser.add_argument(
+        "--ignore-rules",
+        nargs="+",
+        default=[
+            "re:.*lm_head.*",
+            "re:.*norm.*",
+            "re:.*embed.*",
+            "re:.*self_attn.*",
+            "re:.*shared_experts.*",
+            "re:.*mlp\\.(gate|up|gate_up|down)_proj.*",
+            "re:.*mlp\\.gate\\.*",
+        ],
+        help="Ignore Rules",
+    )
     parser.add_argument("--max-workers", type=int, default=1, help="Number of worker threads for parallel processing")
 
     return parser.parse_args()
+
 
 def main():
     args = parse_args()
@@ -313,9 +311,12 @@ def main():
         os.makedirs(args.save_dir)
     elif not os.path.isdir(args.save_dir):
         raise ValueError("The save_dir should be a directory.")
-    
-    convert_int4(args.model_dir, args.save_dir, args.group_size, args.is_symmetric, args.ignore_rules, args.max_workers)
+
+    convert_int4(
+        args.model_dir, args.save_dir, args.group_size, args.is_symmetric, args.ignore_rules, args.max_workers
+    )
     print(f"Conversion complete, output saved to {args.save_dir}")
+
 
 if __name__ == "__main__":
     main()
