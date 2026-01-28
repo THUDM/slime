@@ -192,7 +192,7 @@ class UpdateWeightFromDistributed(UpdateWeight):
         self._is_src_rank = dist.get_rank() == 0
         if self._is_src_rank:
             self._group_name = "slime"
-            master_address = ray._private.services.get_node_ip_address()
+            master_address = ray.util.get_node_ip_address()
             with socket.socket() as sock:
                 sock.bind(("", 0))
                 master_port = sock.getsockname()[1]

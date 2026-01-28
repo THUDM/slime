@@ -56,7 +56,7 @@ def exec_command(cmd: str, capture_output: bool = False) -> str | None:
 
 
 def get_current_node_ip():
-    address = ray._private.services.get_node_ip_address()
+    address = ray.util.get_node_ip_address()
     # strip ipv6 address
     address = address.strip("[]")
     return address

@@ -247,7 +247,7 @@ def connect_rollout_engines_from_distributed(
     """
     Create NCCL group: training rank 0 + all engine GPUs. Blocks until joined.
     """
-    master_address = ray._private.services.get_node_ip_address()
+    master_address = ray.util.get_node_ip_address()
     with socket.socket() as sock:
         sock.bind(("", 0))
         master_port = sock.getsockname()[1]
