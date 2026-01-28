@@ -55,7 +55,4 @@ MODEL_ARGS=(
    # qwen3 specific
    --attention-output-gate
    --moe-shared-expert-gate
-
-   # mtp
-   --mtp-num-layers 1
 )
