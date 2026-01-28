@@ -17,8 +17,15 @@ from slime.utils.distributed_utils import get_gloo_group
 from slime.utils.logging_utils import init_tracking
 from slime.utils.memory_utils import clear_memory, print_memory
 from slime.utils.metric_utils import compute_rollout_step
-from slime.utils.misc import Box
-from slime.utils.ppo_utils import compute_approx_kl, compute_gspo_kl, compute_opsm_mask, compute_policy_loss
+from slime.utils.misc import load_function, Box
+from slime.utils.ppo_utils import (
+    build_opsm_inputs_from_log_probs,
+    compute_approx_kl,
+    compute_gspo_kl,
+    compute_opsm_mask,
+    compute_policy_loss,
+    vanilla_tis_function,
+)
 from slime.utils.processing_utils import load_processor, load_tokenizer
 from slime.utils.profile_utils import TrainProfiler
 from slime.utils.timer import Timer, inverse_timer, timer, with_defer
@@ -582,12 +589,15 @@ class FSDPTrainRayActor(TrainRayActor):
         ppo_kl = old_log_probs - log_probs
 
         if self.args.use_opsm:
-            opsm_mask, opsm_clipfrac = compute_opsm_mask(
-                args=self.args,
+            opsm_inputs = build_opsm_inputs_from_log_probs(
                 full_log_probs=[batch["cur_log_probs"] for batch in unpacked_batches],
                 full_old_log_probs=[batch[old_log_prob_key] for batch in unpacked_batches],
-                advantages=[batch["advantages"] for batch in unpacked_batches],
                 loss_masks=loss_masks,
+            )
+            opsm_mask, opsm_clipfrac = compute_opsm_mask(
+                args=self.args,
+                advantages=[batch["advantages"] for batch in unpacked_batches],
+                opsm_inputs=opsm_inputs,
             )
 
         if self.args.advantage_estimator == "gspo":
