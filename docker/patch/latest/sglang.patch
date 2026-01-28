@@ -1310,10 +1310,27 @@ index 1d69c0582..d984c2e12 100644
  def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tensor]]):
      params_dict = dict(model.named_parameters())
 diff --git a/python/sglang/srt/models/deepseek_v2.py b/python/sglang/srt/models/deepseek_v2.py
-index ed8cc7ada..d44c8aaa0 100644
+index ed8cc7ada..b8f1026dd 100644
 --- a/python/sglang/srt/models/deepseek_v2.py
 +++ b/python/sglang/srt/models/deepseek_v2.py
-@@ -2704,7 +2704,11 @@ class DeepseekV2AttentionMLA(nn.Module):
+@@ -159,6 +159,7 @@ from sglang.srt.utils import (
+     make_layers,
+     use_intel_amx_backend,
+ )
++from sglang.srt.layers.attention.hybrid_attn_backend import HybridAttnBackend
+ 
+ _is_hip = is_hip()
+ _is_cuda = is_cuda()
+@@ -434,6 +435,8 @@ def handle_attention_nsa(attn, forward_batch):
+     backend = forward_batch.attn_backend
+     if isinstance(backend, TboAttnBackend):  # if enable tbo, get primary backend
+         backend = backend.primary
++    if isinstance(backend, HybridAttnBackend):
++        backend = backend._select_backend(forward_batch.forward_mode)
+     if hasattr(backend, "use_mha") and backend.use_mha:
+         return AttnForwardMethod.MHA_ONE_SHOT
+     return AttnForwardMethod.MLA
+@@ -2704,7 +2707,11 @@ class DeepseekV2AttentionMLA(nn.Module):
          ):
              k = k_nope.new_empty(*k_shape)
              concat_mla_k(k=k, k_nope=k_nope, k_rope=k_pe)

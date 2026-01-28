@@ -169,7 +169,7 @@ def get_log_probs_and_entropy(
     }
     if with_entropy:
         res["entropy"] = entropy_list
-    return res
+    return torch.empty((0,), device=logits.device), res
 
 
 def get_values(
@@ -214,7 +214,7 @@ def get_values(
         assert logits_chunk.size(-1) == 1, f"{logits_chunk.shape}"
         value_list.append(logits_chunk.squeeze(-1))
 
-    return {
+    return torch.empty((0,), device=logits.device), {
         "values": value_list,
     }
 
@@ -476,7 +476,7 @@ def policy_loss_function(
     total_lengths = batch["total_lengths"]
     max_seq_lens = batch.get("max_seq_lens", None)
 
-    log_probs_and_entropy = get_log_probs_and_entropy(
+    _, log_probs_and_entropy = get_log_probs_and_entropy(
         logits,
         args=args,
         unconcat_tokens=batch["unconcat_tokens"],
@@ -680,7 +680,7 @@ def value_loss_function(
     """
     old_values = torch.cat(batch["values"], dim=0)
 
-    values = get_values(
+    _, values = get_values(
         logits,
         args=args,
         unconcat_tokens=batch["unconcat_tokens"],
@@ -738,7 +738,7 @@ def sft_loss_function(
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
 
-    log_probs_and_entropy = get_log_probs_and_entropy(
+    _, log_probs_and_entropy = get_log_probs_and_entropy(
         logits,
         args=args,
         unconcat_tokens=batch["unconcat_tokens"],
