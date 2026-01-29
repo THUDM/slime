@@ -1,7 +1,6 @@
 import base64
 import io
 import logging
-import types
 
 from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 
@@ -19,26 +18,28 @@ def load_tokenizer(name_or_path: str, **kwargs):
     return AutoTokenizer.from_pretrained(name_or_path, **kwargs)
 
 
-def _patch_processor_call(processor: ProcessorMixin):
-    """Patch processor.__call__ to inject default kwargs for modality-specific processors."""
-    original_call = processor.__call__
+def build_processor_kwargs(multimodal_inputs: dict | None = None) -> dict:
 
-    def patched_call(self, *args, **kwargs):
+    forced = {
         # force return_tensors to None for input_ids
-        kwargs["return_tensors"] = None
+        "return_tensors": None,
         # have been resized by qwen_vl_utils, update this when supporting other models
-        kwargs["do_resize"] = False
+        "do_resize": False,
+    }
+    modality_forced = {"return_tensors": "pt"}
 
-        # set return_tensors="pt" for modality-specific outputs
-        for modality_kwargs_key in ("audio_kwargs", "images_kwargs", "videos_kwargs"):
-            if modality_kwargs_key not in kwargs:
-                kwargs[modality_kwargs_key] = {"return_tensors": "pt"}
-            else:
-                kwargs[modality_kwargs_key].setdefault("return_tensors", "pt")
+    result = dict(multimodal_inputs) if multimodal_inputs else {}
 
-        return original_call(*args, **kwargs)
+    result.update(forced)
 
-    processor.__call__ = types.MethodType(patched_call, processor)
+    # set return_tensors="pt" for modality-specific outputs
+    for key in ("audio_kwargs", "images_kwargs", "videos_kwargs"):
+        if key in result:
+            result[key] = {**result[key], **modality_forced}
+        else:
+            result[key] = modality_forced.copy()
+
+    return result
 
 
 def load_processor(name_or_path: str, **kwargs):
@@ -52,10 +53,7 @@ def load_processor(name_or_path: str, **kwargs):
     if isinstance(proc, PreTrainedTokenizerBase) or not isinstance(proc, ProcessorMixin):
         proc = None
 
-    # Patch processor __call__ to add default kwargs
     if proc is not None:
-        _patch_processor_call(proc)
-
         global _qwen_process_vision_info
         if _qwen_process_vision_info is None:
             try:
