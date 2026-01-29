@@ -1,6 +1,7 @@
 # Adapt from https://github.com/NVIDIA/Megatron-LM/blob/b1efb3c7126ef7615e8c333432d76e08038e17ff/pretrain_gpt.py
 import argparse
 import inspect
+import re
 from contextlib import nullcontext
 from typing import Literal
 
@@ -201,3 +202,35 @@ def get_model_provider_func(
         return model
 
     return model_provider
+
+
+def wrap_model_provider_with_freeze(original_provider, args):
+    def wrapped_provider(pre_process=True, post_process=True, vp_stage=None):
+        sig = inspect.signature(original_provider)
+        if "vp_stage" in sig.parameters:
+            model = original_provider(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
+        else:
+            model = original_provider(pre_process=pre_process, post_process=post_process)
+
+        freeze_model_params(model, args)
+
+        return model
+
+    return wrapped_provider
+
+
+def freeze_model_params(model: GPTModel, args: argparse.Namespace):
+    if args.only_train_params_name_list:
+        for name, param in model.named_parameters():
+            param.requires_grad = False
+            for pattern in args.only_train_params_name_list:
+                if re.search(pattern, name):
+                    param.requires_grad = True
+                    break
+
+    if args.freeze_params_name_list:
+        for name, param in model.named_parameters():
+            for pattern in args.freeze_params_name_list:
+                if re.search(pattern, name):
+                    param.requires_grad = False
+                    break

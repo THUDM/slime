@@ -62,8 +62,8 @@ class MegatronTrainRayActor(TrainRayActor):
         self.prof = TrainProfiler(args)
 
         # read config and tokenizer serialized to prevent concurrent writing bug.
-        for i in range(dist.get_world_size()):
-            if i == dist.get_rank():
+        for i in range(args.num_gpus_per_node):
+            if i == dist.get_rank() % args.num_gpus_per_node:
                 self.hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
                 self.tokenizer = AutoTokenizer.from_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
             dist.barrier(group=get_gloo_group())
@@ -218,12 +218,14 @@ class MegatronTrainRayActor(TrainRayActor):
                 continue
             rollout_data[key] = [
                 torch.tensor(
-                    slice_log_prob_with_cp(
-                        log_prob,
-                        total_length,
-                        response_length,
-                        self.args.qkv_format,
-                        rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
+                    (
+                        slice_log_prob_with_cp(
+                            log_prob,
+                            total_length,
+                            response_length,
+                            self.args.qkv_format,
+                            rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
+                        )
                     ),
                     device=torch.cuda.current_device(),
                     dtype=torch.float32,
@@ -440,7 +442,11 @@ class MegatronTrainRayActor(TrainRayActor):
             if self.rollout_data_postprocess is not None:
                 self.rollout_data_postprocess(self.args)
 
-            log_rollout_data(rollout_id, self.args, rollout_data)
+            log_rollout_data(
+                rollout_id,
+                self.args,
+                rollout_data,
+            )
 
             # Train
             if self.args.use_routing_replay:
