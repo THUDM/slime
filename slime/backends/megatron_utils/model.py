@@ -112,6 +112,15 @@ def setup_model_and_optimizer(
     for f in dataclasses.fields(OptimizerConfig):
         if hasattr(args, f.name):
             kwargs[f.name] = getattr(args, f.name)
+    if args.fp16:
+        kwargs["bf16"] = False
+        kwargs["fp16"] = True
+        kwargs["params_dtype"] = torch.float16
+        kwargs["initial_loss_scale"] = 32768
+        kwargs["min_loss_scale"] = 1
+        kwargs["use_precision_aware_optimizer"] = True
+        kwargs["store_param_remainders"] = False
+        logger.info(f"FP16 mode enabled. Optimizer config: {kwargs}")
     config = OptimizerConfig(**kwargs)
     config.timers = None
 
@@ -424,7 +433,8 @@ def train_one_step(
     )
 
     valid_step = True
-    if not getattr(args, "check_for_nan_in_loss_and_grad", True):
+    # FP16 mode does not perform NaN validation on loss and gradients, as this validation process would result in duplicate gradient scaling.
+    if not getattr(args, "check_for_nan_in_loss_and_grad", True) and not args.fp16:
         found_inf_flag = optimizer.prepare_grads()
         if found_inf_flag:
             valid_step = False

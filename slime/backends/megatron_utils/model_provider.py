@@ -90,6 +90,12 @@ def get_model_provider_func(
         provider.expert_model_parallel_size = args.expert_model_parallel_size
         provider.expert_tensor_parallel_size = args.expert_tensor_parallel_size
         provider.sequence_parallel = args.sequence_parallel
+        if args.fp16:
+            provider.fp16 = True
+            provider.bf16 = False
+        elif args.bf16:
+            provider.fp16 = False
+            provider.bf16 = True
         provider.finalize()
         return provider.provide
 
