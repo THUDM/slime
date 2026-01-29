@@ -7,6 +7,7 @@ from .processors import quantize_params, remove_padding
 from .qwen2 import convert_qwen2_to_hf
 from .qwen3_next import convert_qwen3_next_to_hf
 from .qwen3moe import convert_qwen3moe_to_hf
+from .qwen3_vl import convert_qwen3vl_to_hf
 
 
 # TODO unify w/ `convert_to_hf`
@@ -41,6 +42,8 @@ def _convert_to_hf_core(args, model_name, name, param):
         converted_named_tensors = convert_qwen3moe_to_hf(args, name, param)
     elif "qwen3next" in model_name:
         converted_named_tensors = convert_qwen3_next_to_hf(args, name, param)
+    elif "qwen3vl" in model_name:
+        converted_named_tensors = convert_qwen3vl_to_hf(args, name, param)
     elif "qwen2" in model_name or "qwen3" in model_name:
         converted_named_tensors = convert_qwen2_to_hf(args, name, param)
     elif "llama" in model_name:

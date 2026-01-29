@@ -59,9 +59,7 @@ def main():
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
-    ds_hf = get_calibration_dataset(
-        tokenizer, args.num_calibration_samples, args.max_sequence_length, args.data_dir
-    )
+    ds_hf = get_calibration_dataset(tokenizer, args.num_calibration_samples, args.max_sequence_length, args.data_dir)
 
     model = AutoModelForCausalLM.from_pretrained(
         args.input_dir,
