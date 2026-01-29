@@ -38,6 +38,12 @@ class DataSource(abc.ABC):
         """
         Load the state of the data source
         """
+    
+    @abc.abstractmethod
+    def __len__(self) -> int:
+        """
+        Length of the data source. May change when samples are added/fetched.
+        """
 
 
 # TODO may further refactor data-loading part later
@@ -152,6 +158,9 @@ class RolloutDataSource(DataSource):
 
         if self.args.rollout_global_dataset and self.args.rollout_shuffle:
             self.dataset.shuffle(self.epoch_id)
+    
+    def __len__(self) -> int:
+        return len(self.dataset)
 
 
 class RolloutDataSourceWithBuffer(RolloutDataSource):
@@ -207,7 +216,7 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
     def get_metadata(self):
         return self.metadata
 
-    def get_buffer_length(self):
+    def __len__(self) -> int:
         return len(self.buffer)
 
 
