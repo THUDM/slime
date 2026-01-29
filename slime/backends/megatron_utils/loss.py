@@ -313,13 +313,8 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     elif args.advantage_estimator == "on_policy_distillation":
         student_log_probs = log_probs
         teacher_log_probs = rollout_data.get("teacher_log_probs")
-        response_lengths = rollout_data.get("response_lengths")
         device = student_log_probs[0].device
-        teacher_log_probs = [t_log_prob.to(device=device) for t_log_prob in teacher_log_probs]
-        teacher_log_probs = [
-            t_log_prob[-response_length:]
-            for t_log_prob, response_length in zip(teacher_log_probs, response_lengths, strict=False)
-        ]
+        teacher_log_probs = [t.to(device=device) for t in teacher_log_probs]
         advantages = [
             teacher_log_prob - student_log_prob
             for teacher_log_prob, student_log_prob in zip(teacher_log_probs, student_log_probs, strict=False)
