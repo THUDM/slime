@@ -797,6 +797,19 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "'custom_loss': user-defined custom loss (set path via --custom-loss-function-path)."
                 ),
             )
+            parser.add_argument(
+                "--use-proximal-correction-for-policy-loss",
+                action="store_true",
+                default=False,
+                help=(
+                    "When using 'policy_loss' in off-policy settings, use proximal_log_probs "
+                    "(from previous training step) instead of log_probs (from data generation) "
+                    "as the old policy reference. This provides a baseline to compare against "
+                    "'decoupled_policy_loss' by using the same proximal correction but with "
+                    "the standard PPO objective instead of the decoupled objective. "
+                    "Only effective when loss_type='policy_loss' and buffer is enabled."
+                ),
+            )
 
 
             # === NEW: Multi-train per rollout for off-policy GRPO ===

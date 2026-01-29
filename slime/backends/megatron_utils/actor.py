@@ -323,7 +323,9 @@ class MegatronTrainRayActor(TrainRayActor):
                     )
 
                 # === Compute proximal policy log probs for off-policy GRPO ===
-                if self.args.loss_type == "decoupled_policy_loss":
+                # This is needed for both decoupled_policy_loss and policy_loss with proximal correction
+                if self.args.loss_type == "decoupled_policy_loss" or \
+                   (self.args.loss_type == "policy_loss" and getattr(self.args, "use_proximal_correction_for_policy_loss", False)):
                     # First time: initialize proximal policy as current actor
                     if "proximal" not in self.weights_backuper.backup_tags:
                         if is_megatron_main_rank():
@@ -411,7 +413,8 @@ class MegatronTrainRayActor(TrainRayActor):
             # === CRITICAL FIX: Update proximal policy after training ===
             # For off-policy GRPO, proximal policy should be updated to current actor
             # after each training step to serve as the regularization target for next iteration
-            if self.args.loss_type == "decoupled_policy_loss":
+            if self.args.loss_type == "decoupled_policy_loss" or \
+               (self.args.loss_type == "policy_loss" and getattr(self.args, "use_proximal_correction_for_policy_loss", False)):
                 if is_megatron_main_rank():
                     print(f"[Off-Policy GRPO] Updating proximal policy to current actor at rollout {rollout_id}")
                 self.weights_backuper.backup("proximal")
@@ -427,7 +430,8 @@ class MegatronTrainRayActor(TrainRayActor):
         self.weights_backuper.backup("actor")
 
         # === Update proximal policy after training for off-policy GRPO ===
-        if self.args.loss_type == "decoupled_policy_loss":
+        if self.args.loss_type == "decoupled_policy_loss" or \
+           (self.args.loss_type == "policy_loss" and getattr(self.args, "use_proximal_correction_for_policy_loss", False)):
             if is_megatron_main_rank():
                 print(f"[Off-Policy GRPO] Updating proximal policy after rollout {rollout_id}")
             self.weights_backuper.backup("proximal")

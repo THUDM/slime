@@ -394,7 +394,17 @@ def policy_loss_function(
         are enabled.
     """
     advantages = torch.cat(batch["advantages"], dim=0)
-    old_log_probs = batch["rollout_log_probs"] if args.use_rollout_logprobs else batch["log_probs"]
+
+    # Determine which log_probs to use as old policy reference
+    if getattr(args, 'use_proximal_correction_for_policy_loss', False) and 'proximal_log_probs' in batch:
+        # Use proximal_log_probs for off-policy baseline comparison
+        # This allows comparing standard PPO objective with proximal correction
+        # against decoupled PPO objective with the same correction
+        old_log_probs = batch["proximal_log_probs"]
+    elif args.use_rollout_logprobs:
+        old_log_probs = batch["rollout_log_probs"]
+    else:
+        old_log_probs = batch["log_probs"]
 
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
