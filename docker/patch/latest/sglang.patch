@@ -1013,18 +1013,20 @@ index 2ecd8542f..89ef8200d 100644
  @dataclass
  class InitWeightsSendGroupForRemoteInstanceReqOutput(BaseReq):
 diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
-index d423e61d7..9156d543c 100644
+index d423e61d7..d1f54a832 100644
 --- a/python/sglang/srt/managers/schedule_batch.py
 +++ b/python/sglang/srt/managers/schedule_batch.py
-@@ -2186,7 +2186,8 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
-     def __str__(self):
-         return (
-             f"ScheduleBatch(forward_mode={self.forward_mode.name if self.forward_mode else 'None'}, "
--            f"#req={(len(self.reqs))})"
-+            f"#req={(len(self.reqs))}), "
-+            f"#out_cache_loc={self.out_cache_loc})"
-         )
- 
+@@ -1779,7 +1779,10 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+                 selected_indices=sorted_indices, buf_multiplier=buf_multiplier
+             )
+         ):
+-            if len(sorted_indices) == 1:
++            # We should allow all requests to be retracted in decode disaggregation mode
++            # because there call be prealloc prefill requests.
++            num_minimum_reqs = 0 if server_args.disaggregation_mode == "decode" else 1
++            if len(sorted_indices) == num_minimum_reqs:
+                 # Always keep at least one request
+                 break
  
 diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
 index 92d286897..43bfab691 100644
