@@ -168,10 +168,11 @@ async def _post(client, url, payload, max_retries=60):
         try:
             response = await client.post(url, json=payload or {})
             response.raise_for_status()
+            content = await response.aread()
             try:
-                output = response.json()
+                output = json.loads(content)
             except json.JSONDecodeError:
-                output = response.text
+                output = content.decode() if isinstance(content, bytes) else content
         except Exception as e:
             retry_count += 1
 
@@ -286,5 +287,6 @@ async def post(url, payload, max_retries=60):
 async def get(url):
     response = await _http_client.get(url)
     response.raise_for_status()
-    output = response.json()
+    content = await response.aread()
+    output = json.loads(content)
     return output
