@@ -20,7 +20,12 @@ from slime.utils.data import Dataset
 from slime.utils.eval_config import EvalDatasetConfig
 from slime.utils.http_utils import get, post
 from slime.utils.misc import SingletonMeta, load_function
-from slime.utils.processing_utils import encode_image_for_rollout_engine, load_processor, load_tokenizer
+from slime.utils.processing_utils import (
+    build_processor_kwargs,
+    encode_image_for_rollout_engine,
+    load_processor,
+    load_tokenizer,
+)
 from slime.utils.types import Sample
 
 from .rm_hub import async_rm, batched_async_rm
@@ -112,7 +117,8 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     ), f"Sample status is {sample.status}"
 
     if state.processor:
-        processor_output = state.processor(text=sample.prompt, **sample.multimodal_inputs)
+        processor_kwargs = build_processor_kwargs(sample.multimodal_inputs)
+        processor_output = state.processor(text=sample.prompt, **processor_kwargs)
         prompt_ids = processor_output["input_ids"][0]
         sample.multimodal_train_inputs = {
             k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]
