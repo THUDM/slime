@@ -117,6 +117,7 @@ def get_log_probs_and_entropy(
     total_lengths: list[int],
     response_lengths: list[int],
     with_entropy: bool = False,
+    requires_entropy_grad: bool = True,
     non_loss_data: bool = True,
     max_seq_lens: list[int] | None = None,
 ) -> dict[str, list[torch.Tensor]]:
@@ -159,6 +160,7 @@ def get_log_probs_and_entropy(
             mpu.get_tensor_model_parallel_group(),
             with_entropy=with_entropy,
             chunk_size=args.log_probs_chunk_size,
+            requires_entropy_grad=requires_entropy_grad,
         )
 
         log_probs_list.append(log_prob.squeeze(-1))
@@ -475,6 +477,7 @@ def policy_loss_function(
     response_lengths = batch["response_lengths"]
     total_lengths = batch["total_lengths"]
     max_seq_lens = batch.get("max_seq_lens", None)
+    entropy_requires_grad = args.entropy_coef > 0
 
     _, log_probs_and_entropy = get_log_probs_and_entropy(
         logits,
@@ -483,6 +486,7 @@ def policy_loss_function(
         total_lengths=total_lengths,
         response_lengths=response_lengths,
         with_entropy=True,
+        requires_entropy_grad=entropy_requires_grad,
         max_seq_lens=max_seq_lens,
     )
 
@@ -745,6 +749,7 @@ def sft_loss_function(
         total_lengths=total_lengths,
         response_lengths=response_lengths,
         with_entropy=False,
+        requires_entropy_grad=False,
         max_seq_lens=batch.get("max_seq_lens", None),
     )
 
