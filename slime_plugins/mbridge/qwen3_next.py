@@ -45,9 +45,7 @@ class Qwen3NextBridge(Qwen2MoEBridge):
         ret = super()._get_gptmodel_args()
         if getattr(self.config, "mtp_num_layers", None) is not None:
             transformer_layer_spec = self.config
-            mtp_block_spec = get_gpt_mtp_block_spec(
-                self.config, transformer_layer_spec, use_transformer_engine=True
-            )
+            mtp_block_spec = get_gpt_mtp_block_spec(self.config, transformer_layer_spec, use_transformer_engine=True)
             ret["mtp_block_spec"] = mtp_block_spec
         return ret
 
@@ -89,8 +87,7 @@ class Qwen3NextBridge(Qwen2MoEBridge):
                 raise NotImplementedError(f"Unsupported transformer component in MTP: {name}")
 
             convert_names = [
-                cn.replace(f"model.layers.{mtp_layer_idx}", f"mtp.layers.{mtp_layer_idx}")
-                for cn in convert_names
+                cn.replace(f"model.layers.{mtp_layer_idx}", f"mtp.layers.{mtp_layer_idx}") for cn in convert_names
             ]
             return convert_names
 

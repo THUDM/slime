@@ -6,11 +6,7 @@ import time
 
 import torch
 import torch.distributed.checkpoint as dist_cp
-from transformers import (
-    AutoConfig,
-    AutoModelForCausalLM,
-    AutoModelForImageTextToText,
-)
+from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
 from typing_extensions import override
 
 

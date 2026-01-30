@@ -165,6 +165,7 @@ def _next_actor():
 async def _post(client, url, payload, max_retries=60):
     retry_count = 0
     while retry_count < max_retries:
+        response = None
         try:
             response = await client.post(url, json=payload or {})
             response.raise_for_status()
@@ -189,6 +190,9 @@ async def _post(client, url, payload, max_retries=60):
                 raise e
             await asyncio.sleep(1)
             continue
+        finally:
+            if response is not None:
+                await response.aclose()
         break
 
     return output

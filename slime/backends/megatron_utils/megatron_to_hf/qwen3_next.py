@@ -25,10 +25,7 @@ def _convert_mtp_layer(args, name, param, layer_idx):
 
     # MTP inner transformer layers (keep layer index)
     if "transformer_layer" in name:
-        proxy_name = name.replace(
-            f"mtp.layers.{layer_idx}.transformer_layer",
-            f"decoder.layers.{layer_idx}"
-        )
+        proxy_name = name.replace(f"mtp.layers.{layer_idx}.transformer_layer", f"decoder.layers.{layer_idx}")
         mapped_params = convert_qwen3_next_to_hf(args, proxy_name, param)
 
         final_params = []
@@ -52,8 +49,8 @@ def convert_qwen3_next_to_hf(args, name, param):
         try:
             layer_idx_loc = parts.index("layers") + 1
             layer_idx = parts[layer_idx_loc]
-        except (ValueError, IndexError):
-            raise ValueError(f"Invalid MTP layer name format: {name}")
+        except (ValueError, IndexError) as e:
+            raise ValueError(f"Invalid MTP layer name format: {name}") from e
 
         result = _convert_mtp_layer(args, name, param, layer_idx)
         if result is not None:

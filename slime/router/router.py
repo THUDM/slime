@@ -159,6 +159,9 @@ class SlimeRouter:
                     headers=dict(response.headers),
                     media_type=content_type or None,
                 )
+            finally:
+                if response is not None:
+                    await response.aclose()
 
         finally:
             self._finish_url(worker_url)
