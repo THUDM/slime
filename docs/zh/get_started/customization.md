@@ -350,6 +350,11 @@ class CustomDataSource(DataSource):
         
     def load(self, rollout_id=None):
         """从 ckpt 加载状态"""
+    
+    def __len__(self) -> int:
+    """
+        返回当前数据源中可用样本的数量。该数量可能会随着样本的获取或添加而变化。
+    """
 ```
 
 ---
