@@ -328,7 +328,7 @@ class SGLangEngine(RayActor):
     def get_weight_version(self):
         if self.node_rank != 0:
             return
-        url = f"http://{self.server_host}:{self.server_port}/get_weight_version"
+        url = f"http://{self.server_host}:{self.server_port}/weight_version"
         response = requests.get(url)
         response.raise_for_status()
         return response.json()["weight_version"]

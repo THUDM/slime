@@ -283,7 +283,6 @@ async def generate_and_rm_group(
         rewards = await batched_async_rm(args, group)
         for sample, reward in zip(group, rewards, strict=False):
             sample.reward = reward
-
     return group
 
 

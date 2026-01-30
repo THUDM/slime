@@ -385,6 +385,9 @@ class RolloutManager:
         if samples[0].train_metadata is not None:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
 
+        if samples[0].task_type is not None:
+            train_data["task_type"] = [sample.task_type for sample in samples]
+
         if samples[0].multimodal_train_inputs is not None:
             train_data["multimodal_train_inputs"] = [sample.multimodal_train_inputs for sample in samples]
 
@@ -430,6 +433,7 @@ class RolloutManager:
                 "rollout_routed_experts",
                 "prompt",
                 "teacher_log_probs",
+                "task_type",
             ]:
                 if key not in data:
                     continue
