@@ -216,7 +216,7 @@ class RolloutDataSourceWithBuffer(RolloutDataSource):
     def get_metadata(self):
         return self.metadata
 
-    def __len__(self) -> int:
+    def get_buffer_length(self):
         return len(self.buffer)
 
 
