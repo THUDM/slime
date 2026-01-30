@@ -1,3 +1,4 @@
+import contextlib
 import logging
 import os
 import random
@@ -342,6 +343,7 @@ class FSDPTrainRayActor(TrainRayActor):
                         target_tokens=batch["tokens"],
                         allow_compile=not self.args.true_on_policy_mode,
                         temperature=self.args.rollout_temperature,
+                        requires_entropy_grad=False,
                     )
                     batch[f"{store_prefix}log_probs"] = log_probs_result
                     if store_prefix == "":
@@ -547,6 +549,7 @@ class FSDPTrainRayActor(TrainRayActor):
         # Prepare model inputs
         model_args = self._get_model_inputs_args(packed_batch)
         logits = self.model(**model_args).logits.squeeze(0).float()
+        entropy_requires_grad = self.args.entropy_coef > 0
 
         # Compute log probs and entropy
         log_probs, entropy_result = get_logprob_and_entropy(
@@ -554,6 +557,7 @@ class FSDPTrainRayActor(TrainRayActor):
             target_tokens=packed_batch["tokens"],
             allow_compile=not self.args.true_on_policy_mode,
             temperature=self.args.rollout_temperature,
+            requires_entropy_grad=entropy_requires_grad,
         )
         packed_batch["cur_log_probs"] = log_probs
         packed_batch["entropy"] = entropy_result
@@ -861,6 +865,7 @@ def get_logprob_and_entropy(
     target_tokens: torch.Tensor,
     allow_compile: bool,
     temperature: float | None = None,
+    requires_entropy_grad: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Compute log probabilities and entropy.
 
@@ -878,9 +883,11 @@ def get_logprob_and_entropy(
     log_probs = gather_log_probs_packed(
         shifted_logits, target_tokens, allow_compile=allow_compile, temperature=temperature
     )
-    log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
-    probs = torch.softmax(shifted_logits, dim=-1)
-    entropy = -(probs * log_probs_full).sum(dim=-1)
+    entropy_context = torch.no_grad() if not requires_entropy_grad else contextlib.nullcontext()
+    with entropy_context:
+        log_probs_full = torch.log_softmax(shifted_logits, dim=-1)
+        probs = torch.softmax(shifted_logits, dim=-1)
+        entropy = -(probs * log_probs_full).sum(dim=-1)
     return log_probs, entropy
 
 
