@@ -1,0 +1,690 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Slime Router &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/bootstrap.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+
+  
+  <link href="../_static/vendor/fontawesome/6.5.2/css/all.min.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-solid-900.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-brands-400.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-regular-400.woff2" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+  
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b" />
+  <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+    <script src="../_static/documentation_options.js?v=e645c8fa"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/slime-router';</script>
+    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="Speculative Decoding" href="speculative-decoding.html" />
+    <link rel="prev" title="DeepSeek R1 with 128xH100" href="../examples/deepseek-r1.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+    <meta name="docbuild:last-update" content="Jan 30, 2026"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-primary-sidebar-checkbox"/>
+  <label class="overlay overlay-primary" for="pst-primary-sidebar-checkbox"></label>
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-secondary-sidebar-checkbox"/>
+  <label class="overlay overlay-secondary" for="pst-secondary-sidebar-checkbox"></label>
+  
+  <div class="search-button__wrapper">
+    <div class="search-button__overlay"></div>
+    <div class="search-button__search-container">
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         id="search-input"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form></div>
+  </div>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <div class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <script>document.write(`<img src="../_static/logo.jpg" class="logo__image only-dark" alt="slime - Home"/>`);</script>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">Search</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">Quick Start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">Usage Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">Customization Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">FAQ</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">Qwen3-4B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">GLM4-9B with 8xH100</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.5-355B-A32B.html">GLM-4.5 with 64xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Slime Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">Speculative Decoding</a></li>
+<li class="toctree-l1"><a class="reference internal" href="low-precision.html">Low Precision Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">Fault Tolerance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD Disaggregation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully Asynchronous Rollout Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/on_policy_distillation/README.html">On-Policy Distillation Example</a></li>
+
+
+
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debugging</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: Redefining High-Performance RL Training Frameworks</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime: An SGLang-Native Post-Training Framework for RL Scaling</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+  
+  <div id="rtd-footer-container"></div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="Source repository"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/advanced/slime-router.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/advanced/slime-router.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fadvanced/slime-router.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="Open an issue"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/advanced/slime-router.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script>
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm pst-navbar-icon search-button search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+  </button>
+`);
+</script>
+<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>Slime Router</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-slimerouter">1. What is SlimeRouter?</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-is-launched">How it is launched</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-we-need-slimerouter">2. Why we need SlimeRouter</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#radix-tree-cache-transparent-token-management">2.1 Radix-tree cache (transparent token management)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.2 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-side">SGLang side</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-side">Slime side</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#why-slimerouter-is-needed">Why SlimeRouter is needed</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#differences-vs-sglang-model-gateway">3. Differences vs SGLang Model Gateway</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#key-differences">Key differences</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#when-to-use-which">When to use which</a></li>
+</ul>
+</li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="slime-router">
+<h1>Slime Router<a class="headerlink" href="#slime-router" title="Link to this heading">#</a></h1>
+<p>Slime includes an optional SlimeRouter used during rollout / data generation. It is a lightweight HTTP router/proxy that sits in front of one or more SGLang worker servers and adds training-oriented capabilities that are not the main goal of serving-focused routers.</p>
+<hr class="docutils" />
+<section id="what-is-slimerouter">
+<h2>1. What is SlimeRouter?<a class="headerlink" href="#what-is-slimerouter" title="Link to this heading">#</a></h2>
+<p>SlimeRouter is a small FastAPI service that:</p>
+<ul class="simple">
+<li><p>Registers workers (SGLang HTTP servers) into a local pool</p></li>
+<li><p>Routes requests to a selected worker (simple least-inflight load balancing)</p></li>
+<li><p>Proxies arbitrary paths to the selected worker (e.g. <code class="docutils literal notranslate"><span class="pre">/generate</span></code>)</p></li>
+<li><p>Runs periodic health checks and quarantines unhealthy workers</p></li>
+<li><p>Supports middleware plugins (via <code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>) to implement rollout-specific processing (e.g. caching, request/response transforms)</p></li>
+</ul>
+<p>In slime’s architecture, the router is part of the rollout system (“SGLang + router”) that generates samples and pushes them into the data buffer.</p>
+<section id="how-it-is-launched">
+<h3>How it is launched<a class="headerlink" href="#how-it-is-launched" title="Link to this heading">#</a></h3>
+<p>In distributed training, slime will start a router automatically when <code class="docutils literal notranslate"><span class="pre">--sglang-router-ip</span></code> is not provided:</p>
+<ul class="simple">
+<li><p>If <code class="docutils literal notranslate"><span class="pre">--use-slime-router</span></code> is set, slime starts SlimeRouter</p></li>
+<li><p>Otherwise, slime starts SGLang Model Gateway</p></li>
+</ul>
+</section>
+</section>
+<hr class="docutils" />
+<section id="why-we-need-slimerouter">
+<h2>2. Why we need SlimeRouter<a class="headerlink" href="#why-we-need-slimerouter" title="Link to this heading">#</a></h2>
+<p>Unlike production inference, RL rollout needs to capture additional metadata for training: token-level logprobs, loss masks, and (for MoE models) expert routing decisions. SlimeRouter provides these capabilities through its middleware system and passthrough proxy design.</p>
+<section id="radix-tree-cache-transparent-token-management">
+<h3>2.1 Radix-tree cache (transparent token management)<a class="headerlink" href="#radix-tree-cache-transparent-token-management" title="Link to this heading">#</a></h3>
+<blockquote>
+<div><p>Use this when your rollout pipeline is text-in/text-out and you cannot reliably persist token IDs; if you already control token-in/token-out (e.g. search r1, multiturn VLM examples), you likely don’t need the radix-tree cache.</p>
+</div></blockquote>
+<p>Text-in text-out interfaces can cause token retokenization mismatches - re-tokenizing text at training time may produce different token sequences than rollout, breaking per-token alignment needed for PPO/GRPO losses.</p>
+<p>The radix-tree cache solves this transparently: it intercepts text-based requests, tokenizes them, and stores trajectories (text, token IDs, logprobs, loss masks) keyed by the text prefix. After rollout finishes, calling <code class="docutils literal notranslate"><span class="pre">/retrieve_from_text</span></code> returns the exact token sequence with aligned metadata, without requiring any changes to your rollout code.</p>
+<p>Implementation-wise, the radix-tree cache:</p>
+<ul class="simple">
+<li><p>Accepts text plus tokens/metadata and stores them in a radix tree</p></li>
+<li><p>Uses longest-prefix matching to reuse cached token sequences (enabling token-in/token-out downstream)</p></li>
+<li><p>Allows insertion of new text continuations as rollout proceeds (multiple trajectories per prompt, e.g. GRPO)</p></li>
+<li><p>Periodically cleans up stale nodes to control memory usage</p></li>
+</ul>
+<p>Use the radix cache when you have text-based rollout code and want token-level precision without rewriting, or when running GRPO with multiple trajectories sharing the same prompt prefix.</p>
+</section>
+<section id="rollout-routing-replay-r3-for-moe">
+<h3>2.2 Rollout routing replay (R3) for MoE<a class="headerlink" href="#rollout-routing-replay-r3-for-moe" title="Link to this heading">#</a></h3>
+<p>For MoE models, slime supports rollout routing replay (R3): record expert routing decisions during rollout and replay them during training to improve stability.</p>
+<section id="sglang-side">
+<h4>SGLang side<a class="headerlink" href="#sglang-side" title="Link to this heading">#</a></h4>
+<p>SGLang provides expert routing capture via:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--enable-return-routed-experts</span></code>: server argument to enable routing capture</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">RoutedExpertsCapturer</span></code>: captures <code class="docutils literal notranslate"><span class="pre">topk_ids</span></code> (selected expert IDs) at each MoE layer during forward pass</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">return_routed_experts</span></code>: request parameter to retrieve routing data</p></li>
+<li><p>Returns <code class="docutils literal notranslate"><span class="pre">routed_experts</span></code> in response <code class="docutils literal notranslate"><span class="pre">meta_info</span></code> - a <code class="docutils literal notranslate"><span class="pre">[seq_len</span> <span class="pre">-</span> <span class="pre">1,</span> <span class="pre">num_layers,</span> <span class="pre">top_k]</span></code> tensor of expert IDs</p></li>
+</ul>
+</section>
+<section id="slime-side">
+<h4>Slime side<a class="headerlink" href="#slime-side" title="Link to this heading">#</a></h4>
+<p>Slime consumes the routing data and replays it during training:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-slime-router</span> <span class="pre">--use-rollout-routing-replay</span></code>: both flags required to enable R3</p></li>
+<li><p>Rollout sends <code class="docutils literal notranslate"><span class="pre">return_routed_experts=True</span></code> and stores results in <code class="docutils literal notranslate"><span class="pre">sample.rollout_routed_experts</span></code></p></li>
+<li><p>Training calls <code class="docutils literal notranslate"><span class="pre">fill_routing_replay()</span></code> to load routing data into <code class="docutils literal notranslate"><span class="pre">RoutingReplay</span></code> objects</p></li>
+<li><p>During forward pass, recorded routing decisions are replayed instead of recomputed</p></li>
+</ul>
+</section>
+<section id="why-slimerouter-is-needed">
+<h4>Why SlimeRouter is needed<a class="headerlink" href="#why-slimerouter-is-needed" title="Link to this heading">#</a></h4>
+<p>We need SlimeRouter because the SGLang worker returns routed experts in the response (<code class="docutils literal notranslate"><span class="pre">meta_info.routed_experts</span></code>) when the request sets <code class="docutils literal notranslate"><span class="pre">return_routed_experts=true</span></code>, and SlimeRouter preserves this field end-to-end. SGLang Model Gateway may drop this extra metadata when it reconstructs responses with a fixed schema (see section 3).</p>
+</section>
+</section>
+</section>
+<hr class="docutils" />
+<section id="differences-vs-sglang-model-gateway">
+<h2>3. Differences vs SGLang Model Gateway<a class="headerlink" href="#differences-vs-sglang-model-gateway" title="Link to this heading">#</a></h2>
+<p>SlimeRouter and SGLang Model Gateway can both route requests to workers, but they are optimized for different goals.</p>
+<section id="key-differences">
+<h3>Key differences<a class="headerlink" href="#key-differences" title="Link to this heading">#</a></h3>
+<p>SlimeRouter is a lightweight Python/FastAPI proxy that acts as a passthrough to SGLang workers. This passthrough design enables RL-specific features like radix-tree trajectory caching and R3 (which require preserving raw response metadata like <code class="docutils literal notranslate"><span class="pre">routed_experts</span></code>).</p>
+<p>SGLang Model Gateway is a high-performance Rust-based router optimized for large-scale inference: async non-blocking routing, advanced fault tolerance (retries, circuit breakers), multiple load balancing policies (including cache-aware routing), and PD disaggregation support. However, it reconstructs responses with a fixed schema, so it does not preserve the metadata needed for slime’s R3 flow.</p>
+<p>For more details on SGLang Model Gateway, see the <a class="reference external" href="https://docs.sglang.io/advanced_features/sgl_model_gateway.html">official documentation</a>.</p>
+</section>
+<section id="when-to-use-which">
+<h3>When to use which<a class="headerlink" href="#when-to-use-which" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>Use SlimeRouter when you need R3 or radix-tree caching</p></li>
+<li><p>Use SGLang Model Gateway for everything else (recommended default)</p></li>
+</ul>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="../examples/deepseek-r1.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">DeepSeek R1 with 128xH100</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="speculative-decoding.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">Speculative Decoding</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+  <div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav class="bd-toc-nav page-toc">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-slimerouter">1. What is SlimeRouter?</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-is-launched">How it is launched</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-we-need-slimerouter">2. Why we need SlimeRouter</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#radix-tree-cache-transparent-token-management">2.1 Radix-tree cache (transparent token management)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.2 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-side">SGLang side</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-side">Slime side</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#why-slimerouter-is-needed">Why SlimeRouter is needed</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#differences-vs-sglang-model-gateway">3. Differences vs SGLang Model Gateway</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#key-differences">Key differences</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#when-to-use-which">When to use which</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  Last updated on Jan 30, 2026.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b"></script>
+<script src="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>
