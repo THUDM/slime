@@ -304,16 +304,62 @@ class RolloutManager:
                       f"This may cause training issues.")
 
 
-            # === Step 6: Convert to training format ===
-            # IMPORTANT: Verify all samples have valid rewards before conversion
+            # === Step 6: Validate training data before conversion ===
+            # CRITICAL: Verify all samples have valid rewards and responses
+            # If validation fails, we should NOT proceed with training as it indicates a bug
+            validation_errors = []
+
+            # Check for None rewards
             none_reward_indices = [i for i, s in enumerate(train_data_samples) if s.reward is None]
             if len(none_reward_indices) > 0:
-                print(f"[CRITICAL ERROR] Found {len(none_reward_indices)}/{len(train_data_samples)} samples with None rewards before training!")
-                print(f"[CRITICAL ERROR] Indices: {none_reward_indices[:10]}{'...' if len(none_reward_indices) > 10 else ''}")
-                # Force set to 0 to prevent crash
-                for idx in none_reward_indices:
-                    print(f"[CRITICAL ERROR] Forcing reward=1e-8 for sample {idx} {train_data_samples[idx]}")
-                    train_data_samples[idx].reward = 1e-8
+                validation_errors.append(
+                    f"Found {len(none_reward_indices)}/{len(train_data_samples)} samples with reward=None"
+                )
+
+            # Check for empty responses
+            empty_response_indices = [i for i, s in enumerate(train_data_samples) if s.response_length == 0]
+            if len(empty_response_indices) > 0:
+                validation_errors.append(
+                    f"Found {len(empty_response_indices)}/{len(train_data_samples)} samples with response_length=0"
+                )
+
+            # If validation fails, raise error with detailed information
+            if validation_errors:
+                print(f"\n{'='*80}")
+                print(f"[CRITICAL ERROR] Invalid training data in rollout {rollout_id}")
+                print(f"{'='*80}")
+                for i, error in enumerate(validation_errors, 1):
+                    print(f"  {i}. {error}")
+                print(f"{'='*80}")
+                print(f"[CRITICAL ERROR] This indicates a bug in the data pipeline!")
+                print(f"[CRITICAL ERROR] Possible causes:")
+                print(f"  - Buffer sampling returned invalid/incomplete samples")
+                print(f"  - Reward computation failed during rollout generation")
+                print(f"  - Data corruption in buffer storage/retrieval")
+                print(f"  - Rollout generation produced empty responses")
+                print(f"{'='*80}")
+
+                # Log first few invalid samples for debugging
+                print(f"[DEBUG] First 5 invalid samples:")
+                for i, sample in enumerate(train_data_samples[:10]):
+                    if sample.reward is None or sample.response_length == 0:
+                        print(f"  Sample {i}:")
+                        print(f"    - response_length: {sample.response_length}")
+                        print(f"    - reward: {sample.reward}")
+                        print(f"    - status: {sample.status}")
+                        print(f"    - group_index: {sample.group_index}")
+                        print(f"    - policy_version: {sample.policy_version}")
+                        if len([s for s in train_data_samples[:10] if s.reward is None or s.response_length == 0]) >= 5:
+                            break
+                print(f"{'='*80}\n")
+
+                # Raise exception to stop training and force investigation
+                raise RuntimeError(
+                    f"Invalid training data detected in rollout {rollout_id}. "
+                    f"Found samples with None rewards or empty responses. "
+                    f"This indicates a bug in data generation or buffer sampling. "
+                    f"Please check the logs above for details."
+                )
 
             train_data = self._convert_samples_to_train_data(train_data_samples)
 
@@ -506,13 +552,49 @@ class RolloutManager:
                 print(f"[WARNING] Training data has {len(train_data_samples)} samples, "
                       f"less than global_batch_size={self.args.global_batch_size}")
 
-            # === Step 5: Verify rewards ===
+            # === Step 5: Validate training data ===
+            # CRITICAL: Verify all samples have valid rewards and responses
+            validation_errors = []
+
+            # Check for None rewards
             none_reward_indices = [i for i, s in enumerate(train_data_samples) if s.reward is None]
             if len(none_reward_indices) > 0:
-                print(f"[CRITICAL ERROR] Found {len(none_reward_indices)}/{len(train_data_samples)} samples with None rewards!")
-                for idx in none_reward_indices[:10]:
-                    print(f"[CRITICAL ERROR] Forcing reward=1e-8 for sample {idx}")
-                    train_data_samples[idx].reward = 1e-8
+                validation_errors.append(
+                    f"Found {len(none_reward_indices)}/{len(train_data_samples)} samples with reward=None"
+                )
+
+            # Check for empty responses
+            empty_response_indices = [i for i, s in enumerate(train_data_samples) if s.response_length == 0]
+            if len(empty_response_indices) > 0:
+                validation_errors.append(
+                    f"Found {len(empty_response_indices)}/{len(train_data_samples)} samples with response_length=0"
+                )
+
+            # If validation fails, raise error
+            if validation_errors:
+                print(f"\n{'='*80}")
+                print(f"[CRITICAL ERROR] Invalid training data in multi-train iteration {train_iter + 1}")
+                print(f"{'='*80}")
+                for i, error in enumerate(validation_errors, 1):
+                    print(f"  {i}. {error}")
+                print(f"{'='*80}")
+                print(f"[CRITICAL ERROR] This indicates a bug in buffer sampling!")
+                print(f"[CRITICAL ERROR] Buffer may contain corrupted or incomplete samples.")
+                print(f"{'='*80}\n")
+
+                # Log first few invalid samples
+                print(f"[DEBUG] First 5 invalid samples:")
+                for i, sample in enumerate(train_data_samples[:10]):
+                    if sample.reward is None or sample.response_length == 0:
+                        print(f"  Sample {i}: response_length={sample.response_length}, reward={sample.reward}")
+                        if len([s for s in train_data_samples[:10] if s.reward is None or s.response_length == 0]) >= 5:
+                            break
+                print(f"{'='*80}\n")
+
+                raise RuntimeError(
+                    f"Invalid training data in multi-train iteration {train_iter + 1}. "
+                    f"Found samples with None rewards or empty responses."
+                )
 
             # === Step 6: Convert to training format ===
             train_data = self._convert_samples_to_train_data(train_data_samples)
@@ -702,45 +784,64 @@ class RolloutManager:
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
 
-        # === NEW: Handle None rewards robustly ===
-        # Check for None values and provide meaningful default
+        # === ROBUST VALIDATION: Check for None rewards ===
+        # None rewards indicate a bug in reward computation - should not be silently ignored
         none_count = sum(1 for r in raw_rewards if r is None)
 
         if none_count > 0:
             # Get valid rewards for statistics
             valid_rewards = [r for r in raw_rewards if r is not None]
 
-            # Determine fallback value based on valid rewards
             if len(valid_rewards) > 0:
-                # Use mean of valid rewards as fallback (more reasonable than 0)
+                # Partial failure: some rewards are valid, some are None
+                # This is still a bug, but we can provide more context
                 fallback_value = sum(valid_rewards) / len(valid_rewards)
-                print(f"[WARNING] Found {none_count}/{len(raw_rewards)} samples with None rewards. "
-                      f"Using mean of valid rewards ({fallback_value:.4f}) as fallback.")
-            else:
-                # All rewards are None - use 0.0 and warn loudly
-                # fallback_value = 0.0
-                fallback_value = 1e-8
-                print(f"[ERROR] ALL {len(raw_rewards)} samples have None rewards! "
-                      f"This indicates a serious issue with the reward function. "
-                      f"Using fallback value 1e-8, but you should investigate immediately.")
+                print(f"\n{'='*80}")
+                print(f"[CRITICAL WARNING] Found {none_count}/{len(raw_rewards)} samples with None rewards!")
+                print(f"{'='*80}")
+                print(f"[WARNING] This indicates a bug in reward computation for some samples.")
+                print(f"[WARNING] Using mean of valid rewards ({fallback_value:.4f}) as fallback for logging only.")
+                print(f"[WARNING] Training data validation will catch this and abort training.")
+                print(f"{'='*80}\n")
 
-                # Optionally log to wandb if available
+                # Log to wandb
+                if wandb.run is not None:
+                    wandb.log({
+                        "error/partial_rewards_none": 1,
+                        "error/none_reward_count": none_count,
+                        "error/none_reward_ratio": none_count / len(raw_rewards),
+                    })
+
+                # Replace None with fallback for logging purposes only
+                raw_rewards_clean = [r if r is not None else fallback_value for r in raw_rewards]
+            else:
+                # Complete failure: ALL rewards are None
+                # This is a critical bug that must be investigated
+                print(f"\n{'='*80}")
+                print(f"[CRITICAL ERROR] ALL {len(raw_rewards)} samples have None rewards!")
+                print(f"{'='*80}")
+                print(f"[CRITICAL ERROR] This indicates a complete failure in reward computation!")
+                print(f"[CRITICAL ERROR] Possible causes:")
+                print(f"  - Reward function is not properly configured")
+                print(f"  - Reward function crashed during execution")
+                print(f"  - Model outputs are invalid/empty")
+                print(f"  - Label data is missing or corrupted")
+                print(f"{'='*80}")
+                print(f"[CRITICAL ERROR] Training will be aborted by data validation.")
+                print(f"[CRITICAL ERROR] Please investigate the reward function immediately!")
+                print(f"{'='*80}\n")
+
+                # Log to wandb
                 if wandb.run is not None:
                     wandb.log({
                         "error/all_rewards_none": 1,
                         "error/none_reward_count": none_count,
                     })
 
-            # Replace None with fallback value
-            raw_rewards_clean = [r if r is not None else fallback_value for r in raw_rewards]
-
-            # Log statistics to wandb
-            if wandb.run is not None:
-                wandb.log({
-                    "reward/none_count": none_count,
-                    "reward/none_ratio": none_count / len(raw_rewards),
-                    "reward/fallback_value": fallback_value,
-                })
+                # Use 1e-8 as placeholder for logging only
+                # Training will be aborted anyway by validation in generate_rollout()
+                fallback_value = 1e-8
+                raw_rewards_clean = [fallback_value] * len(raw_rewards)
         else:
             raw_rewards_clean = raw_rewards
 

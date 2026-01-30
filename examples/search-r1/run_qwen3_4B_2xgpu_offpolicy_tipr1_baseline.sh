@@ -153,6 +153,12 @@ OFFPOLICY_GRPO_ARGS=(
 
 
 BUFFER_SAMPLING_ARGS=(
+   # 🔧 CRITICAL FIX: Explicitly enable buffer for policy_loss baseline
+   # Without this flag, buffer is auto-disabled when loss_type != decoupled_policy_loss
+   # This caused the original error: training samples had None rewards and empty responses
+   # See rollout_data_source.py:145-148 for auto-detection logic
+   --use-buffer true
+
    # 🔧 FIXED: Reduced from 1024 to 256 for faster version turnover
    # - Smaller buffer means old samples are evicted faster
    # - Ensures buffer contains mostly recent data
@@ -160,28 +166,21 @@ BUFFER_SAMPLING_ARGS=(
    # --buffer-max-size 256
    --buffer-max-size 1024
 
-   # 🔧 CRITICAL FIX: Changed from random to lifo_staleness
-   # - LIFO = Last-In-First-Out (newest samples first)
-   # - Prioritizes samples where π_behave ≈ π_theta
-   # - Minimizes importance weight variance
-   # - See slime/utils/buffer_sampling_strategies.py:369
-
    # --buffer-sampling-strategy lifo_staleness
-
    --buffer-sampling-strategy random
 
    # --buffer-sampling-strategy priority
-   # --buffer-priority-metric reward \  
+   # --buffer-priority-metric reward \
 
-   # --buffer-sampling-strategy hybrid \                            
-   # --buffer-hybrid-lifo-ratio 0.8 \                               
-   # --buffer-hybrid-priority-ratio 0.2 \                           
-   # --buffer-priority-metric reward \  
+   # --buffer-sampling-strategy hybrid \
+   # --buffer-hybrid-lifo-ratio 0.8 \
+   # --buffer-hybrid-priority-ratio 0.2 \
+   # --buffer-priority-metric reward \
 
-   # --buffer-sampling-strategy hybrid \                            
-   # --buffer-hybrid-lifo-ratio 0.2 \                               
-   # --buffer-hybrid-priority-ratio 0.8 \                           
-   # --buffer-priority-metric reward \  
+   # --buffer-sampling-strategy hybrid \
+   # --buffer-hybrid-lifo-ratio 0.2 \
+   # --buffer-hybrid-priority-ratio 0.8 \
+   # --buffer-priority-metric reward \
 
    # Allow sample reuse but don't remove on sample
    --buffer-remove-on-sample false

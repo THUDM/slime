@@ -147,7 +147,7 @@ BUFFER_SAMPLING_ARGS=(
 
    # --buffer-sampling-strategy lifo_staleness
 
-   # --buffer-sampling-strategy random
+   --buffer-sampling-strategy random
 
    # --buffer-sampling-strategy priority
    # --buffer-priority-metric reward \  
@@ -157,10 +157,10 @@ BUFFER_SAMPLING_ARGS=(
    # --buffer-hybrid-priority-ratio 0.2 \                           
    # --buffer-priority-metric reward \  
 
-   --buffer-sampling-strategy hybrid \                            
-   --buffer-hybrid-lifo-ratio 0.2 \                               
-   --buffer-hybrid-priority-ratio 0.8 \                           
-   --buffer-priority-metric reward \  
+   # --buffer-sampling-strategy hybrid \                            
+   # --buffer-hybrid-lifo-ratio 0.2 \                               
+   # --buffer-hybrid-priority-ratio 0.8 \                           
+   # --buffer-priority-metric reward \  
 
    # Allow sample reuse but don't remove on sample
    --buffer-remove-on-sample false

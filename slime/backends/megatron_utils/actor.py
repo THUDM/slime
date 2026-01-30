@@ -309,6 +309,83 @@ class MegatronTrainRayActor(TrainRayActor):
             self.fill_routing_replay(data_iterator, num_microbatches, rollout_data)
 
         with inverse_timer("train_wait"), timer("train"):
+            # === ROBUST DATA VALIDATION: Check for invalid training data ===
+            # Multiple failure modes can cause invalid data:
+            # 1. Empty responses (response_length=0) -> TransformerEngine errors
+            # 2. None rewards -> Training loss computation errors
+            # 3. Missing required fields -> Downstream crashes
+            #
+            # This validation protects ALL compute_log_prob calls (ref, proximal, old_actor)
+            # and ensures training only proceeds with valid data.
+
+            validation_errors = []
+
+            # Check 1: Validate response_lengths exist and are valid
+            response_lengths = rollout_data.get("response_lengths", [])
+            if not response_lengths:
+                validation_errors.append("Missing 'response_lengths' field")
+            else:
+                empty_count = sum(1 for length in response_lengths if length == 0)
+                if empty_count > 0:
+                    validation_errors.append(f"Found {empty_count}/{len(response_lengths)} samples with response_length=0")
+
+            # Check 2: Validate rewards exist and are not None
+            rewards = rollout_data.get("rewards", [])
+            if not rewards:
+                validation_errors.append("Missing 'rewards' field")
+            else:
+                none_reward_count = sum(1 for r in rewards if r is None)
+                if none_reward_count > 0:
+                    validation_errors.append(f"Found {none_reward_count}/{len(rewards)} samples with reward=None")
+
+            # Check 3: Validate tokens exist
+            tokens = rollout_data.get("tokens", [])
+            if not tokens:
+                validation_errors.append("Missing 'tokens' field")
+            elif len(tokens) == 0:
+                validation_errors.append("Empty 'tokens' list")
+
+            # Check 4: Validate field length consistency
+            if response_lengths and rewards and tokens:
+                if not (len(response_lengths) == len(rewards) == len(tokens)):
+                    validation_errors.append(
+                        f"Inconsistent field lengths: response_lengths={len(response_lengths)}, "
+                        f"rewards={len(rewards)}, tokens={len(tokens)}"
+                    )
+
+            # If any validation errors, abort training with detailed error report
+            if validation_errors:
+                if is_megatron_main_rank():
+                    print(f"\n{'='*80}")
+                    print(f"[CRITICAL ERROR] Invalid training data detected in rollout {rollout_id}")
+                    print(f"{'='*80}")
+                    for i, error in enumerate(validation_errors, 1):
+                        print(f"  {i}. {error}")
+                    print(f"{'='*80}")
+                    print(f"[CRITICAL ERROR] This indicates a bug in data generation or buffer sampling!")
+                    print(f"[CRITICAL ERROR] Possible causes:")
+                    print(f"  - Buffer sampling returned invalid/incomplete samples")
+                    print(f"  - Reward computation failed for some samples")
+                    print(f"  - Data corruption during buffer storage/retrieval")
+                    print(f"  - Rollout generation produced empty responses")
+                    print(f"{'='*80}")
+                    print(f"[CRITICAL ERROR] Skipping this rollout to prevent TransformerEngine crash")
+                    print(f"[CRITICAL ERROR] Please investigate the root cause immediately!")
+                    print(f"{'='*80}\n")
+
+                    # Log sample details for debugging (first 3 invalid samples)
+                    if response_lengths and rewards:
+                        print(f"[DEBUG] First 3 invalid samples:")
+                        for i, (rlen, reward) in enumerate(zip(response_lengths[:10], rewards[:10])):
+                            if rlen == 0 or reward is None:
+                                print(f"  Sample {i}: response_length={rlen}, reward={reward}")
+                                if i >= 2:  # Show max 3 samples
+                                    break
+
+                # Skip this rollout entirely - return early
+                # This is the safest approach when we have invalid data
+                return
+
             if self.args.compute_advantages_and_returns:
                 if "ref" in self.weights_backuper.backup_tags:
                     if self.args.use_routing_replay:
