@@ -1,6 +1,7 @@
 import itertools
 import logging
 import multiprocessing
+import os
 import random
 import time
 from pathlib import Path
@@ -484,14 +485,16 @@ def init_rollout_engines(args, pg, all_rollout_engines):
         )
 
         env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST} | {
-            "SGL_JIT_DEEPGEMM_PRECOMPILE": "false",
-            "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
-            "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
-            "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
-            "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
-            "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
-            "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
-            "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
+            key: os.environ.get(key, default_val)
+            for key, default_val in {
+                "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
+                "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
+                "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
+                "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
+                "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
+            }.items()
         }
 
         worker_type = "regular"

@@ -4,14 +4,14 @@ import torch
 
 def convert_qwen3vl_to_hf(args, name, param):
     if name.startswith("module.module.language_model."):
-        name = "module.module." + name[len("module.module.language_model."):]
+        name = "module.module." + name[len("module.module.language_model.") :]
 
     # (Optional safety) if you ever see extra "module." prefixes
     while name.startswith("module.module.module."):
         name = name.replace("module.module.module.", "module.module.", 1)
 
     if name.startswith("module.module.vision_model."):
-        hf_name = "model.visual." + name[len("module.module.vision_model."):]
+        hf_name = "model.visual." + name[len("module.module.vision_model.") :]
         return [(hf_name, param)]
 
     if name == "module.module.embedding.word_embeddings.weight":
@@ -43,11 +43,7 @@ def convert_qwen3vl_to_hf(args, name, param):
         elif rest == "self_attention.linear_qkv.weight":
             # Keep your original split logic -> q_proj/k_proj/v_proj
             param = param.view(args.num_query_groups, -1, head_dim, args.hidden_size)
-            q_param, k_param, v_param = torch.split(
-                param,
-                split_size_or_sections=[value_num_per_group, 1, 1],
-                dim=1
-            )
+            q_param, k_param, v_param = torch.split(param, split_size_or_sections=[value_num_per_group, 1, 1], dim=1)
             q_param = q_param.reshape(-1, args.hidden_size)
             k_param = k_param.reshape(-1, args.hidden_size)
             v_param = v_param.reshape(-1, args.hidden_size)

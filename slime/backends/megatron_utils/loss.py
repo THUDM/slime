@@ -250,7 +250,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     max_seq_lens: list[int] | None = rollout_data.get("max_seq_lens", None)
 
     # return when not the last pp stage.
-    if log_probs is None and values is None:
+    if not mpu.is_pipeline_last_stage():
         return
 
     if args.kl_coef == 0 or not log_probs:
@@ -795,7 +795,6 @@ def loss_function(
     """
     num_tokens = sum([torch.clamp_min(loss_mask.sum(), 1) for loss_mask in batch["loss_masks"]])
     num_samples = len(batch["response_lengths"])
-
     sum_of_sample_mean = get_sum_of_sample_mean(
         batch["total_lengths"],
         batch["response_lengths"],
@@ -833,7 +832,7 @@ def loss_function(
 
     return (
         loss,
-        torch.tensor(num_tokens if args.calculate_per_token_loss else 1, device=logits.device),
+        (num_tokens if args.calculate_per_token_loss else torch.tensor(1, device=logits.device)),
         {
             "keys": list(log.keys()),
             "values": torch.tensor(

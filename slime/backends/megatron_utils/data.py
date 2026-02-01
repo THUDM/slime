@@ -23,7 +23,10 @@ logger = logging.getLogger(__name__)
 
 
 def get_batch(
-    data_iterator: "DataIterator", keys: Sequence[str], pad_multiplier: int = 128, qkv_format: str = "thd"
+    data_iterator: "DataIterator",
+    keys: Sequence[str],
+    pad_multiplier: int = 128,
+    qkv_format: str = "thd",
 ) -> dict[str, torch.Tensor | PackedSeqParams | list[torch.Tensor] | None]:
     """
     Generate a CP-ready micro-batch with packed sequence parameters.
@@ -67,7 +70,6 @@ def get_batch(
         assert max([t.size(0) for t in tokens]) <= max_seqlen
         tokens = [slice_with_cp(t, pad_token_id, qkv_format, max_seqlen) for t in tokens]
         tokens = torch.stack(tokens)
-
     elif qkv_format == "thd":
         tokens = [slice_with_cp(t, pad_token_id, qkv_format) for t in tokens]
 
@@ -111,6 +113,7 @@ def get_batch(
         strict=True,
     ):
         prompt_length = total_length - response_length
+        # Align mask to token stream positions (prompt_length-1 left pad, 1 right pad)
         loss_mask = F.pad(loss_mask, (prompt_length - 1, 1), value=0)
         loss_mask = slice_with_cp(loss_mask, 0, qkv_format, max_seqlen)
         loss_masks.append(loss_mask)
@@ -353,7 +356,11 @@ def get_data_iterator(
     )
 
 
-def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatch) -> None:
+def log_rollout_data(
+    rollout_id: int,
+    args: Namespace,
+    rollout_data: RolloutBatch,
+) -> None:
     """
     Summarize rollout fields and log reduced metrics on PP last stage, TP rank 0.
 
@@ -389,8 +396,16 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                 if isinstance(val[0], torch.Tensor):
                     # NOTE: Here we have to do the clone().detach(), otherwise the tensor will be
                     # modified in place and will cause problem for the next rollout.
-                    val = torch.cat(val).clone().detach()
-                    if key in ["log_probs", "ref_log_probs", "rollout_log_probs", "returns", "advantages", "values"]:
+                    if key in [
+                        "log_probs",
+                        "ref_log_probs",
+                        "rollout_log_probs",
+                        "returns",
+                        "advantages",
+                        "values",
+                        "teacher_log_probs",
+                    ]:
+                        val = torch.cat(val).clone().detach()
                         sum_of_sample_mean = get_sum_of_sample_mean(
                             total_lengths,
                             response_lengths,
@@ -400,6 +415,7 @@ def log_rollout_data(rollout_id: int, args: Namespace, rollout_data: RolloutBatc
                         )
                         val = cp_size * sum_of_sample_mean(val) / len(loss_masks)
                     else:
+                        val = torch.cat(val).clone().detach()
                         val = val.mean() * cp_size
                 else:
                     val = sum(val) / len(val)

@@ -174,6 +174,45 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument(
                 "--log-probs-chunk-size", type=int, default=-1, help="Chunk size to compute log probs to save memory"
             )
+            parser.add_argument(
+                "--only-train-params-name-list",
+                type=str,
+                nargs="*",
+                default=None,
+                help="""List of regex patterns of parameter names to TRAIN. All other parameters will be FROZEN. 
+                        Supports Python regex syntax (re.search).
+
+                        Examples:
+                        1. Train ONLY MoE experts:
+                            --only-train-params-name-list experts
+
+                        2. Train ONLY Indexer parameters:
+                            --only-train-params-name-list self_attention.wq_b self_attention.wk self_attention.k_norm self_attention.weights_proj
+
+                        3. Train ONLY Layer 20 to 23:
+                            --only-train-params-name-list layers\.2[0-3]\.
+                        """,
+            )
+
+            parser.add_argument(
+                "--freeze-params-name-list",
+                type=str,
+                nargs="*",
+                default=None,
+                help="""List of regex patterns of parameter names to FREEZE. Other parameters will remain trainable.
+                        Supports Python regex syntax (re.search).
+
+                        Examples:
+                        1. Freeze Embeddings and Output Layer (common for fine-tuning):
+                            --freeze-params-name-list embedding output_layer
+
+                        2. Freeze Indexer parameters:
+                            --freeze-params-name-list self_attention.wq_b self_attention.wk self_attention.k_norm self_attention.weights_proj
+
+                        3. Freeze specific projection layers (e.g., all Gate/Up projections):
+                            --freeze-params-name-list linear_fc1
+                        """,
+            )
 
             return parser
 
@@ -1408,7 +1447,7 @@ def parse_args(add_custom_arguments=None):
         from slime.backends.megatron_utils.arguments import validate_args as megatron_validate_args
 
         args = megatron_parse_args(extra_args_provider=add_slime_arguments)
-        if args.hf_checkpoint:
+        if args.hf_checkpoint and not args.debug_rollout_only:
             hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
             hf_validate_args(args, hf_config)
 
@@ -1714,6 +1753,9 @@ def slime_validate_args(args):
         assert (
             args.use_dynamic_batch_size is False
         ), "Dynamic batch size is not supported for bshd format. Please specify --micro-batch-size instead."
+
+    if args.only_train_params_name_list and args.freeze_params_name_list:
+        raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
 
 
 def hf_validate_args(args, hf_config):

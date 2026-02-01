@@ -417,3 +417,4 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 | `--use-routing-replay` | 训练中前向-反向路由一致性。([arXiv:2507.18071](https://arxiv.org/abs/2507.18071)) |
 | `--use-rollout-routing-replay` | R3：在训练时重放 rollout 阶段的路由。**需要 `--use-slime-router`**。([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
 
+关于 R3 和 SlimeRouter 的详细说明，请参阅 [Slime Router](../advanced/slime-router.md)。
