@@ -54,7 +54,7 @@
     <link rel="prev" title="Speculative Decoding" href="speculative-decoding.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Jan 30, 2026"/>
+    <meta name="docbuild:last-update" content="Feb 01, 2026"/>
   </head>
   
   
@@ -541,14 +541,11 @@ bash<span class="w"> </span>scripts/low_precision/run-qwen3-30b-a3b-fp8.sh
 <h3>Quick Start<a class="headerlink" href="#id1" title="Link to this heading">#</a></h3>
 <ol class="arabic simple">
 <li><p>Convert HuggingFace Weights to INT4
-First, download the PTQ (Post-Training Quantization) calibration dataset from HuggingFace:
-<a class="reference external" href="https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1">https://huggingface.co/datasets/Salesforce/wikitext/tree/main/wikitext-2-raw-v1</a></p></li>
+Use the <code class="docutils literal notranslate"><span class="pre">tools/convert_hf_to_int4_direct.py</span></code> script to convert BF16 weights to INT4 format. Ensure that the <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> parameter points to a directory where <code class="docutils literal notranslate"><span class="pre">config.json</span></code> contains the correct <code class="docutils literal notranslate"><span class="pre">quantization_config</span></code>. slime will automatically utilize INT4 quantization during weight updates.</p></li>
 </ol>
-<p>Next, use the <code class="docutils literal notranslate"><span class="pre">tools/convert_hf_to_int4.py</span></code> script to convert BF16 weights to INT4 format. Ensure that the <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> parameter points to a directory where <code class="docutils literal notranslate"><span class="pre">config.json</span></code> contains the correct <code class="docutils literal notranslate"><span class="pre">quantization_config</span></code>. slime will automatically utilize INT4 quantization during weight updates.</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/convert_hf_to_int4.py<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--input-dir<span class="w"> </span>/path/to/your/original/models<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--output-dir<span class="w"> </span>/path/to/your/save/models<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--data-dir<span class="w"> </span>/path/to/your/wikitext
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/convert_hf_to_int4_direct.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--model-dir<span class="w"> </span>/path/to/your/original/models<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--save-dir<span class="w"> </span>/path/to/your/save/models<span class="w"> </span><span class="se">\</span>
 </pre></div>
 </div>
 <p>Note: If you only hope to run with INT4 rollout, you only need to set the <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> to the converted INT4 checkpoint.</p>
@@ -686,7 +683,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Jan 30, 2026.
+  Last updated on Feb 01, 2026.
   <br/>
 </p>
   </div>
