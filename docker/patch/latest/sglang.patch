@@ -167,6 +167,26 @@ index 88705cc35..c8dc052f1 100644
  
  @app.post("/update_weight_version")
  async def update_weight_version(obj: UpdateWeightVersionReqInput, request: Request):
+diff --git a/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py b/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py
+index d6c499df0..565004260 100644
+--- a/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py
++++ b/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py
+@@ -613,7 +613,6 @@ def _get_k_and_s_triton(
+         page_indices,
+         k_out,
+         s_out,
+-        seq_len,
+         page_size,
+         buf_numel_per_page,
+         index_head_dim,
+@@ -630,7 +629,6 @@ def _get_k_and_s_triton_kernel(
+     page_indices_ptr,
+     k_out_ptr,
+     s_out_ptr,
+-    seq_len: tl.constexpr,
+     page_size: tl.constexpr,
+     buf_numel_per_page: tl.constexpr,
+     index_head_dim: tl.constexpr,
 diff --git a/python/sglang/srt/layers/attention/nsa/nsa_indexer.py b/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
 index c9e82e4b1..f2584546a 100644
 --- a/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
