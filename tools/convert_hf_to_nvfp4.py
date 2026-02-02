@@ -181,6 +181,7 @@ def process_file(input_path, output_path, filename, result_collector):
     for key in weights.keys():
         if (
             "weight" in key
+            and "expert" in key
             and "layernorm" not in key
             and "embed" not in key
             and "router" not in key
@@ -199,7 +200,14 @@ def process_file(input_path, output_path, filename, result_collector):
             input_scale = key.replace(".weight", ".input_scale")
             q_weights[input_scale] = torch.tensor([1.0])
         else:
-            modules_to_not_convert.append(key.replace(".weight", ""))
+            if ((".self_attn.q_proj.weight" in key or
+                 ".self_attn.k_proj.weight" in key or
+                 ".self_attn.v_proj.weight" in key) and
+                 "model.layers.*.self_attn.qkv_proj" not in modules_to_not_convert):
+                modules_to_not_convert.append("model.layers.*.self_attn.qkv_proj")
+                modules_to_not_convert.append(key.replace(".weight", ""))
+            else:
+                modules_to_not_convert.append(key.replace(".weight", ""))
             q_weights[key] = weights[key]
 
     safetensors.torch.save_file(q_weights, os.path.join(output_path, filename), metadata={"format": "pt"})

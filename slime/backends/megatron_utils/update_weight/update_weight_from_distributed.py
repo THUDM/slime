@@ -82,7 +82,9 @@ class UpdateWeightFromDistributed:
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
 
             # int4/fp4 pre_process
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+            if (self.quantization_config and
+                    (self.quantization_config["quant_method"] in ["compressed-tensors"]
+                        or self.quantization_config.get("quant_algo") == "NVFP4")):
                 post_process_weights(
                     restore_weights_before_load=True,
                     post_process_quantization=False,
