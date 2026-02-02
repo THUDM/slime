@@ -38,7 +38,7 @@ class DataSource(abc.ABC):
         """
         Load the state of the data source
         """
-    
+
     @abc.abstractmethod
     def __len__(self) -> int:
         """
@@ -158,7 +158,7 @@ class RolloutDataSource(DataSource):
 
         if self.args.rollout_global_dataset and self.args.rollout_shuffle:
             self.dataset.shuffle(self.epoch_id)
-    
+
     def __len__(self) -> int:
         return len(self.dataset)
 
