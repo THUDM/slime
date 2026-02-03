@@ -1,10 +1,8 @@
       
       
 """
-python tools/convert_hf_to_fp8.py [-h] [--model-dir MODEL_DIR] [--save-dir SAVE_DIR] [--strategy {block,channel,tensor}] [--block-size [BLOCK_SIZE ...]]
+python tools/convert_hf_to_nvfp4.py [-h] [--model-dir MODEL_DIR] [--save-dir SAVE_DIR] [--strategy {block,channel,tensor}] [--block-size [BLOCK_SIZE ...]]
                            [--max-workers MAX_WORKERS]
-
-python tools/convert_hf_to_nvfp4.py --model-dir
 
 options:
   -h, --help            show this help message and exit
