@@ -54,7 +54,7 @@
     <link rel="prev" title="Multi-Agent RL" href="../multi_agent/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Feb 01, 2026"/>
+    <meta name="docbuild:last-update" content="Feb 03, 2026"/>
   </head>
   
   
@@ -444,8 +444,15 @@ document.write(`
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#">On-Policy Distillation Example</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#key-features">Key Features</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#key-arguments">Key Arguments</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mode-comparison">Mode Comparison</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#components">Components</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-example">Running the example</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-example">Running the example</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#using-sglang-teacher-external-server">Using SGLang Teacher (External Server)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#using-megatron-teacher-no-external-server">Using Megatron Teacher (No External Server)</a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#preliminary-results">Preliminary Results</a></li>
@@ -465,22 +472,86 @@ document.write(`
                   
   <section class="tex2jax_ignore mathjax_ignore" id="on-policy-distillation-example">
 <h1>On-Policy Distillation Example<a class="headerlink" href="#on-policy-distillation-example" title="Link to this heading">#</a></h1>
-<p>This example shows how to run <strong>on-policy distillation</strong> using slime. A small student (Qwen3-8B) is aligned to imitate a larger teacher (Qwen3-32B) by training only on the student’s own rollouts and matching the teacher’s token-level log-probabilities.</p>
-<p>In this example, the teacher model acts as a reward model (RM) by providing teacher log probabilities as the supervision signal.</p>
+<p>This example shows how to run <strong>on-policy distillation (OPD)</strong> using slime. A small student (Qwen3-8B) is aligned to imitate a larger teacher (Qwen3-32B) by training only on the student’s own rollouts and matching the teacher’s token-level log-probabilities.</p>
+<section id="key-features">
+<h2>Key Features<a class="headerlink" href="#key-features" title="Link to this heading">#</a></h2>
+<ul class="simple">
+<li><p><strong>OPD is orthogonal to advantage estimators</strong>: OPD works as an additive KL penalty on top of any advantage estimator (GRPO, PPO, REINFORCE++, etc.), not as a separate estimator.</p></li>
+<li><p><strong>Two teacher modes</strong>:</p>
+<ul>
+<li><p><strong>sglang</strong>: Teacher runs on an external SGLang server, teacher log-probs are obtained during rollout.</p></li>
+<li><p><strong>megatron</strong>: Teacher is loaded directly into Megatron via <code class="docutils literal notranslate"><span class="pre">--opd-teacher-load</span></code>, teacher log-probs are computed during training forward pass.</p></li>
+</ul>
+</li>
+</ul>
+</section>
+<section id="key-arguments">
+<h2>Key Arguments<a class="headerlink" href="#key-arguments" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Argument</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--use-opd</span></code></p></td>
+<td><p>Enable on-policy distillation. Required flag to use OPD.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--opd-type</span></code></p></td>
+<td><p>Type of OPD: <code class="docutils literal notranslate"><span class="pre">sglang</span></code> or <code class="docutils literal notranslate"><span class="pre">megatron</span></code>. Required when <code class="docutils literal notranslate"><span class="pre">--use-opd</span></code> is set.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code></p></td>
+<td><p>OPD KL penalty coefficient (default: 1.0).</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--opd-teacher-load</span></code></p></td>
+<td><p>Path to teacher checkpoint. <strong>Required</strong> when <code class="docutils literal notranslate"><span class="pre">--opd-type=megatron</span></code>, <strong>must not be set</strong> when <code class="docutils literal notranslate"><span class="pre">--opd-type=sglang</span></code>.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--opd-teacher-ckpt-step</span></code></p></td>
+<td><p>Optional checkpoint step for teacher model.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="mode-comparison">
+<h2>Mode Comparison<a class="headerlink" href="#mode-comparison" title="Link to this heading">#</a></h2>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Mode</p></th>
+<th class="head"><p>Teacher Location</p></th>
+<th class="head"><p>When to use</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">sglang</span></code></p></td>
+<td><p>External SGLang server</p></td>
+<td><p>Teacher has different architecture or larger than GPU memory</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">megatron</span></code></p></td>
+<td><p>Loaded into Megatron training</p></td>
+<td><p>Teacher has same architecture as policy/ref model</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
 <section id="components">
 <h2>Components<a class="headerlink" href="#components" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">on_policy_distillation.py</span></code> implements::</p>
+<li><p><code class="docutils literal notranslate"><span class="pre">on_policy_distillation.py</span></code> implements (for SGLang mode):</p>
 <ul>
 <li><p><code class="docutils literal notranslate"><span class="pre">reward_func</span></code> calls the teacher server (via <code class="docutils literal notranslate"><span class="pre">args.rm_url</span></code>) with every sample to obtain token-level logprobs.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">post_process_rewards</span></code> trims the teacher logprobs to the generated response span and writes the tensors back to each <code class="docutils literal notranslate"><span class="pre">Sample</span></code> to compute advantages.</p></li>
 </ul>
 </li>
 <li><p><code class="docutils literal notranslate"><span class="pre">run-qwen3-8B-opd.sh</span></code> launches an SGLang teacher server, then submits a Ray job that runs <code class="docutils literal notranslate"><span class="pre">train.py</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">run-qwen3-8B-opd-megatron.sh</span></code> uses Megatron-loaded teacher model (no external server needed).</p></li>
 </ul>
 </section>
 <section id="running-the-example">
 <h2>Running the example<a class="headerlink" href="#running-the-example" title="Link to this heading">#</a></h2>
+<section id="using-sglang-teacher-external-server">
+<h3>Using SGLang Teacher (External Server)<a class="headerlink" href="#using-sglang-teacher-external-server" title="Link to this heading">#</a></h3>
 <ol class="arabic simple">
 <li><p>Download or prepare the required checkpoints and data.</p></li>
 </ol>
@@ -502,11 +573,42 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 </pre></div>
 </div>
 <ol class="arabic simple" start="3">
-<li><p>run on-policy distillation:</p></li>
+<li><p>Run on-policy distillation:</p></li>
 </ol>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>examples/on_policy_distillation/run-qwen3-8B-opd.sh
 </pre></div>
 </div>
+</section>
+<section id="using-megatron-teacher-no-external-server">
+<h3>Using Megatron Teacher (No External Server)<a class="headerlink" href="#using-megatron-teacher-no-external-server" title="Link to this heading">#</a></h3>
+<ol class="arabic simple">
+<li><p>Prepare student checkpoint (same as above).</p></li>
+<li><p><strong>IMPORTANT</strong>: Convert your teacher model to Megatron format (change the path to your actual teacher):</p></li>
+</ol>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># This example uses the same model as both student and teacher (for demonstration only)</span>
+<span class="c1"># In practice, use a different (stronger) model as the teacher!</span>
+<span class="nb">cd</span><span class="w"> </span>/root/slime
+<span class="nb">source</span><span class="w"> </span>scripts/models/qwen3-8B.sh<span class="w">  </span><span class="c1"># Or your teacher model config</span>
+
+<span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM<span class="w"> </span>python<span class="w"> </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--hf-checkpoint<span class="w"> </span>/root/YourTeacherModel<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--save<span class="w"> </span>/root/YourTeacherModel_torch_dist
+</pre></div>
+</div>
+<ol class="arabic simple" start="3">
+<li><p>Edit <code class="docutils literal notranslate"><span class="pre">run-qwen3-8B-opd-megatron.sh</span></code> to update paths:</p>
+<ul class="simple">
+<li><p>Change <code class="docutils literal notranslate"><span class="pre">--opd-teacher-load</span></code> to your teacher model path</p></li>
+<li><p>Adjust <code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code> based on your task</p></li>
+</ul>
+</li>
+<li><p>Run:</p></li>
+</ol>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>examples/on_policy_distillation/run-qwen3-8B-opd-megatron.sh
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 <section class="tex2jax_ignore mathjax_ignore" id="preliminary-results">
@@ -531,9 +633,30 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 </section>
 <section class="tex2jax_ignore mathjax_ignore" id="faq">
 <h1>FAQ<a class="headerlink" href="#faq" title="Link to this heading">#</a></h1>
-<ol class="arabic simple">
-<li><p><strong>Why are teacher logits computed via a sglang server instead of inside the training backend?</strong>
-The teacher runs on an independent SGLang server that slime treats as a reward model. Hosting it inside Megatron would require maintaining a second, fully configured training stack for the teacher.</p></li>
+<ol class="arabic">
+<li><p><strong>Why are there two OPD modes?</strong></p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">sglang</span></code> mode: The teacher runs on an independent SGLang server. This is useful when the teacher has a different architecture or is too large to load together with the policy model.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">megatron</span></code> mode: The teacher is loaded into Megatron using the same parameter loading mechanism as the reference model. This requires the teacher to have the same architecture as the policy model.</p></li>
+</ul>
+</li>
+<li><p><strong>How do I use Megatron-based teacher instead of SGLang server?</strong>
+Replace your OPD arguments:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Instead of:</span>
+--use-opd<span class="w"> </span>--opd-type<span class="w"> </span>sglang<span class="w"> </span>--opd-kl-coef<span class="w"> </span><span class="m">1</span>.0
+<span class="c1"># Use:</span>
+--use-opd<span class="w"> </span>--opd-type<span class="w"> </span>megatron<span class="w"> </span>--opd-kl-coef<span class="w"> </span><span class="m">1</span>.0<span class="w"> </span>--opd-teacher-load<span class="w"> </span>/path/to/teacher_checkpoint
+</pre></div>
+</div>
+</li>
+<li><p><strong>What happens if I set wrong arguments?</strong>
+The system will raise clear errors:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--use-opd</span></code> without <code class="docutils literal notranslate"><span class="pre">--opd-type</span></code>: Error asking you to specify type</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--opd-type</span> <span class="pre">megatron</span></code> without <code class="docutils literal notranslate"><span class="pre">--opd-teacher-load</span></code>: Error asking for teacher checkpoint</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--opd-type</span> <span class="pre">sglang</span></code> with <code class="docutils literal notranslate"><span class="pre">--opd-teacher-load</span></code>: Error indicating conflict</p></li>
+</ul>
+</li>
 </ol>
 </section>
 <section class="tex2jax_ignore mathjax_ignore" id="references">
@@ -591,8 +714,15 @@ The teacher runs on an independent SGLang server that slime treats as a reward m
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#">On-Policy Distillation Example</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#key-features">Key Features</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#key-arguments">Key Arguments</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mode-comparison">Mode Comparison</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#components">Components</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-example">Running the example</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-example">Running the example</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#using-sglang-teacher-external-server">Using SGLang Teacher (External Server)</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#using-megatron-teacher-no-external-server">Using Megatron Teacher (No External Server)</a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li class="toc-h1 nav-item toc-entry"><a class="reference internal nav-link" href="#preliminary-results">Preliminary Results</a></li>
@@ -632,7 +762,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Feb 01, 2026.
+  Last updated on Feb 03, 2026.
   <br/>
 </p>
   </div>
