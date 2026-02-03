@@ -114,7 +114,9 @@ class UpdateWeightFromTensor:
         if rank == 0:
             ray.get([engine.pause_generation.remote() for engine in self.rollout_engines])
             ray.get([engine.flush_cache.remote() for engine in self.rollout_engines])
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+            if (self.quantization_config and
+                    (self.quantization_config["quant_method"] in ["compressed-tensors"]
+                     or self.quantization_config.get("quant_algo") == "NVFP4")):
                 post_process_weights(
                     restore_weights_before_load=True,
                     post_process_quantization=False,
@@ -133,7 +135,9 @@ class UpdateWeightFromTensor:
 
         # int4/fp4 post_process
         if rank == 0:
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+            if (self.quantization_config and
+                    (self.quantization_config["quant_method"] in ["compressed-tensors"]
+                     or self.quantization_config.get("quant_algo") == "NVFP4")):
                 post_process_weights(
                     restore_weights_before_load=False,
                     post_process_quantization=True,
