@@ -113,6 +113,9 @@ OFFPOLICY_GRPO_ARGS=(
    # This allows isolating the effect of the decoupled objective itself.
    --loss-type policy_loss
    # --use-proximal-correction-for-policy-loss
+   --use-rollout-logprobs # TODO=========
+
+   # --loss-type decoupled_policy_loss
 
    # === Staleness Control ===
    # 🔧 FIXED: Increased from 1 to 5 to match reuse count
@@ -149,6 +152,14 @@ OFFPOLICY_GRPO_ARGS=(
    # - More conservative but much more stable
    --importance-weight-clip-min 0.5
    --importance-weight-clip-max 2.0
+
+   # === Behavior Importance Weight Cap (AReaL-style) ===
+   # 🔧 NEW: Additional protection against extreme off-policy ratios
+   # - Completely filters out tokens with importance weights > cap (set to 0)
+   # - Different from clip-max which only clips values
+   # - AReaL default: 5.0
+   # - Critical for high staleness scenarios (staleness > 2)
+   --behav-imp-weight-cap 5.0
 )
 
 
@@ -196,7 +207,15 @@ BUFFER_SAMPLING_ARGS=(
    # --buffer-reuse-samples 32
 
    --enable-m2po-filtering # TODO
-   --m2po-threshold 0.04 # TODO
+   # --m2po-threshold 0.04 # TODO
+
+   # 如果必须使用高staleness                                                                                                            
+#   --max-staleness 8                                             
+  --m2po-threshold 0.16  # 从0.04提高到0.16 (4倍)       
+
+  # 或者更激进                                                                                                                                                                                                                                                                
+#   --max-staleness 16
+#   --m2po-threshold 0.64  # 从0.04提高到0.64 (16倍) 
 
 )
 

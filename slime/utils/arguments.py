@@ -985,6 +985,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "Recommended: 2.0 to 10.0 if used."
                 ),
             )
+            parser.add_argument(
+                "--behav-imp-weight-cap",
+                type=float,
+                default=None,
+                help=(
+                    "Behavior importance weight cap for decoupled PPO (AReaL-style). "
+                    "Tokens with importance weights π_prox/π_behav > cap are completely filtered out (set to 0). "
+                    "This is different from --importance-weight-clip-max which clips values. "
+                    "Provides additional protection against extreme off-policy ratios. "
+                    "AReaL default: 5.0. Recommended: 5.0 to 10.0 for high staleness scenarios."
+                ),
+            )
             # === Buffer Configuration ===
             parser.add_argument(
                 "--buffer-mode",

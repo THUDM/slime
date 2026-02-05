@@ -886,14 +886,15 @@ def decoupled_policy_loss_function(
         # Update batch with filtered masks
         batch["loss_masks"] = modified_loss_masks
 
-        # [FIX 2] 重建 sum_of_sample_mean，否则过滤无效！
-        from .cp_utils import get_sum_of_sample_mean
-        sum_of_sample_mean = get_sum_of_sample_mean(
-            total_lengths,
-            response_lengths,
-            modified_loss_masks,  # 使用新的 mask
-            args.calculate_per_token_loss
-        )
+        # CRITICAL FIX: Do NOT rebuild sum_of_sample_mean!
+        # AReaL uses the original token count as denominator to avoid loss amplification.
+        # When filter_rate increases, rebuilding sum_of_sample_mean causes:
+        #   - Original: loss = sum(filtered_loss) / original_token_count
+        #   - Bug: loss = sum(filtered_loss) / filtered_token_count  <- amplifies loss!
+        # This causes training collapse when filter_rate > 80%.
+        #
+        # The original sum_of_sample_mean (computed before M2PO filtering) already
+        # uses the correct denominator, so we keep it unchanged.
 
         # Track M2PO filtering metrics
         total_tokens_after = sum(m.sum().item() for m in batch["loss_masks"])
@@ -905,8 +906,8 @@ def decoupled_policy_loss_function(
 
         if is_megatron_main_rank():
             print(f"[M2PO] Filtered {num_filtered} tokens out of {total_tokens_before} "
-                    f"({filter_rate*100:.1f}%, threshold={m2po_threshold})")          
-                        
+                    f"({filter_rate*100:.1f}%, threshold={m2po_threshold})")
+
     # === 7. Compute decoupled policy loss ===
     pg_loss, pg_clipfrac = compute_decoupled_policy_loss(
         log_ratio_intermediate,
@@ -914,6 +915,7 @@ def decoupled_policy_loss_function(
         advantages,
         args.eps_clip,
         args.eps_clip_high,
+        behav_imp_weight_cap=getattr(args, "behav_imp_weight_cap", None),
     )
     pg_loss = sum_of_sample_mean(pg_loss)
     pg_clipfrac = sum_of_sample_mean(pg_clipfrac)

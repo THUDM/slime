@@ -128,6 +128,14 @@ OFFPOLICY_GRPO_ARGS=(
    # - More conservative but much more stable
    --importance-weight-clip-min 0.5
    --importance-weight-clip-max 2.0
+
+      # === Behavior Importance Weight Cap (AReaL-style) ===
+   # 🔧 NEW: Additional protection against extreme off-policy ratios
+   # - Completely filters out tokens with importance weights > cap (set to 0)
+   # - Different from clip-max which only clips values
+   # - AReaL default: 5.0
+   # - Critical for high staleness scenarios (staleness > 2)
+   --behav-imp-weight-cap 5.0
 )
 
 

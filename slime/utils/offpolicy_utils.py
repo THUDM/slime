@@ -61,6 +61,7 @@ def compute_decoupled_policy_loss(
     eps_clip: float,
     eps_clip_high: float,
     eps_clip_c: Optional[float] = None,
+    behav_imp_weight_cap: Optional[float] = None,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Compute decoupled PPO policy loss with importance sampling.
@@ -76,6 +77,10 @@ def compute_decoupled_policy_loss(
         eps_clip: Lower clip threshold
         eps_clip_high: Upper clip threshold
         eps_clip_c: Optional dual-clip parameter
+        behav_imp_weight_cap: Optional cap for behavior importance weights.
+            Tokens with importance_weights > cap will have their weights set to 0.
+            This provides additional protection against extreme off-policy ratios.
+            AReaL default: 5.0
 
     Returns:
         pg_losses: Per-token losses [num_tokens]
@@ -106,6 +111,17 @@ def compute_decoupled_policy_loss(
         pg_losses = torch.where(advantages < 0, clip_pg_losses2, clip_pg_losses1)
     else:
         pg_losses = clip_pg_losses1
+
+    # Apply behavior importance weight capping (AReaL-style protection)
+    # This filters out tokens with extreme importance weights to prevent gradient explosion
+    if behav_imp_weight_cap is not None:
+        # Set importance weights to 0 for tokens exceeding the cap
+        # This is different from clipping: we completely exclude extreme tokens
+        importance_weights = torch.where(
+            importance_weights <= behav_imp_weight_cap,
+            importance_weights,
+            torch.zeros_like(importance_weights)
+        )
 
     # Apply importance weights: π_prox / π_behav
     pg_losses = pg_losses * importance_weights
