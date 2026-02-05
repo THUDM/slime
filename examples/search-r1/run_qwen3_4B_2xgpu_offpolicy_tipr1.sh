@@ -79,7 +79,9 @@ PERF_ARGS=(
 
 # ==================== OFF-POLICY GRPO CONFIGURATION ====================
 # 🔧 FIXED: Optimized for stable training with version diversity
-export MAX_STALENESS=4
+# export MAX_STALENESS=4
+export MAX_STALENESS=8
+
 # export MAX_STALENESS=16
 
 
@@ -184,7 +186,8 @@ BUFFER_SAMPLING_ARGS=(
    # --buffer-reuse-samples 32
 
    --enable-m2po-filtering # TODO
-   --m2po-threshold 0.04 # TODO
+   # --m2po-threshold 0.04 # TODO
+   --m2po-threshold 0.16 # TODO
 
 )
 
