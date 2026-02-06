@@ -1,14 +1,3 @@
-"""
-python tools/convert_hf_to_nvfp4.py [-h] [--model-dir MODEL_DIR] [--save-dir SAVE_DIR]
-                                   [--device DEVICE] [--keep-last-n KEEP_LAST_N]
-
-Convert a BF16/FP16/FP32 HF safetensors checkpoint to NVFP4 (E2M1) for MoE
-expert GEMMs only. Dense linear layers are left unmodified.
-
-This follows the NVFP4 reference quantization in Transformer Engine and uses
-1D block scaling (NVTE_NVFP4_1D_SCALING, group size = 16).
-"""
-
 import argparse
 import gc
 import json
@@ -19,6 +8,7 @@ import safetensors
 import safetensors.torch
 import torch
 from tqdm import tqdm
+from typing import List, Tuple
 
 FP4_E2M1_MAX = 6.0
 FP8_E4M3_MAX = 448.0
@@ -157,11 +147,19 @@ def _quantize_nvfp4(
     x: torch.Tensor,
     global_amax: torch.Tensor,
     pow_2_scales: bool = False,
-    with_2d_quantization: bool = True,
+    with_2d_quantization: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
     tile_len_x = 16
     tile_len_y = 16
+
+    x = x.contiguous()
+    x_f = x.to(torch.float32)
+
+    if global_amax is None:
+        global_amax = torch.amax(torch.abs(x_f))          # scalar tensor (fp32, on device)
+    else:
+        global_amax = global_amax.to(device=x.device, dtype=torch.float32)
 
     assert x.ndim == 2
     m, n = x.shape
@@ -234,7 +232,7 @@ def _quantize_nvfp4(
 
     clipped_x = torch.clamp(scaled_x, -FLOAT4_E2M1_MAX, FLOAT4_E2M1_MAX).reshape(m, n)
 
-    return cast_to_fp4x2(clipped_x), decode_scale.squeeze(-1), global_amax
+    return cast_to_fp4x2(clipped_x), decode_scale.squeeze(-1), global_decode_scale
 
 
 def quantize_nvfp4(
@@ -385,8 +383,8 @@ def process_file(
             qweight, block_scale, weight_scale_2 = quantize_nvfp4(tensor, global_amax=global_amax)
             q_weights[key] = qweight
             q_weights[key.replace(".weight", ".weight_scale")] = block_scale
-            q_weights[key.replace(".weight", ".weight_scale_2")] = weight_scale_2
-            q_weights[key.replace(".weight", ".input_scale")] = torch.ones_like(weight_scale_2, dtype=torch.float32)
+            q_weights[key.replace(".weight", ".weight_scale_2")] = weight_scale_2.detach().clone()
+            q_weights[key.replace(".weight", ".input_scale")] = torch.ones_like(weight_scale_2, dtype=torch.float32).clone()
         else:
             if key.endswith(".weight"):
                 modules_to_not_convert.append(key.replace(".weight", ""))

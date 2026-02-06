@@ -1,4 +1,5 @@
 import re
+from typing import List, Tuple
 
 import torch
 
@@ -147,11 +148,19 @@ def _quantize_nvfp4(
     x: torch.Tensor,
     global_amax: torch.Tensor,
     pow_2_scales: bool = False,
-    with_2d_quantization: bool = True,
+    with_2d_quantization: bool = False,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
 
     tile_len_x = 16
     tile_len_y = 16
+
+    x = x.contiguous()
+    x_f = x.to(torch.float32)
+
+    if global_amax is None:
+        global_amax = torch.amax(torch.abs(x_f))          # scalar tensor (fp32, on device)
+    else:
+        global_amax = global_amax.to(device=x.device, dtype=torch.float32)
 
     assert x.ndim == 2
     m, n = x.shape
@@ -224,7 +233,7 @@ def _quantize_nvfp4(
 
     clipped_x = torch.clamp(scaled_x, -FLOAT4_E2M1_MAX, FLOAT4_E2M1_MAX).reshape(m, n)
 
-    return cast_to_fp4x2(clipped_x), decode_scale.squeeze(-1), global_amax
+    return cast_to_fp4x2(clipped_x), decode_scale.squeeze(-1), global_decode_scale
 
 
 def quantize_nvfp4(
