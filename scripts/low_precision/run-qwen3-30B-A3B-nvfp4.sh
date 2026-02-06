@@ -157,7 +157,10 @@ RUNTIME_ENV_JSON="{
   \"env_vars\": {
     \"PYTHONPATH\": \"/root/Megatron-LM/\",
     \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
-    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\"
+    \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
+    \"NVTE_NVFP4_DISABLE_RHT\": \"0\",
+    \"NVTE_NVFP4_DISABLE_STOCHASTIC_ROUNDING\": \"0\",
+    \"NVTE_NVFP4_DISABLE_2D_QUANTIZATION\": \"1\"
   }
 }"
 
