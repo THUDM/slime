@@ -4,20 +4,24 @@ import torch
 
 
 def convert_kimivl_to_hf(args, name, param):
-    return _convert_kimivl_base(args, name, param, "multi_modal_projector")
-
-
-def convert_kimi_k25_to_hf(args, name, param):
-    return _convert_kimivl_base(args, name, param, "mm_projector")
-
-
-def _convert_kimivl_base(args, name, param, projector_mapping_name):
     if name.startswith("module.module.vision_model."):
         hf_name = "vision_tower." + name[len("module.module.vision_model.") :]
         return [(hf_name, param)]
 
     if name.startswith("module.module.multi_modal_projector."):
-        hf_name = f"{projector_mapping_name}." + name[len("module.module.multi_modal_projector.") :]
+        hf_name = "multi_modal_projector." + name[len("module.module.multi_modal_projector.") :]
+        return [(hf_name, param)]
+
+    return convert_language_model_to_hf(args, name, param)
+
+
+def convert_kimi_k25_to_hf(args, name, param):
+    if name.startswith("module.module.vision_tower."):
+        hf_name = "vision_tower." + name[len("module.module.vision_tower.") :]
+        return [(hf_name, param)]
+
+    if name.startswith("module.module.mm_projector."):
+        hf_name = "mm_projector." + name[len("module.module.mm_projector.") :]
         return [(hf_name, param)]
 
     return convert_language_model_to_hf(args, name, param)
