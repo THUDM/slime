@@ -1,9 +1,19 @@
 from contextlib import contextmanager
+from functools import lru_cache
 
 try:
     from megatron.core.utils import unwrap_model
 except ImportError:
     unwrap_model = None
+
+
+@lru_cache(maxsize=1)
+def get_bridge(hf_checkpoint: str):
+    """Create or return cached AutoBridge instance. Bridge is stateless (only holds
+    architecture metadata), so a single cached instance per hf_checkpoint is safe."""
+    from megatron.bridge import AutoBridge
+
+    return AutoBridge.from_hf_pretrained(hf_checkpoint, trust_remote_code=True)
 
 
 @contextmanager
