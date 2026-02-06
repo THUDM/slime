@@ -1,34 +1,126 @@
-import logging
-import math
 import re
 
 import torch
-import torch.nn as nn
 
-from typing import List, Optional, Tuple, Union
+FP4_E2M1_MAX = 6.0
+FP8_E4M3_MAX = 448.0
+NVFP4_GROUP_SIZE = 16
 
-logger = logging.getLogger(__name__)
-
-
-__all__ = ["quantize_params_nvfp4"]
-
-
-def round_to_quantized_type_dtype(
-    tensor,
-    dtype,
-    cast_to_original_dtype=False,
-):
-    original_dtype = tensor.dtype
-    iinfo = torch.iinfo(dtype)
-    rounded = torch.round(torch.clamp(tensor, iinfo.min, iinfo.max)).to(dtype)
-    if cast_to_original_dtype:
-        return rounded.to(original_dtype)
-    return rounded
+GATED_PAIR_SUFFIXES = {
+    ".gate_proj.weight": "gate",
+    ".up_proj.weight": "up",
+    ".w1.weight": "gate",
+    ".w3.weight": "up",
+}
 
 
-def cast_to_fp4x2(x):
-    """Quantize a tensor to FP4 E2M1 and store in a byte tensor"""
+def quantize_params_nvfp4(args, megatron_name, converted_named_params, quantization_config):
+    assert quantization_config is not None
+    assert quantization_config.get("quant_algo") == "NVFP4" or quantization_config.get("quant_method") == "nvfp4"
+    group_size = _resolve_group_size(quantization_config)
 
+    decoder_layers_pattern = r"decoder\.layers\.(\d+)\.(.+)"
+    match = re.search(decoder_layers_pattern, megatron_name)
+
+    if not match:
+        # check mtp layers
+        mtp_layer_pattern = r"mtp\.layers\.(\d+)\.(.+)"
+        match = re.search(mtp_layer_pattern, megatron_name)
+        if not match:
+            return converted_named_params
+        _, rest = match.groups()
+        rest = rest.replace("transformer_layer.", "")
+    else:
+        _, rest = match.groups()
+
+    # experts
+    expert_pattern = r"mlp.experts\.(.+)\.weight(\d+)"
+    match = re.match(expert_pattern, rest)
+    if match:
+        rest, _ = match.groups()
+        if rest in [
+            "linear_fc1",
+            "linear_fc2",
+        ]:
+            return _quantize_moe_params(converted_named_params, group_size)
+
+    # shared expert
+    shared_expert_pattern = r"mlp.shared_experts\.(.+)"
+    match = re.match(shared_expert_pattern, rest)
+    if match:
+        rest = match.groups()[0]
+        if rest in [
+            "linear_fc1.weight",
+            "linear_fc2.weight",
+        ]:
+            return _quantize_moe_params(converted_named_params, group_size)
+
+    # for other parameters, we just return the original converted_named_params
+    return converted_named_params
+
+
+def _resolve_group_size(quantization_config):
+    group_size = quantization_config.get("group_size", NVFP4_GROUP_SIZE)
+    if group_size != NVFP4_GROUP_SIZE:
+        raise ValueError(f"NVFP4 group_size must be {NVFP4_GROUP_SIZE}, got {group_size}.")
+    return group_size
+
+
+def _quantize_moe_params(converted_named_params, group_size):
+    shared_global_amax = {}
+    gated_candidates = {}
+    for converted_name, param in converted_named_params:
+        base, role = _split_gated_pair_name(converted_name)
+        if base is None or role is None:
+            continue
+        if _should_quantize_param(converted_name, param, group_size):
+            gated_candidates.setdefault(base, {})[role] = param
+
+    for base, roles in gated_candidates.items():
+        if "gate" in roles and "up" in roles:
+            gate_amax = roles["gate"].abs().max().to(torch.float32)
+            up_amax = roles["up"].abs().max().to(torch.float32)
+            shared_global_amax[base] = torch.max(gate_amax, up_amax)
+
+    quantize_named_params = []
+    for converted_name, param in converted_named_params:
+        if not _should_quantize_param(converted_name, param, group_size):
+            quantize_named_params.append((converted_name, param))
+            continue
+        base, _role = _split_gated_pair_name(converted_name)
+        global_amax = shared_global_amax.get(base) if base else None
+        qweight, block_scale, weight_scale_2 = quantize_nvfp4(param, global_amax=global_amax, group_size=group_size)
+        quantize_named_params.append((converted_name, qweight))
+        quantize_named_params.append((converted_name.replace(".weight", ".weight_scale"), block_scale))
+        quantize_named_params.append((converted_name.replace(".weight", ".weight_scale_2"), weight_scale_2))
+        quantize_named_params.append(
+            (converted_name.replace(".weight", ".input_scale"), torch.ones_like(weight_scale_2, dtype=torch.float32))
+        )
+
+    return quantize_named_params
+
+
+def _should_quantize_param(name, weight, group_size):
+    if not name.endswith(".weight"):
+        return False
+    if weight.dtype not in (torch.float16, torch.bfloat16, torch.float32):
+        return False
+    if weight.dim() < 2:
+        return False
+    if weight.shape[-1] % group_size != 0:
+        raise ValueError(f"Last dim {weight.shape[-1]} must be divisible by {group_size} for NVFP4 ({name}).")
+    return True
+
+
+def _split_gated_pair_name(name: str):
+    for suffix, role in GATED_PAIR_SUFFIXES.items():
+        if name.endswith(suffix):
+            return name[: -len(suffix)], role
+    return None, None
+
+
+def cast_to_fp4x2(x: torch.Tensor) -> torch.Tensor:
+    """Quantize a tensor to FP4 E2M1 and pack two values per byte."""
     result = torch.zeros_like(x, dtype=torch.uint8)
     result[(x >= 0.0) & (x <= 0.25)] = 0
     result[(x > 0.25) & (x < 0.75)] = 1
@@ -50,15 +142,16 @@ def cast_to_fp4x2(x):
 
     return result[:, ::2] + result[:, 1::2] * 16
 
-def quantize_blockwise_reference(
+
+def _quantize_nvfp4(
     x: torch.Tensor,
     global_amax: torch.Tensor,
-    tile_len_x: int,
-    tile_len_y: int,
-    pow_2_scales: bool,
-    with_2d_quantization: bool,
-    eps: float,  # pylint: disable=unused-argument
+    pow_2_scales: bool = False,
+    with_2d_quantization: bool = True,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+
+    tile_len_x = 16
+    tile_len_y = 16
 
     assert x.ndim == 2
     m, n = x.shape
@@ -131,43 +224,30 @@ def quantize_blockwise_reference(
 
     clipped_x = torch.clamp(scaled_x, -FLOAT4_E2M1_MAX, FLOAT4_E2M1_MAX).reshape(m, n)
 
-    return cast_to_fp4x2(clipped_x), decode_scale.squeeze(-1)
+    return cast_to_fp4x2(clipped_x), decode_scale.squeeze(-1), global_amax
 
 
-def pack_layer(weight, group_size):
-    global_amax = torch.max(torch.abs(weight)).to(torch.float32).view(1)
-    return quantize_blockwise_reference(
-        weight, global_amax, group_size, group_size, False, True, 0.0
-    ), global_amax
-
-
-def quantize_params_nvfp4(converted_named_params, quantization_config):
-    w_cfg = quantization_config["config_groups"]["group_0"]["weights"]
-    group_size = w_cfg["group_size"]
-    ignore_rules = quantization_config.get("ignore", [])
-
-    results = []
-
-    for name, param in converted_named_params:
-        is_ignored = any(
-            (r.startswith("re:") and re.match(r[3:], name)) or r == name or name.startswith(r) for r in ignore_rules
+def quantize_nvfp4(
+    weight: torch.Tensor,
+    global_amax: torch.Tensor | None = None,
+    group_size: int = NVFP4_GROUP_SIZE,
+) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    if weight.dim() == 2:
+        return _quantize_nvfp4(weight, global_amax=global_amax)
+    if weight.dim() == 3:
+        if global_amax is not None:
+            raise ValueError("global_amax override is only supported for 2D weights.")
+        qweights = []
+        block_scales = []
+        global_scales = []
+        for idx in range(weight.shape[0]):
+            qweight, block_scale, global_scale = _quantize_nvfp4(weight[idx], global_amax=global_amax)
+            qweights.append(qweight)
+            block_scales.append(block_scale)
+            global_scales.append(global_scale)
+        return (
+            torch.stack(qweights, dim=0),
+            torch.stack(block_scales, dim=0),
+            torch.stack(global_scales, dim=0),
         )
-
-        if is_ignored or not name.endswith(".weight") or param.dim() < 2:
-            results.append((name, param))
-            continue
-
-        (qw, scale), amax = pack_layer(param, group_size)
-        scale_name = name.replace(".weight", ".weight_scale")
-        scale_2_name = name.replace(".weight", ".weight_scale_2")
-        scale_2 = amax / (448.0 * 6.0)
-
-        input_scale_name = name.replace(".weight", ".input_scale")
-        input_scale = torch.tensor([1.0]).to('cuda')
-
-        results.append((name, qw.to('cuda')))
-        results.append((scale_name, scale.to('cuda')))
-        results.append((scale_2_name, scale_2.to('cuda')))
-        results.append((input_scale_name, input_scale))
-
-    return results
+    raise ValueError(f"Unsupported weight rank {weight.dim()} for NVFP4 quantization.")
