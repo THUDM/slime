@@ -725,15 +725,14 @@ def save_hf_model(args, rollout_id: int, model: Sequence[DDP]) -> None:
     )
 
     try:
-        from megatron.bridge import AutoBridge
-        from slime.utils.megatron_bridge_utils import patch_megatron_model
+        from slime.utils.megatron_bridge_utils import get_bridge, patch_megatron_model
 
         path = Path(args.save_hf.format(rollout_id=rollout_id))
 
         if should_log:
             logger.info(f"Saving model in HuggingFace format to {path}")
 
-        bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        bridge = get_bridge(args.hf_checkpoint)
 
         path.mkdir(parents=True, exist_ok=True)
 

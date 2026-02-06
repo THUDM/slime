@@ -42,14 +42,6 @@ class UpdateWeightFromDistributed:
         self.weight_version = 0
         self._model_update_groups = None
 
-        self._bridge = None
-        if getattr(args, "megatron_to_hf_mode", "raw") == "bridge":
-            from megatron.bridge import AutoBridge
-
-            import slime_plugins.megatron_bridge  # noqa: F401
-
-            self._bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
-
     def connect_rollout_engines(
         self, rollout_engines: Sequence[ActorHandle], rollout_engine_lock: ActorHandle
     ) -> None:
@@ -161,9 +153,10 @@ class UpdateWeightFromDistributed:
         buffer_size = 0
         converted_named_tensors = []
 
+        bridge = megatron_bridge_utils.get_bridge(self.args.hf_checkpoint)
         with megatron_bridge_utils.patch_megatron_model(self.model):
             # Iterate through weights - all ranks participate in each iteration
-            for hf_name, tensor, megatron_name in self._bridge.export_hf_weights(
+            for hf_name, tensor, megatron_name in bridge.export_hf_weights(
                 self.model,
                 cpu=False,
                 show_progress=False,
