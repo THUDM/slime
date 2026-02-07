@@ -104,6 +104,8 @@ def pack_sequences(
             multimodal_data = {}  # key -> concatenated tensor
             multimodal_num_items = {}  # key -> list of item counts per sequence
             for i in indices:
+                if multimodal_train_inputs[i] is None:
+                    continue
                 for key, mm_tensor in multimodal_train_inputs[i].items():
                     if key not in multimodal_data:
                         multimodal_data[key] = mm_tensor
