@@ -128,7 +128,9 @@ def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimod
         for type_name, data_key in multimodal_keys.items():
             mt = MultimodalTypes.get(type_name)
             if mt:
-                multimodals[mt.placeholder] = (mt, list(data.get(data_key)))
+                multimodal_data = data.get(data_key)
+                if multimodal_data is not None:
+                    multimodals[mt.placeholder] = (mt, list(multimodal_data))
 
         pattern = "(" + "|".join(re.escape(p) for p in multimodals.keys()) + ")"
 

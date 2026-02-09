@@ -45,8 +45,13 @@ class FSDPTrainRayActor(TrainRayActor):
     """
 
     @with_defer(lambda: Timer().start("train_wait"))
-    def init(self, args: Namespace, role: str, with_ref: bool = False) -> int:  # type: ignore[override]
-        super().init(args, role, with_ref)
+    def init(self, args: Namespace, role: str, with_ref: bool = False, with_opd_teacher: bool = False) -> int:  # type: ignore[override]
+        if with_opd_teacher:
+            raise NotImplementedError(
+                "On-policy distillation (OPD) with Megatron teacher is not supported in FSDP backend. "
+                "Please use the Megatron backend for OPD, or use --opd-type=sglang with an external teacher server."
+            )
+        super().init(args, role, with_ref, with_opd_teacher)
 
         # Setup device mesh for data parallelism
         self._setup_device_mesh()

@@ -1,5 +1,5 @@
 diff --git a/python/sglang/srt/configs/model_config.py b/python/sglang/srt/configs/model_config.py
-index aa10cb08d..d41c31a09 100644
+index aa10cb0..d41c31a 100644
 --- a/python/sglang/srt/configs/model_config.py
 +++ b/python/sglang/srt/configs/model_config.py
 @@ -268,6 +268,12 @@ class ModelConfig:
@@ -16,7 +16,7 @@ index aa10cb08d..d41c31a09 100644
              self.hf_config.architectures[0] = "Glm4MoeForCausalLMNextN"
  
 diff --git a/python/sglang/srt/disaggregation/decode.py b/python/sglang/srt/disaggregation/decode.py
-index 51af67636..661ea6fd6 100644
+index 51af676..661ea6f 100644
 --- a/python/sglang/srt/disaggregation/decode.py
 +++ b/python/sglang/srt/disaggregation/decode.py
 @@ -315,6 +315,16 @@ class DecodePreallocQueue:
@@ -37,7 +37,7 @@ index 51af67636..661ea6fd6 100644
          """Add a request to the pending queue."""
          if self._check_if_req_exceed_kv_capacity(req):
 diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
-index 32e8c0b69..dc93c5c5f 100644
+index 32e8c0b..dc93c5c 100644
 --- a/python/sglang/srt/disaggregation/mooncake/conn.py
 +++ b/python/sglang/srt/disaggregation/mooncake/conn.py
 @@ -253,6 +253,19 @@ class MooncakeKVManager(CommonKVManager):
@@ -61,7 +61,7 @@ index 32e8c0b69..dc93c5c5f 100644
          if not transfer_blocks:
              return 0
 diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
-index a6eed743a..24a72ca70 100644
+index a6eed74..24a72ca 100644
 --- a/python/sglang/srt/disaggregation/prefill.py
 +++ b/python/sglang/srt/disaggregation/prefill.py
 @@ -306,6 +306,15 @@ class PrefillBootstrapQueue:
@@ -81,7 +81,7 @@ index a6eed743a..24a72ca70 100644
  class SchedulerDisaggregationPrefillMixin:
      """
 diff --git a/python/sglang/srt/distributed/parallel_state.py b/python/sglang/srt/distributed/parallel_state.py
-index 0478526ef..cfb1aa669 100644
+index 0478526..cfb1aa6 100644
 --- a/python/sglang/srt/distributed/parallel_state.py
 +++ b/python/sglang/srt/distributed/parallel_state.py
 @@ -1797,7 +1797,10 @@ def get_tensor_model_parallel_world_size():
@@ -97,7 +97,7 @@ index 0478526ef..cfb1aa669 100644
  
  def get_pipeline_model_parallel_world_size():
 diff --git a/python/sglang/srt/entrypoints/engine.py b/python/sglang/srt/entrypoints/engine.py
-index 6f69fd19b..da20ac2ed 100644
+index 6f69fd1..da20ac2 100644
 --- a/python/sglang/srt/entrypoints/engine.py
 +++ b/python/sglang/srt/entrypoints/engine.py
 @@ -49,6 +49,7 @@ from sglang.srt.managers.io_struct import (
@@ -134,7 +134,7 @@ index 6f69fd19b..da20ac2ed 100644
          """Get weights by parameter name."""
          obj = GetWeightsByNameReqInput(name=name, truncate_size=truncate_size)
 diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/entrypoints/http_server.py
-index 88705cc35..c8dc052f1 100644
+index 88705cc..c8dc052 100644
 --- a/python/sglang/srt/entrypoints/http_server.py
 +++ b/python/sglang/srt/entrypoints/http_server.py
 @@ -107,6 +107,7 @@ from sglang.srt.managers.io_struct import (
@@ -168,7 +168,7 @@ index 88705cc35..c8dc052f1 100644
  @app.post("/update_weight_version")
  async def update_weight_version(obj: UpdateWeightVersionReqInput, request: Request):
 diff --git a/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py b/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py
-index d6c499df0..565004260 100644
+index d6c499d..5650042 100644
 --- a/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py
 +++ b/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py
 @@ -613,7 +613,6 @@ def _get_k_and_s_triton(
@@ -188,7 +188,7 @@ index d6c499df0..565004260 100644
      buf_numel_per_page: tl.constexpr,
      index_head_dim: tl.constexpr,
 diff --git a/python/sglang/srt/layers/attention/nsa/nsa_indexer.py b/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
-index c9e82e4b1..f2584546a 100644
+index c9e82e4..f258454 100644
 --- a/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
 +++ b/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
 @@ -3,6 +3,7 @@ from __future__ import annotations
@@ -229,7 +229,7 @@ index c9e82e4b1..f2584546a 100644
          if enable_dual_stream:
              current_stream = torch.cuda.current_stream()
 diff --git a/python/sglang/srt/layers/communicator.py b/python/sglang/srt/layers/communicator.py
-index 15df851eb..1636ed706 100644
+index 15df851..1636ed7 100644
 --- a/python/sglang/srt/layers/communicator.py
 +++ b/python/sglang/srt/layers/communicator.py
 @@ -371,10 +371,13 @@ class LayerCommunicator:
@@ -276,7 +276,7 @@ index 15df851eb..1636ed706 100644
  
          hidden_states = self._communicate_simple_fn(
 diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
-index 7bef9d2ab..5926ff7f5 100644
+index 7bef9d2..5926ff7 100644
 --- a/python/sglang/srt/layers/layernorm.py
 +++ b/python/sglang/srt/layers/layernorm.py
 @@ -83,15 +83,12 @@ class RMSNorm(MultiPlatformOp):
@@ -640,7 +640,7 @@ index 7bef9d2ab..5926ff7f5 100644
          return output
  
 diff --git a/python/sglang/srt/layers/logits_processor.py b/python/sglang/srt/layers/logits_processor.py
-index fa7431048..cd33ea735 100644
+index fa74310..cd33ea7 100644
 --- a/python/sglang/srt/layers/logits_processor.py
 +++ b/python/sglang/srt/layers/logits_processor.py
 @@ -878,11 +878,6 @@ class LogitsProcessor(nn.Module):
@@ -656,7 +656,7 @@ index fa7431048..cd33ea735 100644
                  logits = torch.matmul(
                      hidden_states.to(lm_head.weight.dtype), lm_head.weight.T
 diff --git a/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py b/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py
-index a1885fade..14d692365 100644
+index a1885fa..14d6923 100644
 --- a/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py
 +++ b/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py
 @@ -14,6 +14,7 @@ import torch.nn.functional as F
@@ -680,7 +680,7 @@ index a1885fade..14d692365 100644
                          intermediate_cache3.view(*intermediate_cache3.shape),
                          out_hidden_states[begin_chunk_idx:end_chunk_idx],
 diff --git a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
-index 839463518..7948779aa 100644
+index 8394635..7948779 100644
 --- a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
 +++ b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
 @@ -647,7 +647,7 @@ class FusedMoE(torch.nn.Module):
@@ -693,7 +693,7 @@ index 839463518..7948779aa 100644
          )
  
 diff --git a/python/sglang/srt/layers/moe/routed_experts_capturer.py b/python/sglang/srt/layers/moe/routed_experts_capturer.py
-index 00bd68755..5a3ca8a67 100644
+index 00bd687..5a3ca8a 100644
 --- a/python/sglang/srt/layers/moe/routed_experts_capturer.py
 +++ b/python/sglang/srt/layers/moe/routed_experts_capturer.py
 @@ -1,5 +1,6 @@
@@ -764,7 +764,7 @@ index 00bd68755..5a3ca8a67 100644
  
      def get_routed_experts(
 diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
-index b4bdc41b3..3b895ff6a 100644
+index b4bdc41..3b895ff 100644
 --- a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
 +++ b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
 @@ -442,7 +442,7 @@ class CompressedTensorsConfig(QuantizationConfig):
@@ -777,7 +777,7 @@ index b4bdc41b3..3b895ff6a 100644
      def _get_scheme_from_parts(
          self, weight_quant: BaseModel, input_quant: BaseModel
 diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors_moe.py b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors_moe.py
-index c5e5a11fc..c46526ecc 100644
+index c5e5a11..c46526e 100644
 --- a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors_moe.py
 +++ b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors_moe.py
 @@ -30,7 +30,10 @@ from sglang.srt.layers.quantization.fp8_utils import (
@@ -965,7 +965,7 @@ index c5e5a11fc..c46526ecc 100644
              is_k_full=self.is_k_full,
              routed_scaling_factor=self.moe_runner_config.routed_scaling_factor,
 diff --git a/python/sglang/srt/layers/rotary_embedding.py b/python/sglang/srt/layers/rotary_embedding.py
-index 480579e01..dd8ca7d4f 100644
+index 480579e..dd8ca7d 100644
 --- a/python/sglang/srt/layers/rotary_embedding.py
 +++ b/python/sglang/srt/layers/rotary_embedding.py
 @@ -136,9 +136,7 @@ class RotaryEmbedding(MultiPlatformOp):
@@ -990,7 +990,7 @@ index 480579e01..dd8ca7d4f 100644
          assert (
              fused_set_kv_buffer_arg is None
 diff --git a/python/sglang/srt/layers/sampler.py b/python/sglang/srt/layers/sampler.py
-index 55bef5652..35ad68b1c 100644
+index 55bef56..35ad68b 100644
 --- a/python/sglang/srt/layers/sampler.py
 +++ b/python/sglang/srt/layers/sampler.py
 @@ -108,16 +108,11 @@ class Sampler(nn.Module):
@@ -1014,7 +1014,7 @@ index 55bef5652..35ad68b1c 100644
              if not get_global_server_args().sampling_backend == "ascend" or (
                  return_logprob and not SGLANG_RETURN_ORIGINAL_LOGPROB
 diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
-index 2ecd8542f..89ef8200d 100644
+index 2ecd854..89ef820 100644
 --- a/python/sglang/srt/managers/io_struct.py
 +++ b/python/sglang/srt/managers/io_struct.py
 @@ -1292,6 +1292,19 @@ class UpdateWeightsFromIPCReqOutput(BaseReq):
@@ -1038,7 +1038,7 @@ index 2ecd8542f..89ef8200d 100644
  @dataclass
  class InitWeightsSendGroupForRemoteInstanceReqOutput(BaseReq):
 diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
-index d423e61d7..d1f54a832 100644
+index d423e61..d1f54a8 100644
 --- a/python/sglang/srt/managers/schedule_batch.py
 +++ b/python/sglang/srt/managers/schedule_batch.py
 @@ -1779,7 +1779,10 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
@@ -1054,7 +1054,7 @@ index d423e61d7..d1f54a832 100644
                  break
  
 diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
-index 92d286897..43bfab691 100644
+index 92d2868..43bfab6 100644
 --- a/python/sglang/srt/managers/scheduler.py
 +++ b/python/sglang/srt/managers/scheduler.py
 @@ -98,6 +98,7 @@ from sglang.srt.managers.io_struct import (
@@ -1074,7 +1074,7 @@ index 92d286897..43bfab691 100644
                  (ReleaseMemoryOccupationReqInput, self.release_memory_occupation),
                  (ResumeMemoryOccupationReqInput, self.resume_memory_occupation),
 diff --git a/python/sglang/srt/managers/scheduler_output_processor_mixin.py b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
-index e40586c24..243e2b0c2 100644
+index e40586c..243e2b0 100644
 --- a/python/sglang/srt/managers/scheduler_output_processor_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
 @@ -10,6 +10,7 @@ from sglang.srt.disaggregation.utils import DisaggregationMode
@@ -1095,7 +1095,7 @@ index e40586c24..243e2b0c2 100644
                  return
  
 diff --git a/python/sglang/srt/managers/scheduler_update_weights_mixin.py b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
-index 293a84350..c3a618bcc 100644
+index 293a843..c3a618b 100644
 --- a/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 @@ -1,6 +1,7 @@
@@ -1166,7 +1166,7 @@ index 293a84350..c3a618bcc 100644
  
      def check_weights(self: Scheduler, recv_req: CheckWeightsReqInput):
 diff --git a/python/sglang/srt/managers/tokenizer_communicator_mixin.py b/python/sglang/srt/managers/tokenizer_communicator_mixin.py
-index e5d42bed8..412293b30 100644
+index e5d42be..412293b 100644
 --- a/python/sglang/srt/managers/tokenizer_communicator_mixin.py
 +++ b/python/sglang/srt/managers/tokenizer_communicator_mixin.py
 @@ -49,6 +49,8 @@ from sglang.srt.managers.io_struct import (
@@ -1218,7 +1218,7 @@ index e5d42bed8..412293b30 100644
          self,
          obj: InitWeightsSendGroupForRemoteInstanceReqInput,
 diff --git a/python/sglang/srt/managers/tp_worker.py b/python/sglang/srt/managers/tp_worker.py
-index 49f63a198..e4cd0ff2b 100644
+index 49f63a1..e4cd0ff 100644
 --- a/python/sglang/srt/managers/tp_worker.py
 +++ b/python/sglang/srt/managers/tp_worker.py
 @@ -27,6 +27,7 @@ from sglang.srt.managers.io_struct import (
@@ -1242,7 +1242,7 @@ index 49f63a198..e4cd0ff2b 100644
          parameter = self.model_runner.get_weights_by_name(
              recv_req.name, recv_req.truncate_size
 diff --git a/python/sglang/srt/mem_cache/allocator.py b/python/sglang/srt/mem_cache/allocator.py
-index eaf29628b..bf74cbd12 100644
+index eaf2962..bf74cbd 100644
 --- a/python/sglang/srt/mem_cache/allocator.py
 +++ b/python/sglang/srt/mem_cache/allocator.py
 @@ -287,6 +287,85 @@ def alloc_decode_kernel(
@@ -1388,8 +1388,55 @@ index eaf29628b..bf74cbd12 100644
  
          if self.debug_mode:
              assert len(torch.unique(out_indices)) == len(out_indices)
+diff --git a/python/sglang/srt/mem_cache/hiradix_cache.py b/python/sglang/srt/mem_cache/hiradix_cache.py
+index f6cfca8..5d3cad0 100644
+--- a/python/sglang/srt/mem_cache/hiradix_cache.py
++++ b/python/sglang/srt/mem_cache/hiradix_cache.py
+@@ -11,10 +11,15 @@ import torch
+ 
+ from sglang.srt.managers.cache_controller import HiCacheController, PrefetchOperation
+ from sglang.srt.mem_cache.base_prefix_cache import MatchResult
+-from sglang.srt.mem_cache.memory_pool import MHATokenToKVPool, MLATokenToKVPool
++from sglang.srt.mem_cache.memory_pool import (
++    MHATokenToKVPool,
++    MLATokenToKVPool,
++    NSATokenToKVPool,
++)
+ from sglang.srt.mem_cache.memory_pool_host import (
+     MHATokenToKVPoolHost,
+     MLATokenToKVPoolHost,
++    NSATokenToKVPoolHost,
+ )
+ from sglang.srt.mem_cache.radix_cache import (
+     RadixCache,
+@@ -54,6 +59,16 @@ class HiRadixCache(RadixCache):
+                 server_args.hicache_mem_layout,
+                 allocator_type=server_args.hicache_storage_backend,
+             )
++        elif isinstance(self.kv_cache, NSATokenToKVPool):
++            # Check NSA before MLA since NSATokenToKVPool is a subclass of MLATokenToKVPool
++            self.token_to_kv_pool_host = NSATokenToKVPoolHost(
++                self.kv_cache,
++                server_args.hicache_ratio,
++                server_args.hicache_size,
++                self.page_size,
++                server_args.hicache_mem_layout,
++                allocator_type=server_args.hicache_storage_backend,
++            )
+         elif isinstance(self.kv_cache, MLATokenToKVPool):
+             self.token_to_kv_pool_host = MLATokenToKVPoolHost(
+                 self.kv_cache,
+@@ -64,7 +79,7 @@ class HiRadixCache(RadixCache):
+                 allocator_type=server_args.hicache_storage_backend,
+             )
+         else:
+-            raise ValueError(f"HiRadixCache only supports MHA and MLA yet")
++            raise ValueError(f"HiRadixCache only supports MHA and MLA and NSA yet")
+ 
+         self.tp_group = params.tp_cache_group
+         self.tp_world_size = torch.distributed.get_world_size(group=self.tp_group)
 diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
-index 65d562a27..b00a20e95 100644
+index 65d562a..8517837 100644
 --- a/python/sglang/srt/mem_cache/memory_pool.py
 +++ b/python/sglang/srt/mem_cache/memory_pool.py
 @@ -1678,7 +1678,8 @@ class NSATokenToKVPool(MLATokenToKVPool):
@@ -1402,8 +1449,238 @@ index 65d562a27..b00a20e95 100644
          ):
              self.index_k_with_scale_buffer = [
                  torch.zeros(
+@@ -1700,6 +1701,11 @@ class NSATokenToKVPool(MLATokenToKVPool):
+                 )
+                 for _ in range(layer_num)
+             ]
++            self.index_k_with_scale_buffer_ptrs = torch.tensor(
++                [x.data_ptr() for x in self.index_k_with_scale_buffer],
++                dtype=torch.uint64,
++                device=self.device,
++            )
+         self._finalize_allocation_log(size)
+ 
+     def get_index_k_with_scale_buffer(self, layer_id: int) -> torch.Tensor:
+diff --git a/python/sglang/srt/mem_cache/memory_pool_host.py b/python/sglang/srt/mem_cache/memory_pool_host.py
+index 4639415..d99cc4b 100644
+--- a/python/sglang/srt/mem_cache/memory_pool_host.py
++++ b/python/sglang/srt/mem_cache/memory_pool_host.py
+@@ -15,7 +15,12 @@ from sglang.jit_kernel.hicache import (
+ from sglang.jit_kernel.hicache import (
+     transfer_hicache_one_layer as jit_transfer_hicache_one_layer,
+ )
+-from sglang.srt.mem_cache.memory_pool import KVCache, MHATokenToKVPool, MLATokenToKVPool
++from sglang.srt.mem_cache.memory_pool import (
++    KVCache,
++    MHATokenToKVPool,
++    MLATokenToKVPool,
++    NSATokenToKVPool,
++)
+ from sglang.srt.utils import is_cuda, is_npu, is_xpu
+ 
+ _is_cuda = is_cuda()
+@@ -1015,3 +1020,199 @@ class MLATokenToKVPoolHost(HostKVCache):
+         else:
+             raise ValueError(f"Unsupported layout: {self.layout}")
+         return ptr_list, element_size_list
++
++
++class NSATokenToKVPoolHost(MLATokenToKVPoolHost):
++    """
++    Host memory pool for NSA (Native Sparse Attention) KV cache.
++
++    NSA extends MLA with an additional index_k_with_scale_buffer that stores
++    sparse attention indexing information. This class ensures that buffer is
++    also backed up and restored during hicache operations.
++    """
++
++    device_pool: NSATokenToKVPool
++
++    def __init__(
++        self,
++        device_pool: NSATokenToKVPool,
++        host_to_device_ratio: float,
++        host_size: int,
++        page_size: int,
++        layout: str,
++        pin_memory: bool = True,
++        device: str = "cpu",
++        allocator_type: str = "default",
++    ):
++        # Store NSA-specific attributes before calling parent __init__
++        self.index_head_dim = device_pool.index_head_dim
++        self.quant_block_size = device_pool.quant_block_size
++        self.index_k_with_scale_buffer_dtype = device_pool.index_k_with_scale_buffer_dtype
++
++        super().__init__(
++            device_pool,
++            host_to_device_ratio,
++            host_size,
++            page_size,
++            layout,
++            pin_memory,
++            device,
++            allocator_type,
++        )
++
++        # Initialize index buffer references and pointers for efficient transfer
++        self.index_data_refs = [
++            self.index_k_with_scale_buffer[i] for i in range(self.layer_num)
++        ]
++        self.index_data_ptrs = torch.tensor(
++            [x.data_ptr() for x in self.index_data_refs],
++            dtype=torch.uint64,
++            device=self.device_pool.device,
++        )
++
++    def get_size_per_token(self):
++        # Get base MLA size
++        base_size = super().get_size_per_token()
++
++        # Add NSA index buffer size per token
++        # index_k_with_scale_buffer shape per layer: (num_pages, page_size * (index_head_dim + index_head_dim // quant_block_size * 4))
++        # Per token: (index_head_dim + index_head_dim // quant_block_size * 4) * dtype.itemsize * layer_num
++        index_size_per_token = (
++            (self.index_head_dim + self.index_head_dim // self.quant_block_size * 4)
++            * self.index_k_with_scale_buffer_dtype.itemsize
++            * self.layer_num
++        )
++
++        return base_size + index_size_per_token
++
++    def init_kv_buffer(self):
++        # Initialize base MLA kv_buffer
++        buffer = super().init_kv_buffer()
++
++        # Initialize NSA index_k_with_scale_buffer on host
++        # Layout matches device pool: (num_pages, page_size * (index_head_dim + index_head_dim // quant_block_size * 4))
++        index_buffer_second_dim = self.page_size * (
++            self.index_head_dim + self.index_head_dim // self.quant_block_size * 4
++        )
++        self.index_stride_size = (self.index_head_dim + self.index_head_dim // self.quant_block_size * 4) * self.index_k_with_scale_buffer_dtype.itemsize
++
++        alloc_func = ALLOC_MEMORY_FUNCS[self.device_pool.device]
++        self.index_k_with_scale_buffer = [
++            alloc_func(
++                (self.page_num, index_buffer_second_dim),
++                dtype=self.index_k_with_scale_buffer_dtype,
++                device=self.device,
++                pin_memory=self.pin_memory,
++                allocator=self.allocator,
++            )
++            for _ in range(self.layer_num)
++        ]
++
++        return buffer
++
++    def _load_indexer_to_device_per_layer(
++        self, device_pool, host_indices, device_indices, layer_id, io_backend
++    ):
++        """Load index_k_with_scale_buffer from host to device for a specific layer."""
++        # Convert token indices to page indices
++        # host_indices and device_indices are token-level indices
++        # index_k_with_scale_buffer is page-level with shape (num_pages, page_size * dim)
++
++        if io_backend == "kernel":
++            # Use page-level copy for index buffer
++            # Calculate page indices from token indices
++            page_indices_host = host_indices[:: self.page_size] // self.page_size
++            page_indices_device = device_indices[:: self.page_size] // self.page_size
++
++            src_buffer = self.index_k_with_scale_buffer[layer_id]
++            dst_buffer = device_pool.index_k_with_scale_buffer[layer_id - device_pool.start_layer]
++
++            # Copy each page
++            # for i in range(len(page_indices_host)):
++            #     src_page_idx = page_indices_host[i].item()
++            #     dst_page_idx = page_indices_device[i].item()
++            #     dst_buffer[dst_page_idx].copy_(src_buffer[src_page_idx], non_blocking=True)
++            if self.layout == "layer_first":
++                transfer_kv_per_layer_mla(
++                    src=src_buffer,
++                    dst=dst_buffer,
++                    src_indices=page_indices_host,
++                    dst_indices=page_indices_device,
++                    item_size=self.index_stride_size * self.page_size,
++                )
++            else:
++                raise ValueError(f"Unsupported layout: {self.layout}")
++
++        elif io_backend == "direct":
++            # Direct I/O copy for index buffer
++            page_indices_host = host_indices[:: self.page_size] // self.page_size
++            page_indices_device = device_indices[:: self.page_size] // self.page_size
++
++            src_buffer = self.index_k_with_scale_buffer[layer_id]
++            dst_buffer = device_pool.index_k_with_scale_buffer[layer_id - device_pool.start_layer]
++
++            for i in range(len(page_indices_host)):
++                src_page_idx = page_indices_host[i].item()
++                dst_page_idx = page_indices_device[i].item()
++                dst_buffer[dst_page_idx].copy_(src_buffer[src_page_idx], non_blocking=True)
++        else:
++            raise ValueError(f"Unsupported IO backend for NSA indexer: {io_backend}")
++
++    def _backup_indexer_from_device_all_layer(
++        self, device_pool, host_indices, device_indices, io_backend
++    ):
++        """Backup index_k_with_scale_buffer from device to host for all layers."""
++        # Convert token indices to page indices
++        page_indices_host = host_indices[:: self.page_size] // self.page_size
++        page_indices_device = device_indices[:: self.page_size] // self.page_size
++
++        # if io_backend in ["kernel", "direct"]:
++        if io_backend == "kernel":
++            if self.layout == "layer_first":
++                transfer_kv_all_layer_mla(
++                    src_layers=device_pool.index_k_with_scale_buffer_ptrs,
++                    dst_layers=self.index_data_ptrs,
++                    src_indices=page_indices_device,
++                    dst_indices=page_indices_host,
++                    item_size=self.index_stride_size * self.page_size,
++                    num_layers=self.layer_num,
++                )
++            else:
++                raise ValueError(f"Unsupported layout: {self.layout}")
++        elif io_backend == "direct":
++            for layer_id in range(self.layer_num):
++                src_buffer = device_pool.index_k_with_scale_buffer[layer_id]
++                dst_buffer = self.index_k_with_scale_buffer[layer_id]
++
++                for i in range(len(page_indices_device)):
++                    src_page_idx = page_indices_device[i].item()
++                    dst_page_idx = page_indices_host[i].item()
++                    dst_buffer[dst_page_idx].copy_(src_buffer[src_page_idx], non_blocking=True)
++        else:
++            raise ValueError(f"Unsupported IO backend for NSA indexer: {io_backend}")
++
++    def load_to_device_per_layer(
++        self, device_pool, host_indices, device_indices, layer_id, io_backend
++    ):
++        """Load KV cache and index buffer from host to device for a specific layer."""
++        # Load base MLA kv_buffer
++        super().load_to_device_per_layer(
++            device_pool, host_indices, device_indices, layer_id, io_backend
++        )
++        # Load NSA index_k_with_scale_buffer
++        self._load_indexer_to_device_per_layer(
++            device_pool, host_indices, device_indices, layer_id, io_backend
++        )
++
++    def backup_from_device_all_layer(
++        self, device_pool, host_indices, device_indices, io_backend
++    ):
++        """Backup KV cache and index buffer from device to host for all layers."""
++        # Backup base MLA kv_buffer
++        super().backup_from_device_all_layer(
++            device_pool, host_indices, device_indices, io_backend
++        )
++        # Backup NSA index_k_with_scale_buffer
++        self._backup_indexer_from_device_all_layer(
++            device_pool, host_indices, device_indices, io_backend
++        )
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index 1d69c0582..d984c2e12 100644
+index 1d69c05..d984c2e 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
 @@ -558,7 +558,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
@@ -1484,7 +1761,7 @@ index 1d69c0582..d984c2e12 100644
  def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tensor]]):
      params_dict = dict(model.named_parameters())
 diff --git a/python/sglang/srt/models/deepseek_v2.py b/python/sglang/srt/models/deepseek_v2.py
-index ed8cc7ada..b8f1026dd 100644
+index ed8cc7a..b8f1026 100644
 --- a/python/sglang/srt/models/deepseek_v2.py
 +++ b/python/sglang/srt/models/deepseek_v2.py
 @@ -159,6 +159,7 @@ from sglang.srt.utils import (
@@ -1518,7 +1795,7 @@ index ed8cc7ada..b8f1026dd 100644
              if (
                  self.current_attention_backend == "fa3"
 diff --git a/python/sglang/srt/models/qwen2.py b/python/sglang/srt/models/qwen2.py
-index a7dbadec6..c83a41338 100644
+index a7dbade..c83a413 100644
 --- a/python/sglang/srt/models/qwen2.py
 +++ b/python/sglang/srt/models/qwen2.py
 @@ -90,9 +90,6 @@ class Qwen2MLP(nn.Module):
@@ -1556,7 +1833,7 @@ index a7dbadec6..c83a41338 100644
                  if get_global_server_args().rl_on_policy_target is not None
                  else {}
 diff --git a/python/sglang/srt/models/qwen2_moe.py b/python/sglang/srt/models/qwen2_moe.py
-index 3ad9f6736..0b9c7f499 100644
+index 3ad9f67..0b9c7f4 100644
 --- a/python/sglang/srt/models/qwen2_moe.py
 +++ b/python/sglang/srt/models/qwen2_moe.py
 @@ -586,7 +586,17 @@ class Qwen2MoeModel(nn.Module):
@@ -1579,7 +1856,7 @@ index 3ad9f6736..0b9c7f499 100644
              self.norm = PPMissingLayer(return_tuple=True)
  
 diff --git a/python/sglang/srt/models/qwen3.py b/python/sglang/srt/models/qwen3.py
-index 9220831f6..2b8303b54 100644
+index 9220831..2b8303b 100644
 --- a/python/sglang/srt/models/qwen3.py
 +++ b/python/sglang/srt/models/qwen3.py
 @@ -90,8 +90,8 @@ class Qwen3Attention(nn.Module):
@@ -1622,7 +1899,7 @@ index 9220831f6..2b8303b54 100644
          if hidden_states.shape[0] != 0:
              hidden_states = self.self_attn(
 diff --git a/python/sglang/srt/models/qwen3_moe.py b/python/sglang/srt/models/qwen3_moe.py
-index e11678a9e..e277d46f2 100644
+index e11678a..e277d46 100644
 --- a/python/sglang/srt/models/qwen3_moe.py
 +++ b/python/sglang/srt/models/qwen3_moe.py
 @@ -22,6 +22,7 @@ import math
@@ -1732,7 +2009,7 @@ index e11678a9e..e277d46f2 100644
  
          self.layer_communicator = LayerCommunicator(
 diff --git a/python/sglang/srt/models/qwen3_vl.py b/python/sglang/srt/models/qwen3_vl.py
-index 079f45843..218e32362 100644
+index 079f458..218e323 100644
 --- a/python/sglang/srt/models/qwen3_vl.py
 +++ b/python/sglang/srt/models/qwen3_vl.py
 @@ -397,28 +397,68 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
@@ -1848,7 +2125,7 @@ index 079f45843..218e32362 100644
                  positions,
                  hidden_states,
 diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
-index a2b26e0e0..72db29801 100644
+index a2b26e0..72db298 100644
 --- a/python/sglang/srt/server_args.py
 +++ b/python/sglang/srt/server_args.py
 @@ -527,6 +527,7 @@ class ServerArgs:
@@ -1872,7 +2149,7 @@ index a2b26e0e0..72db29801 100644
              "--disable-cuda-graph-padding",
              action="store_true",
 diff --git a/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py b/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
-index 5fe45086c..c95fbd0f6 100644
+index 5fe4508..c95fbd0 100644
 --- a/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
 +++ b/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
 @@ -341,7 +341,10 @@ class EAGLEDraftCudaGraphRunner:
@@ -1899,7 +2176,7 @@ index 5fe45086c..c95fbd0f6 100644
          self.req_pool_indices[:raw_bs].copy_(forward_batch.req_pool_indices)
  
 diff --git a/python/sglang/srt/speculative/eagle_info.py b/python/sglang/srt/speculative/eagle_info.py
-index 1bf3816e9..b5b41dba4 100644
+index 1bf3816..b5b41db 100644
 --- a/python/sglang/srt/speculative/eagle_info.py
 +++ b/python/sglang/srt/speculative/eagle_info.py
 @@ -778,6 +778,10 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
@@ -1942,7 +2219,7 @@ index 1bf3816e9..b5b41dba4 100644
  
  @dataclass
 diff --git a/python/sglang/srt/speculative/eagle_worker.py b/python/sglang/srt/speculative/eagle_worker.py
-index a702df4f8..61d9ae366 100644
+index a702df4..61d9ae3 100644
 --- a/python/sglang/srt/speculative/eagle_worker.py
 +++ b/python/sglang/srt/speculative/eagle_worker.py
 @@ -231,7 +231,7 @@ class EAGLEWorker(TpModelWorker):
@@ -1955,7 +2232,7 @@ index a702df4f8..61d9ae366 100644
  
          Device2DraftCudaGraphRunner = {
 diff --git a/python/sglang/srt/utils/common.py b/python/sglang/srt/utils/common.py
-index 8560246c6..13db860dc 100644
+index 8560246..13db860 100644
 --- a/python/sglang/srt/utils/common.py
 +++ b/python/sglang/srt/utils/common.py
 @@ -2224,6 +2224,8 @@ class SafeUnpickler(pickle.Unpickler):
