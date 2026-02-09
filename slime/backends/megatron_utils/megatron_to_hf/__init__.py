@@ -11,10 +11,9 @@ from .qwen3moe import convert_qwen3moe_to_hf
 
 
 # TODO unify w/ `convert_to_hf`
-def postprocess_hf_param(args, megatron_param_name, hf_param_name, param):
+def postprocess_hf_param(args, megatron_param_name, hf_param_name, param, quantization_config=None):
     param = remove_padding(megatron_param_name, param, args.vocab_size)
-    # TODO support quant
-    return param
+    return quantize_params(args, megatron_param_name, [(hf_param_name, param)], quantization_config)
 
 
 # TODO optimize code details
