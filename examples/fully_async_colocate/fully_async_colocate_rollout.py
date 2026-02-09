@@ -54,6 +54,7 @@ def stop_global_worker():
 
 atexit.register(stop_global_worker)
 
+
 class AsyncColocateWorker:
     """Background worker that generates samples asynchronously.
 
@@ -102,7 +103,7 @@ class AsyncColocateWorker:
 
     def resume(self, rollout_id: int = -1):
         """Un-pause the worker so it starts submitting generation tasks.
-        
+
         Args:
             rollout_id: Current training step id for tracking partial rollout generations.
         """
