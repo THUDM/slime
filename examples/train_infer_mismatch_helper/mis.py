@@ -92,7 +92,6 @@ def calculate_trust_region_seq_mask(
         kl = log_ratio**2 / 2.0  # k2 estimator
         seq_metric = masked_max(kl, loss_mask, expand=True)
     elif trust_region == "avg":
-        log_ratio = -log_ratio
         kl = log_ratio.exp() - 1 - log_ratio  # k3 estimator
         seq_metric = masked_mean(kl, loss_mask, expand=True)
     else:

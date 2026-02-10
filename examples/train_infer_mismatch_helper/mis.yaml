@@ -32,8 +32,8 @@ rs_upper_bound: null
 
 # Additional sequence-level trust-region gate for RS.
 # null: disable
-# max: reject sequence when
-# avg: reject sequence when
+# max: reject sequence when max D_KL(pi_train || pi_rollout) > rs_tr_threshold (k2 estimator)
+# avg: reject sequence when mean D_KL(pi_train || pi_rollout) > rs_tr_threshold (k3 estimator)
 rs_trust_region: null
 rs_tr_threshold: 0.5
 
