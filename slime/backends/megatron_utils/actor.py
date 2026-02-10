@@ -92,12 +92,12 @@ class MegatronTrainRayActor(TrainRayActor):
             args, role
         )
 
+        start_rollout_id = loaded_rollout_id + 1
+
         if role == "critic":
             if self.args.offload_train:
                 self.sleep()
-            return
-
-        start_rollout_id = loaded_rollout_id + 1
+            return start_rollout_id
 
         self.weights_backuper = TensorBackuper.create(
             source_getter=lambda: named_params_and_buffers(
