@@ -181,10 +181,14 @@ def compute_mis_weights(
     rs_tr_threshold = args.rs_tr_threshold
 
     # Validate input lists have same length and each sequence has matching shapes
-    assert len(train_log_probs) == len(rollout_log_probs) == len(loss_masks), f"Input lists must have the same number of sequences: {len(train_log_probs)} vs {len(rollout_log_probs)} vs {len(loss_masks)}"
+    assert (
+        len(train_log_probs) == len(rollout_log_probs) == len(loss_masks)
+    ), f"Input lists must have the same number of sequences: {len(train_log_probs)} vs {len(rollout_log_probs)} vs {len(loss_masks)}"
 
     for i, (train, rollout, loss_mask) in enumerate(zip(train_log_probs, rollout_log_probs, loss_masks, strict=False)):
-        assert train.shape == rollout.shape == loss_mask.shape, f"Sequence {i}: shapes must match - train: {train.shape}, rollout: {rollout.shape}, loss_mask: {loss_mask.shape}"
+        assert (
+            train.shape == rollout.shape == loss_mask.shape
+        ), f"Sequence {i}: shapes must match - train: {train.shape}, rollout: {rollout.shape}, loss_mask: {loss_mask.shape}"
 
     SAFETY_BOUND = 20.0  # Add a safety bound to avoid exp overflow
     all_weights = []
@@ -200,7 +204,9 @@ def compute_mis_weights(
         else:
             raise ValueError(f"Invalid level: {level}")
 
-    for train_log_prob, rollout_log_prob, loss_mask in zip(train_log_probs, rollout_log_probs, loss_masks, strict=False):
+    for train_log_prob, rollout_log_prob, loss_mask in zip(
+        train_log_probs, rollout_log_probs, loss_masks, strict=False
+    ):
         add_ppl_metrics(train_log_prob, rollout_log_prob, loss_mask, metrics)
 
     # only calculate mismatch metrics if TIS is not used
@@ -208,7 +214,9 @@ def compute_mis_weights(
         return None, loss_masks, metrics
 
     # handle each sequence independently
-    for train_log_prob, rollout_log_prob, loss_mask in zip(train_log_probs, rollout_log_probs, loss_masks, strict=False):
+    for train_log_prob, rollout_log_prob, loss_mask in zip(
+        train_log_probs, rollout_log_probs, loss_masks, strict=False
+    ):
         loss_mask = loss_mask.float()
         raw_log_ratio_diff = train_log_prob - rollout_log_prob
         modified_mask = loss_mask.clone().float()
@@ -223,9 +231,13 @@ def compute_mis_weights(
             if args.tis_mode == "truncate":
                 weights = truncate(weights, loss_mask, metrics, args.tis_upper_bound, metric_prefix="tis_")
             elif args.tis_mode == "clip":
-                weights = clip(weights, loss_mask, metrics, tis_lower_bound, args.tis_upper_bound, metric_prefix="tis_")
+                weights = clip(
+                    weights, loss_mask, metrics, tis_lower_bound, args.tis_upper_bound, metric_prefix="tis_"
+                )
             elif args.tis_mode == "mask":
-                weights, modified_mask = mask(weights, loss_mask, metrics, tis_lower_bound, args.tis_upper_bound, metric_prefix="tis_")
+                weights, modified_mask = mask(
+                    weights, loss_mask, metrics, tis_lower_bound, args.tis_upper_bound, metric_prefix="tis_"
+                )
             else:
                 raise ValueError(f"Unsupported tis_mode: {args.tis_mode}")
 
@@ -244,12 +256,16 @@ def compute_mis_weights(
             rs_weights = torch.exp(log_ratio_safe_rs)
 
             # Apply mask-based rejection sampling
-            _, modified_mask = mask(rs_weights, modified_mask, metrics, rs_lower_bound, rs_upper_bound, metric_prefix="rs_")
+            _, modified_mask = mask(
+                rs_weights, modified_mask, metrics, rs_lower_bound, rs_upper_bound, metric_prefix="rs_"
+            )
 
             if rs_trust_region:
                 if rs_tr_threshold is None:
                     raise ValueError("rs_tr_threshold is required when rs_trust_region is not 'none'")
-                tr_seq_mask = calculate_trust_region_seq_mask(raw_log_ratio_diff, loss_mask, rs_trust_region, rs_tr_threshold, metrics, metric_prefix="rs_")
+                tr_seq_mask = calculate_trust_region_seq_mask(
+                    raw_log_ratio_diff, loss_mask, rs_trust_region, rs_tr_threshold, metrics, metric_prefix="rs_"
+                )
                 modified_mask = modified_mask * tr_seq_mask
 
         metrics_append(metrics, "is_ratio_mean_after_tis_rs", weights)
@@ -325,8 +341,18 @@ def compute_mis_weights_with_cp(
     from slime.backends.megatron_utils.cp_utils import all_gather_with_cp, slice_log_prob_with_cp
 
     # Gather cp slice from other cp ranks
-    full_rollout_log_probs = [all_gather_with_cp(log_prob, total_length, response_length) for log_prob, total_length, response_length in zip(rollout_log_probs, total_lengths, response_lengths, strict=False)]
-    full_old_log_probs = [all_gather_with_cp(old_log_prob, total_length, response_length) for old_log_prob, total_length, response_length in zip(train_log_probs, total_lengths, response_lengths, strict=False)]
+    full_rollout_log_probs = [
+        all_gather_with_cp(log_prob, total_length, response_length)
+        for log_prob, total_length, response_length in zip(
+            rollout_log_probs, total_lengths, response_lengths, strict=False
+        )
+    ]
+    full_old_log_probs = [
+        all_gather_with_cp(old_log_prob, total_length, response_length)
+        for old_log_prob, total_length, response_length in zip(
+            train_log_probs, total_lengths, response_lengths, strict=False
+        )
+    ]
 
     # Main logic for is (decoupled)
     is_weights, modified_masks, is_metrics = compute_mis_weights(
@@ -337,7 +363,9 @@ def compute_mis_weights_with_cp(
     )
 
     # Slice out the value shards for this CP rank and concat them into a 1D tensor along dim=0 for loss.py computation.
-    def slice_cp_and_concat(values: list[torch.Tensor], total_lengths: list[int], response_lengths: list[int]) -> torch.Tensor:
+    def slice_cp_and_concat(
+        values: list[torch.Tensor], total_lengths: list[int], response_lengths: list[int]
+    ) -> torch.Tensor:
         values = [
             # TODO: A rename of this function?
             slice_log_prob_with_cp(values[i], total_lengths[i], response_lengths[i])
