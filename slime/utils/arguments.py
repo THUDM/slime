@@ -762,6 +762,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             parser.add_argument("--critic-load", type=str, default=None, help="The checkpoint for critic model.")
             parser.add_argument("--critic-save", type=str, default=None, help="The checkpoint for critic model.")
             parser.add_argument("--critic-lr", type=float, default=None, help="The lr for critic model")
+            parser.add_argument("--critic-train-only", action="store_true", default=False, help="Only train critic")
             parser.add_argument(
                 "--critic-lr-warmup-iters",
                 type=int,
@@ -1499,7 +1500,10 @@ def parse_args(add_custom_arguments=None):
             hf_validate_args(args, hf_config)
 
         args.rank = 0
-        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
+        if args.critic_train_only:
+            args.world_size = args.critic_num_nodes * args.critic_num_gpus_per_node
+        else:
+            args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
         args = set_default_megatron_args(args)
     else:
         logger.warning(

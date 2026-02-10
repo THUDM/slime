@@ -155,16 +155,20 @@ def create_training_models(args, pgs, rollout_manager):
             with_opd_teacher=args.use_opd and args.opd_type == "megatron",
         )
     )
+    if not args.critic_train_only:
+        assert len(set(start_rollout_ids)) == 1
 
-    assert len(set(start_rollout_ids)) == 1
     if args.start_rollout_id is None:
         args.start_rollout_id = start_rollout_ids[0]
 
     if args.use_critic:
         ray.get(critic_init_handle)
-        actor_model.connect(critic_model)
+        if not args.critic_train_only:
+            actor_model.connect(critic_model)
 
     actor_model.set_rollout_manager(rollout_manager)
+    if args.critic_train_only:
+        critic_model.set_rollout_manager(rollout_manager)
     if args.rollout_global_dataset:
         ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
 
