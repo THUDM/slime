@@ -30,9 +30,12 @@ tis_upper_bound: 2.0
 rs_lower_bound: null
 rs_upper_bound: null
 
-# Per-token veto threshold. If any token ratio < this, zero the entire sequence weight, the sequences won't have gradient
-# Note: float number must be written with dot e.g. 1.0e-4, not 1e-4
-rs_veto_threshold: 1.0e-4
+# Additional sequence-level trust-region gate for RS.
+# null: disable
+# max: reject sequence when
+# avg: reject sequence when
+rs_trust_region: null
+rs_tr_threshold: 0.5
 
 # Batch normalization: normalize IS weights to mean=1.0 across entire batch
 # This reduces variance in gradient updates
