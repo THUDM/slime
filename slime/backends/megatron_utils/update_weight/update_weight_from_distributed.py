@@ -266,7 +266,8 @@ def connect_rollout_engines_from_distributed(
     ]
     model_update_groups = init_process_group(
         backend="nccl",
-        init_method=f"tcp://{master_address}:{master_port}",
+        # IPv6 addresses must be bracketed in URLs since they contain colons (e.g. tcp://[::1]:8080)
+        init_method=f"tcp://[{master_address}]:{master_port}" if ":" in master_address else f"tcp://{master_address}:{master_port}",
         world_size=world_size,
         rank=0,
         group_name=group_name,
