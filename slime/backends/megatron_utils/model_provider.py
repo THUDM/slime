@@ -194,11 +194,7 @@ def get_model_provider_func(
             if vp_stage is not None:
                 mtp_kwargs["vp_stage"] = vp_stage
 
-            from dataclasses import replace
-
-            mtp_config = replace(config, use_gated_attention=True)
-            object.__setattr__(config, "mtp_config", mtp_config)
-            mtp_block_spec = get_gpt_mtp_block_spec(mtp_config, transformer_layer_spec, **mtp_kwargs)
+            mtp_block_spec = get_gpt_mtp_block_spec(config, transformer_layer_spec, **mtp_kwargs)
             kwargs["mtp_block_spec"] = mtp_block_spec
 
         with build_model_context(**build_model_context_args):

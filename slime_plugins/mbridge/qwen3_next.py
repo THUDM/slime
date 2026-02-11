@@ -47,14 +47,10 @@ class Qwen3NextBridge(Qwen2MoEBridge):
     )
 
     def _get_gptmodel_args(self) -> dict:
-        """Override to add MTP block spec with gated attention config."""
-        from copy import deepcopy
-
+        """Override to add MTP block spec."""
         ret = super()._get_gptmodel_args()
         if getattr(self.config, "mtp_num_layers", None) is not None:
-            mtp_config = deepcopy(self.config)
-            mtp_config.use_gated_attention = True
-            mtp_block_spec = get_gpt_mtp_block_spec(mtp_config, mtp_config, use_transformer_engine=True)
+            mtp_block_spec = get_gpt_mtp_block_spec(self.config, self.config, use_transformer_engine=True)
             ret["mtp_block_spec"] = mtp_block_spec
         return ret
 
@@ -171,17 +167,11 @@ class Qwen3NextBridge(Qwen2MoEBridge):
             return qgkv
 
         weight = super()._weight_to_mcore_format(mcore_weights_name, hf_weights)
-        if mcore_weights_name.endswith("eh_proj.weight"):
-            first_half, second_half = weight.chunk(2, dim=1)
-            weight = torch.cat([second_half, first_half], dim=1)
         return weight
 
     def _weight_to_hf_format(
         self, mcore_weights_name: str, mcore_weights: torch.Tensor
     ) -> tuple[list[str], list[torch.Tensor]]:
-        if mcore_weights_name.endswith("eh_proj.weight"):
-            first_half, second_half = mcore_weights.chunk(2, dim=1)
-            mcore_weights = torch.cat([second_half, first_half], dim=1)
         return super()._weight_to_hf_format(mcore_weights_name, mcore_weights)
 
     def _build_config(self):
@@ -211,5 +201,6 @@ class Qwen3NextBridge(Qwen2MoEBridge):
             # Qwen3 Next specific
             attention_output_gate=True,
             moe_shared_expert_gate=True,
+            use_gated_attention=True,
             **mtp_args,
         )

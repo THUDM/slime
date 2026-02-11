@@ -53,11 +53,7 @@ def _convert_mtp_layer(args, name, param, layer_idx):
     if "final_layernorm.weight" in name:
         return [("mtp.norm.weight", param)]
     if "eh_proj.weight" in name:
-        if param.dim() < 2:
-            raise ValueError(f"eh_proj weight expects 2D tensor, got {param.shape}")
-        first_half, second_half = param.chunk(2, dim=1)
-        new_param = torch.cat([second_half, first_half], dim=1)
-        return [("mtp.fc.weight", new_param)]
+        return [("mtp.fc.weight", param)]
 
     # MTP inner transformer layers (keep layer index)
     if "transformer_layer" in name:
