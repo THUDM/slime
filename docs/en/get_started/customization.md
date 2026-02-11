@@ -350,6 +350,9 @@ class CustomDataSource(DataSource):
         
     def load(self, rollout_id=None):
         """Load state from checkpoint"""
+
+    def __len__(self):
+        """Length of the data source. May change when samples are added/fetched."""
 ```
 
 ---

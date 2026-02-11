@@ -404,6 +404,7 @@ def log_rollout_data(
                         "advantages",
                         "values",
                         "teacher_log_probs",
+                        "opd_reverse_kl",
                     ]:
                         val = torch.cat(val).clone().detach()
                         sum_of_sample_mean = get_sum_of_sample_mean(

@@ -1,38 +1,15 @@
 #!/bin/bash
 
-# usage: bash examples/on_policy_distillation/run-qwen3-8B-opd.sh
+# On-Policy Distillation with Megatron-based teacher model
+# This example uses the original model as the teacher (self-distillation for demonstration)
+# 
+# IMPORTANT: This is just an example configuration!
+# In practice, you should:
+# 1. Use a different (stronger) model as the teacher
+# 2. Adjust --opd-kl-coef based on your task
+# 3. Configure proper evaluation metrics
 
 set -ex
-
-
-# Start the teacher model server
-TEACHER_IP="127.0.0.1" # Use localhost here, you can change it to your IP
-TEACHER_PORT=13141
-LOG_FILE="/tmp/sglang_$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 6).log"
-
-## Launch the teacher model server in the background
-CUDA_VISIBLE_DEVICES=7 python3 -m sglang.launch_server \
-    --model-path /root/Qwen3-32B \
-    --host 0.0.0.0 \
-    --port $TEACHER_PORT \
-    --tp 1 \
-    --chunked-prefill-size 4096 \
-    --mem-fraction-static 0.6 \
-    > "$LOG_FILE" 2>&1 &
-
-echo "Starting teacher model server..."
-
-## Wait for the teacher model server to be ready
-until curl -sf http://$TEACHER_IP:$TEACHER_PORT/health_generate > /dev/null; do
-    echo "Waiting for the teacher model server to start..."
-    tail -n 10 "$LOG_FILE"
-    sleep 5
-done
-
-curl http://$TEACHER_IP:$TEACHER_PORT/get_model_info
-echo "Teacher model server is up and running at $TEACHER_IP:$TEACHER_PORT."
-sleep 10
-
 
 export PYTHONBUFFERED=16
 
@@ -71,9 +48,7 @@ ROLLOUT_ARGS=(
 )
 
 RM_ARGS=(
-   --custom-rm-path examples.on_policy_distillation.on_policy_distillation.reward_func
-   --custom-reward-post-process-path examples.on_policy_distillation.on_policy_distillation.post_process_rewards
-   --rm-url http://$TEACHER_IP:$TEACHER_PORT/generate
+   --rm-type math
 )
 
 EVAL_ARGS=(
@@ -102,10 +77,15 @@ PERF_ARGS=(
 )
 
 GRPO_ARGS=(
-   --advantage-estimator grpo
-   --use-opd
-   --opd-type sglang
-   --opd-kl-coef 1.0
+   --advantage-estimator grpo                        # Base advantage estimator (can be ppo, grpo, etc.)
+   
+   # OPD Configuration
+   --use-opd                                          # Enable on-policy distillation
+   --opd-type megatron                                # Use Megatron forward for teacher
+   --opd-kl-coef 1.0                                  # CHANGE THIS: KL penalty coefficient
+   # Teacher model configuration (CHANGE THIS to a stronger model!)
+   --opd-teacher-load /root/Qwen3-8B_torch_dist      # Teacher model path
+   
    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
@@ -124,7 +104,7 @@ OPTIMIZER_ARGS=(
 WANDB_ARGS=(
    #--use-wandb
    # --wandb-project slime-dev
-   # --wandb-group qwen3-8B-test
+   # --wandb-group qwen3-8B-opd-megatron
    # --wandb-key ${WANDB_KEY}
 )
 

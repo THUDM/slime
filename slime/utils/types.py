@@ -26,6 +26,7 @@ class Sample:
     rollout_log_probs: list[float] | None = None  # Log probabilities from rollout engine
     rollout_routed_experts: list[list[int]] | None = None  # Routed experts from rollout engine
     remove_sample: bool = False
+    teacher_log_probs: list[float] | None = None  # Log probabilities from teacher model for OPD
 
     class Status(Enum):
         PENDING = "pending"
