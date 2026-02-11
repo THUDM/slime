@@ -85,19 +85,59 @@ class GenerateState(metaclass=SingletonMeta):
 
     def submit_generate_tasks(self, samples: list[list[Sample]]) -> None:
         for group in samples:
-            self.pendings.add(
-                asyncio.create_task(
-                    # submit a group of samples as a single task.
-                    generate_and_rm_group(
-                        self.args,
-                        group,
-                        sampling_params=self.sampling_params.copy(),
-                        evaluation=False,
-                    )
+            t = asyncio.create_task(
+                _run_group_with_timeout_and_retry(
+                    self.args,
+                    group,
+                    sampling_params=self.sampling_params.copy(),
+                    evaluation=False,
                 )
             )
+            # 绑定原始输入，方便失败时回收
+            t._slime_input_group = group
+            self.pendings.add(t)
         self.remaining_batch_size += len(samples)
 
+import random
+async def _run_group_with_timeout_and_retry(args, group, sampling_params, evaluation: bool):
+    timeout_s = getattr(args, "rollout_group_timeout_s", 600)      # 15min
+    retries = getattr(args, "rollout_group_retries", 2)            # retries 2 times
+    backoff_s = getattr(args, "rollout_group_backoff_s", 2.0)
+
+    last_exc = None
+    for attempt in range(retries + 1):
+        try:
+            return await asyncio.wait_for(
+                generate_and_rm_group(args, group, sampling_params=sampling_params, evaluation=evaluation),
+                timeout=timeout_s,
+            )
+        except asyncio.TimeoutError as e:
+            last_exc = e
+            print(f"[rollout retries] timeout after {timeout_s}s (attempt {attempt+1}/{retries+1})")
+            
+        except Exception as e:
+            last_exc = e
+            print(f"[rollout retries] exception {type(e).__name__}: {e} (attempt {attempt+1}/{retries+1})")
+        # Only reset + backoff if there are still retries left
+        if attempt < retries:
+            # reset: avoid "completed but reward None" dirty state affecting next attempt
+            for s in group:
+                if getattr(s, "reward", None) is None and getattr(s, "status", None) in (
+                    Sample.Status.COMPLETED,
+                    Sample.Status.TRUNCATED,
+                ):
+                    s.status = Sample.Status.PENDING
+
+                    s.reward = None
+                    s.response = ""
+                    s.response_length = 0
+                    s.tokens = []
+                    s.rollout_log_probs = None
+                    s.loss_mask = None
+
+            await asyncio.sleep(backoff_s * (attempt + 1) + random.random())
+
+    raise last_exc
 
 async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, Any]) -> Sample:
     """Generate using traditional SGLang router with token-based workflow"""
@@ -206,8 +246,13 @@ async def generate_and_rm(
     # For samples with existing response, check if they're complete
     if sample.status == Sample.Status.COMPLETED or sample.status == Sample.Status.TRUNCATED:
         assert sample.response is not None
-        if not args.group_rm:
-            assert sample.reward is not None
+        # if not args.group_rm:
+        #     assert sample.reward is not None
+        if not args.group_rm and sample.reward is None:
+            try:
+                sample.reward = await async_rm(args, sample)
+            except Exception:
+                sample.status = Sample.Status.ABORTED
         return sample
 
     state = GenerateState(args)
@@ -357,6 +402,7 @@ async def generate_rollout_async(
     target_data_size = args.rollout_batch_size
 
     data = []
+    failed_groups = []
     all_data = []
     do_print = True
     pbar = tqdm(total=target_data_size * args.n_samples_per_prompt, desc="Rollout generation")
@@ -368,8 +414,28 @@ async def generate_rollout_async(
 
         # wait for the generation to finish
         done, state.pendings = await asyncio.wait(state.pendings, return_when=asyncio.FIRST_COMPLETED)
+        def _flatten_group(g: list[Any]) -> list[Sample]:
+            flat: list[Sample] = []
+            for x in g:
+                if isinstance(x, list):
+                    flat.extend(x)
+                else:
+                    flat.append(x)
+            return flat
+
         for task in done:
-            group: list[Sample] = task.result()
+            # 1) get result first, TimeoutError / AssertionError / other exceptions are all caught here
+            try:
+                group: list[Sample] = task.result()
+            except Exception as e:
+                # This group generation failed: deduct the occupied quota + recycle the input group (if you bound the input when submitting generate tasks)
+                state.remaining_batch_size -= 1
+                inp = getattr(task, "_slime_input_group", None)  # input group in submit_generate_tasks 
+                if inp is not None:
+                    failed_groups.append(inp)
+                metric_gatherer.on_dynamic_filter_drop(reason=f"rollout_exception:{type(e).__name__}")
+                logger.warning(f"Rollout task failed (rollout_id={rollout_id}): {type(e).__name__}: {e}")
+                continue
 
             if do_print:
                 sample = group[0][0] if isinstance(group[0], list) else group[0]
@@ -378,7 +444,9 @@ async def generate_rollout_async(
                 )
                 do_print = False
 
+            # 2) structure validation
             assert len(group) == args.n_samples_per_prompt
+
             all_data.append(group)
             dynamic_filter_output = call_dynamic_filter(dynamic_filter, args, group)
             if not dynamic_filter_output.keep:
@@ -386,8 +454,35 @@ async def generate_rollout_async(
                 state.remaining_batch_size -= 1
                 continue
 
-            # add the samples to the data
-            # NOTE: here we have not stored all the unused samples back to the data buffer.
+            # 4) Key: training samples must have numeric rewards and no ABORTED status
+            flat = _flatten_group(group)
+
+            if any(s.status == Sample.Status.ABORTED for s in flat):
+                state.remaining_batch_size -= 1
+                inp = getattr(task, "_slime_input_group", None)
+                if inp is not None:
+                    failed_groups.append(inp)
+                metric_gatherer.on_dynamic_filter_drop(reason="aborted_in_group")
+                continue
+
+            if not args.group_rm:
+                # reward must be valid number
+                if any(s.reward is None for s in flat):
+                    state.remaining_batch_size -= 1
+                    inp = getattr(task, "_slime_input_group", None)
+                    if inp is not None:
+                        failed_groups.append(inp)
+                    metric_gatherer.on_dynamic_filter_drop(reason="reward_none")
+                    continue
+                if any(not isinstance(s.reward, (int, float)) for s in flat):
+                    state.remaining_batch_size -= 1
+                    inp = getattr(task, "_slime_input_group", None)
+                    if inp is not None:
+                        failed_groups.append(inp)
+                    metric_gatherer.on_dynamic_filter_drop(reason="reward_not_number")
+                    continue
+
+            # 5) accept the group as valid training data
             if len(data) < target_data_size:
                 data.append(group)
                 pbar.update(args.n_samples_per_prompt)
@@ -400,6 +495,7 @@ async def generate_rollout_async(
 
     # there are still some unfinished requests, abort them
     aborted_samples = await abort(args, rollout_id)
+    aborted_samples.extend(failed_groups)
 
     assert len(data) == args.rollout_batch_size, f"Got {len(data)} samples, expected {args.rollout_batch_size}"
     data = sorted(data, key=lambda group: group[0][0].index if isinstance(group[0], list) else group[0].index)
