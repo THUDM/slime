@@ -1603,43 +1603,19 @@ def slime_validate_args(args):
                 "please make sure it is a valid megatron checkpoint directory."
             )
 
-    # Validate on-policy distillation (OPD) arguments
-    if args.use_opd:
-        if args.opd_type is None:
-            raise ValueError("--opd-type must be specified when --use-opd is enabled. Choose 'sglang' or 'megatron'.")
-
-        if args.opd_type == "megatron":
-            if args.opd_teacher_load is None:
-                raise ValueError(
-                    "--opd-teacher-load is required when --opd-type=megatron. "
-                    "Please provide the path to the teacher model checkpoint."
-                )
-            if not os.path.exists(args.opd_teacher_load):
-                raise FileNotFoundError(
-                    f"opd_teacher_load {args.opd_teacher_load} does not exist, please check the path."
-                )
-            if not os.path.exists(os.path.join(args.opd_teacher_load, "latest_checkpointed_iteration.txt")):
-                logger.info(
-                    f"opd_teacher_load {args.opd_teacher_load} does not have latest_checkpointed_iteration.txt, "
-                    "please make sure it is a valid megatron checkpoint directory."
-                )
-
-        elif args.opd_type == "sglang":
-            if args.opd_teacher_load is not None:
-                raise ValueError(
-                    "--opd-teacher-load should not be set when --opd-type=sglang. "
-                    "In sglang mode, teacher log-probs are obtained from external server during rollout."
-                )
-    else:
-        # If OPD is not enabled, opd_teacher_load should not be set
-        if args.opd_teacher_load is not None:
-            raise ValueError("--opd-teacher-load is set but --use-opd is not enabled. Please add --use-opd flag.")
-
     # TODO: During loading, we need to set the start_rollout_id here.
     if args.megatron_to_hf_mode == "bridge":
         if args.load is None:
             args.load = args.ref_load or args.hf_checkpoint
-        args.start_rollout_id = 0
+        if (
+            args.start_rollout_id is None
+            and (
+                args.load is None
+                or not os.path.exists(args.load)
+                or not os.path.exists(os.path.join(args.load, "latest_checkpointed_iteration.txt"))
+            )
+        ):
+            args.start_rollout_id = 0
     else:
         if (
             args.load is None
@@ -1652,7 +1628,8 @@ def slime_validate_args(args):
             args.load = args.ref_load
             if args.ref_ckpt_step is not None:
                 args.ckpt_step = args.ref_ckpt_step
-            args.start_rollout_id = 0
+            if args.start_rollout_id is None:
+                args.start_rollout_id = 0
 
     if args.eval_interval is not None:
         assert args.eval_datasets, "Evaluation datasets must be configured when eval_interval is set."
