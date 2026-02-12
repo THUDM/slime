@@ -83,8 +83,7 @@ async def remote_rm(args, sample: Sample, max_retries: int = 60):
             try:
                 async with session.post(args.rm_url, json=payload) as resp:
                     resp.raise_for_status()
-                    result = await resp.json()
-                    return result["score"]
+                    return await resp.json()
             except Exception as e:
                 if not _is_retryable(e) or attempt + 1 >= max_retries:
                     if attempt > 0:
