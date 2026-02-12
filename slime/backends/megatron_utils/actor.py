@@ -459,7 +459,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 compute_advantages_and_returns(self.args, rollout_data)
 
             if self.rollout_data_postprocess is not None:
-                self.rollout_data_postprocess(self.args)
+                self.rollout_data_postprocess(self.args, rollout_data)
 
             log_rollout_data(
                 rollout_id,
