@@ -1,4 +1,5 @@
 import asyncio
+import atexit
 import logging
 import random
 
@@ -17,11 +18,16 @@ from .math_utils import extract_answer as extract_boxed_answer
 from .math_utils import grade_answer_verl
 
 
-# Global semaphore to limit concurrent remote RM requests.
-# Without this, thousands of requests fire simultaneously during eval,
-# overwhelming the endpoint and causing connection drops.
 _remote_rm_semaphore: asyncio.Semaphore | None = None
 _remote_rm_session: aiohttp.ClientSession | None = None
+
+TRANSIENT_ERRORS = (
+    aiohttp.ClientConnectionError,
+    aiohttp.ServerTimeoutError,
+    asyncio.TimeoutError,
+    ConnectionError,
+    OSError,
+)
 
 
 def _get_remote_rm_semaphore(max_concurrent: int = 64) -> asyncio.Semaphore:
@@ -40,6 +46,30 @@ def _get_remote_rm_session() -> aiohttp.ClientSession:
     return _remote_rm_session
 
 
+def _cleanup_remote_rm_session():
+    global _remote_rm_session
+    if _remote_rm_session is not None and not _remote_rm_session.closed:
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(_remote_rm_session.close())
+            else:
+                loop.run_until_complete(_remote_rm_session.close())
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_remote_rm_session)
+
+
+def _is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, TRANSIENT_ERRORS):
+        return True
+    if isinstance(exc, aiohttp.ClientResponseError):
+        return exc.status >= 500 or exc.status == 429
+    return False
+
+
 async def remote_rm(args, sample: Sample, max_retries: int = 60):
     payload = {
         "prompt": sample.prompt,
@@ -56,11 +86,13 @@ async def remote_rm(args, sample: Sample, max_retries: int = 60):
                     result = await resp.json()
                     return result["score"]
             except Exception as e:
-                if attempt + 1 >= max_retries:
-                    logger.warning(f"remote_rm max retries ({max_retries}) reached, url={args.rm_url}")
+                if not _is_retryable(e) or attempt + 1 >= max_retries:
+                    if attempt > 0:
+                        logger.warning(f"remote_rm failed after {attempt + 1} attempts, url={args.rm_url}")
                     raise
-                logger.info(f"remote_rm error: {type(e).__name__}: {e}, retrying (attempt {attempt + 1}/{max_retries})")
-                await asyncio.sleep(1 + random.random())
+                backoff = min(2 ** attempt, 30) + random.random()
+                logger.info(f"remote_rm error: {type(e).__name__}: {e}, retrying in {backoff:.1f}s (attempt {attempt + 1}/{max_retries})")
+                await asyncio.sleep(backoff)
 
 
 async def async_rm(args, sample: Sample, **kwargs):
