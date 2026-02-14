@@ -23,7 +23,7 @@ jobs:
     steps:
       - name: React to command comment (ack)
         if: always()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const commentId = context.payload.comment.id;
@@ -36,14 +36,14 @@ jobs:
             });
 
       - name: Check out Git repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: ${{ github.repository }}
           ref: refs/pull/${{ github.event.issue.number }}/head    
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.10'
 
@@ -80,7 +80,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Remove initial ack reaction
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const commentId = context.payload.comment.id;
