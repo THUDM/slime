@@ -54,7 +54,7 @@
     <link rel="prev" title="128xH100 训练 DeepSeek R1" href="../examples/deepseek-r1.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 02 月 13 日"/>
+    <meta name="docbuild:last-update" content="2026 年 02 月 14 日"/>
   </head>
   
   
@@ -459,6 +459,13 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">如何选择</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agent">4. 多轮 Agent 的会话亲和性路由</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">什么是会话亲和性？</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">工作原理</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">配置方法</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">注意事项</a></li>
+</ul>
+</li>
 </ul>
             </nav>
         </div>
@@ -561,6 +568,53 @@ document.write(`
 </ul>
 </section>
 </section>
+<hr class="docutils" />
+<section id="agent">
+<h2>4. 多轮 Agent 的会话亲和性路由<a class="headerlink" href="#agent" title="链接到此标题。">#</a></h2>
+<p>当使用 SGLang Model Gateway 的一致性哈希路由策略时，slime 会自动为每个 rollout session 分配唯一的 session ID，并将其作为路由键来实现会话亲和性。</p>
+<section id="id6">
+<h3>什么是会话亲和性？<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
+<p>会话亲和性（Session Affinity，也称为粘性会话）确保属于同一对话或 agent session 的所有请求都被路由到相同的后端 worker。这对以下场景有益：</p>
+<ul class="simple">
+<li><p><strong>多轮对话</strong>：保持相同 worker 可以提高前缀缓存命中率</p></li>
+<li><p><strong>多 agent 系统</strong>：确保 agent 状态一致性和更好的资源局部性</p></li>
+<li><p><strong>调试</strong>：更容易追踪和调试特定会话</p></li>
+</ul>
+</section>
+<section id="id7">
+<h3>工作原理<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h3>
+<p>当 rollout 系统生成样本时，每个样本都会被分配一个唯一的 <code class="docutils literal notranslate"><span class="pre">session_id</span></code>。这个 ID 会：</p>
+<ol class="arabic simple">
+<li><p>使用 UUID 为每个样本自动生成</p></li>
+<li><p>存储在 <code class="docutils literal notranslate"><span class="pre">sample.session_id</span></code> 字段中</p></li>
+<li><p>当 router policy 为 <code class="docutils literal notranslate"><span class="pre">consistent_hashing</span></code> 时，作为 <code class="docutils literal notranslate"><span class="pre">X-SMG-Routing-Key</span></code> header 传递</p></li>
+</ol>
+<p>SGLang Model Gateway 的一致性哈希策略会使用这个路由键，确定性地为所有具有相同 session ID 的请求选择相同的 worker。</p>
+</section>
+<section id="id8">
+<h3>配置方法<a class="headerlink" href="#id8" title="链接到此标题。">#</a></h3>
+<p>启用会话亲和性路由只需在 slime 中配置 router policy 参数：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-router-policy<span class="w"> </span>consistent_hashing
+</pre></div>
+</div>
+<p>Slime 会自动启动 SGLang Model Gateway 并使用一致性哈希策略。</p>
+<blockquote>
+<div><p><strong>注意</strong>：如果遇到 <code class="docutils literal notranslate"><span class="pre">consistent_hashing</span></code> policy 不可用的错误，请升级 sglang-router：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span>sglang-router
+</pre></div>
+</div>
+</div></blockquote>
+</section>
+<section id="id9">
+<h3>注意事项<a class="headerlink" href="#id9" title="链接到此标题。">#</a></h3>
+<ul class="simple">
+<li><p>每个样本都有自己独立的 session ID</p></li>
+<li><p>同一 group 中的不同样本可能会被路由到不同的 worker</p></li>
+<li><p>同一样本的后续轮次会保持相同的 session ID</p></li>
+<li><p>目前该功能只适用于 SGLang Model Gateway</p></li>
+</ul>
+</section>
+</section>
 </section>
 
 
@@ -627,6 +681,13 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">如何选择</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agent">4. 多轮 Agent 的会话亲和性路由</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">什么是会话亲和性？</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">工作原理</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">配置方法</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">注意事项</a></li>
+</ul>
+</li>
 </ul>
   </nav></div>
 
@@ -660,7 +721,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 02 月 13 日.
+  最后更新于 2026 年 02 月 14 日.
   <br/>
 </p>
   </div>

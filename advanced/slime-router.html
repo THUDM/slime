@@ -54,7 +54,7 @@
     <link rel="prev" title="DeepSeek R1 with 128xH100" href="../examples/deepseek-r1.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Feb 13, 2026"/>
+    <meta name="docbuild:last-update" content="Feb 14, 2026"/>
   </head>
   
   
@@ -463,6 +463,13 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#when-to-use-which">When to use which</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#session-affinity-routing-for-multi-turn-agents">4. Session-Affinity Routing for Multi-Turn Agents</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-session-affinity">What is session affinity?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works">How it works</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#notes">Notes</a></li>
+</ul>
+</li>
 </ul>
             </nav>
         </div>
@@ -565,6 +572,53 @@ document.write(`
 </ul>
 </section>
 </section>
+<hr class="docutils" />
+<section id="session-affinity-routing-for-multi-turn-agents">
+<h2>4. Session-Affinity Routing for Multi-Turn Agents<a class="headerlink" href="#session-affinity-routing-for-multi-turn-agents" title="Link to this heading">#</a></h2>
+<p>When using SGLang Model Gateway with consistent hashing routing policy, Slime automatically assigns each rollout session a unique session ID and uses it as the routing key to enable session affinity.</p>
+<section id="what-is-session-affinity">
+<h3>What is session affinity?<a class="headerlink" href="#what-is-session-affinity" title="Link to this heading">#</a></h3>
+<p>Session affinity (also called sticky sessions) ensures that all requests belonging to the same conversation or agent session are routed to the same backend worker. This is beneficial for:</p>
+<ul class="simple">
+<li><p><strong>Multi-turn dialogues</strong>: Keeping the same worker improves prefix cache hit rates</p></li>
+<li><p><strong>Multi-agent systems</strong>: Ensures agent state consistency and better resource locality</p></li>
+<li><p><strong>Debugging</strong>: Makes it easier to trace and debug specific sessions</p></li>
+</ul>
+</section>
+<section id="how-it-works">
+<h3>How it works<a class="headerlink" href="#how-it-works" title="Link to this heading">#</a></h3>
+<p>When the rollout system generates samples, each sample is assigned a unique <code class="docutils literal notranslate"><span class="pre">session_id</span></code>. This ID is:</p>
+<ol class="arabic simple">
+<li><p>Automatically generated using UUID for each sample</p></li>
+<li><p>Stored in <code class="docutils literal notranslate"><span class="pre">sample.session_id</span></code> field</p></li>
+<li><p>Passed as <code class="docutils literal notranslate"><span class="pre">X-SMG-Routing-Key</span></code> header when the router policy is <code class="docutils literal notranslate"><span class="pre">consistent_hashing</span></code></p></li>
+</ol>
+<p>The SGLang Model Gateway’s consistent hashing policy then uses this routing key to deterministically select the same worker for all requests with the same session ID.</p>
+</section>
+<section id="configuration">
+<h3>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">#</a></h3>
+<p>To enable session-affinity routing, simply configure the router policy in Slime:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-router-policy<span class="w"> </span>consistent_hashing
+</pre></div>
+</div>
+<p>Slime will automatically start SGLang Model Gateway with the consistent hashing policy.</p>
+<blockquote>
+<div><p><strong>Note</strong>: If you encounter an error about the <code class="docutils literal notranslate"><span class="pre">consistent_hashing</span></code> policy not being available, upgrade sglang-router:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span>sglang-router
+</pre></div>
+</div>
+</div></blockquote>
+</section>
+<section id="notes">
+<h3>Notes<a class="headerlink" href="#notes" title="Link to this heading">#</a></h3>
+<ul class="simple">
+<li><p>Each sample gets its own unique session ID</p></li>
+<li><p>Different samples in the same group may be routed to different workers</p></li>
+<li><p>The same sample’s subsequent turns will maintain the same session ID</p></li>
+<li><p>Currently, this feature is only available for SGLang Model Gateway</p></li>
+</ul>
+</section>
+</section>
 </section>
 
 
@@ -631,6 +685,13 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#when-to-use-which">When to use which</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#session-affinity-routing-for-multi-turn-agents">4. Session-Affinity Routing for Multi-Turn Agents</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-session-affinity">What is session affinity?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works">How it works</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#notes">Notes</a></li>
+</ul>
+</li>
 </ul>
   </nav></div>
 
@@ -664,7 +725,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Feb 13, 2026.
+  Last updated on Feb 14, 2026.
   <br/>
 </p>
   </div>
