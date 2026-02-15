@@ -79,6 +79,7 @@ def monkey_patch_torch_dist():
     dist.send = get_new_function(dist.send)
     dist.recv = get_new_function(dist.recv)
     dist._coalescing_manager = get_new_function(dist._coalescing_manager)
+    dist.broadcast_object_list = get_new_function(dist.broadcast_object_list)
 
     # p2p
     old_isend = dist.isend
