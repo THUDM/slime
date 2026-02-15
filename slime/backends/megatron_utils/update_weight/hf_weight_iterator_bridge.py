@@ -27,20 +27,19 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
 
             named_weights = self._bridge.export_hf_weights(self.model, cpu=False, conversion_tasks=conversion_tasks)
 
-            named_weights = (
-                (
-                    hf_param_name,
-                    postprocess_hf_param(
-                        args=self.args,
-                        megatron_param_name=megatron_param_name,
-                        hf_param_name=hf_param_name,
-                        param=weight,
-                    ),
-                )
+            processed_weights = (
+                processed
                 for hf_param_name, weight, megatron_param_name in named_weights
+                for processed in postprocess_hf_param(
+                    args=self.args,
+                    megatron_param_name=megatron_param_name,
+                    hf_param_name=hf_param_name,
+                    param=weight,
+                    quantization_config=self.quantization_config,
+                )
             )
 
-            yield from chunk_named_params_by_size(named_weights, chunk_size=self.args.update_weight_buffer_size)
+            yield from chunk_named_params_by_size(processed_weights, chunk_size=self.args.update_weight_buffer_size)
 
 
 def _process_conversion_tasks(vanilla_conversion_tasks, new_weight_dict):
