@@ -1,0 +1,13 @@
+# multi_source_config.yaml
+prompt_data:
+  - examples/curriculum_learning/data/dapo-math-17k.jsonl
+  - examples/curriculum_learning/data/verinstruct.jsonl
+prompt_data_source_names:
+  - dapo_math_17k
+  - verinstruct
+data_source_weights:
+  - 0.7
+  - 0.3
+data_source_path: examples.curriculum_learning.data_source.MultipleWeightedRolloutDataSourceWithBuffer
+custom_rm_path: examples.curriculum_learning.reward.async_rm_math_if
+custom_rollout_log_function_path: examples.curriculum_learning.custom_log.custom_rollout_log_function
