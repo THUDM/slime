@@ -30,7 +30,7 @@ TRANSIENT_ERRORS = (
 )
 
 
-def _get_remote_rm_semaphore(max_concurrent: int = 64) -> asyncio.Semaphore:
+def _get_remote_rm_semaphore(max_concurrent: int = 16) -> asyncio.Semaphore:
     global _remote_rm_semaphore
     if _remote_rm_semaphore is None:
         _remote_rm_semaphore = asyncio.Semaphore(max_concurrent)
@@ -41,7 +41,7 @@ def _get_remote_rm_session() -> aiohttp.ClientSession:
     global _remote_rm_session
     if _remote_rm_session is None or _remote_rm_session.closed:
         timeout = aiohttp.ClientTimeout(total=120, connect=10)
-        connector = aiohttp.TCPConnector(limit=64)
+        connector = aiohttp.TCPConnector(limit=16, keepalive_timeout=30)
         _remote_rm_session = aiohttp.ClientSession(timeout=timeout, connector=connector)
     return _remote_rm_session
 
@@ -70,6 +70,10 @@ def _is_retryable(exc: Exception) -> bool:
     return False
 
 
+def _is_connection_error(exc: Exception) -> bool:
+    return isinstance(exc, (aiohttp.ClientConnectionError, ConnectionError, OSError))
+
+
 async def remote_rm(args, sample: Sample, max_retries: int = 60):
     payload = {
         "prompt": sample.prompt,
@@ -78,20 +82,30 @@ async def remote_rm(args, sample: Sample, max_retries: int = 60):
     }
     semaphore = _get_remote_rm_semaphore()
     session = _get_remote_rm_session()
-    async with semaphore:
-        for attempt in range(max_retries):
+    attempt = 0
+    conn_errors = 0
+    while True:
+        async with semaphore:
             try:
                 async with session.post(args.rm_url, json=payload) as resp:
                     resp.raise_for_status()
                     return await resp.json()
             except Exception as e:
-                if not _is_retryable(e) or attempt + 1 >= max_retries:
-                    if attempt > 0:
-                        logger.warning(f"remote_rm failed after {attempt + 1} attempts, url={args.rm_url}")
+                is_conn_err = _is_connection_error(e)
+                if is_conn_err:
+                    conn_errors += 1
+                else:
+                    attempt += 1
+
+                if not _is_retryable(e) or attempt >= max_retries:
+                    total = attempt + conn_errors
+                    if total > 0:
+                        logger.warning(f"remote_rm failed after {total} attempts ({conn_errors} conn errors), url={args.rm_url}")
                     raise e
-                backoff = min(2 ** attempt, 30) + random.random()
-                logger.info(f"remote_rm error: {type(e).__name__}: {e}, retrying in {backoff:.1f}s (attempt {attempt + 1}/{max_retries})")
-                await asyncio.sleep(backoff)
+
+                backoff = min(2 ** (attempt + conn_errors - 1), 30) + random.random()
+                logger.info(f"remote_rm error: {type(e).__name__}: {e}, retrying in {backoff:.1f}s (attempt {attempt}/{max_retries}, conn_errors={conn_errors})")
+        await asyncio.sleep(backoff)
 
 
 async def async_rm(args, sample: Sample, **kwargs):
