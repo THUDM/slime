@@ -1,7 +1,11 @@
 import asyncio
+import atexit
+import logging
 import random
 
 import aiohttp
+
+logger = logging.getLogger(__name__)
 
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
@@ -14,17 +18,94 @@ from .math_utils import extract_answer as extract_boxed_answer
 from .math_utils import grade_answer_verl
 
 
-async def remote_rm(args, sample: Sample):
+_remote_rm_semaphore: asyncio.Semaphore | None = None
+_remote_rm_session: aiohttp.ClientSession | None = None
+
+TRANSIENT_ERRORS = (
+    aiohttp.ClientConnectionError,
+    aiohttp.ServerTimeoutError,
+    asyncio.TimeoutError,
+    ConnectionError,
+    OSError,
+)
+
+
+def _get_remote_rm_semaphore(max_concurrent: int = 16) -> asyncio.Semaphore:
+    global _remote_rm_semaphore
+    if _remote_rm_semaphore is None:
+        _remote_rm_semaphore = asyncio.Semaphore(max_concurrent)
+    return _remote_rm_semaphore
+
+
+def _get_remote_rm_session() -> aiohttp.ClientSession:
+    global _remote_rm_session
+    if _remote_rm_session is None or _remote_rm_session.closed:
+        timeout = aiohttp.ClientTimeout(total=120, connect=10)
+        connector = aiohttp.TCPConnector(limit=16, keepalive_timeout=30)
+        _remote_rm_session = aiohttp.ClientSession(timeout=timeout, connector=connector)
+    return _remote_rm_session
+
+
+def _cleanup_remote_rm_session():
+    global _remote_rm_session
+    if _remote_rm_session is not None and not _remote_rm_session.closed:
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(_remote_rm_session.close())
+            else:
+                loop.run_until_complete(_remote_rm_session.close())
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_remote_rm_session)
+
+
+def _is_retryable(exc: Exception) -> bool:
+    if isinstance(exc, TRANSIENT_ERRORS):
+        return True
+    if isinstance(exc, aiohttp.ClientResponseError):
+        return exc.status >= 500 or exc.status == 429
+    return False
+
+
+def _is_connection_error(exc: Exception) -> bool:
+    return isinstance(exc, (aiohttp.ClientConnectionError, ConnectionError, OSError))
+
+
+async def remote_rm(args, sample: Sample, max_retries: int = 60):
     payload = {
         "prompt": sample.prompt,
         "response": sample.response,
         "label": sample.label,
     }
-    session_kwargs = {}
-    async with aiohttp.ClientSession(**session_kwargs) as session:
-        async with session.post(args.rm_url, json=payload) as resp:
-            resp.raise_for_status()
-            return await resp.json()
+    semaphore = _get_remote_rm_semaphore()
+    session = _get_remote_rm_session()
+    attempt = 0
+    conn_errors = 0
+    while True:
+        async with semaphore:
+            try:
+                async with session.post(args.rm_url, json=payload) as resp:
+                    resp.raise_for_status()
+                    return await resp.json()
+            except Exception as e:
+                is_conn_err = _is_connection_error(e)
+                if is_conn_err:
+                    conn_errors += 1
+                else:
+                    attempt += 1
+
+                if not _is_retryable(e) or attempt >= max_retries:
+                    total = attempt + conn_errors
+                    if total > 0:
+                        logger.warning(f"remote_rm failed after {total} attempts ({conn_errors} conn errors), url={args.rm_url}")
+                    raise e
+
+                backoff = min(2 ** (attempt + conn_errors - 1), 30) + random.random()
+                logger.info(f"remote_rm error: {type(e).__name__}: {e}, retrying in {backoff:.1f}s (attempt {attempt}/{max_retries}, conn_errors={conn_errors})")
+        await asyncio.sleep(backoff)
 
 
 async def async_rm(args, sample: Sample, **kwargs):
