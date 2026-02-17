@@ -100,6 +100,7 @@ async def reward_func(args, sample: Sample, **kwargs):
     """Reward function using math_dapo scoring."""
     ground_truth = sample.label or ""
     tool_iters = getattr(sample, "tool_iters", 0)
+    tool_calls = getattr(sample, "tool_calls", 0)
 
     result = math_dapo_compute_score(sample.response, ground_truth, strict_box_verify=False)
     if result["pred"] == "[INVALID]":
@@ -110,5 +111,5 @@ async def reward_func(args, sample: Sample, **kwargs):
         result["score"] = min(-0.6, result["score"] + (tool_iters - 2) / 2 * 0.1)
 
     result["pred"] = result["pred"] or ""
-    logger.info(f"reward={result['score']:.2f} | status={sample.status.name} | tool_iters={tool_iters} | tool_calls={sample.tool_calls} | tokens={len(sample.tokens)} | resp_len={sample.response_length} | ")
+    logger.info(f"reward={result['score']:.2f} | status={sample.status.name} | tool_iters={tool_iters} | tool_calls={tool_calls} | tokens={len(sample.tokens)} | resp_len={sample.response_length} | ")
     return result["score"]
