@@ -113,6 +113,7 @@ class RolloutManager:
             self._metric_checker.dispose()
         if self._health_monitor is not None:
             self._health_monitor.stop()
+        logging_utils.finish_tracking(self.args)
 
     # TODO maybe rename "rollout_engines" and "all_rollout_engines" later
     @property
