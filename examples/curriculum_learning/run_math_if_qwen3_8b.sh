@@ -44,7 +44,7 @@ ROLLOUT_ARGS=(
    --label-key label
    --apply-chat-template
    --rollout-shuffle
-   --num-rollout 100
+   --num-rollout 200 # Placeholder, overwritten in --custom-config-path
    --rollout-batch-size 128
    --n-samples-per-prompt 16
    --rollout-max-response-len 16384

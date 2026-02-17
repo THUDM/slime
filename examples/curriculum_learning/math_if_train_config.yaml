@@ -1,43 +1,31 @@
-# multi_source_config.yaml
+# Example config demonstrating curriculum learning with dynamic reward caps
+# This shows how to combine dynamic weights with dynamic reward caps for sophisticated curriculum strategies
+
 prompt_data:
   - examples/curriculum_learning/data/dapo-math-17k.jsonl
   - examples/curriculum_learning/data/verinstruct.jsonl
+
 prompt_data_source_names:
   - dapo_math_17k
   - verinstruct
-# Data source weights - one entry per data source
-# Each entry can be a constant, lambda function, or function path
-#
-# Format options for each source:
-# 1. Constant number: 0.5
-# 2. Lambda function: "lambda step: 0.5 + step/1000"
-# 3. Function from file: "examples.curriculum_learning.weight_scheduler.easy_to_hard"
-#
-# Example 1: Constant weights (current default)
-# data_source_weights:
-#   - 0.5  # dapo_math_17k: constant weight
-#   - 0.5  # verinstruct: constant weight
 
-# Example 2: Mixed - constant and lambda
-# data_source_weights:
-#   - 0.5  # dapo_math_17k: constant
-#   - "lambda step: 0.1 + 0.8 * min(step / 1000, 1.0)"  # verinstruct: increases over time
-
-# Example 3: Both using lambda functions
+num_rollout: 200
+# Dynamic weights: gradually shift from easy to hard dataset
 data_source_weights:
-  - "lambda step: 0.9 - 0.8 * min(step / 100, 1.0)"  # dapo_math_17k: decreases (0.9 -> 0.1)
-  - "lambda step: 0.1 + 0.8 * min(step / 100, 1.0)"  # verinstruct: increases (0.1 -> 0.9)
+  - "lambda step: 0.9 - 0.7 * min(step / 200, 1.0)"  # dapo_math_17k (easy): 0.9 -> 0.2
+  - "lambda step: 0.1 + 0.7 * min(step / 200, 1.0)"  # verinstruct (hard): 0.1 -> 0.8
 
-# Example 4: Using predefined scheduler functions
-# data_source_weights:
-#   - "examples.curriculum_learning.weight_scheduler.easy_to_hard"  # dapo_math_17k: decreasing
-#   - "examples.curriculum_learning.weight_scheduler.hard_to_easy"  # verinstruct: increasing
+# Dynamic reward caps: start strict on easy dataset, gradually relax
+# Easy dataset: start very strict (0.1), accept only hardest samples, gradually relax to 0.5
+# Hard dataset: start lenient (0.8), gradually tighten to 0.4 as model improves
+data_source_reward_caps:
+  - "lambda step: 0.9 - 0.2 * min(step / 200, 1.0)"  # dapo_math_17k (easy): 0.9 -> 0.7
+  - "lambda step: 0.9 - 0.1 * min(step / 200, 1.0)"  # verinstruct (hard): 0.9 -> 0.8
 
-# Available scheduler functions (see weight_scheduler.py):
-# - easy_to_hard: decreasing weight (0.9 -> 0.1)
-# - hard_to_easy: increasing weight (0.1 -> 0.9)
-# - exponential_decay: smooth exponential decrease
-# - exponential_warmup: smooth exponential increase
+# Enable dynamic filtering with reward caps
+over_sampling_batch_size: 256
+dynamic_sampling_filter_path: examples.curriculum_learning.reward_cap_filter.check_reward_cap_per_source
+
 data_source_path: examples.curriculum_learning.data_source.MultipleWeightedRolloutDataSourceWithBuffer
 custom_rm_path: examples.curriculum_learning.reward.async_rm_math_if
 custom_rollout_log_function_path: examples.curriculum_learning.custom_log.custom_rollout_log_function
