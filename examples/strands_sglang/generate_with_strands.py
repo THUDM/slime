@@ -79,7 +79,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         sample.status = Sample.Status.TRUNCATED
         logger.warning(f"TRUNCATED: {type(e).__name__}: {e}")
 
-    # Extract tokentrajectory from token_manager
+    # Extract token trajectory from token_manager
     tm = model.token_manager
     prompt_len = len(tm.segments[0])  # system + user are first segment
     sample.tokens = tm.token_ids
