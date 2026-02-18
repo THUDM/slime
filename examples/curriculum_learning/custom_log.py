@@ -113,13 +113,13 @@ def custom_rollout_log_function(rollout_id, args, samples, rollout_extra_metrics
 
         # Import parsing function from reward_cap_filter
         try:
-            from examples.curriculum_learning.reward_cap_filter import _parse_reward_caps
+            from examples.curriculum_learning.reward_cap_filter import parse_reward_caps
 
             source_names = args.prompt_data_source_names
             reward_caps_config = args.data_source_reward_caps
 
             # Parse reward caps into callable functions
-            cap_functions = _parse_reward_caps(reward_caps_config, source_names)
+            cap_functions = parse_reward_caps(reward_caps_config, source_names)
 
             # Evaluate and log cap for each source at its current rollout step
             for source_name, cap_fn in zip(source_names, cap_functions, strict=True):

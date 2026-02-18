@@ -3,9 +3,10 @@
 Download all four JSONL files to the current directory:
 
 ```bash
+# You should be under examples/curriculum_learning/data
 huggingface-cli download zhangzx369/curriculum-learning-minimal-example \
   --include "data/*.jsonl" \
-  --local-dir .
+  --local-dir ../
 ```
 After downloading, the data file structure should be:
 ```

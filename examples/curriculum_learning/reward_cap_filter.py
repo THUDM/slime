@@ -14,7 +14,7 @@ Example usage in config:
       - verinstruct
     data_source_reward_caps:
       - 0.3  # Constant cap
-      - "lambda step: 0.1 + 0.5 * min(step / 1000, 1.0)"  # Dynamic cap
+      - "lambda step: 0.1 + 0.5 * min(step / 200, 1.0)"  # Dynamic cap
       # OR
       - "examples.curriculum_learning.reward_cap_scheduler.increasing_cap"
     dynamic_sampling_filter_path: examples.curriculum_learning.reward_cap_filter.check_reward_cap_per_source
@@ -29,13 +29,13 @@ from slime.utils.types import Sample
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["check_reward_cap_per_source"]
+__all__ = ["check_reward_cap_per_source", "parse_reward_caps"]
 
 # Module-level cache for parsed cap functions
 _CAP_FUNCTIONS_CACHE = {}
 
 
-def _parse_reward_caps(reward_caps_config: list, source_names: list) -> list[Callable[[int], float]]:
+def parse_reward_caps(reward_caps_config: list, source_names: list) -> list[Callable[[int], float]]:
     """
     Parse reward cap configuration into a list of callable functions.
 
@@ -146,7 +146,7 @@ def check_reward_cap_per_source(args, samples: list[Sample], **kwargs) -> Dynami
         return DynamicFilterOutput(keep=True)
 
     # Parse reward caps into callable functions
-    cap_functions = _parse_reward_caps(reward_caps_config, source_names)
+    cap_functions = parse_reward_caps(reward_caps_config, source_names)
 
     # Build source -> cap_function mapping
     cap_fn_by_source = dict(zip(source_names, cap_functions, strict=True))

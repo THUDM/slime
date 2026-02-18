@@ -31,6 +31,8 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." &>/dev/null && pwd)"
 source "${SCRIPT_DIR}/../../scripts/models/qwen3-8B.sh"
 
+# NOTE: Update these checkpoint paths according to your environment
+# These are example paths and need to be adjusted to match your model location
 CKPT_ARGS=(
    --hf-checkpoint /root/Qwen3-8B
    --ref-load /root/Qwen3-8B_torch_dist
@@ -56,7 +58,7 @@ ROLLOUT_ARGS=(
 EVAL_ARGS=(
    # --skip-eval-before-train
    --eval-interval 20
-   --eval-config ${REPO_ROOT}/examples/curriculum_learning/math_if_eval_config.yaml
+   --eval-config ${REPO_ROOT}/examples/curriculum_learning/configs/math_if_eval_config.yaml
 )
 
 PERF_ARGS=(
@@ -117,7 +119,7 @@ MISC_ARGS=(
    --attention-softmax-in-fp32
    # need to comment this when using model with MLA
    --attention-backend flash
-   --custom-config-path ${REPO_ROOT}/examples/curriculum_learning/math_if_train_config.yaml
+   --custom-config-path ${REPO_ROOT}/examples/curriculum_learning/configs/math_if_train_config.yaml
 )
 
 # launch the master node of ray in container

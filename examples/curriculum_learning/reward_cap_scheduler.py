@@ -1,13 +1,3 @@
-"""
-Example reward cap scheduler functions for dynamic reward capping.
-
-These functions compute reward caps for individual data sources based on the current rollout step,
-enabling curriculum learning strategies where filtering strictness changes during training.
-
-Each function takes a rollout_step and returns a single float cap for one data source.
-Multiple sources can use different functions, constants, or lambdas independently.
-"""
-
 import logging
 import math
 
@@ -26,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def increasing_cap(rollout_step: int) -> float:
     """
-    Increasing cap: starts strict (0.1) and becomes lenient (0.9) over 1000 steps.
+    Increasing cap: starts strict (0.1) and becomes lenient (0.9) over 200 steps.
     Use for datasets where you want to gradually accept more samples as training progresses.
 
     Curriculum: Start by only accepting very difficult samples, gradually accept easier ones.
@@ -37,14 +27,14 @@ def increasing_cap(rollout_step: int) -> float:
     Returns:
         Single float cap for this data source
     """
-    max_steps = 1000
+    max_steps = 200
     progress = min(rollout_step / max_steps, 1.0)
     return 0.1 + 0.8 * progress  # 0.1 -> 0.9
 
 
 def decreasing_cap(rollout_step: int) -> float:
     """
-    Decreasing cap: starts lenient (0.9) and becomes strict (0.1) over 1000 steps.
+    Decreasing cap: starts lenient (0.9) and becomes strict (0.1) over 200 steps.
     Use for datasets where you want to gradually filter out easier samples.
 
     Curriculum: Start by accepting many samples, gradually become more selective.
@@ -55,7 +45,7 @@ def decreasing_cap(rollout_step: int) -> float:
     Returns:
         Single float cap for this data source
     """
-    max_steps = 1000
+    max_steps = 200
     progress = min(rollout_step / max_steps, 1.0)
     return 0.9 - 0.8 * progress  # 0.9 -> 0.1
 
@@ -93,7 +83,7 @@ def exponential_decrease(rollout_step: int) -> float:
 def step_function_cap(rollout_step: int) -> float:
     """
     Step function: abrupt changes at specific thresholds.
-    Useful for staged curriculum learning.
+    Useful for staged curriculum learning (over 200 steps).
 
     Args:
         rollout_step: Current training rollout step
@@ -101,9 +91,9 @@ def step_function_cap(rollout_step: int) -> float:
     Returns:
         Single float cap for this data source
     """
-    if rollout_step < 200:
+    if rollout_step < 100:
         return 0.2  # Stage 1: Very strict
-    elif rollout_step < 500:
+    elif rollout_step < 200:
         return 0.5  # Stage 2: Moderate
     else:
         return 0.8  # Stage 3: Lenient
@@ -111,7 +101,7 @@ def step_function_cap(rollout_step: int) -> float:
 
 def warmup_then_constant(rollout_step: int) -> float:
     """
-    Linear warmup for first 500 steps, then constant.
+    Linear warmup for first 100 steps, then constant.
     Useful for stabilizing early training with strict filtering,
     then maintaining consistent quality bar.
 
@@ -121,7 +111,7 @@ def warmup_then_constant(rollout_step: int) -> float:
     Returns:
         Single float cap for this data source
     """
-    warmup_steps = 500
+    warmup_steps = 100
     target_cap = 0.6
 
     if rollout_step < warmup_steps:
@@ -129,3 +119,63 @@ def warmup_then_constant(rollout_step: int) -> float:
         return 0.1 + (target_cap - 0.1) * (rollout_step / warmup_steps)
     else:
         return target_cap
+
+
+def level_increasing(rollout_step: int) -> float:
+    """
+    Level-based increasing cap with discrete steps.
+    Cap increases in 4 levels over 200 steps: 0.5 -> 0.6 -> 0.7 -> 0.8
+
+    Useful for staged curriculum where you want discrete milestones
+    for gradually accepting more samples.
+
+    Stages:
+    - Steps 0-50: 0.5 (strict)
+    - Steps 50-100: 0.6
+    - Steps 100-150: 0.7
+    - Steps 150-200: 0.8 (lenient)
+
+    Args:
+        rollout_step: Current training rollout step
+
+    Returns:
+        Single float cap for this data source
+    """
+    if rollout_step < 50:
+        return 0.5
+    elif rollout_step < 100:
+        return 0.6
+    elif rollout_step < 150:
+        return 0.7
+    else:
+        return 0.8
+
+
+def level_decreasing(rollout_step: int) -> float:
+    """
+    Level-based decreasing cap with discrete steps.
+    Cap decreases in 4 levels over 200 steps: 0.8 -> 0.7 -> 0.6 -> 0.5
+
+    Useful for staged curriculum where you want discrete milestones
+    for gradually filtering out easier samples.
+
+    Stages:
+    - Steps 0-50: 0.8 (lenient)
+    - Steps 50-100: 0.7
+    - Steps 100-150: 0.6
+    - Steps 150-200: 0.5 (strict)
+
+    Args:
+        rollout_step: Current training rollout step
+
+    Returns:
+        Single float cap for this data source
+    """
+    if rollout_step < 50:
+        return 0.8
+    elif rollout_step < 100:
+        return 0.7
+    elif rollout_step < 150:
+        return 0.6
+    else:
+        return 0.5
