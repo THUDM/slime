@@ -10,11 +10,11 @@ logger = logging.getLogger(__name__)
 # Each function returns a single float for one data source
 # Use these in config like:
 #   data_source_weights:
-#     - "examples.curriculum_learning.weight_scheduler.easy_to_hard"
-#     - "examples.curriculum_learning.weight_scheduler.hard_to_easy"
+#     - "examples.curriculum_learning.weight_scheduler.decreasing_weight"
+#     - "examples.curriculum_learning.weight_scheduler.increasing_weight"
 
 
-def easy_to_hard(rollout_step: int) -> float:
+def decreasing_weight(rollout_step: int) -> float:
     """
     Decreasing weight: starts high (0.9) and decreases to low (0.1) over 200 steps.
     Use for easier data sources that should be de-emphasized as training progresses.
@@ -30,7 +30,7 @@ def easy_to_hard(rollout_step: int) -> float:
     return 0.9 - 0.8 * progress  # 0.9 -> 0.1
 
 
-def hard_to_easy(rollout_step: int) -> float:
+def increasing_weight(rollout_step: int) -> float:
     """
     Increasing weight: starts low (0.1) and increases to high (0.9) over 200 steps.
     Use for harder data sources that should be emphasized as training progresses.

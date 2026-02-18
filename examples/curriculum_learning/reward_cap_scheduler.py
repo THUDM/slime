@@ -80,47 +80,6 @@ def exponential_decrease(rollout_step: int) -> float:
     return 0.9 * math.exp(-decay_rate * rollout_step) + 0.1  # 0.9 -> ~0.1
 
 
-def step_function_cap(rollout_step: int) -> float:
-    """
-    Step function: abrupt changes at specific thresholds.
-    Useful for staged curriculum learning (over 200 steps).
-
-    Args:
-        rollout_step: Current training rollout step
-
-    Returns:
-        Single float cap for this data source
-    """
-    if rollout_step < 100:
-        return 0.2  # Stage 1: Very strict
-    elif rollout_step < 200:
-        return 0.5  # Stage 2: Moderate
-    else:
-        return 0.8  # Stage 3: Lenient
-
-
-def warmup_then_constant(rollout_step: int) -> float:
-    """
-    Linear warmup for first 100 steps, then constant.
-    Useful for stabilizing early training with strict filtering,
-    then maintaining consistent quality bar.
-
-    Args:
-        rollout_step: Current training rollout step
-
-    Returns:
-        Single float cap for this data source
-    """
-    warmup_steps = 100
-    target_cap = 0.6
-
-    if rollout_step < warmup_steps:
-        # Linear increase from 0.1 to target_cap
-        return 0.1 + (target_cap - 0.1) * (rollout_step / warmup_steps)
-    else:
-        return target_cap
-
-
 def level_increasing(rollout_step: int) -> float:
     """
     Level-based increasing cap with discrete steps.

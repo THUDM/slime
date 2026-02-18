@@ -24,8 +24,8 @@ data_source_weights:
 ### 3. Function from File
 ```yaml
 data_source_weights:
-  - "examples.curriculum_learning.weight_scheduler.easy_to_hard"
-  - "examples.curriculum_learning.weight_scheduler.hard_to_easy"
+  - "examples.curriculum_learning.weight_scheduler.decreasing_weight"
+  - "examples.curriculum_learning.weight_scheduler.increasing_weight"
 ```
 
 ### 4. Mixed Approaches
@@ -33,15 +33,15 @@ data_source_weights:
 data_source_weights:
   - 0.3  # constant for source 1
   - "lambda step: 0.5 + step/2000"  # lambda for source 2
-  - "examples.curriculum_learning.weight_scheduler.hard_to_easy"  # function for source 3
+  - "examples.curriculum_learning.weight_scheduler.increasing_weight"  # function for source 3
 ```
 
 ## Available Scheduler Functions
 
 See `weight_scheduler.py` for predefined functions:
 
-- **easy_to_hard**: Decreasing weight (0.9 → 0.1 over 200 steps)
-- **hard_to_easy**: Increasing weight (0.1 → 0.9 over 200 steps)
+- **decreasing_weight**: Decreasing weight (0.9 → 0.1 over 200 steps)
+- **increasing_weight**: Increasing weight (0.1 → 0.9 over 200 steps)
 - **exponential_decay**: Smooth exponential decrease
 - **exponential_warmup**: Smooth exponential increase
 - **level_increasing**: Discrete increasing levels (0.5 → 0.6 → 0.7 → 0.8 over 200 steps)
@@ -90,26 +90,3 @@ data_source_weights:
   - "path.to.your.module.my_custom_schedule"
   - 0.5  # other source with constant weight
 ```
-
-## Architecture
-
-- **data_source.py**: `MultipleWeightedRolloutDataSourceWithBuffer` class
-  - Manages multiple data sources with independent weights
-  - Parses weight configurations (constant/lambda/function)
-  - Tracks rollout step for dynamic weight computation
-  - Distributes samples according to computed weights
-
-- **weight_scheduler.py**: Pre-defined weight scheduler functions
-  - Each function takes `rollout_step` and returns a single float
-  - Can be referenced from config files
-
-- **custom_log.py**: Custom logging function
-  - Logs per-source metrics and weight curves
-  - Parses and evaluates weight functions for logging
-
-## Notes
-
-- Weights are normalized automatically (sum to 1.0)
-- Each data source maintains its own buffer independently, which also supports partial rollouts based on data-source separate buffers.
-- Sample group indices are kept globally unique across sources
-- Checkpoint saving/loading preserves rollout step and source states

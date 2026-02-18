@@ -8,7 +8,7 @@ This feature enables fine-grained quality control during dynamic sampling by set
 
 During rollout generation with dynamic sampling:
 1. For each sample group, check if all rewards are 0.0 - if so, drop the group (no learning signal)
-2. Compute the average reward across all samples
+2. Compute the average reward across all samples inside a group
 3. Compare against the configured cap for this group's data source
 4. Drop the group if avg_reward > cap
 5. Otherwise, keep the group for training
