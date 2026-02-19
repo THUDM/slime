@@ -856,7 +856,7 @@ def value_loss_function(
     """
     old_values = torch.cat(batch["values"], dim=0)
 
-    values = get_values(
+    _, values = get_values(
         logits,
         args=args,
         unconcat_tokens=batch["unconcat_tokens"],
