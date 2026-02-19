@@ -20,13 +20,14 @@ Guidelines:
 - After completing your reasoning, present the final result enclosed in \\boxed{}.
 """.strip()
 
-MAX_TOOL_ITERATIONS = 5
+MAX_TOOL_ITERS = 5
+MAX_TOOL_CALLS = None  # No limit
 
 _client_cache: dict[str, SGLangClient] = {}
 
 
 def get_client(args) -> SGLangClient:
-    """Get shared client for connection pooling (like SLIME)."""
+    """Get shared client for connection pooling."""
     base_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
     if base_url not in _client_cache:
         _client_cache[base_url] = SGLangClient.from_slime_args(args, timeout=300.0)
@@ -59,11 +60,11 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         sampling_params=sampling_params,
     )
 
-    limiter = ToolLimiter(max_tool_iters=MAX_TOOL_ITERATIONS)
+    tool_limiter = ToolLimiter(max_tool_iters=MAX_TOOL_ITERS, max_tool_calls=MAX_TOOL_CALLS)
     agent = Agent(
         model=model,
         tools=[execute_python_code],
-        hooks=[limiter],
+        hooks=[tool_limiter],
         callback_handler=None,
         system_prompt=SYSTEM_PROMPT,
     )
@@ -88,8 +89,8 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     sample.response_length = len(sample.tokens) - prompt_len
     sample.response = model.tokenizer.decode(sample.tokens[prompt_len:], skip_special_tokens=False)
     # Tool iteration and tool call count are different because multiple parallel tool calls count as 1 iteration
-    sample.tool_iters = limiter.tool_iter_count
-    sample.tool_calls = limiter.tool_call_count
+    sample.tool_iters = tool_limiter.tool_iter_count
+    sample.tool_calls = tool_limiter.tool_call_count
 
     model.reset()
     agent.cleanup()
