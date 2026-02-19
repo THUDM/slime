@@ -205,6 +205,7 @@ def forward_only(
         assert not return_schedule_plan, "forward_only step should never return schedule plan"
 
         # Get the batch.
+        pad_to_seq_length = args.seq_length if (mpu.get_pipeline_model_parallel_world_size() > 1) else None
         batch = get_batch(
             data_iterator,
             [
@@ -217,6 +218,7 @@ def forward_only(
             ],
             args.data_pad_size_multiplier,
             args.qkv_format,
+            pad_to_seq_length,
         )
         unconcat_tokens = batch["unconcat_tokens"]
         tokens = batch["tokens"]
@@ -354,6 +356,7 @@ def train_one_step(
         """
 
         # Get the batch.
+        pad_to_seq_length = args.seq_length if (mpu.get_pipeline_model_parallel_world_size() > 1) else None
         batch = get_batch(
             data_iterator,
             [
@@ -374,6 +377,7 @@ def train_one_step(
             ],
             args.data_pad_size_multiplier,
             args.qkv_format,
+            pad_to_seq_length,
         )
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
