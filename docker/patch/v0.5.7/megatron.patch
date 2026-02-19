@@ -379,7 +379,7 @@ index e21127b87..712793853 100755
          ),
      )
 diff --git a/megatron/core/models/gpt/gpt_model.py b/megatron/core/models/gpt/gpt_model.py
-index a1230568c..b45e63237 100644
+index a1230568c..1fd52f65a 100644
 --- a/megatron/core/models/gpt/gpt_model.py
 +++ b/megatron/core/models/gpt/gpt_model.py
 @@ -446,6 +446,7 @@ class GPTModel(LanguageModule):
@@ -437,7 +437,7 @@ index a1230568c..b45e63237 100644
              for mtp_layer_number in range(self.config.mtp_num_layers):
                  # Calc loss for the current Multi-Token Prediction (MTP) layers.
                  mtp_labels, _ = roll_tensor(
-@@ -595,17 +604,19 @@ class GPTModel(LanguageModule):
+@@ -595,7 +604,7 @@ class GPTModel(LanguageModule):
                      sequence_parallel_enabled=self.output_layer.sequence_parallel,
                      column_parallel_linear=self.output_layer,
                      col_linear_kwargs={
@@ -446,28 +446,6 @@ index a1230568c..b45e63237 100644
                          'runtime_gather_output': runtime_gather_output,
                      },
                  )
- 
-                 mtp_loss = loss_mask * mtp_loss
-+                # Guard against division by zero when num_tokens is 0
-+                safe_num_tokens = max(num_tokens, 1)
-                 if self.training:
-                     # TODO(shifangx): remove the use of parallel_state here
-                     # after moving loss logging to loss_func in pretrain_gpt.py
-                     MTPLossLoggingHelper.save_loss_to_tracker(
--                        torch.sum(mtp_loss) / num_tokens,
-+                        torch.sum(mtp_loss) / safe_num_tokens,
-                         mtp_layer_number,
-                         self.config.mtp_num_layers,
-                         avg_group=parallel_state.get_data_parallel_group(
-@@ -619,7 +630,7 @@ class GPTModel(LanguageModule):
-                     )
-                 else:
-                     hidden_states = MTPLossAutoScaler.apply(
--                        hidden_states, mtp_loss_scale * mtp_loss / num_tokens
-+                        hidden_states, mtp_loss_scale * mtp_loss / safe_num_tokens
-                     )
-         sequence_parallel_override = False
- 
 diff --git a/megatron/core/optimizer/distrib_optimizer.py b/megatron/core/optimizer/distrib_optimizer.py
 index 6e093f96f..eac21a3ea 100644
 --- a/megatron/core/optimizer/distrib_optimizer.py
