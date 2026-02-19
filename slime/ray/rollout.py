@@ -385,7 +385,7 @@ class RolloutManager:
         if samples[0].train_metadata is not None:
             train_data["metadata"] = [sample.train_metadata for sample in samples]
 
-        if samples[0].multimodal_train_inputs is not None:
+        if any(sample.multimodal_train_inputs is not None for sample in samples):
             train_data["multimodal_train_inputs"] = [sample.multimodal_train_inputs for sample in samples]
 
         if samples[0].teacher_log_probs is not None:
@@ -657,6 +657,9 @@ def _start_router(args):
         router_args.prometheus_port = find_available_port(random.randint(4000, 5000))
         router_args.log_level = "warn"
         router_args.request_timeout_secs = args.sglang_router_request_timeout_secs
+
+        if hasattr(args, "sglang_router_policy") and args.sglang_router_policy:
+            router_args.policy = args.sglang_router_policy
 
         if args.prefill_num_servers is not None:
             router_args.pd_disaggregation = True
