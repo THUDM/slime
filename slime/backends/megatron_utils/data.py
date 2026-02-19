@@ -27,6 +27,7 @@ def get_batch(
     keys: Sequence[str],
     pad_multiplier: int = 128,
     qkv_format: str = "thd",
+    seq_length: int | None = None,
 ) -> dict[str, torch.Tensor | PackedSeqParams | list[torch.Tensor] | None]:
     """
     Generate a CP-ready micro-batch with packed sequence parameters.
@@ -79,13 +80,19 @@ def get_batch(
 
         tokens = torch.cat(tokens)
 
-        # Always pad to reduce memory fragmentation and maybe make the computation faster
-        pad = (pad_size - tokens.size(0) % pad_size) % pad_size
+        if seq_length is not None:
+            assert tokens.size(0) <= seq_length, f"packed tokens length {tokens.size(0)} > seq_length {seq_length}"
+            assert (
+                seq_length % pad_size == 0
+            ), f"seq_length {seq_length} must be divisible by pad_size {pad_size} for THD padding"
+            pad = seq_length - tokens.size(0)
+        else:
+            pad = (pad_size - tokens.size(0) % pad_size) % pad_size
+
         if pad != 0:
             tokens = F.pad(tokens, (0, pad), value=pad_token_id)
             cu_seqlens.append(cu_seqlens[-1] + pad)
 
-        # thd requires the cu_seqlens to be of the origin length
         cu_seqlens = torch.tensor(cu_seqlens, dtype=torch.int).cuda() * cp_size
         max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
 

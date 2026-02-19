@@ -17,7 +17,6 @@ from slime.backends.megatron_utils.model_provider import get_model_provider_func
 from slime.utils.logging_utils import configure_logger
 from slime.utils.memory_utils import print_memory
 
-
 def add_convertion_args(parser):
     """Add conversion arguments to the parser"""
     parser.add_argument("--hf-checkpoint", type=str, required=True, help="HuggingFace model path")
@@ -32,7 +31,6 @@ def add_convertion_args(parser):
     except Exception:
         pass
     return parser
-
 
 def get_args():
     args = parse_args(add_convertion_args)
@@ -76,7 +74,6 @@ def get_args():
     validate_args(args)
     return args
 
-
 def main():
     if torch.version.hip:
         import megatron.core.dist_checkpointing.strategies.filesystem_async as filesystem_async_module
@@ -113,10 +110,16 @@ def main():
 
     model = get_model(get_model_provider_func(args), ModelType.encoder_or_decoder, wrap_with_ddp=False)
 
-    # Load model
     hf_model_path = args.hf_checkpoint
-    bridge = AutoBridge.from_pretrained(hf_model_path, trust_remote_code=True)
-    bridge.load_weights(model, hf_model_path, memory_efficient=True)
+
+    # Load model
+    if args.megatron_to_hf_mode == "bridge":
+        from megatron.bridge import AutoBridge
+        bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
+        bridge.load_hf_weights(model, hf_model_path)
+    else :
+        bridge = AutoBridge.from_pretrained(hf_model_path, trust_remote_code=True)
+        bridge.load_weights(model, hf_model_path, memory_efficient=True)
     print(f"Model loaded: {hf_model_path}")
 
     if args.use_cpu_initialization:
@@ -139,7 +142,6 @@ def main():
         shutil.move(source_dir, target_dir)
     dist.barrier()
     dist.destroy_process_group()
-
 
 if __name__ == "__main__":
     main()
