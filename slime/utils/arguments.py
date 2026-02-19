@@ -213,6 +213,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                             --freeze-params-name-list linear_fc1
                         """,
             )
+            parser.add_argument(
+                "--allgather-cp",
+                action="store_true",
+                default=False,
+            )
 
             return parser
 
