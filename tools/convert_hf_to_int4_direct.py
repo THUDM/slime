@@ -292,6 +292,8 @@ def parse_args():
             "re:.*norm.*",
             "re:.*embed.*",
             "re:.*self_attn.*",
+            "re:.*vision_tower.*",
+            "re:.*multi_modal_projector.*",
             "re:.*shared_experts.*",
             "re:.*mlp\\.(gate|up|gate_up|down)_proj.*",
             "re:.*mlp\\.gate\\.*",
