@@ -55,6 +55,9 @@ class MegatronTrainRayActor(TrainRayActor):
 
         super().init(args, role, with_ref, with_opd_teacher)
 
+        if args.debug_rollout_only:
+            return 0
+
         init(args)
 
         if is_megatron_main_rank():
@@ -78,9 +81,6 @@ class MegatronTrainRayActor(TrainRayActor):
             if (x := args.train_memory_margin_bytes) > 0:
                 logger.info(f"Set torch_memory_saver.memory_margin_bytes to {x}")
                 torch_memory_saver.memory_margin_bytes = x
-
-        if self.args.debug_rollout_only:
-            return 0
 
         if role == "critic":
             self.args.load = self.args.critic_load
