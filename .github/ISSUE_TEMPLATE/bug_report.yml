@@ -8,8 +8,8 @@ body:
       value: |
         Thank you for taking the time to report a bug!
 
-        > **Note:** slime focuses open-source collaboration on **bug fixes** and **general-purpose RL optimizations**.
-        > Feature requests are not accepted — please read [CONTRIBUTING.md](https://github.com/THUDM/slime/blob/main/CONTRIBUTING.md) for details.
+        > **Note:** slime's open-source collaboration is currently focused on **bug fixes** and **general-purpose RL optimizations**.
+        > Feature requests are outside our current scope — please see [CONTRIBUTING.md](https://github.com/THUDM/slime/blob/main/CONTRIBUTING.md) for details.
 
         Before submitting, please make sure you have:
         - [ ] Read the [documentation](https://thudm.github.io/slime/) and [FAQ](https://thudm.github.io/slime/en/get_started/qa.html)
