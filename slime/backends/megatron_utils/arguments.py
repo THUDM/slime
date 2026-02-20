@@ -5,7 +5,7 @@ from megatron.training.arguments import validate_args as _megatron_validate_args
 from megatron.training.tokenizer.tokenizer import _vocab_size_with_padding
 from transformers import AutoConfig
 
-__all__ = ["validate_args", "megatron_parse_args"]
+__all__ = ["validate_args", "megatron_parse_args", "set_default_megatron_args"]
 
 logger = logging.getLogger(__name__)
 
@@ -83,6 +83,10 @@ def _set_default_megatron_args(args):
         args.tokenizer_model = args.hf_checkpoint
         args.tokenizer_type = "HuggingFaceTokenizer"
     return args
+
+
+# Public alias for external tools (e.g. convert_hf_to_torch_dist.py)
+set_default_megatron_args = _set_default_megatron_args
 
 
 def megatron_parse_args(extra_args_provider):
