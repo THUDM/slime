@@ -89,11 +89,11 @@ def _set_default_megatron_args(args):
 set_default_megatron_args = _set_default_megatron_args
 
 
-def megatron_parse_args(extra_args_provider):
+def megatron_parse_args(extra_args_provider, skip_hf_validate=False):
     """Parse megatron args, validate HF config, and set defaults."""
     args = _megatron_parse_args(extra_args_provider=extra_args_provider, ignore_unknown_args=True)
 
-    if args.hf_checkpoint and not args.debug_rollout_only:
+    if args.hf_checkpoint and not skip_hf_validate:
         hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
         _hf_validate_args(args, hf_config)
 

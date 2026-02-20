@@ -1476,7 +1476,10 @@ def parse_args(add_custom_arguments=None):
         from slime.backends.megatron_utils.arguments import megatron_parse_args
         from slime.backends.megatron_utils.arguments import validate_args as megatron_validate_args
 
-        args = megatron_parse_args(extra_args_provider=add_slime_arguments)
+        args = megatron_parse_args(
+            extra_args_provider=add_slime_arguments,
+            skip_hf_validate=pre.debug_rollout_only,
+        )
     else:
         logger.warning(
             "🚧 🚧 🚧 FSDP backend is being rewritten, please use Megatron backend for better stability. 🚧 🚧 🚧"
