@@ -58,7 +58,7 @@ def convert_checkpoint(
         f"tools/convert_hf_to_torch_dist.py "
         "${MODEL_ARGS[@]} "
         f"--hf-checkpoint {hf_checkpoint} "
-        f"--save {path_dst}"
+        f"--save {path_dst} "
         f"{extra_args}"
     )
 
