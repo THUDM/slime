@@ -156,15 +156,22 @@ def create_training_models(args, pgs, rollout_manager):
         )
     )
 
+    if args.use_critic:
+        critic_start_rollout_ids = ray.get(critic_init_handle)
+        if not args.critic_train_only:
+            actor_model.connect(critic_model)
+        else:
+            start_rollout_ids = critic_start_rollout_ids
+
     assert len(set(start_rollout_ids)) == 1
+
     if args.start_rollout_id is None:
         args.start_rollout_id = start_rollout_ids[0]
 
-    if args.use_critic:
-        ray.get(critic_init_handle)
-        actor_model.connect(critic_model)
-
     actor_model.set_rollout_manager(rollout_manager)
+    if args.use_critic:
+        critic_model.set_rollout_manager(rollout_manager)
+
     if args.rollout_global_dataset:
         ray.get(rollout_manager.load.remote(args.start_rollout_id - 1))
 
