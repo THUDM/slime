@@ -1,0 +1,72 @@
+name: Question / Help
+description: Ask a question about using slime. Please check the docs and FAQ first.
+title: "[Question] "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reaching out!
+
+        > **Note:** slime's open-source collaboration is currently focused on **bug fixes** and **general-purpose RL optimizations**.
+        > Feature requests are outside our current scope — please see [CONTRIBUTING.md](https://github.com/THUDM/slime/blob/main/CONTRIBUTING.md) for details.
+
+        Before asking, please make sure you have checked:
+        - [Quick Start Guide](https://thudm.github.io/slime/en/get_started/quick_start.html)
+        - [Usage Guide](https://thudm.github.io/slime/en/get_started/usage.html)
+        - [FAQ](https://thudm.github.io/slime/en/get_started/qa.html)
+        - [Examples](https://github.com/THUDM/slime/tree/main/examples)
+
+        Many common questions are already covered in the documentation above. If your question is about general usage or open-ended discussion, consider using [GitHub Discussions](https://github.com/THUDM/slime/discussions) instead.
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your Question
+      description: Describe your question clearly. Include enough context so we can understand what you're trying to achieve.
+      placeholder: I'm trying to ... and I'm confused about ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-tried
+    attributes:
+      label: What I've Tried
+      description: |
+        Please describe what you have already tried. This helps us avoid suggesting things you've already done, and shows us that you've done your homework.
+      placeholder: |
+        - I read the Quick Start Guide and followed the steps, but ...
+        - I tried modifying the config to ..., but got ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment (if relevant)
+      description: If your question is related to setup or runtime behavior, please provide your environment details.
+      value: |
+        - slime version:
+        - Python version:
+        - PyTorch version:
+        - CUDA/ROCm version:
+        - GPU type and count:
+        - OS:
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add any other context, logs, config files, or screenshots that might help us answer your question.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I have read the [CONTRIBUTING.md](https://github.com/THUDM/slime/blob/main/CONTRIBUTING.md) and understand the collaboration scope.
+          required: true
+        - label: I have read the [documentation](https://thudm.github.io/slime/) and [FAQ](https://thudm.github.io/slime/en/get_started/qa.html) and my question is not answered there.
+          required: true
+        - label: I have searched for [existing issues](https://github.com/THUDM/slime/issues) and my question has not been asked before.
+          required: true
