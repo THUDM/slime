@@ -136,6 +136,9 @@ class RolloutManager:
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
         self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
         _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
+        if self.args.debug_rollout_only:
+            # if debug rollout only, we don't convert samples to train data and directly return
+            return
         data = self._convert_samples_to_train_data(data)
         return self._split_train_data_by_dp(data, self.train_parallel_config["dp_size"])
 
