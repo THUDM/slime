@@ -46,12 +46,10 @@ class RolloutManager:
     def __init__(self, args, pg):
         configure_logger()
 
-        self.args = args
         self.pg = pg
-        _start_router(args)
-        # TODO make args immutable
-        init_tracking(args, primary=False, router_addr=f"http://{args.sglang_router_ip}:{args.sglang_router_port}")
-        init_http_client(args)
+        self.args = args
+
+        init_tracking(args, primary=False)
 
         data_source_cls = load_function(self.args.data_source_path)
         self.data_source = data_source_cls(args)
@@ -72,17 +70,19 @@ class RolloutManager:
         if self.args.debug_train_only:
             self.all_rollout_engines = []
         else:
+            _start_router(args)
+            init_http_client(args)
             num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
             num_engines = args.rollout_num_gpus // num_gpu_per_engine
             self.all_rollout_engines = [None] * num_engines
+            self.nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
         self.num_new_engines = init_rollout_engines(args, pg, self.all_rollout_engines)
-        self.nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
         self.rollout_id = -1
 
         self._metric_checker = MetricChecker.maybe_create(args)
         self._health_monitor = None
-        if self.args.use_fault_tolerance:
+        if not self.args.debug_train_only and self.args.use_fault_tolerance:
             self._health_monitor = RolloutHealthMonitor(self, args)
             self._health_monitor.start()  # Start the monitor thread (in paused state)
             self._ci_fault_injection_pending = self.args.ci_test  # Flag for CI fault injection
@@ -117,6 +117,8 @@ class RolloutManager:
     # TODO maybe rename "rollout_engines" and "all_rollout_engines" later
     @property
     def rollout_engines(self):
+        if self.args.debug_train_only:
+            return []
         # when doing multi-node serving, we will only send request to node-0 for each engine.
         return self.all_rollout_engines[:: self.nodes_per_engine]
 
@@ -136,6 +138,9 @@ class RolloutManager:
         data, metrics = self._get_rollout_data(rollout_id=rollout_id)
         self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
         _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
+        if self.args.debug_rollout_only:
+            # if debug rollout only, we don't convert samples to train data and directly return
+            return
         data = self._convert_samples_to_train_data(data)
         return self._split_train_data_by_dp(data, self.train_parallel_config["dp_size"])
 
@@ -234,7 +239,7 @@ class RolloutManager:
             while isinstance(data[0], list):
                 data = list(itertools.chain.from_iterable(data))
 
-            if not self.args.disable_rollout_trim_samples:
+            if not self.args.disable_rollout_trim_samples and not self.args.debug_rollout_only:
                 global_batch_size = self.args.global_batch_size
                 if self.args.use_dynamic_global_batch_size:
                     logger.info(f"Collected {len(data)} samples from rollout to train with dynamic global batch size")
