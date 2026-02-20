@@ -117,6 +117,8 @@ class RolloutManager:
     # TODO maybe rename "rollout_engines" and "all_rollout_engines" later
     @property
     def rollout_engines(self):
+        if self.args.debug_train_only:
+            return []
         # when doing multi-node serving, we will only send request to node-0 for each engine.
         return self.all_rollout_engines[:: self.nodes_per_engine]
 
