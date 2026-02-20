@@ -162,12 +162,12 @@ def _next_actor():
     return actor
 
 
-async def _post(client, url, payload, max_retries=60):
+async def _post(client, url, payload, max_retries=60, headers=None):
     retry_count = 0
     while retry_count < max_retries:
         response = None
         try:
-            response = await client.post(url, json=payload or {})
+            response = await client.post(url, json=payload or {}, headers=headers)
             response.raise_for_status()
             content = await response.aread()
             try:
@@ -245,8 +245,8 @@ def _init_ray_distributed_post(args):
                 timeout=httpx.Timeout(None),
             )
 
-        async def do_post(self, url, payload, max_retries=60):
-            return await _post(self._client, url, payload, max_retries)
+        async def do_post(self, url, payload, max_retries=60, headers=None):
+            return await _post(self._client, url, payload, max_retries, headers=headers)
 
     # Create actors per node
     created = []
@@ -270,7 +270,7 @@ def _init_ray_distributed_post(args):
     _post_actors = created
 
 
-async def post(url, payload, max_retries=60):
+async def post(url, payload, max_retries=60, headers=None):
     # If distributed mode is enabled and actors exist, dispatch via Ray.
     if _distributed_post_enabled and _post_actors:
         try:
@@ -279,13 +279,13 @@ async def post(url, payload, max_retries=60):
             actor = _next_actor()
             if actor is not None:
                 # Use a thread to avoid blocking the event loop on ray.get
-                obj_ref = actor.do_post.remote(url, payload, max_retries)
+                obj_ref = actor.do_post.remote(url, payload, max_retries, headers=headers)
                 return await asyncio.to_thread(ray.get, obj_ref)
         except Exception as e:
             logger.info(f"[http_utils] Distributed POST failed, falling back to local: {e} (url={url})")
             # fall through to local
 
-    return await _post(_http_client, url, payload, max_retries)
+    return await _post(_http_client, url, payload, max_retries, headers=headers)
 
 
 async def get(url):

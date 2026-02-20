@@ -223,14 +223,12 @@ class MegatronTrainRayActor(TrainRayActor):
                 continue
             rollout_data[key] = [
                 torch.tensor(
-                    (
-                        slice_log_prob_with_cp(
-                            log_prob,
-                            total_length,
-                            response_length,
-                            self.args.qkv_format,
-                            rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
-                        )
+                    slice_log_prob_with_cp(
+                        log_prob,
+                        total_length,
+                        response_length,
+                        self.args.qkv_format,
+                        rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
                     ),
                     device=torch.cuda.current_device(),
                     dtype=torch.float32,

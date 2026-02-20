@@ -91,3 +91,48 @@ For more details on SGLang Model Gateway, see the [official documentation](https
 - Use SlimeRouter when you need R3 or radix-tree caching
 - Use SGLang Model Gateway for everything else (recommended default)
 
+---
+
+## 4. Session-Affinity Routing for Multi-Turn Agents
+
+When using SGLang Model Gateway with consistent hashing routing policy, Slime automatically assigns each rollout session a unique session ID and uses it as the routing key to enable session affinity.
+
+### What is session affinity?
+
+Session affinity (also called sticky sessions) ensures that all requests belonging to the same conversation or agent session are routed to the same backend worker. This is beneficial for:
+
+- **Multi-turn dialogues**: Keeping the same worker improves prefix cache hit rates
+- **Multi-agent systems**: Ensures agent state consistency and better resource locality
+- **Debugging**: Makes it easier to trace and debug specific sessions
+
+### How it works
+
+When the rollout system generates samples, each sample is assigned a unique `session_id`. This ID is:
+
+1. Automatically generated using UUID for each sample
+2. Stored in `sample.session_id` field
+3. Passed as `X-SMG-Routing-Key` header when the router policy is `consistent_hashing`
+
+The SGLang Model Gateway's consistent hashing policy then uses this routing key to deterministically select the same worker for all requests with the same session ID.
+
+### Configuration
+
+To enable session-affinity routing, simply configure the router policy in Slime:
+
+```bash
+--sglang-router-policy consistent_hashing
+```
+
+Slime will automatically start SGLang Model Gateway with the consistent hashing policy.
+
+> **Note**: If you encounter an error about the `consistent_hashing` policy not being available, upgrade sglang-router:
+> ```bash
+> pip install -U sglang-router
+> ```
+
+### Notes
+
+- Each sample gets its own unique session ID
+- Different samples in the same group may be routed to different workers
+- The same sample's subsequent turns will maintain the same session ID
+- Currently, this feature is only available for SGLang Model Gateway
