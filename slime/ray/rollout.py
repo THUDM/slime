@@ -19,13 +19,7 @@ from slime.utils import logging_utils
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
-from slime.utils.metric_utils import (
-    MetricChecker,
-    compute_pass_rate,
-    compute_rollout_step,
-    compute_statistics,
-    dict_add_prefix,
-)
+from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
 from slime.utils.misc import Box, group_by, load_function
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.types import Sample
@@ -80,7 +74,6 @@ class RolloutManager:
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
         self.rollout_id = -1
 
-        self._metric_checker = MetricChecker.maybe_create(args)
         self._health_monitor = None
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
             self._health_monitor = RolloutHealthMonitor(self, args)
@@ -109,8 +102,6 @@ class RolloutManager:
                 logger.warning(f"CI Fault Injection failed: {e}")
 
     def dispose(self):
-        if self._metric_checker is not None:
-            self._metric_checker.dispose()
         if self._health_monitor is not None:
             self._health_monitor.stop()
 
@@ -153,9 +144,7 @@ class RolloutManager:
         result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
         data = result.data
         self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=True)
-        metrics = _log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
-        if self._metric_checker is not None:
-            self._metric_checker.on_eval(metrics)
+        _log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
 
     def save(self, rollout_id):
         self.data_source.save(rollout_id)

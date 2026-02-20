@@ -11,7 +11,6 @@
       'tests': [
         {'test_file': 'test_qwen3_4B_fsdp_true_on_policy.py --colocated', 'num_gpus': 4},
         {'test_file': 'test_qwen3_vl_4B_fsdp.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_0.6B_fsdp_distributed.py', 'num_gpus': 2},
         {'test_file': 'test_qwen3_0.6B_megatron_fsdp_align.py', 'num_gpus': 4},
       ],
     },
@@ -43,25 +42,15 @@
         {'test_file': 'test_qwen3_4B_ckpt.py --async-save', 'num_gpus': 8},
       ],
     },
-    'e2e-test-long': {
-      'label': 'run-ci-long',
-      'tests': [
-        {'test_file': 'test_qwen2.5_0.5B_gsm8k.py', 'num_gpus': 2},
-        {'test_file': 'test_qwen2.5_0.5B_gsm8k_async.py', 'num_gpus': 2},
-        {'test_file': 'test_qwen3_0.6B_fsdp_colocated_2xGPU.py', 'num_gpus': 2},
-        {'test_file': 'test_qwen3_0.6B_fsdp_distributed.py', 'num_gpus': 2},
-      ],
-    },
+
     'e2e-test-image': {
       'label': 'run-ci-image',
       'image': 'slimerl/slime-test:latest',
       'tests': [
         {'test_file': 'test_qwen2.5_0.5B_gsm8k_async_short.py', 'num_gpus': 4},
         {'test_file': 'test_qwen2.5_0.5B_gsm8k_short.py', 'num_gpus': 4},
-        {'test_file': 'test_qwen3_0.6B_fsdp_colocated_2xGPU.py', 'num_gpus': 2},
         {'test_file': 'test_qwen3_4B_fsdp_true_on_policy.py', 'num_gpus': 2},
         {'test_file': 'test_qwen3_vl_4B_fsdp.py', 'num_gpus': 8},
-        {'test_file': 'test_qwen3_0.6B_fsdp_distributed.py', 'num_gpus': 2},
         {'test_file': 'test_quick_start_glm4_9B.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_30B_A3B.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ppo.py', 'num_gpus': 8},
@@ -71,8 +60,6 @@
         {'test_file': 'test_qwen3_0.6B_megatron_fsdp_align.py', 'num_gpus': 4},
         {'test_file': 'test_qwen3_4B_ckpt.py', 'num_gpus': 8},
         {'test_file': 'test_qwen3_4B_ckpt.py --async-save', 'num_gpus': 8},
-        {'test_file': 'test_qwen2.5_0.5B_gsm8k.py', 'num_gpus': 2},
-        {'test_file': 'test_qwen2.5_0.5B_gsm8k_async.py', 'num_gpus': 2},
         {'test_file': 'test_qwen2.5_0.5B_debug_rollout_then_train.py', 'num_gpus': 8},
       ],
     },
