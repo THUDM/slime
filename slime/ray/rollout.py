@@ -58,6 +58,27 @@ class RolloutServerGroup:
         self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_engines)
         return self.num_new_engines
 
+    def recover(self):
+        """Recover dead engines and handle memory state for newly created ones."""
+        dead_indices = [i for i, engine in enumerate(self.all_engines) if engine is None]
+        self.reinit_engines()
+        logger.info(f"Recovered {self.num_new_engines} dead rollout engines")
+        assert self.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
+        if self.args.offload_rollout and dead_indices:
+            new_engines = [self.all_engines[i] for i in dead_indices]
+            ray.get([engine.release_memory_occupation.remote() for engine in new_engines])
+            ray.get([engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]) for engine in new_engines])
+
+    def offload(self):
+        """Release memory occupation on all engines."""
+        return ray.get([engine.release_memory_occupation.remote() for engine in self.engines if engine is not None])
+
+    def onload(self, tags: list[str] | None = None):
+        """Resume memory occupation on all engines."""
+        return ray.get(
+            [engine.resume_memory_occupation.remote(tags=tags) for engine in self.engines if engine is not None]
+        )
+
 
 @ray.remote
 class RolloutManager:
@@ -89,20 +110,15 @@ class RolloutManager:
 
         if self.args.debug_train_only:
             self.server_group = None
-            self.all_rollout_engines = []
-            self.num_new_engines = 0
         else:
             init_http_client(args)
             self.server_group = start_rollout_server(args, pg)
-            self.all_rollout_engines = self.server_group.all_engines
-            self.nodes_per_engine = self.server_group.nodes_per_engine
-            self.num_new_engines = self.server_group.num_new_engines
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
         self.rollout_id = -1
 
         self._health_monitor = None
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
-            self._health_monitor = RolloutHealthMonitor(self, args)
+            self._health_monitor = RolloutHealthMonitor(self.server_group, args)
             self._health_monitor.start()  # Start the monitor thread (in paused state)
             self._ci_fault_injection_pending = self.args.ci_test  # Flag for CI fault injection
 
@@ -114,11 +130,11 @@ class RolloutManager:
         # Only inject fault once
         self._ci_fault_injection_pending = False
 
-        if self.all_rollout_engines and self.all_rollout_engines[0]:
+        if self.server_group and self.server_group.all_engines and self.server_group.all_engines[0]:
             logger.info("CI Fault Injection: Simulating crash on engine 0 during generate")
             try:
                 # This will cause the ray actor to exit
-                self.all_rollout_engines[0].simulate_crash.remote()
+                self.server_group.all_engines[0].simulate_crash.remote()
                 # Wait for health monitor to detect the crash and mark engine as None
                 # health_check_interval + health_check_timeout + buffer
                 wait_time = self.args.rollout_health_check_interval + self.args.rollout_health_check_timeout + 5
@@ -131,16 +147,15 @@ class RolloutManager:
         if self._health_monitor is not None:
             self._health_monitor.stop()
 
-    # TODO maybe rename "rollout_engines" and "all_rollout_engines" later
     @property
     def rollout_engines(self):
-        if self.args.debug_train_only:
+        if self.server_group is None:
             return []
-        # when doing multi-node serving, we will only send request to node-0 for each engine.
-        return self.all_rollout_engines[:: self.nodes_per_engine]
+        return self.server_group.engines
 
     def get_rollout_engines_and_lock(self):
-        return self.rollout_engines, self.rollout_engine_lock, self.num_new_engines
+        num_new_engines = self.server_group.num_new_engines if self.server_group else 0
+        return self.rollout_engines, self.rollout_engine_lock, num_new_engines
 
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset
@@ -180,18 +195,10 @@ class RolloutManager:
 
     def offload(self):
         self.health_monitoring_pause()
-        return ray.get(
-            [engine.release_memory_occupation.remote() for engine in self.rollout_engines if engine is not None]
-        )
+        return self.server_group.offload()
 
     def onload(self, tags: list[str] | None = None):
-        return ray.get(
-            [
-                engine.resume_memory_occupation.remote(tags=tags)
-                for engine in self.rollout_engines
-                if engine is not None
-            ]
-        )
+        return self.server_group.onload(tags)
 
     def onload_weights(self):
         self.onload(tags=[GPU_MEMORY_TYPE_WEIGHTS])
@@ -202,23 +209,17 @@ class RolloutManager:
     def recover_rollout_engines(self):
         """Restart any dead rollout engines and update num_new_engines for update_weights detection."""
         self.health_monitoring_pause()
+        sg = self.server_group
         if self.rollout_id == -1:
-            return self.rollout_engines, self.rollout_engine_lock, self.num_new_engines
+            return self.rollout_engines, self.rollout_engine_lock, sg.num_new_engines
 
-        dead_indices = [i for i, engine in enumerate(self.all_rollout_engines) if engine is None]
-        self.num_new_engines = self.server_group.reinit_engines()
-        logger.info(f"Recovered {self.num_new_engines} dead rollout engines")
-        assert self.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
-        if self.args.offload_rollout and dead_indices:
-            new_engines = [self.all_rollout_engines[i] for i in dead_indices]
-            ray.get([engine.release_memory_occupation.remote() for engine in new_engines])
-            ray.get([engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]) for engine in new_engines])
-
-        return self.rollout_engines, self.rollout_engine_lock, self.num_new_engines
+        sg.recover()
+        return self.rollout_engines, self.rollout_engine_lock, sg.num_new_engines
 
     def clear_num_new_engines(self):
         # when fault tolerance is not enabled, we need to manually clear num_new_engines after update_weights
-        self.num_new_engines = 0
+        if self.server_group:
+            self.server_group.num_new_engines = 0
 
     def health_monitoring_pause(self) -> None:
         if self._health_monitor is not None:
