@@ -116,7 +116,7 @@ def init_wandb_secondary(args, router_addr=None):
             x_update_finish_state=False,
         )
 
-    if args.sglang_enable_metrics and router_addr is not None:
+    if getattr(args, "sglang_enable_metrics", False) and router_addr is not None:
         logger.info(f"Forward SGLang metrics at {router_addr} to WandB.")
         settings_kwargs |= dict(
             x_stats_open_metrics_endpoints={
