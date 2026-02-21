@@ -138,3 +138,100 @@ jobs:
         shell: bash
         run: python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python tests/${{ matrix.info.test_file }}
 <% endfor %>
+
+  e2e-test-changed-detect:
+    if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-changed'))
+    runs-on: self-hosted
+    container:
+      image: slimerl/slime:latest
+      options: >
+        --gpus all
+        --ipc=host
+        --shm-size=16g
+        --ulimit memlock=-1
+        --ulimit stack=67108864
+        --memory=0
+        --memory-swap=0
+    outputs:
+      matrix: ${{ steps.detect.outputs.matrix }}
+      has_tests: ${{ steps.detect.outputs.has_tests }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed tests
+        id: detect
+        shell: bash
+        run: |
+          CHANGED=$(git diff --name-only --diff-filter=AM origin/main...HEAD -- 'tests/test_*.py' || true)
+          if [ -z "$CHANGED" ]; then
+            echo "No new or modified test files found."
+            echo "has_tests=false" >> $GITHUB_OUTPUT
+            echo 'matrix={"info":[]}' >> $GITHUB_OUTPUT
+          else
+            echo "Changed test files:"
+            echo "$CHANGED"
+            MATRIX="["
+            FIRST=true
+            for filepath in $CHANGED; do
+              filename=$(basename "$filepath")
+              # Extract NUM_GPUS from the test file, default to 8
+              NGPU=$(grep -oP '^NUM_GPUS\s*=\s*\K\d+' "$filepath" | head -1)
+              NGPU=${NGPU:-8}
+              if [ "$FIRST" = true ]; then FIRST=false; else MATRIX+=","; fi
+              MATRIX+="{\"test_file\":\"$filename\",\"num_gpus\":$NGPU}"
+            done
+            MATRIX+="]"
+            echo "has_tests=true" >> $GITHUB_OUTPUT
+            echo "matrix={\"info\":$MATRIX}" >> $GITHUB_OUTPUT
+            echo "Generated matrix: $MATRIX"
+          fi
+
+  e2e-test-changed:
+    needs: e2e-test-changed-detect
+    if: needs.e2e-test-changed-detect.outputs.has_tests == 'true'
+    runs-on: self-hosted
+    container:
+      image: slimerl/slime:latest
+      options: >
+        --gpus all
+        --ipc=host
+        --shm-size=16g
+        --ulimit memlock=-1
+        --ulimit stack=67108864
+        --memory=0
+        --memory-swap=0
+        -e http_proxy=$http_proxy
+        -e https_proxy=$https_proxy
+        -e HTTP_PROXY=$HTTP_PROXY
+        -e HTTPS_PROXY=$HTTPS_PROXY
+        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
+        -v /mnt/nvme0n1/slime_ci/models:/root/models
+        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.e2e-test-changed-detect.outputs.matrix) }}
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    env:
+      GITHUB_COMMIT_NAME: ${{ github.sha }}_${{ github.event.pull_request.number || 'non-pr' }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      SLIME_TEST_ENABLE_INFINITE_RUN: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.infinite_run) || 'false' }}
+      SLIME_TEST_USE_DEEPEP: ${{ matrix.info.use_deepep || '0' }}
+      SLIME_TEST_USE_FP8_ROLLOUT: ${{ matrix.info.use_fp8_rollout || '0' }}
+      SLIME_TEST_ENABLE_EVAL: ${{ matrix.info.enable_eval || '1' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install
+        shell: bash
+        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
+
+      - name: Execute
+        shell: bash
+        run: python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python tests/${{ matrix.info.test_file }}
