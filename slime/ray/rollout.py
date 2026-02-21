@@ -400,7 +400,7 @@ class RolloutManager:
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
         if (
-            self.args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
+            self.args.advantage_estimator in ["grpo", "gspo", "cispo", "reinforce_plus_plus_baseline"]
             and self.args.rewards_normalization
         ):
             # group norm
@@ -413,7 +413,7 @@ class RolloutManager:
             mean = rewards.mean(dim=-1, keepdim=True)
             rewards = rewards - mean
 
-            if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
+            if self.args.advantage_estimator in ["grpo", "gspo", "cispo"] and self.args.grpo_std_normalization:
                 std = rewards.std(dim=-1, keepdim=True)
                 rewards = rewards / (std + 1e-6)
 

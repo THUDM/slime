@@ -148,8 +148,63 @@ def compute_policy_loss(
     return pg_losses, clipfrac
 
 
+@torch.compile(dynamic=True)
+def compute_cispo_loss(
+    ppo_kl: torch.Tensor,
+    log_probs: torch.Tensor,
+    advantages: torch.Tensor,
+    eps_clip: float,
+    eps_clip_high: float,
+):
+    """Compute CISPO (Clipped IS-weight Policy Optimization) loss.
+
+    CISPO applies clipping on the importance sampling ratio with stop-gradient,
+    preventing the ratio itself from being learned.
+
+    The key formula from MiniMax-M1 paper:
+        ratio = exp(log π_current - log π_old)
+        ratio_truncated = clamp(ratio, 1 - eps_clip, 1 + eps_clip_high)
+        loss = -sg(ratio_truncated) * advantages * log(π_current)
+
+    Note: log_probs is explicitly multiplied so gradient flows through it,
+    while ratio_sg is detached to prevent learning the ratio itself.
+
+    Uses delta-from-1 semantics for eps_clip/eps_clip_high, consistent with
+    compute_policy_loss. For wider CISPO ranges (e.g. [0, 5] from the paper),
+    use --eps-clip 1.0 --eps-clip-high 4.0.
+
+    Args:
+        ppo_kl: Log-ratio (log π_old - log π_current) for each token
+        log_probs: Current policy log probabilities (requires gradient)
+        advantages: Advantage estimates for each token
+        eps_clip: Lower clipping delta from 1 (ratio lower bound = 1 - eps_clip)
+        eps_clip_high: Upper clipping delta from 1 (ratio upper bound = 1 + eps_clip_high)
+
+    Returns:
+        Tuple of (losses, clipfrac) where:
+            - losses: Per-token CISPO policy gradient losses
+            - clipfrac: Fraction of ratios that were clipped
+    """
+    # Compute importance sampling ratio: π_current / π_old
+    ratio = (-ppo_kl).exp()
+
+    # Clipping with delta-from-1 semantics, same convention as compute_policy_loss
+    ratio_truncated = torch.clamp(ratio, min=1.0 - eps_clip, max=1.0 + eps_clip_high)
+
+    # Stop-gradient: prevent the ratio from being learned (CISPO's key feature)
+    ratio_sg = ratio_truncated.detach()
+
+    # CISPO formula: sg(ratio) * advantages * log_probs
+    # This ensures gradient flows through log_probs but not through ratio
+    pg_losses = -ratio_sg * advantages * log_probs
+
+    # Track clipping fraction for monitoring
+    clipfrac = (ratio_truncated != ratio).float()
+
+    return pg_losses, clipfrac
+
+
 def compute_log_probs(logits: torch.Tensor, tokens: torch.Tensor, process_group: dist.ProcessGroup | None):
-    # TODO: when megatron is not installed, fall back to naive implementation
     from megatron.core.fusions.fused_cross_entropy import fused_vocab_parallel_cross_entropy
 
     # convert to [seq_len, batch_size, vocab_size] as expected by fused_vocab_parallel_cross_entropy

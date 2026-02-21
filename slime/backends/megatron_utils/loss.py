@@ -13,6 +13,7 @@ from slime.utils.misc import load_function
 from slime.utils.ppo_utils import (
     calculate_log_probs_and_entropy,
     compute_approx_kl,
+    compute_cispo_loss,
     compute_gspo_kl,
     compute_opsm_mask,
     compute_policy_loss,
@@ -445,7 +446,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
             for i in range(len(log_probs))
         ]
 
-    if args.advantage_estimator in ["grpo", "gspo"]:
+    if args.advantage_estimator in ["grpo", "gspo", "cispo"]:
         rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
         returns = get_grpo_returns(rewards, kl)
         # TODO: is the copy necessary?
@@ -703,7 +704,10 @@ def policy_loss_function(
         log_probs = torch.cat(log_probs, dim=0)
         ppo_kl = old_log_probs - log_probs
 
-    pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
+    if args.advantage_estimator == "cispo":
+        pg_loss, pg_clipfrac = compute_cispo_loss(ppo_kl, log_probs, advantages, args.eps_clip, args.eps_clip_high)
+    else:
+        pg_loss, pg_clipfrac = compute_policy_loss(ppo_kl, advantages, args.eps_clip, args.eps_clip_high)
 
     if args.use_opsm:
         pg_loss = pg_loss * opsm_mask
