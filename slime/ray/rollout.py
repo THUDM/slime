@@ -35,11 +35,12 @@ logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass
-class RolloutServerGroup:
-    """A group of SGLang engines behind a shared router.
+class EngineGroup:
+    """A group of homogeneous SGLang engines with the same configuration.
 
-    Bundles router + engines into a single unit, as a step towards
-    multi-model support where each model has its own router + engine group.
+    All engines in a group share the same tp_size / nodes_per_engine / pg.
+    A RolloutServer may contain multiple EngineGroups (e.g. prefill vs decode
+    with different GPU configurations in the future).
     """
 
     args: Any
@@ -57,6 +58,98 @@ class RolloutServerGroup:
         """Re-initialize dead engines (for fault recovery). Does not restart the router."""
         self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_engines)
         return self.num_new_engines
+
+    def recover(self):
+        """Recover dead engines and handle memory state for newly created ones."""
+        dead_indices = [i for i, engine in enumerate(self.all_engines) if engine is None]
+        self.reinit_engines()
+        logger.info(f"Recovered {self.num_new_engines} dead rollout engines")
+        assert self.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
+        if self.args.offload_rollout and dead_indices:
+            new_engines = [self.all_engines[i] for i in dead_indices]
+            ray.get([engine.release_memory_occupation.remote() for engine in new_engines])
+            ray.get([engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]) for engine in new_engines])
+
+    def offload(self):
+        """Release memory occupation on all engines."""
+        return ray.get([engine.release_memory_occupation.remote() for engine in self.engines if engine is not None])
+
+    def onload(self, tags: list[str] | None = None):
+        """Resume memory occupation on all engines."""
+        return ray.get(
+            [engine.resume_memory_occupation.remote(tags=tags) for engine in self.engines if engine is not None]
+        )
+
+
+@dataclasses.dataclass
+class RolloutServer:
+    """A model served behind a shared router, with one or more engine groups.
+
+    Corresponds to one entry in the future ``--sglang-config`` YAML::
+
+        rollout_servers:
+          - name: policy
+            engine_groups:
+              - role: prefill
+                ...
+              - role: decode
+                ...
+
+    Currently only a single EngineGroup is used; multi-group support
+    (e.g. PD disaggregation with heterogeneous tp_size) is planned.
+    """
+
+    engine_groups: list[EngineGroup]
+    router_ip: str | None = None
+    router_port: int | None = None
+
+    @property
+    def engines(self):
+        """All node-0 engines across all groups."""
+        return [e for g in self.engine_groups for e in g.engines]
+
+    @property
+    def all_engines(self):
+        """All engines (including non-node-0) across all groups."""
+        return [e for g in self.engine_groups for e in g.all_engines]
+
+    @property
+    def num_new_engines(self):
+        return sum(g.num_new_engines for g in self.engine_groups)
+
+    @num_new_engines.setter
+    def num_new_engines(self, value):
+        for g in self.engine_groups:
+            g.num_new_engines = value
+
+    @property
+    def nodes_per_engine(self):
+        """Nodes per engine. Only valid when all groups share the same value.
+
+        TODO: remove once health_monitor operates per-group.
+        """
+        values = {g.nodes_per_engine for g in self.engine_groups}
+        assert len(values) == 1, f"Heterogeneous nodes_per_engine: {values}"
+        return values.pop()
+
+    def recover(self):
+        """Recover dead engines across all groups."""
+        for g in self.engine_groups:
+            g.recover()
+
+    def offload(self):
+        """Release memory occupation across all groups."""
+        results = []
+        for g in self.engine_groups:
+            results.extend(g.offload())
+        return results
+
+    def onload(self, tags: list[str] | None = None):
+        """Resume memory occupation across all groups."""
+        results = []
+        for g in self.engine_groups:
+            results.extend(g.onload(tags))
+        return results
 
 
 @ray.remote
@@ -88,21 +181,16 @@ class RolloutManager:
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
         if self.args.debug_train_only:
-            self.server_group = None
-            self.all_rollout_engines = []
-            self.num_new_engines = 0
+            self.server = None
         else:
             init_http_client(args)
-            self.server_group = start_rollout_server(args, pg)
-            self.all_rollout_engines = self.server_group.all_engines
-            self.nodes_per_engine = self.server_group.nodes_per_engine
-            self.num_new_engines = self.server_group.num_new_engines
+            self.server = start_rollout_server(args, pg)
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
         self.rollout_id = -1
 
         self._health_monitor = None
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
-            self._health_monitor = RolloutHealthMonitor(self, args)
+            self._health_monitor = RolloutHealthMonitor(self.server.engine_groups[0], args)
             self._health_monitor.start()  # Start the monitor thread (in paused state)
             self._ci_fault_injection_pending = self.args.ci_test  # Flag for CI fault injection
 
@@ -114,11 +202,11 @@ class RolloutManager:
         # Only inject fault once
         self._ci_fault_injection_pending = False
 
-        if self.all_rollout_engines and self.all_rollout_engines[0]:
+        if self.server and self.server.engine_groups[0].all_engines and self.server.engine_groups[0].all_engines[0]:
             logger.info("CI Fault Injection: Simulating crash on engine 0 during generate")
             try:
                 # This will cause the ray actor to exit
-                self.all_rollout_engines[0].simulate_crash.remote()
+                self.server.engine_groups[0].all_engines[0].simulate_crash.remote()
                 # Wait for health monitor to detect the crash and mark engine as None
                 # health_check_interval + health_check_timeout + buffer
                 wait_time = self.args.rollout_health_check_interval + self.args.rollout_health_check_timeout + 5
@@ -131,16 +219,15 @@ class RolloutManager:
         if self._health_monitor is not None:
             self._health_monitor.stop()
 
-    # TODO maybe rename "rollout_engines" and "all_rollout_engines" later
     @property
     def rollout_engines(self):
-        if self.args.debug_train_only:
+        if self.server is None:
             return []
-        # when doing multi-node serving, we will only send request to node-0 for each engine.
-        return self.all_rollout_engines[:: self.nodes_per_engine]
+        return self.server.engines
 
     def get_rollout_engines_and_lock(self):
-        return self.rollout_engines, self.rollout_engine_lock, self.num_new_engines
+        num_new_engines = self.server.num_new_engines if self.server else 0
+        return self.rollout_engines, self.rollout_engine_lock, num_new_engines
 
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset
@@ -180,18 +267,10 @@ class RolloutManager:
 
     def offload(self):
         self.health_monitoring_pause()
-        return ray.get(
-            [engine.release_memory_occupation.remote() for engine in self.rollout_engines if engine is not None]
-        )
+        return self.server.offload()
 
     def onload(self, tags: list[str] | None = None):
-        return ray.get(
-            [
-                engine.resume_memory_occupation.remote(tags=tags)
-                for engine in self.rollout_engines
-                if engine is not None
-            ]
-        )
+        return self.server.onload(tags)
 
     def onload_weights(self):
         self.onload(tags=[GPU_MEMORY_TYPE_WEIGHTS])
@@ -202,23 +281,17 @@ class RolloutManager:
     def recover_rollout_engines(self):
         """Restart any dead rollout engines and update num_new_engines for update_weights detection."""
         self.health_monitoring_pause()
+        srv = self.server
         if self.rollout_id == -1:
-            return self.rollout_engines, self.rollout_engine_lock, self.num_new_engines
+            return self.rollout_engines, self.rollout_engine_lock, srv.num_new_engines
 
-        dead_indices = [i for i, engine in enumerate(self.all_rollout_engines) if engine is None]
-        self.num_new_engines = self.server_group.reinit_engines()
-        logger.info(f"Recovered {self.num_new_engines} dead rollout engines")
-        assert self.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
-        if self.args.offload_rollout and dead_indices:
-            new_engines = [self.all_rollout_engines[i] for i in dead_indices]
-            ray.get([engine.release_memory_occupation.remote() for engine in new_engines])
-            ray.get([engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]) for engine in new_engines])
-
-        return self.rollout_engines, self.rollout_engine_lock, self.num_new_engines
+        srv.recover()
+        return self.rollout_engines, self.rollout_engine_lock, srv.num_new_engines
 
     def clear_num_new_engines(self):
         # when fault tolerance is not enabled, we need to manually clear num_new_engines after update_weights
-        self.num_new_engines = 0
+        if self.server:
+            self.server.num_new_engines = 0
 
     def health_monitoring_pause(self) -> None:
         if self._health_monitor is not None:
@@ -651,19 +724,27 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
     return addr_and_ports
 
 
-def _start_router(args):
-    """start sgl router and slime router"""
-    if args.sglang_router_ip is not None:
-        return
+def _start_router(args) -> tuple[str, int]:
+    """Start sgl router or slime router and return (router_ip, router_port).
 
-    args.sglang_router_ip = _wrap_ipv6(get_host_info()[1])
-    if args.sglang_router_port is None:
-        args.sglang_router_port = find_available_port(random.randint(3000, 4000))
+    If ``args.sglang_router_ip`` is already set (e.g. by the user), skip
+    launching and return the existing values.
+    """
+    if args.sglang_router_ip is not None:
+        return args.sglang_router_ip, args.sglang_router_port
+
+    router_ip = _wrap_ipv6(get_host_info()[1])
+    router_port = args.sglang_router_port
+    if router_port is None:
+        router_port = find_available_port(random.randint(3000, 4000))
 
     if args.use_slime_router:
         assert args.prefill_num_servers is None, "slime router does not support prefill_num_servers."
         from slime.router.router import run_router
 
+        # slime router reads ip/port from args at startup
+        args.sglang_router_ip = router_ip
+        args.sglang_router_port = router_port
         router_args = args
 
     else:
@@ -672,8 +753,8 @@ def _start_router(args):
         from slime.utils.http_utils import run_router
 
         router_args = RouterArgs.from_cli_args(args, use_router_prefix=True)
-        router_args.host = args.sglang_router_ip
-        router_args.port = args.sglang_router_port
+        router_args.host = router_ip
+        router_args.port = router_port
         router_args.prometheus_port = find_available_port(random.randint(4000, 5000))
         router_args.log_level = "warn"
         router_args.request_timeout_secs = args.sglang_router_request_timeout_secs
@@ -695,20 +776,26 @@ def _start_router(args):
     # Wait 3 seconds
     time.sleep(3)
     assert process.is_alive()
-    logger.info(f"Router launched at {args.sglang_router_ip}:{args.sglang_router_port}")
+    logger.info(f"Router launched at {router_ip}:{router_port}")
+    return router_ip, router_port
 
 
-def start_rollout_server(args, pg) -> RolloutServerGroup:
+def start_rollout_server(args, pg) -> RolloutServer:
     """Start a complete rollout server: one router + a set of SGLang engines.
 
     Combines router startup and engine initialization into a single
-    operation. Each RolloutServerGroup represents one model served
-    behind a shared router.
+    operation. Each RolloutServer represents one model served behind
+    a shared router, containing one or more EngineGroups.
 
     Note: init_http_client should be called separately before this,
-    as the HTTP client is shared across all server groups.
+    as the HTTP client is shared across all servers.
     """
-    _start_router(args)
+    router_ip, router_port = _start_router(args)
+    # Write back for backward compatibility: downstream code (SGLangEngine,
+    # rollout functions, examples) still reads args.sglang_router_ip/port.
+    # TODO: remove once all consumers read from RolloutServer directly.
+    args.sglang_router_ip = router_ip
+    args.sglang_router_port = router_port
 
     num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
     num_engines = args.rollout_num_gpus // num_gpu_per_engine
@@ -716,12 +803,17 @@ def start_rollout_server(args, pg) -> RolloutServerGroup:
     nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
     num_new_engines = init_rollout_engines(args, pg, all_engines)
 
-    return RolloutServerGroup(
+    engine_group = EngineGroup(
         args=args,
         pg=pg,
         all_engines=all_engines,
         nodes_per_engine=nodes_per_engine,
         num_new_engines=num_new_engines,
+    )
+    return RolloutServer(
+        engine_groups=[engine_group],
+        router_ip=router_ip,
+        router_port=router_port,
     )
 
 
