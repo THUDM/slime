@@ -152,17 +152,39 @@ def _build_messages(data: dict, prompt_key: str, as_conversation: bool, multimod
                 message["content"] = content_list
 
             elif isinstance(message["content"], list):
-                # TODO: handle more general cases. where message['content'] is a dict and contains multiple types of content.
-                # e.g.
-                #  "content": [
-                #     {
-                #         "type": "image",
-                #         "image": "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg",
-                #     },
-                #     {"type": "text", "text": "Describe this image."},
-                # ],
-                logger.warning("message['content'] is a list of dicts, no processing will be done.")
-                continue
+                # Handle list of dicts that may contain text with placeholders
+                processed_content = []
+
+                for item in message["content"]:
+                    if not isinstance(item, dict):
+                        raise ValueError(f"Expected dict in content list, got {type(item)}")
+
+                    # If item is text type, check for placeholders
+                    if item.get("type") == "text" and "text" in item:
+                        text_segments = []
+                        for segment in re.split(pattern, item["text"]):
+                            if not segment:
+                                continue
+                            if segment in multimodals:
+                                # Add any accumulated text first
+                                if text_segments:
+                                    processed_content.append({"type": "text", "text": "".join(text_segments)})
+                                    text_segments = []
+                                # Add the multimodal content
+                                mt, content = multimodals[segment]
+                                processed_content.append({"type": mt.name, mt.name: content.pop(0)})
+                            else:
+                                text_segments.append(segment)
+
+                        # Add any remaining text
+                        if text_segments:
+                            processed_content.append({"type": "text", "text": "".join(text_segments)})
+                    else:
+                        # Non-text items (images, etc.) are kept as-is
+                        processed_content.append(item)
+
+                message["content"] = processed_content
+
             else:
                 raise ValueError(
                     f"Unsupported content type: {type(message['content'])}, expected str or list of dicts"
