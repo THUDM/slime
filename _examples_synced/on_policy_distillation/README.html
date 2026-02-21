@@ -50,8 +50,6 @@
     <link rel="icon" href="../../_static/logo.ico"/>
     <link rel="index" title="Index" href="../../genindex.html" />
     <link rel="search" title="Search" href="../../search.html" />
-    <link rel="next" title="Debugging" href="../../developer_guide/debug.html" />
-    <link rel="prev" title="Multi-Agent RL" href="../multi_agent/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
     <meta name="docbuild:last-update" content="Feb 21, 2026"/>
@@ -114,6 +112,8 @@
     <div class="bd-container__inner bd-page-width">
       
       
+      
+        
       
       <div class="bd-sidebar-primary bd-sidebar">
         
@@ -183,6 +183,7 @@
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
 <ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../../advanced/slime-router.html">Slime Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../../advanced/on-policy-distillation.html">On-Policy Distillation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../advanced/speculative-decoding.html">Speculative Decoding</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../advanced/low-precision.html">Low Precision Training</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../../advanced/reproducibility.html">Reproducibility</a></li>
@@ -191,16 +192,12 @@
 <li class="toctree-l1"><a class="reference internal" href="../../advanced/arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
-<ul class="current nav bd-sidenav">
+<ul class="nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="../../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../search-r1/README.html">Search-R1 lite</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../fully_async/README.html">Fully Asynchronous Rollout Example</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../retool/README.html">Retool: from SFT to RL</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../multi_agent/README.html">Multi-Agent RL</a></li>
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">On-Policy Distillation Example</a></li>
-
-
-
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
 <ul class="nav bd-sidenav">
@@ -539,7 +536,7 @@ document.write(`
 <section id="components">
 <h2>Components<a class="headerlink" href="#components" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">on_policy_distillation.py</span></code> implements (for SGLang mode):</p>
+<li><p><code class="docutils literal notranslate"><span class="pre">slime/rollout/on_policy_distillation.py</span></code> implements (for SGLang mode):</p>
 <ul>
 <li><p><code class="docutils literal notranslate"><span class="pre">reward_func</span></code> calls the teacher server (via <code class="docutils literal notranslate"><span class="pre">args.rm_url</span></code>) with every sample to obtain token-level logprobs.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">post_process_rewards</span></code> trims the teacher logprobs to the generated response span and writes the tensors back to each <code class="docutils literal notranslate"><span class="pre">Sample</span></code> to compute advantages.</p></li>
@@ -680,24 +677,6 @@ The system will raise clear errors:</p>
                 <footer class="prev-next-footer d-print-none">
                   
 <div class="prev-next-area">
-    <a class="left-prev"
-       href="../multi_agent/README.html"
-       title="previous page">
-      <i class="fa-solid fa-angle-left"></i>
-      <div class="prev-next-info">
-        <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Multi-Agent RL</p>
-      </div>
-    </a>
-    <a class="right-next"
-       href="../../developer_guide/debug.html"
-       title="next page">
-      <div class="prev-next-info">
-        <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">Debugging</p>
-      </div>
-      <i class="fa-solid fa-angle-right"></i>
-    </a>
 </div>
                 </footer>
               
