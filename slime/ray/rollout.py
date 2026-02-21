@@ -353,10 +353,12 @@ class RolloutManager:
 
     def offload(self):
         self.health_monitoring_pause()
-        return self.server.offload()
+        if self.server:
+            return self.server.offload()
 
     def onload(self, tags: list[str] | None = None):
-        return self.server.onload(tags)
+        if self.server:
+            return self.server.onload(tags)
 
     def onload_weights(self):
         self.onload(tags=[GPU_MEMORY_TYPE_WEIGHTS])
