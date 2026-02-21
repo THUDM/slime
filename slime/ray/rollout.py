@@ -56,16 +56,92 @@ class EngineGroup:
         """Node-0 engines only (for multi-node serving)."""
         return self.all_engines[:: self.nodes_per_engine]
 
-    def reinit_engines(self):
-        """Re-initialize dead engines (for fault recovery). Does not restart the router."""
-        self.num_new_engines = init_rollout_engines(
-            self.args,
-            self.pg,
-            self.all_engines,
-            worker_type=self.role,
-            rank_offset=self.rank_offset,
-        )
+    def init_engines(self):
+        """Initialize or re-initialize engines that are None in all_engines.
+
+        Creates Ray actors for each None slot, allocates ports, and calls
+        engine.init(). Used both for first-time creation and fault recovery.
+        """
+        if self.args.debug_train_only:
+            self.num_new_engines = 0
+            return 0
+
+        num_gpu_per_engine = min(self.args.rollout_num_gpus_per_engine, self.args.num_gpus_per_node)
+        total_num_engines = self.args.rollout_num_gpus // num_gpu_per_engine
+
+        pg, reordered_bundle_indices, reordered_gpu_ids = self.pg
+
+        RolloutRayActor = ray.remote(SGLangEngine)
+
+        rollout_engines = []
+        for i in range(len(self.all_engines)):
+            if self.all_engines[i] is not None:
+                continue
+
+            global_rank = self.rank_offset + i
+            num_gpus = 0.2
+            num_cpus = num_gpus
+
+            # Get the base GPU ID from placement group
+            base_gpu_id = int(reordered_gpu_ids[global_rank * num_gpu_per_engine])
+
+            scheduling_strategy = PlacementGroupSchedulingStrategy(
+                placement_group=pg,
+                placement_group_capture_child_tasks=True,
+                placement_group_bundle_index=reordered_bundle_indices[global_rank * num_gpu_per_engine],
+            )
+
+            env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST} | {
+                key: os.environ.get(key, default_val)
+                for key, default_val in {
+                    "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
+                    "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                    "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+                    "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
+                    "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
+                    "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
+                    "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
+                }.items()
+            }
+
+            rollout_engine = RolloutRayActor.options(
+                num_cpus=num_cpus,
+                num_gpus=num_gpus,
+                scheduling_strategy=scheduling_strategy,
+                runtime_env={
+                    "env_vars": env_vars,
+                },
+            ).remote(self.args, rank=global_rank, worker_type=self.role, base_gpu_id=base_gpu_id)
+
+            rollout_engines.append((global_rank, rollout_engine))
+            self.all_engines[i] = rollout_engine
+
+        self.num_new_engines = len(rollout_engines)
+
+        if self.num_new_engines == 0:
+            return self.num_new_engines
+
+        if self.args.rollout_external:
+            addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(
+                args=self.args, rollout_engines=rollout_engines
+            )
+        else:
+            addr_and_ports = _allocate_rollout_engine_addr_and_ports_normal(
+                args=self.args,
+                num_engines=total_num_engines,
+                rollout_engines=rollout_engines,
+                worker_type=self.role,
+            )
+
+        # TODO: don't ray.get here to overlap train actor init with rollout engine init.
+        # somehow if we don't sync here, the --debug-rollout-only mode will crash.
+        init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in rollout_engines]
+        ray.get(init_handles)
+
         return self.num_new_engines
+
+    # Alias for backward compatibility / clarity in fault-recovery paths.
+    reinit_engines = init_engines
 
     def recover(self):
         """Recover dead engines and handle memory state for newly created ones."""
@@ -551,84 +627,6 @@ class RolloutManager:
         return rollout_data_refs
 
 
-def init_rollout_engines(args, pg, all_rollout_engines, *, worker_type="regular", rank_offset=0):
-    if args.debug_train_only:
-        return 0
-
-    num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
-    total_num_engines = args.rollout_num_gpus // num_gpu_per_engine
-    num_engines = len(all_rollout_engines)
-
-    pg, reordered_bundle_indices, reordered_gpu_ids = pg
-
-    RolloutRayActor = ray.remote(SGLangEngine)
-
-    rollout_engines = []
-    for i in range(num_engines):
-        if all_rollout_engines[i] is not None:
-            continue
-
-        global_rank = rank_offset + i
-        num_gpus = 0.2
-        num_cpus = num_gpus
-
-        # Get the base GPU ID from placement group
-        base_gpu_id = int(reordered_gpu_ids[global_rank * num_gpu_per_engine])
-
-        scheduling_strategy = PlacementGroupSchedulingStrategy(
-            placement_group=pg,
-            placement_group_capture_child_tasks=True,
-            placement_group_bundle_index=reordered_bundle_indices[global_rank * num_gpu_per_engine],
-        )
-
-        env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST} | {
-            key: os.environ.get(key, default_val)
-            for key, default_val in {
-                "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
-                "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
-                "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
-                "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
-                "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
-                "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
-                "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
-            }.items()
-        }
-
-        rollout_engine = RolloutRayActor.options(
-            num_cpus=num_cpus,
-            num_gpus=num_gpus,
-            scheduling_strategy=scheduling_strategy,
-            runtime_env={
-                "env_vars": env_vars,
-            },
-        ).remote(args, rank=global_rank, worker_type=worker_type, base_gpu_id=base_gpu_id)
-
-        rollout_engines.append((global_rank, rollout_engine))
-        all_rollout_engines[i] = rollout_engine
-
-    num_new_engines = len(rollout_engines)
-
-    if num_new_engines == 0:
-        return num_new_engines
-
-    if args.rollout_external:
-        addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(args=args, rollout_engines=rollout_engines)
-    else:
-        addr_and_ports = _allocate_rollout_engine_addr_and_ports_normal(
-            args=args,
-            num_engines=total_num_engines,
-            rollout_engines=rollout_engines,
-            worker_type=worker_type,
-        )
-
-    # TODO: don't ray.get here to overlap train actor init with rollout engine init.
-    # somehow if we don't sync here, the --debug-rollout-only mode will crash.
-    init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in rollout_engines]
-    ray.get(init_handles)
-
-    return num_new_engines
-
-
 def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
     addr_and_ports = []
     for rank, _ in rollout_engines:
@@ -803,55 +801,39 @@ def start_rollout_server(args, pg) -> RolloutServer:
         decode_engine_count = total_num_engines - prefill_engine_count
         assert decode_engine_count > 0, f"No decode engines: total {total_num_engines}, prefill {prefill_engine_count}"
 
-        prefill_engines = [None] * prefill_engine_count
-        prefill_new = init_rollout_engines(
-            args,
-            pg,
-            prefill_engines,
-            worker_type="prefill",
-            rank_offset=0,
-        )
         prefill_group = EngineGroup(
             args=args,
             pg=pg,
-            all_engines=prefill_engines,
+            all_engines=[None] * prefill_engine_count,
             nodes_per_engine=nodes_per_engine,
-            num_new_engines=prefill_new,
+            num_new_engines=0,
             role="prefill",
             rank_offset=0,
         )
+        prefill_group.init_engines()
 
-        decode_engines = [None] * decode_engine_count
-        decode_new = init_rollout_engines(
-            args,
-            pg,
-            decode_engines,
-            worker_type="decode",
-            rank_offset=prefill_engine_count,
-        )
         decode_group = EngineGroup(
             args=args,
             pg=pg,
-            all_engines=decode_engines,
+            all_engines=[None] * decode_engine_count,
             nodes_per_engine=nodes_per_engine,
-            num_new_engines=decode_new,
+            num_new_engines=0,
             role="decode",
             rank_offset=prefill_engine_count,
         )
+        decode_group.init_engines()
 
         engine_groups = [prefill_group, decode_group]
     else:
-        all_engines = [None] * total_num_engines
-        num_new_engines = init_rollout_engines(args, pg, all_engines)
-        engine_groups = [
-            EngineGroup(
-                args=args,
-                pg=pg,
-                all_engines=all_engines,
-                nodes_per_engine=nodes_per_engine,
-                num_new_engines=num_new_engines,
-            )
-        ]
+        group = EngineGroup(
+            args=args,
+            pg=pg,
+            all_engines=[None] * total_num_engines,
+            nodes_per_engine=nodes_per_engine,
+            num_new_engines=0,
+        )
+        group.init_engines()
+        engine_groups = [group]
 
     return RolloutServer(
         engine_groups=engine_groups,
