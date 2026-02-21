@@ -17,7 +17,7 @@ except ImportError:
 
 from sglang.srt.utils import MultiprocessingSerializer
 
-from slime.utils.distributed_utils import init_process_group
+from slime.utils.distributed.distributed_utils import init_process_group
 
 
 try:

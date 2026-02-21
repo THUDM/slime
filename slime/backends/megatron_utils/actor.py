@@ -13,17 +13,21 @@ from ray.actor import ActorHandle
 from torch_memory_saver import torch_memory_saver
 from transformers import AutoConfig, AutoTokenizer
 
+from slime.backends.megatron_utils.routing_replay import RoutingReplay
 from slime.ray.train_actor import TrainRayActor
-from slime.utils import train_dump_utils
-from slime.utils.data import process_rollout_data
-from slime.utils.distributed_utils import get_gloo_group, init_process_group
-from slime.utils.logging_utils import init_tracking
-from slime.utils.memory_utils import clear_memory, print_memory
-from slime.utils.misc import Box
-from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
-from slime.utils.routing_replay import RoutingReplay
-from slime.utils.timer import Timer, inverse_timer, timer, with_defer
-from slime.utils.types import RolloutBatch
+from slime.utils.core.misc import Box
+from slime.utils.core.timer import Timer, inverse_timer, timer, with_defer
+from slime.utils.core.types import RolloutBatch
+from slime.utils.dataset.data import process_rollout_data
+from slime.utils.distributed.distributed_utils import get_gloo_group, init_process_group
+from slime.utils.distributed.reloadable_process_group import (
+    destroy_process_groups,
+    monkey_patch_torch_dist,
+    reload_process_groups,
+)
+from slime.utils.logging.logging_utils import init_tracking
+from slime.utils.training import train_dump_utils
+from slime.utils.training.memory_utils import clear_memory, print_memory
 
 from ...utils.profile_utils import TrainProfiler
 from ...utils.tensor_backper import TensorBackuper
@@ -149,7 +153,7 @@ class MegatronTrainRayActor(TrainRayActor):
 
         self.rollout_data_postprocess = None
         if self.args.rollout_data_postprocess_path is not None:
-            from slime.utils.misc import load_function
+            from slime.utils.core.misc import load_function
 
             self.rollout_data_postprocess = load_function(self.args.rollout_data_postprocess_path)
 
@@ -263,7 +267,7 @@ class MegatronTrainRayActor(TrainRayActor):
         from megatron.core.transformer.transformer_block import get_num_layers_to_build
         from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
 
-        from slime.utils.routing_replay import RoutingReplay
+        from slime.backends.megatron_utils.routing_replay import RoutingReplay
 
         for iterator in data_iterator:
             iterator.reset()

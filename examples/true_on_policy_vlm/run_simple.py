@@ -1,6 +1,6 @@
 import os
 
-import slime.utils.misc as U
+import slime.utils.core.misc as U
 from slime.utils.external_utils.command_utils import execute_train, get_default_wandb_args
 
 MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")

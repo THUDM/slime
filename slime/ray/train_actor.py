@@ -8,11 +8,11 @@ import ray
 import torch
 import torch.distributed as dist
 
-import slime.utils.eval_config
+import slime.utils.dataset.eval_config
 from slime.ray.ray_actor import RayActor
-from slime.utils.distributed_utils import init_gloo_group
-from slime.utils.logging_utils import configure_logger
-from slime.utils.memory_utils import clear_memory, print_memory
+from slime.utils.distributed.distributed_utils import init_gloo_group
+from slime.utils.logging.logging_utils import configure_logger
+from slime.utils.training.memory_utils import clear_memory, print_memory
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +53,7 @@ class TrainRayActor(RayActor):
         self.with_ref = with_ref
         self.with_opd_teacher = with_opd_teacher
 
-        torch.serialization.add_safe_globals([slime.utils.eval_config.EvalDatasetConfig])
+        torch.serialization.add_safe_globals([slime.utils.dataset.eval_config.EvalDatasetConfig])
 
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         torch.cuda.set_device(f"cuda:{local_rank}")

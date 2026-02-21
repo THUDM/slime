@@ -22,8 +22,8 @@ from megatron.core.utils import get_model_config
 from megatron.training.global_vars import get_args
 from megatron.training.training import get_model
 
-from slime.utils import logging_utils
-from slime.utils.memory_utils import clear_memory
+from slime.utils.logging import logging_utils
+from slime.utils.training.memory_utils import clear_memory
 
 from .checkpoint import load_checkpoint, save_checkpoint
 from .data import DataIterator, get_batch
@@ -249,7 +249,7 @@ def forward_only(
         model_module.eval()
 
     if args.custom_megatron_before_log_prob_hook_path:
-        from slime.utils.misc import load_function
+        from slime.utils.core.misc import load_function
 
         custom_before_log_prob_hook = load_function(args.custom_megatron_before_log_prob_hook_path)
         custom_before_log_prob_hook(args, model, store_prefix)
@@ -333,7 +333,7 @@ def train_one_step(
     optimizer.zero_grad()
 
     if args.custom_megatron_before_train_step_hook_path:
-        from slime.utils.misc import load_function
+        from slime.utils.core.misc import load_function
 
         custom_before_train_step_hook = load_function(args.custom_megatron_before_train_step_hook_path)
         custom_before_train_step_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler)
@@ -728,7 +728,7 @@ def save_hf_model(args, rollout_id: int, model: Sequence[DDP]) -> None:
 
     try:
         from megatron.bridge import AutoBridge
-        from slime.utils.megatron_bridge_utils import patch_megatron_model
+        from slime.backends.megatron_utils.megatron_bridge_utils import patch_megatron_model
 
         path = Path(args.save_hf.format(rollout_id=rollout_id))
 
@@ -768,7 +768,7 @@ def initialize_model_and_optimizer(
 
     if torch.version.hip:
         import megatron.core.dist_checkpointing.strategies.filesystem_async as filesystem_async_module
-        from slime.utils.rocm_checkpoint_writer import ROCmFileSystemWriterAsync
+        from slime.backends.megatron_utils.rocm_checkpoint_writer import ROCmFileSystemWriterAsync
 
         filesystem_async_module.FileSystemWriterAsync = ROCmFileSystemWriterAsync
         print("[ROCm] Applied FileSystemWriterAsync patch for HIP compatibility")

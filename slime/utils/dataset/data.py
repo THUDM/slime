@@ -13,9 +13,8 @@ try:
 except ImportError:
     pq = None
 
-from slime.utils.types import MultimodalTypes, Sample
-
-from .timer import Timer
+from slime.utils.core.timer import Timer
+from slime.utils.core.types import MultimodalTypes, Sample
 
 __all__ = ["Dataset"]
 
@@ -91,7 +90,7 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
     if processor:
         filtered_samples = []
         for sample in origin_samples:
-            from slime.utils.processing_utils import process_vision_info
+            from slime.utils.dataset.processing_utils import process_vision_info
 
             multimodal_inputs = process_vision_info(sample.prompt, processor)
             processor_output = processor(text=sample.prompt, **multimodal_inputs)
@@ -223,7 +222,7 @@ class Dataset:
                 output_prompt = prompt
 
             if processor:
-                from slime.utils.processing_utils import process_vision_info
+                from slime.utils.dataset.processing_utils import process_vision_info
 
                 assert isinstance(
                     prompt, list

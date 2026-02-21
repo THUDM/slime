@@ -9,7 +9,7 @@ from megatron.core import mpu
 from ray import ObjectRef
 from ray.actor import ActorHandle
 
-from slime.utils.distributed_utils import get_gloo_group
+from slime.utils.distributed.distributed_utils import get_gloo_group
 
 from ..sglang import FlattenedTensorBucket, MultiprocessingSerializer
 from .hf_weight_iterator_base import HfWeightIteratorBase

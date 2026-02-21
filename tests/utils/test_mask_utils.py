@@ -1,6 +1,6 @@
 from transformers import AutoTokenizer
 
-from slime.utils.mask_utils import MultiTurnLossMaskGenerator
+from slime.utils.dataset.mask_utils import MultiTurnLossMaskGenerator
 
 
 def test_loss_mask_qwen3_simple(model_name: str = "Qwen/Qwen3-8B"):

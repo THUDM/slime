@@ -7,8 +7,8 @@ import torch.distributed as dist
 from megatron.core import mpu
 from tqdm import tqdm
 
-from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.types import ParamInfo
+from slime.utils.core.types import ParamInfo
+from slime.utils.distributed.distributed_utils import get_gloo_group
 
 from ..megatron_to_hf import convert_to_hf
 from ..sglang import monkey_patch_torch_reductions

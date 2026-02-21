@@ -3,9 +3,9 @@ from argparse import Namespace
 from collections.abc import Callable
 from copy import deepcopy
 
-from slime.utils import logging_utils
-from slime.utils.metric_utils import compute_rollout_step
-from slime.utils.timer import Timer
+from slime.utils.core.timer import Timer
+from slime.utils.logging import logging_utils
+from slime.utils.logging.metric_utils import compute_rollout_step
 
 logger = logging.getLogger(__name__)
 

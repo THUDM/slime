@@ -1,7 +1,7 @@
 import torch
 
 from slime.rollout.filter_hub.base_types import DynamicFilterOutput
-from slime.utils.types import Sample
+from slime.utils.core.types import Sample
 
 __all__ = ["check_reward_nonzero_std"]
 

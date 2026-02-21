@@ -5,7 +5,7 @@ from contextlib import contextmanager
 import torch
 import torch.distributed as dist
 
-from slime.utils.memory_utils import available_memory, clear_memory, print_memory
+from slime.utils.training.memory_utils import available_memory, clear_memory, print_memory
 
 logger = logging.getLogger(__name__)
 

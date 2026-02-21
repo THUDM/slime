@@ -6,10 +6,10 @@ from pathlib import Path
 
 import torch
 
-from slime.utils.data import Dataset
-from slime.utils.misc import load_function
-from slime.utils.processing_utils import load_processor, load_tokenizer
-from slime.utils.types import Sample
+from slime.utils.core.misc import load_function
+from slime.utils.core.types import Sample
+from slime.utils.dataset.data import Dataset
+from slime.utils.dataset.processing_utils import load_processor, load_tokenizer
 
 logger = logging.getLogger(__name__)
 

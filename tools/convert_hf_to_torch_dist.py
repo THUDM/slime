@@ -14,8 +14,8 @@ from mbridge import AutoBridge
 from slime.backends.megatron_utils.arguments import set_default_megatron_args
 from slime.backends.megatron_utils.initialize import init
 from slime.backends.megatron_utils.model_provider import get_model_provider_func
-from slime.utils.logging_utils import configure_logger
-from slime.utils.memory_utils import print_memory
+from slime.utils.logging.logging_utils import configure_logger
+from slime.utils.training.memory_utils import print_memory
 
 
 def add_convertion_args(parser):
@@ -80,7 +80,7 @@ def get_args():
 def main():
     if torch.version.hip:
         import megatron.core.dist_checkpointing.strategies.filesystem_async as filesystem_async_module
-        from slime.utils.rocm_checkpoint_writer import ROCmFileSystemWriterAsync
+        from slime.backends.megatron_utils.rocm_checkpoint_writer import ROCmFileSystemWriterAsync
 
         filesystem_async_module.FileSystemWriterAsync = ROCmFileSystemWriterAsync
         print("[ROCm] Applied FileSystemWriterAsync patch for HIP compatibility")

@@ -9,12 +9,12 @@ import torch.nn.functional as F
 from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 
-from slime.utils import train_metric_utils
-from slime.utils.data import get_minimum_num_micro_batch_size
-from slime.utils.flops_utils import calculate_fwd_flops
-from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step
-from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
-from slime.utils.types import RolloutBatch
+from slime.utils.core.types import RolloutBatch
+from slime.utils.dataset.data import get_minimum_num_micro_batch_size
+from slime.utils.logging.metric_utils import compute_pass_rate, compute_rollout_step
+from slime.utils.training import train_metric_utils
+from slime.utils.training.flops_utils import calculate_fwd_flops
+from slime.utils.training.seqlen_balancing import get_seqlen_balanced_partitions
 
 from ...utils import logging_utils
 from .cp_utils import get_sum_of_sample_mean, slice_with_cp

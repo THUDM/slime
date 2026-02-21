@@ -7,7 +7,7 @@ import torch
 import typer
 
 from slime.ray.rollout import compute_perf_metrics_from_samples
-from slime.utils.types import Sample
+from slime.utils.core.types import Sample
 
 _WHITELIST_KEYS = [
     "group_index",

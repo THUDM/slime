@@ -5,7 +5,7 @@ from typing import Annotated
 import typer
 from openai import AsyncOpenAI
 
-from slime.utils.data import read_file
+from slime.utils.dataset.data import read_file
 
 
 # can unify w/ sglang_rollout.py later, e.g. add RM, if needed

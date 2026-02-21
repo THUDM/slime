@@ -14,7 +14,7 @@ from tau_bench.envs import get_env
 from tau_bench.types import RunConfig
 from trainable_agents import InteractionResult, Status, agent_factory
 
-from slime.utils.types import Sample
+from slime.utils.core.types import Sample
 
 # Set up logger for this module
 logger = logging.getLogger(__name__)

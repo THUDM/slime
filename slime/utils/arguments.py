@@ -9,8 +9,8 @@ from sglang_router.launch_router import RouterArgs
 
 from slime.backends.sglang_utils.arguments import sglang_parse_args
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
-from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
-from slime.utils.logging_utils import configure_logger
+from slime.utils.dataset.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
+from slime.utils.logging.logging_utils import configure_logger
 
 logger = logging.getLogger(__name__)
 

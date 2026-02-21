@@ -5,8 +5,8 @@ import ray
 import torch
 import typer
 
-from slime.utils.misc import load_function
-from slime.utils.types import Sample
+from slime.utils.core.misc import load_function
+from slime.utils.core.types import Sample
 
 
 def _truncate(text, max_len=200):

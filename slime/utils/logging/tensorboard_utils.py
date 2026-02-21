@@ -1,7 +1,7 @@
 import datetime
 import logging
 import os
-from slime.utils.misc import SingletonMeta
+from slime.utils.core.misc import SingletonMeta
 
 try:
     from torch.utils.tensorboard import SummaryWriter

@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 
-from slime.utils.memory_utils import print_memory
+from slime.utils.training.memory_utils import print_memory
 
 logger = logging.getLogger(__name__)
 

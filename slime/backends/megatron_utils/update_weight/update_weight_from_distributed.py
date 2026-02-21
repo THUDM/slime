@@ -11,7 +11,7 @@ from ray import ObjectRef
 from ray.actor import ActorHandle
 from tqdm import tqdm
 
-from slime.utils.distributed_utils import get_gloo_group, init_process_group
+from slime.utils.distributed.distributed_utils import get_gloo_group, init_process_group
 
 from ..megatron_to_hf import convert_to_hf
 from .common import all_gather_param, named_params_and_buffers

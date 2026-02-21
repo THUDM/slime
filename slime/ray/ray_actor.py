@@ -1,4 +1,4 @@
-from slime.utils.misc import get_current_node_ip, get_free_port
+from slime.utils.core.misc import get_current_node_ip, get_free_port
 
 
 class RayActor:

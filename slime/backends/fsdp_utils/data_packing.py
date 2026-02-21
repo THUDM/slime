@@ -4,7 +4,7 @@ import math
 
 import torch
 
-from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
+from slime.utils.training.seqlen_balancing import get_seqlen_balanced_partitions
 
 
 def pack_sequences(

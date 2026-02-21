@@ -98,7 +98,7 @@ def init(args):
         _initialize_tp_communicators()
 
     if getattr(args, "custom_megatron_init_path", None):
-        from slime.utils.misc import load_function
+        from slime.utils.core.misc import load_function
 
         custom_init = load_function(args.custom_megatron_init_path)
         custom_init(args)

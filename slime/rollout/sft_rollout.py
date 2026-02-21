@@ -1,7 +1,7 @@
 import logging
 
-from slime.utils.mask_utils import MultiTurnLossMaskGenerator
-from slime.utils.processing_utils import load_processor, load_tokenizer
+from slime.utils.dataset.mask_utils import MultiTurnLossMaskGenerator
+from slime.utils.dataset.processing_utils import load_processor, load_tokenizer
 
 __all__ = ["generate_rollout"]
 

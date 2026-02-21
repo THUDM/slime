@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from slime.utils.types import Sample
+from slime.utils.core.types import Sample
 
 
 @dataclass

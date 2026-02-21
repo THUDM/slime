@@ -2,7 +2,7 @@ import time
 import pytest
 import torch
 
-from slime.utils.ppo_utils import chunked_gae, vanilla_gae
+from slime.utils.training.ppo_utils import chunked_gae, vanilla_gae
 
 
 @pytest.mark.parametrize(

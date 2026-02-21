@@ -3,8 +3,8 @@ import random
 
 import aiohttp
 
-from slime.utils.misc import load_function
-from slime.utils.types import Sample
+from slime.utils.core.misc import load_function
+from slime.utils.core.types import Sample
 
 from .deepscaler import get_deepscaler_rule_based_reward
 from .f1 import f1_score

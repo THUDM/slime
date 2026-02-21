@@ -9,7 +9,7 @@ from megatron.core import mpu
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
 
 from slime.backends.megatron_utils.misc_utils import strip_param_name_prefix
-from slime.utils.types import ParamInfo
+from slime.utils.core.types import ParamInfo
 
 
 def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:

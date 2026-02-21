@@ -7,8 +7,8 @@ import re
 from qa_em_format import compute_score_em
 
 from slime.rollout.sglang_rollout import GenerateState
-from slime.utils.http_utils import post
-from slime.utils.types import Sample
+from slime.utils.core.types import Sample
+from slime.utils.network.http_utils import post
 
 # Configuration for Search-R1
 SEARCH_R1_CONFIGS = {

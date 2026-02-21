@@ -16,16 +16,21 @@ from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
-from slime.utils import logging_utils
-from slime.utils.health_monitor import RolloutHealthMonitor
-from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
-from slime.utils.logging_utils import configure_logger, init_tracking
-from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
-from slime.utils.misc import Box, group_by, load_function
-from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
-from slime.utils.types import Sample
+from slime.utils.core.misc import Box, group_by, load_function
+from slime.utils.core.types import Sample
+from slime.utils.logging import logging_utils
+from slime.utils.logging.logging_utils import configure_logger, init_tracking
+from slime.utils.logging.metric_utils import (
+    compute_pass_rate,
+    compute_rollout_step,
+    compute_statistics,
+    dict_add_prefix,
+)
+from slime.utils.network.health_monitor import RolloutHealthMonitor
+from slime.utils.network.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
+from slime.utils.training.seqlen_balancing import get_seqlen_balanced_partitions
 
-from ..utils.metric_utils import has_repetition
+from ..utils.logging.metric_utils import has_repetition
 from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -750,7 +755,7 @@ def _start_router(args) -> tuple[str, int]:
     else:
         from sglang_router.launch_router import RouterArgs
 
-        from slime.utils.http_utils import run_router
+        from slime.utils.network.http_utils import run_router
 
         router_args = RouterArgs.from_cli_args(args, use_router_prefix=True)
         router_args.host = router_ip

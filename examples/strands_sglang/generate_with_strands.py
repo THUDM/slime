@@ -7,7 +7,7 @@ from strands_sglang.tool_parsers import HermesToolParser
 
 from slime.rollout.rm_hub.math_dapo_utils import compute_score as math_dapo_compute_score
 from slime.rollout.sglang_rollout import GenerateState
-from slime.utils.types import Sample
+from slime.utils.core.types import Sample
 
 logger = logging.getLogger(__name__)
 

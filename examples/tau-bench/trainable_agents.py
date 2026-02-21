@@ -11,7 +11,7 @@ from tau_bench.types import Action, RunConfig
 from transformers import AutoTokenizer
 
 from slime.rollout.sglang_rollout import GenerateState
-from slime.utils.http_utils import post
+from slime.utils.network.http_utils import post
 
 # Set up logger for this module
 logger = logging.getLogger(__name__)

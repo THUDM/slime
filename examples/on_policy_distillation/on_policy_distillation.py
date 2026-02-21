@@ -1,7 +1,7 @@
 import aiohttp
 import torch
 
-from slime.utils.types import Sample
+from slime.utils.core.types import Sample
 
 
 async def reward_func(args, sample, **kwargs):

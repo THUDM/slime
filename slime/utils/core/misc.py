@@ -3,7 +3,7 @@ import subprocess
 
 import ray
 
-from slime.utils.http_utils import is_port_available
+from slime.utils.network.http_utils import is_port_available
 
 
 def load_function(path):

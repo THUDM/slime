@@ -7,9 +7,9 @@ from starlette.requests import Request
 from starlette.responses import Response
 from transformers import AutoTokenizer
 
-from slime.utils.http_utils import post
-from slime.utils.mask_utils import get_response_lengths
-from slime.utils.types import Sample
+from slime.utils.core.types import Sample
+from slime.utils.dataset.mask_utils import get_response_lengths
+from slime.utils.network.http_utils import post
 
 from .radix_tree import StringRadixTrie
 

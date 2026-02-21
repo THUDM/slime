@@ -1,8 +1,8 @@
 import dataclasses
 
-from slime.utils import megatron_bridge_utils
-from slime.utils.misc import chunk_named_params_by_size
+from slime.utils.core.misc import chunk_named_params_by_size
 
+from .. import megatron_bridge_utils
 from ..megatron_to_hf import postprocess_hf_param
 from ..misc_utils import strip_param_name_prefix
 from .hf_weight_iterator_base import HfWeightIteratorBase

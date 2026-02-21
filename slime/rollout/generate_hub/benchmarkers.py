@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Any
 
 from slime.rollout.sglang_rollout import generate as _generate_base
-from slime.utils.types import Sample
+from slime.utils.core.types import Sample
 
 logger = logging.getLogger(__name__)
 

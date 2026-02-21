@@ -11,17 +11,18 @@ from tqdm import tqdm
 from transformers import AutoConfig
 
 from slime.ray.train_actor import TrainRayActor
-from slime.utils import logging_utils, train_dump_utils, train_metric_utils
-from slime.utils.data import get_minimum_num_micro_batch_size, process_rollout_data
-from slime.utils.distributed_utils import get_gloo_group
-from slime.utils.logging_utils import init_tracking
-from slime.utils.memory_utils import clear_memory, print_memory
-from slime.utils.metric_utils import compute_rollout_step
-from slime.utils.misc import Box
-from slime.utils.ppo_utils import compute_approx_kl, compute_gspo_kl, compute_opsm_mask, compute_policy_loss
-from slime.utils.processing_utils import load_processor, load_tokenizer
-from slime.utils.profile_utils import TrainProfiler
-from slime.utils.timer import Timer, inverse_timer, timer, with_defer
+from slime.utils.core.misc import Box
+from slime.utils.core.timer import Timer, inverse_timer, timer, with_defer
+from slime.utils.dataset.data import get_minimum_num_micro_batch_size, process_rollout_data
+from slime.utils.dataset.processing_utils import load_processor, load_tokenizer
+from slime.utils.distributed.distributed_utils import get_gloo_group
+from slime.utils.logging import logging_utils
+from slime.utils.logging.logging_utils import init_tracking
+from slime.utils.logging.metric_utils import compute_rollout_step
+from slime.utils.training import train_dump_utils, train_metric_utils
+from slime.utils.training.memory_utils import clear_memory, print_memory
+from slime.utils.training.ppo_utils import compute_approx_kl, compute_gspo_kl, compute_opsm_mask, compute_policy_loss
+from slime.utils.training.profile_utils import TrainProfiler
 
 from . import checkpoint
 from .data_packing import pack_sequences, unpack_sequences

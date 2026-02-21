@@ -8,8 +8,8 @@ except ImportError as e:
     raise ImportError("Jinja2 is required. Please install it with: pip install jinja2") from e
 
 from slime.rollout.sglang_rollout import GenerateState
-from slime.utils.http_utils import post
-from slime.utils.types import Sample
+from slime.utils.core.types import Sample
+from slime.utils.network.http_utils import post
 
 # Import reward models
 try:
