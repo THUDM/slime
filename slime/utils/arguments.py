@@ -1361,28 +1361,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
 
             return parser
 
-        def add_prefill_decode_disaggregation_arguments(parser):
-            parser.add_argument(
-                "--prefill-num-servers",
-                type=int,
-                default=None,
-                help="Number of prefill servers for disaggregation.",
-            )
-            parser.add_argument(
-                "--sglang-config",
-                type=str,
-                default=None,
-                help=(
-                    "Path to a YAML config for SGLang engine deployment. "
-                    "Defines engine_groups with roles (regular/prefill/decode/placeholder), "
-                    "num_gpus per group, and optional per-group 'overrides' dict of "
-                    "ServerArgs field names that override the base --sglang-* CLI args. "
-                    "Placeholder groups reserve GPU slots without creating engines. "
-                    "Mutually exclusive with --prefill-num-servers."
-                ),
-            )
-            return parser
-
         def add_ci_arguments(parser):
             parser.add_argument(
                 "--ci-test",
@@ -1424,7 +1402,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_reward_model_arguments(parser)
         parser = add_rollout_buffer_arguments(parser)
         parser = add_mtp_training_arguments(parser)
-        parser = add_prefill_decode_disaggregation_arguments(parser)
         parser = add_ci_arguments(parser)
         parser = add_custom_megatron_plugins_arguments(parser)
         reset_arg(
@@ -1795,18 +1772,6 @@ def slime_validate_args(args):
         assert (
             args.rollout_max_prompt_len <= args.rollout_max_context_len - 1
         ), f"args.rollout_max_prompt_len ({args.rollout_max_prompt_len}) must be smaller than args.rollout_max_context_len ({args.rollout_max_context_len}) so that there is at least one generated token to compute loss."
-
-    assert not (
-        args.prefill_num_servers is not None and args.rollout_external
-    ), "prefill_num_servers cannot be set when rollout_external is set."
-
-    assert not (
-        getattr(args, "sglang_config", None) is not None and args.rollout_external
-    ), "sglang_config cannot be set when rollout_external is set."
-
-    assert not (
-        getattr(args, "sglang_config", None) is not None and args.prefill_num_servers is not None
-    ), "sglang_config and prefill_num_servers are mutually exclusive. Use engine_groups in the YAML config instead."
 
     if args.qkv_format == "bshd":
         assert args.train_backend == "megatron", "bshd format is only supported for megatron backend."
