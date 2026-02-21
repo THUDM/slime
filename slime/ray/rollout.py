@@ -100,6 +100,8 @@ class RolloutServer:
     """
 
     engine_groups: list[EngineGroup]
+    router_ip: str | None = None
+    router_port: int | None = None
 
     @property
     def engines(self):
@@ -722,19 +724,27 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
     return addr_and_ports
 
 
-def _start_router(args):
-    """start sgl router and slime router"""
-    if args.sglang_router_ip is not None:
-        return
+def _start_router(args) -> tuple[str, int]:
+    """Start sgl router or slime router and return (router_ip, router_port).
 
-    args.sglang_router_ip = _wrap_ipv6(get_host_info()[1])
-    if args.sglang_router_port is None:
-        args.sglang_router_port = find_available_port(random.randint(3000, 4000))
+    If ``args.sglang_router_ip`` is already set (e.g. by the user), skip
+    launching and return the existing values.
+    """
+    if args.sglang_router_ip is not None:
+        return args.sglang_router_ip, args.sglang_router_port
+
+    router_ip = _wrap_ipv6(get_host_info()[1])
+    router_port = args.sglang_router_port
+    if router_port is None:
+        router_port = find_available_port(random.randint(3000, 4000))
 
     if args.use_slime_router:
         assert args.prefill_num_servers is None, "slime router does not support prefill_num_servers."
         from slime.router.router import run_router
 
+        # slime router reads ip/port from args at startup
+        args.sglang_router_ip = router_ip
+        args.sglang_router_port = router_port
         router_args = args
 
     else:
@@ -743,8 +753,8 @@ def _start_router(args):
         from slime.utils.http_utils import run_router
 
         router_args = RouterArgs.from_cli_args(args, use_router_prefix=True)
-        router_args.host = args.sglang_router_ip
-        router_args.port = args.sglang_router_port
+        router_args.host = router_ip
+        router_args.port = router_port
         router_args.prometheus_port = find_available_port(random.randint(4000, 5000))
         router_args.log_level = "warn"
         router_args.request_timeout_secs = args.sglang_router_request_timeout_secs
@@ -766,7 +776,8 @@ def _start_router(args):
     # Wait 3 seconds
     time.sleep(3)
     assert process.is_alive()
-    logger.info(f"Router launched at {args.sglang_router_ip}:{args.sglang_router_port}")
+    logger.info(f"Router launched at {router_ip}:{router_port}")
+    return router_ip, router_port
 
 
 def start_rollout_server(args, pg) -> RolloutServer:
@@ -779,7 +790,12 @@ def start_rollout_server(args, pg) -> RolloutServer:
     Note: init_http_client should be called separately before this,
     as the HTTP client is shared across all servers.
     """
-    _start_router(args)
+    router_ip, router_port = _start_router(args)
+    # Write back for backward compatibility: downstream code (SGLangEngine,
+    # rollout functions, examples) still reads args.sglang_router_ip/port.
+    # TODO: remove once all consumers read from RolloutServer directly.
+    args.sglang_router_ip = router_ip
+    args.sglang_router_port = router_port
 
     num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
     num_engines = args.rollout_num_gpus // num_gpu_per_engine
@@ -794,7 +810,11 @@ def start_rollout_server(args, pg) -> RolloutServer:
         nodes_per_engine=nodes_per_engine,
         num_new_engines=num_new_engines,
     )
-    return RolloutServer(engine_groups=[engine_group])
+    return RolloutServer(
+        engine_groups=[engine_group],
+        router_ip=router_ip,
+        router_port=router_port,
+    )
 
 
 def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any] | None = None):
