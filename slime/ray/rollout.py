@@ -1,3 +1,4 @@
+import dataclasses
 import itertools
 import logging
 import multiprocessing
@@ -33,6 +34,31 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
+@dataclasses.dataclass
+class RolloutServerGroup:
+    """A group of SGLang engines behind a shared router.
+
+    Bundles router + engines into a single unit, as a step towards
+    multi-model support where each model has its own router + engine group.
+    """
+
+    args: Any
+    pg: Any  # (placement_group, reordered_bundle_indices, reordered_gpu_ids)
+    all_engines: list
+    nodes_per_engine: int
+    num_new_engines: int
+
+    @property
+    def engines(self):
+        """Node-0 engines only (for multi-node serving)."""
+        return self.all_engines[:: self.nodes_per_engine]
+
+    def reinit_engines(self):
+        """Re-initialize dead engines (for fault recovery). Does not restart the router."""
+        self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_engines)
+        return self.num_new_engines
+
+
 @ray.remote
 class RolloutManager:
     """The class to run rollout and convert rollout data to training data."""
@@ -62,15 +88,15 @@ class RolloutManager:
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
         if self.args.debug_train_only:
+            self.server_group = None
             self.all_rollout_engines = []
+            self.num_new_engines = 0
         else:
-            _start_router(args)
             init_http_client(args)
-            num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
-            num_engines = args.rollout_num_gpus // num_gpu_per_engine
-            self.all_rollout_engines = [None] * num_engines
-            self.nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
-        self.num_new_engines = init_rollout_engines(args, pg, self.all_rollout_engines)
+            self.server_group = start_rollout_server(args, pg)
+            self.all_rollout_engines = self.server_group.all_engines
+            self.nodes_per_engine = self.server_group.nodes_per_engine
+            self.num_new_engines = self.server_group.num_new_engines
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
         self.rollout_id = -1
 
@@ -180,7 +206,7 @@ class RolloutManager:
             return self.rollout_engines, self.rollout_engine_lock, self.num_new_engines
 
         dead_indices = [i for i, engine in enumerate(self.all_rollout_engines) if engine is None]
-        self.num_new_engines = init_rollout_engines(self.args, self.pg, self.all_rollout_engines)
+        self.num_new_engines = self.server_group.reinit_engines()
         logger.info(f"Recovered {self.num_new_engines} dead rollout engines")
         assert self.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
         if self.args.offload_rollout and dead_indices:
@@ -670,6 +696,33 @@ def _start_router(args):
     time.sleep(3)
     assert process.is_alive()
     logger.info(f"Router launched at {args.sglang_router_ip}:{args.sglang_router_port}")
+
+
+def start_rollout_server(args, pg) -> RolloutServerGroup:
+    """Start a complete rollout server: one router + a set of SGLang engines.
+
+    Combines router startup and engine initialization into a single
+    operation. Each RolloutServerGroup represents one model served
+    behind a shared router.
+
+    Note: init_http_client should be called separately before this,
+    as the HTTP client is shared across all server groups.
+    """
+    _start_router(args)
+
+    num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
+    num_engines = args.rollout_num_gpus // num_gpu_per_engine
+    all_engines = [None] * num_engines
+    nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
+    num_new_engines = init_rollout_engines(args, pg, all_engines)
+
+    return RolloutServerGroup(
+        args=args,
+        pg=pg,
+        all_engines=all_engines,
+        nodes_per_engine=nodes_per_engine,
+        num_new_engines=num_new_engines,
+    )
 
 
 def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any] | None = None):
