@@ -107,11 +107,19 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
 
 
 class SGLangEngine(RayActor):
-    def __init__(self, args, rank: int, worker_type: str = "regular", base_gpu_id: int | None = None):
+    def __init__(
+        self,
+        args,
+        rank: int,
+        worker_type: str = "regular",
+        base_gpu_id: int | None = None,
+        sglang_overrides: dict | None = None,
+    ):
         self.args = args
         self.rank = rank
         self.worker_type = worker_type
         self.base_gpu_id = base_gpu_id
+        self.sglang_overrides = sglang_overrides or {}
 
     def init(self, dist_init_addr, port, nccl_port, host=None, disaggregation_bootstrap_port=None):
         self.router_ip = self.args.sglang_router_ip
@@ -143,6 +151,7 @@ class SGLangEngine(RayActor):
             self.worker_type,
             disaggregation_bootstrap_port,
             base_gpu_id=self.base_gpu_id,
+            sglang_overrides=self.sglang_overrides,
         )
 
         self.node_rank = server_args_dict["node_rank"]
@@ -476,6 +485,7 @@ def _compute_server_args(
     worker_type: str = "regular",
     disaggregation_bootstrap_port: int | None = None,
     base_gpu_id: int | None = None,
+    sglang_overrides: dict | None = None,
 ):
     nnodes = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
     node_rank = rank % nnodes
@@ -531,6 +541,15 @@ def _compute_server_args(
         if hasattr(args, f"sglang_{attr.name}") and attr.name not in kwargs:
             kwargs[attr.name] = getattr(args, f"sglang_{attr.name}")
         unused_keys.discard(attr.name)
+
+    # Per-engine-group overrides from --sglang-config YAML.
+    # Applied after base args so they take highest priority.
+    if sglang_overrides:
+        for key, value in sglang_overrides.items():
+            if key in kwargs:
+                logger.info(f"sglang_overrides: overriding {key}={kwargs[key]} -> {value} (rank={rank})")
+            kwargs[key] = value
+            unused_keys.discard(key)
 
     # for compatibility with old args
     if len(unused_keys) > 0:
