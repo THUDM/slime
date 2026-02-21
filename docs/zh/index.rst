@@ -63,6 +63,7 @@ slime 是 GLM-4.7、GLM-4.6、GLM-4.5 背后的 RL 训练框架。除此之外�
    :maxdepth: 1
    :caption: 开发指南
 
+   developer_guide/ci.md
    developer_guide/debug.md
    developer_guide/profiling.md
 
