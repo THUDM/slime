@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 import ray
 import torch
+import yaml
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
@@ -32,6 +33,78 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
+
+
+@dataclasses.dataclass
+class EngineGroupConfig:
+    """Configuration for a single engine group.
+
+    Attributes:
+        role: One of "regular", "prefill", "decode", or "placeholder".
+              "placeholder" reserves GPU slots without creating engines.
+        num_gpus: Total number of GPUs for this group.
+    """
+
+    role: str
+    num_gpus: int
+
+    def __post_init__(self):
+        valid_roles = {"regular", "prefill", "decode", "placeholder"}
+        assert self.role in valid_roles, f"Invalid role '{self.role}', must be one of {valid_roles}"
+        assert self.num_gpus > 0, f"num_gpus must be > 0, got {self.num_gpus}"
+
+
+@dataclasses.dataclass
+class SglangConfig:
+    """Configuration for SGLang engine deployment.
+
+    Loaded from ``--sglang-config`` YAML file::
+
+        engine_groups:
+          - role: prefill
+            num_gpus: 4
+          - role: placeholder
+            num_gpus: 2
+          - role: decode
+            num_gpus: 10
+
+    ``placeholder`` groups reserve GPU slots in the placement group without
+    creating engines.  This is useful when different models or model parts
+    need empty GPUs between them (e.g. for NUMA alignment or future expansion).
+    """
+
+    engine_groups: list[EngineGroupConfig]
+
+    @staticmethod
+    def from_yaml(path: str) -> "SglangConfig":
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        assert "engine_groups" in data, f"sglang config must have 'engine_groups' key, got {list(data.keys())}"
+        groups = [EngineGroupConfig(**g) for g in data["engine_groups"]]
+        return SglangConfig(engine_groups=groups)
+
+    @staticmethod
+    def from_prefill_num_servers(args) -> "SglangConfig":
+        """Build a config equivalent to the legacy --prefill-num-servers flag."""
+        total_gpus = args.rollout_num_gpus
+        prefill_gpus = args.prefill_num_servers * args.rollout_num_gpus_per_engine
+        decode_gpus = total_gpus - prefill_gpus
+        assert decode_gpus > 0, f"No decode GPUs: total {total_gpus}, prefill {prefill_gpus}"
+        return SglangConfig(
+            engine_groups=[
+                EngineGroupConfig(role="prefill", num_gpus=prefill_gpus),
+                EngineGroupConfig(role="decode", num_gpus=decode_gpus),
+            ]
+        )
+
+    @property
+    def has_pd_disaggregation(self) -> bool:
+        """Whether any group uses prefill or decode roles."""
+        return any(g.role in ("prefill", "decode") for g in self.engine_groups)
+
+    @property
+    def total_num_gpus(self) -> int:
+        return sum(g.num_gpus for g in self.engine_groups)
 
 
 @dataclasses.dataclass
@@ -61,8 +134,10 @@ class EngineGroup:
 
         Creates Ray actors for each None slot, allocates ports, and calls
         engine.init(). Used both for first-time creation and fault recovery.
+
+        Placeholder groups (role="placeholder") skip engine creation entirely.
         """
-        if self.args.debug_train_only:
+        if self.args.debug_train_only or self.role == "placeholder":
             self.num_new_engines = 0
             return 0
 
@@ -169,18 +244,17 @@ class EngineGroup:
 class RolloutServer:
     """A model served behind a shared router, with one or more engine groups.
 
-    Corresponds to one entry in the future ``--sglang-config`` YAML::
+    Configured via ``--sglang-config`` YAML::
 
-        rollout_servers:
-          - name: policy
-            engine_groups:
-              - role: prefill
-                ...
-              - role: decode
-                ...
+        engine_groups:
+          - role: prefill
+            num_gpus: 4
+          - role: placeholder
+            num_gpus: 2
+          - role: decode
+            num_gpus: 10
 
-    Currently only a single EngineGroup is used for non-PD mode;
-    PD disaggregation creates separate prefill and decode groups.
+    Placeholder groups reserve GPU slots without creating engines.
     """
 
     engine_groups: list[EngineGroup]
@@ -188,50 +262,52 @@ class RolloutServer:
     router_port: int | None = None
 
     @property
+    def active_engine_groups(self):
+        """Engine groups that have actual engines (excludes placeholder)."""
+        return [g for g in self.engine_groups if g.role != "placeholder"]
+
+    @property
     def engines(self):
-        """All node-0 engines across all groups."""
-        return [e for g in self.engine_groups for e in g.engines]
+        """All node-0 engines across all active groups."""
+        return [e for g in self.active_engine_groups for e in g.engines]
 
     @property
     def all_engines(self):
-        """All engines (including non-node-0) across all groups."""
-        return [e for g in self.engine_groups for e in g.all_engines]
+        """All engines (including non-node-0) across all active groups."""
+        return [e for g in self.active_engine_groups for e in g.all_engines]
 
     @property
     def num_new_engines(self):
-        return sum(g.num_new_engines for g in self.engine_groups)
+        return sum(g.num_new_engines for g in self.active_engine_groups)
 
     @num_new_engines.setter
     def num_new_engines(self, value):
-        for g in self.engine_groups:
+        for g in self.active_engine_groups:
             g.num_new_engines = value
 
     @property
     def nodes_per_engine(self):
-        """Nodes per engine. Only valid when all groups share the same value.
-
-        TODO: remove once health_monitor operates per-group.
-        """
-        values = {g.nodes_per_engine for g in self.engine_groups}
+        """Nodes per engine. Only valid when all active groups share the same value."""
+        values = {g.nodes_per_engine for g in self.active_engine_groups}
         assert len(values) == 1, f"Heterogeneous nodes_per_engine: {values}"
         return values.pop()
 
     def recover(self):
-        """Recover dead engines across all groups."""
-        for g in self.engine_groups:
+        """Recover dead engines across all active groups."""
+        for g in self.active_engine_groups:
             g.recover()
 
     def offload(self):
-        """Release memory occupation across all groups."""
+        """Release memory occupation across all active groups."""
         results = []
-        for g in self.engine_groups:
+        for g in self.active_engine_groups:
             results.extend(g.offload())
         return results
 
     def onload(self, tags: list[str] | None = None):
-        """Resume memory occupation across all groups."""
+        """Resume memory occupation across all active groups."""
         results = []
-        for g in self.engine_groups:
+        for g in self.active_engine_groups:
             results.extend(g.onload(tags))
         return results
 
@@ -274,7 +350,7 @@ class RolloutManager:
 
         self._health_monitors = []
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
-            for group in self.server.engine_groups:
+            for group in self.server.active_engine_groups:
                 monitor = RolloutHealthMonitor(group, args)
                 monitor.start()
                 self._health_monitors.append(monitor)
@@ -718,7 +794,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(*, args, num_engines, rollout
     return addr_and_ports
 
 
-def _start_router(args) -> tuple[str, int]:
+def _start_router(args, *, has_pd_disaggregation: bool = False) -> tuple[str, int]:
     """Start sgl router or slime router and return (router_ip, router_port).
 
     If ``args.sglang_router_ip`` is already set (e.g. by the user), skip
@@ -733,7 +809,7 @@ def _start_router(args) -> tuple[str, int]:
         router_port = find_available_port(random.randint(3000, 4000))
 
     if args.use_slime_router:
-        assert args.prefill_num_servers is None, "slime router does not support prefill_num_servers."
+        assert not has_pd_disaggregation, "slime router does not support PD disaggregation."
         from slime.router.router import run_router
 
         # slime router reads ip/port from args at startup
@@ -756,7 +832,7 @@ def _start_router(args) -> tuple[str, int]:
         if hasattr(args, "sglang_router_policy") and args.sglang_router_policy:
             router_args.policy = args.sglang_router_policy
 
-        if args.prefill_num_servers is not None:
+        if has_pd_disaggregation:
             router_args.pd_disaggregation = True
 
         logger.info(f"Launch router with args: {router_args}")
@@ -781,13 +857,18 @@ def start_rollout_server(args, pg) -> RolloutServer:
     operation. Each RolloutServer represents one model served behind
     a shared router, containing one or more EngineGroups.
 
-    When ``args.prefill_num_servers`` is set, creates separate prefill
-    and decode EngineGroups for PD disaggregation.
+    Engine groups are determined by (in priority order):
+    1. ``args.sglang_config`` — YAML file with explicit engine_groups.
+    2. ``args.prefill_num_servers`` — legacy PD disaggregation flag.
+    3. Default — a single "regular" group using all rollout GPUs.
 
     Note: init_http_client should be called separately before this,
     as the HTTP client is shared across all servers.
     """
-    router_ip, router_port = _start_router(args)
+    # Resolve the deployment config.
+    config = _resolve_sglang_config(args)
+
+    router_ip, router_port = _start_router(args, has_pd_disaggregation=config.has_pd_disaggregation)
     # Write back for backward compatibility: downstream code (SGLangEngine,
     # rollout functions, examples) still reads args.sglang_router_ip/port.
     # TODO: remove once all consumers read from RolloutServer directly.
@@ -795,53 +876,50 @@ def start_rollout_server(args, pg) -> RolloutServer:
     args.sglang_router_port = router_port
 
     num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
-    total_num_engines = args.rollout_num_gpus // num_gpu_per_engine
     nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
 
-    if args.prefill_num_servers is not None:
-        prefill_engine_count = args.prefill_num_servers * args.rollout_num_gpus_per_engine // num_gpu_per_engine
-        decode_engine_count = total_num_engines - prefill_engine_count
-        assert decode_engine_count > 0, f"No decode engines: total {total_num_engines}, prefill {prefill_engine_count}"
+    engine_groups = []
+    gpu_offset = 0  # cumulative GPU offset for rank_offset calculation
+    for group_cfg in config.engine_groups:
+        num_engines = group_cfg.num_gpus // num_gpu_per_engine
+        rank_offset = gpu_offset // num_gpu_per_engine
 
-        prefill_group = EngineGroup(
-            args=args,
-            pg=pg,
-            all_engines=[None] * prefill_engine_count,
-            nodes_per_engine=nodes_per_engine,
-            num_new_engines=0,
-            role="prefill",
-            rank_offset=0,
-        )
-        prefill_group.init_engines()
-
-        decode_group = EngineGroup(
-            args=args,
-            pg=pg,
-            all_engines=[None] * decode_engine_count,
-            nodes_per_engine=nodes_per_engine,
-            num_new_engines=0,
-            role="decode",
-            rank_offset=prefill_engine_count,
-        )
-        decode_group.init_engines()
-
-        engine_groups = [prefill_group, decode_group]
-    else:
         group = EngineGroup(
             args=args,
             pg=pg,
-            all_engines=[None] * total_num_engines,
+            all_engines=[None] * num_engines if group_cfg.role != "placeholder" else [],
             nodes_per_engine=nodes_per_engine,
             num_new_engines=0,
+            role=group_cfg.role,
+            rank_offset=rank_offset,
         )
         group.init_engines()
-        engine_groups = [group]
+        engine_groups.append(group)
+
+        gpu_offset += group_cfg.num_gpus
 
     return RolloutServer(
         engine_groups=engine_groups,
         router_ip=router_ip,
         router_port=router_port,
     )
+
+
+def _resolve_sglang_config(args) -> SglangConfig:
+    """Build a SglangConfig from args, choosing the right source."""
+    if getattr(args, "sglang_config", None) is not None:
+        config = SglangConfig.from_yaml(args.sglang_config)
+        # Validate total GPUs match.
+        expected = args.rollout_num_gpus
+        actual = config.total_num_gpus
+        assert actual == expected, f"sglang_config total GPUs ({actual}) != rollout_num_gpus ({expected})"
+        return config
+
+    if args.prefill_num_servers is not None:
+        return SglangConfig.from_prefill_num_servers(args)
+
+    # Default: single regular group.
+    return SglangConfig(engine_groups=[EngineGroupConfig(role="regular", num_gpus=args.rollout_num_gpus)])
 
 
 def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any] | None = None):
