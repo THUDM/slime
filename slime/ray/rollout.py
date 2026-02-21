@@ -43,10 +43,14 @@ class EngineGroupConfig:
         role: One of "regular", "prefill", "decode", or "placeholder".
               "placeholder" reserves GPU slots without creating engines.
         num_gpus: Total number of GPUs for this group.
+        overrides: Optional dict of SGLang ``ServerArgs`` field overrides.
+                   These are applied on top of the base CLI ``--sglang-*``
+                   arguments in ``_compute_server_args``.
     """
 
     role: str
     num_gpus: int
+    overrides: dict = dataclasses.field(default_factory=dict)
 
     def __post_init__(self):
         valid_roles = {"regular", "prefill", "decode", "placeholder"}
@@ -63,14 +67,22 @@ class SglangConfig:
         engine_groups:
           - role: prefill
             num_gpus: 4
+            overrides:
+              mem_fraction_static: 0.9
+              chunked_prefill_size: 8192
           - role: placeholder
             num_gpus: 2
           - role: decode
             num_gpus: 10
+            overrides:
+              mem_fraction_static: 0.7
 
     ``placeholder`` groups reserve GPU slots in the placement group without
     creating engines.  This is useful when different models or model parts
     need empty GPUs between them (e.g. for NUMA alignment or future expansion).
+
+    ``overrides`` are ``ServerArgs`` field names applied on top of the base
+    CLI ``--sglang-*`` arguments, allowing per-group customisation.
     """
 
     engine_groups: list[EngineGroupConfig]
@@ -123,6 +135,7 @@ class EngineGroup:
     num_new_engines: int
     role: str = "regular"  # "regular", "prefill", or "decode"
     rank_offset: int = 0  # global rank of the first engine in this group
+    sglang_overrides: dict = dataclasses.field(default_factory=dict)
 
     @property
     def engines(self):
@@ -186,7 +199,13 @@ class EngineGroup:
                 runtime_env={
                     "env_vars": env_vars,
                 },
-            ).remote(self.args, rank=global_rank, worker_type=self.role, base_gpu_id=base_gpu_id)
+            ).remote(
+                self.args,
+                rank=global_rank,
+                worker_type=self.role,
+                base_gpu_id=base_gpu_id,
+                sglang_overrides=self.sglang_overrides,
+            )
 
             rollout_engines.append((global_rank, rollout_engine))
             self.all_engines[i] = rollout_engine
@@ -892,6 +911,7 @@ def start_rollout_server(args, pg) -> RolloutServer:
             num_new_engines=0,
             role=group_cfg.role,
             rank_offset=rank_offset,
+            sglang_overrides=group_cfg.overrides,
         )
         group.init_engines()
         engine_groups.append(group)

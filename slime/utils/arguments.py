@@ -1303,7 +1303,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 type=str,
                 default=None,
                 help=(
-                    "Path to a YAML config for SGLang engine deployment. Defines engine_groups with roles (regular/prefill/decode/placeholder) and num_gpus per group. Placeholder groups reserve GPU slots without creating engines. Overrides --prefill-num-servers when set."
+                    "Path to a YAML config for SGLang engine deployment. "
+                    "Defines engine_groups with roles (regular/prefill/decode/placeholder), "
+                    "num_gpus per group, and optional per-group 'overrides' dict of "
+                    "ServerArgs field names that override the base --sglang-* CLI args. "
+                    "Placeholder groups reserve GPU slots without creating engines. "
+                    "Mutually exclusive with --prefill-num-servers."
                 ),
             )
             return parser
