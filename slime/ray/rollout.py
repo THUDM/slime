@@ -40,21 +40,23 @@ class EngineGroupConfig:
     """Configuration for a single engine group.
 
     Attributes:
-        role: One of "regular", "prefill", "decode", or "placeholder".
-              "placeholder" reserves GPU slots without creating engines.
+        worker_type: One of "regular", "prefill", "decode", or "placeholder".
+                     "placeholder" reserves GPU slots without creating engines.
         num_gpus: Total number of GPUs for this group.
         overrides: Optional dict of SGLang ``ServerArgs`` field overrides.
                    These are applied on top of the base CLI ``--sglang-*``
                    arguments in ``_compute_server_args``.
     """
 
-    role: str
+    worker_type: str
     num_gpus: int
     overrides: dict = dataclasses.field(default_factory=dict)
 
     def __post_init__(self):
-        valid_roles = {"regular", "prefill", "decode", "placeholder"}
-        assert self.role in valid_roles, f"Invalid role '{self.role}', must be one of {valid_roles}"
+        valid_types = {"regular", "prefill", "decode", "placeholder"}
+        assert (
+            self.worker_type in valid_types
+        ), f"Invalid worker_type '{self.worker_type}', must be one of {valid_types}"
         assert self.num_gpus > 0, f"num_gpus must be > 0, got {self.num_gpus}"
 
 
@@ -65,14 +67,14 @@ class SglangConfig:
     Loaded from ``--sglang-config`` YAML file::
 
         engine_groups:
-          - role: prefill
+          - worker_type: prefill
             num_gpus: 4
             overrides:
               mem_fraction_static: 0.9
               chunked_prefill_size: 8192
-          - role: placeholder
+          - worker_type: placeholder
             num_gpus: 2
-          - role: decode
+          - worker_type: decode
             num_gpus: 10
             overrides:
               mem_fraction_static: 0.7
@@ -104,15 +106,15 @@ class SglangConfig:
         assert decode_gpus > 0, f"No decode GPUs: total {total_gpus}, prefill {prefill_gpus}"
         return SglangConfig(
             engine_groups=[
-                EngineGroupConfig(role="prefill", num_gpus=prefill_gpus),
-                EngineGroupConfig(role="decode", num_gpus=decode_gpus),
+                EngineGroupConfig(worker_type="prefill", num_gpus=prefill_gpus),
+                EngineGroupConfig(worker_type="decode", num_gpus=decode_gpus),
             ]
         )
 
     @property
     def has_pd_disaggregation(self) -> bool:
-        """Whether any group uses prefill or decode roles."""
-        return any(g.role in ("prefill", "decode") for g in self.engine_groups)
+        """Whether any group uses prefill or decode worker_type."""
+        return any(g.worker_type in ("prefill", "decode") for g in self.engine_groups)
 
     @property
     def total_num_gpus(self) -> int:
@@ -133,7 +135,7 @@ class EngineGroup:
     all_engines: list
     nodes_per_engine: int
     num_new_engines: int
-    role: str = "regular"  # "regular", "prefill", or "decode"
+    worker_type: str = "regular"  # "regular", "prefill", or "decode"
     rank_offset: int = 0  # global rank of the first engine in this group
     sglang_overrides: dict = dataclasses.field(default_factory=dict)
 
@@ -148,9 +150,9 @@ class EngineGroup:
         Returns a list of Ray ObjectRefs for the init calls.  The caller
         should ``ray.get()`` on them to block until the engines are healthy.
 
-        Placeholder groups (role="placeholder") skip engine creation entirely.
+        Placeholder groups (worker_type="placeholder") skip engine creation entirely.
         """
-        if self.args.debug_train_only or self.role == "placeholder":
+        if self.args.debug_train_only or self.worker_type == "placeholder":
             self.num_new_engines = 0
             return []
 
@@ -202,7 +204,7 @@ class EngineGroup:
             ).remote(
                 self.args,
                 rank=global_rank,
-                worker_type=self.role,
+                worker_type=self.worker_type,
                 base_gpu_id=base_gpu_id,
                 sglang_overrides=self.sglang_overrides,
             )
@@ -224,7 +226,7 @@ class EngineGroup:
                 args=self.args,
                 num_engines=total_num_engines,
                 rollout_engines=rollout_engines,
-                worker_type=self.role,
+                worker_type=self.worker_type,
             )
 
         init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in rollout_engines]
@@ -252,11 +254,11 @@ class RolloutServer:
     Configured via ``--sglang-config`` YAML::
 
         engine_groups:
-          - role: prefill
+          - worker_type: prefill
             num_gpus: 4
-          - role: placeholder
+          - worker_type: placeholder
             num_gpus: 2
-          - role: decode
+          - worker_type: decode
             num_gpus: 10
 
     Placeholder groups reserve GPU slots without creating engines.
@@ -267,46 +269,39 @@ class RolloutServer:
     router_port: int | None = None
 
     @property
-    def active_engine_groups(self):
-        """Engine groups that have actual engines (excludes placeholder)."""
-        return [g for g in self.engine_groups if g.role != "placeholder"]
-
-    @property
     def engines(self):
-        """All node-0 engines across all active groups."""
-        return [e for g in self.active_engine_groups for e in g.engines]
+        """All node-0 engines across all groups (placeholder groups contribute nothing)."""
+        return [e for g in self.engine_groups for e in g.engines]
 
     @property
     def all_engines(self):
-        """All engines (including non-node-0) across all active groups."""
-        return [e for g in self.active_engine_groups for e in g.all_engines]
+        """All engines (including non-node-0) across all groups."""
+        return [e for g in self.engine_groups for e in g.all_engines]
 
     @property
     def num_new_engines(self):
-        return sum(g.num_new_engines for g in self.active_engine_groups)
+        return sum(g.num_new_engines for g in self.engine_groups)
 
     @num_new_engines.setter
     def num_new_engines(self, value):
-        for g in self.active_engine_groups:
+        for g in self.engine_groups:
             g.num_new_engines = value
 
     @property
     def nodes_per_engine(self):
         """Nodes per engine. Only valid when all active groups share the same value."""
-        values = {g.nodes_per_engine for g in self.active_engine_groups}
+        values = {g.nodes_per_engine for g in self.engine_groups}
         assert len(values) == 1, f"Heterogeneous nodes_per_engine: {values}"
         return values.pop()
 
     def recover(self):
         """Recover dead engines across all active groups, overlapping init."""
         # Record dead indices per group before starting.
-        dead_per_group = [
-            [i for i, engine in enumerate(g.all_engines) if engine is None] for g in self.active_engine_groups
-        ]
+        dead_per_group = [[i for i, engine in enumerate(g.all_engines) if engine is None] for g in self.engine_groups]
 
         # Start all groups concurrently.
         all_handles = []
-        for g in self.active_engine_groups:
+        for g in self.engine_groups:
             all_handles.extend(g.start_engines())
         if all_handles:
             ray.get(all_handles)
@@ -314,8 +309,8 @@ class RolloutServer:
         # Post-recovery: offload then onload weights for newly created engines.
         release_handles = []
         new_engines_all = []
-        for g, dead_indices in zip(self.active_engine_groups, dead_per_group, strict=True):
-            logger.info(f"Recovered {g.num_new_engines} dead rollout engines (role={g.role})")
+        for g, dead_indices in zip(self.engine_groups, dead_per_group, strict=True):
+            logger.info(f"Recovered {g.num_new_engines} dead rollout engines (worker_type={g.worker_type})")
             assert g.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
             if g.args.offload_rollout and dead_indices:
                 new_engines = [g.all_engines[i] for i in dead_indices]
@@ -329,16 +324,16 @@ class RolloutServer:
             )
 
     def offload(self):
-        """Release memory occupation across all active groups (concurrent)."""
+        """Release memory occupation across all groups (concurrent)."""
         handles = []
-        for g in self.active_engine_groups:
+        for g in self.engine_groups:
             handles.extend(g.offload())
         return ray.get(handles) if handles else []
 
     def onload(self, tags: list[str] | None = None):
-        """Resume memory occupation across all active groups (concurrent)."""
+        """Resume memory occupation across all groups (concurrent)."""
         handles = []
-        for g in self.active_engine_groups:
+        for g in self.engine_groups:
             handles.extend(g.onload(tags))
         return ray.get(handles) if handles else []
 
@@ -381,7 +376,7 @@ class RolloutManager:
 
         self._health_monitors = []
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
-            for group in self.server.active_engine_groups:
+            for group in self.server.engine_groups:
                 monitor = RolloutHealthMonitor(group, args)
                 monitor.start()
                 self._health_monitors.append(monitor)
@@ -919,10 +914,10 @@ def start_rollout_server(args, pg) -> RolloutServer:
         group = EngineGroup(
             args=args,
             pg=pg,
-            all_engines=[None] * num_engines if group_cfg.role != "placeholder" else [],
+            all_engines=[None] * num_engines if group_cfg.worker_type != "placeholder" else [],
             nodes_per_engine=nodes_per_engine,
             num_new_engines=0,
-            role=group_cfg.role,
+            worker_type=group_cfg.worker_type,
             rank_offset=rank_offset,
             sglang_overrides=group_cfg.overrides,
         )
@@ -955,7 +950,7 @@ def _resolve_sglang_config(args) -> SglangConfig:
         return SglangConfig.from_prefill_num_servers(args)
 
     # Default: single regular group.
-    return SglangConfig(engine_groups=[EngineGroupConfig(role="regular", num_gpus=args.rollout_num_gpus)])
+    return SglangConfig(engine_groups=[EngineGroupConfig(worker_type="regular", num_gpus=args.rollout_num_gpus)])
 
 
 def _log_eval_rollout_data(rollout_id, args, data, extra_metrics: dict[str, Any] | None = None):
