@@ -450,6 +450,9 @@ def log_rollout_data(
                     else:
                         val = torch.cat(val).clone().detach()
                         val = val.mean() * cp_size
+                elif isinstance(val[0], list):
+                    # Adding support for per token rewards
+                    val = sum(sum(v) / len(v) for v in val) / len(val)
                 else:
                     val = sum(val) / len(val)
             elif isinstance(val, torch.Tensor):
