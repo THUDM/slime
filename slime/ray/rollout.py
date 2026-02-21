@@ -56,15 +56,15 @@ class EngineGroup:
         """Node-0 engines only (for multi-node serving)."""
         return self.all_engines[:: self.nodes_per_engine]
 
-    def init_engines(self):
-        """Initialize or re-initialize engines that are None in all_engines.
+    def start_engines(self) -> list:
+        """Create Ray actors, allocate ports, and fire ``engine.init()`` without waiting.
 
-        Creates Ray actors for each None slot, allocates ports, and calls
-        engine.init(). Used both for first-time creation and fault recovery.
+        Returns a list of Ray ObjectRefs for the init calls.  The caller
+        should ``ray.get()`` on them to block until the engines are healthy.
         """
         if self.args.debug_train_only:
             self.num_new_engines = 0
-            return 0
+            return []
 
         num_gpu_per_engine = min(self.args.rollout_num_gpus_per_engine, self.args.num_gpus_per_node)
         total_num_engines = self.args.rollout_num_gpus // num_gpu_per_engine
@@ -119,7 +119,7 @@ class EngineGroup:
         self.num_new_engines = len(rollout_engines)
 
         if self.num_new_engines == 0:
-            return self.num_new_engines
+            return []
 
         if self.args.rollout_external:
             addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(
@@ -133,36 +133,22 @@ class EngineGroup:
                 worker_type=self.role,
             )
 
-        # TODO: don't ray.get here to overlap train actor init with rollout engine init.
-        # somehow if we don't sync here, the --debug-rollout-only mode will crash.
         init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in rollout_engines]
-        ray.get(init_handles)
-
-        return self.num_new_engines
-
-    # Alias for backward compatibility / clarity in fault-recovery paths.
-    reinit_engines = init_engines
-
-    def recover(self):
-        """Recover dead engines and handle memory state for newly created ones."""
-        dead_indices = [i for i, engine in enumerate(self.all_engines) if engine is None]
-        self.reinit_engines()
-        logger.info(f"Recovered {self.num_new_engines} dead rollout engines")
-        assert self.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
-        if self.args.offload_rollout and dead_indices:
-            new_engines = [self.all_engines[i] for i in dead_indices]
-            ray.get([engine.release_memory_occupation.remote() for engine in new_engines])
-            ray.get([engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]) for engine in new_engines])
+        return init_handles
 
     def offload(self):
-        """Release memory occupation on all engines."""
-        return ray.get([engine.release_memory_occupation.remote() for engine in self.engines if engine is not None])
+        """Fire release_memory_occupation on all engines (non-blocking).
+
+        Returns a list of Ray ObjectRefs.
+        """
+        return [engine.release_memory_occupation.remote() for engine in self.engines if engine is not None]
 
     def onload(self, tags: list[str] | None = None):
-        """Resume memory occupation on all engines."""
-        return ray.get(
-            [engine.resume_memory_occupation.remote(tags=tags) for engine in self.engines if engine is not None]
-        )
+        """Fire resume_memory_occupation on all engines (non-blocking).
+
+        Returns a list of Ray ObjectRefs.
+        """
+        return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.engines if engine is not None]
 
 
 @dataclasses.dataclass
@@ -217,23 +203,47 @@ class RolloutServer:
         return values.pop()
 
     def recover(self):
-        """Recover dead engines across all groups."""
+        """Recover dead engines across all groups, overlapping init."""
+        # Record dead indices per group before starting.
+        dead_per_group = [[i for i, engine in enumerate(g.all_engines) if engine is None] for g in self.engine_groups]
+
+        # Start all groups concurrently.
+        all_handles = []
         for g in self.engine_groups:
-            g.recover()
+            all_handles.extend(g.start_engines())
+        if all_handles:
+            ray.get(all_handles)
+
+        # Post-recovery: offload then onload weights for newly created engines.
+        release_handles = []
+        new_engines_all = []
+        for g, dead_indices in zip(self.engine_groups, dead_per_group, strict=True):
+            logger.info(f"Recovered {g.num_new_engines} dead rollout engines (role={g.role})")
+            assert g.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
+            if g.args.offload_rollout and dead_indices:
+                new_engines = [g.all_engines[i] for i in dead_indices]
+                release_handles.extend(engine.release_memory_occupation.remote() for engine in new_engines)
+                new_engines_all.extend(new_engines)
+
+        if release_handles:
+            ray.get(release_handles)
+            ray.get(
+                [engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]) for engine in new_engines_all]
+            )
 
     def offload(self):
-        """Release memory occupation across all groups."""
-        results = []
+        """Release memory occupation across all groups (concurrent)."""
+        handles = []
         for g in self.engine_groups:
-            results.extend(g.offload())
-        return results
+            handles.extend(g.offload())
+        return ray.get(handles) if handles else []
 
     def onload(self, tags: list[str] | None = None):
-        """Resume memory occupation across all groups."""
-        results = []
+        """Resume memory occupation across all groups (concurrent)."""
+        handles = []
         for g in self.engine_groups:
-            results.extend(g.onload(tags))
-        return results
+            handles.extend(g.onload(tags))
+        return ray.get(handles) if handles else []
 
 
 @ray.remote
@@ -812,8 +822,6 @@ def start_rollout_server(args, pg) -> RolloutServer:
             role="prefill",
             rank_offset=0,
         )
-        prefill_group.init_engines()
-
         decode_group = EngineGroup(
             args=args,
             pg=pg,
@@ -823,7 +831,12 @@ def start_rollout_server(args, pg) -> RolloutServer:
             role="decode",
             rank_offset=prefill_engine_count,
         )
-        decode_group.init_engines()
+
+        # Start both groups concurrently — the heavy work (sglang server
+        # startup + health-check) runs inside engine.init() on the Ray
+        # workers, so overlapping the two groups nearly halves wall time.
+        all_handles = prefill_group.start_engines() + decode_group.start_engines()
+        ray.get(all_handles)
 
         engine_groups = [prefill_group, decode_group]
     else:
@@ -834,7 +847,7 @@ def start_rollout_server(args, pg) -> RolloutServer:
             nodes_per_engine=nodes_per_engine,
             num_new_engines=0,
         )
-        group.init_engines()
+        ray.get(group.start_engines())
         engine_groups = [group]
 
     return RolloutServer(
