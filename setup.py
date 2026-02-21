@@ -39,7 +39,10 @@ setup(
     extras_require={
         "fsdp": [
             "torch>=2.0",
-        ]
+        ],
+        "mlflow": [
+            "mlflow",
+        ],
     },
     python_requires=">=3.10",
     classifiers=[
