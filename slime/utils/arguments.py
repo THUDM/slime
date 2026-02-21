@@ -1380,16 +1380,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
             )
             parser.add_argument(
-                "--ci-metric-checker-key",
-                type=str,
-                default=None,
-            )
-            parser.add_argument(
-                "--ci-metric-checker-threshold",
-                type=float,
-                default=None,
-            )
-            parser.add_argument(
                 "--ci-save-grad-norm",
                 type=str,
                 default=None,
