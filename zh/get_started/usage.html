@@ -658,15 +658,15 @@ document.write(`
 </section>
 <section id="rl">
 <h3>RL 训练需要的超参<a class="headerlink" href="#rl" title="链接到此标题。">#</a></h3>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span></code>: 当前训练需要的 RL 算法，目前支持：</p>
 <ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span></code>: 当前训练需要的 RL 算法，目前支持：</p>
+<ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">grpo</span></code>（https://arxiv.org/abs/2402.03300）；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">gspo</span></code>（https://arxiv.org/abs/2507.18071）；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">reinforce_plus_plus</span></code> 与 <code class="docutils literal notranslate"><span class="pre">reinforce_plus_plus_baseline</span></code>（https://arxiv.org/abs/2501.03262）；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">ppo</span></code>（https://arxiv.org/abs/1707.06347）；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">on_policy_distillation</span></code>。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">ppo</span></code>（https://arxiv.org/abs/1707.06347）。</p></li>
 </ul>
+<p>注意：在策略蒸馏 (OPD) 现在与 advantage estimator 正交，使用 <code class="docutils literal notranslate"><span class="pre">--use-opd</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code> 可以在任意 estimator 之上启用 OPD。</p>
 </li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>：slime 中默认的方案是 per sample loss，即 <code class="docutils literal notranslate"><span class="pre">mean(sum(sample_i)</span> <span class="pre">/</span> <span class="pre">len(sample_i))</span></code>，如果需要计算 per token loss，即 <code class="docutils literal notranslate"><span class="pre">sum(sum(sample_i))</span> <span class="pre">/</span> <span class="pre">sum(len(sample_i))</span></code>，可以开启 <code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；</p></li>
@@ -739,33 +739,33 @@ document.write(`
 <ul>
 <li><p>默认会使用 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py">slime/rollout/sglang_rollout.py</a> 中的 <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> 函数进行数据生成。这个文件中实现了基于 sglang 的异步（asyncio）数据生成流程，并支持了例如 dynamic sampling，partial rollout 等功能；</p></li>
 <li><p>可以通过 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> 参数，完全替换 sglang_rollout.py 中的 <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code>，只需要保证 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> 传入的函数签名满足：</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">generate_rollout</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">data_buffer</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]:</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">generate_rollout</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">data_source</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">RolloutFnTrainOutput</span> <span class="o">|</span> <span class="n">RolloutFnEvalOutput</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    Args:</span>
 <span class="sd">        args: the whole args</span>
 <span class="sd">        rollout_id: int, the id of the rollout, used for deterministic data generation</span>
-<span class="sd">        data_buffer: the data buffer to store the generated samples</span>
+<span class="sd">        data_source: the data source to get and store samples</span>
 <span class="sd">        evaluation: bool, whether the rollout is for evaluation or not</span>
 <span class="sd">    </span>
 <span class="sd">    Returns:</span>
-<span class="sd">        list[list[Sample]]: a list of list of samples generated by the rollout</span>
+<span class="sd">        RolloutFnTrainOutput | RolloutFnEvalOutput: the output of the rollout</span>
 <span class="sd">    &quot;&quot;&quot;</span>
         <span class="o">...</span>
-        <span class="k">return</span> <span class="n">samples</span>
+        <span class="k">return</span> <span class="n">output</span>
 </pre></div>
 </div>
 <p>其中：</p>
 <ul>
 <li><p><code class="docutils literal notranslate"><span class="pre">args</span></code> 为整个 slime 运行使用的 args；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">rollout_id</span></code> 对应的是当前是第几次数据生成，用作保证续训时的数据顺序；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">data_buffer</span></code> 是 slime 中全局唯一的数据 buffer，可以用来获取初始 prompt，数据 id，将生成至一半的 sample 存储下来下次留作下次使用等；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">data_source</span></code> 是 slime 中全局唯一的数据源，可以用来获取初始 prompt，数据 id，将生成至一半的 sample 存储下来下次留作下次使用等；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">evaluation</span></code> 是否是当做 evaluation 使用。可以通过 <code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code> 单独配置 eval 的函数；</p></li>
 <li><p>返回的 <code class="docutils literal notranslate"><span class="pre">Sample</span></code> 类型见 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/utils/types.py">slime/utils/types.py</a>，在实现时，需要保证</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">tokens</span></code>：prompt + response 的 token；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">response_length</span></code>：response 的总长。对于多轮任务，则是除去第一轮 prompt，剩余的 token 长度；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">reward</span></code>：这条数据的 reward；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">truncated</span></code>：这条数据是否被截断了，类似于 sglang 中的 <code class="docutils literal notranslate"><span class="pre">finish_reason</span> <span class="pre">==</span> <span class="pre">length</span></code>。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">status</span></code>：这条数据的状态（如 <code class="docutils literal notranslate"><span class="pre">Sample.Status.COMPLETED</span></code>、<code class="docutils literal notranslate"><span class="pre">Sample.Status.TRUNCATED</span></code>、<code class="docutils literal notranslate"><span class="pre">Sample.Status.ABORTED</span></code>、<code class="docutils literal notranslate"><span class="pre">Sample.Status.FAILED</span></code>）。</p></li>
 </ul>
 <p>这几个参数被正确配置了。以及如果有工具调用或者多轮使用等场景，确保 <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code> 是正确的：</p>
 <ul class="simple">
@@ -795,9 +795,14 @@ document.write(`
     <span class="c1"># set sample</span>
     <span class="n">sample</span><span class="o">.</span><span class="n">tokens</span> <span class="o">=</span> <span class="n">prompt_tokens_ids</span> <span class="o">+</span> <span class="n">response_token_ids</span>
     <span class="n">sample</span><span class="o">.</span><span class="n">response_length</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">response_token_ids</span><span class="p">)</span>
-    <span class="n">sample</span><span class="o">.</span><span class="n">truncated</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">&quot;meta_info&quot;</span><span class="p">][</span><span class="s2">&quot;finish_reason&quot;</span><span class="p">][</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;length&quot;</span>
+    <span class="n">finish_reason</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">&quot;meta_info&quot;</span><span class="p">][</span><span class="s2">&quot;finish_reason&quot;</span><span class="p">][</span><span class="s2">&quot;type&quot;</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">finish_reason</span> <span class="o">==</span> <span class="s2">&quot;length&quot;</span><span class="p">:</span>
+        <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">TRUNCATED</span>
+    <span class="k">elif</span> <span class="n">finish_reason</span> <span class="o">==</span> <span class="s2">&quot;abort&quot;</span><span class="p">:</span>
+        <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">ABORTED</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">COMPLETED</span>
     <span class="n">sample</span><span class="o">.</span><span class="n">response</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">&quot;text&quot;</span><span class="p">]</span>
-    <span class="n">sample</span><span class="o">.</span><span class="n">aborted</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">&quot;meta_info&quot;</span><span class="p">][</span><span class="s2">&quot;finish_reason&quot;</span><span class="p">][</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;abort&quot;</span>
 
     <span class="k">return</span> <span class="n">sample</span>
 </pre></div>

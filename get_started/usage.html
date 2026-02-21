@@ -661,15 +661,15 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 </section>
 <section id="hyperparameters-for-rl-training">
 <h3>Hyperparameters for RL Training<a class="headerlink" href="#hyperparameters-for-rl-training" title="Link to this heading">#</a></h3>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span></code>: Specifies the RL algorithm for the training process. Currently supported algorithms include:</p>
 <ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">--advantage-estimator</span></code>: Specifies the RL algorithm for the training process. Currently supported algorithms include:</p>
+<ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">grpo</span></code> (<a class="reference external" href="https://arxiv.org/abs/2402.03300">https://arxiv.org/abs/2402.03300</a>)</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">gspo</span></code> (<a class="reference external" href="https://arxiv.org/abs/2507.18071">https://arxiv.org/abs/2507.18071</a>)</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">reinforce_plus_plus</span></code> and <code class="docutils literal notranslate"><span class="pre">reinforce_plus_plus_baseline</span></code> (<a class="reference external" href="https://arxiv.org/abs/2501.03262">https://arxiv.org/abs/2501.03262</a>)</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">ppo</span></code> (<a class="reference external" href="https://arxiv.org/abs/1707.06347">https://arxiv.org/abs/1707.06347</a>)</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">on_policy_distillation</span></code></p></li>
 </ul>
+<p>Note: On-policy distillation (OPD) is now orthogonal to the advantage estimator. Use <code class="docutils literal notranslate"><span class="pre">--use-opd</span></code> and <code class="docutils literal notranslate"><span class="pre">--opd-kl-coef</span></code> to enable OPD on top of any estimator.</p>
 </li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>: By default, slime calculates loss on a per-sample basis, i.e., <code class="docutils literal notranslate"><span class="pre">mean(sum(sample_i)</span> <span class="pre">/</span> <span class="pre">len(sample_i))</span></code>. Enable this flag to calculate loss on a per-token basis, i.e., <code class="docutils literal notranslate"><span class="pre">sum(sum(sample_i))</span> <span class="pre">/</span> <span class="pre">sum(len(sample_i))</span></code>.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>: Enable this setting to use TIS (Truncated Importance Sampling) (https://fengyao.notion.site/off-policy-rl).</p></li>
@@ -742,37 +742,37 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <ul>
 <li><p>By default, it uses the <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> function from <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/rollout/sglang_rollout.py">slime/rollout/sglang_rollout.py</a> for data generation. This file implements an asynchronous (asyncio) data generation flow based on SGLang and supports features like dynamic sampling and partial rollout.</p></li>
 <li><p>You can completely replace the <code class="docutils literal notranslate"><span class="pre">generate_rollout</span></code> in sglang_example.py by using the <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> parameter. You just need to ensure that the function signature passed via <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code> is as follows:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">generate_rollout</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">data_buffer</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]:</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">generate_rollout</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">data_source</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">RolloutFnTrainOutput</span> <span class="o">|</span> <span class="n">RolloutFnEvalOutput</span><span class="p">:</span>
 <span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
 <span class="sd">    Args:</span>
 <span class="sd">        args: the whole args</span>
 <span class="sd">        rollout_id: int, the id of the rollout, used for deterministic data generation</span>
-<span class="sd">        data_buffer: the data buffer to store the generated samples</span>
+<span class="sd">        data_source: the data source to get and store samples</span>
 <span class="sd">        evaluation: bool, whether the rollout is for evaluation or not</span>
 <span class="sd">    </span>
 <span class="sd">    Returns:</span>
-<span class="sd">        list[list[Sample]]: a list of samples generated by the rollout</span>
+<span class="sd">        RolloutFnTrainOutput | RolloutFnEvalOutput: the output of the rollout</span>
 <span class="sd">    &quot;&quot;&quot;</span>
         <span class="o">...</span>
-        <span class="k">return</span> <span class="n">samples</span>
+        <span class="k">return</span> <span class="n">output</span>
 </pre></div>
 </div>
 <p>Where:</p>
-<ul>
+<ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">args</span></code>: The complete arguments used for the slime run.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">rollout_id</span></code>: The ID of the current data generation round, used to ensure data order when resuming training.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">data_buffer</span></code>: A globally unique data buffer in slime, which can be used to get initial prompts, data IDs, and store partially generated samples for later use.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">data_source</span></code>: A globally unique data source in slime, which can be used to get initial prompts, data IDs, and store partially generated samples for later use.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">evaluation</span></code>: A boolean indicating if the rollout is for evaluation. You can configure a separate evaluation function using <code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>.</p></li>
 <li><p>The returned <code class="docutils literal notranslate"><span class="pre">Sample</span></code> type is defined in <a class="reference external" href="https://github.com/THUDM/slime/blob/main/slime/utils/types.py">slime/utils/types.py</a>. When implementing, you need to ensure the following fields are correctly set:</p>
-<ul class="simple">
+<ul>
 <li><p><code class="docutils literal notranslate"><span class="pre">tokens</span></code>: The tokens for the prompt + response.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">response_length</span></code>: The total length of the response. For multi-turn tasks, this is the length of the tokens remaining after the first-turn prompt.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">reward</span></code>: The reward for this data sample.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">truncated</span></code>: Whether this data sample was truncated, similar to <code class="docutils literal notranslate"><span class="pre">finish_reason</span> <span class="pre">==</span> <span class="pre">length</span></code> in SGLang.</p></li>
-</ul>
-<p>And if there are scenarios like tool calls or multi-turn usage, ensure the <code class="docutils literal notranslate"><span class="pre">loss_mask</span></code> is correct:</p>
-<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">status</span></code>: The status of this data sample (e.g., <code class="docutils literal notranslate"><span class="pre">Sample.Status.COMPLETED</span></code>, <code class="docutils literal notranslate"><span class="pre">Sample.Status.TRUNCATED</span></code>, <code class="docutils literal notranslate"><span class="pre">Sample.Status.ABORTED</span></code>, <code class="docutils literal notranslate"><span class="pre">Sample.Status.FAILED</span></code>).</p>
+<ul>
 <li><p><code class="docutils literal notranslate"><span class="pre">loss_mask</span></code> should be the same length as <code class="docutils literal notranslate"><span class="pre">response_length</span></code>, with <code class="docutils literal notranslate"><span class="pre">1</span></code> for tokens that should be included in the loss calculation and <code class="docutils literal notranslate"><span class="pre">0</span></code> for those that should be masked out.</p></li>
+</ul>
+</li>
 </ul>
 </li>
 </ul>
@@ -798,9 +798,14 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
     <span class="c1"># set sample</span>
     <span class="n">sample</span><span class="o">.</span><span class="n">tokens</span> <span class="o">=</span> <span class="n">prompt_tokens_ids</span> <span class="o">+</span> <span class="n">response_token_ids</span>
     <span class="n">sample</span><span class="o">.</span><span class="n">response_length</span> <span class="o">=</span> <span class="nb">len</span><span class="p">(</span><span class="n">response_token_ids</span><span class="p">)</span>
-    <span class="n">sample</span><span class="o">.</span><span class="n">truncated</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">&quot;meta_info&quot;</span><span class="p">][</span><span class="s2">&quot;finish_reason&quot;</span><span class="p">][</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;length&quot;</span>
+    <span class="n">finish_reason</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">&quot;meta_info&quot;</span><span class="p">][</span><span class="s2">&quot;finish_reason&quot;</span><span class="p">][</span><span class="s2">&quot;type&quot;</span><span class="p">]</span>
+    <span class="k">if</span> <span class="n">finish_reason</span> <span class="o">==</span> <span class="s2">&quot;length&quot;</span><span class="p">:</span>
+        <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">TRUNCATED</span>
+    <span class="k">elif</span> <span class="n">finish_reason</span> <span class="o">==</span> <span class="s2">&quot;abort&quot;</span><span class="p">:</span>
+        <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">ABORTED</span>
+    <span class="k">else</span><span class="p">:</span>
+        <span class="n">sample</span><span class="o">.</span><span class="n">status</span> <span class="o">=</span> <span class="n">Sample</span><span class="o">.</span><span class="n">Status</span><span class="o">.</span><span class="n">COMPLETED</span>
     <span class="n">sample</span><span class="o">.</span><span class="n">response</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">&quot;text&quot;</span><span class="p">]</span>
-    <span class="n">sample</span><span class="o">.</span><span class="n">aborted</span> <span class="o">=</span> <span class="n">output</span><span class="p">[</span><span class="s2">&quot;meta_info&quot;</span><span class="p">][</span><span class="s2">&quot;finish_reason&quot;</span><span class="p">][</span><span class="s2">&quot;type&quot;</span><span class="p">]</span> <span class="o">==</span> <span class="s2">&quot;abort&quot;</span>
 
     <span class="k">return</span> <span class="n">sample</span>
 </pre></div>

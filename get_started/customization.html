@@ -574,7 +574,7 @@ document.write(`
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">slime.rollout.sglang_rollout.generate_rollout</span></code></p>
 <p><strong>Purpose</strong>: Override the entire rollout generation logic.</p>
 <p><strong>Signature</strong>:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_rollout</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">RolloutFnTrainOutput</span> <span class="o">|</span> <span class="n">RolloutFnEvalOutput</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">generate_rollout</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">data_source</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="n">RolloutFnTrainOutput</span> <span class="o">|</span> <span class="n">RolloutFnEvalOutput</span>
 </pre></div>
 </div>
 <p><strong>Use Cases</strong>:</p>
@@ -662,7 +662,7 @@ document.write(`
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>Purpose</strong>: Filter samples in the rollout buffer before training.</p>
 <p><strong>Signature</strong>:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">buffer_filter</span><span class="p">(</span><span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]])</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">buffer_filter</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">rollout_id</span><span class="p">,</span> <span class="n">buffer</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]],</span> <span class="n">num_samples</span><span class="p">:</span> <span class="nb">int</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]]</span>
 </pre></div>
 </div>
 <p><strong>Use Cases</strong>:</p>
@@ -694,7 +694,7 @@ document.write(`
 <p><strong>Default</strong>: <code class="docutils literal notranslate"><span class="pre">None</span></code></p>
 <p><strong>Purpose</strong>: Process all samples (including filtered ones) after rollout.</p>
 <p><strong>Signature</strong>:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">process_function</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]])</span> <span class="o">-&gt;</span> <span class="kc">None</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">process_function</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">samples</span><span class="p">:</span> <span class="nb">list</span><span class="p">[</span><span class="nb">list</span><span class="p">[</span><span class="n">Sample</span><span class="p">]],</span> <span class="n">data_source</span><span class="p">)</span> <span class="o">-&gt;</span> <span class="kc">None</span>
 </pre></div>
 </div>
 <p><strong>Use Cases</strong>:</p>
