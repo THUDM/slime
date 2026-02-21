@@ -12,20 +12,15 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        from megatron.bridge import AutoBridge
-
-        import slime_plugins.megatron_bridge  # noqa: F401
-
-        self._bridge = AutoBridge.from_hf_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
-
     def get_hf_weight_chunks(self, megatron_local_weights):
         # TODO support quantization (e.g. modify megatron-bridge to provide megatron param name)
+        bridge = megatron_bridge_utils.get_bridge(self.args.hf_checkpoint)
         renamed_megatron_local_weights = {strip_param_name_prefix(k): v for k, v in megatron_local_weights.items()}
         with megatron_bridge_utils.patch_megatron_model(self.model):
-            conversion_tasks = self._bridge.get_conversion_tasks(self.model)
+            conversion_tasks = bridge.get_conversion_tasks(self.model)
             conversion_tasks = _process_conversion_tasks(conversion_tasks, renamed_megatron_local_weights)
 
-            named_weights = self._bridge.export_hf_weights(self.model, cpu=False, conversion_tasks=conversion_tasks)
+            named_weights = bridge.export_hf_weights(self.model, cpu=False, conversion_tasks=conversion_tasks)
 
             named_weights = (
                 (
