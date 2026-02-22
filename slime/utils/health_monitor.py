@@ -20,9 +20,8 @@ class RolloutHealthMonitor:
     - stop(): Stop the monitor thread completely (called during dispose)
     """
 
-    def __init__(self, rollout_manager, args):
-        # TODO may remove this dependency after refactoring
-        self._rollout_manager = rollout_manager
+    def __init__(self, engine_group, args):
+        self._engine_group = engine_group
 
         self._thread = None
         self._stop_event = None
@@ -39,7 +38,7 @@ class RolloutHealthMonitor:
         Returns:
             True if the monitor was started, False if there are no engines to monitor.
         """
-        if not self._rollout_manager.all_rollout_engines:
+        if not self._engine_group.all_engines:
             return False
 
         if self._thread is not None:
@@ -136,7 +135,7 @@ class RolloutHealthMonitor:
                 break
 
     def _run_health_checks(self) -> None:
-        for rollout_engine_id, engine in enumerate(self._rollout_manager.rollout_engines):
+        for rollout_engine_id, engine in enumerate(self._engine_group.engines):
             if self._stop_event is not None and self._stop_event.is_set():
                 break
             if self._pause_event is not None and self._pause_event.is_set():
@@ -161,10 +160,10 @@ class RolloutHealthMonitor:
     def _kill_engine(self, rollout_engine_id: int):
         logger.info(f"Killing engine group {rollout_engine_id}...")
         for i in range(
-            rollout_engine_id * self._rollout_manager.nodes_per_engine,
-            (rollout_engine_id + 1) * self._rollout_manager.nodes_per_engine,
+            rollout_engine_id * self._engine_group.nodes_per_engine,
+            (rollout_engine_id + 1) * self._engine_group.nodes_per_engine,
         ):
-            engine = self._rollout_manager.all_rollout_engines[i]
+            engine = self._engine_group.all_engines[i]
             if engine:
                 logger.info(f"Shutting down and killing engine at index {i}")
                 try:
@@ -175,4 +174,4 @@ class RolloutHealthMonitor:
                     logger.warning(f"Fail to kill engine at index {i} (e: {e})")
             else:
                 logger.info(f"Engine at index {i} is already None")
-            self._rollout_manager.all_rollout_engines[i] = None
+            self._engine_group.all_engines[i] = None

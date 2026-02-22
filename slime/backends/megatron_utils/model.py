@@ -217,6 +217,7 @@ def forward_only(
             ],
             args.data_pad_size_multiplier,
             args.qkv_format,
+            args.allgather_cp,
         )
         unconcat_tokens = batch["unconcat_tokens"]
         tokens = batch["tokens"]
@@ -374,6 +375,7 @@ def train_one_step(
             ],
             args.data_pad_size_multiplier,
             args.qkv_format,
+            args.allgather_cp,
         )
 
         if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":

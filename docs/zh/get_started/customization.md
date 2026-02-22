@@ -40,7 +40,7 @@ slime 通过函数路径参数提供了广泛的自定义能力。这些参数�
 
 **函数签名**:
 ```python
-async def generate_rollout(args, rollout_id, *, evaluation=False) -> RolloutFnTrainOutput | RolloutFnEvalOutput
+def generate_rollout(args, rollout_id, data_source, evaluation=False) -> RolloutFnTrainOutput | RolloutFnEvalOutput
 ```
 
 **使用场景**:
@@ -140,7 +140,7 @@ class DynamicFilterOutput:
 
 **函数签名**:
 ```python
-def buffer_filter(samples: list[list[Sample]]) -> list[list[Sample]]
+def buffer_filter(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]
 ```
 
 **使用场景**:
@@ -177,7 +177,7 @@ def filter_function(args, samples: list[Sample]) -> None
 
 **函数签名**:
 ```python
-def process_function(args, samples: list[list[Sample]]) -> None
+def process_function(args, samples: list[list[Sample]], data_source) -> None
 ```
 
 **使用场景**:
