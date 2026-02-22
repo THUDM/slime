@@ -27,18 +27,25 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
 
             named_weights = self._bridge.export_hf_weights(self.model, cpu=False, conversion_tasks=conversion_tasks)
 
-            named_weights = (
-                (
-                    hf_param_name,
-                    postprocess_hf_param(
-                        args=self.args,
-                        megatron_param_name=megatron_param_name,
-                        hf_param_name=hf_param_name,
-                        param=weight,
-                    ),
-                )
-                for hf_param_name, weight, megatron_param_name in named_weights
-            )
+            base_named_weights = named_weights
+
+            def _iter_named_weights():
+                for item in base_named_weights:
+                    if len(item) == 3:
+                        hf_param_name, weight, megatron_param_name = item
+                        weight = postprocess_hf_param(
+                            args=self.args,
+                            megatron_param_name=megatron_param_name,
+                            hf_param_name=hf_param_name,
+                            param=weight,
+                        )
+                    elif len(item) == 2:
+                        hf_param_name, weight = item
+                    else:
+                        raise ValueError(f"Unexpected weight tuple size: {len(item)} for {item}")
+                    yield (hf_param_name, weight)
+
+            named_weights = _iter_named_weights()
 
             yield from chunk_named_params_by_size(named_weights, chunk_size=self.args.update_weight_buffer_size)
 
