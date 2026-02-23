@@ -359,8 +359,12 @@ The filtering function `check_reward_nonzero_std` in the example will check whet
 
 ```python
 def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
-    rewards = [sample.reward for sample in samples]
-    return torch.tensor(rewards, dtype=torch.float).std() > 0.0
+    rewards = [sample.get_reward_value(args) for sample in samples]
+    keep = torch.tensor(rewards, dtype=torch.float).std() > 0.0
+    return DynamicFilterOutput(
+        keep=keep,
+        reason=None if keep else f"zero_std_{round(rewards[0], 1)}",
+    )
 ```
 
 If the filtering function is very strict, causing a large number of prompt groups to be discarded, the system will monitor the number of pending tasks in `remaining_batch_size`. Once the number of pending tasks drops below the target number (32) due to too many being discarded, the system will automatically trigger a new round of oversampling, requesting `over_sampling_batch_size` (64) new prompts again to repeat the above process.

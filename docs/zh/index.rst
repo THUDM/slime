@@ -41,6 +41,7 @@ slime 是 GLM-4.7、GLM-4.6、GLM-4.5 背后的 RL 训练框架。除此之外�
    :caption: 高级特性
 
    advanced/slime-router.md
+   advanced/on-policy-distillation.md
    advanced/speculative-decoding.md
    advanced/low-precision.md
    advanced/reproducibility.md
@@ -57,12 +58,12 @@ slime 是 GLM-4.7、GLM-4.6、GLM-4.5 背后的 RL 训练框架。除此之外�
    _examples_synced/fully_async/README.md
    _examples_synced/retool/README.md
    _examples_synced/multi_agent/README.md
-   _examples_synced/on_policy_distillation/README.md
 
 .. toctree::
    :maxdepth: 1
    :caption: 开发指南
 
+   developer_guide/ci.md
    developer_guide/debug.md
    developer_guide/profiling.md
 

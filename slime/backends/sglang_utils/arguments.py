@@ -1,3 +1,5 @@
+import argparse
+
 from sglang.srt.server_args import ServerArgs
 from slime.utils.http_utils import _wrap_ipv6
 
@@ -138,3 +140,29 @@ def validate_args(args):
 
     if getattr(args, "sglang_router_ip", None):
         args.sglang_router_ip = _wrap_ipv6(args.sglang_router_ip)
+
+
+def sglang_parse_args():
+    """
+    Parse sglang server arguments independently using a separate ArgumentParser.
+    Uses parse_known_args() to only consume sglang-related arguments from sys.argv,
+    allowing the remaining arguments to be parsed by megatron/fsdp separately.
+
+    Returns:
+        argparse.Namespace: Parsed sglang arguments (all attributes prefixed with sglang_).
+    """
+    parser = argparse.ArgumentParser(add_help=False)
+    add_sglang_arguments(parser)
+
+    # Compute default sglang_tensor_parallel_size from CLI args
+    temp_parser = argparse.ArgumentParser(add_help=False)
+    temp_parser.add_argument("--rollout-num-gpus-per-engine", type=int, default=1)
+    temp_parser.add_argument("--sglang-pp-size", type=int, default=1)
+    temp_parser.add_argument("--sglang-pipeline-parallel-size", type=int, default=1)
+    temp_args, _ = temp_parser.parse_known_args()
+    pp_size = temp_args.sglang_pp_size if temp_args.sglang_pp_size != 1 else temp_args.sglang_pipeline_parallel_size
+    sglang_tp_size = temp_args.rollout_num_gpus_per_engine // pp_size
+    parser.set_defaults(sglang_tensor_parallel_size=sglang_tp_size)
+
+    args, _ = parser.parse_known_args()
+    return args

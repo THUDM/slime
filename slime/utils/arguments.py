@@ -6,9 +6,8 @@ from typing import Any
 
 import yaml
 from sglang_router.launch_router import RouterArgs
-from transformers import AutoConfig
 
-from slime.backends.sglang_utils.arguments import add_sglang_arguments
+from slime.backends.sglang_utils.arguments import sglang_parse_args
 from slime.backends.sglang_utils.arguments import validate_args as sglang_validate_args
 from slime.utils.eval_config import EvalDatasetConfig, build_eval_dataset_configs, ensure_dataset_list
 from slime.utils.logging_utils import configure_logger
@@ -110,13 +109,7 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             return parser
 
         def add_train_arguments(parser):
-            parser.add_argument(
-                "--train-backend",
-                type=str,
-                choices=["megatron", "fsdp"],
-                default="megatron",
-                help="The backend for training.",
-            )
+            # --train-backend is parsed early in _pre_parse_mode() and merged later.
             parser.add_argument(
                 "--qkv-format",
                 type=str,
@@ -213,6 +206,11 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                             --freeze-params-name-list linear_fc1
                         """,
             )
+            parser.add_argument(
+                "--allgather-cp",
+                action="store_true",
+                default=False,
+            )
 
             return parser
 
@@ -249,9 +247,9 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "You should use this model to create your own custom rollout function, "
                     "and then set this to the path of your custom rollout function. "
                     "The signature of the function should be "
-                    "`def generate_rollout(args, rollout_id, *, evaluation=False) -> list[list[Sample]]`"
+                    "`def generate_rollout(args, rollout_id, data_source, evaluation=False) -> RolloutFnTrainOutput | RolloutFnEvalOutput`"
                     "and within the output sample, you should at least set `tokens`, `response_length`, `reward` "
-                    "and `truncated`."
+                    "and `status`."
                 ),
             )
             parser.add_argument(
@@ -1162,39 +1160,13 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "The file will be saved to `save_debug_rollout_data.format(rollout_id)`."
                 ),
             )
-            parser.add_argument(
-                "--load-debug-rollout-data",
-                type=str,
-                default=None,
-                help=(
-                    "Load the rollout data from this path for debugging. "
-                    "The file will be loaded from `load_debug_rollout_data.format(rollout_id)`. "
-                    "When this is enabled, slime will not instantiate sglang servers."
-                ),
-            )
+            # --load-debug-rollout-data, --debug-rollout-only, --debug-train-only
+            # are parsed early in _pre_parse_mode() and merged later.
             parser.add_argument(
                 "--load-debug-rollout-data-subsample",
                 type=float,
                 default=None,
                 help="Subsample a portion of the debug rollout data for faster debugging.",
-            )
-            parser.add_argument(
-                "--debug-rollout-only",
-                action="store_true",
-                default=False,
-                help=(
-                    "Whether to only run the rollout generation without training. "
-                    "This is useful for debugging the rollout generation function."
-                ),
-            )
-            parser.add_argument(
-                "--debug-train-only",
-                action="store_true",
-                default=False,
-                help=(
-                    "Whether to only run the training without sglang servers. "
-                    "This is useful for debugging the rollout generation function."
-                ),
             )
             parser.add_argument(
                 "--save-debug-train-data",
@@ -1432,16 +1404,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 action="store_true",
             )
             parser.add_argument(
-                "--ci-metric-checker-key",
-                type=str,
-                default=None,
-            )
-            parser.add_argument(
-                "--ci-metric-checker-threshold",
-                type=float,
-                default=None,
-            )
-            parser.add_argument(
                 "--ci-save-grad-norm",
                 type=str,
                 default=None,
@@ -1452,19 +1414,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 default=None,
             )
             return parser
-
-        def add_sglang_tp_size():
-            temp_parser = argparse.ArgumentParser(add_help=False)
-            temp_parser.add_argument("--rollout-num-gpus-per-engine", type=int, default=1)
-            temp_parser.add_argument("--sglang-pp-size", type=int, default=1)
-            temp_parser.add_argument("--sglang-pipeline-parallel-size", type=int, default=1)
-            temp_args, _ = temp_parser.parse_known_args()
-            # Use sglang_pp_size if set (non-default), otherwise use sglang_pipeline_parallel_size
-            pp_size = (
-                temp_args.sglang_pp_size if temp_args.sglang_pp_size != 1 else temp_args.sglang_pipeline_parallel_size
-            )
-            sglang_tp_size = temp_args.rollout_num_gpus_per_engine // pp_size
-            return sglang_tp_size
 
         # Add custom arguments in front to prevent overwritten some slime arguments.
         if add_custom_arguments is not None:
@@ -1483,7 +1432,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         parser = add_tensorboard_arguments(parser)
         parser = add_router_arguments(parser)
         parser = add_debug_arguments(parser)
-        parser = add_sglang_arguments(parser)
         parser = add_network_arguments(parser)
         parser = add_reward_model_arguments(parser)
         parser = add_rollout_buffer_arguments(parser)
@@ -1500,10 +1448,25 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
         )
         reset_arg(parser, "--padded-vocab-size", type=int, default=None)
 
-        parser.set_defaults(sglang_tensor_parallel_size=add_sglang_tp_size())
         return parser
 
     return add_slime_arguments
+
+
+def _pre_parse_mode():
+    """Pre-parse CLI to extract arguments that control parsing flow.
+
+    These arguments are removed from add_slime_arguments to avoid
+    registering them twice.  The returned namespace is merged into
+    the final ``args`` after Phase 2 parsing.
+    """
+    temp_parser = argparse.ArgumentParser(add_help=False)
+    temp_parser.add_argument("--train-backend", type=str, choices=["megatron", "fsdp"], default="megatron")
+    temp_parser.add_argument("--debug-rollout-only", action="store_true", default=False)
+    temp_parser.add_argument("--debug-train-only", action="store_true", default=False)
+    temp_parser.add_argument("--load-debug-rollout-data", type=str, default=None)
+    temp_args, _ = temp_parser.parse_known_args()
+    return temp_args
 
 
 def parse_args(add_custom_arguments=None):
@@ -1512,64 +1475,53 @@ def parse_args(add_custom_arguments=None):
 
     add_slime_arguments = get_slime_extra_args_provider(add_custom_arguments)
 
-    backend = parse_args_train_backend()
-    if backend == "megatron":
-        from slime.backends.megatron_utils.arguments import parse_args as megatron_parse_args
-        from slime.backends.megatron_utils.arguments import set_default_megatron_args
+    pre = _pre_parse_mode()
+    skip_sglang = pre.debug_train_only or pre.load_debug_rollout_data is not None
+
+    # Phase 1: Parse sglang args independently (separate parser, parse_known_args).
+    # Skipped when sglang servers are not needed.
+    sglang_ns = None
+    if not skip_sglang:
+        sglang_ns = sglang_parse_args()
+
+    # Phase 2: Parse megatron/fsdp + slime args.
+    # Uses ignore_unknown_args=True so that --sglang-* and pre-parsed CLI flags
+    # are silently ignored by the megatron/fsdp parser.
+    if pre.train_backend == "megatron":
+        from slime.backends.megatron_utils.arguments import megatron_parse_args
         from slime.backends.megatron_utils.arguments import validate_args as megatron_validate_args
 
-        args = megatron_parse_args(extra_args_provider=add_slime_arguments)
-        if args.hf_checkpoint and not args.debug_rollout_only:
-            hf_config = AutoConfig.from_pretrained(args.hf_checkpoint, trust_remote_code=True)
-            hf_validate_args(args, hf_config)
-
-        args.rank = 0
-        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
-        args = set_default_megatron_args(args)
+        args = megatron_parse_args(
+            extra_args_provider=add_slime_arguments,
+            skip_hf_validate=pre.debug_rollout_only,
+        )
     else:
         logger.warning(
             "🚧 🚧 🚧 FSDP backend is being rewritten, please use Megatron backend for better stability. 🚧 🚧 🚧"
         )
 
-        from slime.backends.fsdp_utils.arguments import load_fsdp_args
+        from slime.backends.fsdp_utils.arguments import fsdp_parse_args
 
-        args = load_fsdp_args(extra_args_provider=add_slime_arguments)
-        args.rank = 0  # Primary process rank for wandb initialization
-        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
+        args = fsdp_parse_args(extra_args_provider=add_slime_arguments, ignore_unknown_args=True)
+
+    # Merge pre-parsed args into the main namespace
+    for key, value in vars(pre).items():
+        setattr(args, key, value)
+
+    # Merge sglang args into the main namespace
+    if sglang_ns is not None:
+        for key, value in vars(sglang_ns).items():
+            setattr(args, key, value)
 
     slime_validate_args(args)
 
-    if backend == "megatron":
+    if pre.train_backend == "megatron" and not args.debug_rollout_only:
         megatron_validate_args(args)
 
-        # always use varlen
-        args.variable_seq_lengths = True
-        if getattr(args, "moe_token_dispatcher_type", None) == "allgather":
-            logger.info(
-                "--moe-token-dispatcher-type allgather does not support variable sequence length, "
-                "please use alltoall dispatcher instead."
-            )
-            args.moe_token_dispatcher_type = "alltoall"
-
-        if args.pipeline_model_parallel_size == 1:
-            assert args.decoder_first_pipeline_num_layers is None and args.decoder_last_pipeline_num_layers is None, (
-                "decoder_first_pipeline_num_layers and decoder_last_pipeline_num_layers should be None when "
-                "pipeline_model_parallel_size is 1."
-            )
-
-    sglang_validate_args(args)
+    if not args.debug_train_only:
+        sglang_validate_args(args)
 
     return args
-
-
-def parse_args_train_backend():
-    if os.environ.get("SLIME_BACKEND") is not None:
-        raise Exception("`SLIME_BACKEND` is deprecated, please use --train-backend directly.")
-
-    parser = argparse.ArgumentParser()
-    get_slime_extra_args_provider()(parser)
-    args_partial, _ = parser.parse_known_args()
-    return args_partial.train_backend
 
 
 def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
@@ -1868,33 +1820,3 @@ def slime_validate_args(args):
 
     if args.only_train_params_name_list and args.freeze_params_name_list:
         raise ValueError("You can only specify ONE of: --only-train-params-name-list, or --freeze-params-name-list.")
-
-
-def hf_validate_args(args, hf_config):
-    def equal(x, y):
-        return x == y
-
-    errors = []
-
-    # multimodal models have different config structure
-    if hasattr(hf_config, "text_config"):
-        hf_config = hf_config.text_config
-
-    for hf_config_name, megatron_config_name, compare_fn in [
-        ("hidden_size", "hidden_size", equal),
-        ("num_attention_heads", "num_attention_heads", equal),
-        ("num_hidden_layers", "num_layers", equal),
-        ("intermediate_size", "ffn_hidden_size", equal),
-        ("tie_word_embeddings", "untie_embeddings_and_output_weights", lambda x, y: not x == y),
-        ("rms_norm_eps", "norm_epsilon", equal),
-        ("rope_theta", "rotary_base", equal),
-    ]:
-        if hasattr(hf_config, hf_config_name):
-            if not compare_fn(getattr(hf_config, hf_config_name), getattr(args, megatron_config_name)):
-                errors.append(
-                    f"{hf_config_name} in hf config {getattr(hf_config, hf_config_name)} is not equal to "
-                    f"{megatron_config_name} {getattr(args, megatron_config_name)}, please check the config."
-                )
-
-    if len(errors) > 0:
-        raise AssertionError("hf_validate_args failed: " + "; ".join(errors))

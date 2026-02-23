@@ -14,7 +14,7 @@ This example connects `slime` with [`strands-sglang`](https://github.com/horizon
 
 - Captures exact token IDs during generation (no retokenization drift)
 - Automatically tracks `loss_mask` via `token_manager`
-- Provides `ToolIterationLimiter` for clean trajectory truncation
+- Provides `ToolLimiter` for clean trajectory truncation
 
 ## Install Dependencies
 
