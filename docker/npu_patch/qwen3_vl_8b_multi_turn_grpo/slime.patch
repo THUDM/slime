@@ -1,0 +1,998 @@
+diff --git a/examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_turn_grpo_npu.py b/examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_turn_grpo_npu.py
+new file mode 100644
+index 00000000..8c862444
+--- /dev/null
++++ b/examples/geo3k_vlm_multi_turn/run_geo3k_vlm_multi_turn_grpo_npu.py
+@@ -0,0 +1,163 @@
++import os
++
++import slime.utils.misc as U
++from slime.utils.external_utils.command_utils import execute_train_npu
++
++MODEL_NAME = os.environ.get("SLIME_SCRIPT_MODEL_NAME", "Qwen3-VL-2B-Instruct")
++assert MODEL_NAME in {
++    "Qwen3-VL-2B-Instruct",
++    "Qwen3-VL-4B-Instruct",
++    "Qwen3-VL-8B-Instruct",
++    "Qwen3-VL-2B-Thinking",
++    "Qwen3-VL-4B-Thinking",
++    "Qwen3-VL-8B-Thinking",
++}
++
++EXTERNAL_RAY = int(os.environ.get("SLIME_SCRIPT_EXTERNAL_RAY", "0"))
++TRAIN_BACKEND = os.environ.get("SLIME_SCRIPT_TRAIN_BACKEND", "fsdp").lower()
++assert TRAIN_BACKEND in {"fsdp", "megatron"}
++
++DATASET_NAME = "VeraIsHere/geo3k_imgurl_processed"
++DATA_ROOT = "/root/datasets/geo3k_imgurl_processed"
++TRAIN_DATA_PATH = os.path.join(DATA_ROOT, "train.parquet")
++
++
++def get_megatron_model_type(model_name: str) -> str:
++    model_type = model_name.replace("-Instruct", "").replace("-Thinking", "")
++    model_type = model_type.replace("Qwen3-VL-", "qwen3-")
++    return model_type.replace("-2B", "-1.7B")
++
++
++def execute():
++    ckpt_args = f"--hf-checkpoint /home/data/{MODEL_NAME} "
++
++    wandb_args = (
++        (
++            "--use-wandb "
++            "--wandb-project slime-dev "
++            "--wandb-group geo3k_vlm_multi_turn "
++            f"--wandb-key '{wandb_api_key}' "
++        )
++        if (wandb_api_key := os.environ.get("WANDB_API_KEY"))
++        else ""
++    )
++
++    rollout_args = (
++        f"--prompt-data {TRAIN_DATA_PATH} "
++        "--input-key problem "
++        "--label-key answer "
++        '--multimodal-keys \'{"image": "images"}\' '
++        "--rm-type math "
++        "--apply-chat-template "
++        "--custom-generate-function-path examples.geo3k_vlm_multi_turn.rollout.generate "
++        "--custom-config-path examples/geo3k_vlm_multi_turn/geo3k_vlm_multi_turn_config.yaml "
++        "--rollout-shuffle "
++        "--num-rollout 3000 "
++        "--rollout-batch-size 32 "
++        "--n-samples-per-prompt 8 "
++        "--rollout-max-response-len 4096 "
++        "--rollout-temperature 1 "
++        "--global-batch-size 256 "
++    )
++
++    # eval_args = (
++    #     "--eval-interval 20 "
++    #     f"--eval-prompt-data geo3k_eval {TRAIN_DATA_PATH}@[0:64] "
++    #     "--n-samples-per-eval-prompt 1 "
++    #     "--eval-max-response-len 4096 "
++    #     "--eval-top-k 1 "
++    # )
++
++    grpo_args = (
++        "--advantage-estimator grpo "
++        "--kl-loss-coef 0.00 "
++        "--kl-loss-type low_var_kl "
++        "--kl-coef 0.00 "
++        "--entropy-coef 0.00 "
++        "--eps-clip 0.2 "
++        "--eps-clip-high 0.28 "
++        "--use-kl-loss "
++    )
++
++    optimizer_args = (
++        "--optimizer adam "
++        "--lr 1e-6 "
++        "--lr-decay-style constant "
++        "--weight-decay 0.1 "
++        "--adam-beta1 0.9 "
++        "--adam-beta2 0.98 "
++
++        "--optimizer-cpu-offload "
++        "--overlap-cpu-optimizer-d2h-h2d "
++        "--use-precision-aware-optimizer "
++    )
++
++    sglang_args = (
++        "--rollout-num-gpus-per-engine 1 "
++        "--sglang-mem-fraction-static 0.6 "
++        f"--sglang-cuda-graph-bs {' '.join(map(str, [4, 8] + list(range(16, 257, 8))))} "
++        "--sglang-device npu "
++        "--sglang-disable-radix-cache "
++        "--sglang-chunked-prefill-size 32768 "
++        "--sglang-max-prefill-tokens 4000 "
++        "--sglang-max-total-tokens 327680 "
++    )
++
++    megatron_args = (
++        "--train-backend megatron "
++        f"--load /home/data/{MODEL_NAME} "
++        f"--ref-load /home/data/{MODEL_NAME} "
++        "--tensor-model-parallel-size 4 "
++        "--sequence-parallel "
++        "--pipeline-model-parallel-size 1 "
++        "--context-parallel-size 1 "
++        "--expert-model-parallel-size 1 "
++        "--expert-tensor-parallel-size 1 "
++        "--recompute-granularity full "
++        "--recompute-method uniform "
++        "--recompute-num-layers 1 "
++        "--use-dynamic-batch-size "
++        "--max-tokens-per-gpu 16384 "
++        "--balance-data "
++        "--attention-dropout 0.0 "
++        "--hidden-dropout 0.0 "
++        "--accumulate-allreduce-grads-in-fp32 "
++        "--attention-softmax-in-fp32 "
++        "--attention-backend flash "
++        "--megatron-to-hf-mode bridge "
++    )
++
++    misc_args = (
++        "--actor-num-nodes 1 " f"--actor-num-gpus-per-node 8 " f"--rollout-num-gpus 8 "
++        "--no-gradient-accumulation-fusion "
++        "--use-flash-attn "
++    )
++
++    if TRAIN_BACKEND == "megatron":
++        backend_args = megatron_args
++        megatron_model_type = get_megatron_model_type(MODEL_NAME)
++        os.environ["MODEL_ARGS_ROTARY_BASE"] = "5000000"
++    else:
++        exit()
++
++    train_args = (
++        f"{ckpt_args} "
++        f"{rollout_args} "
++        f"{optimizer_args} "
++        f"{grpo_args} "
++        f"{sglang_args} "
++        f"{backend_args} "
++        f"{misc_args} "
++        f"{wandb_args} "
++        # f"{get_default_wandb_args(__file__)} "
++    )
++
++    execute_train_npu(
++        train_args=train_args,
++        megatron_model_type=megatron_model_type,
++        extra_env_vars=({"WANDB_API_KEY": os.environ["WANDB_API_KEY"]} if os.environ.get("WANDB_API_KEY") else {}),
++    )
++
++
++if __name__ == "__main__":
++    execute()
+diff --git a/slime/backends/megatron_utils/__init__.py b/slime/backends/megatron_utils/__init__.py
+index a4666fbe..96e7b1b0 100644
+--- a/slime/backends/megatron_utils/__init__.py
++++ b/slime/backends/megatron_utils/__init__.py
+@@ -21,22 +21,31 @@ except ImportError:
+     logging.warning("deep_ep is not installed, some functionalities may be limited.")
+ 
+ try:
+-    from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.text_model import (
+-        Qwen3VLMoETextRotaryEmbedding,
+-        Qwen3VLTextRotaryEmbedding,
+-    )
+-
+-    def patch_rotary_embedding(cls):
+-        _original_forward = cls.forward
+-
+-        def _patched_forward(self, *args, packed_seq_params=None, **kwargs):
+-            return _original_forward(self, *args, **kwargs)
+-
+-        cls.forward = _patched_forward
+-
+-    patch_rotary_embedding(Qwen3VLTextRotaryEmbedding)
+-    patch_rotary_embedding(Qwen3VLMoETextRotaryEmbedding)
++    from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.text_model import Qwen3VLTextRotaryEmbedding
++        
++    _original_forward = Qwen3VLTextRotaryEmbedding.forward
++
++    
++    def _patched_forward(self, *args, packed_seq_params=None, **kwargs):
++        return _original_forward(self, *args, **kwargs)
++    Qwen3VLTextRotaryEmbedding.forward = _patched_forward
+ except ImportError:
+     pass
+ 
++try:
++    from mbridge.models.qwen3_vl.model import Qwen3VLModel
++    _original_forward2 = Qwen3VLModel.forward
++    def _patched_forward2(self, *args, loss_mask=None, **kwargs):
++        return _original_forward2(self, *args, **kwargs)
++    Qwen3VLModel.forward = _patched_forward2
++except ImportError:
++    pass
++try:
++    from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model import Qwen3VLModel
++    _original_forward3 = Qwen3VLModel.forward
++    def _patched_forward3(self, *args, loss_mask=None, **kwargs):
++        return _original_forward3(self, *args, **kwargs)
++    Qwen3VLModel.forward = _patched_forward3
++except ImportError:
++    pass
+ logging.getLogger("megatron").setLevel(logging.WARNING)
+diff --git a/slime/backends/megatron_utils/actor.py b/slime/backends/megatron_utils/actor.py
+index 7bc4f910..a0b1f63a 100644
+--- a/slime/backends/megatron_utils/actor.py
++++ b/slime/backends/megatron_utils/actor.py
+@@ -8,6 +8,10 @@ from contextlib import nullcontext
+ import ray
+ import torch
+ import torch.distributed as dist
++from slime.utils.common import is_npu
++if is_npu():
++    import mindspeed.megatron_adaptor
++    from mindspeed.megatron_adaptor import repatch
+ from megatron.core import mpu
+ from ray.actor import ActorHandle
+ from torch_memory_saver import torch_memory_saver
+@@ -55,6 +59,8 @@ class MegatronTrainRayActor(TrainRayActor):
+         super().init(args, role, with_ref)
+ 
+         init(args)
++        if is_npu():
++            repatch(args)
+ 
+         if is_megatron_main_rank():
+             init_tracking(args, primary=False)
+@@ -596,8 +602,12 @@ class MegatronTrainRayActor(TrainRayActor):
+ 
+         group_name = "actor_critic"
+         world_size = 2
++        if is_npu():
++            backend = "hccl"
++        else:
++            backend = "nccl"
+         self._actor_critic_groups = init_process_group(
+-            backend="nccl",
++            backend=backend,
+             init_method=f"tcp://{master_address}:{master_port}",
+             world_size=world_size,
+             rank=0 if self.role == "actor" else 1,
+diff --git a/slime/backends/megatron_utils/megatron_to_hf/__init__.py b/slime/backends/megatron_utils/megatron_to_hf/__init__.py
+index 84ff899a..a0e2e43c 100644
+--- a/slime/backends/megatron_utils/megatron_to_hf/__init__.py
++++ b/slime/backends/megatron_utils/megatron_to_hf/__init__.py
+@@ -7,7 +7,7 @@ from .processors import quantize_params, remove_padding
+ from .qwen2 import convert_qwen2_to_hf
+ from .qwen3_next import convert_qwen3_next_to_hf
+ from .qwen3moe import convert_qwen3moe_to_hf
+-
++from .qwen3_vl import convert_qwen3vl_to_hf
+ 
+ # TODO unify w/ `convert_to_hf`
+ def postprocess_hf_param(args, megatron_param_name, hf_param_name, param):
+@@ -40,7 +40,10 @@ def _convert_to_hf_core(args, model_name, name, param):
+     elif "qwen3next" in model_name:
+         converted_named_tensors = convert_qwen3_next_to_hf(args, name, param)
+     elif "qwen2" in model_name or "qwen3" in model_name:
+-        converted_named_tensors = convert_qwen2_to_hf(args, name, param)
++        if "qwen3vl" in model_name:
++            converted_named_tensors = convert_qwen3vl_to_hf(args, name, param)
++        else:
++            converted_named_tensors = convert_qwen2_to_hf(args, name, param)
+     elif "deepseekv3" in model_name:
+         converted_named_tensors = convert_deepseekv3_to_hf(args, name, param)
+ 
+diff --git a/slime/backends/megatron_utils/megatron_to_hf/qwen3_vl.py b/slime/backends/megatron_utils/megatron_to_hf/qwen3_vl.py
+new file mode 100644
+index 00000000..13cf674a
+--- /dev/null
++++ b/slime/backends/megatron_utils/megatron_to_hf/qwen3_vl.py
+@@ -0,0 +1,182 @@
++import re
++import torch
++from megatron.core import parallel_state as mpu
++
++
++DEBUG_MODE = False
++# if True, will compare the updated parameters from megatron with huggingface checkpoint
++# only for debugging purpose before first rollout, best to set it to False during actual training
++# currently, only support Qwen3-VL-4B and Qwen3-VL-8B
++
++
++def compare_with_hf(args, mcore_name_param):
++
++    import os
++    import pandas as pd
++    from safetensors import safe_open
++
++    if args.num_layers == 36 and args.hidden_size == 2560:
++        # 4B
++        hf_dir = "/mnt/shared-storage-user/ailab-sys/shipengcheng/CKPT/Qwen/Qwen3-VL-4B-Instruct/"
++    else:
++        # 8B
++        hf_dir = "/mnt/shared-storage-user/ailab-sys/shipengcheng/CKPT/Qwen/Qwen3-VL-8B-Instruct/"
++
++    weight_mapping = pd.read_json(os.path.join(hf_dir, "model.safetensors.index.json"))["weight_map"]
++    # save_dir = "/mnt/shared-storage-user/ailab-sys/shipengcheng/slime/debug/weight_diff"
++
++    for key, megatron_param in mcore_name_param:
++
++        weight_path = os.path.join(hf_dir, weight_mapping[key])
++
++        with safe_open(weight_path, framework="pt", device="cpu") as f:
++            # 获取所有键名
++            hf_param = f.get_tensor(key)
++
++            if megatron_param.shape == hf_param.shape:
++                if abs(megatron_param.cpu() - hf_param).sum() > 0:
++                    print(
++                        "[Debug] uncompatible",
++                        key,
++                        megatron_param.shape,
++                        hf_param.shape,
++                        abs(megatron_param.cpu() - hf_param).sum(),
++                    )
++                    # torch.save(megatron_param.cpu(), os.path.join(save_dir, f"{key}_megatron.pt"))
++                    # torch.save(hf_param.cpu(), os.path.join(save_dir, f"{key}_hf.pt"))
++            else:
++                print("[Debug] uncompatible shape", key, megatron_param.shape, hf_param.shape)
++
++
++def convert_qwen3vl_to_hf(args, name, param):
++    """
++    Convert Megatron-style Qwen3-VL parameter names to HF-style names.
++    Supports both language model and vision model parameters.
++
++    Args:
++        args: megatron model args (num_attention_heads, kv_channels, etc.)
++        name: str, Megatron parameter name
++        param: torch.Tensor, parameter value
++
++    Returns:
++        List of tuples [(hf_name, hf_param), ...]
++    """
++
++    hf_name_param = None
++
++    # ----------------------------
++    # 1. language model & vision model parameters
++    # ----------------------------
++
++    try:
++        head_dim = args.kv_channels if args.kv_channels is not None else args.hidden_size // args.num_attention_heads
++    except:
++        head_dim = args.hidden_size // args.num_attention_heads
++    value_num_per_group = args.num_attention_heads // args.num_query_groups
++    language_num_layers = args.num_layers
++    
++    pp_size = args.pipeline_model_parallel_size
++    pp_rank = mpu.get_pipeline_model_parallel_rank()
++    assert language_num_layers % pp_size == 0
++
++    num_layers_per_rank = language_num_layers // pp_size
++    offsets = pp_rank * num_layers_per_rank
++
++
++
++    # ----------------------------
++    # 2. LM Embeddings & output
++    # ----------------------------
++    if name == "module.module.language_model.embedding.word_embeddings.weight":
++        hf_name_param = [("model.language_model.embed_tokens.weight", param)]
++    elif name == "module.module.language_model.decoder.final_layernorm.weight":
++        hf_name_param = [("model.language_model.norm.weight", param)]
++    elif name == "module.module.language_model.output_layer.weight":
++        if not args.untie_embeddings_and_output_weights:
++            return [("model.language_model.embed_tokens.weight", param)]
++        else:
++            return [("lm_head.weight", param)]
++
++    else:
++
++        decoder_layers_pattern = r"module\.module\.language_model.decoder\.layers\.(\d+)\.(.+)"
++        vision_pattern = r"module\.module\.vision_model\.(.+)"
++
++        if match := re.match(decoder_layers_pattern, name):
++            # ----------------------------
++            # 3. Attention and MLP layers in language model
++            # ----------------------------
++
++            layer_idx, rest = match.groups()
++            layer_idx = str(int(layer_idx) + offsets)
++            # Self-attention projection
++            if rest == "self_attention.linear_proj.weight":
++                hf_name_param = [(f"model.language_model.layers.{layer_idx}.self_attn.o_proj.weight", param)]
++            # elif rest == "self_attention.linear_proj.bias": # 暂时没用到，没有bias
++            #     return [(f"model.language_model.layers.{layer_idx}.self_attn.o_proj.bias", param)]
++            elif rest == "self_attention.linear_qkv.weight":
++                param = param.view(args.num_query_groups, -1, head_dim, args.hidden_size)
++                q_param, k_param, v_param = torch.split(
++                    param, split_size_or_sections=[value_num_per_group, 1, 1], dim=1
++                )
++                q_param = q_param.reshape(-1, args.hidden_size)
++                k_param = k_param.reshape(-1, args.hidden_size)
++                v_param = v_param.reshape(-1, args.hidden_size)
++                hf_name_param = [
++                    (f"model.language_model.layers.{layer_idx}.self_attn.q_proj.weight", q_param),
++                    (f"model.language_model.layers.{layer_idx}.self_attn.k_proj.weight", k_param),
++                    (f"model.language_model.layers.{layer_idx}.self_attn.v_proj.weight", v_param),
++                ]
++
++            # MLP layers
++            elif rest == "mlp.linear_fc1.weight":
++                gate_weight, up_weight = param.chunk(2, dim=0)
++
++                hf_name_param = [
++                    (f"model.language_model.layers.{layer_idx}.mlp.gate_proj.weight", gate_weight),
++                    (f"model.language_model.layers.{layer_idx}.mlp.up_proj.weight", up_weight),
++                ]
++
++            elif rest == "mlp.linear_fc2.weight":
++                hf_name_param = [(f"model.language_model.layers.{layer_idx}.mlp.down_proj.weight", param)]
++
++            # LayerNorms
++            elif rest == "self_attention.linear_qkv.layer_norm_weight":
++                hf_name_param = [(f"model.language_model.layers.{layer_idx}.input_layernorm.weight", param)]
++            elif rest == "mlp.linear_fc1.layer_norm_weight":
++                hf_name_param = [(f"model.language_model.layers.{layer_idx}.post_attention_layernorm.weight", param)]
++            elif rest == "self_attention.q_layernorm.weight":
++                hf_name_param = [(f"model.language_model.layers.{layer_idx}.self_attn.q_norm.weight", param)]
++            elif rest == "self_attention.k_layernorm.weight":
++                hf_name_param = [(f"model.language_model.layers.{layer_idx}.self_attn.k_norm.weight", param)]
++
++        elif match_v := re.match(vision_pattern, name):
++            # ----------------------------
++            # 4. Vision model parameters
++            # ----------------------------
++            deepstack_merger_pattern = r"deepstack_merger_list\.(\d+)\.(.+)"
++            decoder_layer_pattern = r"blocks\.(\d+)\.(.+)"
++
++            rest = match_v.groups()[0]
++
++            if match_layer := re.match(deepstack_merger_pattern, rest):
++                layer_idx, layer_rest = match_layer.groups()
++                layer_idx = str(int(layer_idx) + offsets)
++                hf_name_param = [(f"model.visual.deepstack_merger_list.{layer_idx}.{layer_rest}", param)]
++
++            # Decoder layers
++            elif match_layer := re.match(decoder_layer_pattern, rest):
++
++                layer_idx, layer_rest = match_layer.groups()
++                layer_idx = str(int(layer_idx) + offsets)
++                hf_name_param = [(f"model.visual.blocks.{layer_idx}.{layer_rest}", param)]
++            else:
++                hf_name_param = [(f"model.visual.{rest}", param)]
++
++    if hf_name_param == None:
++        raise ValueError(f"Unknown parameter name: {name}")
++    else:
++        if DEBUG_MODE:
++            compare_with_hf(args, hf_name_param)
++
++        return hf_name_param
+diff --git a/slime/backends/megatron_utils/model_provider.py b/slime/backends/megatron_utils/model_provider.py
+index 8174c7ac..cdd57524 100644
+--- a/slime/backends/megatron_utils/model_provider.py
++++ b/slime/backends/megatron_utils/model_provider.py
+@@ -17,7 +17,7 @@ from megatron.core.transformer.transformer_config import TransformerConfig
+ from megatron.training.arguments import core_transformer_config_from_args
+ 
+ from slime.utils.misc import load_function
+-
++import slime_plugins.patch.mbridge_patch
+ 
+ # Adapt from https://github.com/volcengine/verl/blob/c3b20575d2bc815fcccd84bddb4c0401fc4b632b/verl/models/llama/megatron/layers/parallel_linear.py#L82
+ class LinearForLastLayer(torch.nn.Linear):
+@@ -33,7 +33,7 @@ class LinearForLastLayer(torch.nn.Linear):
+         self.sequence_parallel = config.sequence_parallel
+         if self.sequence_parallel:
+             self.weight.sequence_parallel = True
+-
++            self.bias.sequence_parallel = True
+         self.weight.data.normal_(mean=0.0, std=0.02)
+         if bias:
+             self.bias.data.zero_()
+@@ -55,6 +55,8 @@ def get_model_provider_func(
+     args: argparse.Namespace,
+     role: Literal["actor", "critic"] = "actor",
+ ):
++    from megatron.bridge.models.conversion.param_mapping import AutoMapping
++    AutoMapping.register_module_type('LinearForLastLayer', 'replicated')  # 或 'column' / 'replicated'
+     # Support custom model provider path (similar to --custom-rm-path for reward models)
+     if getattr(args, "custom_model_provider_path", None):
+ 
+@@ -83,11 +85,14 @@ def get_model_provider_func(
+         bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
+         provider = bridge.to_megatron_provider(load_weights=False)
+         # TODO: we should not manually set this...
+-        provider.tensor_model_parallel_size = args.tensor_model_parallel_size
+-        provider.pipeline_model_parallel_size = args.pipeline_model_parallel_size
+-        provider.expert_model_parallel_size = args.expert_model_parallel_size
+-        provider.expert_tensor_parallel_size = args.expert_tensor_parallel_size
+-        provider.sequence_parallel = args.sequence_parallel
++        provider.gradient_accumulation_fusion = args.gradient_accumulation_fusion
++        provider.recompute_granularity = args.recompute_granularity
++        provider.recompute_method = args.recompute_method
++        provider.recompute_num_layers = args.recompute_num_layers
++        for key, value in vars(args).items():
++            if hasattr(provider, key):
++                continue
++            setattr(provider, key, value)    
+         provider.finalize()
+         return provider.provide
+ 
+diff --git a/slime/backends/megatron_utils/update_weight/common.py b/slime/backends/megatron_utils/update_weight/common.py
+index a2e4e129..ce40b446 100644
+--- a/slime/backends/megatron_utils/update_weight/common.py
++++ b/slime/backends/megatron_utils/update_weight/common.py
+@@ -10,7 +10,7 @@ from megatron.core.transformer.transformer_layer import get_transformer_layer_of
+ 
+ from slime.backends.megatron_utils.misc_utils import strip_param_name_prefix
+ from slime.utils.types import ParamInfo
+-
++from slime.utils.common import is_npu
+ 
+ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
+     """
+@@ -40,6 +40,8 @@ def all_gather_param(name: str, param: torch.nn.Parameter) -> torch.Tensor:
+     if "linear_fc1.weight" in name:
+         param_partitions = [p.chunk(2, dim=0) for p in param_partitions]
+         param_partitions = [p[0] for p in param_partitions] + [p[1] for p in param_partitions]
++        if is_npu():
++            partition_dim = 0
+     # this is bug in megatron's grouped moe.
+     if "linear_fc2.weight" in name:
+         if partition_dim == 0:
+@@ -102,6 +104,8 @@ def all_gather_params_async(
+             if "linear_fc1.weight" in info.name:
+                 param_partitions = [p.chunk(2, dim=0) for p in param_partitions]
+                 param_partitions = [p[0] for p in param_partitions] + [p[1] for p in param_partitions]
++                if is_npu():
++                    partition_dim = 0
+             # this is bug in megatron's grouped moe.
+             if "linear_fc2.weight" in info.name:
+                 if partition_dim == 0:
+diff --git a/slime/backends/megatron_utils/update_weight/update_weight_from_distributed.py b/slime/backends/megatron_utils/update_weight/update_weight_from_distributed.py
+index a8e50e0e..b3c6ac24 100644
+--- a/slime/backends/megatron_utils/update_weight/update_weight_from_distributed.py
++++ b/slime/backends/megatron_utils/update_weight/update_weight_from_distributed.py
+@@ -12,6 +12,7 @@ from ray.actor import ActorHandle
+ from tqdm import tqdm
+ 
+ from slime.utils.distributed_utils import get_gloo_group, init_process_group
++from slime.utils.common import is_npu
+ 
+ from ..megatron_to_hf import convert_to_hf
+ from .common import all_gather_param, named_params_and_buffers
+@@ -253,6 +254,7 @@ def connect_rollout_engines_from_distributed(
+         master_port = sock.getsockname()[1]
+     world_size = len(rollout_engines) * args.rollout_num_gpus_per_engine + 1
+ 
++    backend = "hccl" if is_npu() else "nccl"
+     refs = [
+         engine.init_weights_update_group.remote(
+             master_address,
+@@ -260,12 +262,12 @@ def connect_rollout_engines_from_distributed(
+             i * args.rollout_num_gpus_per_engine + 1,
+             world_size,
+             group_name,
+-            backend="nccl",
++            backend=backend,
+         )
+         for i, engine in enumerate(rollout_engines)
+     ]
+     model_update_groups = init_process_group(
+-        backend="nccl",
++        backend=backend,
+         init_method=f"tcp://{master_address}:{master_port}",
+         world_size=world_size,
+         rank=0,
+diff --git a/slime/backends/sglang_utils/sglang_engine.py b/slime/backends/sglang_utils/sglang_engine.py
+index af0f5620..03ded2c8 100644
+--- a/slime/backends/sglang_utils/sglang_engine.py
++++ b/slime/backends/sglang_utils/sglang_engine.py
+@@ -15,6 +15,7 @@ from urllib3.exceptions import NewConnectionError
+ 
+ from slime.ray.ray_actor import RayActor
+ from slime.utils.http_utils import get_host_info
++from slime.utils.common import is_npu
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -33,7 +34,10 @@ def get_base_gpu_id(args, rank):
+ 
+ 
+ def _to_local_gpu_id(physical_gpu_id: int) -> int:
+-    cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
++    if is_npu():
++        cvd = os.environ.get("ASCEND_RT_VISIBLE_DEVICES")
++    else:
++        cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+     if not cvd:
+         return physical_gpu_id  # no remapping
+     # CUDA_VISIBLE_DEVICES can be like "4,5,6,7"
+diff --git a/slime/ray/actor_group.py b/slime/ray/actor_group.py
+index 4cac07a2..098bdf92 100644
+--- a/slime/ray/actor_group.py
++++ b/slime/ray/actor_group.py
+@@ -5,6 +5,7 @@ from ray.util.placement_group import PlacementGroup
+ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
+ 
+ from slime.ray.utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST
++from slime.utils.common import is_npu
+ 
+ 
+ class RayTrainGroup:
+@@ -87,19 +88,19 @@ class RayTrainGroup:
+ 
+             actor_impl = FSDPTrainRayActor
+ 
+-        TrainRayActor = ray.remote(num_gpus=1, runtime_env={"env_vars": env_vars})(actor_impl)
+-
++        TrainRayActor = ray.remote(runtime_env={"env_vars": env_vars})(actor_impl)
++        device_name = "NPU" if is_npu() else "GPU"
+         # Create worker actors
+         self._actor_handlers = []
+         master_addr, master_port = None, None
+         for rank in range(world_size):
+             actor = TrainRayActor.options(
+                 num_cpus=num_gpus_per_actor,
+-                num_gpus=num_gpus_per_actor,
+                 scheduling_strategy=PlacementGroupSchedulingStrategy(
+                     placement_group=pg,
+                     placement_group_bundle_index=reordered_bundle_indices[rank],
+                 ),
++                resources={device_name:num_gpus_per_actor}
+             ).remote(world_size, rank, master_addr, master_port)
+             if rank == 0:
+                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())
+diff --git a/slime/ray/placement_group.py b/slime/ray/placement_group.py
+index eb232b16..963b4071 100644
+--- a/slime/ray/placement_group.py
++++ b/slime/ray/placement_group.py
+@@ -4,6 +4,7 @@ import socket
+ import ray
+ from ray.util.placement_group import placement_group
+ from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
++from slime.utils.common import is_npu
+ 
+ from .actor_group import RayTrainGroup
+ from .rollout import RolloutManager
+@@ -11,10 +12,13 @@ from .rollout import RolloutManager
+ logger = logging.getLogger(__name__)
+ 
+ 
+-@ray.remote(num_gpus=1)
++@ray.remote
+ class InfoActor:
+     def get_ip_and_gpu_id(self):
+-        return ray.util.get_node_ip_address(), ray.get_gpu_ids()[0]
++        if is_npu():
++            return ray.util.get_node_ip_address(), ray.get_runtime_context().get_accelerator_ids()["NPU"][0]
++        else:
++            return ray.util.get_node_ip_address(), ray.get_gpu_ids()[0]
+ 
+ 
+ def sort_key(x):
+@@ -35,12 +39,13 @@ def sort_key(x):
+             # representation that allows for sorting.
+             node_ip_parts = [ord(c) for c in node_identifier]
+ 
+-    return (node_ip_parts, gpu_id)
++    return (node_ip_parts, int(gpu_id))
+ 
+ 
+ def _create_placement_group(num_gpus):
+     """Create a placement group with the specified number of GPUs."""
+-    bundles = [{"GPU": 1, "CPU": 1} for _ in range(num_gpus)]
++    device_name = "NPU" if is_npu() else "GPU"
++    bundles = [{device_name: 1, "CPU": 1} for _ in range(num_gpus)]
+     pg = placement_group(bundles, strategy="PACK")
+     num_bundles = len(bundles)
+ 
+@@ -53,7 +58,8 @@ def _create_placement_group(num_gpus):
+                 scheduling_strategy=PlacementGroupSchedulingStrategy(
+                     placement_group=pg,
+                     placement_group_bundle_index=i,
+-                )
++                ),
++                resources={device_name:1}
+             ).remote()
+         )
+     gpu_ids = ray.get([actor.get_ip_and_gpu_id.remote() for actor in info_actors])
+@@ -167,9 +173,11 @@ def create_training_models(args, pgs, rollout_manager):
+ 
+ 
+ def create_rollout_manager(args, pg):
++    device_name = "NPU" if is_npu() else "GPU"
+     rollout_manager = RolloutManager.options(
+         num_cpus=1,
+         num_gpus=0,
++        resources={device_name:0}
+     ).remote(args, pg)
+ 
+     # calculate num_rollout from num_epoch
+diff --git a/slime/ray/rollout.py b/slime/ray/rollout.py
+index 75cb053c..c54a3854 100644
+--- a/slime/ray/rollout.py
++++ b/slime/ray/rollout.py
+@@ -28,6 +28,7 @@ from slime.utils.metric_utils import (
+ from slime.utils.misc import Box, group_by, load_function
+ from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
+ from slime.utils.types import Sample
++from slime.utils.common import is_npu
+ 
+ from ..utils.metric_utils import has_repetition
+ from .utils import NOSET_VISIBLE_DEVICES_ENV_VARS_LIST, Lock
+@@ -76,7 +77,8 @@ class RolloutManager:
+             self.all_rollout_engines = [None] * num_engines
+         self.num_new_engines = init_rollout_engines(args, pg, self.all_rollout_engines)
+         self.nodes_per_engine = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
+-        self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
++        device_name = "NPU" if is_npu() else "GPU"
++        self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0, resources={device_name:0}).remote()
+         self.rollout_id = -1
+ 
+         self._metric_checker = MetricChecker.maybe_create(args)
+@@ -467,6 +469,7 @@ def init_rollout_engines(args, pg, all_rollout_engines):
+     RolloutRayActor = ray.remote(SGLangEngine)
+ 
+     rollout_engines = []
++    device_name = "NPU" if is_npu() else "GPU"
+     for i in range(num_engines):
+         if all_rollout_engines[i] is not None:
+             continue
+@@ -503,11 +506,11 @@ def init_rollout_engines(args, pg, all_rollout_engines):
+ 
+         rollout_engine = RolloutRayActor.options(
+             num_cpus=num_cpus,
+-            num_gpus=num_gpus,
+             scheduling_strategy=scheduling_strategy,
+             runtime_env={
+                 "env_vars": env_vars,
+             },
++            resources={device_name:num_gpus}
+         ).remote(args, rank=i, worker_type=worker_type, base_gpu_id=base_gpu_id)
+ 
+         rollout_engines.append((i, rollout_engine))
+diff --git a/slime/ray/train_actor.py b/slime/ray/train_actor.py
+index 2e900ca5..d0a25583 100644
+--- a/slime/ray/train_actor.py
++++ b/slime/ray/train_actor.py
+@@ -13,16 +13,23 @@ from slime.ray.ray_actor import RayActor
+ from slime.utils.distributed_utils import init_gloo_group
+ from slime.utils.logging_utils import configure_logger
+ from slime.utils.memory_utils import clear_memory, print_memory
++from slime.utils.common import is_npu
+ 
+ logger = logging.getLogger(__name__)
+ 
+ 
+ def get_local_gpu_id():
+-    cvd = os.environ.get("CUDA_VISIBLE_DEVICES", None)
++    if is_npu():
++        env_var = "ASCEND_RT_VISIBLE_DEVICES"
++        device_ids = ray.get_runtime_context().get_accelerator_ids()["NPU"]
++    else:
++        env_var = "CUDA_VISIBLE_DEVICES"
++        device_ids = ray.get_gpu_ids()
++    cvd = os.environ.get(env_var, None)
+     if cvd is None:
+-        return ray.get_gpu_ids()[0]
++        return device_ids[0]
+     else:
+-        return cvd.split(",").index(str(ray.get_gpu_ids()[0]))
++        return cvd.split(",").index(str(device_ids[0]))
+ 
+ 
+ class TrainRayActor(RayActor):
+diff --git a/slime/utils/common.py b/slime/utils/common.py
+new file mode 100644
+index 00000000..60ee5b5c
+--- /dev/null
++++ b/slime/utils/common.py
+@@ -0,0 +1,12 @@
++import torch
++
++def is_npu() -> bool:
++    if not hasattr(torch, "npu"):
++        return False
++
++    if not torch.npu.is_available():
++        raise RuntimeError(
++            "torch_npu detected, but NPU device is not available or visible."
++        )
++
++    return True
+diff --git a/slime/utils/external_utils/command_utils.py b/slime/utils/external_utils/command_utils.py
+index 9f51ecdf..66e9d3e5 100644
+--- a/slime/utils/external_utils/command_utils.py
++++ b/slime/utils/external_utils/command_utils.py
+@@ -184,6 +184,108 @@ def execute_train(
+             f"{train_args}"
+         )
+ 
++def execute_train_npu(
++    train_args: str,
++    megatron_model_type: str | None,
++    train_script: str = "train.py",
++    before_ray_job_submit=None,
++    extra_env_vars=None,
++    config: ExecuteTrainConfig | None = None,
++):
++    if extra_env_vars is None:
++        extra_env_vars = {}
++    if config is None:
++        config = ExecuteTrainConfig()
++    external_ray = get_bool_env_var("SLIME_SCRIPT_EXTERNAL_RAY")
++    master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
++
++    train_backend_fsdp = "--train-backend fsdp" in train_args
++    assert train_backend_fsdp == (megatron_model_type is None)
++
++    exec_command(
++        "pkill -9 sglang; "
++        "sleep 3; "
++        f"{'' if external_ray else 'ray stop --force; '}"
++        f"{'' if external_ray else 'pkill -9 ray; '}"
++        # cannot be run in CI, o/w kill the parent script
++        # TODO: do we really need this kill? (or can we instead kill slime)
++        # "pkill -9 python; "
++        "pkill -9 slime; "
++        "sleep 3; "
++        f"{'' if external_ray else 'pkill -9 ray; '}"
++        # "pkill -9 python; "
++        "pkill -9 slime; "
++        "pkill -9 redis; "
++        "true; "
++    )
++
++    if not external_ray:
++        exec_command(
++            # will prevent ray from buffering stdout/stderr
++            f"export PYTHONBUFFERED=16 && "
++            f"ray start --head --node-ip-address {master_addr} --disable-usage-stats"
++        )
++
++    if (f := before_ray_job_submit) is not None:
++        f()
++
++    runtime_env_json = json.dumps(
++        {
++            "env_vars": {
++                # "PYTHONPATH": "/root/Megatron-LM/",
++                "CUDA_DEVICE_MAX_CONNECTIONS": "1",
++                "RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES": "1",
++                "ASCEND_TOOLKIT_HOME": "/usr/local/Ascend/ascend-toolkit/latest/",
++                "ASCEND_OPP_PATH": "/usr/local/Ascend/ascend-toolkit/latest/opp/",
++                "ASCEND_AICPU_PATH": "/usr/local/Ascend/ascend-toolkit/latest/",
++                "ASCEND_HOME_PATH": "/usr/local/Ascend/ascend-toolkit/latest/",
++                "set_env_path": "/usr/local/Ascend/nnal/atb/set_env.sh",
++                "HYDRA_FULL_ERROR": "1",
++                "HCCL_HOST_SOCKET_PORT_RANGE": "60000-60050",
++                "HCCL_NPU_SOCKET_PORT_RANGE": "61000-61050",
++                # If setting this in FSDP, the computation communication overlapping may have issues
++                **(
++                    {}
++                    if train_backend_fsdp
++                    else {
++                        "CUDA_DEVICE_MAX_CONNECTIONS": "1",
++                    }
++                ),
++                "NCCL_NVLS_ENABLE": str(int(check_has_nvlink())),
++                "no_proxy": f"127.0.0.1,{master_addr}",
++                # This is needed by megatron / torch distributed in multi-node setup
++                "MASTER_ADDR": master_addr,
++                **(
++                    {
++                        "CUDA_ENABLE_COREDUMP_ON_EXCEPTION": "1",
++                        "CUDA_COREDUMP_SHOW_PROGRESS": "1",
++                        "CUDA_COREDUMP_GENERATION_FLAGS": "skip_nonrelocated_elf_images,skip_global_memory,skip_shared_memory,skip_local_memory,skip_constbank_memory",
++                        "CUDA_COREDUMP_FILE": "/root/shared_data/cuda_coredump_%h.%p.%t",
++                    }
++                    if config.cuda_core_dump
++                    else {}
++                ),
++                **extra_env_vars,
++                **_parse_extra_env_vars(config.extra_env_vars),
++            }
++        }
++    )
++
++    if get_bool_env_var("SLIME_SCRIPT_ENABLE_RAY_SUBMIT", "1"):
++        cmd_megatron_model_source = (
++            f'source "{repo_base_dir}/scripts/models/{megatron_model_type}.sh" && '
++            if megatron_model_type is not None
++            else ""
++        )
++        exec_command(
++            f"export no_proxy=127.0.0.1 && export PYTHONBUFFERED=16 && "
++            f"{cmd_megatron_model_source}"
++            f'ray job submit --address="http://127.0.0.1:8265" '
++            f"--runtime-env-json='{runtime_env_json}' "
++            f"-- python3 {train_script} "
++            f"{'${MODEL_ARGS[@]}' if megatron_model_type is not None else ''} "
++            f"{train_args}"
++        )
+ 
+ def _parse_extra_env_vars(text: str):
+     try:
+diff --git a/slime/utils/memory_utils.py b/slime/utils/memory_utils.py
+index c12f3cd0..89078266 100644
+--- a/slime/utils/memory_utils.py
++++ b/slime/utils/memory_utils.py
+@@ -3,6 +3,7 @@ import logging
+ 
+ import torch
+ import torch.distributed as dist
++from slime.utils.common import is_npu
+ 
+ logger = logging.getLogger(__name__)
+ 
+@@ -12,12 +13,19 @@ def clear_memory(clear_host_memory: bool = False):
+     gc.collect()
+     torch.cuda.empty_cache()
+     if clear_host_memory:
+-        torch._C._host_emptyCache()
++        if is_npu():
++            torch.npu.empty_cache()
++        else:
++            torch._C._host_emptyCache()
+ 
+ 
+ def available_memory():
+-    device = torch.cuda.current_device()
+-    free, total = torch.cuda.mem_get_info(device)
++    if is_npu():
++        device = torch.npu.current_device()
++        free, total = torch.npu.mem_get_info(device)
++    else:
++        device = torch.cuda.current_device()
++        free, total = torch.cuda.mem_get_info(device)
+     return {
+         "gpu": str(device),
+         "total_GB": _byte_to_gb(total),
+diff --git a/slime_plugins/patch/mbridge_patch.py b/slime_plugins/patch/mbridge_patch.py
+new file mode 100644
+index 00000000..00348839
+--- /dev/null
++++ b/slime_plugins/patch/mbridge_patch.py
+@@ -0,0 +1,26 @@
++
++try:
++    from megatron.bridge.models.conversion.model_bridge import MegatronModelBridge
++    _original_build_conversion_tasks = MegatronModelBridge.build_conversion_tasks
++
++    def _patched_build_conversion_tasks(self, hf_pretrained, megatron_model):
++        """
++        Invoke the original build_conversion_tasks and filter out any actual None tasks.
++
++        The original implementation might return List[None | WeightConversionTask]. 
++        We consolidate it here into List[WeightConversionTask] to avoid errors 
++        when accessing None.task.xxx later.
++        """
++        tasks = _original_build_conversion_tasks(self, hf_pretrained, megatron_model)
++
++        if tasks is None:
++            return []
++
++        filtered = [t for t in tasks if t is not None]
++
++        return filtered
++
++    MegatronModelBridge.build_conversion_tasks = _patched_build_conversion_tasks
++
++except ImportError:
++    pass
+diff --git a/train.py b/train.py
+index 01883c47..18faa6d2 100644
+--- a/train.py
++++ b/train.py
+@@ -1,5 +1,7 @@
+ import ray
+-
++from slime.utils.common import is_npu
++if is_npu():
++    import mindspeed.megatron_adaptor
+ from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
+ from slime.utils.arguments import parse_args
+ from slime.utils.logging_utils import configure_logger, init_tracking

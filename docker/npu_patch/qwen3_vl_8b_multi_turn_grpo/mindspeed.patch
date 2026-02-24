@@ -1,0 +1,48 @@
+diff --git a/mindspeed/core/fusions/fused_rope.py b/mindspeed/core/fusions/fused_rope.py
+index a6f02e07..70f7cb08 100644
+--- a/mindspeed/core/fusions/fused_rope.py
++++ b/mindspeed/core/fusions/fused_rope.py
+@@ -126,5 +126,6 @@ def apply_rotary_pos_emb(
+         freqs,
+         rotary_interleaved=config.rotary_interleaved,
+         multi_latent_attention=config.multi_latent_attention,
+-        mscale=mscale
++        mscale=mscale,
++        cp_group=cp_group
+     )
+diff --git a/mindspeed/megatron_adaptor.py b/mindspeed/megatron_adaptor.py
+index f14b231d..4615590e 100644
+--- a/mindspeed/megatron_adaptor.py
++++ b/mindspeed/megatron_adaptor.py
+@@ -57,6 +57,7 @@ def delete_lock_file():
+ def repatch(args):
+     MindSpeedFeaturesManager.remove_patches()
+     full_args = get_full_args()
++    args = vars(args)
+     for k, v in args.items():
+         setattr(full_args, k, v)
+     MindSpeedFeaturesManager.apply_features_pre_patches(full_args)
+diff --git a/mindspeed/te/pytorch/attention/dot_product_attention/dot_product_attention.py b/mindspeed/te/pytorch/attention/dot_product_attention/dot_product_attention.py
+index ac4eabe5..78c5866d 100644
+--- a/mindspeed/te/pytorch/attention/dot_product_attention/dot_product_attention.py
++++ b/mindspeed/te/pytorch/attention/dot_product_attention/dot_product_attention.py
+@@ -330,6 +330,8 @@ class DotProductAttention(torch.nn.Module):
+         inference_params: Any = None,
+         pad_between_seqs: Optional[bool] = None,
+         fp8_output: Optional[bool] = False,
++        local_cp_size=None,
++        cp_group=None,
+     ) -> torch.Tensor:
+         """
+         Dot Product Attention Layer.
+@@ -659,7 +661,9 @@ class MindSpeedTEDotProductAttention(DotProductAttention):
+         ) and not getattr(self.config, 'is_llava', False):
+             self.config.sparse_mode = 2
+             attention_mask = get_attention_mask(self.config)
+-
++        attention_mask = torch.triu(
++            torch.ones((2048, 2048),
++                       device=query.device, dtype=torch.bool), diagonal=1)
+         packed_seq_kwargs = (
+             {key: getattr(packed_seq_params, key) for key in self.kept_packed_seq_params}
+             if packed_seq_params is not None
