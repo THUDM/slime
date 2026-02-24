@@ -1435,7 +1435,7 @@ def _pre_parse_mode():
     registering them twice.  The returned namespace is merged into
     the final ``args`` after Phase 2 parsing.
     """
-    temp_parser = argparse.ArgumentParser(add_help=False)
+    temp_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
     temp_parser.add_argument("--train-backend", type=str, choices=["megatron", "fsdp"], default="megatron")
     temp_parser.add_argument("--debug-rollout-only", action="store_true", default=False)
     temp_parser.add_argument("--debug-train-only", action="store_true", default=False)
