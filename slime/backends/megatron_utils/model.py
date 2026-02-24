@@ -109,6 +109,20 @@ def setup_model_and_optimizer(
         wrap_model_provider_with_freeze(get_model_provider_func(args, role), args), ModelType.encoder_or_decoder
     )
 
+    # Some models (e.g., Qwen3VLGPTModel) rebuild the decoder in __init__,
+    # which causes duplicate RoutingReplay registrations. Rebuild the list from
+    # the actual model modules to remove orphaned entries.
+    if os.environ.get("ENABLE_ROUTING_REPLAY", "0") == "1":
+
+        from slime.utils.routing_replay import RoutingReplay
+        active_replays = []
+        for model_chunk in model:
+            for module in model_chunk.modules():
+                if hasattr(module, "routing_replay") and isinstance(module.routing_replay, RoutingReplay):
+                    active_replays.append(module.routing_replay)
+        if active_replays:
+            RoutingReplay.all_routing_replays = active_replays
+
     # Optimizer
     kwargs = {}
     for f in dataclasses.fields(OptimizerConfig):
