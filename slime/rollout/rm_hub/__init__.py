@@ -16,30 +16,40 @@ from .math_dapo_utils import compute_score as compute_score_dapo
 from .math_utils import extract_answer as extract_boxed_answer
 from .math_utils import grade_answer_verl
 
+_shared_session: aiohttp.ClientSession | None = None
+
+
+def _get_shared_session() -> aiohttp.ClientSession:
+    global _shared_session
+    if _shared_session is None or _shared_session.closed:
+        connector = aiohttp.TCPConnector(
+            limit=64,
+            enable_cleanup_closed=True,
+        )
+        timeout = aiohttp.ClientTimeout(total=120)
+        _shared_session = aiohttp.ClientSession(connector=connector, timeout=timeout)
+    return _shared_session
+
+
 async def remote_rm(args, sample: Sample, max_retries: int = 10):
     payload = {
         "prompt": sample.prompt,
         "response": sample.response,
         "label": sample.label,
     }
-    connector = aiohttp.TCPConnector(
-        force_close=True,
-        enable_cleanup_closed=True,
-    )
-    timeout = aiohttp.ClientTimeout(total=30)
-    async with aiohttp.ClientSession(connector=connector, timeout=timeout) as session:
-        for attempt in range(max_retries):
-            try:
-                async with session.post(args.rm_url, json=payload) as resp:
-                    resp.raise_for_status()
-                    return await resp.json()
-            except Exception as e:
-                if attempt + 1 >= max_retries:
-                    logger.warning(f"remote_rm failed after {attempt + 1} attempts: {e}")
-                    raise
-                backoff = min(2 ** attempt, 30) + random.random()
-                logger.info(f"remote_rm: {type(e).__name__}, retrying in {backoff:.1f}s ({attempt + 1}/{max_retries})")
-                await asyncio.sleep(backoff)
+    session = _get_shared_session()
+    for attempt in range(max_retries):
+        try:
+            async with session.post(args.rm_url, json=payload) as resp:
+                resp.raise_for_status()
+                return await resp.json()
+        except Exception as e:
+            if attempt + 1 >= max_retries:
+                logger.warning(f"remote_rm failed after {attempt + 1} attempts: {e}")
+                raise
+            backoff = min(2 ** attempt, 30) + random.random()
+            logger.info(f"remote_rm: {type(e).__name__}, retrying in {backoff:.1f}s ({attempt + 1}/{max_retries})")
+            await asyncio.sleep(backoff)
 
 
 async def async_rm(args, sample: Sample, **kwargs):
