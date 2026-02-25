@@ -106,9 +106,9 @@ class SglangConfig:
 
     Loaded from ``--sglang-config`` YAML file.
 
-    **Multi-model format**::
+    **Config format**::
 
-        models:
+        sglang:
           - name: actor
             model_path: /path/to/actor
             num_gpus_per_engine: 2
@@ -125,14 +125,6 @@ class SglangConfig:
               - worker_type: regular
                 num_gpus: 4
 
-    **Legacy single-model format** (still supported)::
-
-        engine_groups:
-          - worker_type: prefill
-            num_gpus: 4
-          - worker_type: decode
-            num_gpus: 10
-
     Each model gets its own router.  ``placeholder`` groups reserve GPU
     slots without creating engines.  ``overrides`` are ``ServerArgs``
     field names applied on top of the base ``--sglang-*`` CLI args.
@@ -145,26 +137,22 @@ class SglangConfig:
         with open(path) as f:
             data = yaml.safe_load(f)
 
-        if "models" in data:
-            models = []
-            for m in data["models"]:
-                groups = [EngineGroupConfig(**g) for g in m.get("engine_groups", [])]
-                models.append(
-                    ModelConfig(
-                        name=m["name"],
-                        model_path=m.get("model_path"),
-                        num_gpus_per_engine=m.get("num_gpus_per_engine"),
-                        engine_groups=groups,
-                    )
+        assert "sglang" in data, (
+            f"sglang config must have a 'sglang' key, got {list(data.keys())}. "
+            f"Wrap your engine_groups inside a model entry under 'sglang'."
+        )
+        models = []
+        for m in data["sglang"]:
+            groups = [EngineGroupConfig(**g) for g in m.get("engine_groups", [])]
+            models.append(
+                ModelConfig(
+                    name=m["name"],
+                    model_path=m.get("model_path"),
+                    num_gpus_per_engine=m.get("num_gpus_per_engine"),
+                    engine_groups=groups,
                 )
-            return SglangConfig(models=models)
-
-        # Backward compat: top-level engine_groups → single "default" model.
-        assert (
-            "engine_groups" in data
-        ), f"sglang config must have 'models' or 'engine_groups' key, got {list(data.keys())}"
-        groups = [EngineGroupConfig(**g) for g in data["engine_groups"]]
-        return SglangConfig(models=[ModelConfig(name="default", engine_groups=groups)])
+            )
+        return SglangConfig(models=models)
 
     @staticmethod
     def from_prefill_num_servers(args) -> "SglangConfig":
@@ -192,12 +180,6 @@ class SglangConfig:
     @property
     def total_num_gpus(self) -> int:
         return sum(m.total_num_gpus for m in self.models)
-
-    # Backward compat: single-model access.
-    @property
-    def engine_groups(self) -> list[EngineGroupConfig]:
-        assert len(self.models) == 1, "engine_groups property requires single-model config"
-        return self.models[0].engine_groups
 
 
 @dataclasses.dataclass
