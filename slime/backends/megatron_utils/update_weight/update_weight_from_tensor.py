@@ -63,6 +63,7 @@ class UpdateWeightFromTensor:
         rollout_engines: Sequence[ActorHandle],
         rollout_engine_lock: ActorHandle,
         engine_gpu_counts: Sequence[int] | None = None,
+        engine_gpu_offsets: Sequence[int] | None = None,
     ) -> None:
         """
         Split colocated/distributed engines. Global source rank (DP=TP=PP=0) creates NCCL
@@ -72,15 +73,20 @@ class UpdateWeightFromTensor:
 
         if engine_gpu_counts is None:
             engine_gpu_counts = [self.args.rollout_num_gpus_per_engine] * len(rollout_engines)
+        if engine_gpu_offsets is None:
+            # Fallback: assume engines are densely packed (no placeholder gaps).
+            engine_gpu_offsets = []
+            offset = 0
+            for c in engine_gpu_counts:
+                engine_gpu_offsets.append(offset)
+                offset += c
 
-        # Compute colocated engine count from cumulative GPU budget.
+        # Compute colocated engine count: engines whose GPUs fall within actor GPU range.
         total_actor_gpus = self.args.actor_num_nodes * self.args.actor_num_gpus_per_node
         colocate_engine_nums = 0
-        gpu_sum = 0
-        for c in engine_gpu_counts:
-            if gpu_sum + c > total_actor_gpus:
+        for gpu_offset, gpu_count in zip(engine_gpu_offsets, engine_gpu_counts, strict=True):
+            if gpu_offset + gpu_count > total_actor_gpus:
                 break
-            gpu_sum += c
             colocate_engine_nums += 1
 
         self.use_distribute = len(rollout_engines) > colocate_engine_nums
@@ -108,25 +114,24 @@ class UpdateWeightFromTensor:
                     engine_gpu_counts=distributed_gpu_counts,
                 )
 
-        # Cumulative rank offsets for (potentially) non-uniform colocated groups.
+        colocate_gpu_offsets = engine_gpu_offsets[:colocate_engine_nums]
         colocate_gpu_counts = engine_gpu_counts[:colocate_engine_nums]
-        cumulative = [0]
-        for c in colocate_gpu_counts:
-            cumulative.append(cumulative[-1] + c)
 
         # Create IPC Gloo gather groups (only on first call; partitioning is
         # fixed across reconnects).
         if self._ipc_gather_group is None:
             for i in range(colocate_engine_nums):
-                group_ranks = list(range(cumulative[i], cumulative[i + 1]))
+                group_ranks = list(range(colocate_gpu_offsets[i], colocate_gpu_offsets[i] + colocate_gpu_counts[i]))
                 new_group = dist.new_group(ranks=group_ranks, backend="gloo")
                 if dist.get_rank() in group_ranks:
                     self._ipc_gather_group = new_group
-                    self._ipc_gather_src = cumulative[i]
+                    self._ipc_gather_src = colocate_gpu_offsets[i]
 
         # Map training ranks to colocated engine actors.
         for i, engine in enumerate(self.rollout_engines):
-            if cumulative[i] <= dist.get_rank() < cumulative[i + 1]:
+            start = colocate_gpu_offsets[i]
+            end = start + colocate_gpu_counts[i]
+            if start <= dist.get_rank() < end:
                 self._ipc_engine = engine
 
     @torch.no_grad()

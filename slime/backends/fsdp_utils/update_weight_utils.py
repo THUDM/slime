@@ -41,6 +41,7 @@ class UpdateWeight(abc.ABC):
         rollout_engines: Sequence[ActorHandle],
         rollout_engine_lock: ActorHandle | None,
         engine_gpu_counts: Sequence[int] | None = None,
+        engine_gpu_offsets: Sequence[int] | None = None,
     ) -> None:
         pass
 
@@ -94,6 +95,7 @@ class UpdateWeightFromTensor(UpdateWeight):
         rollout_engines: Sequence[ActorHandle],
         rollout_engine_lock: ActorHandle | None,
         engine_gpu_counts: Sequence[int] | None = None,
+        engine_gpu_offsets: Sequence[int] | None = None,
     ) -> None:
         """Attach rollout engines and create per-engine IPC (Gloo) groups.
 
@@ -104,15 +106,17 @@ class UpdateWeightFromTensor(UpdateWeight):
 
         if engine_gpu_counts is None:
             engine_gpu_counts = [self.args.rollout_num_gpus_per_engine] * len(rollout_engines)
-
-        # Cumulative rank offsets for (potentially) non-uniform engine groups.
-        cumulative = [0]
-        for c in engine_gpu_counts:
-            cumulative.append(cumulative[-1] + c)
+        if engine_gpu_offsets is None:
+            # Fallback: assume engines are densely packed (no placeholder gaps).
+            engine_gpu_offsets = []
+            offset = 0
+            for c in engine_gpu_counts:
+                engine_gpu_offsets.append(offset)
+                offset += c
 
         for i, engine in enumerate(self.rollout_engines):
-            start_rank = cumulative[i]
-            end_rank = cumulative[i + 1]
+            start_rank = engine_gpu_offsets[i]
+            end_rank = start_rank + engine_gpu_counts[i]
             group_ranks = list(range(start_rank, end_rank))
             new_group = dist.new_group(
                 ranks=group_ranks,
@@ -191,6 +195,7 @@ class UpdateWeightFromDistributed(UpdateWeight):
         rollout_engines: Sequence[ActorHandle],
         rollout_engine_lock: ActorHandle | None,
         engine_gpu_counts: Sequence[int] | None = None,
+        engine_gpu_offsets: Sequence[int] | None = None,
     ) -> None:
         """On rank 0, initialize a temporary NCCL group for parameter broadcast."""
         self.rollout_engines = rollout_engines

@@ -363,6 +363,18 @@ class RolloutServer:
         return [g.num_gpus_per_engine for g in self.engine_groups for _ in g.engines]
 
     @property
+    def engine_gpu_offsets(self) -> list[int]:
+        """Per-engine GPU offset for all node-0 engines, parallel to ``engines``.
+
+        Accounts for placeholder groups that occupy GPU slots without creating engines.
+        """
+        offsets = []
+        for g in self.engine_groups:
+            for j in range(len(g.engines)):
+                offsets.append(g.gpu_offset + j * g.num_gpus_per_engine)
+        return offsets
+
+    @property
     def nodes_per_engine(self):
         """Nodes per engine.  Only valid when all active groups share the same value."""
         values = {g.nodes_per_engine for g in self.engine_groups}
@@ -505,8 +517,9 @@ class RolloutManager:
         srv = self._get_server(model_name)
         engines = srv.engines if srv else []
         gpu_counts = srv.engine_gpu_counts if srv else []
+        gpu_offsets = srv.engine_gpu_offsets if srv else []
         num_new = srv.num_new_engines if srv else 0
-        return engines, self.rollout_engine_lock, num_new, gpu_counts
+        return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets
 
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset
@@ -566,10 +579,17 @@ class RolloutManager:
         if self.rollout_id == -1 or srv is None:
             engines = srv.engines if srv else []
             gpu_counts = srv.engine_gpu_counts if srv else []
-            return engines, self.rollout_engine_lock, (srv.num_new_engines if srv else 0), gpu_counts
+            gpu_offsets = srv.engine_gpu_offsets if srv else []
+            return engines, self.rollout_engine_lock, (srv.num_new_engines if srv else 0), gpu_counts, gpu_offsets
 
         srv.recover()
-        return srv.engines, self.rollout_engine_lock, srv.num_new_engines, srv.engine_gpu_counts
+        return (
+            srv.engines,
+            self.rollout_engine_lock,
+            srv.num_new_engines,
+            srv.engine_gpu_counts,
+            srv.engine_gpu_offsets,
+        )
 
     def clear_num_new_engines(self, model_name: str | None = None):
         # when fault tolerance is not enabled, we need to manually clear num_new_engines after update_weights
