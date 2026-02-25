@@ -912,7 +912,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(
 
         for i in range(num_engines_on_this_node):
             current_rank = rank + i
-            addr_and_ports[current_rank] = {}
+            addr_and_ports.setdefault(current_rank, {})
             addr_and_ports[current_rank]["host"] = get_addr()
             addr_and_ports[current_rank]["port"] = get_port()
             addr_and_ports[current_rank]["nccl_port"] = get_port()
@@ -926,6 +926,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(
                 # this is the first node in the engine, we need to allocate the dist_init_addr port
                 dist_init_addr = f"{get_addr()}:{get_port(30 + args.sglang_dp_size)}"
                 for i in range(num_node_per_engine):
+                    addr_and_ports.setdefault(rank + i, {})
                     addr_and_ports[rank + i]["dist_init_addr"] = dist_init_addr
         else:
             for i in range(num_engines_on_this_node):
