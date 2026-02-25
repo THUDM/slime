@@ -361,8 +361,12 @@ slime 支持更复杂的采样策略，例如 [DAPO](https://dapo-sia.github.io/
 
 ```python
 def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
-    rewards = [sample.reward for sample in samples]
-    return torch.tensor(rewards, dtype=torch.float).std() > 0.0
+    rewards = [sample.get_reward_value(args) for sample in samples]
+    keep = torch.tensor(rewards, dtype=torch.float).std() > 0.0
+    return DynamicFilterOutput(
+        keep=keep,
+        reason=None if keep else f"zero_std_{round(rewards[0], 1)}",
+    )
 ```
 
 如果过滤函数非常严格，导致大量 prompt 组被丢弃，系统会监控 ` remaining_batch_size` 中待处理的任务数量。一旦待处理的任务数因丢弃过多而降至目标数 (32) 以下，系统会自动触发新一轮的过采样，再次请求  `over_sampling_batch_size` (64) 个新的 prompt 重复上述流程。

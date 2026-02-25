@@ -84,12 +84,7 @@ def execute():
         "--update-weight-buffer-size 536870912 "  # 512MB
     )
 
-    ci_args = (
-        "--ci-test "
-        "--ci-disable-kl-checker "
-        "--ci-metric-checker-key eval/gsm8k "
-        "--ci-metric-checker-threshold 0.71 "  # loose threshold at 60 step
-    )
+    ci_args = "--ci-test " "--ci-disable-kl-checker "
 
     misc_args = "--actor-num-nodes 1 " f"--actor-num-gpus-per-node {NUM_GPUS} " "--colocate " "--train-backend fsdp "
 

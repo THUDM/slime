@@ -101,15 +101,12 @@ class ConversionResult:
         self.weight_map = {}
         self.param_count = 0
         self.modules_to_not_convert = []
-        self.has_dsa_layers = False
 
     def add_result(self, filename, q_weights, module_names):
         with self.lock:
             for k, v in q_weights.items():
                 self.weight_map[k] = filename
                 self.param_count += len(v)
-                if "indexer" in k:
-                    self.has_dsa_layers = True
             self.modules_to_not_convert.extend(module_names)
 
 
@@ -154,7 +151,7 @@ def process_file(input_path, output_path, filename, strategy, block_size, result
     result_collector.add_result(filename, q_weights, modules_to_not_convert)
 
 
-def convert_fp8(input_path, output_path, strategy, block_size=None, max_workers=4):
+def convert_fp8(input_path, output_path, strategy, block_size=None, max_workers=4, scale_fmt=None):
     input_path = os.path.abspath(input_path)
     os.makedirs(output_path, exist_ok=True)
 
@@ -185,8 +182,8 @@ def convert_fp8(input_path, output_path, strategy, block_size=None, max_workers=
         }
         if block_size:
             quantization_config["weight_block_size"] = block_size
-            if result_collector.has_dsa_layers:
-                quantization_config["scale_fmt"] = "ue8m0"
+            if scale_fmt is not None:
+                quantization_config["scale_fmt"] = scale_fmt
         if len(result_collector.modules_to_not_convert) > 0:
             quantization_config["modules_to_not_convert"] = list(set(result_collector.modules_to_not_convert))
     else:
@@ -246,8 +243,9 @@ if __name__ == "__main__":
     parser.add_argument("--model-dir", type=str, help="Path to the directory of the HF safetensors model.")
     parser.add_argument("--save-dir", type=str, help="Path to the directory to save the converted model.")
     parser.add_argument("--strategy", type=str, default="block", choices=["block", "channel", "tensor"])
-    parser.add_argument("--block-size", type=int, nargs="*", default=None, help="eg. --block-size 32 32")
+    parser.add_argument("--block-size", type=int, nargs="*", default=None, help="eg. --block-size 128 128")
     parser.add_argument("--max-workers", type=int, default=1, help="Number of worker threads for parallel processing")
+    parser.add_argument("--scale-fmt", type=str, default=None, choices=["ue8m0"])
     args = parser.parse_args()
 
     if not os.path.exists(args.save_dir):
@@ -256,4 +254,4 @@ if __name__ == "__main__":
     elif not os.path.isdir(args.save_dir):
         raise ValueError("The save_dir should be a directory.")
 
-    convert_fp8(args.model_dir, args.save_dir, args.strategy, args.block_size, args.max_workers)
+    convert_fp8(args.model_dir, args.save_dir, args.strategy, args.block_size, args.max_workers, args.scale_fmt)
