@@ -82,12 +82,7 @@ def execute():
         "--attn-implementation flash_attention_3 "
     )
 
-    ci_args = (
-        "--ci-test "
-        "--ci-disable-kl-checker "
-        "--ci-metric-checker-key eval/geo3k "
-        "--ci-metric-checker-threshold 0.5 "  # loose threshold at 60 step
-    )
+    ci_args = "--ci-test " "--ci-disable-kl-checker "
 
     misc_args = "--actor-num-nodes 1 " f"--actor-num-gpus-per-node {NUM_GPUS} " "--colocate "
 

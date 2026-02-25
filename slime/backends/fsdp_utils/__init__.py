@@ -1,8 +1,8 @@
 import logging
 
 from .actor import FSDPTrainRayActor
-from .arguments import load_fsdp_args
+from .arguments import fsdp_parse_args
 
-__all__ = ["load_fsdp_args", "FSDPTrainRayActor"]
+__all__ = ["fsdp_parse_args", "FSDPTrainRayActor"]
 
 logging.getLogger().setLevel(logging.WARNING)

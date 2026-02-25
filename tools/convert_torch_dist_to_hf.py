@@ -104,9 +104,6 @@ def get_named_params(args, state_dict):
 
 
 def save_tensors(args, model_name, state_dict, output_dir, chunk_size, vocab_size=None):
-    # for slime update_weight compatible
-    args.sglang_enable_ep_moe = False
-
     print(f"start saving to {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
     # 2GB

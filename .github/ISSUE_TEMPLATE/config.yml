@@ -1,0 +1,16 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Collaboration Scope / 协作范围
+    url: https://github.com/THUDM/slime/blob/main/CONTRIBUTING.md
+    about: |
+      Please read before submitting. We welcome bug reports and general RL optimizations; feature requests are currently outside our scope.
+      提交前请阅读。我们欢迎 bug 报告和通用 RL 优化，feature request 暂时不在协作范围内。
+  - name: Documentation
+    url: https://thudm.github.io/slime/
+    about: Please check the documentation before opening an issue. Many common questions are already answered there.
+  - name: Q&A / FAQ
+    url: https://thudm.github.io/slime/en/get_started/qa.html
+    about: Check the FAQ — your question might already have an answer.
+  - name: Discussions
+    url: https://github.com/THUDM/slime/discussions
+    about: For general questions and open-ended conversations, please use GitHub Discussions instead.
