@@ -26,7 +26,7 @@ def execute():
         "--rm-type math "
         "--num-rollout 3 "
         "--rollout-batch-size 8 "
-        "--n-samples-per-prompt 8 "
+        "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 4096 "
         "--rollout-temperature 1 "
         "--global-batch-size 32 "
@@ -72,7 +72,7 @@ def execute():
         # "--sglang-rl-on-policy-target fsdp "
         "--sglang-attention-backend fa3 "
         "--attn-implementation flash_attention_3 "
-        "--sglang-cuda-graph-bs 1 2 4 8 16 24 32 40 48 56 64 "
+        "--sglang-cuda-graph-max-bs 32 "
         # "--deterministic-mode "
         # "--true-on-policy-mode "
     )

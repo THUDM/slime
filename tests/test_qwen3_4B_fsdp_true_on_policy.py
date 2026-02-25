@@ -30,7 +30,7 @@ def execute(args):
         "--rm-type math "
         "--num-rollout 3 "
         "--rollout-batch-size 8 "
-        "--n-samples-per-prompt 8 "
+        "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 4096 "
         "--rollout-temperature 1 "
         "--global-batch-size 64 "
@@ -68,6 +68,7 @@ def execute(args):
     sglang_args = (
         "--rollout-num-gpus-per-engine 1 "
         "--sglang-decode-log-interval 1000 "
+        "--sglang-cuda-graph-max-bs 32 "
         "--sglang-enable-metrics "
         "--sglang-enable-deterministic-inference "
         "--sglang-rl-on-policy-target fsdp "
