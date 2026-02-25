@@ -92,12 +92,12 @@ class MegatronTrainRayActor(TrainRayActor):
             args, role
         )
 
+        start_rollout_id = loaded_rollout_id + 1
+
         if role == "critic":
             if self.args.offload_train:
                 self.sleep()
-            return
-
-        start_rollout_id = loaded_rollout_id + 1
+            return start_rollout_id
 
         self.weights_backuper = TensorBackuper.create(
             source_getter=lambda: named_params_and_buffers(
@@ -378,7 +378,7 @@ class MegatronTrainRayActor(TrainRayActor):
             )
         )
 
-        if rollout_id >= self.args.num_critic_only_steps:
+        if rollout_id >= self.args.num_critic_only_steps and not self.args.critic_train_only:
             sync_actor_critic_data(self.args, rollout_data, self._actor_critic_groups)
 
         compute_advantages_and_returns(self.args, rollout_data)
