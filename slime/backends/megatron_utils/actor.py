@@ -358,7 +358,6 @@ class MegatronTrainRayActor(TrainRayActor):
 
         with timer("data_preprocess"):
             rollout_data = self._get_rollout_data(rollout_data_ref)
-            log_rollout_data(rollout_id, self.args, rollout_data)
 
         if self.role == "critic":
             return self.train_critic(rollout_id, rollout_data)
