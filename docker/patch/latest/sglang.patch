@@ -352,7 +352,7 @@ index 0ed5a1b44..67e33c650 100644
          """Get weights by parameter name."""
          obj = GetWeightsByNameReqInput(name=name, truncate_size=truncate_size)
 diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/entrypoints/http_server.py
-index 1d6816c01..07b159968 100644
+index 1d6816c01..60e14a00e 100644
 --- a/python/sglang/srt/entrypoints/http_server.py
 +++ b/python/sglang/srt/entrypoints/http_server.py
 @@ -115,6 +115,7 @@ from sglang.srt.managers.io_struct import (
@@ -363,7 +363,20 @@ index 1d6816c01..07b159968 100644
      ProfileReqInput,
      ReleaseMemoryOccupationReqInput,
      ResumeMemoryOccupationReqInput,
-@@ -1084,6 +1085,23 @@ async def update_weights_from_ipc(obj: UpdateWeightsFromIPCReqInput, request: Re
+@@ -574,10 +575,8 @@ async def model_info():
+ @app.get("/weight_version")
+ async def weight_version():
+     """Get the current weight version."""
+-    raise HTTPException(
+-        status_code=404,
+-        detail="Endpoint '/get_weight_version' or '/weight_version' is deprecated. Please use '/model_info' instead.",
+-    )
++    result = await model_info()
++    return {"weight_version": result.get("weight_version", None)}
+ 
+ 
+ @app.get("/get_server_info")
+@@ -1084,6 +1083,23 @@ async def update_weights_from_ipc(obj: UpdateWeightsFromIPCReqInput, request: Re
          return ORJSONResponse(content, status_code=HTTPStatus.BAD_REQUEST)
  
  
