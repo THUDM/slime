@@ -102,10 +102,17 @@ class UpdateWeightFromTensor(UpdateWeight):
         """
         self.rollout_engines = rollout_engines
 
-        # Here we assume the gpu id of rollout engines and train actors are the same.
+        if engine_gpu_counts is None:
+            engine_gpu_counts = [self.args.rollout_num_gpus_per_engine] * len(rollout_engines)
+
+        # Cumulative rank offsets for (potentially) non-uniform engine groups.
+        cumulative = [0]
+        for c in engine_gpu_counts:
+            cumulative.append(cumulative[-1] + c)
+
         for i, engine in enumerate(self.rollout_engines):
-            start_rank = i * self.args.rollout_num_gpus_per_engine
-            end_rank = (i + 1) * self.args.rollout_num_gpus_per_engine
+            start_rank = cumulative[i]
+            end_rank = cumulative[i + 1]
             group_ranks = list(range(start_rank, end_rank))
             new_group = dist.new_group(
                 ranks=group_ranks,

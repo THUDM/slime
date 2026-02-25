@@ -39,7 +39,8 @@ class UpdateWeightFromTensor:
         quantization_config: dict[str, int | str | list[str]] | None,
     ) -> None:
         """
-        Compute param buckets, create IPC Gloo groups (rollout_num_gpus_per_engine ranks/group).
+        Compute param buckets.  IPC Gloo groups are created later in
+        ``connect_rollout_engines`` once ``engine_gpu_counts`` is known.
         """
         self.args = args
         self.model = model
@@ -52,15 +53,9 @@ class UpdateWeightFromTensor:
             args=args, model=model, model_name=model_name, quantization_config=quantization_config
         )
 
-        # create the group within megatron.
-        for start_rank in range(0, dist.get_world_size(), self.args.rollout_num_gpus_per_engine):
-            end_rank = start_rank + self.args.rollout_num_gpus_per_engine
-            group_ranks = list(range(start_rank, end_rank))
-            new_group = dist.new_group(ranks=group_ranks, backend="gloo")
-            if dist.get_rank() in group_ranks:
-                self._ipc_gather_group = new_group
-                self._ipc_gather_src = start_rank
-
+        self._ipc_gather_group = None
+        self._ipc_gather_src = None
+        self._ipc_engine = None
         self._model_update_groups = None
 
     def connect_rollout_engines(
@@ -74,15 +69,26 @@ class UpdateWeightFromTensor:
         for distributed. Map ranks to colocated IPC engines.
         """
         self.rollout_engines = rollout_engines
-        colocate_engine_nums = (
-            self.args.actor_num_nodes * self.args.actor_num_gpus_per_node // self.args.rollout_num_gpus_per_engine
-        )
+
+        if engine_gpu_counts is None:
+            engine_gpu_counts = [self.args.rollout_num_gpus_per_engine] * len(rollout_engines)
+
+        # Compute colocated engine count from cumulative GPU budget.
+        total_actor_gpus = self.args.actor_num_nodes * self.args.actor_num_gpus_per_node
+        colocate_engine_nums = 0
+        gpu_sum = 0
+        for c in engine_gpu_counts:
+            if gpu_sum + c > total_actor_gpus:
+                break
+            gpu_sum += c
+            colocate_engine_nums += 1
+
         self.use_distribute = len(rollout_engines) > colocate_engine_nums
 
         if self.use_distribute:
             self.rollout_engines = rollout_engines[:colocate_engine_nums]
             self.distributed_rollout_engines = rollout_engines[colocate_engine_nums:]
-            distributed_gpu_counts = engine_gpu_counts[colocate_engine_nums:] if engine_gpu_counts else None
+            distributed_gpu_counts = engine_gpu_counts[colocate_engine_nums:]
             self._is_distributed_src_rank = (
                 mpu.get_data_parallel_rank(with_context_parallel=True) == 0
                 and mpu.get_tensor_model_parallel_rank() == 0
@@ -102,12 +108,25 @@ class UpdateWeightFromTensor:
                     engine_gpu_counts=distributed_gpu_counts,
                 )
 
-        # Here we assume the gpu id of rollout engines and train actors are the same.
+        # Cumulative rank offsets for (potentially) non-uniform colocated groups.
+        colocate_gpu_counts = engine_gpu_counts[:colocate_engine_nums]
+        cumulative = [0]
+        for c in colocate_gpu_counts:
+            cumulative.append(cumulative[-1] + c)
+
+        # Create IPC Gloo gather groups (only on first call; partitioning is
+        # fixed across reconnects).
+        if self._ipc_gather_group is None:
+            for i in range(colocate_engine_nums):
+                group_ranks = list(range(cumulative[i], cumulative[i + 1]))
+                new_group = dist.new_group(ranks=group_ranks, backend="gloo")
+                if dist.get_rank() in group_ranks:
+                    self._ipc_gather_group = new_group
+                    self._ipc_gather_src = cumulative[i]
+
+        # Map training ranks to colocated engine actors.
         for i, engine in enumerate(self.rollout_engines):
-            start_rank = i * self.args.rollout_num_gpus_per_engine
-            end_rank = (i + 1) * self.args.rollout_num_gpus_per_engine
-            group_ranks = list(range(start_rank, end_rank))
-            if dist.get_rank() in group_ranks:
+            if cumulative[i] <= dist.get_rank() < cumulative[i + 1]:
                 self._ipc_engine = engine
 
     @torch.no_grad()
