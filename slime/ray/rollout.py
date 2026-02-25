@@ -212,17 +212,22 @@ class EngineGroup:
         """Node-0 engines only (for multi-node serving)."""
         return self.all_engines[:: self.nodes_per_engine]
 
-    def start_engines(self) -> list:
+    def start_engines(self, port_cursors: dict[int, int] | None = None) -> tuple[list, dict[int, int]]:
         """Create Ray actors, allocate ports, and fire ``engine.init()`` without waiting.
 
-        Returns a list of Ray ObjectRefs for the init calls.  The caller
-        should ``ray.get()`` on them to block until the engines are healthy.
+        Returns ``(init_handles, port_cursors)`` where *init_handles* is a list
+        of Ray ObjectRefs and *port_cursors* maps node index → next free port.
+        The caller should ``ray.get()`` on the handles to block until the
+        engines are healthy, and pass *port_cursors* to the next engine group
+        so that different groups on the same node don't race for ports.
 
         Placeholder groups (worker_type="placeholder") skip engine creation entirely.
         """
+        if port_cursors is None:
+            port_cursors = {}
         if self.args.debug_train_only or self.worker_type == "placeholder":
             self.num_new_engines = 0
-            return []
+            return [], port_cursors
 
         num_gpu_per_engine = min(self.num_gpus_per_engine, self.args.num_gpus_per_node)
 
@@ -284,19 +289,23 @@ class EngineGroup:
         self.num_new_engines = len(rollout_engines)
 
         if self.num_new_engines == 0:
-            return []
+            return [], port_cursors
 
         if self.args.rollout_external:
             addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(
                 args=self.args, rollout_engines=rollout_engines
             )
         else:
-            addr_and_ports = _allocate_rollout_engine_addr_and_ports_normal(
+            # Compute base_port from the maximum cursor across all nodes that
+            # this group's engines may land on (conservative: just use global max).
+            base_port = max(port_cursors.values()) if port_cursors else 15000
+            addr_and_ports, port_cursors = _allocate_rollout_engine_addr_and_ports_normal(
                 args=self.args,
                 rollout_engines=rollout_engines,
                 worker_type=self.worker_type,
                 num_gpus_per_engine=self.num_gpus_per_engine,
                 rank_offset=self.rank_offset,
+                base_port=base_port,
             )
 
         init_handles = [
@@ -307,7 +316,7 @@ class EngineGroup:
             )
             for rank, engine in rollout_engines
         ]
-        return init_handles
+        return init_handles, port_cursors
 
     def offload(self):
         """Fire release_memory_occupation on all engines (non-blocking).
@@ -389,8 +398,10 @@ class RolloutServer:
 
         # Start all groups concurrently.
         all_handles = []
+        port_cursors: dict[int, int] = {}
         for g in self.engine_groups:
-            all_handles.extend(g.start_engines())
+            handles, port_cursors = g.start_engines(port_cursors)
+            all_handles.extend(handles)
         if all_handles:
             ray.get(all_handles)
 
@@ -866,6 +877,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(
     worker_type="regular",
     num_gpus_per_engine=None,
     rank_offset=0,
+    base_port=15000,
 ):
     # get ports
     # there are 4 ports we need to allocate
@@ -876,6 +888,10 @@ def _allocate_rollout_engine_addr_and_ports_normal(
     _gpus_per_engine = num_gpus_per_engine or args.rollout_num_gpus_per_engine
     num_engines_per_node = max(1, args.num_gpus_per_node // _gpus_per_engine)
     addr_and_ports: dict[int, dict] = {}
+
+    # Track per-node port cursors so that different engine groups (called
+    # sequentially) never race for the same ports on a given node.
+    node_port_cursor: dict[int, int] = {}
 
     visited_nodes = set()
     for rank, engine in rollout_engines:
@@ -888,10 +904,10 @@ def _allocate_rollout_engine_addr_and_ports_normal(
         # e.g. for 8 gpus, if we are restarting engine on gpu 3, we will set port for engine 3,4,5,6,7 on this node.
         num_engines_on_this_node = num_engines_per_node - (local_rank % num_engines_per_node)
 
-        def get_addr_and_ports(engine):
+        def get_addr_and_ports(engine, node_idx):
             # use small ports to prevent ephemeral port between 32768 and 65536.
             # also, ray uses port 10002-19999, thus we avoid near-10002 to avoid racing condition
-            start_port = 15000
+            start_port = node_port_cursor.get(node_idx, base_port)
 
             def port(consecutive=1):
                 nonlocal start_port
@@ -902,6 +918,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(
                     )
                 )
                 start_port = port + consecutive
+                node_port_cursor[node_idx] = start_port
                 return port
 
             def addr():
@@ -910,7 +927,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(
 
             return addr, port
 
-        get_addr, get_port = get_addr_and_ports(engine)
+        get_addr, get_port = get_addr_and_ports(engine, node_index)
 
         for i in range(num_engines_on_this_node):
             current_rank = rank + i
@@ -939,7 +956,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(
             assert key in addr_and_ports[i], f"Engine {i} {key} is not set."
         logger.info(f"Ports for engine {i}: {addr_and_ports[i]}")
 
-    return addr_and_ports
+    return addr_and_ports, node_port_cursor
 
 
 def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool = False) -> tuple[str, int]:
@@ -1035,6 +1052,7 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
 
         engine_groups: list[EngineGroup] = []
         all_init_handles: list = []
+        port_cursors: dict[int, int] = {}
 
         for group_cfg in model_cfg.engine_groups:
             gpus_per_engine = group_cfg.num_gpus_per_engine
@@ -1054,7 +1072,8 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
                 router_ip=router_ip,
                 router_port=router_port,
             )
-            all_init_handles.extend(group.start_engines())
+            handles, port_cursors = group.start_engines(port_cursors)
+            all_init_handles.extend(handles)
             engine_groups.append(group)
 
             engine_offset += num_engines
