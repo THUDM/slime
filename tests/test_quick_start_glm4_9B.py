@@ -30,7 +30,7 @@ def execute():
         "--rm-type deepscaler "
         "--num-rollout 3 "
         "--rollout-batch-size 8 "
-        "--n-samples-per-prompt 8 "
+        "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 8192 "
         "--rollout-temperature 1 "
         "--global-batch-size 32 "
@@ -80,7 +80,7 @@ def execute():
         "--adam-beta2 0.98 "
     )
 
-    sglang_args = "--rollout-num-gpus-per-engine 2 " "--use-slime-router "
+    sglang_args = "--rollout-num-gpus-per-engine 2 " "--sglang-cuda-graph-max-bs 32 " "--use-slime-router "
 
     ci_args = "--ci-test "
 

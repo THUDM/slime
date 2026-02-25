@@ -75,6 +75,7 @@ def execute():
     sglang_args = (
         "--rollout-num-gpus-per-engine 1 "
         f"--sglang-mem-fraction-static {0.55 if TIGHT_DEVICE_MEMORY else 0.65} "
+        "--sglang-cuda-graph-max-bs 32 "
         "--sglang-enable-metrics "
     )
 

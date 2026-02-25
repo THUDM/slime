@@ -35,7 +35,7 @@ def execute():
         "--rm-type deepscaler "
         "--num-rollout 1 "
         "--rollout-batch-size 8 "
-        "--n-samples-per-prompt 8 "
+        "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 8192 "
         "--rollout-temperature 1 "
         "--global-batch-size 64 "
@@ -62,7 +62,10 @@ def execute():
     )
 
     sglang_args = (
-        "--rollout-num-gpus-per-engine 1 " "--sglang-chunked-prefill-size 4096 " "--sglang-mem-fraction-static 0.75 "
+        "--rollout-num-gpus-per-engine 1 "
+        "--sglang-chunked-prefill-size 4096 "
+        "--sglang-mem-fraction-static 0.75 "
+        "--sglang-cuda-graph-max-bs 32 "
     )
 
     ci_args = "--ci-test "
