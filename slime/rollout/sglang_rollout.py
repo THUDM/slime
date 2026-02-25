@@ -117,6 +117,12 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
     ), f"Sample status is {sample.status}"
 
+    # Lazy-load multimodal inputs to avoid OOM during Dataset init
+    if state.processor and sample.multimodal_inputs is None and sample.raw_prompt is not None:
+        from slime.utils.processing_utils import process_vision_info
+
+        sample.multimodal_inputs = process_vision_info(sample.raw_prompt, state.processor)
+
     if state.processor:
         processor_kwargs = build_processor_kwargs(sample.multimodal_inputs)
         processor_output = state.processor(text=sample.prompt, **processor_kwargs)
@@ -484,6 +490,7 @@ async def eval_rollout_single_dataset(
             tool_key=dataset_cfg.tool_key,
             apply_chat_template=args.apply_chat_template,
             apply_chat_template_kwargs=args.apply_chat_template_kwargs,
+            lazy_multimodal_load=args.lazy_multimodal_load,
         )
     dataset = EVAL_PROMPT_DATASET[cache_key]
 

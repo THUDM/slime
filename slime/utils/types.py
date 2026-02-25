@@ -13,6 +13,7 @@ class Sample:
     index: int | None = None
     # prompt
     prompt: str | list[dict[str, str]] = ""
+    raw_prompt: list[dict[str, str]] | None = None  # original conversation-format prompt for lazy multimodal loading
     tokens: list[int] = field(default_factory=list)
     multimodal_inputs: dict[str, Any] | None = None  # raw multimodal data, e.g. images, videos, etc.
     multimodal_train_inputs: dict[str, Any] | None = None  # processed multimodal data, e.g. pixel_values, etc.
