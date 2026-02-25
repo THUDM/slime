@@ -1,22 +1,17 @@
 diff --git a/python/sglang/srt/configs/model_config.py b/python/sglang/srt/configs/model_config.py
-index aa10cb08d..d41c31a09 100644
+index 6fbd1db82..f80ec11bb 100644
 --- a/python/sglang/srt/configs/model_config.py
 +++ b/python/sglang/srt/configs/model_config.py
-@@ -268,6 +268,12 @@ class ModelConfig:
-         ):
+@@ -274,6 +274,7 @@ class ModelConfig:
+ 
+         if is_draft_model and self.hf_config.architectures[0] in [
+             "DeepseekV3ForCausalLM",
++            "DeepseekV32ForCausalLM",
+             "GlmMoeDsaForCausalLM",
+         ]:
              self.hf_config.architectures[0] = "DeepseekV3ForCausalLMNextN"
- 
-+        if (
-+            is_draft_model
-+            and self.hf_config.architectures[0] == "DeepseekV32ForCausalLM"
-+        ):
-+            self.hf_config.architectures[0] = "DeepseekV3ForCausalLMNextN"
-+
-         if is_draft_model and self.hf_config.architectures[0] == "Glm4MoeForCausalLM":
-             self.hf_config.architectures[0] = "Glm4MoeForCausalLMNextN"
- 
 diff --git a/python/sglang/srt/disaggregation/decode.py b/python/sglang/srt/disaggregation/decode.py
-index 51af67636..3ec1778ed 100644
+index 1d8baf002..440579d3f 100644
 --- a/python/sglang/srt/disaggregation/decode.py
 +++ b/python/sglang/srt/disaggregation/decode.py
 @@ -21,6 +21,7 @@ Life cycle of a request in the decode server
@@ -27,7 +22,7 @@ index 51af67636..3ec1778ed 100644
  import time
  from collections import deque
  from dataclasses import dataclass
-@@ -315,6 +316,16 @@ class DecodePreallocQueue:
+@@ -336,6 +337,16 @@ class DecodePreallocQueue:
          )
          return kv_manager
  
@@ -44,7 +39,7 @@ index 51af67636..3ec1778ed 100644
      def add(self, req: Req, is_retracted: bool = False) -> None:
          """Add a request to the pending queue."""
          if self._check_if_req_exceed_kv_capacity(req):
-@@ -419,12 +430,37 @@ class DecodePreallocQueue:
+@@ -440,12 +451,37 @@ class DecodePreallocQueue:
              [decode_req.kv_receiver for decode_req in self.queue], self.gloo_group
          )
  
@@ -83,7 +78,7 @@ index 51af67636..3ec1778ed 100644
              elif poll == KVPoll.WaitingForInput:
                  decode_req.waiting_for_input = True
              elif poll == KVPoll.Failed:
-@@ -776,6 +812,13 @@ class DecodeTransferQueue:
+@@ -830,6 +866,13 @@ class DecodeTransferQueue:
              [decode_req.kv_receiver for decode_req in self.queue], self.gloo_group
          )
  
@@ -97,7 +92,7 @@ index 51af67636..3ec1778ed 100644
          transferred_reqs = []
          indices_to_remove = set()
          for i, (decode_req, poll) in enumerate(zip(self.queue, polls)):
-@@ -811,7 +854,33 @@ class DecodeTransferQueue:
+@@ -877,7 +920,33 @@ class DecodeTransferQueue:
                  KVPoll.WaitingForInput,
                  KVPoll.Transferring,
              ]:
@@ -132,7 +127,7 @@ index 51af67636..3ec1778ed 100644
              else:
                  raise ValueError(f"Unexpected poll case: {poll}")
  
-@@ -827,6 +896,14 @@ class DecodeTransferQueue:
+@@ -893,6 +962,14 @@ class DecodeTransferQueue:
  
          return transferred_reqs
  
@@ -147,7 +142,7 @@ index 51af67636..3ec1778ed 100644
  
  class SchedulerDisaggregationDecodeMixin:
  
-@@ -1004,7 +1081,15 @@ class SchedulerDisaggregationDecodeMixin:
+@@ -1072,7 +1149,15 @@ class SchedulerDisaggregationDecodeMixin:
          resumed_reqs = self.disagg_decode_prealloc_queue.resume_retracted_reqs()
          self.waiting_queue.extend(resumed_reqs)
          if len(self.disagg_decode_prealloc_queue.retracted_queue) > 0:
@@ -165,10 +160,10 @@ index 51af67636..3ec1778ed 100644
  
          if not hasattr(self, "polling_count"):
 diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
-index 32e8c0b69..dc93c5c5f 100644
+index d0d4efd95..2796402e0 100644
 --- a/python/sglang/srt/disaggregation/mooncake/conn.py
 +++ b/python/sglang/srt/disaggregation/mooncake/conn.py
-@@ -253,6 +253,19 @@ class MooncakeKVManager(CommonKVManager):
+@@ -260,6 +260,19 @@ class MooncakeKVManager(CommonKVManager):
                  self.kv_args.state_data_ptrs, self.kv_args.state_data_lens
              )
  
@@ -189,7 +184,7 @@ index 32e8c0b69..dc93c5c5f 100644
          if not transfer_blocks:
              return 0
 diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
-index a6eed743a..191b0977f 100644
+index fbc801635..ba4bd6fd2 100644
 --- a/python/sglang/srt/disaggregation/prefill.py
 +++ b/python/sglang/srt/disaggregation/prefill.py
 @@ -20,6 +20,7 @@ Life cycle of a request in the prefill server
@@ -200,7 +195,7 @@ index a6eed743a..191b0977f 100644
  import time
  from collections import deque
  from http import HTTPStatus
-@@ -250,6 +251,12 @@ class PrefillBootstrapQueue:
+@@ -276,6 +277,12 @@ class PrefillBootstrapQueue:
              [req.disagg_kv_sender for req in self.queue], self.gloo_group
          )
  
@@ -213,7 +208,7 @@ index a6eed743a..191b0977f 100644
          for i, (req, poll) in enumerate(zip(self.queue, polls)):
              if rids_to_check is not None:
                  # if req not in reqs_info_to_check, skip
-@@ -257,6 +264,27 @@ class PrefillBootstrapQueue:
+@@ -283,6 +290,27 @@ class PrefillBootstrapQueue:
                      continue
  
              if poll == KVPoll.Bootstrapping:
@@ -241,7 +236,7 @@ index a6eed743a..191b0977f 100644
                  continue
              elif poll == KVPoll.Failed:
                  error_message = f"Prefill bootstrap failed for request rank={self.tp_rank} {req.rid=} {req.bootstrap_room=}"
-@@ -306,6 +334,15 @@ class PrefillBootstrapQueue:
+@@ -335,6 +363,15 @@ class PrefillBootstrapQueue:
          else:
              return bootstrapped_reqs, failed_reqs
  
@@ -257,7 +252,7 @@ index a6eed743a..191b0977f 100644
  
  class SchedulerDisaggregationPrefillMixin:
      """
-@@ -535,6 +572,13 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -564,6 +601,13 @@ class SchedulerDisaggregationPrefillMixin:
              self.attn_tp_cpu_group,
          )
  
@@ -271,7 +266,7 @@ index a6eed743a..191b0977f 100644
          undone_reqs: List[Req] = []
          # Check .poll() for the reqs in disagg_prefill_inflight_queue. If Success, respond to the client and remove it from the queue
          for req, poll in zip(self.disagg_prefill_inflight_queue, polls):
-@@ -547,7 +591,30 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -576,7 +620,30 @@ class SchedulerDisaggregationPrefillMixin:
                  assert poll == KVPoll.Success or poll == KVPoll.Failed
  
              if poll in [KVPoll.WaitingForInput, KVPoll.Transferring]:
@@ -304,10 +299,10 @@ index a6eed743a..191b0977f 100644
                  release_kv_cache(req, self.tree_cache)  # unlock the tree
                  req.finished_reason = FINISH_LENGTH(length=0)
 diff --git a/python/sglang/srt/distributed/parallel_state.py b/python/sglang/srt/distributed/parallel_state.py
-index 0478526ef..cfb1aa669 100644
+index 8f1069c00..e47589295 100644
 --- a/python/sglang/srt/distributed/parallel_state.py
 +++ b/python/sglang/srt/distributed/parallel_state.py
-@@ -1797,7 +1797,10 @@ def get_tensor_model_parallel_world_size():
+@@ -1999,7 +1999,10 @@ def get_tensor_model_parallel_world_size():
  
  def get_tensor_model_parallel_rank():
      """Return my rank for the tensor model parallel group."""
@@ -318,20 +313,20 @@ index 0478526ef..cfb1aa669 100644
 +        return 0
  
  
- def get_pipeline_model_parallel_world_size():
+ # ATTN_TP
 diff --git a/python/sglang/srt/entrypoints/engine.py b/python/sglang/srt/entrypoints/engine.py
-index 6f69fd19b..da20ac2ed 100644
+index 0ed5a1b44..67e33c650 100644
 --- a/python/sglang/srt/entrypoints/engine.py
 +++ b/python/sglang/srt/entrypoints/engine.py
-@@ -49,6 +49,7 @@ from sglang.srt.managers.io_struct import (
-     InitWeightsUpdateGroupReqInput,
+@@ -52,6 +52,7 @@ from sglang.srt.managers.io_struct import (
      LoadLoRAAdapterReqInput,
      MultimodalDataInputFormat,
+     OpenSessionReqInput,
 +    PostProcessWeightsReqInput,
      ReleaseMemoryOccupationReqInput,
      ResumeMemoryOccupationReqInput,
      RpcReqInput,
-@@ -593,6 +594,24 @@ class Engine(EngineBase):
+@@ -641,6 +642,24 @@ class Engine(EngineBase):
              self.tokenizer_manager.update_weights_from_ipc(obj, None)
          )
  
@@ -357,10 +352,10 @@ index 6f69fd19b..da20ac2ed 100644
          """Get weights by parameter name."""
          obj = GetWeightsByNameReqInput(name=name, truncate_size=truncate_size)
 diff --git a/python/sglang/srt/entrypoints/http_server.py b/python/sglang/srt/entrypoints/http_server.py
-index 88705cc35..c8dc052f1 100644
+index 1d6816c01..60e14a00e 100644
 --- a/python/sglang/srt/entrypoints/http_server.py
 +++ b/python/sglang/srt/entrypoints/http_server.py
-@@ -107,6 +107,7 @@ from sglang.srt.managers.io_struct import (
+@@ -115,6 +115,7 @@ from sglang.srt.managers.io_struct import (
      OpenSessionReqInput,
      ParseFunctionCallReq,
      PauseGenerationReqInput,
@@ -368,11 +363,25 @@ index 88705cc35..c8dc052f1 100644
      ProfileReqInput,
      ReleaseMemoryOccupationReqInput,
      ResumeMemoryOccupationReqInput,
-@@ -957,6 +958,21 @@ async def update_weights_from_ipc(obj: UpdateWeightsFromIPCReqInput, request: Re
-     else:
+@@ -574,10 +575,8 @@ async def model_info():
+ @app.get("/weight_version")
+ async def weight_version():
+     """Get the current weight version."""
+-    raise HTTPException(
+-        status_code=404,
+-        detail="Endpoint '/get_weight_version' or '/weight_version' is deprecated. Please use '/model_info' instead.",
+-    )
++    result = await model_info()
++    return {"weight_version": result.get("weight_version", None)}
+ 
+ 
+ @app.get("/get_server_info")
+@@ -1084,6 +1083,23 @@ async def update_weights_from_ipc(obj: UpdateWeightsFromIPCReqInput, request: Re
          return ORJSONResponse(content, status_code=HTTPStatus.BAD_REQUEST)
  
+ 
 +@app.post("/post_process_weights")
++@auth_level(AuthLevel.ADMIN_OPTIONAL)
 +async def post_process_weights(req: PostProcessWeightsReqInput, request: Request):
 +    """
 +    Optional post-processing for updated weights (e.g., Marlin conversion).
@@ -387,14 +396,15 @@ index 88705cc35..c8dc052f1 100644
 +        content, status_code=200 if success else HTTPStatus.BAD_REQUEST
 +    )
 +
- 
++
  @app.post("/update_weight_version")
+ @auth_level(AuthLevel.ADMIN_OPTIONAL)
  async def update_weight_version(obj: UpdateWeightVersionReqInput, request: Request):
 diff --git a/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py b/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py
-index d6c499df0..565004260 100644
+index 1cdf65b91..4783cd18f 100644
 --- a/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py
 +++ b/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py
-@@ -613,7 +613,6 @@ def _get_k_and_s_triton(
+@@ -630,7 +630,6 @@ def _get_k_and_s_triton(
          page_indices,
          k_out,
          s_out,
@@ -402,7 +412,7 @@ index d6c499df0..565004260 100644
          page_size,
          buf_numel_per_page,
          index_head_dim,
-@@ -630,7 +629,6 @@ def _get_k_and_s_triton_kernel(
+@@ -647,7 +646,6 @@ def _get_k_and_s_triton_kernel(
      page_indices_ptr,
      k_out_ptr,
      s_out_ptr,
@@ -411,10 +421,10 @@ index d6c499df0..565004260 100644
      buf_numel_per_page: tl.constexpr,
      index_head_dim: tl.constexpr,
 diff --git a/python/sglang/srt/layers/attention/nsa/nsa_indexer.py b/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
-index c9e82e4b1..f2584546a 100644
+index ca54a931b..7a5b55c5d 100644
 --- a/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
 +++ b/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
-@@ -3,6 +3,7 @@ from __future__ import annotations
+@@ -4,6 +4,7 @@ import contextlib
  from abc import ABC, abstractmethod
  from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
  
@@ -422,185 +432,68 @@ index c9e82e4b1..f2584546a 100644
  import torch
  from einops import rearrange
  
-@@ -178,7 +179,7 @@ class Indexer(MultiPlatformOp):
+@@ -207,7 +208,7 @@ class Indexer(MultiPlatformOp):
              max_position=max_position_embeddings,
              base=rope_theta,  # type: ignore
              rope_scaling=rope_scaling,
--            is_neox_style=True,
-+            is_neox_style=True if os.environ.get("INDEXER_ROPE_NEOX_STYLE", "1") == "1" else False,
+-            is_neox_style=is_neox_style,
++            is_neox_style=True if os.environ.get("INDEXER_ROPE_NEOX_STYLE", "1") == "1" else is_neox_style,
              device=get_global_server_args().device,
          )
          self.block_size = block_size
-@@ -188,6 +189,9 @@ class Indexer(MultiPlatformOp):
-     @torch.compile(dynamic=True)
-     def _get_logits_head_gate(self, x: torch.Tensor, q_scale: torch.Tensor):
-         weights, _ = self.weights_proj(x.float())
-+        if weights.shape[1] < 32:
-+            assert 32 % weights.shape[1] == 0
-+            weights = weights.repeat_interleave(32 // weights.shape[1], dim=1)
-         weights = weights * self.n_heads**-0.5
-         weights = weights.unsqueeze(-1) * q_scale * self.softmax_scale
-         return weights
-@@ -837,6 +841,9 @@ class Indexer(MultiPlatformOp):
-         query, key = self._get_q_k_bf16(
-             q_lora, x, positions, enable_dual_stream, forward_batch=forward_batch
-         )
-+        if query.shape[1] < 32:
-+            assert 32 % query.shape[1] == 0
-+            query = query.repeat_interleave(32//query.shape[1], dim=1)
+@@ -982,6 +983,9 @@ class Indexer(MultiPlatformOp):
+             query, key = self._get_q_k_bf16(
+                 q_lora, x, positions, enable_dual_stream, forward_batch=forward_batch
+             )
++            if query.shape[1] < 32:
++                assert 32 % query.shape[1] == 0
++                query = query.repeat_interleave(32//query.shape[1], dim=1)
+             q_fp8, q_scale = act_quant(query, self.block_size, self.scale_fmt)
+             with torch.cuda.stream(self.alt_stream):
+                 k_fp8, k_scale = act_quant(key, self.block_size, self.scale_fmt)
+@@ -991,6 +995,9 @@ class Indexer(MultiPlatformOp):
+             query, key = self._get_q_k_bf16(
+                 q_lora, x, positions, enable_dual_stream, forward_batch=forward_batch
+             )
++            if query.shape[1] < 32:
++                assert 32 % query.shape[1] == 0
++                query = query.repeat_interleave(32//query.shape[1], dim=1)
  
-         if enable_dual_stream:
-             current_stream = torch.cuda.current_stream()
-diff --git a/python/sglang/srt/layers/communicator.py b/python/sglang/srt/layers/communicator.py
-index 15df851eb..1636ed706 100644
---- a/python/sglang/srt/layers/communicator.py
-+++ b/python/sglang/srt/layers/communicator.py
-@@ -371,10 +371,13 @@ class LayerCommunicator:
-         residual: torch.Tensor,
-         forward_batch: ForwardBatch,
-         captured_last_layer_outputs: Optional[List[torch.Tensor]] = None,
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ):
-         hidden_states, residual = self.prepare_attn(
--            hidden_states, residual, forward_batch, **kwargs
-+            hidden_states,
-+            residual,
-+            forward_batch,
-+            post_residual_addition=post_residual_addition,
-         )
-         if captured_last_layer_outputs is not None:
-             gathered_last_layer_output = self._communicate_simple_fn(
-@@ -394,7 +397,7 @@ class LayerCommunicator:
-         residual: torch.Tensor,
-         forward_batch: ForwardBatch,
-         quant_format: str = "",
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ):
-         if get_attn_tp_context().input_scattered:
-             hidden_states, residual = self._tp_reduce_scatter(
-@@ -444,7 +447,7 @@ class LayerCommunicator:
-                         )
- 
-                     else:
--                        hidden_states = self.input_layernorm(hidden_states, **kwargs)
-+                        hidden_states = self.input_layernorm(hidden_states)
-                 else:
- 
-                     if _use_aiter and _is_gfx95_supported and ("mxfp4" in quant_format):
-@@ -478,7 +481,7 @@ class LayerCommunicator:
-                         hidden_states, residual = self.input_layernorm(
-                             hidden_states,
-                             residual,
--                            **kwargs,
-+                            post_residual_addition,
-                         )
- 
-         hidden_states = self._communicate_simple_fn(
+             if enable_dual_stream:
+                 current_stream = torch.cuda.current_stream()
 diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
-index 7bef9d2ab..5926ff7f5 100644
+index 39832c45a..c3d3c6b54 100644
 --- a/python/sglang/srt/layers/layernorm.py
 +++ b/python/sglang/srt/layers/layernorm.py
-@@ -83,15 +83,12 @@ class RMSNorm(MultiPlatformOp):
+@@ -93,20 +93,17 @@ class RMSNorm(MultiPlatformOp):
          eps: float = 1e-6,
          var_hidden_size: Optional[int] = None,
          cast_x_before_out_mul: bool = False,
 -        fp32_residual: bool = False,
++        fp32_residual: bool = True,
+         has_weight: bool = True,
 -        weight_dtype: Optional = None,
 -        override_orig_dtype: Optional = None,
-+        fp32_residual: bool = True,
      ) -> None:
          super().__init__()
+         self.has_weight = has_weight
          self.cast_x_before_out_mul = cast_x_before_out_mul
          self.fp32_residual = fp32_residual
 -        self.override_orig_dtype = override_orig_dtype
--        self.weight = nn.Parameter(torch.ones(hidden_size, dtype=weight_dtype))
-+        self.weight = nn.Parameter(torch.ones(hidden_size))
+         if self.has_weight:
+-            self.weight = nn.Parameter(torch.ones(hidden_size, dtype=weight_dtype))
++            self.weight = nn.Parameter(torch.ones(hidden_size))
+         else:
+-            self.weight = torch.ones(hidden_size, dtype=weight_dtype)
++            self.weight = torch.ones(hidden_size)
          self.variance_epsilon = eps
          self.hidden_size = hidden_size
          self.variance_size_override = (
-@@ -104,16 +101,16 @@ class RMSNorm(MultiPlatformOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         if self.variance_size_override is not None:
--            return self.forward_native(x, residual, **kwargs)
-+            return self.forward_native(x, residual, post_residual_addition)
-         if is_batch_invariant_mode_enabled():
-             if (
-                 residual is not None
-                 or get_global_server_args().rl_on_policy_target == "fsdp"
-             ):
--                return self.forward_native(x, residual, **kwargs)
-+                return self.forward_native(x, residual, post_residual_addition)
-             return rms_norm_batch_invariant(
-                 x,
-                 self.weight.data,
-@@ -124,7 +121,6 @@ class RMSNorm(MultiPlatformOp):
-             # but right now we can only have hidden_states+(residual+post_residual_addition).
-             # (hidden_states+residual)+post_residual_addition != hidden_states+(residual+post_residual_addition),
-             # we probably need to add another parameter to fused_add_rmsnorm
--            post_residual_addition = kwargs.get("post_residual_addition")
-             if post_residual_addition is not None:
-                 residual = residual + post_residual_addition
-             fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
-@@ -136,9 +132,11 @@ class RMSNorm(MultiPlatformOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         if residual is not None:
-+            if post_residual_addition is not None:
-+                residual = residual + post_residual_addition
-             out, _, residual_out = torch_npu.npu_add_rms_norm(
-                 residual, x, self.weight.data, self.variance_epsilon
-             )
-@@ -149,9 +147,11 @@ class RMSNorm(MultiPlatformOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         if residual is not None:
-+            if post_residual_addition is not None:
-+                residual = residual + post_residual_addition
-             residual_out = torch.empty_like(x)
-             output = torch.empty_like(x)
-             fused_add_rms_norm(
-@@ -169,12 +169,14 @@ class RMSNorm(MultiPlatformOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         if not x.is_contiguous():
-             # NOTE: Remove this if aiter kernel supports discontinuous input
-             x = x.contiguous()
-         if residual is not None:
-+            if post_residual_addition is not None:
-+                residual = residual + post_residual_addition
-             out = torch.empty_like(x)
-             residual_out = torch.empty_like(x)
-             fused_add_rms_norm(
-@@ -189,27 +191,23 @@ class RMSNorm(MultiPlatformOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
+@@ -219,16 +216,19 @@ class RMSNorm(MultiPlatformOp):
      ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
          if not x.is_contiguous():
              x = x.contiguous()
 -        orig_dtype = self.override_orig_dtype or x.dtype
--        post_residual_addition = kwargs.get("post_residual_addition")
 +        orig_dtype = x.dtype
 +
 +        if residual is not None and not self.fp32_residual:
@@ -610,263 +503,32 @@ index 7bef9d2ab..5926ff7f5 100644
 +            residual = x.clone()
          x = x.to(torch.float32)
 -        if residual is not None:
--            x = (
--                x
--                + residual.to(torch.float32)
--                + (
--                    post_residual_addition.to(torch.float32)
--                    if post_residual_addition is not None
--                    else 0.0
--                )
--            )
++        if residual is not None and self.fp32_residual:
+             x = x + residual.to(torch.float32)
+             if post_residual_addition is not None:
+                 x = x + post_residual_addition.to(torch.float32)
 -            if self.fp32_residual:
 -                residual = x.clone()
 -            else:
 -                residual = x.to(orig_dtype)
-+        if residual is not None and self.fp32_residual:
-+            x = x + residual.to(torch.float32)
-+            if post_residual_addition is not None:
-+                x = x + post_residual_addition.to(torch.float32)
 +            residual = x.to(orig_dtype)
  
          hidden_size = x.shape[-1]
          if hidden_size != self.hidden_size:
-@@ -246,10 +244,12 @@ class RMSNorm(MultiPlatformOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         if _is_cpu_amx_available:
-             if residual is not None:
-+                if post_residual_addition is not None:
-+                    residual = residual + post_residual_addition
-                 torch.ops.sgl_kernel.fused_add_rmsnorm_cpu(
-                     x, residual, self.weight.data, self.variance_epsilon
-                 )
-@@ -258,17 +258,19 @@ class RMSNorm(MultiPlatformOp):
-                 x, self.weight.data, self.variance_epsilon
-             )
-         else:
--            return self.forward_native(x, residual, **kwargs)
-+            return self.forward_native(x, residual, post_residual_addition)
- 
-     def forward_xpu(
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         if self.variance_size_override is not None:
--            return self.forward_native(x, residual, **kwargs)
-+            return self.forward_native(x, residual, post_residual_addition)
-         if residual is not None:
-+            if post_residual_addition is not None:
-+                residual = residual + post_residual_addition
-             fused_add_rmsnorm(x, residual, self.weight.data, self.variance_epsilon)
-             return x, residual
-         out = rmsnorm(x, self.weight.data, self.variance_epsilon)
-@@ -278,6 +280,7 @@ class RMSNorm(MultiPlatformOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         """
-         Forward method with allreduce fusion, prioritizing flashinfer fused operations
-@@ -289,6 +292,8 @@ class RMSNorm(MultiPlatformOp):
-             )
+@@ -314,7 +314,7 @@ class RMSNorm(MultiPlatformOp):
  
              if get_tensor_model_parallel_world_size() > 1:
-+                if post_residual_addition is not None:
+                 if post_residual_addition is not None:
+-                    residual = residual + post_residual_addition
 +                    x = x + post_residual_addition
                  fused_result = flashinfer_allreduce_residual_rmsnorm(
                      input_tensor=x,
                      residual=residual,
-@@ -298,7 +303,7 @@ class RMSNorm(MultiPlatformOp):
-                 if fused_result[0] is not None:
-                     return fused_result
- 
--        return self.forward(x, residual)
-+        return self.forward(x, residual, post_residual_addition)
- 
- 
- class LayerNorm(MultiPlatformOp):
-@@ -323,7 +328,6 @@ class LayerNorm(MultiPlatformOp):
-     def forward_cuda(
-         self,
-         x: torch.Tensor,
--        **kwargs,
-     ) -> torch.Tensor:
-         if (
-             _flashinfer_layernorm_available
-@@ -332,12 +336,11 @@ class LayerNorm(MultiPlatformOp):
-         ):
-             return layernorm(x, self.weight, self.bias, self.variance_epsilon)
-         else:
--            return self.forward_native(x, **kwargs)
-+            return self.forward_native(x)
- 
-     def forward_native(
-         self,
-         x: torch.Tensor,
--        **kwargs,
-     ) -> torch.Tensor:
-         weight = self.weight if self.elementwise_affine else None
-         bias = self.bias if self.use_bias else None
-@@ -354,28 +357,25 @@ class LayerNorm(MultiPlatformOp):
-     def forward_hip(
-         self,
-         x: torch.Tensor,
--        **kwargs,
-     ) -> torch.Tensor:
--        return self.forward_native(x, **kwargs)
-+        return self.forward_native(x)
- 
-     def forward_npu(
-         self,
-         x: torch.Tensor,
--        **kwargs,
-     ) -> torch.Tensor:
--        return self.forward_native(x, **kwargs)
-+        return self.forward_native(x)
- 
-     def forward_cpu(
-         self,
-         x: torch.Tensor,
--        **kwargs,
-     ) -> torch.Tensor:
-         if _is_cpu_amx_available:
-             return torch.ops.sgl_kernel.layernorm_cpu(
-                 x, self.weight.data, self.variance_epsilon
-             )
-         else:
--            return self.forward_native(x, **kwargs)
-+            return self.forward_native(x)
- 
- 
- class GemmaRMSNorm(MultiPlatformOp):
-@@ -396,9 +396,11 @@ class GemmaRMSNorm(MultiPlatformOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         if residual is not None:
-+            if post_residual_addition is not None:
-+                residual = residual + post_residual_addition
-             gemma_fused_add_rmsnorm(
-                 x, residual, self.weight.data, self.variance_epsilon
-             )
-@@ -410,11 +412,13 @@ class GemmaRMSNorm(MultiPlatformOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         orig_dtype = x.dtype
-         if residual is not None:
-             x = x + residual
-+            if post_residual_addition is not None:
-+                x = x + post_residual_addition
-             residual = x
- 
-         x = x.float()
-@@ -428,18 +432,20 @@ class GemmaRMSNorm(MultiPlatformOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
--        return self._forward_impl(x, residual, **kwargs)
-+        return self._forward_impl(x, residual, post_residual_addition)
- 
-     def forward_cpu(
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         if _is_cpu_amx_available:
-             if residual is not None:
-+                if post_residual_addition is not None:
-+                    residual = residual + post_residual_addition
-                 torch.ops.sgl_kernel.gemma_fused_add_rmsnorm_cpu(
-                     x, residual, self.weight.data, self.variance_epsilon
-                 )
-@@ -447,16 +453,18 @@ class GemmaRMSNorm(MultiPlatformOp):
-             return torch.ops.sgl_kernel.gemma_rmsnorm_cpu(
-                 x, self.weight.data, self.variance_epsilon
-             )
--        return self.forward_native(x, residual, **kwargs)
-+        return self.forward_native(x, residual, post_residual_addition)
- 
-     def forward_npu(
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
-         if residual is not None:
-             x = x + residual
-+            if post_residual_addition is not None:
-+                x = x + post_residual_addition
-             residual = x
- 
-         x, _ = torch_npu.npu_gemma_rms_norm(x, self.weight, self.variance_epsilon)
-@@ -466,9 +474,9 @@ class GemmaRMSNorm(MultiPlatformOp):
-         self,
-         x: torch.Tensor,
-         residual: Optional[torch.Tensor] = None,
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
--        return self._forward_impl(x, residual, **kwargs)
-+        return self._forward_impl(x, residual, post_residual_addition)
- 
- 
- class Gemma3RMSNorm(MultiPlatformOp):
-@@ -481,22 +489,22 @@ class Gemma3RMSNorm(MultiPlatformOp):
-     def _norm(self, x):
-         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
- 
--    def forward_native(self, x, **kwargs):
-+    def forward_native(self, x):
-         output = self._norm(x.float())
-         # Llama does x.to(float16) * w whilst Gemma3 is (x * w).to(float16)
-         # See https://github.com/huggingface/transformers/pull/29402
-         output = output * (1.0 + self.weight.float())
-         return output.type_as(x)
- 
--    def forward_cpu(self, x, **kwargs):
-+    def forward_cpu(self, x):
-         if _is_cpu_amx_available and x.stride(-1) == 1:
-             return torch.ops.sgl_kernel.gemma3_rmsnorm_cpu(x, self.weight, self.eps)
--        return self.forward_native(x, **kwargs)
-+        return self.forward_native(x)
- 
--    def forward_cuda(self, x, **kwargs):
--        return self.forward_native(x, **kwargs)
-+    def forward_cuda(self, x):
-+        return self.forward_native(x)
- 
--    def forward_npu(self, x, **kwargs):
-+    def forward_npu(self, x):
-         output, _ = torch_npu.npu_gemma_rms_norm(x, self.weight, self.eps)
-         return output
- 
 diff --git a/python/sglang/srt/layers/logits_processor.py b/python/sglang/srt/layers/logits_processor.py
-index fa7431048..cd33ea735 100644
+index aff05bf42..130359232 100644
 --- a/python/sglang/srt/layers/logits_processor.py
 +++ b/python/sglang/srt/layers/logits_processor.py
-@@ -878,11 +878,6 @@ class LogitsProcessor(nn.Module):
+@@ -872,11 +872,6 @@ class LogitsProcessor(nn.Module):
                      None,  # bias
                      True,  # is_vnni
                  )
@@ -879,7 +541,7 @@ index fa7431048..cd33ea735 100644
                  logits = torch.matmul(
                      hidden_states.to(lm_head.weight.dtype), lm_head.weight.T
 diff --git a/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py b/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py
-index a1885fade..14d692365 100644
+index ebdbb42c6..714ffbe0e 100644
 --- a/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py
 +++ b/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py
 @@ -14,6 +14,7 @@ import torch.nn.functional as F
@@ -890,7 +552,7 @@ index a1885fade..14d692365 100644
  from sglang.srt.utils import (
      cpu_has_amx_support,
      get_bool_env_var,
-@@ -573,7 +574,10 @@ def fused_experts_impl(
+@@ -617,7 +618,10 @@ def fused_experts_impl(
                  ).squeeze(dim=1)
              else:
                  # According to micro benchmark results, torch.compile can get better performance for small token.
@@ -903,12 +565,21 @@ index a1885fade..14d692365 100644
                          intermediate_cache3.view(*intermediate_cache3.shape),
                          out_hidden_states[begin_chunk_idx:end_chunk_idx],
 diff --git a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
-index 839463518..7948779aa 100644
+index de8a07ab3..643f03a53 100644
 --- a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
 +++ b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
-@@ -647,7 +647,7 @@ class FusedMoE(torch.nn.Module):
-                     "CompressedTensorsWNA16MarlinMoEMethod",
-                     "CompressedTensorsWNA16MoEMethod",
+@@ -696,7 +696,7 @@ class FusedMoE(torch.nn.Module):
+                     "CompressedTensorsWNA16MoE",
+                     "CompressedTensorsWNA16TritonMoE",
+                 ]
+-            )
++            ) and "zero" not in weight_name
+             else loaded_weight
+         )
+ 
+@@ -915,7 +915,7 @@ class FusedMoE(torch.nn.Module):
+                     "CompressedTensorsWNA16MoE",
+                     "CompressedTensorsWNA16TritonMoE",
                  ]
 -            )
 +            ) and "zero" not in weight_name
@@ -987,24 +658,24 @@ index 00bd68755..5a3ca8a67 100644
  
      def get_routed_experts(
 diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
-index b4bdc41b3..3b895ff6a 100644
+index 4cbfed6f9..cd6c825f6 100644
 --- a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
 +++ b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
-@@ -442,7 +442,7 @@ class CompressedTensorsConfig(QuantizationConfig):
+@@ -499,7 +499,7 @@ class CompressedTensorsConfig(QuantizationConfig):
          )
          is_static = not weight_quant.dynamic
  
 -        return is_channel_group and input_quant_none and is_symmetric and is_static
 +        return is_channel_group and input_quant_none and is_static
  
-     def _get_scheme_from_parts(
-         self, weight_quant: BaseModel, input_quant: BaseModel
-diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors_moe.py b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors_moe.py
-index c5e5a11fc..c46526ecc 100644
---- a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors_moe.py
-+++ b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors_moe.py
-@@ -30,7 +30,10 @@ from sglang.srt.layers.quantization.fp8_utils import (
-     normalize_e4m3fn_to_e4m3fnuz,
+     def _is_mxint4a16(self, weight_quant: BaseModel, input_quant: BaseModel) -> bool:
+         input_quant_none = input_quant is None
+diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py b/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py
+index 6264f36d0..bef31a374 100644
+--- a/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py
++++ b/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py
+@@ -17,7 +17,10 @@ from sglang.srt.layers.quantization.compressed_tensors.schemes import (
+     CompressedTensorsMoEScheme,
  )
  from sglang.srt.layers.quantization.gptq import gptq_marlin_moe_repack
 -from sglang.srt.layers.quantization.marlin_utils import marlin_moe_permute_scales
@@ -1012,10 +683,10 @@ index c5e5a11fc..c46526ecc 100644
 +    marlin_moe_permute_scales,
 +    moe_awq_to_marlin_zero_points
 +)
- from sglang.srt.layers.quantization.utils import (
-     all_close_1d,
-     per_tensor_dequantize,
-@@ -865,7 +868,7 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
+ from sglang.srt.layers.quantization.utils import replace_parameter
+ from sglang.srt.utils import get_bool_env_var, is_cuda, is_hip, set_weight_attrs
+ 
+@@ -64,7 +67,7 @@ class CompressedTensorsWNA16MoE(CompressedTensorsMoEScheme):
          self.strategy = config.strategy
          self.group_size = config.group_size
          self.actorder = config.actorder
@@ -1024,7 +695,7 @@ index c5e5a11fc..c46526ecc 100644
  
          if not (
              self.quant_config.quant_format == CompressionFormat.pack_quantized.value
-@@ -920,7 +923,7 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
+@@ -124,7 +127,7 @@ class CompressedTensorsWNA16MoE(CompressedTensorsMoEScheme):
  
          # In the case where we have actorder/g_idx,
          # we do not partition the w2 scales
@@ -1033,7 +704,7 @@ index c5e5a11fc..c46526ecc 100644
  
          if load_full_w2:
              w2_scales_size = intermediate_size_per_partition * layer.moe_tp_size
-@@ -968,6 +971,32 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
+@@ -172,6 +175,32 @@ class CompressedTensorsWNA16MoE(CompressedTensorsMoEScheme):
          layer.register_parameter("w13_weight_shape", w13_weight_shape)
          set_weight_attrs(w13_weight_shape, extra_weight_attrs)
  
@@ -1066,83 +737,28 @@ index c5e5a11fc..c46526ecc 100644
          w13_g_idx = torch.nn.Parameter(
              torch.empty(
                  num_experts,
-@@ -1016,13 +1045,40 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
-         layer.a2_scale = None
-         layer.marlin_state = GPTQMarlinState.REPACK
+@@ -225,11 +254,14 @@ class CompressedTensorsWNA16MoE(CompressedTensorsMoEScheme):
  
-+        if not hasattr(layer, "_original_shapes"):
-+            layer._original_shapes = {}
-+
-+        # Force record: these are the target GPTQ shapes for rollback.
-+        layer._original_shapes["w13_weight_packed"] = tuple(w13_weight.shape)
+         # Force record: these are the target GPTQ shapes for rollback.
+         layer._original_shapes["w13_weight_packed"] = tuple(w13_weight.shape)
+-        layer._original_shapes["w2_weight_packed"] = tuple(w2_weight.shape)
 +        layer._original_shapes["w13_weight_scale"] = tuple(w13_scale.shape)
 +        if not self.sym:
 +            layer._original_shapes["w13_weight_zero_point"] = w13_qzeros.shape
-+
+ 
+-        # Also record the shapes of the scales.
 +        layer._original_shapes["w2_weight_packed"] = tuple(w2_weight.shape)
-+        layer._original_shapes["w2_weight_scale"] = tuple(w2_scale.shape)
+         layer._original_shapes["w2_weight_scale"] = tuple(w2_scale.shape)
+-        layer._original_shapes["w13_weight_scale"] = tuple(w13_scale.shape)
 +        if not self.sym:
 +            layer._original_shapes["w2_weight_zero_point"] = tuple(w2_qzeros.shape)
-+
+ 
      def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
-+        # Skip if the layer is already converted to Marlin format to prevent double-packing.
-+        if getattr(layer, "is_marlin_converted", False):
-+            return
-+
-+        if not hasattr(layer, "_original_shapes"):
-+            layer._original_shapes = {}
  
-         def replace_tensor(name, new_t):
-+            target_attr = getattr(layer, name)
-+
-+            # Only save if the key doesn't exist to prevent overwriting with Marlin shapes.
-+            if name not in layer._original_shapes:
-+                # This is a safety check; `create_weights` usually handles this already.
-+                layer._original_shapes[name] = tuple(target_attr.shape)
-+
-             # It is important to use resize_() here since it ensures
-             # the same buffer is reused
--            getattr(layer, name).resize_(new_t.shape)
--            getattr(layer, name).copy_(new_t)
-+            target_attr.resize_(new_t.shape)
-+            target_attr.copy_(new_t)
-             del new_t
+@@ -334,6 +366,24 @@ class CompressedTensorsWNA16MoE(CompressedTensorsMoEScheme):
+         )
+         replace_tensor("w2_weight_scale", marlin_w2_scales)
  
-         num_experts = layer.w13_weight_g_idx.shape[0]
-@@ -1078,7 +1134,7 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
-             layer.w13_weight_packed.shape[2],
-             self.num_bits,
-         )
--        replace_parameter(layer, "w13_weight_packed", marlin_w13_qweight)
-+        replace_tensor("w13_weight_packed", marlin_w13_qweight)
-         marlin_w2_qweight = gptq_marlin_moe_repack(
-             layer.w2_weight_packed,
-             layer.w2_g_idx_sort_indices,
-@@ -1086,7 +1142,7 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
-             layer.w2_weight_packed.shape[2],
-             self.num_bits,
-         )
--        replace_parameter(layer, "w2_weight_packed", marlin_w2_qweight)
-+        replace_tensor("w2_weight_packed", marlin_w2_qweight)
-         # Repack scales
-         marlin_w13_scales = marlin_moe_permute_scales(
-             layer.w13_weight_scale,
-@@ -1094,7 +1150,7 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
-             layer.w13_weight_scale.shape[2],
-             self.group_size,
-         )
--        replace_parameter(layer, "w13_weight_scale", marlin_w13_scales)
-+        replace_tensor("w13_weight_scale", marlin_w13_scales)
- 
-         marlin_w2_scales = marlin_moe_permute_scales(
-             layer.w2_weight_scale,
-@@ -1103,7 +1159,40 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
-             layer.w2_weight_scale.shape[2],
-             self.group_size,
-         )
--        replace_parameter(layer, "w2_weight_scale", marlin_w2_scales)
-+        replace_tensor("w2_weight_scale", marlin_w2_scales)
-+
 +        # Repack zero
 +        if not self.sym:
 +            marlin_w13_zp = moe_awq_to_marlin_zero_points(
@@ -1161,24 +777,10 @@ index c5e5a11fc..c46526ecc 100644
 +            )
 +            replace_tensor("w2_weight_zero_point", marlin_w2_zp)
 +
-+        layer.is_marlin_converted = True
-+
-+    def restore_weights_before_loading(self, layer: torch.nn.Module):
-+        """Forcibly resize parameters back to their original shapes (e.g., GPTQ format) before loading weights."""
-+        if not hasattr(layer, "_original_shapes"):
-+            return
-+
-+        for name, orig_shape in layer._original_shapes.items():
-+            param = getattr(layer, name, None)
-+
-+            if param is not None and param.shape != orig_shape:
-+                param.resize_(orig_shape)
-+
-+        layer.is_marlin_converted = False
+         layer.is_marlin_converted = True
  
-     def create_moe_runner(
-         self, layer: torch.nn.Module, moe_runner_config: MoeRunnerConfig
-@@ -1154,6 +1243,8 @@ class CompressedTensorsWNA16MoEMethod(CompressedTensorsMoEMethod):
+     def restore_weights_before_loading(self, layer: torch.nn.Module):
+@@ -399,6 +449,8 @@ class CompressedTensorsWNA16MoE(CompressedTensorsMoEScheme):
              g_idx2=layer.w2_weight_g_idx,
              sort_indices1=layer.w13_g_idx_sort_indices,
              sort_indices2=layer.w2_g_idx_sort_indices,
@@ -1188,10 +790,10 @@ index c5e5a11fc..c46526ecc 100644
              is_k_full=self.is_k_full,
              routed_scaling_factor=self.moe_runner_config.routed_scaling_factor,
 diff --git a/python/sglang/srt/layers/rotary_embedding.py b/python/sglang/srt/layers/rotary_embedding.py
-index 480579e01..dd8ca7d4f 100644
+index ae0614635..32171c9c1 100644
 --- a/python/sglang/srt/layers/rotary_embedding.py
 +++ b/python/sglang/srt/layers/rotary_embedding.py
-@@ -136,9 +136,7 @@ class RotaryEmbedding(MultiPlatformOp):
+@@ -150,9 +150,7 @@ class RotaryEmbedding(MultiPlatformOp):
  
          if get_global_server_args().rl_on_policy_target is not None:
              self._forward_method = self.forward_native
@@ -1202,7 +804,7 @@ index 480579e01..dd8ca7d4f 100644
          self.position_cos, self.position_sin = None, None
  
      def _compute_inv_freq(self, base: Union[int, float]) -> torch.Tensor:
-@@ -1578,6 +1576,9 @@ class MRotaryEmbedding(RotaryEmbedding):
+@@ -1778,6 +1776,9 @@ class MRotaryEmbedding(RotaryEmbedding):
          key: torch.Tensor,
          fused_set_kv_buffer_arg: Optional[FusedSetKVBufferArg] = None,
      ) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -1213,34 +815,30 @@ index 480579e01..dd8ca7d4f 100644
          assert (
              fused_set_kv_buffer_arg is None
 diff --git a/python/sglang/srt/layers/sampler.py b/python/sglang/srt/layers/sampler.py
-index 55bef5652..35ad68b1c 100644
+index f78d83d79..f1d577453 100644
 --- a/python/sglang/srt/layers/sampler.py
 +++ b/python/sglang/srt/layers/sampler.py
-@@ -108,16 +108,11 @@ class Sampler(nn.Module):
-             if return_logprob and SGLANG_RETURN_ORIGINAL_LOGPROB:
-                 probs_without_temp_scaling = torch.softmax(logits, dim=-1)
- 
--            if get_global_server_args().rl_on_policy_target is not None:
+@@ -122,14 +122,9 @@ class Sampler(nn.Module):
+             # In RL on-policy mode, we use log_softmax to compute logprobs to match the trainer.
+             logprobs_via_logsoftmax_kernel = None
+             if self.rl_on_policy_target is not None:
+-                # TODO: use more inplace ops to save memory
 -                logits_div_temperature = (
 -                    logits.bfloat16().div(sampling_info.temperatures).bfloat16()
 -                )
--                logprobs_via_logsoftmax_kernel = torch.log_softmax(
+                 logprobs_via_logsoftmax_kernel = torch.log_softmax(
 -                    logits_div_temperature, dim=-1
--                )
--
-             # Post process logits
-             logits.div_(sampling_info.temperatures)
-+            if get_global_server_args().rl_on_policy_target is not None:
-+                logprobs_via_logsoftmax_kernel = torch.log_softmax(logits, dim=-1)
-+
-             # For ascend backend, softmax is not needed before sampling
-             if not get_global_server_args().sampling_backend == "ascend" or (
-                 return_logprob and not SGLANG_RETURN_ORIGINAL_LOGPROB
++                    logits / sampling_info.temperatures, dim=-1
+                 )
+-                del logits_div_temperature
+ 
+             if self.use_ascend_backend:
+                 # Ascend backend: sample from logits directly.
 diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
-index 2ecd8542f..2a2e011ea 100644
+index ff1774567..5aa2e3b85 100644
 --- a/python/sglang/srt/managers/io_struct.py
 +++ b/python/sglang/srt/managers/io_struct.py
-@@ -1292,6 +1292,19 @@ class UpdateWeightsFromIPCReqOutput(BaseReq):
+@@ -1402,6 +1402,19 @@ class UpdateWeightsFromIPCReqOutput(BaseReq):
      success: bool
      message: str
  
@@ -1260,7 +858,7 @@ index 2ecd8542f..2a2e011ea 100644
  
  @dataclass
  class InitWeightsSendGroupForRemoteInstanceReqOutput(BaseReq):
-@@ -1667,6 +1680,10 @@ class GetLoadReqOutput(BaseReq):
+@@ -1802,6 +1815,10 @@ class GetLoadReqOutput(BaseReq):
      num_waiting_reqs: int
      num_tokens: int
      ts_tic: float
@@ -1272,12 +870,12 @@ index 2ecd8542f..2a2e011ea 100644
  
  @dataclass
 diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
-index d423e61d7..d1f54a832 100644
+index c07995798..dd8ca7167 100644
 --- a/python/sglang/srt/managers/schedule_batch.py
 +++ b/python/sglang/srt/managers/schedule_batch.py
-@@ -1779,7 +1779,10 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
-                 selected_indices=sorted_indices, buf_multiplier=buf_multiplier
-             )
+@@ -1869,7 +1869,10 @@ class ScheduleBatch(ScheduleBatchDisaggregationDecodeMixin):
+         while first_iter or (
+             not self.check_decode_mem(selected_indices=sorted_indices)
          ):
 -            if len(sorted_indices) == 1:
 +            # We should allow all requests to be retracted in decode disaggregation mode
@@ -1288,10 +886,10 @@ index d423e61d7..d1f54a832 100644
                  break
  
 diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
-index 92d286897..43bfab691 100644
+index a9ff0ac94..a50dd5122 100644
 --- a/python/sglang/srt/managers/scheduler.py
 +++ b/python/sglang/srt/managers/scheduler.py
-@@ -98,6 +98,7 @@ from sglang.srt.managers.io_struct import (
+@@ -114,6 +114,7 @@ from sglang.srt.managers.io_struct import (
      OpenSessionReqInput,
      OpenSessionReqOutput,
      PauseGenerationReqInput,
@@ -1299,7 +897,7 @@ index 92d286897..43bfab691 100644
      ProfileReq,
      ReleaseMemoryOccupationReqInput,
      ResumeMemoryOccupationReqInput,
-@@ -1060,6 +1061,7 @@ class Scheduler(
+@@ -1063,6 +1064,7 @@ class Scheduler(
                  ),
                  (UpdateWeightsFromTensorReqInput, self.update_weights_from_tensor),
                  (UpdateWeightsFromIPCReqInput, self.update_weights_from_ipc),
@@ -1308,10 +906,10 @@ index 92d286897..43bfab691 100644
                  (ReleaseMemoryOccupationReqInput, self.release_memory_occupation),
                  (ResumeMemoryOccupationReqInput, self.resume_memory_occupation),
 diff --git a/python/sglang/srt/managers/scheduler_metrics_mixin.py b/python/sglang/srt/managers/scheduler_metrics_mixin.py
-index d44ff6027..3fad54598 100644
+index 30b2732b9..91ea814b0 100644
 --- a/python/sglang/srt/managers/scheduler_metrics_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_metrics_mixin.py
-@@ -553,12 +553,48 @@ class SchedulerMetricsMixin:
+@@ -609,12 +609,48 @@ class SchedulerMetricsMixin:
          num_tokens += sum(req.seqlen for queue in waiting_queues for req in queue)
          num_waiting_reqs = sum(len(queue) for queue in waiting_queues)
  
@@ -1359,9 +957,9 @@ index d44ff6027..3fad54598 100644
 +            running_details=running_details,
          )
  
-     @contextmanager
+     def get_loads(self: Scheduler, req: GetLoadsReqInput = None) -> GetLoadsReqOutput:
 diff --git a/python/sglang/srt/managers/scheduler_output_processor_mixin.py b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
-index e40586c24..243e2b0c2 100644
+index 482bc6ca6..bda193935 100644
 --- a/python/sglang/srt/managers/scheduler_output_processor_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
 @@ -10,6 +10,7 @@ from sglang.srt.disaggregation.utils import DisaggregationMode
@@ -1372,7 +970,7 @@ index e40586c24..243e2b0c2 100644
  from sglang.srt.managers.io_struct import (
      AbortReq,
      BatchEmbeddingOutput,
-@@ -1070,7 +1071,7 @@ class SchedulerOutputProcessorMixin:
+@@ -1134,7 +1135,7 @@ class SchedulerOutputProcessorMixin:
                  req.log_time_stats()
  
          # Send to detokenizer
@@ -1380,7 +978,7 @@ index e40586c24..243e2b0c2 100644
 +        if rids or is_idle_batch:
              if self.model_config.is_multimodal_gen:
                  return
- 
+             self.send_to_detokenizer.send_output(
 diff --git a/python/sglang/srt/managers/scheduler_update_weights_mixin.py b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 index 293a84350..8ee36c794 100644
 --- a/python/sglang/srt/managers/scheduler_update_weights_mixin.py
@@ -1457,10 +1055,10 @@ index 293a84350..8ee36c794 100644
  
      def check_weights(self: Scheduler, recv_req: CheckWeightsReqInput):
 diff --git a/python/sglang/srt/managers/tokenizer_communicator_mixin.py b/python/sglang/srt/managers/tokenizer_communicator_mixin.py
-index e5d42bed8..412293b30 100644
+index f2ffa9909..6e4d1d460 100644
 --- a/python/sglang/srt/managers/tokenizer_communicator_mixin.py
 +++ b/python/sglang/srt/managers/tokenizer_communicator_mixin.py
-@@ -49,6 +49,8 @@ from sglang.srt.managers.io_struct import (
+@@ -59,6 +59,8 @@ from sglang.srt.managers.io_struct import (
      LoadLoRAAdapterReqOutput,
      LoRAUpdateOutput,
      OpenSessionReqInput,
@@ -1469,7 +1067,7 @@ index e5d42bed8..412293b30 100644
      ProfileReq,
      ProfileReqOutput,
      ProfileReqType,
-@@ -177,6 +179,9 @@ class TokenizerCommunicatorMixin:
+@@ -187,6 +189,9 @@ class TokenizerCommunicatorMixin:
          self.update_weights_from_ipc_communicator = _Communicator(
              self.send_to_scheduler, server_args.dp_size
          )
@@ -1479,7 +1077,7 @@ index e5d42bed8..412293b30 100644
          self.get_weights_by_name_communicator = _Communicator(
              self.send_to_scheduler, server_args.dp_size
          )
-@@ -250,6 +255,10 @@ class TokenizerCommunicatorMixin:
+@@ -272,6 +277,10 @@ class TokenizerCommunicatorMixin:
                      UpdateWeightsFromIPCReqOutput,
                      self.update_weights_from_ipc_communicator.handle_recv,
                  ),
@@ -1490,7 +1088,7 @@ index e5d42bed8..412293b30 100644
                  (
                      GetWeightsByNameReqOutput,
                      self.get_weights_by_name_communicator.handle_recv,
-@@ -433,6 +442,17 @@ class TokenizerCommunicatorMixin:
+@@ -522,6 +531,17 @@ class TokenizerCommunicatorMixin:
  
          return success, message
  
@@ -1509,18 +1107,18 @@ index e5d42bed8..412293b30 100644
          self,
          obj: InitWeightsSendGroupForRemoteInstanceReqInput,
 diff --git a/python/sglang/srt/managers/tp_worker.py b/python/sglang/srt/managers/tp_worker.py
-index 49f63a198..e4cd0ff2b 100644
+index 86b009df4..16ebd52ae 100644
 --- a/python/sglang/srt/managers/tp_worker.py
 +++ b/python/sglang/srt/managers/tp_worker.py
-@@ -27,6 +27,7 @@ from sglang.srt.managers.io_struct import (
-     InitWeightsSendGroupForRemoteInstanceReqInput,
+@@ -29,6 +29,7 @@ from sglang.srt.managers.io_struct import (
      InitWeightsUpdateGroupReqInput,
+     LoadLoRAAdapterFromTensorsReqInput,
      LoadLoRAAdapterReqInput,
 +    PostProcessWeightsReqInput,
      SendWeightsToRemoteInstanceReqInput,
      UnloadLoRAAdapterReqInput,
      UpdateWeightFromDiskReqInput,
-@@ -175,6 +176,11 @@ class BaseTpWorker(ABC):
+@@ -168,6 +169,11 @@ class BaseTpWorker(ABC):
          success, message = self.model_runner.update_weights_from_ipc(recv_req)
          return success, message
  
@@ -1533,10 +1131,10 @@ index 49f63a198..e4cd0ff2b 100644
          parameter = self.model_runner.get_weights_by_name(
              recv_req.name, recv_req.truncate_size
 diff --git a/python/sglang/srt/mem_cache/allocator.py b/python/sglang/srt/mem_cache/allocator.py
-index eaf29628b..bf74cbd12 100644
+index fa08bb66a..c02dff372 100644
 --- a/python/sglang/srt/mem_cache/allocator.py
 +++ b/python/sglang/srt/mem_cache/allocator.py
-@@ -287,6 +287,85 @@ def alloc_decode_kernel(
+@@ -347,6 +347,85 @@ def alloc_decode_kernel(
          tl.store(out_indices + pid, page * page_size)
  
  
@@ -1622,102 +1220,37 @@ index eaf29628b..bf74cbd12 100644
  class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
      """
      An allocator managing the indices to kv cache data.
-@@ -349,11 +428,6 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
-                 (last_loc + 1) % self.page_size == prefix_lens % self.page_size
-             )
+@@ -411,7 +490,7 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
  
--        self.seen_max_num_extend_tokens_next_power_of_2 = max(
--            self.seen_max_num_extend_tokens_next_power_of_2,
--            next_power_of_2(extend_num_tokens),
--        )
--
+         self.seen_max_num_extend_tokens_next_power_of_2 = max(
+             self.seen_max_num_extend_tokens_next_power_of_2,
+-            min(tl.core.TRITON_MAX_TENSOR_NUMEL, next_power_of_2(extend_num_tokens)),
++            min(65536, next_power_of_2(extend_num_tokens)),
+         )
+ 
          bs = len(prefix_lens)
-         if self.need_sort and extend_num_tokens // self.page_size + bs + 1 > len(
-             self.free_pages
-@@ -363,16 +437,34 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
-         out_indices = torch.empty(
+@@ -424,7 +503,7 @@ class PagedTokenToKVPoolAllocator(BaseTokenToKVPoolAllocator):
              (extend_num_tokens,), dtype=torch.int64, device=self.device
          )
--        alloc_extend_kernel[(bs,)](
--            prefix_lens,
--            seq_lens,
--            last_loc,
--            self.free_pages,
--            out_indices,
--            next_power_of_2(bs),
--            self.page_size,
--            self.seen_max_num_extend_tokens_next_power_of_2,
--        )
-+
-+        # Use PyTorch fallback for large extend_num_tokens to avoid slow Triton compilation
-+        MAX_TRITON_EXTEND_TOKENS = 65536  # 64K
-+        if next_power_of_2(extend_num_tokens) > MAX_TRITON_EXTEND_TOKENS:
-+            alloc_extend_torch_fallback(
-+                prefix_lens_cpu=prefix_lens_cpu,
-+                seq_lens_cpu=seq_lens_cpu,
-+                last_loc=last_loc,
-+                free_pages=self.free_pages,
-+                out_indices=out_indices,
-+                page_size=self.page_size,
-+                debug_mode=self.debug_mode,
-+            )
-+        else:
-+            self.seen_max_num_extend_tokens_next_power_of_2 = max(
-+                self.seen_max_num_extend_tokens_next_power_of_2,
-+                next_power_of_2(extend_num_tokens),
-+            )
-+            alloc_extend_kernel[(bs,)](
-+                prefix_lens,
-+                seq_lens,
-+                last_loc,
-+                self.free_pages,
-+                out_indices,
-+                next_power_of_2(bs),
-+                self.page_size,
-+                self.seen_max_num_extend_tokens_next_power_of_2,
-+            )
  
-         if self.debug_mode:
-             assert len(torch.unique(out_indices)) == len(out_indices)
+-        if extend_num_tokens < tl.core.TRITON_MAX_TENSOR_NUMEL:
++        if extend_num_tokens < 65536:
+             alloc_extend_kernel[(bs,)](
+                 prefix_lens,
+                 seq_lens,
 diff --git a/python/sglang/srt/mem_cache/hiradix_cache.py b/python/sglang/srt/mem_cache/hiradix_cache.py
-index f6cfca8b6..5d3cad059 100644
+index d7cd472a9..84511681a 100644
 --- a/python/sglang/srt/mem_cache/hiradix_cache.py
 +++ b/python/sglang/srt/mem_cache/hiradix_cache.py
-@@ -11,10 +11,15 @@ import torch
- 
- from sglang.srt.managers.cache_controller import HiCacheController, PrefetchOperation
- from sglang.srt.mem_cache.base_prefix_cache import MatchResult
--from sglang.srt.mem_cache.memory_pool import MHATokenToKVPool, MLATokenToKVPool
-+from sglang.srt.mem_cache.memory_pool import (
-+    MHATokenToKVPool,
-+    MLATokenToKVPool,
-+    NSATokenToKVPool,
-+)
- from sglang.srt.mem_cache.memory_pool_host import (
-     MHATokenToKVPoolHost,
-     MLATokenToKVPoolHost,
-+    NSATokenToKVPoolHost,
- )
- from sglang.srt.mem_cache.radix_cache import (
-     RadixCache,
-@@ -54,6 +59,16 @@ class HiRadixCache(RadixCache):
-                 server_args.hicache_mem_layout,
+@@ -76,6 +76,7 @@ class HiRadixCache(RadixCache):
                  allocator_type=server_args.hicache_storage_backend,
              )
-+        elif isinstance(self.kv_cache, NSATokenToKVPool):
+         elif isinstance(self.kv_cache, NSATokenToKVPool):
 +            # Check NSA before MLA since NSATokenToKVPool is a subclass of MLATokenToKVPool
-+            self.token_to_kv_pool_host = NSATokenToKVPoolHost(
-+                self.kv_cache,
-+                server_args.hicache_ratio,
-+                server_args.hicache_size,
-+                self.page_size,
-+                server_args.hicache_mem_layout,
-+                allocator_type=server_args.hicache_storage_backend,
-+            )
-         elif isinstance(self.kv_cache, MLATokenToKVPool):
-             self.token_to_kv_pool_host = MLATokenToKVPoolHost(
+             self.token_to_kv_pool_host = NSATokenToKVPoolHost(
                  self.kv_cache,
-@@ -64,7 +79,7 @@ class HiRadixCache(RadixCache):
+                 server_args.hicache_ratio,
+@@ -94,7 +95,7 @@ class HiRadixCache(RadixCache):
                  allocator_type=server_args.hicache_storage_backend,
              )
          else:
@@ -1727,10 +1260,10 @@ index f6cfca8b6..5d3cad059 100644
          self.tp_group = params.tp_cache_group
          self.tp_world_size = torch.distributed.get_world_size(group=self.tp_group)
 diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
-index 65d562a27..fe5547d7b 100644
+index 1d917137c..7d62e0ff4 100644
 --- a/python/sglang/srt/mem_cache/memory_pool.py
 +++ b/python/sglang/srt/mem_cache/memory_pool.py
-@@ -1678,7 +1678,8 @@ class NSATokenToKVPool(MLATokenToKVPool):
+@@ -1779,7 +1779,8 @@ class NSATokenToKVPool(MLATokenToKVPool):
          with (
              torch.cuda.use_mem_pool(self.custom_mem_pool)
              if self.custom_mem_pool
@@ -1740,7 +1273,7 @@ index 65d562a27..fe5547d7b 100644
          ):
              self.index_k_with_scale_buffer = [
                  torch.zeros(
-@@ -1700,6 +1701,11 @@ class NSATokenToKVPool(MLATokenToKVPool):
+@@ -1801,6 +1802,11 @@ class NSATokenToKVPool(MLATokenToKVPool):
                  )
                  for _ in range(layer_num)
              ]
@@ -1752,7 +1285,7 @@ index 65d562a27..fe5547d7b 100644
          self._finalize_allocation_log(size)
  
      def get_index_k_with_scale_buffer(self, layer_id: int) -> torch.Tensor:
-@@ -1775,6 +1781,50 @@ class NSATokenToKVPool(MLATokenToKVPool):
+@@ -1876,6 +1882,50 @@ class NSATokenToKVPool(MLATokenToKVPool):
          ]
          return data_ptrs, data_lens, item_lens
  
@@ -1803,229 +1336,11 @@ index 65d562a27..fe5547d7b 100644
      def get_kv_size_bytes(self):
          kv_size_bytes = super().get_kv_size_bytes()
          for index_k_cache in self.index_k_with_scale_buffer:
-diff --git a/python/sglang/srt/mem_cache/memory_pool_host.py b/python/sglang/srt/mem_cache/memory_pool_host.py
-index 46394158f..d99cc4b3b 100644
---- a/python/sglang/srt/mem_cache/memory_pool_host.py
-+++ b/python/sglang/srt/mem_cache/memory_pool_host.py
-@@ -15,7 +15,12 @@ from sglang.jit_kernel.hicache import (
- from sglang.jit_kernel.hicache import (
-     transfer_hicache_one_layer as jit_transfer_hicache_one_layer,
- )
--from sglang.srt.mem_cache.memory_pool import KVCache, MHATokenToKVPool, MLATokenToKVPool
-+from sglang.srt.mem_cache.memory_pool import (
-+    KVCache,
-+    MHATokenToKVPool,
-+    MLATokenToKVPool,
-+    NSATokenToKVPool,
-+)
- from sglang.srt.utils import is_cuda, is_npu, is_xpu
- 
- _is_cuda = is_cuda()
-@@ -1015,3 +1020,199 @@ class MLATokenToKVPoolHost(HostKVCache):
-         else:
-             raise ValueError(f"Unsupported layout: {self.layout}")
-         return ptr_list, element_size_list
-+
-+
-+class NSATokenToKVPoolHost(MLATokenToKVPoolHost):
-+    """
-+    Host memory pool for NSA (Native Sparse Attention) KV cache.
-+
-+    NSA extends MLA with an additional index_k_with_scale_buffer that stores
-+    sparse attention indexing information. This class ensures that buffer is
-+    also backed up and restored during hicache operations.
-+    """
-+
-+    device_pool: NSATokenToKVPool
-+
-+    def __init__(
-+        self,
-+        device_pool: NSATokenToKVPool,
-+        host_to_device_ratio: float,
-+        host_size: int,
-+        page_size: int,
-+        layout: str,
-+        pin_memory: bool = True,
-+        device: str = "cpu",
-+        allocator_type: str = "default",
-+    ):
-+        # Store NSA-specific attributes before calling parent __init__
-+        self.index_head_dim = device_pool.index_head_dim
-+        self.quant_block_size = device_pool.quant_block_size
-+        self.index_k_with_scale_buffer_dtype = device_pool.index_k_with_scale_buffer_dtype
-+
-+        super().__init__(
-+            device_pool,
-+            host_to_device_ratio,
-+            host_size,
-+            page_size,
-+            layout,
-+            pin_memory,
-+            device,
-+            allocator_type,
-+        )
-+
-+        # Initialize index buffer references and pointers for efficient transfer
-+        self.index_data_refs = [
-+            self.index_k_with_scale_buffer[i] for i in range(self.layer_num)
-+        ]
-+        self.index_data_ptrs = torch.tensor(
-+            [x.data_ptr() for x in self.index_data_refs],
-+            dtype=torch.uint64,
-+            device=self.device_pool.device,
-+        )
-+
-+    def get_size_per_token(self):
-+        # Get base MLA size
-+        base_size = super().get_size_per_token()
-+
-+        # Add NSA index buffer size per token
-+        # index_k_with_scale_buffer shape per layer: (num_pages, page_size * (index_head_dim + index_head_dim // quant_block_size * 4))
-+        # Per token: (index_head_dim + index_head_dim // quant_block_size * 4) * dtype.itemsize * layer_num
-+        index_size_per_token = (
-+            (self.index_head_dim + self.index_head_dim // self.quant_block_size * 4)
-+            * self.index_k_with_scale_buffer_dtype.itemsize
-+            * self.layer_num
-+        )
-+
-+        return base_size + index_size_per_token
-+
-+    def init_kv_buffer(self):
-+        # Initialize base MLA kv_buffer
-+        buffer = super().init_kv_buffer()
-+
-+        # Initialize NSA index_k_with_scale_buffer on host
-+        # Layout matches device pool: (num_pages, page_size * (index_head_dim + index_head_dim // quant_block_size * 4))
-+        index_buffer_second_dim = self.page_size * (
-+            self.index_head_dim + self.index_head_dim // self.quant_block_size * 4
-+        )
-+        self.index_stride_size = (self.index_head_dim + self.index_head_dim // self.quant_block_size * 4) * self.index_k_with_scale_buffer_dtype.itemsize
-+
-+        alloc_func = ALLOC_MEMORY_FUNCS[self.device_pool.device]
-+        self.index_k_with_scale_buffer = [
-+            alloc_func(
-+                (self.page_num, index_buffer_second_dim),
-+                dtype=self.index_k_with_scale_buffer_dtype,
-+                device=self.device,
-+                pin_memory=self.pin_memory,
-+                allocator=self.allocator,
-+            )
-+            for _ in range(self.layer_num)
-+        ]
-+
-+        return buffer
-+
-+    def _load_indexer_to_device_per_layer(
-+        self, device_pool, host_indices, device_indices, layer_id, io_backend
-+    ):
-+        """Load index_k_with_scale_buffer from host to device for a specific layer."""
-+        # Convert token indices to page indices
-+        # host_indices and device_indices are token-level indices
-+        # index_k_with_scale_buffer is page-level with shape (num_pages, page_size * dim)
-+
-+        if io_backend == "kernel":
-+            # Use page-level copy for index buffer
-+            # Calculate page indices from token indices
-+            page_indices_host = host_indices[:: self.page_size] // self.page_size
-+            page_indices_device = device_indices[:: self.page_size] // self.page_size
-+
-+            src_buffer = self.index_k_with_scale_buffer[layer_id]
-+            dst_buffer = device_pool.index_k_with_scale_buffer[layer_id - device_pool.start_layer]
-+
-+            # Copy each page
-+            # for i in range(len(page_indices_host)):
-+            #     src_page_idx = page_indices_host[i].item()
-+            #     dst_page_idx = page_indices_device[i].item()
-+            #     dst_buffer[dst_page_idx].copy_(src_buffer[src_page_idx], non_blocking=True)
-+            if self.layout == "layer_first":
-+                transfer_kv_per_layer_mla(
-+                    src=src_buffer,
-+                    dst=dst_buffer,
-+                    src_indices=page_indices_host,
-+                    dst_indices=page_indices_device,
-+                    item_size=self.index_stride_size * self.page_size,
-+                )
-+            else:
-+                raise ValueError(f"Unsupported layout: {self.layout}")
-+
-+        elif io_backend == "direct":
-+            # Direct I/O copy for index buffer
-+            page_indices_host = host_indices[:: self.page_size] // self.page_size
-+            page_indices_device = device_indices[:: self.page_size] // self.page_size
-+
-+            src_buffer = self.index_k_with_scale_buffer[layer_id]
-+            dst_buffer = device_pool.index_k_with_scale_buffer[layer_id - device_pool.start_layer]
-+
-+            for i in range(len(page_indices_host)):
-+                src_page_idx = page_indices_host[i].item()
-+                dst_page_idx = page_indices_device[i].item()
-+                dst_buffer[dst_page_idx].copy_(src_buffer[src_page_idx], non_blocking=True)
-+        else:
-+            raise ValueError(f"Unsupported IO backend for NSA indexer: {io_backend}")
-+
-+    def _backup_indexer_from_device_all_layer(
-+        self, device_pool, host_indices, device_indices, io_backend
-+    ):
-+        """Backup index_k_with_scale_buffer from device to host for all layers."""
-+        # Convert token indices to page indices
-+        page_indices_host = host_indices[:: self.page_size] // self.page_size
-+        page_indices_device = device_indices[:: self.page_size] // self.page_size
-+
-+        # if io_backend in ["kernel", "direct"]:
-+        if io_backend == "kernel":
-+            if self.layout == "layer_first":
-+                transfer_kv_all_layer_mla(
-+                    src_layers=device_pool.index_k_with_scale_buffer_ptrs,
-+                    dst_layers=self.index_data_ptrs,
-+                    src_indices=page_indices_device,
-+                    dst_indices=page_indices_host,
-+                    item_size=self.index_stride_size * self.page_size,
-+                    num_layers=self.layer_num,
-+                )
-+            else:
-+                raise ValueError(f"Unsupported layout: {self.layout}")
-+        elif io_backend == "direct":
-+            for layer_id in range(self.layer_num):
-+                src_buffer = device_pool.index_k_with_scale_buffer[layer_id]
-+                dst_buffer = self.index_k_with_scale_buffer[layer_id]
-+
-+                for i in range(len(page_indices_device)):
-+                    src_page_idx = page_indices_device[i].item()
-+                    dst_page_idx = page_indices_host[i].item()
-+                    dst_buffer[dst_page_idx].copy_(src_buffer[src_page_idx], non_blocking=True)
-+        else:
-+            raise ValueError(f"Unsupported IO backend for NSA indexer: {io_backend}")
-+
-+    def load_to_device_per_layer(
-+        self, device_pool, host_indices, device_indices, layer_id, io_backend
-+    ):
-+        """Load KV cache and index buffer from host to device for a specific layer."""
-+        # Load base MLA kv_buffer
-+        super().load_to_device_per_layer(
-+            device_pool, host_indices, device_indices, layer_id, io_backend
-+        )
-+        # Load NSA index_k_with_scale_buffer
-+        self._load_indexer_to_device_per_layer(
-+            device_pool, host_indices, device_indices, layer_id, io_backend
-+        )
-+
-+    def backup_from_device_all_layer(
-+        self, device_pool, host_indices, device_indices, io_backend
-+    ):
-+        """Backup KV cache and index buffer from device to host for all layers."""
-+        # Backup base MLA kv_buffer
-+        super().backup_from_device_all_layer(
-+            device_pool, host_indices, device_indices, io_backend
-+        )
-+        # Backup NSA index_k_with_scale_buffer
-+        self._backup_indexer_from_device_all_layer(
-+            device_pool, host_indices, device_indices, io_backend
-+        )
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index 1d69c0582..d984c2e12 100644
+index 275775a73..25febd774 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
-@@ -558,7 +558,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -600,7 +600,8 @@ class ModelRunner(ModelRunnerKVCacheMixin):
          )
  
          # Init routed experts capturer
@@ -2033,9 +1348,9 @@ index 1d69c0582..d984c2e12 100644
 +        if not self.is_draft_worker:
 +            self.init_routed_experts_capturer()
  
-         if self.device == "cuda":
+         if self.device == "cuda" or self.device == "musa":
              self.init_cublas()
-@@ -2224,11 +2225,19 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -2429,11 +2430,19 @@ class ModelRunner(ModelRunnerKVCacheMixin):
          output.expert_distribution_metrics = recorder_outputs.get("metrics")
  
          # Copy cached routing experts' buffers back to CPU cache
@@ -2060,9 +1375,9 @@ index 1d69c0582..d984c2e12 100644
  
          if self.eplb_manager is not None:
              self.eplb_manager.on_forward_pass_end()
-@@ -2436,6 +2445,41 @@ class ModelRunner(ModelRunnerKVCacheMixin):
-             logger.error(f"IPC weight update failed: {e}")
-             return False, str(e)
+@@ -2665,6 +2674,43 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+                 )
+ 
  
 +    def post_process_weights(self, recv_req):
 +        """
@@ -2099,22 +1414,24 @@ index 1d69c0582..d984c2e12 100644
 +                        quant_method.process_weights_after_loading(module)
 +
 +        return True, "Success"
- 
++
++
  def _model_load_weights_direct(model, named_tensors: List[Tuple[str, torch.Tensor]]):
      params_dict = dict(model.named_parameters())
-diff --git a/python/sglang/srt/models/deepseek_v2.py b/python/sglang/srt/models/deepseek_v2.py
-index ed8cc7ada..b8f1026dd 100644
---- a/python/sglang/srt/models/deepseek_v2.py
-+++ b/python/sglang/srt/models/deepseek_v2.py
-@@ -159,6 +159,7 @@ from sglang.srt.utils import (
-     make_layers,
-     use_intel_amx_backend,
- )
+     for name, tensor in named_tensors:
+diff --git a/python/sglang/srt/models/deepseek_common/attention_backend_handler.py b/python/sglang/srt/models/deepseek_common/attention_backend_handler.py
+index cc673a9ca..514d5ea7b 100644
+--- a/python/sglang/srt/models/deepseek_common/attention_backend_handler.py
++++ b/python/sglang/srt/models/deepseek_common/attention_backend_handler.py
+@@ -6,6 +6,7 @@ from sglang.srt.models.deepseek_common.attention_forward_methods.forward_methods
+ from sglang.srt.models.deepseek_common.utils import _is_hip
+ from sglang.srt.server_args import get_global_server_args
+ from sglang.srt.utils import use_intel_amx_backend
 +from sglang.srt.layers.attention.hybrid_attn_backend import HybridAttnBackend
  
- _is_hip = is_hip()
- _is_cuda = is_cuda()
-@@ -434,6 +435,8 @@ def handle_attention_nsa(attn, forward_batch):
+ MHA_ONE_SHOT_SUPPORTED_BACKENDS = ["fa3", "flashinfer", "flashmla"]
+ 
+@@ -150,6 +151,8 @@ def handle_attention_nsa(attn, forward_batch):
      backend = forward_batch.attn_backend
      if isinstance(backend, TboAttnBackend):  # if enable tbo, get primary backend
          backend = backend.primary
@@ -2123,24 +1440,23 @@ index ed8cc7ada..b8f1026dd 100644
      if hasattr(backend, "use_mha") and backend.use_mha:
          return AttnForwardMethod.MHA_ONE_SHOT
      return AttnForwardMethod.MLA
-@@ -2704,7 +2707,11 @@ class DeepseekV2AttentionMLA(nn.Module):
-         ):
-             k = k_nope.new_empty(*k_shape)
-             concat_mla_k(k=k, k_nope=k_nope, k_rope=k_pe)
--        elif _is_cuda:
-+        elif _is_cuda and all(
-+            # (i.bit_count() == 1) == (is_power_of_two(i))
-+            i.bit_count() == 1
-+            for i in (k_shape[1], k_nope.shape[-1], k_pe.shape[-1])
-+        ):
-             # fa3 mha support fp8 inputs
-             if (
-                 self.current_attention_backend == "fa3"
+diff --git a/python/sglang/srt/models/deepseek_v2.py b/python/sglang/srt/models/deepseek_v2.py
+index 1583dd788..e95103beb 100644
+--- a/python/sglang/srt/models/deepseek_v2.py
++++ b/python/sglang/srt/models/deepseek_v2.py
+@@ -157,6 +157,7 @@ from sglang.srt.utils import (
+     make_layers,
+     use_intel_amx_backend,
+ )
++from sglang.srt.layers.attention.hybrid_attn_backend import HybridAttnBackend
+ 
+ if _use_aiter_gfx95:
+ 
 diff --git a/python/sglang/srt/models/qwen2.py b/python/sglang/srt/models/qwen2.py
-index a7dbadec6..c83a41338 100644
+index a3cfde4d6..18fb07b9d 100644
 --- a/python/sglang/srt/models/qwen2.py
 +++ b/python/sglang/srt/models/qwen2.py
-@@ -90,9 +90,6 @@ class Qwen2MLP(nn.Module):
+@@ -91,9 +91,6 @@ class Qwen2MLP(nn.Module):
          self.act_fn = SiluAndMul()
  
      def forward(self, x):
@@ -2150,9 +1466,9 @@ index a7dbadec6..c83a41338 100644
          gate_up, _ = self.gate_up_proj(x)
          x = self.act_fn(gate_up)
          x, _ = self.down_proj(x)
-@@ -279,11 +276,6 @@ class Qwen2Model(nn.Module):
+@@ -280,11 +277,6 @@ class Qwen2Model(nn.Module):
                  quant_config=quant_config,
-                 enable_tp=not is_dp_attention_enabled(),
+                 use_attn_tp_group=is_dp_attention_enabled(),
                  prefix=add_prefix("embed_tokens", prefix),
 -                params_dtype=(
 -                    torch.float32
@@ -2162,7 +1478,7 @@ index a7dbadec6..c83a41338 100644
              )
          else:
              self.embed_tokens = PPMissingLayer()
-@@ -306,10 +298,8 @@ class Qwen2Model(nn.Module):
+@@ -307,10 +299,8 @@ class Qwen2Model(nn.Module):
          if self.pp_group.is_last_rank:
              norm_kwargs = (
                  dict(
@@ -2175,10 +1491,10 @@ index a7dbadec6..c83a41338 100644
                  if get_global_server_args().rl_on_policy_target is not None
                  else {}
 diff --git a/python/sglang/srt/models/qwen2_moe.py b/python/sglang/srt/models/qwen2_moe.py
-index 3ad9f6736..0b9c7f499 100644
+index bbb883a2d..9bad2d1e0 100644
 --- a/python/sglang/srt/models/qwen2_moe.py
 +++ b/python/sglang/srt/models/qwen2_moe.py
-@@ -586,7 +586,17 @@ class Qwen2MoeModel(nn.Module):
+@@ -596,7 +596,17 @@ class Qwen2MoeModel(nn.Module):
              prefix=add_prefix("layers", prefix),
          )
          if self.pp_group.is_last_rank:
@@ -2198,7 +1514,7 @@ index 3ad9f6736..0b9c7f499 100644
              self.norm = PPMissingLayer(return_tuple=True)
  
 diff --git a/python/sglang/srt/models/qwen3.py b/python/sglang/srt/models/qwen3.py
-index 9220831f6..2b8303b54 100644
+index b056317e4..351b18684 100644
 --- a/python/sglang/srt/models/qwen3.py
 +++ b/python/sglang/srt/models/qwen3.py
 @@ -90,8 +90,8 @@ class Qwen3Attention(nn.Module):
@@ -2223,25 +1539,8 @@ index 9220831f6..2b8303b54 100644
              )
              if get_global_server_args().rl_on_policy_target is not None
              else {}
-@@ -276,14 +274,14 @@ class Qwen3DecoderLayer(nn.Module):
-         hidden_states: torch.Tensor,
-         forward_batch: ForwardBatch,
-         residual: Optional[torch.Tensor],
--        **kwargs,
-+        post_residual_addition: Optional[torch.Tensor] = None,
-     ) -> Tuple[torch.Tensor, torch.Tensor]:
-         # Self Attention
-         hidden_states, residual = self.layer_communicator.prepare_attn(
-             hidden_states,
-             residual,
-             forward_batch,
--            **kwargs,
-+            post_residual_addition=post_residual_addition,
-         )
-         if hidden_states.shape[0] != 0:
-             hidden_states = self.self_attn(
 diff --git a/python/sglang/srt/models/qwen3_moe.py b/python/sglang/srt/models/qwen3_moe.py
-index e11678a9e..e277d46f2 100644
+index 3fcf0cfa0..bfef7bcf8 100644
 --- a/python/sglang/srt/models/qwen3_moe.py
 +++ b/python/sglang/srt/models/qwen3_moe.py
 @@ -22,6 +22,7 @@ import math
@@ -2258,10 +1557,10 @@ index e11678a9e..e277d46f2 100644
  from sglang.srt.layers.moe.fused_moe_triton.layer import FusedMoE
 -from sglang.srt.layers.moe.topk import TopK
 +from sglang.srt.layers.moe.topk import StandardTopKOutput, TopK
- from sglang.srt.layers.moe.utils import RoutingMethodType
- from sglang.srt.layers.quantization.base_config import QuantizationConfig
- from sglang.srt.layers.radix_attention import RadixAttention
-@@ -229,6 +230,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
+ from sglang.srt.layers.moe.utils import (
+     RoutingMethodType,
+     filter_moe_weight_param_global_expert,
+@@ -233,6 +234,7 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
              use_grouped_topk=False,
              layer_id=layer_id,
          )
@@ -2269,7 +1568,7 @@ index e11678a9e..e277d46f2 100644
  
          self.experts = get_moe_impl_class(quant_config)(
              num_experts=config.num_experts
-@@ -294,7 +296,22 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
+@@ -301,7 +303,22 @@ class Qwen3MoeSparseMoeBlock(nn.Module):
  
          # router_logits: (num_tokens, n_experts)
          router_logits, _ = self.gate(hidden_states)
@@ -2293,7 +1592,7 @@ index e11678a9e..e277d46f2 100644
          final_hidden_states = self.experts(hidden_states, topk_output)
          if (
              self.tp_size > 1
-@@ -475,13 +492,14 @@ class Qwen3MoeAttention(nn.Module):
+@@ -482,13 +499,14 @@ class Qwen3MoeAttention(nn.Module):
          )
          self.compatible_with_fused_kv_buffer = (
              False if isinstance(self.rotary_emb, MRotaryEmbedding) else True
@@ -2309,7 +1608,7 @@ index e11678a9e..e277d46f2 100644
          )
          self._used_fused_qk_norm_rope_last_call = False
  
-@@ -494,8 +512,16 @@ class Qwen3MoeAttention(nn.Module):
+@@ -501,8 +519,16 @@ class Qwen3MoeAttention(nn.Module):
              prefix=add_prefix("attn", prefix),
          )
  
@@ -2328,7 +1627,7 @@ index e11678a9e..e277d46f2 100644
          self.alt_stream = alt_stream
  
      def op_prepare(self, state):
-@@ -736,9 +762,19 @@ class Qwen3MoeDecoderLayer(nn.Module):
+@@ -743,9 +769,19 @@ class Qwen3MoeDecoderLayer(nn.Module):
                  quant_config=quant_config,
                  prefix=add_prefix("mlp", prefix),
              )
@@ -2351,98 +1650,10 @@ index e11678a9e..e277d46f2 100644
  
          self.layer_communicator = LayerCommunicator(
 diff --git a/python/sglang/srt/models/qwen3_vl.py b/python/sglang/srt/models/qwen3_vl.py
-index 079f45843..218e32362 100644
+index d641826e3..3abc39ef3 100644
 --- a/python/sglang/srt/models/qwen3_vl.py
 +++ b/python/sglang/srt/models/qwen3_vl.py
-@@ -397,28 +397,68 @@ class Qwen3VLMoeVisionModel(nn.Module, RotaryPosMixin):
-         return cos_combined, sin_combined
- 
-     def fast_pos_embed_interpolate(self, grid_thw):
--        patch_pos_embeds_permute = []
--        m_size = self.spatial_merge_size
-+        grid_ts, grid_hs, grid_ws = grid_thw[:, 0], grid_thw[:, 1], grid_thw[:, 2]
-+        num_grid_per_side = int(self.num_position_embeddings**0.5)
-+        device = self.pos_embed.weight.device
-+
-+        idx_list = [[] for _ in range(4)]
-+        weight_list = [[] for _ in range(4)]
-+
-+        for t, h, w in zip(grid_ts, grid_hs, grid_ws):
-+            h_idxs = torch.linspace(0, num_grid_per_side - 1, h)
-+            w_idxs = torch.linspace(0, num_grid_per_side - 1, w)
-+
-+            h_idxs_floor = h_idxs.int()
-+            w_idxs_floor = w_idxs.int()
-+            h_idxs_ceil = (h_idxs.int() + 1).clip(max=num_grid_per_side - 1)
-+            w_idxs_ceil = (w_idxs.int() + 1).clip(max=num_grid_per_side - 1)
-+
-+            dh = h_idxs - h_idxs_floor
-+            dw = w_idxs - w_idxs_floor
-+
-+            base_h = h_idxs_floor * num_grid_per_side
-+            base_h_ceil = h_idxs_ceil * num_grid_per_side
-+
-+            indices = [
-+                (base_h[None].T + w_idxs_floor[None]).flatten(),
-+                (base_h[None].T + w_idxs_ceil[None]).flatten(),
-+                (base_h_ceil[None].T + w_idxs_floor[None]).flatten(),
-+                (base_h_ceil[None].T + w_idxs_ceil[None]).flatten(),
-+            ]
-+
-+            weights = [
-+                ((1 - dh)[None].T * (1 - dw)[None]).flatten(),
-+                ((1 - dh)[None].T * dw[None]).flatten(),
-+                (dh[None].T * (1 - dw)[None]).flatten(),
-+                (dh[None].T * dw[None]).flatten(),
-+            ]
- 
--        embeds = torch.arange(self.num_grid, device=self.pos_embed.weight.device)
--        embeds = (
--            self.pos_embed(embeds)
--            .permute(1, 0)
--            .reshape(1, -1, self.num_grid_per_side, self.num_grid_per_side)
-+            for i in range(4):
-+                idx_list[i].extend(indices[i].tolist())
-+                weight_list[i].extend(weights[i].tolist())
-+
-+        idx_tensor = torch.tensor(idx_list, dtype=torch.long, device=device)
-+        weight_tensor = torch.tensor(
-+            weight_list, dtype=self.pos_embed.weight.dtype, device=device
-         )
--        for t, h, w in grid_thw:
--            pos_embed = torch.nn.functional.interpolate(
--                embeds, size=(h, w), mode="bilinear", align_corners=self.align_corners
--            )
--            pos_embed = pos_embed.reshape(
--                -1,
--                h // self.spatial_merge_size,
--                self.spatial_merge_size,
--                w // self.spatial_merge_size,
--                self.spatial_merge_size,
-+        pos_embeds = self.pos_embed(idx_tensor).to(device) * weight_tensor[:, :, None]
-+        patch_pos_embeds = pos_embeds[0] + pos_embeds[1] + pos_embeds[2] + pos_embeds[3]
-+
-+        patch_pos_embeds = patch_pos_embeds.split(
-+            [h * w for h, w in zip(grid_hs, grid_ws)]
-+        )
-+
-+        patch_pos_embeds_permute = []
-+        merge_size = self.spatial_merge_size
-+        for pos_embed, t, h, w in zip(patch_pos_embeds, grid_ts, grid_hs, grid_ws):
-+            pos_embed = pos_embed.repeat(t, 1)
-+            pos_embed = (
-+                pos_embed.view(
-+                    t, h // merge_size, merge_size, w // merge_size, merge_size, -1
-+                )
-+                .permute(0, 1, 3, 2, 4, 5)
-+                .flatten(0, 4)
-             )
--            pos_embed = pos_embed.permute(1, 3, 2, 4, 0)
--            pos_embed = pos_embed.flatten(0, 3).repeat(t, 1)
-             patch_pos_embeds_permute.append(pos_embed)
-         return torch.cat(patch_pos_embeds_permute)
- 
-@@ -610,14 +650,19 @@ class Qwen3LLMModel(Qwen3Model):
+@@ -711,14 +711,19 @@ class Qwen3LLMModel(Qwen3Model):
                      hidden_states + residual if residual is not None else hidden_states
                  )
  
@@ -2467,10 +1678,10 @@ index 079f45843..218e32362 100644
                  positions,
                  hidden_states,
 diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
-index a2b26e0e0..72db29801 100644
+index b080aeb16..f5bbba456 100644
 --- a/python/sglang/srt/server_args.py
 +++ b/python/sglang/srt/server_args.py
-@@ -527,6 +527,7 @@ class ServerArgs:
+@@ -580,6 +580,7 @@ class ServerArgs:
      cuda_graph_max_bs: Optional[int] = None
      cuda_graph_bs: Optional[List[int]] = None
      disable_cuda_graph: bool = False
@@ -2478,7 +1689,7 @@ index a2b26e0e0..72db29801 100644
      disable_cuda_graph_padding: bool = False
      enable_profile_cuda_graph: bool = False
      enable_cudagraph_gc: bool = False
-@@ -3980,6 +3981,11 @@ class ServerArgs:
+@@ -4491,6 +4492,11 @@ class ServerArgs:
              action="store_true",
              help="Disable cuda graph.",
          )
@@ -2518,10 +1729,10 @@ index 5fe45086c..c95fbd0f6 100644
          self.req_pool_indices[:raw_bs].copy_(forward_batch.req_pool_indices)
  
 diff --git a/python/sglang/srt/speculative/eagle_info.py b/python/sglang/srt/speculative/eagle_info.py
-index 1bf3816e9..b5b41dba4 100644
+index ac629c7ee..c039d2350 100644
 --- a/python/sglang/srt/speculative/eagle_info.py
 +++ b/python/sglang/srt/speculative/eagle_info.py
-@@ -778,6 +778,10 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
+@@ -774,6 +774,10 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
              self.topk_index = self.topk_index[: len(new_indices)]
              self.hidden_states = self.hidden_states[: len(new_indices)]
              self.verified_id = self.verified_id[: len(new_indices)]
@@ -2532,7 +1743,7 @@ index 1bf3816e9..b5b41dba4 100644
          else:
              # in some cases(e.g draft_extend), we have not filtered the batch by `unfinished_index`
              self.topk_p = self.topk_p[new_indices]
-@@ -809,6 +813,27 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
+@@ -805,6 +809,27 @@ class EagleDraftInput(SpecInput, EagleDraftInputV2Mixin):
          self.verified_id = torch.cat([self.verified_id, spec_info.verified_id], axis=0)
          self.topk_p = torch.cat([self.topk_p, spec_info.topk_p])
          self.topk_index = torch.cat([self.topk_index, spec_info.topk_index])
@@ -2561,10 +1772,10 @@ index 1bf3816e9..b5b41dba4 100644
  
  @dataclass
 diff --git a/python/sglang/srt/speculative/eagle_worker.py b/python/sglang/srt/speculative/eagle_worker.py
-index a702df4f8..61d9ae366 100644
+index 32b3a520a..489207014 100644
 --- a/python/sglang/srt/speculative/eagle_worker.py
 +++ b/python/sglang/srt/speculative/eagle_worker.py
-@@ -231,7 +231,7 @@ class EAGLEWorker(TpModelWorker):
+@@ -234,7 +234,7 @@ class EAGLEWorker(TpModelWorker):
          self.cuda_graph_runner = None
          self.cuda_graph_runner_for_draft_extend = None
  
@@ -2574,10 +1785,10 @@ index a702df4f8..61d9ae366 100644
  
          Device2DraftCudaGraphRunner = {
 diff --git a/python/sglang/srt/utils/common.py b/python/sglang/srt/utils/common.py
-index 8560246c6..13db860dc 100644
+index 4636128fa..a9b61df39 100644
 --- a/python/sglang/srt/utils/common.py
 +++ b/python/sglang/srt/utils/common.py
-@@ -2224,6 +2224,8 @@ class SafeUnpickler(pickle.Unpickler):
+@@ -2359,6 +2359,8 @@ class SafeUnpickler(pickle.Unpickler):
          "sglang.srt.model_executor.model_runner.",
          "sglang.srt.layers.",
          "sglang.srt.utils.",

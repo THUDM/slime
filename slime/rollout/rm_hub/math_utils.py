@@ -168,8 +168,13 @@ TUPLE_CHARS = "()[]"
 def _sympy_parse(expr: str):
     """Parses an expression with sympy."""
     py_expr = expr.replace("^", "**")
+    # We allow basic SymPy names but no builtins to prevent arbitrary code execution
+    # This whitelist approach ensures SymPy's internal transformations (like Integer) still work
+    safe_dict = {k: v for k, v in sympy.__dict__.items() if not k.startswith("_")}
     return sympy_parser.parse_expr(
         py_expr,
+        local_dict={},
+        global_dict={"__builtins__": {}, **safe_dict},
         transformations=(sympy_parser.standard_transformations + (sympy_parser.implicit_multiplication_application,)),
     )
 
