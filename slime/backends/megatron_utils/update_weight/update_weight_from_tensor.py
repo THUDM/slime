@@ -64,7 +64,10 @@ class UpdateWeightFromTensor:
         self._model_update_groups = None
 
     def connect_rollout_engines(
-        self, rollout_engines: Sequence[ActorHandle], rollout_engine_lock: ActorHandle
+        self,
+        rollout_engines: Sequence[ActorHandle],
+        rollout_engine_lock: ActorHandle,
+        engine_gpu_counts: Sequence[int] | None = None,
     ) -> None:
         """
         Split colocated/distributed engines. Global source rank (DP=TP=PP=0) creates NCCL
@@ -79,6 +82,7 @@ class UpdateWeightFromTensor:
         if self.use_distribute:
             self.rollout_engines = rollout_engines[:colocate_engine_nums]
             self.distributed_rollout_engines = rollout_engines[colocate_engine_nums:]
+            distributed_gpu_counts = engine_gpu_counts[colocate_engine_nums:] if engine_gpu_counts else None
             self._is_distributed_src_rank = (
                 mpu.get_data_parallel_rank(with_context_parallel=True) == 0
                 and mpu.get_tensor_model_parallel_rank() == 0
@@ -92,7 +96,10 @@ class UpdateWeightFromTensor:
                     )
 
                 self._model_update_groups = connect_rollout_engines_from_distributed(
-                    self.args, self._group_name, self.distributed_rollout_engines
+                    self.args,
+                    self._group_name,
+                    self.distributed_rollout_engines,
+                    engine_gpu_counts=distributed_gpu_counts,
                 )
 
         # Here we assume the gpu id of rollout engines and train actors are the same.

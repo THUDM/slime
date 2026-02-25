@@ -40,6 +40,7 @@ class UpdateWeight(abc.ABC):
         self,
         rollout_engines: Sequence[ActorHandle],
         rollout_engine_lock: ActorHandle | None,
+        engine_gpu_counts: Sequence[int] | None = None,
     ) -> None:
         pass
 
@@ -92,6 +93,7 @@ class UpdateWeightFromTensor(UpdateWeight):
         self,
         rollout_engines: Sequence[ActorHandle],
         rollout_engine_lock: ActorHandle | None,
+        engine_gpu_counts: Sequence[int] | None = None,
     ) -> None:
         """Attach rollout engines and create per-engine IPC (Gloo) groups.
 
@@ -181,6 +183,7 @@ class UpdateWeightFromDistributed(UpdateWeight):
         self,
         rollout_engines: Sequence[ActorHandle],
         rollout_engine_lock: ActorHandle | None,
+        engine_gpu_counts: Sequence[int] | None = None,
     ) -> None:
         """On rank 0, initialize a temporary NCCL group for parameter broadcast."""
         self.rollout_engines = rollout_engines
@@ -190,20 +193,28 @@ class UpdateWeightFromDistributed(UpdateWeight):
         #   1. AllGather parameters to rank 0
         #   2. Broadcast parameters from rank 0 to all sglang engines
         self._is_src_rank = dist.get_rank() == 0
+
+        if engine_gpu_counts is None:
+            engine_gpu_counts = [self.args.rollout_num_gpus_per_engine] * len(rollout_engines)
+
         if self._is_src_rank:
             self._group_name = "slime"
             master_address = ray._private.services.get_node_ip_address()
             with socket.socket() as sock:
                 sock.bind(("", 0))
                 master_port = sock.getsockname()[1]
-            ## TODO: why +1?
-            world_size = self.args.rollout_num_gpus + 1
+            world_size = sum(engine_gpu_counts) + 1
+
+            # Compute cumulative rank offsets.
+            cumulative = [0]
+            for c in engine_gpu_counts:
+                cumulative.append(cumulative[-1] + c)
 
             refs = [
                 engine.init_weights_update_group.remote(
                     master_address,
                     master_port,
-                    i * self.args.rollout_num_gpus_per_engine + 1,
+                    cumulative[i] + 1,
                     world_size,
                     self._group_name,
                     backend="nccl",
