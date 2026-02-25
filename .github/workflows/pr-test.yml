@@ -48,7 +48,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        info: [{"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_gsm8k_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_gsm8k_short.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_sglang_config.py"}]
+        info: [{"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_gsm8k_async_short.py"}, {"num_gpus": 4, "test_file": "test_qwen2.5_0.5B_gsm8k_short.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_sglang_config.py"}, {"num_gpus": 8, "test_file": "test_qwen2.5_0.5B_sglang_config_distributed.py"}]
     defaults:
       run:
         working-directory: ${{ github.workspace }}

@@ -10,21 +10,22 @@ MODEL_TYPE = "qwen2.5-0.5B"
 NUM_GPUS = 8
 
 # Inline sglang config: same model, 3 engine groups with different parallelism.
-# Group 1: 4 GPUs, 2 GPUs/engine (tp=2) → 2 engines
-# Group 2: 2 GPUs, 1 GPU/engine  (tp=1) → 2 engines
-# Group 3: 2 GPUs, placeholder   → reserves 2 GPU slots, no engine created
+# Non-colocated (训推分离): actor uses 4 GPUs, rollout uses 4 GPUs.
+# Group 1: 2 GPUs, 2 GPUs/engine (tp=2) → 1 engine
+# Group 2: 1 GPU,  1 GPU/engine  (tp=1) → 1 engine
+# Group 3: 1 GPU,  placeholder   → reserves 1 GPU slot, no engine created
 SGLANG_CONFIG_YAML = """\
 sglang:
   - name: default
     engine_groups:
       - worker_type: regular
-        num_gpus: 4
+        num_gpus: 2
         num_gpus_per_engine: 2
       - worker_type: regular
-        num_gpus: 2
+        num_gpus: 1
         num_gpus_per_engine: 1
       - worker_type: placeholder
-        num_gpus: 2
+        num_gpus: 1
 """
 
 
@@ -108,6 +109,7 @@ def execute():
 
     ci_args = "--ci-test "
 
+    # Non-colocated: actor 4 GPUs, rollout 4 GPUs (separate)
     misc_args = (
         "--attention-dropout 0.0 "
         "--hidden-dropout 0.0 "
@@ -115,8 +117,8 @@ def execute():
         "--attention-softmax-in-fp32 "
         "--attention-backend flash "
         "--actor-num-nodes 1 "
-        "--actor-num-gpus-per-node 8 "
-        "--colocate "
+        "--actor-num-gpus-per-node 4 "
+        "--rollout-num-gpus 4 "
         "--megatron-to-hf-mode bridge "
     )
 
