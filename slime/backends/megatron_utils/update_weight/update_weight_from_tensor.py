@@ -207,6 +207,11 @@ def _send_to_colocated_engine(
     ipc_gather_group,
     weight_version,
 ) -> tuple[list[ObjectRef], Any]:
+    # Placeholder ranks (GPU slots reserved but no engine) have no gather group.
+    # gather_object is only collective among group members, so we skip entirely.
+    if ipc_gather_group is None:
+        return [], None
+
     # TODO improve
     long_live_tensors = []
 

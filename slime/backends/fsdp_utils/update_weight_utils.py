@@ -130,6 +130,11 @@ class UpdateWeightFromTensor(UpdateWeight):
                 self.tp_rank = dist.get_rank() - start_rank
 
     def update_bucket_weights(self, named_tensors, weight_version=None) -> None:
+        # Placeholder ranks (GPU slots reserved but no engine) have no gather group.
+        # gather_object is only collective among group members, so we skip entirely.
+        if self._ipc_gather_group is None:
+            return
+
         monkey_patch_torch_reductions()
         # Use flattened bucket approach similar to Megatron
         logger.info("Using flattened tensor bucket")
