@@ -51,6 +51,10 @@ We also provide examples for some use cases not covered in the quick start guide
 
 slime has powered several novel research projects and production systems. Here are some notable examples:
 
+### 🦞 OpenClaw-RL: Train a Personalized Clawbot Simply by Talking to It
+
+[**OpenClaw-RL**](https://github.com/Gen-Verse/OpenClaw-RL) is an RL server for personalized OpenClaw agents. It hosts the OpenClaw model and improves it from prior conversations across deployments, while slime's asynchronous RL infrastructure prevents training from interfering with API serving. It supports two automatic optimization methods: GRPO with binary feedback inferred from subsequent states, and on-policy distillation that extracts hindsight hints from later feedback for the current policy.
+
 ### ⚛️ P1: Mastering Physics Olympiads with Reinforcement Learning
 
 [**P1**](https://prime-rl.github.io/P1/) is a family of open-source physics reasoning models trained entirely through reinforcement learning. P1 leverages slime as the RL post training framework, and introduces a multi-stage RL training algorithm that progressively enhances reasoning ability through adaptive learnability adjustment and stabilization mechanisms. Enpowered by this training paradigm, P1 delivers breakthrough performance in open-source physics reasoning.
