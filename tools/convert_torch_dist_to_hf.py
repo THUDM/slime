@@ -106,6 +106,12 @@ def get_named_params(args, state_dict):
 def save_tensors(args, model_name, state_dict, output_dir, chunk_size, vocab_size=None):
     print(f"start saving to {output_dir}")
     os.makedirs(output_dir, exist_ok=True)
+
+    hf_config = AutoConfig.from_pretrained(
+        hf_model_configs_only_path, trust_remote_code=True
+    )
+    quantization_config = getattr(hf_config, "quantization_config", None)
+    
     # 2GB
     current_size = 0
     total_size = 0
@@ -113,7 +119,7 @@ def save_tensors(args, model_name, state_dict, output_dir, chunk_size, vocab_siz
     for name, param in get_named_params(args, state_dict):
         if vocab_size:
             param = remove_padding(name, param, vocab_size)
-        converted_named_tensors = convert_to_hf(args, model_name, name, param)
+        converted_named_tensors = convert_to_hf(args, model_name, name, param, quantization_config)
         for converted_name, converted_param in converted_named_tensors:
             tensor_size = converted_param.numel() * converted_param.element_size()
             if tensor_size + current_size > chunk_size:
