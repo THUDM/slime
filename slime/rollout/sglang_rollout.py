@@ -413,6 +413,12 @@ async def generate_rollout_async(
                 data.append(group)
                 pbar.update(args.n_samples_per_prompt)
 
+        # When effective_batch_filtering is enabled, we only submit initial batch once
+        if args.effective_batch_filtering:
+            break
+
+    args.rollout_batch_size = len(data)
+
     pbar.close()
     sample = data[-1][0][0] if isinstance(data[-1][0], list) else data[-1][0]
     logger.info(

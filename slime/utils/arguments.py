@@ -364,6 +364,18 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 ),
             )
 
+            # See "Zero-Varience Filtering" part of https://arxiv.org/pdf/2510.13786
+            parser.add_argument(
+                "--effective-batch-filtering",
+                action="store_true",
+                default=False,
+                help=(
+                    "Whether to resample the effective batch during dynamic sampling. "
+                    "By default, we will resample until we reach the target data size (DAPO)"
+                    "With this argument turned on, we will simply drop the prompt."
+                ),
+            )
+
             # partial rollout
             parser.add_argument(
                 "--partial-rollout",
