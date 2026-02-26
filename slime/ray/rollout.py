@@ -722,7 +722,7 @@ class RolloutManager:
                 rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
             else:
                 # when samples count are not equal in each group
-                rewards = rewards.view(-1, rewards.shape[-1])
+                TODO
             mean = rewards.mean(dim=-1, keepdim=True)
             rewards = rewards - mean
 
