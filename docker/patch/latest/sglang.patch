@@ -10,6 +10,67 @@ index 6fbd1db82..f80ec11bb 100644
              "GlmMoeDsaForCausalLM",
          ]:
              self.hf_config.architectures[0] = "DeepseekV3ForCausalLMNextN"
+diff --git a/python/sglang/srt/disaggregation/common/conn.py b/python/sglang/srt/disaggregation/common/conn.py
+index 67fe82ad6..67f564f04 100644
+--- a/python/sglang/srt/disaggregation/common/conn.py
++++ b/python/sglang/srt/disaggregation/common/conn.py
+@@ -116,10 +116,18 @@ class CommonKVManager(BaseKVManager):
+ 
+         bootstrap_server_url = f"{host}:{self.bootstrap_port}"
+         url = f"http://{bootstrap_server_url}/route"
++        route_attn_tp_rank = self.attn_tp_rank
++        # In prefill CP mode, attention TP rank is flattened to 0, but requests are
++        # still routed by engine rank; register by engine rank to preserve all routes.
++        if (
++            self.disaggregation_mode == DisaggregationMode.PREFILL
++            and self.attn_tp_size == 1
++        ):
++            route_attn_tp_rank = self.kv_args.engine_rank
+         payload = {
+             "role": "Prefill",
+             "attn_tp_size": self.attn_tp_size,
+-            "attn_tp_rank": self.attn_tp_rank,
++            "attn_tp_rank": route_attn_tp_rank,
+             "attn_dp_size": self.attn_dp_size,
+             "attn_dp_rank": self.attn_dp_rank,
+             "pp_size": self.pp_size,
+@@ -333,6 +341,10 @@ class CommonKVReceiver(BaseKVReceiver):
+             self.required_dst_info_num = (
+                 self.kv_mgr.attn_tp_size // self.prefill_attn_tp_size
+             )
++            # With attention DP, one request is routed to one decode rank.
++            # Waiting for all TP shards to pre-allocate the same bootstrap room would stall forever.
++            if self.kv_mgr.attn_dp_size > 1:
++                self.required_dst_info_num = 1
+             self.required_prefill_response_num = 1 * (
+                 self.prefill_pp_size // self.kv_mgr.pp_size
+             )
+@@ -357,6 +369,11 @@ class CommonKVReceiver(BaseKVReceiver):
+             # multiple connections in the connection pool and have to send dummy requests to other prefill ranks,
+             # or the KVPoll will never be set correctly
+             self.target_tp_rank = self.target_tp_ranks[0]
++            # For prefill CP mode (decode attention TP=1, prefill attention TP>1),
++            # route bootstrap to all prefill ranks as non-dummy so the serving rank
++            # always receives decode-side metadata.
++            if self.kv_mgr.attn_tp_size == 1 and self.prefill_attn_tp_size > 1:
++                self.target_tp_rank = None
+             self.required_dst_info_num = 1
+             if self.kv_mgr.is_mla_backend:
+                 self.required_prefill_response_num = (
+@@ -610,8 +627,12 @@ class CommonKVBootstrapServer(BaseKVBootstrapServer):
+             and int(target_dp_group) == -1
+             and int(target_pp_rank) == -1
+         ):
++            inferred_attn_tp_size = max(
++                (len(v) for v in self.prefill_port_table.values()),
++                default=self.attn_tp_size,
++            )
+             prefill_parallel_info = {
+-                "prefill_attn_tp_size": self.attn_tp_size,
++                "prefill_attn_tp_size": inferred_attn_tp_size,
+                 "prefill_dp_size": self.dp_size,
+                 "prefill_pp_size": self.pp_size,
+                 "prefill_page_size": self.page_size,
 diff --git a/python/sglang/srt/disaggregation/decode.py b/python/sglang/srt/disaggregation/decode.py
 index 1d8baf002..440579d3f 100644
 --- a/python/sglang/srt/disaggregation/decode.py
@@ -160,7 +221,7 @@ index 1d8baf002..440579d3f 100644
  
          if not hasattr(self, "polling_count"):
 diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
-index d0d4efd95..2796402e0 100644
+index d0d4efd95..572e0b04f 100644
 --- a/python/sglang/srt/disaggregation/mooncake/conn.py
 +++ b/python/sglang/srt/disaggregation/mooncake/conn.py
 @@ -260,6 +260,19 @@ class MooncakeKVManager(CommonKVManager):
@@ -183,8 +244,80 @@ index d0d4efd95..2796402e0 100644
      def _transfer_data(self, mooncake_session_id, transfer_blocks):
          if not transfer_blocks:
              return 0
+@@ -895,6 +908,25 @@ class MooncakeKVManager(CommonKVManager):
+                                 target_rank_registration_info.dst_aux_ptrs,
+                             )
+                             polls.append(True if ret == 0 else False)
++                            if ret != 0:
++                                # Mark session as failed to avoid hanging
++                                # on subsequent batch_transfer_sync calls
++                                with self.session_lock:
++                                    self.session_failures[
++                                        req.mooncake_session_id
++                                    ] += 1
++                                    if (
++                                        self.session_failures[
++                                            req.mooncake_session_id
++                                        ]
++                                        >= 1
++                                    ):
++                                        self.failed_sessions.add(
++                                            req.mooncake_session_id
++                                        )
++                                        logger.error(
++                                            f"Session {req.mooncake_session_id} failed (send_aux)."
++                                        )
+                             dst_ranks_infos.append(
+                                 (req.endpoint, req.dst_port, req.room)
+                             )
+@@ -902,6 +934,16 @@ class MooncakeKVManager(CommonKVManager):
+                             # Only sync status when all the dst ranks have received the kvcache
+                             if len(polls) == req.required_dst_info_num:
+                                 status = KVPoll.Success if all(polls) else KVPoll.Failed
++                                logger.info(
++                                    "PD prefill transfer conclude room=%s status=%s pp_rank=%s attn_tp_rank=%s local_rank=%s polls=%s required_dst_info_num=%s",
++                                    req.room,
++                                    status,
++                                    self.pp_rank,
++                                    self.attn_tp_rank,
++                                    local_rank,
++                                    len(polls),
++                                    req.required_dst_info_num,
++                                )
+                                 self.update_status(req.room, status)
+                                 for endpoint, dst_port, room in dst_ranks_infos:
+                                     self.sync_status_to_decode_endpoint(
+@@ -950,6 +992,13 @@ class MooncakeKVManager(CommonKVManager):
+                 else:
+                     required_dst_info_num = int(waiting_req_bytes[7].decode("ascii"))
+                     room = int(room)
++                    logger.info(
++                        "PD prefill bootstrap recv room=%s required_dst_info_num=%s pp_rank=%s attn_tp_rank=%s",
++                        room,
++                        required_dst_info_num,
++                        self.pp_rank,
++                        self.attn_tp_rank,
++                    )
+                     if room not in self.transfer_infos:
+                         self.transfer_infos[room] = {}
+ 
+@@ -1333,6 +1382,14 @@ class MooncakeKVReceiver(CommonKVReceiver):
+         for bootstrap_info in self.bootstrap_infos:
+             sock, lock = self._connect_to_bootstrap_server(bootstrap_info)
+             is_dummy = bootstrap_info["is_dummy"]
++            logger.info(
++                "PD decode init room=%s required_dst_info_num=%s target_bootstrap=%s:%s is_dummy=%s",
++                self.bootstrap_room,
++                self.required_dst_info_num,
++                bootstrap_info["rank_ip"],
++                bootstrap_info["rank_port"],
++                is_dummy,
++            )
+ 
+             with lock:
+                 sock.send_multipart(
 diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
-index fbc801635..ba4bd6fd2 100644
+index fbc801635..215a59626 100644
 --- a/python/sglang/srt/disaggregation/prefill.py
 +++ b/python/sglang/srt/disaggregation/prefill.py
 @@ -20,6 +20,7 @@ Life cycle of a request in the prefill server
@@ -236,7 +369,22 @@ index fbc801635..ba4bd6fd2 100644
                  continue
              elif poll == KVPoll.Failed:
                  error_message = f"Prefill bootstrap failed for request rank={self.tp_rank} {req.rid=} {req.bootstrap_room=}"
-@@ -335,6 +363,15 @@ class PrefillBootstrapQueue:
+@@ -316,6 +344,14 @@ class PrefillBootstrapQueue:
+ 
+             num_pages = kv_to_page_num(num_kv_indices, self.token_to_kv_pool.page_size)
+             req.disagg_kv_sender.init(num_pages, req.metadata_buffer_index)
++            logger.info(
++                "PD prefill bootstrapped rid=%s room=%s pp_rank=%s tp_rank=%s num_pages=%s",
++                req.rid,
++                req.bootstrap_room,
++                self.pp_rank,
++                self.tp_rank,
++                num_pages,
++            )
+ 
+             bootstrapped_reqs.append(req)
+             indices_to_remove.add(i)
+@@ -335,6 +371,15 @@ class PrefillBootstrapQueue:
          else:
              return bootstrapped_reqs, failed_reqs
  
@@ -252,7 +400,7 @@ index fbc801635..ba4bd6fd2 100644
  
  class SchedulerDisaggregationPrefillMixin:
      """
-@@ -564,6 +601,13 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -564,6 +609,13 @@ class SchedulerDisaggregationPrefillMixin:
              self.attn_tp_cpu_group,
          )
  
@@ -266,8 +414,14 @@ index fbc801635..ba4bd6fd2 100644
          undone_reqs: List[Req] = []
          # Check .poll() for the reqs in disagg_prefill_inflight_queue. If Success, respond to the client and remove it from the queue
          for req, poll in zip(self.disagg_prefill_inflight_queue, polls):
-@@ -576,7 +620,30 @@ class SchedulerDisaggregationPrefillMixin:
-                 assert poll == KVPoll.Success or poll == KVPoll.Failed
+@@ -573,10 +625,35 @@ class SchedulerDisaggregationPrefillMixin:
+                     undone_reqs.append(req)
+                     continue
+ 
+-                assert poll == KVPoll.Success or poll == KVPoll.Failed
++                if poll not in (KVPoll.Success, KVPoll.Failed):
++                    undone_reqs.append(req)
++                    continue
  
              if poll in [KVPoll.WaitingForInput, KVPoll.Transferring]:
 -                undone_reqs.append(req)
@@ -298,6 +452,20 @@ index fbc801635..ba4bd6fd2 100644
              elif poll == KVPoll.Success:  # transfer done
                  release_kv_cache(req, self.tree_cache)  # unlock the tree
                  req.finished_reason = FINISH_LENGTH(length=0)
+@@ -747,4 +824,13 @@ class SchedulerDisaggregationPrefillMixin:
+                 f"Skip sending kv chunk for request {req.rid=} {req.bootstrap_room=} because page_indices is empty"
+             )
+             return
++        logger.info(
++            "PD prefill send chunk rid=%s room=%s pp_rank=%s tp_rank=%s pages=%s last_chunk=%s",
++            req.rid,
++            req.bootstrap_room,
++            self.pp_rank,
++            self.tp_rank,
++            len(page_indices),
++            last_chunk,
++        )
+         req.disagg_kv_sender.send(page_indices, state_indices)
 diff --git a/python/sglang/srt/distributed/parallel_state.py b/python/sglang/srt/distributed/parallel_state.py
 index 8f1069c00..e47589295 100644
 --- a/python/sglang/srt/distributed/parallel_state.py
@@ -421,7 +589,7 @@ index 1cdf65b91..4783cd18f 100644
      buf_numel_per_page: tl.constexpr,
      index_head_dim: tl.constexpr,
 diff --git a/python/sglang/srt/layers/attention/nsa/nsa_indexer.py b/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
-index ca54a931b..7a5b55c5d 100644
+index ca54a931b..258407c71 100644
 --- a/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
 +++ b/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
 @@ -4,6 +4,7 @@ import contextlib
@@ -432,16 +600,19 @@ index ca54a931b..7a5b55c5d 100644
  import torch
  from einops import rearrange
  
-@@ -207,7 +208,7 @@ class Indexer(MultiPlatformOp):
+@@ -207,7 +208,10 @@ class Indexer(MultiPlatformOp):
              max_position=max_position_embeddings,
              base=rope_theta,  # type: ignore
              rope_scaling=rope_scaling,
 -            is_neox_style=is_neox_style,
-+            is_neox_style=True if os.environ.get("INDEXER_ROPE_NEOX_STYLE", "1") == "1" else is_neox_style,
++            is_neox_style=(
++                os.environ.get("INDEXER_ROPE_NEOX_STYLE", "1") == "1"
++                if os.environ.get("INDEXER_ROPE_NEOX_STYLE", None) else is_neox_style
++            ),
              device=get_global_server_args().device,
          )
          self.block_size = block_size
-@@ -982,6 +983,9 @@ class Indexer(MultiPlatformOp):
+@@ -982,6 +986,9 @@ class Indexer(MultiPlatformOp):
              query, key = self._get_q_k_bf16(
                  q_lora, x, positions, enable_dual_stream, forward_batch=forward_batch
              )
@@ -451,7 +622,7 @@ index ca54a931b..7a5b55c5d 100644
              q_fp8, q_scale = act_quant(query, self.block_size, self.scale_fmt)
              with torch.cuda.stream(self.alt_stream):
                  k_fp8, k_scale = act_quant(key, self.block_size, self.scale_fmt)
-@@ -991,6 +995,9 @@ class Indexer(MultiPlatformOp):
+@@ -991,6 +998,9 @@ class Indexer(MultiPlatformOp):
              query, key = self._get_q_k_bf16(
                  q_lora, x, positions, enable_dual_stream, forward_batch=forward_batch
              )
@@ -461,6 +632,135 @@ index ca54a931b..7a5b55c5d 100644
  
              if enable_dual_stream:
                  current_stream = torch.cuda.current_stream()
+diff --git a/python/sglang/srt/layers/attention/nsa/utils.py b/python/sglang/srt/layers/attention/nsa/utils.py
+index 00ef96f9b..9885fcd0d 100644
+--- a/python/sglang/srt/layers/attention/nsa/utils.py
++++ b/python/sglang/srt/layers/attention/nsa/utils.py
+@@ -54,7 +54,12 @@ def can_nsa_prefill_cp_round_robin_split(forward_batch: "ForwardBatch"):
+         return False
+     cp_size = get_attention_cp_size()
+     seq_len = sum(forward_batch.extend_seq_lens_cpu)
+-    return is_nsa_prefill_cp_round_robin_split() and seq_len > 0 and cp_size > 1
++    return (
++        is_nsa_prefill_cp_round_robin_split()
++        and seq_len >= cp_size
++        and seq_len % cp_size == 0
++        and cp_size > 1
++    )
+ 
+ 
+ def nsa_cp_round_robin_split_data(input_: Union[torch.Tensor, List]):
+@@ -91,20 +96,29 @@ def nsa_cp_round_robin_split_data(input_: Union[torch.Tensor, List]):
+ def cal_padded_tokens(forward_batch: "ForwardBatch"):
+     # Consistent with the padding calculation logic in ForwardBatch.prepare_mlp_sync_batch,
+     # calculate the actual token length after padding when attn_tp_size > 1 or in the MAX_LEN padding mode.
+-    global_num_tokens = forward_batch.global_num_tokens_cpu.copy()
++    if forward_batch.global_num_tokens_cpu is None:
++        # PD prefill CP+PP path can bypass MLP-sync metadata. Reconstruct a single-rank
++        # global token view from the local token count for NSA padding logic.
++        local_tokens = forward_batch.num_token_non_padded_cpu
++        if local_tokens is None:
++            local_tokens = len(forward_batch.input_ids)
++        global_num_tokens = [local_tokens * get_attention_cp_size()]
++    else:
++        global_num_tokens = forward_batch.global_num_tokens_cpu.copy()
+     sync_group_size = len(global_num_tokens)
+     attn_cp_size = get_attention_cp_size()
+     for i in range(sync_group_size):
+         global_num_tokens[i] = ceil_align(global_num_tokens[i], attn_cp_size)
+-    dp_padding_mode = DpPaddingMode.get_dp_padding_mode(
+-        forward_batch.is_extend_in_batch, global_num_tokens
+-    )
+-    if dp_padding_mode.is_max_len():
+-        tokens = max(global_num_tokens)
+-    elif len(global_num_tokens) > 1:
+-        tokens = global_num_tokens[get_attention_dp_rank()]
+-    else:
++    if len(global_num_tokens) == 1:
+         tokens = global_num_tokens[0]
++    else:
++        dp_padding_mode = DpPaddingMode.get_dp_padding_mode(
++            forward_batch.is_extend_in_batch, global_num_tokens
++        )
++        if dp_padding_mode.is_max_len():
++            tokens = max(global_num_tokens)
++        else:
++            tokens = global_num_tokens[get_attention_dp_rank()]
+     if can_nsa_prefill_cp_round_robin_split(forward_batch):
+         tokens = ceil_div(tokens, attn_cp_size)
+     return tokens
+@@ -152,10 +166,9 @@ class NSAContextParallelMetadata:
+ 
+ def can_cp_split(seq_len: int, cp_size: int, use_nsa: bool, forward_batch):
+     if is_nsa_prefill_cp_round_robin_split():
++        if seq_len < cp_size or seq_len % cp_size != 0:
++            return False
+         cur_cp_seq_len = seq_len // cp_size
+-        assert (
+-            seq_len % cp_size == 0
+-        ), f"seq_len {seq_len} is not divisible by cp_size {cp_size} when nsa_prefill_cp_mode is round-robin-split"
+     else:
+         # TODO current just support prefill batch=1 and len(input_ids) > self.cp_size * 2
+         # Note: (self.cp_size * 2) To achieve load balancing for seq computation,
+@@ -175,10 +188,6 @@ def can_cp_split(seq_len: int, cp_size: int, use_nsa: bool, forward_batch):
+ 
+ def cp_split_and_rebuild_data(forward_batch, input_: torch.Tensor):
+     if is_nsa_prefill_cp_round_robin_split():
+-        cp_size = get_attention_cp_size()
+-        assert (
+-            input_.shape[0] % cp_size == 0
+-        ), f"Expect input shape 0 can divided by cp size, but got input shape {input_.shape}, cp size {cp_size}"
+         return nsa_cp_round_robin_split_data(input_)
+ 
+     input_list = list(
+@@ -192,11 +201,6 @@ def cp_split_and_rebuild_data(forward_batch, input_: torch.Tensor):
+ 
+ def cp_split_and_rebuild_position(forward_batch, positions: torch.Tensor):
+     if is_nsa_prefill_cp_round_robin_split():
+-        cp_size = get_attention_cp_size()
+-        assert positions.shape[0] % cp_size == 0, (
+-            f"Expect positions shape 0 can divided by cp size, but got positions shape {positions.shape}, "
+-            f"cp size {cp_size}"
+-        )
+         return nsa_cp_round_robin_split_data(positions)
+ 
+     position_id_list = list(
+diff --git a/python/sglang/srt/layers/communicator_nsa_cp.py b/python/sglang/srt/layers/communicator_nsa_cp.py
+index 296d14568..dbf97da87 100644
+--- a/python/sglang/srt/layers/communicator_nsa_cp.py
++++ b/python/sglang/srt/layers/communicator_nsa_cp.py
+@@ -34,7 +34,6 @@ from sglang.srt.layers.communicator import (
+ from sglang.srt.layers.dp_attention import (
+     attn_cp_all_gather_into_tensor,
+     attn_cp_reduce_scatter_tensor,
+-    get_local_dp_buffer,
+ )
+ from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+ 
+@@ -153,9 +152,20 @@ class NSACPCommunicateWithAllReduceAndLayerNormFn(
+         # for decode: attn tp full -> full
+         if nsa_use_prefill_cp(forward_batch):
+             assert context.attn_dp_size == 1
+-            hidden_states, local_hidden_states = (
+-                get_local_dp_buffer(),
+-                hidden_states,
++            local_hidden_states = hidden_states
++            total_tokens = (
++                sum(forward_batch.extend_seq_lens_cpu)
++                if forward_batch.extend_seq_lens_cpu is not None
++                else local_hidden_states.shape[0] * context.attn_cp_size
++            )
++            max_len = (total_tokens + context.attn_cp_size - 1) // context.attn_cp_size
++            if local_hidden_states.shape[0] < max_len:
++                pad = local_hidden_states.new_zeros(
++                    (max_len - local_hidden_states.shape[0], local_hidden_states.shape[1])
++                )
++                local_hidden_states = torch.cat([local_hidden_states, pad], dim=0)
++            hidden_states = local_hidden_states.new_empty(
++                (max_len * context.attn_cp_size, local_hidden_states.shape[1])
+             )
+             attn_cp_all_gather_into_tensor(
+                 hidden_states,
 diff --git a/python/sglang/srt/layers/layernorm.py b/python/sglang/srt/layers/layernorm.py
 index 39832c45a..c3d3c6b54 100644
 --- a/python/sglang/srt/layers/layernorm.py
@@ -886,7 +1186,7 @@ index c07995798..dd8ca7167 100644
                  break
  
 diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
-index a9ff0ac94..a50dd5122 100644
+index a9ff0ac94..61ee8a5cf 100644
 --- a/python/sglang/srt/managers/scheduler.py
 +++ b/python/sglang/srt/managers/scheduler.py
 @@ -114,6 +114,7 @@ from sglang.srt.managers.io_struct import (
@@ -897,7 +1197,20 @@ index a9ff0ac94..a50dd5122 100644
      ProfileReq,
      ReleaseMemoryOccupationReqInput,
      ResumeMemoryOccupationReqInput,
-@@ -1063,6 +1064,7 @@ class Scheduler(
+@@ -453,6 +454,12 @@ class Scheduler(
+                         self.recv_from_rpc,
+                     ]
+                 )
++            if self.server_args.disaggregation_mode == DisaggregationMode.PREFILL.value:
++                logger.info(
++                    "PD prefill scheduler ipc recv_from_tokenizer=%s recv_from_rpc=%s",
++                    port_args.scheduler_input_ipc_name,
++                    port_args.rpc_ipc_name,
++                )
+         else:
+             self.recv_from_tokenizer = None
+             self.recv_from_rpc = None
+@@ -1063,6 +1070,7 @@ class Scheduler(
                  ),
                  (UpdateWeightsFromTensorReqInput, self.update_weights_from_tensor),
                  (UpdateWeightsFromIPCReqInput, self.update_weights_from_ipc),
@@ -905,6 +1218,85 @@ index a9ff0ac94..a50dd5122 100644
                  (GetWeightsByNameReqInput, self.get_weights_by_name),
                  (ReleaseMemoryOccupationReqInput, self.release_memory_occupation),
                  (ResumeMemoryOccupationReqInput, self.resume_memory_occupation),
+@@ -1248,6 +1256,17 @@ class Scheduler(
+                     except zmq.ZMQError:
+                         break
+                     recv_reqs.append(recv_rpc)
++                if (
++                    self.disaggregation_mode == DisaggregationMode.PREFILL
++                    and len(recv_reqs) > 0
++                ):
++                    logger.info(
++                        "PD prefill recv_requests raw_count=%s pp_rank=%s tp_rank=%s attn_cp_rank=%s",
++                        len(recv_reqs),
++                        self.pp_rank,
++                        self.tp_rank,
++                        self.attn_cp_rank,
++                    )
+             else:
+                 recv_reqs = None
+         else:
+@@ -1304,6 +1323,14 @@ class Scheduler(
+                 self.tp_cpu_group,
+                 src=self.tp_group.ranks[0],
+             )
++        if self.disaggregation_mode == DisaggregationMode.PREFILL and len(recv_reqs) > 0:
++            logger.info(
++                "PD prefill recv_requests post_bcast_count=%s pp_rank=%s tp_rank=%s attn_cp_rank=%s",
++                len(recv_reqs),
++                self.pp_rank,
++                self.tp_rank,
++                self.attn_cp_rank,
++            )
+ 
+         # Process MM requests under EPD-disaggregation mode
+         if (
+@@ -1364,6 +1391,18 @@ class Scheduler(
+     def process_input_requests(self, recv_reqs: List):
+ 
+         for recv_req in recv_reqs:
++            if (
++                self.disaggregation_mode == DisaggregationMode.PREFILL
++                and isinstance(recv_req, TokenizedGenerateReqInput)
++            ):
++                logger.info(
++                    "PD prefill scheduler recv rid=%s room=%s pp_rank=%s tp_rank=%s attn_cp_rank=%s",
++                    recv_req.rid,
++                    recv_req.bootstrap_room,
++                    self.pp_rank,
++                    self.tp_rank,
++                    self.attn_cp_rank,
++                )
+             # If it is a health check generation request and there are running requests, ignore it.
+             if is_health_check_generate_req(recv_req) and (
+                 self.chunked_req is not None
+@@ -1687,6 +1726,13 @@ class Scheduler(
+             req.time_stats.wait_queue_entry_time = time.perf_counter()
+             trace_slice_end(RequestStage.REQUEST_PROCESS, req.rid, auto_next_anon=True)
+         elif self.disaggregation_mode == DisaggregationMode.PREFILL:
++            logger.info(
++                "PD prefill enqueue rid=%s room=%s pp_rank=%s tp_rank=%s",
++                req.rid,
++                req.bootstrap_room,
++                self.pp_rank,
++                self.tp_rank,
++            )
+             self._prefetch_kvcache(req)
+             self.disagg_prefill_bootstrap_queue.add(
+                 req, self.model_config.num_key_value_heads
+@@ -3160,6 +3206,12 @@ def run_scheduler_process(
+ 
+         # Dispatch to the appropriate event loop based on the disaggregation mode
+         disaggregation_mode: DisaggregationMode = scheduler.disaggregation_mode
++        logger.info(
++            "PD scheduler loop dispatch mode=%s pp_size=%s enable_overlap=%s",
++            disaggregation_mode,
++            server_args.pp_size,
++            scheduler.enable_overlap,
++        )
+         if disaggregation_mode == DisaggregationMode.NULL:
+             if scheduler.enable_pdmux:
+                 scheduler.event_loop_pdmux()
 diff --git a/python/sglang/srt/managers/scheduler_metrics_mixin.py b/python/sglang/srt/managers/scheduler_metrics_mixin.py
 index 30b2732b9..91ea814b0 100644
 --- a/python/sglang/srt/managers/scheduler_metrics_mixin.py
@@ -979,6 +1371,100 @@ index 482bc6ca6..bda193935 100644
              if self.model_config.is_multimodal_gen:
                  return
              self.send_to_detokenizer.send_output(
+diff --git a/python/sglang/srt/managers/scheduler_pp_mixin.py b/python/sglang/srt/managers/scheduler_pp_mixin.py
+index 1a65a3c3d..c395472f8 100644
+--- a/python/sglang/srt/managers/scheduler_pp_mixin.py
++++ b/python/sglang/srt/managers/scheduler_pp_mixin.py
+@@ -20,6 +20,7 @@ from sglang.srt.layers.dp_attention import (
+     get_attention_dp_rank,
+     get_attention_dp_size,
+     is_dp_attention_enabled,
++    set_is_extend_in_batch,
+ )
+ from sglang.srt.managers.schedule_batch import Req, ScheduleBatch
+ from sglang.srt.managers.utils import (
+@@ -197,6 +198,22 @@ class SchedulerPPMixin:
+         while True:
+             server_is_idle = True
+             for mb_id in range(self.pp_loop_size):
++                if (
++                    self.pp_rank == 0
++                    and self.tp_rank == 0
++                    and self.attn_cp_rank == 0
++                    and mb_id == 0
++                ):
++                    if not hasattr(self, "_pd_prefill_loop_heartbeat"):
++                        self._pd_prefill_loop_heartbeat = 0
++                    self._pd_prefill_loop_heartbeat += 1
++                    if self._pd_prefill_loop_heartbeat == 1:
++                        logger.info("PD prefill loop heartbeat iter=1")
++                    elif self._pd_prefill_loop_heartbeat % 2000 == 0:
++                        logger.info(
++                            "PD prefill loop heartbeat iter=%s",
++                            self._pd_prefill_loop_heartbeat,
++                        )
+                 self.running_batch = self.running_mbs[mb_id]
+                 self.last_batch = self.last_mbs[mb_id]
+                 next_first_rank_mb_id = (mb_id + self.pp_size) % self.pp_loop_size
+@@ -224,7 +241,24 @@ class SchedulerPPMixin:
+ 
+                 self.process_prefill_chunk()
+                 batch = self.get_new_batch_prefill()
+-                batch = self.maybe_prepare_mlp_sync_batch(batch)
++                need_mlp_sync = self.require_mlp_sync
++                skipped_mlp_sync = False
++                if (
++                    need_mlp_sync
++                    and self.disaggregation_mode == DisaggregationMode.PREFILL
++                    and self.server_args.enable_nsa_prefill_context_parallel
++                    and self.pp_size > 1
++                ):
++                    # In PD prefill CP+PP, MLP sync all_gather can deadlock on idle micro-batches.
++                    # Skip MLP sync here because decode-side MLP gather is not involved in this path.
++                    need_mlp_sync = False
++                    skipped_mlp_sync = True
++                batch = self.maybe_prepare_mlp_sync_batch(batch, need_sync=need_mlp_sync)
++                if skipped_mlp_sync:
++                    # MLP sync was skipped but set_is_extend_in_batch is still needed
++                    # by the deepep dispatcher (called in model forward).
++                    is_extend = batch.forward_mode.is_extend() if batch is not None else False
++                    set_is_extend_in_batch(is_extend)
+                 self.mbs[mb_id] = batch
+                 self.running_mbs[mb_id] = self.running_batch
+ 
+@@ -859,7 +893,7 @@ class SchedulerPPMixin:
+ 
+     def _pp_send_pyobj_to_next_stage(self: Scheduler, data, async_send: bool = False):
+         p2p_work = []
+-        if self.attn_tp_rank == 0:
++        if self.attn_tp_rank == 0 and self.attn_cp_rank == 0:
+             dp_offset = self.attn_dp_rank * self.attn_tp_size
+             p2p_work = point_to_point_pyobj(
+                 data,
+@@ -872,7 +906,7 @@ class SchedulerPPMixin:
+         return p2p_work
+ 
+     def _pp_recv_pyobj_from_prev_stage(self: Scheduler):
+-        if self.attn_tp_rank == 0:
++        if self.attn_tp_rank == 0 and self.attn_cp_rank == 0:
+             dp_offset = self.attn_dp_rank * self.attn_tp_size
+             data = point_to_point_pyobj(
+                 [],
+@@ -884,6 +918,14 @@ class SchedulerPPMixin:
+         else:
+             data = None
+ 
++        if self.attn_cp_size > 1:
++            data = broadcast_pyobj(
++                data,
++                self.attn_cp_group.rank,
++                self.attn_cp_cpu_group,
++                src=self.attn_cp_group.ranks[0],
++            )
++
+         if self.attn_tp_size > 1:
+             data = broadcast_pyobj(
+                 data,
 diff --git a/python/sglang/srt/managers/scheduler_update_weights_mixin.py b/python/sglang/srt/managers/scheduler_update_weights_mixin.py
 index 293a84350..8ee36c794 100644
 --- a/python/sglang/srt/managers/scheduler_update_weights_mixin.py
@@ -1106,6 +1592,55 @@ index f2ffa9909..6e4d1d460 100644
      async def init_weights_send_group_for_remote_instance(
          self,
          obj: InitWeightsSendGroupForRemoteInstanceReqInput,
+diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
+index 0914a5230..d637041b0 100644
+--- a/python/sglang/srt/managers/tokenizer_manager.py
++++ b/python/sglang/srt/managers/tokenizer_manager.py
+@@ -324,8 +324,12 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
+             context, zmq.PULL, port_args.tokenizer_ipc_name, True
+         )
+         if self.server_args.tokenizer_worker_num == 1:
++            self.send_to_scheduler_context = zmq.Context(1)
+             self.send_to_scheduler = get_zmq_socket(
+-                context, zmq.PUSH, port_args.scheduler_input_ipc_name, True
++                self.send_to_scheduler_context,
++                zmq.PUSH,
++                port_args.scheduler_input_ipc_name,
++                True,
+             )
+         else:
+             from sglang.srt.managers.multi_tokenizer_mixin import SenderWrapper
+@@ -337,6 +341,12 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
+ 
+             # Make sure that each request carries the tokenizer_ipc_name for response routing
+             self.send_to_scheduler = SenderWrapper(port_args, send_to_scheduler)
++        if self.server_args.disaggregation_mode == DisaggregationMode.PREFILL.value:
++            logger.info(
++                "PD prefill tokenizer ipc send_to_scheduler=%s recv_from_detokenizer=%s",
++                port_args.scheduler_input_ipc_name,
++                port_args.tokenizer_ipc_name,
++            )
+ 
+     def init_running_status(self):
+         # Request states
+@@ -1060,6 +1070,17 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
+         tokenized_obj: Union[TokenizedGenerateReqInput, TokenizedEmbeddingReqInput],
+         created_time: Optional[float] = None,
+     ):
++        if (
++            self.disaggregation_mode == DisaggregationMode.PREFILL
++            and isinstance(tokenized_obj, TokenizedGenerateReqInput)
++        ):
++            logger.info(
++                "PD prefill tokenizer send rid=%s room=%s bootstrap=%s:%s",
++                tokenized_obj.rid,
++                tokenized_obj.bootstrap_room,
++                tokenized_obj.bootstrap_host,
++                tokenized_obj.bootstrap_port,
++            )
+         trace_slice_start(RequestStage.TOKENIZER_DISPATCH, obj.rid)
+         tokenized_obj.trace_context = trace_get_proc_propagate_context(obj.rid)
+         tokenized_obj = wrap_shm_features(tokenized_obj)
 diff --git a/python/sglang/srt/managers/tp_worker.py b/python/sglang/srt/managers/tp_worker.py
 index 86b009df4..16ebd52ae 100644
 --- a/python/sglang/srt/managers/tp_worker.py
@@ -1678,7 +2213,7 @@ index d641826e3..3abc39ef3 100644
                  positions,
                  hidden_states,
 diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
-index b080aeb16..f5bbba456 100644
+index b080aeb16..957a613fa 100644
 --- a/python/sglang/srt/server_args.py
 +++ b/python/sglang/srt/server_args.py
 @@ -580,6 +580,7 @@ class ServerArgs:
@@ -1689,7 +2224,25 @@ index b080aeb16..f5bbba456 100644
      disable_cuda_graph_padding: bool = False
      enable_profile_cuda_graph: bool = False
      enable_cudagraph_gc: bool = False
-@@ -4491,6 +4492,11 @@ class ServerArgs:
+@@ -2089,7 +2090,16 @@ class ServerArgs:
+             assert (
+                 self.tp_size % (self.dp_size * self.attn_cp_size) == 0
+             ), "tp_size must be divisible by dp_size * attn_cp_size"
+-            assert self.pp_size == 1, "PP is not supported with context parallelism"
++            if self.pp_size > 1:
++                assert (
++                    self.disaggregation_mode == "prefill"
++                    and self.enable_nsa_prefill_context_parallel
++                    and self.nsa_prefill_cp_mode == "round-robin-split"
++                ), (
++                    "PP with context parallelism is only supported for PD prefill "
++                    "with --enable-nsa-prefill-context-parallel and "
++                    "--nsa-prefill-cp-mode round-robin-split."
++                )
+ 
+         if self.moe_dp_size > 1:
+             # The tp_size is the world size, not the real tensor parallel size
+@@ -4491,6 +4501,11 @@ class ServerArgs:
              action="store_true",
              help="Disable cuda graph.",
          )
@@ -1701,6 +2254,61 @@ index b080aeb16..f5bbba456 100644
          parser.add_argument(
              "--disable-cuda-graph-padding",
              action="store_true",
+@@ -5636,6 +5651,54 @@ class PortArgs:
+             )
+ 
+         if not server_args.enable_dp_attention:
++            # In multi-node prefill PD with PP/CP, use TCP transport for tokenizer<->scheduler
++            # IPC occasionally stalls in this topology.
++            if (
++                server_args.nnodes > 1
++                and server_args.disaggregation_mode == "prefill"
++                and server_args.dist_init_addr is not None
++            ):
++                if server_args.dist_init_addr.startswith("["):  # ipv6 address
++                    port_num, host = configure_ipv6(server_args.dist_init_addr)
++                    dist_init_addr = (host, str(port_num))
++                else:
++                    dist_init_addr = server_args.dist_init_addr.split(":")
++
++                assert (
++                    len(dist_init_addr) == 2
++                ), "please provide --dist-init-addr as host:port of head node"
++
++                dist_init_host, dist_init_port = dist_init_addr
++                dist_init_port = int(dist_init_port)
++                port_base = dist_init_port + ZMQ_TCP_PORT_DELTA
++                detokenizer_port = port_base + 1
++                rpc_port = port_base + 2
++                metrics_port = port_base + 3
++                scheduler_input_port = port_base + 4
++
++                try:
++                    wait_port_available(dist_init_port, "dist_init_port")
++                    wait_port_available(port_base, "port_base")
++                    wait_port_available(detokenizer_port, "detokenizer_port")
++                    wait_port_available(nccl_port, "nccl_port")
++                    wait_port_available(rpc_port, "rpc_port")
++                    wait_port_available(metrics_port, "metrics_port")
++                    wait_port_available(scheduler_input_port, "scheduler_input_port")
++                except ValueError:
++                    logger.exception(
++                        f"Port is already in use. {dist_init_port=} {port_base=} {detokenizer_port=} {nccl_port=} {scheduler_input_port=}"
++                    )
++                    raise
++
++                return PortArgs(
++                    tokenizer_ipc_name=f"tcp://{dist_init_host}:{port_base}",
++                    scheduler_input_ipc_name=f"tcp://{dist_init_host}:{scheduler_input_port}",
++                    detokenizer_ipc_name=f"tcp://{dist_init_host}:{detokenizer_port}",
++                    nccl_port=nccl_port,
++                    rpc_ipc_name=f"tcp://{dist_init_host}:{rpc_port}",
++                    metrics_ipc_name=f"tcp://{dist_init_host}:{metrics_port}",
++                    tokenizer_worker_ipc_name=tokenizer_worker_ipc_name,
++                )
+             # Normal case, use IPC within a single node
+             return PortArgs(
+                 tokenizer_ipc_name=f"ipc://{tempfile.NamedTemporaryFile(delete=False).name}",
 diff --git a/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py b/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
 index 5fe45086c..c95fbd0f6 100644
 --- a/python/sglang/srt/speculative/eagle_draft_cuda_graph_runner.py
