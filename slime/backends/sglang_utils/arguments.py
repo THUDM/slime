@@ -48,6 +48,7 @@ def add_sglang_arguments(parser):
 
     skipped_args = [
         "model_path",
+        "config",
         "trust_remote_code",
         "random_seed",
         # memory
@@ -117,6 +118,27 @@ def add_sglang_arguments(parser):
     ServerArgs.add_cli_args(parser)
     parser.add_argument = old_add_argument
 
+    # PD disaggregation / multi-group config
+    parser.add_argument(
+        "--prefill-num-servers",
+        type=int,
+        default=None,
+        help="Number of prefill servers for disaggregation.",
+    )
+    parser.add_argument(
+        "--sglang-config",
+        type=str,
+        default=None,
+        help=(
+            "Path to a YAML config for SGLang engine deployment. "
+            "Defines engine_groups with worker_type (regular/prefill/decode/placeholder), "
+            "num_gpus per group, and optional per-group 'overrides' dict of "
+            "ServerArgs field names that override the base --sglang-* CLI args. "
+            "Placeholder groups reserve GPU slots without creating engines. "
+            "Mutually exclusive with --prefill-num-servers."
+        ),
+    )
+
     return parser
 
 
@@ -140,6 +162,19 @@ def validate_args(args):
 
     if getattr(args, "sglang_router_ip", None):
         args.sglang_router_ip = _wrap_ipv6(args.sglang_router_ip)
+
+    # Mutual-exclusion checks for PD disaggregation / sglang-config.
+    assert not (
+        getattr(args, "prefill_num_servers", None) is not None and args.rollout_external
+    ), "prefill_num_servers cannot be set when rollout_external is set."
+
+    assert not (
+        getattr(args, "sglang_config", None) is not None and args.rollout_external
+    ), "sglang_config cannot be set when rollout_external is set."
+
+    assert not (
+        getattr(args, "sglang_config", None) is not None and getattr(args, "prefill_num_servers", None) is not None
+    ), "sglang_config and prefill_num_servers are mutually exclusive. Use engine_groups in the YAML config instead."
 
 
 def sglang_parse_args():

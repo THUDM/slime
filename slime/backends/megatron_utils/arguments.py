@@ -98,6 +98,9 @@ def megatron_parse_args(extra_args_provider, skip_hf_validate=False):
         _hf_validate_args(args, hf_config)
 
     args.rank = 0
-    args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
+    if args.critic_train_only:
+        args.world_size = args.critic_num_nodes * args.critic_num_gpus_per_node
+    else:
+        args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
     args = _set_default_megatron_args(args)
     return args
