@@ -93,7 +93,8 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
         for sample in origin_samples:
             from slime.utils.processing_utils import process_vision_info
 
-            multimodal_inputs = process_vision_info(sample.prompt, processor)
+            vision_prompt = sample.raw_prompt if sample.raw_prompt is not None else sample.prompt
+            multimodal_inputs = process_vision_info(vision_prompt, processor)
             processor_output = processor(text=sample.prompt, **multimodal_inputs)
             input_ids = processor_output["input_ids"][0]
             if len(input_ids) <= max_length:
@@ -193,6 +194,7 @@ class Dataset:
         seed=42,
         apply_chat_template=False,
         apply_chat_template_kwargs=None,
+        lazy_multimodal_load=False,
     ):
         origin_samples = []
         for data in read_file(path):
@@ -222,7 +224,7 @@ class Dataset:
             else:
                 output_prompt = prompt
 
-            if processor:
+            if processor and not lazy_multimodal_load:
                 from slime.utils.processing_utils import process_vision_info
 
                 assert isinstance(
@@ -232,9 +234,13 @@ class Dataset:
             else:
                 multimodal_inputs = None
 
+            # Store raw conversation prompt for lazy multimodal loading
+            raw_prompt = prompt if processor and lazy_multimodal_load and isinstance(prompt, list) else None
+
             origin_samples.append(
                 Sample(
                     prompt=output_prompt,
+                    raw_prompt=raw_prompt,
                     label=data[label_key] if label_key is not None else None,
                     metadata=metadata,
                     multimodal_inputs=multimodal_inputs,

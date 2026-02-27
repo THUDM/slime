@@ -152,6 +152,12 @@ def _initialize_resources(args: Any, sample: Sample):
 
 
 def _prepare_initial_inputs(sample: Sample, processor, tokenizer):
+    # Lazy-load multimodal inputs to avoid OOM during Dataset init
+    if processor and sample.multimodal_inputs is None and sample.raw_prompt is not None:
+        from slime.utils.processing_utils import process_vision_info
+
+        sample.multimodal_inputs = process_vision_info(sample.raw_prompt, processor)
+
     if processor:
         processor_output = processor(text=sample.prompt, **(sample.multimodal_inputs or {}))
         prompt_ids = processor_output["input_ids"][0]
