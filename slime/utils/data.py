@@ -89,13 +89,19 @@ def filter_long_prompt(origin_samples: list[Sample], tokenizer, processor, max_l
         return origin_samples
 
     if processor:
+        from slime.utils.processing_utils import is_internvl_model
+
         filtered_samples = []
         for sample in origin_samples:
-            from slime.utils.processing_utils import process_vision_info
+            if is_internvl_model(processor):
+                # InternVL: use tokenizer directly for length check
+                input_ids = tokenizer(sample.prompt, add_special_tokens=False)["input_ids"]
+            else:
+                from slime.utils.processing_utils import process_vision_info
 
-            multimodal_inputs = process_vision_info(sample.prompt, processor)
-            processor_output = processor(text=sample.prompt, **multimodal_inputs)
-            input_ids = processor_output["input_ids"][0]
+                multimodal_inputs = process_vision_info(sample.prompt, processor)
+                processor_output = processor(text=sample.prompt, **multimodal_inputs)
+                input_ids = processor_output["input_ids"][0]
             if len(input_ids) <= max_length:
                 filtered_samples.append(sample)
     else:
@@ -223,12 +229,15 @@ class Dataset:
                 output_prompt = prompt
 
             if processor:
-                from slime.utils.processing_utils import process_vision_info
+                from slime.utils.processing_utils import is_internvl_model, process_vision_info, process_vision_info_internvl
 
                 assert isinstance(
                     prompt, list
                 ), f"prompt must be a list when processor is not None, got {type(prompt)} instead"
-                multimodal_inputs = process_vision_info(prompt, processor)
+                if is_internvl_model(processor):
+                    multimodal_inputs = process_vision_info_internvl(prompt, processor)
+                else:
+                    multimodal_inputs = process_vision_info(prompt, processor)
             else:
                 multimodal_inputs = None
 
