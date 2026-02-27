@@ -293,6 +293,10 @@ def forward_only(
                     origin_values[origin_index] = value
                 values = origin_values
             rollout_data[f"{store_prefix}{key}"] = values
+
+    # 显式释放 forward_data_store 以避免显存泄漏
+    del forward_data_store
+
     return rollout_data
 
 
