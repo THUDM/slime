@@ -48,6 +48,48 @@ slime 支持将训练部分和推理部分分开进行调试，从而实现：
 
    开启后，会从 `args.load_debug_rollout_data.format(rollout_id=rollout_id)` 来加载数据，并且不会初始化 sglang（自动设置 `debug_train_only=True`）。可以以这种方式来固定训练部分的输入，对训练部分进行调优，例如切换各种并行。
 
+## INT4 / Compressed-Tensors 量化 Checkpoint 问题
+
+使用 INT4 量化模型（如 `compressed-tensors` 的 `W4A16`）时，checkpoint 的 `config.json` 中有一个 `quantization_config.ignore` 列表，指定哪些参数**不**做量化。在线权重更新（Megatron → SGLang）时，slime 也会读取这个 ignore list 来决定哪些参数需要 INT4 量化。ignore list 不正确会导致静默错误：
+
+1. **MoE 路由权重（`mlp.gate.weight`）变成全零**
+
+   MoE 的路由权重（`mlp.gate.weight`，shape `[num_experts, hidden_size]`）是一个普通的 2D weight tensor，但它**不是** Linear 层的权重。如果它不在 ignore list 中，在线量化器会把它 INT4 量化为 `weight_packed`、`weight_scale`、`weight_zero_point` 等。然而 SGLang 不会以量化名称来加载路由权重，因此这些参数在 `load_weights` 时被静默跳过，导致 gate 权重全零。
+
+   **修复方法**：确保 `config.json` 的 ignore list 中包含 `"re:.*mlp\\.gate\\..*"`。
+
+2. **其他非 Linear 的 2D 权重**
+
+   类似问题可能出现在任何不是真正 Linear 层的 2D `.weight` tensor 上，例如 `model.embed_tokens.weight`。务必检查 ignore list 覆盖了所有非 Linear 权重。
+
+   **推荐的 ignore 配置**（以 GLM 系 MoE 模型为例）：
+   ```json
+   "ignore": [
+     "lm_head",
+     "model.embed_tokens.weight",
+     "re:.*self_attn.*",
+     "re:.*mlp\\.shared_experts.*",
+     "re:.*mlp\\.gate_up_proj.*",
+     "re:.*mlp\\.gate_proj.*",
+     "re:.*mlp\\.up_proj.*",
+     "re:.*mlp\\.down_proj.*",
+     "re:.*eh_proj.*",
+     "re:.*mlp\\.gate\\..*"
+   ]
+   ```
+
+3. **safetensors 分片缺失**
+
+   转换工具偶尔可能产出不完整的 checkpoint（例如缺少 `model-00010-of-00093.safetensors`）。转换完成后，务必检查：
+   - `.safetensors` 文件数量是否与预期一致。
+   - `model.safetensors.index.json` 中是否包含所有 layer 的条目。
+   - 抽查关键 layer（如第一个 MoE layer）的 key 数量是否正确。
+
+4. **如何排查**
+
+   - 使用 `--check-weight-update-equal` 验证 Megatron → SGLang 权重同步后的值是否正确。如果某个参数在 SGLang 侧全为零，说明它可能被错误量化或在 checkpoint 中缺失。
+   - 使用 `--debug-rollout-only` 配合少量 GPU，快速测试 SGLang 能否从量化 checkpoint 正常生成文本。
+
 ## Debug sglang illegal memory access (IMA)
 
 在进行大规模 RL 时，不时会遇到 SGLang IMA 的问题，以下是我们的一些 debug 建议：
