@@ -973,7 +973,7 @@ index 00bd68755..5a3ca8a67 100644
  
      def get_routed_experts(
 diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
-index 4cbfed6f9..cd6c825f6 100644
+index 4cbfed6f9..88b452744 100644
 --- a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
 +++ b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
 @@ -499,7 +499,7 @@ class CompressedTensorsConfig(QuantizationConfig):
@@ -985,6 +985,16 @@ index 4cbfed6f9..cd6c825f6 100644
  
      def _is_mxint4a16(self, weight_quant: BaseModel, input_quant: BaseModel) -> bool:
          input_quant_none = input_quant is None
+@@ -968,6 +968,9 @@ class CompressedTensorsFusedMoEMethod(FusedMoEMethodBase):
+     def process_weights_after_loading(self, layer: torch.nn.Module) -> None:
+         layer.scheme.process_weights_after_loading(layer)
+ 
++    def restore_weights_before_loading(self, layer: torch.nn.Module) -> None:
++        layer.scheme.restore_weights_before_loading(layer)
++
+     def create_weights(
+         self,
+         layer: torch.nn.Module,
 diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py b/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py
 index 6264f36d0..bef31a374 100644
 --- a/python/sglang/srt/layers/quantization/compressed_tensors/schemes/compressed_tensors_wNa16_moe.py
@@ -2438,3 +2448,17 @@ index 4636128fa..a9b61df39 100644
      }
  
      DENY_CLASSES = {
+diff --git a/python/sglang/srt/utils/weight_checker.py b/python/sglang/srt/utils/weight_checker.py
+index 3be16446e..1b2371c83 100644
+--- a/python/sglang/srt/utils/weight_checker.py
++++ b/python/sglang/srt/utils/weight_checker.py
+@@ -69,6 +69,9 @@ def _check_tensors(
+         actual_should_compare,
+         actual,
+     ) in zip(expect_tensors, actual_tensors, strict=True):
++        if ".cos_sin_cache" in expect_name:
++            # skip cos/sin cache which is deterministic from shape and dtype and may have different shapes due to different implementations.
++            continue
+         assert expect_name == actual_name, f"{expect_name=} {actual_name=}"
+         assert (
+             expect_should_compare == actual_should_compare
