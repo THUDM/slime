@@ -30,7 +30,7 @@ The reward model is the default math RM.
 export WANDB_API_KEY=...
 export SLIME_SCRIPT_MODEL_NAME=Qwen3-VL-2B-Instruct
 export SLIME_SCRIPT_NUM_GPUS=4
-export SLIME_SCRIPT_TRAIN_BACKEND=fsdp
+export SLIME_SCRIPT_TRAIN_BACKEND=megatron
 
 # 2) Download the dataset
 hf download --repo-type dataset VeraIsHere/geo3k_imgurl_processed --local-dir /root/datasets/geo3k_imgurl_processed
