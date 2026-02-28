@@ -30,11 +30,9 @@ When creating CI-discoverable tests, ensure top-level constants and conventions 
 
 ### Step 3: Run Local Validation
 
-```bash
-pytest tests/test_*.py -k "<new_feature_keyword>" -vv
-pytest -m "not skipduringci"
-pre-commit run --all-files --show-diff-on-failure --color=always
-```
+- Run the exact existing test files you changed, if any.
+- Run repository-wide checks only when they are already part of the task or workflow.
+- Avoid documenting placeholder test commands that may not exist in the current tree.
 
 ### Step 4: Update Workflow Template Correctly
 

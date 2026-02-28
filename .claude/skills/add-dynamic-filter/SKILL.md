@@ -80,13 +80,6 @@ Example wiring:
 --rollout-all-samples-process-path <module>.process_all_samples
 ```
 
-Run targeted validation:
-
-```bash
-rg --files tests | rg 'rollout|debug_rollout'
-pytest "$(rg --files tests | rg 'rollout|debug_rollout' | head -n 1)" -vv
-```
-
 ### Step 5: Measure Side Effects
 
 - Check final sample count remains aligned with `rollout_batch_size` expectations.

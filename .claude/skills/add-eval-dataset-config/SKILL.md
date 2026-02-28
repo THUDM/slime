@@ -76,13 +76,6 @@ Use a separate eval function when inference/eval behavior must differ from train
 - Confirm dataset entries are loaded into `args.eval_datasets`.
 - Verify output keys match eval logging/metrics expectations.
 
-Suggested checks:
-
-```bash
-rg --files tests | rg 'quick_start|eval|debug_rollout'
-pytest "$(rg --files tests | rg 'quick_start|eval|debug_rollout' | head -n 1)" -vv
-```
-
 ## Common Mistakes
 
 - Missing `name` in dataset entries

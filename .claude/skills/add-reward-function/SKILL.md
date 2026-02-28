@@ -76,16 +76,6 @@ Use:
 --custom-rm-path slime.rollout.rm_hub.<your_rm>.custom_rm
 ```
 
-Run focused checks:
-
-```bash
-rg --files tests | rg 'reward|rollout|quick_start'
-pytest "$(rg --files tests | rg 'reward|rollout|quick_start' | head -n 1)" -vv
-python -m slime.utils.debug_utils.replay_reward_fn --help
-```
-
-For fast offline verification, use `slime/utils/debug_utils/replay_reward_fn.py` to replay reward logic on saved samples.
-
 ## Common Mistakes
 
 - Returning wrong output shape in group mode
@@ -96,6 +86,5 @@ For fast offline verification, use `slime/utils/debug_utils/replay_reward_fn.py`
 ## Reference Locations
 
 - Reward dispatch: `slime/rollout/rm_hub/__init__.py`
-- Reward debug utility: `slime/utils/debug_utils/replay_reward_fn.py`
 - Reward post-process hook: `slime/ray/rollout.py`
 - Customization docs: `docs/en/get_started/customization.md`
