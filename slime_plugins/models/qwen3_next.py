@@ -170,6 +170,7 @@ class Attention(HuggingfaceAttention):
         layer_number: int,
         cp_comm_type: str = "p2p",
         pg_collection=None,
+        **kwargs,
     ):
         super().__init__(
             args,
@@ -177,6 +178,7 @@ class Attention(HuggingfaceAttention):
             layer_number,
             cp_comm_type,
             pg_collection,
+            **kwargs,
         )
         if Qwen3NextAttention is None:
             raise ImportError("Please install transformers>=4.35.0 to use Qwen3NextAttention.")

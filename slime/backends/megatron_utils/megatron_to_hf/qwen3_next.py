@@ -3,6 +3,42 @@ import re
 import torch
 
 
+def _convert_qgkv_weight_to_hf(args, param, head_dim, prefix):
+    """Convert gated attention QGKV from Megatron per-group layout to HF format.
+
+    Megatron stores: [Q_g0, G_g0, K_g0, V_g0, Q_g1, G_g1, K_g1, V_g1, ...]
+    HF stores: q_proj=[Q+G interleaved per head], k_proj=[K flat], v_proj=[V flat]
+    """
+    num_heads = args.num_attention_heads
+    num_kv_heads = args.num_query_groups
+    heads_per_group = num_heads // num_kv_heads
+    hidden_size = args.hidden_size
+
+    q_size = heads_per_group * head_dim
+    g_size = heads_per_group * head_dim
+    group_size = q_size + g_size + head_dim + head_dim  # Q + G + K + V per group
+
+    groups = param.view(num_kv_heads, group_size, hidden_size)
+    g_off, k_off, v_off = q_size, q_size + g_size, q_size + g_size + head_dim
+
+    all_q = groups[:, :g_off, :].reshape(num_kv_heads, heads_per_group, head_dim, hidden_size)
+    all_g = groups[:, g_off:k_off, :].reshape(num_kv_heads, heads_per_group, head_dim, hidden_size)
+    all_k = groups[:, k_off:v_off, :]
+    all_v = groups[:, v_off:, :]
+
+    q = all_q.reshape(num_heads, head_dim, hidden_size)
+    g = all_g.reshape(num_heads, head_dim, hidden_size)
+    qg = torch.cat([q, g], dim=1).reshape(num_heads * 2 * head_dim, hidden_size)
+    k = all_k.reshape(num_kv_heads * head_dim, hidden_size).contiguous()
+    v = all_v.reshape(num_kv_heads * head_dim, hidden_size).contiguous()
+
+    return [
+        (f"{prefix}.self_attn.q_proj.weight", qg),
+        (f"{prefix}.self_attn.k_proj.weight", k),
+        (f"{prefix}.self_attn.v_proj.weight", v),
+    ]
+
+
 def _convert_mtp_layer(args, name, param, layer_idx):
     """Convert MTP layer parameters from Megatron to HuggingFace format.
 
@@ -17,11 +53,7 @@ def _convert_mtp_layer(args, name, param, layer_idx):
     if "final_layernorm.weight" in name:
         return [("mtp.norm.weight", param)]
     if "eh_proj.weight" in name:
-        if param.dim() < 2:
-            raise ValueError(f"eh_proj weight expects 2D tensor, got {param.shape}")
-        first_half, second_half = param.chunk(2, dim=1)
-        new_param = torch.cat([second_half, first_half], dim=1)
-        return [("mtp.fc.weight", new_param)]
+        return [("mtp.fc.weight", param)]
 
     # MTP inner transformer layers (keep layer index)
     if "transformer_layer" in name:
@@ -146,6 +178,10 @@ def convert_qwen3_next_to_hf(args, name, param):
                 (f"model.layers.{layer_idx}.self_attn.k_proj.bias", k_bias),
                 (f"model.layers.{layer_idx}.self_attn.v_proj.bias", v_bias),
             ]
+        elif rest == "self_attention.linear_qgkv.weight":
+            return _convert_qgkv_weight_to_hf(args, param, head_dim, f"model.layers.{layer_idx}")
+        elif rest == "self_attention.linear_qgkv.layer_norm_weight":
+            return [(f"model.layers.{layer_idx}.input_layernorm.weight", param)]
         elif rest == "mlp.linear_fc1.weight":
             gate_weight, up_weight = param.chunk(2, dim=0)
             return [

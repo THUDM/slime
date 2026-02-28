@@ -23,6 +23,7 @@ class HuggingfaceAttention(MegatronModule, ABC):
         layer_number: int,
         cp_comm_type: str = "p2p",
         pg_collection=None,
+        **kwargs,
     ):
         super().__init__(config=config)
         self.args = args
