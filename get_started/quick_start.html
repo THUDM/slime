@@ -176,6 +176,7 @@
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
 <ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/glm4.5-355B-A32B.html">GLM-4.5 with 64xH100</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
@@ -562,7 +563,7 @@ hf<span class="w"> </span>download<span class="w"> </span>--repo-type<span class
 <section id="convert-from-hugging-face-format-to-megatron-format">
 <h3>Convert from Hugging Face Format to Megatron Format<a class="headerlink" href="#convert-from-hugging-face-format-to-megatron-format" title="Link to this heading">#</a></h3>
 <p>When using Megatron as the training backend, you need to first convert Hugging Face format model weights to Megatron <code class="docutils literal notranslate"><span class="pre">torch_dist</span></code> format.</p>
-<p>First, load the configuration file of the target model. The <code class="docutils literal notranslate"><span class="pre">slime/scripts/models</span></code> directory contains configuration files for supported models. You need to <code class="docutils literal notranslate"><span class="pre">source</span></code> the corresponding model script to load the configuration parameters into the current environment. Here we use GLM4-9B model as an example, and it’s similar for Qwen3-4B, Qwen3-30B-A3B, etc.</p>
+<p>First, load the configuration file of the target model. The <code class="docutils literal notranslate"><span class="pre">slime/scripts/models</span></code> directory contains configuration files for supported models. You need to <code class="docutils literal notranslate"><span class="pre">source</span></code> the corresponding model script to load the configuration parameters into the current environment. Here we use GLM4-9B model as an example, and it’s similar for Qwen3-4B, GLM-4.7-Flash, Qwen3-30B-A3B, etc.</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
 <span class="nb">source</span><span class="w"> </span>scripts/models/glm4-9B.sh
 </pre></div>
@@ -1070,6 +1071,7 @@ export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=$(ip -o -4 addr show | awk &#39;$4 ~ /^
 </div>
 <p>slime has been deeply optimized for distributed training of large-scale Mixture of Experts (MoE) models. We provide some end-to-end training cases for reference:</p>
 <ul class="simple">
+<li><p><a class="reference internal" href="../examples/glm4.7-30B-A3B.html"><span class="std std-doc">Example: 8xH100 Training GLM-4.7-Flash</span></a></p></li>
 <li><p><a class="reference internal" href="../examples/glm4.5-355B-A32B.html"><span class="std std-doc">Example: 64xH100 Training GLM-4.5</span></a></p></li>
 <li><p><a class="reference internal" href="../examples/deepseek-r1.html"><span class="std std-doc">Example: 128xH100 Training DeepSeek-R1</span></a></p></li>
 <li><p>The scripts such as <code class="docutils literal notranslate"><span class="pre">scripts/run_qwen3_30b_a3b.py</span></code>, <code class="docutils literal notranslate"><span class="pre">scripts/run_glm45_355b_a32b.py</span></code> also support multi-node training, though there are little documentations about it currently.</p></li>
