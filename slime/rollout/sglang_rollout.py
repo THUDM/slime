@@ -117,7 +117,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
     ), f"Sample status is {sample.status}"
 
-    if state.processor:
+    if state.processor and sample.multimodal_inputs and any(v is not None for v in sample.multimodal_inputs.values()):
         processor_kwargs = build_processor_kwargs(sample.multimodal_inputs)
         processor_output = state.processor(text=sample.prompt, **processor_kwargs)
         prompt_ids = processor_output["input_ids"][0]
@@ -319,7 +319,11 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
         urls = [worker["url"] for worker in response["workers"]]
 
     logger.info(f"Abort request for {urls}")
-    await asyncio.gather(*[post(f"{url}/abort_request", {"abort_all": True}) for url in urls])
+    abort_tasks = [post(f"{url}/abort_request", {"abort_all": True}) for url in urls]
+    abort_results = await asyncio.gather(*abort_tasks, return_exceptions=True)
+    for url, result in zip(urls, abort_results, strict=False):
+        if isinstance(result, Exception):
+            logger.warning(f"Failed to abort worker at {url}: {result}")
 
     # make sure all the pending tasks are finished
     count = 0

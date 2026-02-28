@@ -71,7 +71,7 @@ hf download --repo-type dataset zhuzilin/aime-2024 \
 
 When using Megatron as the training backend, you need to first convert Hugging Face format model weights to Megatron `torch_dist` format.
 
-First, load the configuration file of the target model. The `slime/scripts/models` directory contains configuration files for supported models. You need to `source` the corresponding model script to load the configuration parameters into the current environment. Here we use GLM4-9B model as an example, and it's similar for Qwen3-4B, Qwen3-30B-A3B, etc.
+First, load the configuration file of the target model. The `slime/scripts/models` directory contains configuration files for supported models. You need to `source` the corresponding model script to load the configuration parameters into the current environment. Here we use GLM4-9B model as an example, and it's similar for Qwen3-4B, GLM-4.7-Flash, Qwen3-30B-A3B, etc.
 
 ```bash
 cd /root/slime
@@ -580,6 +580,7 @@ export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\.
 
 slime has been deeply optimized for distributed training of large-scale Mixture of Experts (MoE) models. We provide some end-to-end training cases for reference:
 
+- [Example: 8xH100 Training GLM-4.7-Flash](../examples/glm4.7-30B-A3B.md)
 - [Example: 64xH100 Training GLM-4.5](../examples/glm4.5-355B-A32B.md)
 - [Example: 128xH100 Training DeepSeek-R1](../examples/deepseek-r1.md)
 - The scripts such as `scripts/run_qwen3_30b_a3b.py`, `scripts/run_glm45_355b_a32b.py` also support multi-node training, though there are little documentations about it currently.

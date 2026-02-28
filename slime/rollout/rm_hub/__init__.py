@@ -47,7 +47,7 @@ async def remote_rm(args, sample: Sample, max_retries: int = 10):
             if attempt + 1 >= max_retries:
                 logger.warning(f"remote_rm failed after {attempt + 1} attempts: {e}")
                 raise
-            backoff = min(2 ** attempt, 30) + random.random()
+            backoff = min(2**attempt, 30) + random.random()
             logger.info(f"remote_rm: {type(e).__name__}, retrying in {backoff:.1f}s ({attempt + 1}/{max_retries})")
             await asyncio.sleep(backoff)
 

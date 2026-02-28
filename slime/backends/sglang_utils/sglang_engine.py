@@ -107,15 +107,34 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
 
 
 class SGLangEngine(RayActor):
-    def __init__(self, args, rank: int, worker_type: str = "regular", base_gpu_id: int | None = None):
+    def __init__(
+        self,
+        args,
+        rank: int,
+        worker_type: str = "regular",
+        base_gpu_id: int | None = None,
+        sglang_overrides: dict | None = None,
+        num_gpus_per_engine: int | None = None,
+    ):
         self.args = args
         self.rank = rank
         self.worker_type = worker_type
         self.base_gpu_id = base_gpu_id
+        self.sglang_overrides = sglang_overrides or {}
+        self.num_gpus_per_engine = num_gpus_per_engine
 
-    def init(self, dist_init_addr, port, nccl_port, host=None, disaggregation_bootstrap_port=None):
-        self.router_ip = self.args.sglang_router_ip
-        self.router_port = self.args.sglang_router_port
+    def init(
+        self,
+        dist_init_addr,
+        port,
+        nccl_port,
+        host=None,
+        disaggregation_bootstrap_port=None,
+        router_ip=None,
+        router_port=None,
+    ):
+        self.router_ip = router_ip if router_ip is not None else self.args.sglang_router_ip
+        self.router_port = router_port if router_port is not None else self.args.sglang_router_port
 
         host = host or get_host_info()[1]
 
@@ -143,6 +162,8 @@ class SGLangEngine(RayActor):
             self.worker_type,
             disaggregation_bootstrap_port,
             base_gpu_id=self.base_gpu_id,
+            sglang_overrides=self.sglang_overrides,
+            num_gpus_per_engine=self.num_gpus_per_engine,
         )
 
         self.node_rank = server_args_dict["node_rank"]
@@ -476,8 +497,11 @@ def _compute_server_args(
     worker_type: str = "regular",
     disaggregation_bootstrap_port: int | None = None,
     base_gpu_id: int | None = None,
+    sglang_overrides: dict | None = None,
+    num_gpus_per_engine: int | None = None,
 ):
-    nnodes = max(1, args.rollout_num_gpus_per_engine // args.num_gpus_per_node)
+    _gpus_per_engine = num_gpus_per_engine or args.rollout_num_gpus_per_engine
+    nnodes = max(1, _gpus_per_engine // args.num_gpus_per_node)
     node_rank = rank % nnodes
     base = base_gpu_id if base_gpu_id is not None else get_base_gpu_id(args, rank)
     base = _to_local_gpu_id(base)
@@ -497,7 +521,7 @@ def _compute_server_args(
         "gpu_id_step": 1,
         "base_gpu_id": base,
         # parallel
-        "tp_size": args.rollout_num_gpus_per_engine // args.sglang_pp_size,
+        "tp_size": _gpus_per_engine // args.sglang_pp_size,
         "dp_size": args.sglang_dp_size,
         "pp_size": args.sglang_pp_size,
         "ep_size": args.sglang_ep_size,
@@ -531,6 +555,15 @@ def _compute_server_args(
         if hasattr(args, f"sglang_{attr.name}") and attr.name not in kwargs:
             kwargs[attr.name] = getattr(args, f"sglang_{attr.name}")
         unused_keys.discard(attr.name)
+
+    # Per-engine-group overrides from --sglang-config YAML.
+    # Applied after base args so they take highest priority.
+    if sglang_overrides:
+        for key, value in sglang_overrides.items():
+            if key in kwargs:
+                logger.info(f"sglang_overrides: overriding {key}={kwargs[key]} -> {value} (rank={rank})")
+            kwargs[key] = value
+            unused_keys.discard(key)
 
     # for compatibility with old args
     if len(unused_keys) > 0:
