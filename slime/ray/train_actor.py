@@ -47,10 +47,11 @@ class TrainRayActor(RayActor):
         # os.environ["LOCAL_RANK"] = str(ray.get_gpu_ids()[0])
         os.environ["LOCAL_RANK"] = str(get_local_gpu_id())
 
-    def init(self, args, role, with_ref=False):
+    def init(self, args, role, with_ref=False, with_opd_teacher=False):
         self.args = args
         self.role = role
         self.with_ref = with_ref
+        self.with_opd_teacher = with_opd_teacher
 
         torch.serialization.add_safe_globals([slime.utils.eval_config.EvalDatasetConfig])
 
@@ -130,5 +131,5 @@ class TrainRayActor(RayActor):
 
     def set_rollout_manager(self, rollout_manager):
         self.rollout_manager = rollout_manager
-        if self.args.rank == 0:
+        if not self.args.debug_rollout_only and self.args.rank == 0:
             ray.get(self.rollout_manager.set_train_parallel_config.remote(self.train_parallel_config))

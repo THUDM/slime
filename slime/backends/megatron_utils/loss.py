@@ -3,6 +3,8 @@ from collections.abc import Callable, Iterator
 from typing import Any
 
 import torch
+import torch.distributed as dist
+import torch.nn.functional as F
 from megatron.core import mpu
 from torch.utils.checkpoint import checkpoint
 
@@ -21,7 +23,12 @@ from slime.utils.ppo_utils import (
 )
 from slime.utils.types import RolloutBatch
 
-from .cp_utils import all_gather_with_cp, get_logits_and_tokens_offset_with_cp, get_sum_of_sample_mean
+from .cp_utils import (
+    all_gather_with_cp,
+    get_logits_and_tokens_offset_with_cp,
+    get_sum_of_sample_mean,
+    slice_log_prob_with_cp,
+)
 
 
 def get_responses(
@@ -71,6 +78,7 @@ def get_responses(
 
     cp_size = mpu.get_context_parallel_world_size()
     end = 0
+    seq_start = 0
     for i, (tokens, total_length, response_length) in enumerate(
         zip(unconcat_tokens, total_lengths, response_lengths, strict=False)
     ):
@@ -85,6 +93,29 @@ def get_responses(
                 start = end - response_length
             logits_chunk = logits[start - 1 : end - 1]
             tokens_chunk = tokens[-response_length:]
+        elif args.allgather_cp:
+            # DSA: global concat then contiguous CP split. Each rank owns logits for
+            # global positions [chunk_start, chunk_end).
+            logits_local_len = logits.size(0)
+            cp_rank = mpu.get_context_parallel_rank()
+            chunk_start = cp_rank * logits_local_len
+            chunk_end = chunk_start + logits_local_len
+
+            prompt_length = total_length - response_length
+            resp_token_start = seq_start + prompt_length
+            resp_token_end = seq_start + total_length
+            logit_global_start = resp_token_start - 1
+            logit_global_end = resp_token_end - 1
+
+            s = max(logit_global_start, chunk_start)
+            e = min(logit_global_end, chunk_end)
+            if e <= s:
+                logits_chunk = logits[0:0]
+                tokens_chunk = tokens[0:0]
+            else:
+                logits_chunk = logits[s - chunk_start : e - chunk_start]
+                tokens_chunk = tokens[(s + 1) - seq_start : (e + 1) - seq_start]
+            assert logits_chunk.size(0) == tokens_chunk.size(0), f"{logits_chunk.size(0)} vs {tokens_chunk.size(0)}"
         else:
             # TODO: this is super ugly... do better abstraction.
             chunk_size, chunks_offset, logits_offset, tokens_offset = get_logits_and_tokens_offset_with_cp(
@@ -106,7 +137,89 @@ def get_responses(
             logits_chunk = torch.cat([logits_0, logits_1], dim=0)
             tokens_chunk = torch.cat([tokens_0, tokens_1], dim=0)
 
+        seq_start += total_length
+
         yield logits_chunk, tokens_chunk
+
+
+def _allgather_cp_redistribute(
+    res: dict[str, list[torch.Tensor]],
+    *,
+    logits: torch.Tensor,
+    args: Namespace,
+    total_lengths: list[int],
+    response_lengths: list[int],
+    max_seq_lens: list[int] | None = None,
+) -> None:
+    """Redistribute response tensors from allgather-CP layout to zigzag ring-attn layout.
+
+    After allgather context parallelism, each rank holds a contiguous chunk of
+    the global sequence.  This helper reconstructs per-sample full response
+    tensors via a differentiable all-reduce and re-slices them into the zigzag
+    CP pattern expected by downstream code.
+
+    The *res* dict is modified **in-place**.
+
+    Args:
+        res: Dict mapping metric names to lists of per-sample tensors.
+        logits: Model output used only to determine the local sequence length
+            (``logits.size(1)``).
+        args: Configuration (needs ``qkv_format``).
+        total_lengths: Total sequence lengths (prompt + response) per sample.
+        response_lengths: Response segment lengths per sample.
+        max_seq_lens: Optional padded max sequence lengths per sample.
+    """
+    cp_group = mpu.get_context_parallel_group()
+    cp_rank = mpu.get_context_parallel_rank()
+
+    logits_local_len = logits.size(1)  # logits shape: [1, T_local, ...]
+    chunk_start = cp_rank * logits_local_len
+    chunk_end = chunk_start + logits_local_len
+
+    for key, values in res.items():
+        # Reconstruct full response tensors with each rank's contiguous contribution
+        full_resps = []
+        seq_start = 0
+        for value, total_length, response_length in zip(values, total_lengths, response_lengths, strict=False):
+            prompt_length = total_length - response_length
+            logit_global_start = seq_start + prompt_length - 1
+            logit_global_end = seq_start + total_length - 1
+
+            s = max(logit_global_start, chunk_start)
+            e = min(logit_global_end, chunk_end)
+
+            if e <= s:
+                # This rank has no response logprobs for this sample
+                full_resp = torch.zeros(
+                    response_length,
+                    dtype=value.dtype,
+                    device=value.device,
+                    requires_grad=True,
+                )
+            else:
+                resp_start = s - logit_global_start
+                resp_end = e - logit_global_start
+                full_resp = F.pad(value, (resp_start, response_length - resp_end))
+
+            assert full_resp.size(0) == response_length, f"Expected {response_length}, got {full_resp.size(0)}"
+            full_resps.append(full_resp)
+            seq_start += total_length
+
+        # Single differentiable all-reduce to gather full response from all CP ranks
+        all_cat = torch.cat(full_resps, dim=0)
+        all_cat = dist.nn.all_reduce(all_cat, group=cp_group)
+
+        # Re-slice each sample into zigzag CP pattern
+        new_values = []
+        for idx, (full_resp, total_length, response_length) in enumerate(
+            zip(all_cat.split(response_lengths, dim=0), total_lengths, response_lengths, strict=False)
+        ):
+            max_seq_len = max_seq_lens[idx] if max_seq_lens is not None else None
+            new_values.append(
+                slice_log_prob_with_cp(full_resp, total_length, response_length, args.qkv_format, max_seq_len)
+            )
+
+        res[key] = new_values
 
 
 def get_log_probs_and_entropy(
@@ -169,6 +282,18 @@ def get_log_probs_and_entropy(
     }
     if with_entropy:
         res["entropy"] = entropy_list
+
+    # we need to turn the all gather kv into zigzag ring attn kv
+    if args.allgather_cp:
+        _allgather_cp_redistribute(
+            res,
+            logits=logits,
+            args=args,
+            total_lengths=total_lengths,
+            response_lengths=response_lengths,
+            max_seq_lens=max_seq_lens,
+        )
+
     return torch.empty((0,), device=logits.device), res
 
 
@@ -214,9 +339,62 @@ def get_values(
         assert logits_chunk.size(-1) == 1, f"{logits_chunk.shape}"
         value_list.append(logits_chunk.squeeze(-1))
 
-    return torch.empty((0,), device=logits.device), {
+    res = {
         "values": value_list,
     }
+
+    if args.allgather_cp:
+        _allgather_cp_redistribute(
+            res,
+            logits=logits,
+            args=args,
+            total_lengths=total_lengths,
+            response_lengths=response_lengths,
+            max_seq_lens=max_seq_lens,
+        )
+
+    return torch.empty((0,), device=logits.device), res
+
+
+def apply_opd_kl_to_advantages(
+    args: Namespace,
+    rollout_data: RolloutBatch,
+    advantages: list[torch.Tensor],
+    student_log_probs: list[torch.Tensor] | None,
+) -> None:
+    """Apply on-policy distillation KL penalty to advantages.
+
+    Computes reverse KL (student_logp - teacher_logp) and adds weighted penalty
+    to advantages in-place. This is orthogonal to the base advantage estimator.
+
+    Args:
+        args: Configuration containing `use_opd` and `opd_kl_coef`.
+        rollout_data: Dict containing "teacher_log_probs".
+        advantages: List of advantage tensors to modify in-place.
+        student_log_probs: List of student log-probability tensors.
+
+    References:
+        https://github.com/thinking-machines-lab/tinker-cookbook/blob/main/tinker_cookbook/distillation/train_on_policy.py
+    """
+
+    if student_log_probs is None:
+        return
+
+    teacher_log_probs = rollout_data.get("teacher_log_probs")
+    if teacher_log_probs is None:
+        raise ValueError(f"OPD with opd_type='{args.opd_type}' requires teacher_log_probs, but it is missing.")
+
+    device = student_log_probs[0].device
+    teacher_log_probs = [t.to(device=device) for t in teacher_log_probs]
+
+    reverse_kls = []
+    for i, adv in enumerate(advantages):
+        reverse_kl = student_log_probs[i] - teacher_log_probs[i]
+        advantages[i] = adv - args.opd_kl_coef * reverse_kl
+        reverse_kls.append(reverse_kl)
+
+    # Store reverse KL for logging
+    rollout_data["opd_reverse_kl"] = reverse_kls
 
 
 def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) -> None:
@@ -250,7 +428,7 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
     max_seq_lens: list[int] | None = rollout_data.get("max_seq_lens", None)
 
     # return when not the last pp stage.
-    if log_probs is None and values is None:
+    if not mpu.is_pipeline_last_stage():
         return
 
     if args.kl_coef == 0 or not log_probs:
@@ -310,24 +488,17 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         )
         returns = advantages
 
-    elif args.advantage_estimator == "on_policy_distillation":
-        student_log_probs = log_probs
-        teacher_log_probs = rollout_data.get("teacher_log_probs")
-        response_lengths = rollout_data.get("response_lengths")
-        device = student_log_probs[0].device
-        teacher_log_probs = [t_log_prob.to(device=device) for t_log_prob in teacher_log_probs]
-        teacher_log_probs = [
-            t_log_prob[-response_length:]
-            for t_log_prob, response_length in zip(teacher_log_probs, response_lengths, strict=False)
-        ]
-        advantages = [
-            teacher_log_prob - student_log_prob
-            for teacher_log_prob, student_log_prob in zip(teacher_log_probs, student_log_probs, strict=False)
-        ]
-        returns = advantages
-
     else:
         raise NotImplementedError(f"advantage_estimator {args.advantage_estimator} is not supported. ")
+
+    # Apply on-policy distillation KL penalty to advantages (orthogonal to advantage estimator)
+    if args.use_opd:
+        apply_opd_kl_to_advantages(
+            args=args,
+            rollout_data=rollout_data,
+            advantages=advantages,
+            student_log_probs=log_probs,
+        )
 
     # TODO: OpenRLHF always does advantages normalization but veRL doesn't seem to do it.
     if args.normalize_advantages:
@@ -652,6 +823,11 @@ def policy_loss_function(
     if args.use_opsm:
         reported_loss["opsm_clipfrac"] = opsm_clipfrac
 
+    # Add OPD metrics if available
+    if "opd_reverse_kl" in batch:
+        opd_reverse_kl = torch.cat(batch["opd_reverse_kl"], dim=0)
+        reported_loss["opd_reverse_kl"] = sum_of_sample_mean(opd_reverse_kl).clone().detach()
+
     return loss, reported_loss
 
 
@@ -833,7 +1009,7 @@ def loss_function(
 
     return (
         loss,
-        torch.tensor(num_tokens if args.calculate_per_token_loss else 1, device=logits.device),
+        (num_tokens if args.calculate_per_token_loss else torch.tensor(1, device=logits.device)),
         {
             "keys": list(log.keys()),
             "values": torch.tensor(

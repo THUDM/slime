@@ -71,8 +71,8 @@ ROLLOUT_ARGS=(
 )
 
 RM_ARGS=(
-   --custom-rm-path examples.on_policy_distillation.on_policy_distillation.reward_func
-   --custom-reward-post-process-path examples.on_policy_distillation.on_policy_distillation.post_process_rewards
+   --custom-rm-path slime.rollout.on_policy_distillation.reward_func
+   --custom-reward-post-process-path slime.rollout.on_policy_distillation.post_process_rewards
    --rm-url http://$TEACHER_IP:$TEACHER_PORT/generate
 )
 
@@ -102,7 +102,10 @@ PERF_ARGS=(
 )
 
 GRPO_ARGS=(
-   --advantage-estimator on_policy_distillation
+   --advantage-estimator grpo
+   --use-opd
+   --opd-type sglang
+   --opd-kl-coef 1.0
    --use-kl-loss
    --kl-loss-coef 0.00
    --kl-loss-type low_var_kl
@@ -181,13 +184,3 @@ pkill -9 python
 sleep 3
 pkill -9 ray
 pkill -9 python
-
-
-
-
-
-
-
-
-
-

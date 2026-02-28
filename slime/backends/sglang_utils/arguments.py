@@ -1,3 +1,5 @@
+import argparse
+
 from sglang.srt.server_args import ServerArgs
 from slime.utils.http_utils import _wrap_ipv6
 
@@ -20,6 +22,12 @@ def add_sglang_router_arguments(parser):
         help="Port of the SGLang router",
     )
     parser.add_argument(
+        "--sglang-router-policy",
+        type=str,
+        default=None,
+        help="Routing policy for the SGLang router (e.g., 'consistent_hashing', 'round_robin')",
+    )
+    parser.add_argument(
         "--sglang-router-request-timeout-secs",
         type=int,
         default=14400,
@@ -40,6 +48,7 @@ def add_sglang_arguments(parser):
 
     skipped_args = [
         "model_path",
+        "config",
         "trust_remote_code",
         "random_seed",
         # memory
@@ -109,6 +118,27 @@ def add_sglang_arguments(parser):
     ServerArgs.add_cli_args(parser)
     parser.add_argument = old_add_argument
 
+    # PD disaggregation / multi-group config
+    parser.add_argument(
+        "--prefill-num-servers",
+        type=int,
+        default=None,
+        help="Number of prefill servers for disaggregation.",
+    )
+    parser.add_argument(
+        "--sglang-config",
+        type=str,
+        default=None,
+        help=(
+            "Path to a YAML config for SGLang engine deployment. "
+            "Defines engine_groups with worker_type (regular/prefill/decode/placeholder), "
+            "num_gpus per group, and optional per-group 'overrides' dict of "
+            "ServerArgs field names that override the base --sglang-* CLI args. "
+            "Placeholder groups reserve GPU slots without creating engines. "
+            "Mutually exclusive with --prefill-num-servers."
+        ),
+    )
+
     return parser
 
 
@@ -132,3 +162,42 @@ def validate_args(args):
 
     if getattr(args, "sglang_router_ip", None):
         args.sglang_router_ip = _wrap_ipv6(args.sglang_router_ip)
+
+    # Mutual-exclusion checks for PD disaggregation / sglang-config.
+    assert not (
+        getattr(args, "prefill_num_servers", None) is not None and args.rollout_external
+    ), "prefill_num_servers cannot be set when rollout_external is set."
+
+    assert not (
+        getattr(args, "sglang_config", None) is not None and args.rollout_external
+    ), "sglang_config cannot be set when rollout_external is set."
+
+    assert not (
+        getattr(args, "sglang_config", None) is not None and getattr(args, "prefill_num_servers", None) is not None
+    ), "sglang_config and prefill_num_servers are mutually exclusive. Use engine_groups in the YAML config instead."
+
+
+def sglang_parse_args():
+    """
+    Parse sglang server arguments independently using a separate ArgumentParser.
+    Uses parse_known_args() to only consume sglang-related arguments from sys.argv,
+    allowing the remaining arguments to be parsed by megatron/fsdp separately.
+
+    Returns:
+        argparse.Namespace: Parsed sglang arguments (all attributes prefixed with sglang_).
+    """
+    parser = argparse.ArgumentParser(add_help=False)
+    add_sglang_arguments(parser)
+
+    # Compute default sglang_tensor_parallel_size from CLI args
+    temp_parser = argparse.ArgumentParser(add_help=False)
+    temp_parser.add_argument("--rollout-num-gpus-per-engine", type=int, default=1)
+    temp_parser.add_argument("--sglang-pp-size", type=int, default=1)
+    temp_parser.add_argument("--sglang-pipeline-parallel-size", type=int, default=1)
+    temp_args, _ = temp_parser.parse_known_args()
+    pp_size = temp_args.sglang_pp_size if temp_args.sglang_pp_size != 1 else temp_args.sglang_pipeline_parallel_size
+    sglang_tp_size = temp_args.rollout_num_gpus_per_engine // pp_size
+    parser.set_defaults(sglang_tensor_parallel_size=sglang_tp_size)
+
+    args, _ = parser.parse_known_args()
+    return args

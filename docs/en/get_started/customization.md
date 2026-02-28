@@ -40,7 +40,7 @@ Below is a summary of all available customization interfaces and their purposes.
 
 **Signature**:
 ```python
-async def generate_rollout(args, rollout_id, *, evaluation=False) -> RolloutFnTrainOutput | RolloutFnEvalOutput
+def generate_rollout(args, rollout_id, data_source, evaluation=False) -> RolloutFnTrainOutput | RolloutFnEvalOutput
 ```
 
 **Use Cases**:
@@ -140,7 +140,7 @@ class DynamicFilterOutput:
 
 **Signature**:
 ```python
-def buffer_filter(samples: list[list[Sample]]) -> list[list[Sample]]
+def buffer_filter(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]
 ```
 
 **Use Cases**:
@@ -177,7 +177,7 @@ def filter_function(args, samples: list[Sample]) -> None
 
 **Signature**:
 ```python
-def process_function(args, samples: list[list[Sample]]) -> None
+def process_function(args, samples: list[list[Sample]], data_source) -> None
 ```
 
 **Use Cases**:
@@ -350,6 +350,9 @@ class CustomDataSource(DataSource):
         
     def load(self, rollout_id=None):
         """Load state from checkpoint"""
+
+    def __len__(self):
+        """Length of the data source. May change when samples are added/fetched."""
 ```
 
 ---
@@ -417,3 +420,4 @@ Stabilize MoE RL training by recording and replaying expert routing decisions to
 | `--use-routing-replay` | Forward-backward routing consistency in training. ([arXiv:2507.18071](https://arxiv.org/abs/2507.18071)) |
 | `--use-rollout-routing-replay` | R3: Replay routing from rollout during training. **Requires `--use-slime-router`**. ([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
 
+For detailed explanation of R3 and SlimeRouter, see [Slime Router](../advanced/slime-router.md).

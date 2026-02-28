@@ -90,7 +90,7 @@ def execute(mode: str = ""):
         "--use-precision-aware-optimizer "
     )
 
-    sglang_args = "--rollout-num-gpus-per-engine 2 --sglang-mem-fraction-static 0.8 --sglang-cuda-graph-bs 1 2 4 8 16 "
+    sglang_args = "--rollout-num-gpus-per-engine 2 --sglang-mem-fraction-static 0.8 --sglang-cuda-graph-max-bs 32 "
 
     ci_args = "--ci-test "
 

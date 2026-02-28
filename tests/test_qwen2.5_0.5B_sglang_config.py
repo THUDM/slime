@@ -1,12 +1,31 @@
 import os
+import tempfile
+
 import slime.utils.external_utils.command_utils as U
 
-FEW_GPU = U.get_bool_env_var("SLIME_TEST_FEW_GPU", "1")
 TIGHT_DEVICE_MEMORY = U.get_bool_env_var("SLIME_TEST_TIGHT_DEVICE_MEMORY", "1")
 
 MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
-NUM_GPUS = 2 if FEW_GPU else 4
+NUM_GPUS = 8
+
+# Inline sglang config: same model, 3 engine groups with different parallelism.
+# Group 1: 4 GPUs, 2 GPUs/engine (tp=2) → 2 engines
+# Group 2: 2 GPUs, 1 GPU/engine  (tp=1) → 2 engines
+# Group 3: 2 GPUs, placeholder   → reserves 2 GPU slots, no engine created
+SGLANG_CONFIG_YAML = """\
+sglang:
+  - name: default
+    engine_groups:
+      - worker_type: regular
+        num_gpus: 4
+        num_gpus_per_engine: 2
+      - worker_type: regular
+        num_gpus: 2
+        num_gpus_per_engine: 1
+      - worker_type: placeholder
+        num_gpus: 2
+"""
 
 
 def prepare():
@@ -16,6 +35,12 @@ def prepare():
 
 
 def execute():
+    # Write inline sglang config to a temp file
+    config_file = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", prefix="sglang_config_", delete=False)
+    config_file.write(SGLANG_CONFIG_YAML)
+    config_file.flush()
+    config_path = config_file.name
+
     ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
     rollout_args = (
@@ -25,14 +50,14 @@ def execute():
         "--apply-chat-template "
         "--rollout-shuffle "
         "--rm-type math "
-        f"--num-rollout {3000 if U.get_env_enable_infinite_run() else 250} "
-        "--rollout-batch-size 32 "
-        "--n-samples-per-prompt 8 "
+        "--num-rollout 3 "
+        "--rollout-batch-size 8 "
+        "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 1024 "
-        "--rollout-temperature 1 "
-        "--over-sampling-batch-size 64 "
+        "--rollout-temperature 0.8 "
+        "--over-sampling-batch-size 16 "
         "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "
-        "--global-batch-size 256 "
+        "--global-batch-size 32 "
     )
 
     eval_args = (
@@ -50,7 +75,6 @@ def execute():
         "--context-parallel-size 1 "
         "--expert-model-parallel-size 1 "
         "--expert-tensor-parallel-size 1 "
-        # "--micro-batch-size 1 "
         "--use-dynamic-batch-size "
         "--max-tokens-per-gpu 9216 "
     )
@@ -78,27 +102,21 @@ def execute():
         "--rollout-num-gpus-per-engine 1 "
         f"--sglang-mem-fraction-static {0.6 if TIGHT_DEVICE_MEMORY else 0.7} "
         "--sglang-enable-metrics "
+        "--sglang-cuda-graph-max-bs 32 "
+        f"--sglang-config {config_path} "
     )
 
-    ci_args = (
-        "--ci-test "
-        "--ci-disable-kl-checker "
-        "--ci-metric-checker-key eval/gsm8k "
-        "--ci-metric-checker-threshold 0.55 "  # loose threshold at 250 step
-    )
+    ci_args = "--ci-test "
 
     misc_args = (
-        # default dropout in megatron is 0.1
         "--attention-dropout 0.0 "
         "--hidden-dropout 0.0 "
-        # should be good for model performance
         "--accumulate-allreduce-grads-in-fp32 "
         "--attention-softmax-in-fp32 "
-        # need to comment this when using model with MLA
         "--attention-backend flash "
         "--actor-num-nodes 1 "
-        f"--actor-num-gpus-per-node {1 if FEW_GPU else 2} "
-        f"--rollout-num-gpus {1 if FEW_GPU else 2} "
+        "--actor-num-gpus-per-node 8 "
+        "--colocate "
         "--megatron-to-hf-mode bridge "
     )
 
@@ -119,12 +137,13 @@ def execute():
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=MODEL_TYPE,
-        train_script="train_async.py",
     )
 
 
 if __name__ == "__main__":
     prepare()
-    for proxy_var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-        os.environ.pop(proxy_var, None)
+    os.environ.pop("http_proxy", None)
+    os.environ.pop("https_proxy", None)
+    os.environ.pop("HTTP_PROXY", None)
+    os.environ.pop("HTTPS_PROXY", None)
     execute()

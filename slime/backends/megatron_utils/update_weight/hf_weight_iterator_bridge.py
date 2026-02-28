@@ -4,6 +4,7 @@ from slime.utils import megatron_bridge_utils
 from slime.utils.misc import chunk_named_params_by_size
 
 from ..megatron_to_hf import postprocess_hf_param
+from ..megatron_to_hf.processors import quantize_params
 from ..misc_utils import strip_param_name_prefix
 from .hf_weight_iterator_base import HfWeightIteratorBase
 
@@ -27,20 +28,31 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
 
             named_weights = self._bridge.export_hf_weights(self.model, cpu=False, conversion_tasks=conversion_tasks)
 
-            named_weights = (
-                (
-                    hf_param_name,
-                    postprocess_hf_param(
-                        args=self.args,
-                        megatron_param_name=megatron_param_name,
-                        hf_param_name=hf_param_name,
-                        param=weight,
-                    ),
-                )
-                for hf_param_name, weight, megatron_param_name in named_weights
-            )
+            quantized_results = []
 
-            yield from chunk_named_params_by_size(named_weights, chunk_size=self.args.update_weight_buffer_size)
+            for hf_param_name, weight, megatron_param_name in named_weights:
+
+                processed_weight = postprocess_hf_param(
+                    args=self.args,
+                    megatron_param_name=megatron_param_name,
+                    hf_param_name=hf_param_name,
+                    param=weight,
+                )
+
+                converted_named_params = [(hf_param_name, processed_weight)]
+
+                quantized_batch = quantize_params(
+                    args=self.args,
+                    megatron_name=megatron_param_name,
+                    converted_named_params=converted_named_params,
+                    quantization_config=self.quantization_config,
+                )
+
+                quantized_results.extend(quantized_batch)
+
+            named_weights = quantized_results
+
+            yield from chunk_named_params_by_size(quantized_results, chunk_size=self.args.update_weight_buffer_size)
 
 
 def _process_conversion_tasks(vanilla_conversion_tasks, new_weight_dict):

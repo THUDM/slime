@@ -59,7 +59,7 @@ class FSDPArgs:
     config: str | None = None
 
 
-def parse_fsdp_cli(extra_args_provider=None):
+def _parse_fsdp_cli(extra_args_provider=None, ignore_unknown_args=False):
     parser = argparse.ArgumentParser("FSDP SFT Training (slime)")
     parser.add_argument("--config", type=str, default=None, help="YAML config path")
     for f in dataclasses.fields(FSDPArgs):
@@ -81,16 +81,21 @@ def parse_fsdp_cli(extra_args_provider=None):
 
     if extra_args_provider is not None:
         parser = extra_args_provider(parser)
-    args = parser.parse_args()
+    if ignore_unknown_args:
+        args, _ = parser.parse_known_args()
+    else:
+        args = parser.parse_args()
     return args
 
 
-def load_fsdp_args(extra_args_provider=None):
-    args = parse_fsdp_cli(extra_args_provider)
+def fsdp_parse_args(extra_args_provider=None, ignore_unknown_args=False):
+    args = _parse_fsdp_cli(extra_args_provider, ignore_unknown_args=ignore_unknown_args)
     if args.config:
         with open(args.config) as f:
             data = yaml.safe_load(f) or {}
         for k, v in data.items():
             if not hasattr(args, k):
                 setattr(args, k, v)
+    args.rank = 0  # Primary process rank for wandb initialization
+    args.world_size = args.actor_num_nodes * args.actor_num_gpus_per_node
     return args
