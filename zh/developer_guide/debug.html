@@ -54,7 +54,7 @@
     <link rel="prev" title="CI（持续集成）" href="ci.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 02 月 21 日"/>
+    <meta name="docbuild:last-update" content="2026 年 02 月 28 日"/>
   </head>
   
   
@@ -440,6 +440,7 @@ document.write(`
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">对齐精度</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">训练推理单独 debug</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#int4-compressed-tensors-checkpoint">INT4 / Compressed-Tensors 量化 Checkpoint 问题</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-sglang-illegal-memory-access-ima">Debug sglang illegal memory access (IMA)</a></li>
 </ul>
             </nav>
@@ -524,6 +525,48 @@ document.write(`
 </li>
 </ol>
 </section>
+<section id="int4-compressed-tensors-checkpoint">
+<h2>INT4 / Compressed-Tensors 量化 Checkpoint 问题<a class="headerlink" href="#int4-compressed-tensors-checkpoint" title="链接到此标题。">#</a></h2>
+<p>使用 INT4 量化模型（如 <code class="docutils literal notranslate"><span class="pre">compressed-tensors</span></code> 的 <code class="docutils literal notranslate"><span class="pre">W4A16</span></code>）时，checkpoint 的 <code class="docutils literal notranslate"><span class="pre">config.json</span></code> 中有一个 <code class="docutils literal notranslate"><span class="pre">quantization_config.ignore</span></code> 列表，指定哪些参数<strong>不</strong>做量化。在线权重更新（Megatron → SGLang）时，slime 也会读取这个 ignore list 来决定哪些参数需要 INT4 量化。ignore list 不正确会导致静默错误：</p>
+<ol class="arabic">
+<li><p><strong>MoE 路由权重（<code class="docutils literal notranslate"><span class="pre">mlp.gate.weight</span></code>）变成全零</strong></p>
+<p>MoE 的路由权重（<code class="docutils literal notranslate"><span class="pre">mlp.gate.weight</span></code>，shape <code class="docutils literal notranslate"><span class="pre">[num_experts,</span> <span class="pre">hidden_size]</span></code>）是一个普通的 2D weight tensor，但它<strong>不是</strong> Linear 层的权重。如果它不在 ignore list 中，在线量化器会把它 INT4 量化为 <code class="docutils literal notranslate"><span class="pre">weight_packed</span></code>、<code class="docutils literal notranslate"><span class="pre">weight_scale</span></code>、<code class="docutils literal notranslate"><span class="pre">weight_zero_point</span></code> 等。然而 SGLang 不会以量化名称来加载路由权重，因此这些参数在 <code class="docutils literal notranslate"><span class="pre">load_weights</span></code> 时被静默跳过，导致 gate 权重全零。</p>
+<p><strong>修复方法</strong>：确保 <code class="docutils literal notranslate"><span class="pre">config.json</span></code> 的 ignore list 中包含 <code class="docutils literal notranslate"><span class="pre">&quot;re:.*mlp\\.gate\\..*&quot;</span></code>。</p>
+</li>
+<li><p><strong>其他非 Linear 的 2D 权重</strong></p>
+<p>类似问题可能出现在任何不是真正 Linear 层的 2D <code class="docutils literal notranslate"><span class="pre">.weight</span></code> tensor 上，例如 <code class="docutils literal notranslate"><span class="pre">model.embed_tokens.weight</span></code>。务必检查 ignore list 覆盖了所有非 Linear 权重。</p>
+<p><strong>推荐的 ignore 配置</strong>（以 GLM 系 MoE 模型为例）：</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="s2">&quot;lm_head&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;model.embed_tokens.weight&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*self_attn.*&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.shared_experts.*&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.gate_up_proj.*&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.gate_proj.*&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.up_proj.*&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.down_proj.*&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*eh_proj.*&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.gate\\..*&quot;</span>
+<span class="p">]</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>safetensors 分片缺失</strong></p>
+<p>转换工具偶尔可能产出不完整的 checkpoint（例如缺少 <code class="docutils literal notranslate"><span class="pre">model-00010-of-00093.safetensors</span></code>）。转换完成后，务必检查：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">.safetensors</span></code> 文件数量是否与预期一致。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">model.safetensors.index.json</span></code> 中是否包含所有 layer 的条目。</p></li>
+<li><p>抽查关键 layer（如第一个 MoE layer）的 key 数量是否正确。</p></li>
+</ul>
+</li>
+<li><p><strong>如何排查</strong></p>
+<ul class="simple">
+<li><p>使用 <code class="docutils literal notranslate"><span class="pre">--check-weight-update-equal</span></code> 验证 Megatron → SGLang 权重同步后的值是否正确。如果某个参数在 SGLang 侧全为零，说明它可能被错误量化或在 checkpoint 中缺失。</p></li>
+<li><p>使用 <code class="docutils literal notranslate"><span class="pre">--debug-rollout-only</span></code> 配合少量 GPU，快速测试 SGLang 能否从量化 checkpoint 正常生成文本。</p></li>
+</ul>
+</li>
+</ol>
+</section>
 <section id="debug-sglang-illegal-memory-access-ima">
 <h2>Debug sglang illegal memory access (IMA)<a class="headerlink" href="#debug-sglang-illegal-memory-access-ima" title="链接到此标题。">#</a></h2>
 <p>在进行大规模 RL 时，不时会遇到 SGLang IMA 的问题，以下是我们的一些 debug 建议：</p>
@@ -589,6 +632,7 @@ document.write(`
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">对齐精度</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">训练推理单独 debug</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#int4-compressed-tensors-checkpoint">INT4 / Compressed-Tensors 量化 Checkpoint 问题</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-sglang-illegal-memory-access-ima">Debug sglang illegal memory access (IMA)</a></li>
 </ul>
   </nav></div>
@@ -623,7 +667,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 02 月 21 日.
+  最后更新于 2026 年 02 月 28 日.
   <br/>
 </p>
   </div>

@@ -54,7 +54,7 @@
     <link rel="prev" title="CI (Continuous Integration)" href="ci.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Feb 21, 2026"/>
+    <meta name="docbuild:last-update" content="Feb 28, 2026"/>
   </head>
   
   
@@ -444,6 +444,7 @@ document.write(`
                 <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#aligning-precision">Aligning Precision</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#separate-debugging-for-training-and-inference">Separate Debugging for Training and Inference</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#int4-compressed-tensors-quantization-checkpoint-issues">INT4 / Compressed-Tensors Quantization Checkpoint Issues</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-sglang-illegal-memory-access-ima">Debug sglang illegal memory access (IMA)</a></li>
 </ul>
             </nav>
@@ -528,6 +529,48 @@ document.write(`
 </li>
 </ol>
 </section>
+<section id="int4-compressed-tensors-quantization-checkpoint-issues">
+<h2>INT4 / Compressed-Tensors Quantization Checkpoint Issues<a class="headerlink" href="#int4-compressed-tensors-quantization-checkpoint-issues" title="Link to this heading">#</a></h2>
+<p>When using INT4-quantized models (e.g., <code class="docutils literal notranslate"><span class="pre">compressed-tensors</span></code> with <code class="docutils literal notranslate"><span class="pre">W4A16</span></code>), the checkpoint’s <code class="docutils literal notranslate"><span class="pre">config.json</span></code> contains a <code class="docutils literal notranslate"><span class="pre">quantization_config.ignore</span></code> list that specifies which parameters should <strong>not</strong> be quantized. During online weight updates (Megatron → SGLang), slime also reads this ignore list to decide which parameters to INT4-quantize. An incorrect ignore list can cause silent errors:</p>
+<ol class="arabic">
+<li><p><strong>MoE router weights (<code class="docutils literal notranslate"><span class="pre">mlp.gate.weight</span></code>) become all zeros</strong></p>
+<p>The MoE router weight (<code class="docutils literal notranslate"><span class="pre">mlp.gate.weight</span></code>, shape <code class="docutils literal notranslate"><span class="pre">[num_experts,</span> <span class="pre">hidden_size]</span></code>) is a plain 2D weight tensor, but it is <strong>not</strong> a Linear layer weight. If it is not in the ignore list, the online quantizer will INT4-quantize it into <code class="docutils literal notranslate"><span class="pre">weight_packed</span></code>, <code class="docutils literal notranslate"><span class="pre">weight_scale</span></code>, <code class="docutils literal notranslate"><span class="pre">weight_zero_point</span></code>, etc. However, SGLang does not expect quantized names for the router, so these parameters are silently skipped during <code class="docutils literal notranslate"><span class="pre">load_weights</span></code>, resulting in all-zero gate weights.</p>
+<p><strong>Fix</strong>: Ensure <code class="docutils literal notranslate"><span class="pre">config.json</span></code> contains <code class="docutils literal notranslate"><span class="pre">&quot;re:.*mlp\\.gate\\..*&quot;</span></code> in the ignore list.</p>
+</li>
+<li><p><strong>Other non-Linear 2D weights</strong></p>
+<p>Similar issues can occur with any 2D <code class="docutils literal notranslate"><span class="pre">.weight</span></code> tensor that is not a true Linear layer, such as <code class="docutils literal notranslate"><span class="pre">model.embed_tokens.weight</span></code>. Always verify the ignore list covers all non-Linear weights.</p>
+<p><strong>Recommended ignore patterns</strong> (for GLM-style MoE models):</p>
+<div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="nt">&quot;ignore&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span>
+<span class="w">  </span><span class="s2">&quot;lm_head&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;model.embed_tokens.weight&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*self_attn.*&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.shared_experts.*&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.gate_up_proj.*&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.gate_proj.*&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.up_proj.*&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.down_proj.*&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*eh_proj.*&quot;</span><span class="p">,</span>
+<span class="w">  </span><span class="s2">&quot;re:.*mlp\\.gate\\..*&quot;</span>
+<span class="p">]</span>
+</pre></div>
+</div>
+</li>
+<li><p><strong>Missing safetensors shards</strong></p>
+<p>Conversion tools may occasionally produce an incomplete checkpoint (e.g., a missing <code class="docutils literal notranslate"><span class="pre">model-00010-of-00093.safetensors</span></code>). After conversion, always verify:</p>
+<ul class="simple">
+<li><p>The number of <code class="docutils literal notranslate"><span class="pre">.safetensors</span></code> files matches the expected count.</p></li>
+<li><p>The <code class="docutils literal notranslate"><span class="pre">model.safetensors.index.json</span></code> contains entries for every layer.</p></li>
+<li><p>Spot-check that critical layers (e.g., the first MoE layer) have the expected number of keys.</p></li>
+</ul>
+</li>
+<li><p><strong>How to diagnose</strong></p>
+<ul class="simple">
+<li><p>Use <code class="docutils literal notranslate"><span class="pre">--check-weight-update-equal</span></code> to verify that weights after a Megatron → SGLang sync match the expected values. If a parameter shows all zeros on the SGLang side, it was likely incorrectly quantized or missing from the checkpoint.</p></li>
+<li><p>Use <code class="docutils literal notranslate"><span class="pre">--debug-rollout-only</span></code> with a small number of GPUs to quickly test whether SGLang can generate coherent text from the quantized checkpoint alone.</p></li>
+</ul>
+</li>
+</ol>
+</section>
 <section id="debug-sglang-illegal-memory-access-ima">
 <h2>Debug sglang illegal memory access (IMA)<a class="headerlink" href="#debug-sglang-illegal-memory-access-ima" title="Link to this heading">#</a></h2>
 <p>When running large scale RL, we will occationally meet the IMA in SGLang, there are some debug suggestions based on our experience:</p>
@@ -593,6 +636,7 @@ document.write(`
     <ul class="visible nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#aligning-precision">Aligning Precision</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#separate-debugging-for-training-and-inference">Separate Debugging for Training and Inference</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#int4-compressed-tensors-quantization-checkpoint-issues">INT4 / Compressed-Tensors Quantization Checkpoint Issues</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#debug-sglang-illegal-memory-access-ima">Debug sglang illegal memory access (IMA)</a></li>
 </ul>
   </nav></div>
@@ -627,7 +671,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Feb 21, 2026.
+  Last updated on Feb 28, 2026.
   <br/>
 </p>
   </div>
