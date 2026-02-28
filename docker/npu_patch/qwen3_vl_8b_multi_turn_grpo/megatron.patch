@@ -1,0 +1,518 @@
+diff --git a/megatron/core/activations.py b/megatron/core/activations.py
+index 8b422d73a..58fba4667 100644
+--- a/megatron/core/activations.py
++++ b/megatron/core/activations.py
+@@ -5,19 +5,19 @@ import torch.nn.functional as F
+ from megatron.core.jit import jit_fuser
+ 
+ 
+-@jit_fuser
++
+ def squared_relu(x: torch.Tensor) -> torch.Tensor:
+     """Squared ReLU activation"""
+     return torch.pow(F.relu(x), 2)
+ 
+ 
+-@jit_fuser
++
+ def quick_gelu(x: torch.Tensor) -> torch.Tensor:
+     """Quick GELU activation"""
+     return x * torch.sigmoid(1.702 * x)
+ 
+ 
+-@jit_fuser
++
+ def fast_gelu(x: torch.Tensor) -> torch.Tensor:
+     """Fast GELU activation"""
+     return 0.5 * x * (1.0 + torch.tanh(x * 0.7978845608 * (1.0 + 0.044715 * x * x)))
+diff --git a/megatron/core/fusions/fused_bias_dropout.py b/megatron/core/fusions/fused_bias_dropout.py
+index 336452562..614ee1a48 100644
+--- a/megatron/core/fusions/fused_bias_dropout.py
++++ b/megatron/core/fusions/fused_bias_dropout.py
+@@ -64,14 +64,14 @@ def bias_dropout_add_unfused(training):
+     return _bias_dropout_add
+ 
+ 
+-@jit_fuser
++
+ def bias_dropout_add_fused_train(
+     x_with_bias: Tuple[torch.Tensor, Optional[torch.Tensor]], residual: torch.Tensor, prob: float
+ ) -> torch.Tensor:
+     return _bias_dropout_add_func(x_with_bias, residual, prob, True)
+ 
+ 
+-@jit_fuser
++
+ def bias_dropout_add_fused_inference(
+     x_with_bias: Tuple[torch.Tensor, Optional[torch.Tensor]], residual: torch.Tensor, prob: float
+ ) -> torch.Tensor:
+diff --git a/megatron/core/fusions/fused_bias_geglu.py b/megatron/core/fusions/fused_bias_geglu.py
+index 7a7fbe7f9..f9a438953 100644
+--- a/megatron/core/fusions/fused_bias_geglu.py
++++ b/megatron/core/fusions/fused_bias_geglu.py
+@@ -13,7 +13,7 @@ from megatron.core.jit import jit_fuser
+ # x * 0.5 * (1.0 + torch.erf(x * 0.70710678))
+ 
+ 
+-@jit_fuser
++
+ def geglu(y):
+     """Performs GEGLU (GELU-Gated Linear Unit) activation.
+ 
+@@ -27,7 +27,7 @@ def geglu(y):
+     return (y_1 * 0.5 * (1.0 + torch.tanh(0.79788456 * y_1 * (1 + 0.044715 * y_1 * y_1)))) * y_2
+ 
+ 
+-@jit_fuser
++
+ def bias_geglu(bias, y):
+     """Performs GEGLU activation with bias addition.
+ 
+@@ -45,7 +45,7 @@ def bias_geglu(bias, y):
+ # gradient of tanh approximation of gelu
+ # gradient of actual gelu is:
+ # 0.5 * (1. + torch.erf(x * 0.70710678)) + 0.3989423 * x * torch.exp(-0.5 * x * x)
+-@jit_fuser
++
+ def geglu_back(g, y):
+     """Computes the gradient for the GEGLU activation.
+ 
+@@ -65,7 +65,7 @@ def geglu_back(g, y):
+     return torch.cat(((g * y_2) * ff, g * (y_1 * 0.5 * (1.0 + tanh_out))), -1)
+ 
+ 
+-@jit_fuser
++
+ def bias_geglu_back(g, y, bias):
+     """Computes the gradient for the biased GEGLU activation.
+ 
+@@ -181,13 +181,13 @@ def bias_geglu_impl(input, bias):
+ # ------------------------- QUICK GEGLU FUSION --------------------------
+ 
+ 
+-@jit_fuser
++
+ def quick_gelu(y: torch.Tensor) -> torch.Tensor:
+     """Sigmoid approximation of gelu"""
+     return y * torch.sigmoid(1.702 * y)
+ 
+ 
+-@jit_fuser
++
+ def quick_geglu(y: torch.Tensor, linear_offset: float = 0.0) -> torch.Tensor:
+     """Performs Quick-GELU-based GEGLU activation : quick_gelu(y1) * (y2 + offset).
+ 
+@@ -202,7 +202,7 @@ def quick_geglu(y: torch.Tensor, linear_offset: float = 0.0) -> torch.Tensor:
+     return quick_gelu(y_1) * (y_2 + linear_offset)
+ 
+ 
+-@jit_fuser
++
+ def weighted_quick_geglu(
+     y: torch.Tensor, weights: torch.Tensor, linear_offset: float = 0.0
+ ) -> torch.Tensor:
+@@ -217,7 +217,7 @@ def weighted_quick_geglu(
+ 
+ 
+ # gradient of sigmoid approximation of gelu
+-@jit_fuser
++
+ def quick_geglu_back(g, y, linear_offset: float = 0.0) -> torch.Tensor:
+     """Backward helper for Quick-GEGLU.
+ 
+@@ -236,7 +236,7 @@ def quick_geglu_back(g, y, linear_offset: float = 0.0) -> torch.Tensor:
+     return torch.cat((dy_1, dy_2), -1)
+ 
+ 
+-@jit_fuser
++
+ def weighted_quick_geglu_back(g, y, weights, linear_offset: float = 0.0):
+     """Backward helper for weighted Quick-GEGLU.
+     Returns gradient w.r.t input `y` and `weights`.
+@@ -255,7 +255,7 @@ def weighted_quick_geglu_back(g, y, weights, linear_offset: float = 0.0):
+ # ---------------- Weighted Bias Quick-GEGLU helpers -----------------
+ 
+ 
+-@jit_fuser
++
+ def weighted_bias_quick_geglu(
+     y: torch.Tensor, bias: torch.Tensor, weights: torch.Tensor, linear_offset: float = 0.0
+ ) -> torch.Tensor:
+@@ -275,7 +275,7 @@ def weighted_bias_quick_geglu(
+     return res.to(dtype)
+ 
+ 
+-@jit_fuser
++
+ def weighted_bias_quick_geglu_back(g, y, bias, weights, linear_offset: float = 0.0):
+     """Backward helper for weighted Quick-GEGLU with bias.
+ 
+diff --git a/megatron/core/fusions/fused_bias_gelu.py b/megatron/core/fusions/fused_bias_gelu.py
+index 8cc90f617..fda8f2f5f 100644
+--- a/megatron/core/fusions/fused_bias_gelu.py
++++ b/megatron/core/fusions/fused_bias_gelu.py
+@@ -13,7 +13,7 @@ from megatron.core.jit import jit_fuser
+ # x * 0.5 * (1.0 + torch.erf(x * 0.70710678))
+ 
+ 
+-@jit_fuser
++
+ def bias_gelu(bias, y):
+     x = bias + y
+     return x * 0.5 * (1.0 + torch.tanh(0.79788456 * x * (1 + 0.044715 * x * x)))
+@@ -22,7 +22,7 @@ def bias_gelu(bias, y):
+ # gradient of tanh approximation of gelu
+ # gradient of actual gelu is:
+ # 0.5 * (1. + torch.erf(x * 0.70710678)) + 0.3989423 * x * torch.exp(-0.5 * x * x)
+-@jit_fuser
++
+ def bias_gelu_back(g, bias, y):
+     x = bias + y
+     tanh_out = torch.tanh(0.79788456 * x * (1 + 0.044715 * x * x))
+diff --git a/megatron/core/fusions/fused_bias_swiglu.py b/megatron/core/fusions/fused_bias_swiglu.py
+index 632470876..105936786 100644
+--- a/megatron/core/fusions/fused_bias_swiglu.py
++++ b/megatron/core/fusions/fused_bias_swiglu.py
+@@ -12,7 +12,7 @@ from megatron.core.utils import nvtx_decorator
+ ###### BIAS SWIGLU FUSION/ NO AUTOGRAD ################
+ 
+ 
+-@jit_fuser
++
+ def swiglu(y):
+     """Performs SwiGLU (Swish-Gated Linear Unit) activation function.
+ 
+@@ -26,7 +26,7 @@ def swiglu(y):
+     return F.silu(y_1) * y_2
+ 
+ 
+-@jit_fuser
++
+ def bias_swiglu(y, bias):
+     """Performs SwiGLU activation with bias addition.
+ 
+@@ -41,7 +41,7 @@ def bias_swiglu(y, bias):
+     return swiglu(y)
+ 
+ 
+-@jit_fuser
++
+ def weighted_swiglu(y, weights):
+     dtype = y.dtype
+     res = swiglu(y) * weights
+@@ -51,7 +51,7 @@ def weighted_swiglu(y, weights):
+ # gradient of tanh approximation of gelu
+ # gradient of actual gelu is:
+ # 0.5 * (1. + torch.erf(x * 0.70710678)) + 0.3989423 * x * torch.exp(-0.5 * x * x)
+-@jit_fuser
++
+ def swiglu_back(g, y):
+     """Computes the gradient for the SwiGLU activation function.
+ 
+@@ -69,7 +69,7 @@ def swiglu_back(g, y):
+     )
+ 
+ 
+-@jit_fuser
++
+ def bias_swiglu_back(g, y, bias):
+     """Computes the gradient for the biased SwiGLU activation function.
+ 
+@@ -86,7 +86,7 @@ def bias_swiglu_back(g, y, bias):
+     return swiglu_back(g, y)
+ 
+ 
+-@jit_fuser
++
+ def weighted_swiglu_back(g, y, weights):
+     input_dtype = y.dtype
+     w_dtype = weights.dtype
+diff --git a/megatron/core/fusions/fused_cross_entropy.py b/megatron/core/fusions/fused_cross_entropy.py
+index 23e4b6031..4d447e0e0 100644
+--- a/megatron/core/fusions/fused_cross_entropy.py
++++ b/megatron/core/fusions/fused_cross_entropy.py
+@@ -9,7 +9,7 @@ from megatron.core.tensor_parallel.cross_entropy import VocabParallelCrossEntrop
+ from megatron.core.tensor_parallel.utils import VocabUtility
+ 
+ 
+-@jit_fuser
++
+ def calculate_logits_max(vocab_parallel_logits: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+     """
+     Calculates the maximum logits of the predicted tokens.
+@@ -22,7 +22,7 @@ def calculate_logits_max(vocab_parallel_logits: torch.Tensor) -> Tuple[torch.Ten
+     return vocab_parallel_logits, logits_max
+ 
+ 
+-@jit_fuser
++
+ def calculate_predicted_logits(
+     vocab_parallel_logits: torch.Tensor,
+     target: torch.Tensor,
+@@ -44,7 +44,7 @@ def calculate_predicted_logits(
+     return target_mask, masked_target_1d, predicted_logits_sum_exp_logits, exp_logits
+ 
+ 
+-@jit_fuser
++
+ def calculate_cross_entropy_loss(
+     exp_logits: torch.Tensor, predicted_logits_sum_exp_logits: torch.Tensor
+ ) -> Tuple[torch.Tensor, torch.Tensor]:
+@@ -61,7 +61,7 @@ def calculate_cross_entropy_loss(
+     return exp_logits, loss
+ 
+ 
+-@jit_fuser
++
+ def calculate_gradients(
+     softmax: torch.Tensor,
+     grad_output: torch.Tensor,
+diff --git a/megatron/core/fusions/fused_pad_routing_map.py b/megatron/core/fusions/fused_pad_routing_map.py
+index c382178b6..563279edd 100644
+--- a/megatron/core/fusions/fused_pad_routing_map.py
++++ b/megatron/core/fusions/fused_pad_routing_map.py
+@@ -70,7 +70,7 @@ def _pad_routing_map_kernel(
+     tl.store(output_row_ptr + token_indices, output_row, mask=token_mask)
+ 
+ 
+-@jit_fuser
++
+ def fused_pad_routing_map(routing_map: torch.Tensor, pad_multiple: int) -> torch.Tensor:
+     """Fused version of pad_routing_map.
+     Args:
+diff --git a/megatron/core/fusions/fused_weighted_squared_relu.py b/megatron/core/fusions/fused_weighted_squared_relu.py
+index 02dabc14c..137022386 100644
+--- a/megatron/core/fusions/fused_weighted_squared_relu.py
++++ b/megatron/core/fusions/fused_weighted_squared_relu.py
+@@ -10,7 +10,7 @@ from megatron.core.utils import nvtx_decorator
+ ######################  WEIGHTED SQUARED ReLU FUSION  ######################
+ 
+ 
+-@jit_fuser
++
+ def weighted_squared_relu(x: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
+     """Element-wise weight applied after Squared-ReLU.
+ 
+@@ -28,7 +28,7 @@ def weighted_squared_relu(x: torch.Tensor, weights: torch.Tensor) -> torch.Tenso
+     return res.to(out_dtype)
+ 
+ 
+-@jit_fuser
++
+ def _squared_relu_back(g: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+     """Gradient of Squared-ReLU.
+ 
+@@ -37,7 +37,7 @@ def _squared_relu_back(g: torch.Tensor, x: torch.Tensor) -> torch.Tensor:
+     return g * 2 * F.relu(x)
+ 
+ 
+-@jit_fuser
++
+ def weighted_squared_relu_back(g: torch.Tensor, x: torch.Tensor, weights: torch.Tensor):
+     """Backward for weighted Squared-ReLU.
+ 
+diff --git a/megatron/core/models/gpt/gpt_layer_specs.py b/megatron/core/models/gpt/gpt_layer_specs.py
+index 712793853..76ea4333b 100755
+--- a/megatron/core/models/gpt/gpt_layer_specs.py
++++ b/megatron/core/models/gpt/gpt_layer_specs.py
+@@ -219,7 +219,7 @@ def get_gpt_layer_with_transformer_engine_spec(
+             'The fp8 argument in "get_gpt_layer_with_transformer_engine_spec" has been deprecated'
+             " and will be removed soon. Please update your code accordingly."
+         )
+-
++    from megatron.core.extensions.transformer_engine_spec_provider import TESpecProvider
+     if use_kitchen:
+         assert HAVE_KITCHEN
+         backend: BackendSpecProvider = KitchenSpecProvider(
+diff --git a/megatron/core/ssm/gated_delta_net.py b/megatron/core/ssm/gated_delta_net.py
+index dfa6e4c35..8b3621819 100644
+--- a/megatron/core/ssm/gated_delta_net.py
++++ b/megatron/core/ssm/gated_delta_net.py
+@@ -413,7 +413,7 @@ class GatedDeltaNet(MegatronModule):
+ 
+         return out, out_bias
+ 
+-    @jit_fuser
++    
+     def _apply_gated_norm(self, x, gate):
+         # Output Norm
+         x_dtype = x.dtype
+diff --git a/megatron/core/transformer/attention.py b/megatron/core/transformer/attention.py
+index 80e9ec6fc..b6bcef6a9 100644
+--- a/megatron/core/transformer/attention.py
++++ b/megatron/core/transformer/attention.py
+@@ -1026,7 +1026,7 @@ class Attention(MegatronModule, ABC):
+ 
+         return output, bias
+ 
+-    @jit_fuser
++    
+     def _apply_output_gate(self, x, gate):
+         x_dtype = x.dtype
+         gate = gate.contiguous()
+diff --git a/megatron/core/transformer/module.py b/megatron/core/transformer/module.py
+index 2330df91b..0446c9097 100644
+--- a/megatron/core/transformer/module.py
++++ b/megatron/core/transformer/module.py
+@@ -16,9 +16,9 @@ from megatron.core.transformer.utils import (
+     sharded_state_dict_default,
+ )
+ 
+-_FLOAT_TYPES = (torch.FloatTensor, torch.cuda.FloatTensor)
+-_HALF_TYPES = (torch.HalfTensor, torch.cuda.HalfTensor)
+-_BF16_TYPES = (torch.BFloat16Tensor, torch.cuda.BFloat16Tensor)
++_FLOAT_TYPES = (torch.FloatTensor, torch.cuda.FloatTensor, torch.npu.FloatTensor)
++_HALF_TYPES = (torch.HalfTensor, torch.cuda.HalfTensor, torch.npu.HalfTensor)
++_BF16_TYPES = (torch.BFloat16Tensor, torch.cuda.BFloat16Tensor, torch.npu.BFloat16Tensor)
+ 
+ 
+ def param_is_not_shared(param):  # pylint: disable=missing-function-docstring
+diff --git a/megatron/core/transformer/moe/experts.py b/megatron/core/transformer/moe/experts.py
+index 5eeafdd8d..a4dce6970 100644
+--- a/megatron/core/transformer/moe/experts.py
++++ b/megatron/core/transformer/moe/experts.py
+@@ -91,7 +91,7 @@ class GroupedMLP(MegatronModule):
+             if self.config.activation_func not in (F.silu, F.gelu):
+                 raise ValueError("Activation function must be silu or gelu when using GroupedMLP.")
+ 
+-            @jit_fuser
++            
+             def glu(x):
+                 x = torch.chunk(x, 2, dim=-1)
+                 return self.config.activation_func(x[0]) * x[1]
+@@ -108,7 +108,7 @@ class GroupedMLP(MegatronModule):
+                 "moe_act recompute for fp8 or fp4 cannot work with the legacy GroupedMLP."
+             )
+ 
+-        @jit_fuser
++        
+         def activation_func_with_probs(x, probs):
+             dtype = x.dtype
+             res = self.activation_func(x) * probs
+diff --git a/megatron/core/transformer/moe/router.py b/megatron/core/transformer/moe/router.py
+index 517944f25..2c5bc0728 100644
+--- a/megatron/core/transformer/moe/router.py
++++ b/megatron/core/transformer/moe/router.py
+@@ -472,7 +472,7 @@ class TopKRouter(Router):
+         else:
+             return input
+ 
+-    @jit_fuser
++    
+     def _apply_expert_bias(self, routing_map: torch.Tensor):
+         """
+         Update expert bias and tokens_per_expert
+diff --git a/megatron/core/transformer/moe/token_dispatcher.py b/megatron/core/transformer/moe/token_dispatcher.py
+index d0da38d63..6d092c88f 100644
+--- a/megatron/core/transformer/moe/token_dispatcher.py
++++ b/megatron/core/transformer/moe/token_dispatcher.py
+@@ -1403,7 +1403,7 @@ class MoEFlexTokenDispatcher(MoETokenDispatcher):
+         ).contiguous()
+         return routing_map, probs
+ 
+-    @jit_fuser
++    
+     def dispatch_preprocess(
+         self, hidden_states: torch.Tensor, routing_map: torch.Tensor, probs: torch.Tensor
+     ):
+diff --git a/megatron/core/transformer/torch_norm.py b/megatron/core/transformer/torch_norm.py
+index d0ceca7af..f16796680 100644
+--- a/megatron/core/transformer/torch_norm.py
++++ b/megatron/core/transformer/torch_norm.py
+@@ -69,7 +69,7 @@ class L2Norm(torch.nn.Module):
+         self.hidden_size = hidden_size
+         self.eps = eps
+ 
+-    @jit_fuser
++    
+     def _norm(self, x):
+         """
+         Performs the actual L2 normalization.
+diff --git a/megatron/core/transformer/utils.py b/megatron/core/transformer/utils.py
+index 880c53099..dbc95736e 100644
+--- a/megatron/core/transformer/utils.py
++++ b/megatron/core/transformer/utils.py
+@@ -51,7 +51,7 @@ def attention_mask_func(attention_scores, attention_mask):
+     return attention_scores
+ 
+ 
+-@jit_fuser
++
+ def gelu_impl(x):
+     """OpenAI's gelu implementation."""
+     return 0.5 * x * (1.0 + torch.tanh(0.7978845608028654 * x * (1.0 + 0.044715 * x * x)))
+@@ -65,7 +65,7 @@ def openai_gelu(x):
+ # This is actually Python equivalent of torch.nn.functional.gelu(), also with
+ # type hints for ONNX exporter
+ # pylint: disable=missing-function-docstring
+-@jit_fuser
++
+ def erf_gelu(x):
+     return (
+         x * 0.5 * (torch.erf(x / 1.41421).to(dtype=x.dtype) + torch.ones_like(x).to(dtype=x.dtype))
+diff --git a/megatron/legacy/model/fused_bias_gelu.py b/megatron/legacy/model/fused_bias_gelu.py
+index e00e63148..ffe4b7ec6 100644
+--- a/megatron/legacy/model/fused_bias_gelu.py
++++ b/megatron/legacy/model/fused_bias_gelu.py
+@@ -12,7 +12,7 @@ from megatron.core.jit import jit_fuser
+ # actual gelu is:
+ # x * 0.5 * (1.0 + torch.erf(x * 0.70710678))
+ 
+-@jit_fuser
++
+ def bias_gelu(bias, y):
+     x = bias + y
+     return  x * 0.5 * (1.0 + torch.tanh(0.79788456 * x * (1 + 0.044715 * x * x)))
+@@ -20,7 +20,7 @@ def bias_gelu(bias, y):
+ # gradient of tanh approximation of gelu
+ # gradient of actual gelu is:
+ # 0.5 * (1. + torch.erf(x * 0.70710678)) + 0.3989423 * x * torch.exp(-0.5 * x * x)
+-@jit_fuser
++
+ def bias_gelu_back(g, bias, y):
+     x = bias + y
+     tanh_out = torch.tanh(0.79788456 * x * (1 + 0.044715 * x * x))
+diff --git a/megatron/legacy/model/transformer.py b/megatron/legacy/model/transformer.py
+index 2a662a55b..2fc3e1bfb 100644
+--- a/megatron/legacy/model/transformer.py
++++ b/megatron/legacy/model/transformer.py
+@@ -856,7 +856,7 @@ def get_bias_dropout_add(training):
+     return _bias_dropout_add
+ 
+ 
+-@jit_fuser
++
+ def bias_dropout_add_fused_train(x: torch.Tensor,
+                                  bias: Optional[torch.Tensor],
+                                  residual: torch.Tensor,
+@@ -864,7 +864,7 @@ def bias_dropout_add_fused_train(x: torch.Tensor,
+     return bias_dropout_add(x, bias, residual, prob, True)
+ 
+ 
+-@jit_fuser
++
+ def bias_dropout_add_fused_inference(x: torch.Tensor,
+                                      bias: Optional[torch.Tensor],
+                                      residual: torch.Tensor,
+diff --git a/megatron/legacy/model/utils.py b/megatron/legacy/model/utils.py
+index 5762000d5..534858df7 100644
+--- a/megatron/legacy/model/utils.py
++++ b/megatron/legacy/model/utils.py
+@@ -43,7 +43,7 @@ def get_linear_layer(rows, columns, init_method):
+     return layer
+ 
+ 
+-@jit_fuser
++
+ def gelu_impl(x):
+     """OpenAI's gelu implementation."""
+     return 0.5 * x * (1.0 + torch.tanh(0.7978845608028654 * x *
+@@ -54,7 +54,7 @@ def openai_gelu(x):
+ 
+ 
+ #This is actually Python equivalent of torch.nn.functional.gelu(), also with type hints for ONNX exporter
+-@jit_fuser
++
+ def erf_gelu(x):
+     return x * 0.5 * (torch.erf(x / 1.41421).to(dtype=x.dtype)+torch.ones_like(x).to(dtype=x.dtype))
+ 
