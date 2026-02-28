@@ -91,19 +91,6 @@ The default and signature expectation are documented in:
 - `slime/utils/arguments.py`
 - `docs/en/get_started/customization.md`
 
-### Step 6: Validate End-to-End
-
-- Run a closest existing script with your new function path.
-- Run at least one targeted test under `tests/`.
-- Confirm both training generation and eval path (if eval is enabled) execute without schema mismatch.
-
-Suggested commands:
-
-```bash
-rg --files tests | rg 'rollout|debug_rollout|quick_start'
-pytest "$(rg --files tests | rg 'rollout|debug_rollout|quick_start' | head -n 1)" -vv
-```
-
 ## Common Mistakes
 
 - Returning raw Python lists/dicts with mismatched schema in custom path
