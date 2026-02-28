@@ -99,6 +99,8 @@ pre-commit run --all-files --show-diff-on-failure --color=always
 
 - For debugging tips, please refer to the [Debugging Guide](docs/en/developer_guide/debug.md)
 
+- To link repository skills into your local Codex skill directory, run `scripts/link_codex_skills.sh`
+
 ## FAQ & Acknowledgements
 
 - For frequently asked questions, please see the [Q\&A](docs/en/get_started/qa.md)
