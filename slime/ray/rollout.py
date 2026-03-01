@@ -17,8 +17,8 @@ from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_
 
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
-from slime.utils import logging_utils
-from slime.utils.health_monitor import RolloutHealthMonitor
+from slime.utils import logging_utils, tracking_utils
+from slime.utils.health_monitor import RolloutHealthMonitor, get_active_seed_instance
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
@@ -473,6 +473,8 @@ class RolloutManager:
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
         self.rollout_id = -1
 
+        self.need_connect_train_actors = True
+        self._metric_checker = MetricChecker.maybe_create(args)
         self._health_monitors = []
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
             for srv in self.servers.values():
@@ -530,7 +532,10 @@ class RolloutManager:
         gpu_counts = srv.engine_gpu_counts if srv else []
         gpu_offsets = srv.engine_gpu_offsets if srv else []
         num_new = srv.num_new_engines if srv else 0
-        return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets
+        return engines, self.rollout_engine_lock, num_new, gpu_counts, gpu_offsets, self.need_connect_train_actors
+
+    def set_need_connect_train_actors(self, value: bool):
+        self.need_connect_train_actors = value
 
     def get_num_rollout_per_epoch(self):
         assert self.args.rollout_global_dataset
@@ -603,6 +608,8 @@ class RolloutManager:
         )
 
     def clear_num_new_engines(self, model_name: str | None = None):
+        if len(dead_indices) > 0:
+            self.need_connect_train_actors = True
         # when fault tolerance is not enabled, we need to manually clear num_new_engines after update_weights
         srv = self._get_server(model_name)
         if srv:
@@ -855,6 +862,101 @@ class RolloutManager:
             rollout_data_refs.append(Box(ray.put(rollout_data)))
         return rollout_data_refs
 
+
+def init_rollout_engines(args, pg, all_rollout_engines):
+    if args.debug_train_only:
+        return 0
+
+    num_gpu_per_engine = min(args.rollout_num_gpus_per_engine, args.num_gpus_per_node)
+    num_engines = args.rollout_num_gpus // num_gpu_per_engine
+    assert len(all_rollout_engines) == num_engines
+    if args.prefill_num_servers is not None:
+        prefill_num_servers = args.prefill_num_servers * args.rollout_num_gpus_per_engine // num_gpu_per_engine
+        assert (
+            num_engines > prefill_num_servers
+        ), f"num_engines {num_engines} should be larger than prefill_num_servers {prefill_num_servers}"
+
+    pg, reordered_bundle_indices, reordered_gpu_ids = pg
+
+    RolloutRayActor = ray.remote(SGLangEngine)
+
+    rollout_engines = []
+    for i in range(num_engines):
+        if all_rollout_engines[i] is not None:
+            continue
+
+        num_gpus = 0.2
+        num_cpus = num_gpus
+
+        # Get the base GPU ID from placement group
+        base_gpu_id = int(reordered_gpu_ids[i * num_gpu_per_engine])
+
+        scheduling_strategy = PlacementGroupSchedulingStrategy(
+            placement_group=pg,
+            placement_group_capture_child_tasks=True,
+            placement_group_bundle_index=reordered_bundle_indices[i * num_gpu_per_engine],
+        )
+
+        env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST} | {
+            "SGL_JIT_DEEPGEMM_PRECOMPILE": "false",
+            "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
+            "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+            "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
+            "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
+            "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
+            "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
+            "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
+        }
+
+        worker_type = "regular"
+        if args.prefill_num_servers is not None:
+            if i < prefill_num_servers:
+                worker_type = "prefill"
+            else:
+                worker_type = "decode"
+
+        rollout_engine = RolloutRayActor.options(
+            num_cpus=num_cpus,
+            num_gpus=num_gpus,
+            scheduling_strategy=scheduling_strategy,
+            runtime_env={
+                "env_vars": env_vars,
+            },
+        ).remote(args, rank=i, worker_type=worker_type, base_gpu_id=base_gpu_id)
+
+        rollout_engines.append((i, rollout_engine))
+        all_rollout_engines[i] = rollout_engine
+
+    num_new_engines = len(rollout_engines)
+
+    if num_new_engines == 0:
+        return num_new_engines
+
+    if args.rollout_external:
+        addr_and_ports = _allocate_rollout_engine_addr_and_ports_external(args=args, rollout_engines=rollout_engines)
+    else:
+        addr_and_ports = _allocate_rollout_engine_addr_and_ports_normal(
+            args=args, num_engines=num_engines, rollout_engines=rollout_engines
+        )
+
+    # Get active seed instance for fault tolerance restart (only when partial restart)
+    if args.use_fault_tolerance and num_new_engines < num_engines:
+        remote_seed_instance = get_active_seed_instance(args)
+        if remote_seed_instance:
+            logger.info(
+                f"Fault tolerance: {num_new_engines} engine(s) will load weights from seed instance "
+                f"{remote_seed_instance['ip']}:{remote_seed_instance['port']}"
+            )
+            # Add remote_seed_instance to all addr_and_ports for new engines
+            for rank, _ in rollout_engines:
+                addr_and_ports[rank]["remote_seed_instance"] = remote_seed_instance
+
+    # TODO: don't ray.get here to overlap train actor init with rollout engine init.
+    # somehow if we don't sync here, the --debug-rollout-only mode will crash.
+    init_handles = [engine.init.remote(**(addr_and_ports[rank])) for rank, engine in rollout_engines]
+    ray.get(init_handles)
+
+    return num_new_engines
 
 def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):
     addr_and_ports = {}
