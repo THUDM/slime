@@ -58,6 +58,12 @@ def _profile_simple_loop(iterator, args, name):
 
 
 def _create_torch_profiler(args, name):
+    tensorboard_dir = args.tensorboard_dir
+    if tensorboard_dir is not None:
+        tensorboard_dir = Path(tensorboard_dir)
+        tensorboard_dir.mkdir(parents=True, exist_ok=True)
+        tensorboard_dir = str(tensorboard_dir)
+    
     return torch.profiler.profile(
         schedule=torch.profiler.schedule(
             # TODO the train_actor and train_log_probs ones may need to have different args to control step
@@ -67,7 +73,7 @@ def _create_torch_profiler(args, name):
             repeat=1,
         ),
         on_trace_ready=torch.profiler.tensorboard_trace_handler(
-            args.tensorboard_dir,
+            tensorboard_dir,
             worker_name=f"{name}_rank_{torch.distributed.get_rank()}",
             use_gzip=True,
         ),
@@ -88,8 +94,10 @@ class _BaseMemoryProfiler:
         return c(args)
 
     def __init__(self, args):
+        snapshot_dir = Path(args.memory_snapshot_dir)
+        snapshot_dir.mkdir(parents=True, exist_ok=True)
         self._path_dump = (
-            Path(args.memory_snapshot_dir)
+            snapshot_dir
             / f"memory_snapshot_time{time.time()}_rank{torch.distributed.get_rank()}_{args.memory_snapshot_path}"
         )
 
