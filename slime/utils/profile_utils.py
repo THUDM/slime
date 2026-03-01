@@ -2,7 +2,7 @@ import logging
 import time
 import traceback
 from pathlib import Path
-
+import os
 import torch
 
 from slime.utils.memory_utils import print_memory
@@ -60,10 +60,8 @@ def _profile_simple_loop(iterator, args, name):
 def _create_torch_profiler(args, name):
     tensorboard_dir = args.tensorboard_dir
     if tensorboard_dir is not None:
-        tensorboard_dir = Path(tensorboard_dir)
-        tensorboard_dir.mkdir(parents=True, exist_ok=True)
-        tensorboard_dir = str(tensorboard_dir)
-    
+        os.makedirs(tensorboard_dir, exist_ok=True)
+
     return torch.profiler.profile(
         schedule=torch.profiler.schedule(
             # TODO the train_actor and train_log_probs ones may need to have different args to control step

@@ -201,10 +201,12 @@ class MultiTurnLossMaskGenerator:
         return selected_texts
 
 if __name__ == "__main__":
-    tokenizer = AutoTokenizer.from_pretrained("/workspace/Qwen3.5-35B-A3B")
-    mask_utils = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type="qwen")
-    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "content": "hello"}]
+    tokenizer = AutoTokenizer.from_pretrained("/workspace/swe-data/models/Qwen3.5-35B-A3B")
+    mask_utils = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type="qwen3")
+    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "reasoning_content": "hihi", "content": "hello"}]
     tools = [{"type": "function", "function": {"name": "get_weather", "description": "Get the weather", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "The city to get the weather for"}}}}}]
     token_ids, loss_mask = mask_utils.get_loss_mask(messages, tools=tools)
     for i in range(len(token_ids)):
         print(f'Token: {repr(tokenizer.decode(token_ids[i]))}, Loss Mask: {loss_mask[i]}')
+
+    print(tokenizer.apply_chat_template(messages, tokenize=False, tools=tools))
