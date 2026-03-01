@@ -36,14 +36,14 @@ class MultiTurnLossMaskGenerator:
         chat_template_token_ids = self.tokenizer(chat_template_token, add_special_tokens=False)["input_ids"]
         idx_1, idx_2 = self.find_all_sublist_indices(chat_template_token_ids, raw_token_ids)
         end_interval = len(chat_template_token_ids) - len(raw_token_ids) - idx_2
-        
+
         gen_prompt_token_ids = self.tokenizer.apply_chat_template(
             test_messages, add_special_tokens=False, tokenize=True, add_generation_prompt=True
         )
         # Handle transformers 5.2.0+ API change: apply_chat_template now returns dict when tokenize=True
         if not isinstance(gen_prompt_token_ids, list):
             gen_prompt_token_ids = gen_prompt_token_ids["input_ids"]
-        
+
         gen_token_length = len(gen_prompt_token_ids) - len(chat_template_token_ids)
 
         system_message_length = idx_1 - ((idx_2 - idx_1) - end_interval - len(raw_token_ids))
@@ -64,7 +64,7 @@ class MultiTurnLossMaskGenerator:
             # Handle transformers 5.2.0+ API change: apply_chat_template now returns dict when tokenize=True
             if not isinstance(message_ids, list):
                 message_ids = message_ids["input_ids"]
-            
+
             if message["role"] != "system" and i > 0:
                 message_ids = message_ids[self.system_message_length :]
 
@@ -89,7 +89,7 @@ class MultiTurnLossMaskGenerator:
 
         prefix_message = {"role": "user", "content": "FOR CALCULATING LOSS MASK ONLY"}
         prefix_token_ids = self.tokenizer.apply_chat_template([prefix_message], tokenize=True)
-        
+
         # Handle transformers 5.2.0+ API change: apply_chat_template now returns dict when tokenize=True
         if not isinstance(prefix_token_ids, list):
             prefix_token_ids = prefix_token_ids["input_ids"]
@@ -200,13 +200,29 @@ class MultiTurnLossMaskGenerator:
 
         return selected_texts
 
+
 if __name__ == "__main__":
     tokenizer = AutoTokenizer.from_pretrained("/workspace/swe-data/models/Qwen3.5-35B-A3B")
     mask_utils = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type="qwen3")
-    messages = [{"role": "user", "content": "hi"}, {"role": "assistant", "reasoning_content": "hihi", "content": "hello"}]
-    tools = [{"type": "function", "function": {"name": "get_weather", "description": "Get the weather", "parameters": {"type": "object", "properties": {"city": {"type": "string", "description": "The city to get the weather for"}}}}}]
+    messages = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "reasoning_content": "hihi", "content": "hello"},
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_weather",
+                "description": "Get the weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string", "description": "The city to get the weather for"}},
+                },
+            },
+        }
+    ]
     token_ids, loss_mask = mask_utils.get_loss_mask(messages, tools=tools)
     for i in range(len(token_ids)):
-        print(f'Token: {repr(tokenizer.decode(token_ids[i]))}, Loss Mask: {loss_mask[i]}')
+        print(f"Token: {repr(tokenizer.decode(token_ids[i]))}, Loss Mask: {loss_mask[i]}")
 
     print(tokenizer.apply_chat_template(messages, tokenize=False, tools=tools))

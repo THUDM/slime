@@ -105,7 +105,6 @@ class _BaseMemoryProfiler:
         )
         logger.info(f"Memory snapshot will be saved to: {self._path_dump} (absolute path)")
 
-
     def start(self):
         raise NotImplementedError
 
@@ -130,20 +129,20 @@ class _TorchMemoryProfiler(_BaseMemoryProfiler):
                     f"Observe OOM, will dump snapshot to {self._path_dump}. ({device=} {alloc=} {device_alloc=} {device_free=}; stacktrace is as follows)"
                 )
                 traceback.print_stack()
-                
+
                 # Ensure the snapshot path is converted to string
                 snapshot_path = str(self._path_dump)
                 logger.info(f"Attempting to save snapshot to: {snapshot_path}")
-                
+
                 torch.cuda.memory._dump_snapshot(snapshot_path)
-                
+
                 # Verify file was created
                 if Path(snapshot_path).exists():
                     file_size = Path(snapshot_path).stat().st_size
                     logger.info(f"Successfully saved snapshot to {snapshot_path} (size: {file_size} bytes)")
                 else:
                     logger.warning(f"Snapshot file was not created at {snapshot_path}")
-                
+
                 print_memory("when oom")
             except Exception as e:
                 logger.error(f"Error in OOM observer: {e}", exc_info=True)
@@ -157,14 +156,14 @@ class _TorchMemoryProfiler(_BaseMemoryProfiler):
             snapshot_path = str(self._path_dump)
             logger.info(f"Dump memory snapshot to: {snapshot_path}")
             torch.cuda.memory._dump_snapshot(snapshot_path)
-            
+
             # Verify file was created
             if Path(snapshot_path).exists():
                 file_size = Path(snapshot_path).stat().st_size
                 logger.info(f"Successfully saved snapshot to {snapshot_path} (size: {file_size} bytes)")
             else:
                 logger.warning(f"Snapshot file was not created at {snapshot_path}")
-            
+
             torch.cuda.memory._record_memory_history(enabled=None)
         except Exception as e:
             logger.error(f"Error dumping memory snapshot: {e}", exc_info=True)

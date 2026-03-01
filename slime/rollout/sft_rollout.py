@@ -50,9 +50,7 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
 
         max_len = getattr(args, "rollout_max_context_len", None)
         if max_len is not None and len(token_ids) > max_len:
-            logger.warning(
-                f"sft_rollout: truncating sequence from {len(token_ids)} to {max_len} tokens"
-            )
+            logger.warning(f"sft_rollout: truncating sequence from {len(token_ids)} to {max_len} tokens")
             token_ids = token_ids[:max_len]
             loss_mask = loss_mask[:max_len]
 
