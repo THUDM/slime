@@ -152,23 +152,9 @@ class _TorchMemoryProfiler(_BaseMemoryProfiler):
         torch._C._cuda_attach_out_of_memory_observer(oom_observer)
 
     def stop(self):
-        try:
-            snapshot_path = str(self._path_dump)
-            logger.info(f"Dump memory snapshot to: {snapshot_path}")
-            torch.cuda.memory._dump_snapshot(snapshot_path)
-
-            # Verify file was created
-            if Path(snapshot_path).exists():
-                file_size = Path(snapshot_path).stat().st_size
-                logger.info(f"Successfully saved snapshot to {snapshot_path} (size: {file_size} bytes)")
-            else:
-                logger.warning(f"Snapshot file was not created at {snapshot_path}")
-
-            torch.cuda.memory._record_memory_history(enabled=None)
-        except Exception as e:
-            logger.error(f"Error dumping memory snapshot: {e}", exc_info=True)
-            traceback.print_exc(file=sys.stderr)
-            raise
+        logger.info(f"Dump memory snapshot to: {self._path_dump}")
+        torch.cuda.memory._dump_snapshot(self._path_dump)
+        torch.cuda.memory._record_memory_history(enabled=None)
 
 
 class _MemrayMemoryProfiler(_BaseMemoryProfiler):
