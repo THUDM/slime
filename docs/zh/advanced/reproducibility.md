@@ -1,8 +1,9 @@
 # Reproducibility
 
-Reproducibility is a bedrock of scientific progress. By combining the [deterministic inference](https://lmsys.org/blog/2025-09-22-sglang-deterministic/) of SGLang and the deterministic mode of Megatron-LM, slime supports bitwise experiment reproduction.
+Reproducibility is a bedrock of scientific progress. 通过结合 SGLang 提供的 [确定性推理](https://lmsys.org/blog/2025-09-22-sglang-deterministic/) 和 Megatron-LM 的确定性模式，slime 可以提供完全确定性（bitwise）的实验复现能力。
 
-To enable deterministic training, you need to first uninstall the flash attention 3 in the docker with `pip uninstall flash_attn_3 -y` and set:
+为了开启确定性训练，你需要通过 `pip uninstall flash_attn_3 -y` 卸载 flash attention 3，并设置：
+
 ```bash
   # sglang config
   --sglang-enable-deterministic-inference
@@ -12,7 +13,7 @@ To enable deterministic training, you need to first uninstall the flash attentio
   --deterministic-mode
 ```
 
-And set the following environment variables:
+以及设置如下环境变量：
 
 ```bash
      "env_vars": {
@@ -23,9 +24,9 @@ And set the following environment variables:
      }
 ```
 
-Here we provide the script to do RL training on Qwen2.5 0.5B model and GSM8K dataset with full deterministic.
+我们提供了一个完全确定性的，用 Qwen2.5 0.5B 训练 GSM8K 的脚本。
 
-For data and checkpoint preparation, please run:
+可以用如下脚本初始化训练数据和 ckpt：
 
 ```bash
 # download
@@ -42,10 +43,10 @@ PYTHONPATH=/root/Megatron-LM/ python \
    --save /root/Qwen2.5-0.5B-Instruct_torch_dist/
 ```
 
-And to run training,
+可以使用如下脚本进行训练：
 
 ```bash
 bash script/run-qwen2.5-0.5B-reproducibility.sh
 ```
 
-For screen shots of the wandb, please refer to [pull#370](https://github.com/THUDM/slime/pull/370).
+这个 PR 中记录了 wandb 的截图 [pull#370](https://github.com/THUDM/slime/pull/370).
