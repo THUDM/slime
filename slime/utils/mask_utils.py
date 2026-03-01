@@ -202,7 +202,7 @@ class MultiTurnLossMaskGenerator:
 
 
 if __name__ == "__main__":
-    tokenizer = AutoTokenizer.from_pretrained("/workspace/swe-data/models/Qwen3.5-35B-A3B")
+    tokenizer = AutoTokenizer.from_pretrained("/root/Qwen3.5-35B-A3B")
     mask_utils = MultiTurnLossMaskGenerator(tokenizer, tokenizer_type="qwen3")
     messages = [
         {"role": "user", "content": "hi"},

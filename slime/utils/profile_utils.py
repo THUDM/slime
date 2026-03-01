@@ -1,6 +1,5 @@
 import logging
 import os
-import sys
 import time
 import traceback
 from pathlib import Path
@@ -62,7 +61,6 @@ def _profile_simple_loop(iterator, args, name):
 def _create_torch_profiler(args, name):
     tensorboard_dir = args.tensorboard_dir
     if tensorboard_dir is not None:
-        # Use absolute path to ensure it works across Ray actors with different working directories
         tensorboard_dir = str(Path(tensorboard_dir).resolve())
         os.makedirs(tensorboard_dir, exist_ok=True)
 
@@ -124,30 +122,12 @@ class _TorchMemoryProfiler(_BaseMemoryProfiler):
         )
 
         def oom_observer(device, alloc, device_alloc, device_free):
-            try:
-                logger.info(
-                    f"Observe OOM, will dump snapshot to {self._path_dump}. ({device=} {alloc=} {device_alloc=} {device_free=}; stacktrace is as follows)"
-                )
-                traceback.print_stack()
-
-                # Ensure the snapshot path is converted to string
-                snapshot_path = str(self._path_dump)
-                logger.info(f"Attempting to save snapshot to: {snapshot_path}")
-
-                torch.cuda.memory._dump_snapshot(snapshot_path)
-
-                # Verify file was created
-                if Path(snapshot_path).exists():
-                    file_size = Path(snapshot_path).stat().st_size
-                    logger.info(f"Successfully saved snapshot to {snapshot_path} (size: {file_size} bytes)")
-                else:
-                    logger.warning(f"Snapshot file was not created at {snapshot_path}")
-
-                print_memory("when oom")
-            except Exception as e:
-                logger.error(f"Error in OOM observer: {e}", exc_info=True)
-                traceback.print_exc(file=sys.stderr)
-                raise
+            logger.info(
+                f"Observe OOM, will dump snapshot to {self._path_dump}. ({device=} {alloc=} {device_alloc=} {device_free=}; stacktrace is as follows)"
+            )
+            traceback.print_stack()
+            torch.cuda.memory._dump_snapshot(self._path_dump)
+            print_memory("when oom")
 
         torch._C._cuda_attach_out_of_memory_observer(oom_observer)
 
@@ -167,7 +147,7 @@ class _MemrayMemoryProfiler(_BaseMemoryProfiler):
         import memray
 
         self._tracker = memray.Tracker(
-            file_name=str(self._path_dump),
+            file_name=self._path_dump,
             native_traces=True,
         )
         self._tracker.__enter__()
