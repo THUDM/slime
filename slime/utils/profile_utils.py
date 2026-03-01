@@ -94,14 +94,12 @@ class _BaseMemoryProfiler:
         return c(args)
 
     def __init__(self, args):
-        # Use absolute path to ensure it works across Ray actors with different working directories
         snapshot_dir = Path(args.memory_snapshot_dir).resolve()
         snapshot_dir.mkdir(parents=True, exist_ok=True)
         self._path_dump = (
             snapshot_dir
             / f"memory_snapshot_time{time.time()}_rank{torch.distributed.get_rank()}_{args.memory_snapshot_path}"
         )
-        logger.info(f"Memory snapshot will be saved to: {self._path_dump} (absolute path)")
 
     def start(self):
         raise NotImplementedError
