@@ -62,6 +62,8 @@ def _profile_simple_loop(iterator, args, name):
 def _create_torch_profiler(args, name):
     tensorboard_dir = args.tensorboard_dir
     if tensorboard_dir is not None:
+        # Use absolute path to ensure it works across Ray actors with different working directories
+        tensorboard_dir = str(Path(tensorboard_dir).resolve())
         os.makedirs(tensorboard_dir, exist_ok=True)
 
     return torch.profiler.profile(
@@ -94,12 +96,15 @@ class _BaseMemoryProfiler:
         return c(args)
 
     def __init__(self, args):
-        snapshot_dir = Path(args.memory_snapshot_dir)
+        # Use absolute path to ensure it works across Ray actors with different working directories
+        snapshot_dir = Path(args.memory_snapshot_dir).resolve()
         snapshot_dir.mkdir(parents=True, exist_ok=True)
         self._path_dump = (
             snapshot_dir
             / f"memory_snapshot_time{time.time()}_rank{torch.distributed.get_rank()}_{args.memory_snapshot_path}"
         )
+        logger.info(f"Memory snapshot will be saved to: {self._path_dump} (absolute path)")
+
 
     def start(self):
         raise NotImplementedError
@@ -177,7 +182,7 @@ class _MemrayMemoryProfiler(_BaseMemoryProfiler):
         import memray
 
         self._tracker = memray.Tracker(
-            file_name=self._path_dump,
+            file_name=str(self._path_dump),
             native_traces=True,
         )
         self._tracker.__enter__()
