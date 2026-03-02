@@ -446,7 +446,13 @@ def compute_advantages_and_returns(args: Namespace, rollout_data: RolloutBatch) 
         ]
 
     if args.advantage_estimator in ["grpo", "gspo"]:
-        rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
+        if isinstance(rewards[0], list):
+            # Adding support for per token rewards.
+            # For efficiency (making multiple tensors vs one) when it's per sequence rewards
+            # we only create multiple tensors only when its per token reward
+            rewards = [torch.tensor(r, dtype=torch.float32, device=kl[0].device) for r in rewards]
+        else:
+            rewards = torch.tensor(rewards, dtype=torch.float32, device=kl[0].device)
         returns = get_grpo_returns(rewards, kl)
         # TODO: is the copy necessary?
         advantages = [r for r in returns]
