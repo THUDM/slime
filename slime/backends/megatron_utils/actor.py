@@ -126,7 +126,10 @@ class MegatronTrainRayActor(TrainRayActor):
                 self.weights_backuper.backup("rollout_actor")
 
         if self.args.vocab_size is None:
-            self.args.vocab_size = self.tokenizer.vocab_size
+            # Prefer HF config vocab_size (which may include model-native padding)
+            # over tokenizer vocab_size (which may be smaller, e.g. GPT-OSS).
+            hf_vocab = getattr(self.hf_config, "vocab_size", None)
+            self.args.vocab_size = hf_vocab if hf_vocab is not None else self.tokenizer.vocab_size
 
         update_weight_cls = UpdateWeightFromTensor if self.args.colocate else UpdateWeightFromDistributed
         self.weight_updater = update_weight_cls(
