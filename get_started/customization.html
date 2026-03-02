@@ -54,7 +54,7 @@
     <link rel="prev" title="Usage Guide" href="usage.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Feb 28, 2026"/>
+    <meta name="docbuild:last-update" content="Mar 02, 2026"/>
   </head>
   
   
@@ -475,6 +475,7 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#moe-routing-replay">19. MoE Routing Replay</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#testing-custom-function-paths">Testing Custom Function Paths</a></li>
 </ul>
             </nav>
         </div>
@@ -928,6 +929,37 @@ document.write(`
 <p>For detailed explanation of R3 and SlimeRouter, see <a class="reference internal" href="../advanced/slime-router.html"><span class="std std-doc">Slime Router</span></a>.</p>
 </section>
 </section>
+<section id="testing-custom-function-paths">
+<h2>Testing Custom Function Paths<a class="headerlink" href="#testing-custom-function-paths" title="Link to this heading">#</a></h2>
+<p>slime also provides CPU-only contract tests for customization interfaces. These tests resolve components through import-path strings, so they can validate both built-in hooks and user-defined implementations passed through the same CLI arguments used by training.</p>
+<p>The tests live under <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/</span></code> and are grouped by hook shape:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_plugin_rollout_contracts.py</span></code>
+Covers <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_plugin_generate_contracts.py</span></code>
+Covers <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_plugin_path_loading_contracts.py</span></code>
+Covers <code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>, <code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>, <code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>, <code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>, <code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>, <code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code>, and <code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_plugin_runtime_hook_contracts.py</span></code>
+Covers <code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>, <code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>, <code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>, <code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>, and <code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code></p></li>
+</ul>
+<p>Run all customization contract tests locally:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_rollout_contracts.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_generate_contracts.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_path_loading_contracts.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_runtime_hook_contracts.py
+</pre></div>
+</div>
+<p>Each test file can also be executed directly with <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/plugin_contracts/&lt;file&gt;.py</span></code>, which keeps them compatible with <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code>.</p>
+<p>A dedicated <code class="docutils literal notranslate"><span class="pre">run-ci-plugin-contracts</span></code> CI label is also available. Adding it to a PR triggers all four contract test files in parallel (no GPU required).</p>
+<p>For user-defined implementations, you can either export environment variables such as <code class="docutils literal notranslate"><span class="pre">SLIME_CONTRACT_ROLLOUT_FUNCTION_PATH</span></code> and <code class="docutils literal notranslate"><span class="pre">SLIME_CONTRACT_CUSTOM_RM_PATH</span></code>, or pass overrides directly when running a test file, for example:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tests/plugin_contracts/test_plugin_rollout_contracts.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-function-path<span class="w"> </span>my_project.custom_rollout.generate_rollout
+</pre></div>
+</div>
+<p>To validate your own custom implementation, replace the plugin paths used in these tests with your module path and keep the same assertions on signatures, return structure, and side effects.</p>
+</section>
 </section>
 
 
@@ -1007,6 +1039,7 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#moe-routing-replay">19. MoE Routing Replay</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#testing-custom-function-paths">Testing Custom Function Paths</a></li>
 </ul>
   </nav></div>
 
@@ -1040,7 +1073,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Feb 28, 2026.
+  Last updated on Mar 02, 2026.
   <br/>
 </p>
   </div>

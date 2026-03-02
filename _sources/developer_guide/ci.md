@@ -9,7 +9,7 @@ The workflow is defined in `.github/workflows/pr-test.yml` (auto-generated from 
 1. Runs on a self-hosted GPU runner inside a Docker container (`slimerl/slime:latest`).
 2. Installs slime with `pip install -e . --no-deps`.
 3. Acquires the required GPUs via `tests/ci/gpu_lock_exec.py --count <num_gpus>`.
-4. Executes the test file: `python tests/<test_file>.py`.
+4. Executes the test file: `python <test_path>.py` or `python tests/<test_file>.py`, depending on whether the test lives under `tests/` or a subdirectory such as `tests/plugin_contracts/`.
 
 Each test file follows a standard pattern: a `prepare()` function downloads models/datasets, and an `execute()` function builds CLI arguments and calls `U.execute_train(...)`.
 
@@ -35,7 +35,7 @@ All labels also run when triggered via `workflow_dispatch` (manual run from the 
 
 This is the most useful label for development. When you add a new test file or modify an existing one, just add `run-ci-changed` to your PR and CI will:
 
-1. **Detect** which `tests/test_*.py` files are added or modified relative to `origin/main` (via `git diff --diff-filter=AM`).
+1. **Detect** which `tests/test_*.py` or `tests/plugin_contracts/test_*.py` files are added or modified relative to `origin/main` (via `git diff --diff-filter=AM`).
 2. **Extract** the `NUM_GPUS` value from each detected test file automatically.
 3. **Build** a dynamic GitHub Actions matrix and run each test in parallel.
 
@@ -107,3 +107,17 @@ The workflow file `pr-test.yml` is auto-generated from the Jinja2 template `pr-t
 1. Edit `.github/workflows/pr-test.yml.j2`.
 2. Run `python .github/workflows/generate_github_workflows.py`.
 3. Commit both files.
+
+## Customization Contract Tests
+
+For CPU-only contract tests that validate hooks loaded from function paths, run:
+
+```bash
+python -m pytest \
+  tests/plugin_contracts/test_plugin_rollout_contracts.py \
+  tests/plugin_contracts/test_plugin_generate_contracts.py \
+  tests/plugin_contracts/test_plugin_path_loading_contracts.py \
+  tests/plugin_contracts/test_plugin_runtime_hook_contracts.py
+```
+
+These files also support direct execution as `python tests/plugin_contracts/<file>.py`. They declare `NUM_GPUS = 0`, so `run-ci-changed` can pick them up without treating them as GPU-heavy end-to-end tests.

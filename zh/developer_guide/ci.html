@@ -54,7 +54,7 @@
     <link rel="prev" title="Multi-Agent RL" href="../_examples_synced/multi_agent/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 02 月 28 日"/>
+    <meta name="docbuild:last-update" content="2026 年 03 月 02 日"/>
   </head>
   
   
@@ -449,6 +449,7 @@ document.write(`
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">编写新测试</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#workflow">Workflow 生成</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#customization">Customization 契约测试</a></li>
 </ul>
             </nav>
         </div>
@@ -470,7 +471,7 @@ document.write(`
 <li><p>在自托管 GPU runner 上以 Docker 容器（<code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code>）运行。</p></li>
 <li><p>通过 <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span> <span class="pre">--no-deps</span></code> 安装 slime。</p></li>
 <li><p>通过 <code class="docutils literal notranslate"><span class="pre">tests/ci/gpu_lock_exec.py</span> <span class="pre">--count</span> <span class="pre">&lt;num_gpus&gt;</span></code> 获取所需数量的 GPU。</p></li>
-<li><p>执行测试文件：<code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>。</p></li>
+<li><p>执行测试文件：<code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">&lt;test_path&gt;.py</span></code> 或 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>。如果测试位于 <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/</span></code> 这样的子目录，CI 也会自动处理。</p></li>
 </ol>
 <p>每个测试文件遵循统一的模式：<code class="docutils literal notranslate"><span class="pre">prepare()</span></code> 函数下载模型和数据集，<code class="docutils literal notranslate"><span class="pre">execute()</span></code> 函数构建命令行参数并调用 <code class="docutils literal notranslate"><span class="pre">U.execute_train(...)</span></code>。</p>
 </section>
@@ -524,7 +525,7 @@ document.write(`
 <h3><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> — 仅运行新增或修改的测试<a class="headerlink" href="#run-ci-changed" title="链接到此标题。">#</a></h3>
 <p>这是开发中最常用的 label。当你新增或修改了测试文件时，只需给 PR 添加 <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code>，CI 会自动：</p>
 <ol class="arabic simple">
-<li><p><strong>检测</strong>相对于 <code class="docutils literal notranslate"><span class="pre">origin/main</span></code> 新增或修改的 <code class="docutils literal notranslate"><span class="pre">tests/test_*.py</span></code> 文件（通过 <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">diff</span> <span class="pre">--diff-filter=AM</span></code>）。</p></li>
+<li><p><strong>检测</strong>相对于 <code class="docutils literal notranslate"><span class="pre">origin/main</span></code> 新增或修改的 <code class="docutils literal notranslate"><span class="pre">tests/test_*.py</span></code> 或 <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_*.py</span></code> 文件（通过 <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">diff</span> <span class="pre">--diff-filter=AM</span></code>）。</p></li>
 <li><p><strong>提取</strong>每个测试文件中的 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span></code> 值。</p></li>
 <li><p><strong>构建</strong>动态 GitHub Actions matrix，并行运行每个测试。</p></li>
 </ol>
@@ -597,6 +598,18 @@ document.write(`
 <li><p>同时提交两个文件。</p></li>
 </ol>
 </section>
+<section id="customization">
+<h2>Customization 契约测试<a class="headerlink" href="#customization" title="链接到此标题。">#</a></h2>
+<p>如果你要运行通过函数路径加载的 customization hook 契约测试，可以使用：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_rollout_contracts.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_generate_contracts.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_path_loading_contracts.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_runtime_hook_contracts.py
+</pre></div>
+</div>
+<p>这些测试文件也支持直接执行 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/plugin_contracts/&lt;file&gt;.py</span></code>。它们声明了 <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">0</span></code>，因此可以被 <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 自动识别，同时不会被当作 GPU 重型端到端测试。</p>
+</section>
 </section>
 
 
@@ -654,6 +667,7 @@ document.write(`
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">编写新测试</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#workflow">Workflow 生成</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#customization">Customization 契约测试</a></li>
 </ul>
   </nav></div>
 
@@ -687,7 +701,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 02 月 28 日.
+  最后更新于 2026 年 03 月 02 日.
   <br/>
 </p>
   </div>

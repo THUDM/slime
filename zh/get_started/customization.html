@@ -54,7 +54,7 @@
     <link rel="prev" title="使用文档" href="usage.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 02 月 28 日"/>
+    <meta name="docbuild:last-update" content="2026 年 03 月 02 日"/>
   </head>
   
   
@@ -471,6 +471,7 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#moe">19. MoE 路由重放</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">自定义函数路径的测试</a></li>
 </ul>
             </nav>
         </div>
@@ -926,6 +927,37 @@ document.write(`
 <p>关于 R3 和 SlimeRouter 的详细说明，请参阅 <a class="reference internal" href="../advanced/slime-router.html"><span class="std std-doc">Slime Router</span></a>。</p>
 </section>
 </section>
+<section id="id5">
+<h2>自定义函数路径的测试<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h2>
+<p>slime 现在也提供了一组 CPU 契约测试，用于校验这些 customization 接口。测试会通过字符串形式的导入路径来动态加载组件，因此既能回归仓库内置 hook，也能验证用户通过和训练时完全相同的 CLI 参数传入的自定义实现。</p>
+<p>这些测试统一放在 <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/</span></code> 目录下，并按 hook 形态归并成少数几个文件：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_plugin_rollout_contracts.py</span></code>
+覆盖 <code class="docutils literal notranslate"><span class="pre">--rollout-function-path</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_plugin_generate_contracts.py</span></code>
+覆盖 <code class="docutils literal notranslate"><span class="pre">--custom-generate-function-path</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_plugin_path_loading_contracts.py</span></code>
+覆盖 <code class="docutils literal notranslate"><span class="pre">--eval-function-path</span></code>、<code class="docutils literal notranslate"><span class="pre">--custom-rm-path</span></code>、<code class="docutils literal notranslate"><span class="pre">--dynamic-sampling-filter-path</span></code>、<code class="docutils literal notranslate"><span class="pre">--buffer-filter-path</span></code>、<code class="docutils literal notranslate"><span class="pre">--data-source-path</span></code>、<code class="docutils literal notranslate"><span class="pre">--rollout-sample-filter-path</span></code>、<code class="docutils literal notranslate"><span class="pre">--rollout-all-samples-process-path</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_plugin_runtime_hook_contracts.py</span></code>
+覆盖 <code class="docutils literal notranslate"><span class="pre">--custom-rollout-log-function-path</span></code>、<code class="docutils literal notranslate"><span class="pre">--custom-eval-rollout-log-function-path</span></code>、<code class="docutils literal notranslate"><span class="pre">--custom-reward-post-process-path</span></code>、<code class="docutils literal notranslate"><span class="pre">--custom-convert-samples-to-train-data-path</span></code>、<code class="docutils literal notranslate"><span class="pre">--rollout-data-postprocess-path</span></code></p></li>
+</ul>
+<p>本地运行全部 customization 契约测试：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_rollout_contracts.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_generate_contracts.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_path_loading_contracts.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_runtime_hook_contracts.py
+</pre></div>
+</div>
+<p>每个测试文件也支持直接通过 <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/plugin_contracts/&lt;file&gt;.py</span></code> 执行，这样可以和 <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> 保持兼容。</p>
+<p>CI 中也提供了独立的 <code class="docutils literal notranslate"><span class="pre">run-ci-plugin-contracts</span></code> label，给 PR 打上该标签后会并行运行上述全部四个契约测试（无需 GPU）。</p>
+<p>如果你要验证自己的自定义实现，可以直接设置环境变量，例如 <code class="docutils literal notranslate"><span class="pre">SLIME_CONTRACT_ROLLOUT_FUNCTION_PATH</span></code>、<code class="docutils literal notranslate"><span class="pre">SLIME_CONTRACT_CUSTOM_RM_PATH</span></code>，也可以在直接运行测试文件时传参，例如：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tests/plugin_contracts/test_plugin_rollout_contracts.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-function-path<span class="w"> </span>my_project.custom_rollout.generate_rollout
+</pre></div>
+</div>
+<p>验证时只需将插件路径替换成你的模块路径，断言逻辑（函数签名、返回结构、副作用）保持不变即可。</p>
+</section>
 </section>
 
 
@@ -1005,6 +1037,7 @@ document.write(`
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#moe">19. MoE 路由重放</a></li>
 </ul>
 </li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">自定义函数路径的测试</a></li>
 </ul>
   </nav></div>
 
@@ -1038,7 +1071,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 02 月 28 日.
+  最后更新于 2026 年 03 月 02 日.
   <br/>
 </p>
   </div>

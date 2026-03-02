@@ -423,3 +423,41 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 | `--use-rollout-routing-replay` | R3：在训练时重放 rollout 阶段的路由。**需要 `--use-slime-router`**。([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
 
 关于 R3 和 SlimeRouter 的详细说明，请参阅 [Slime Router](../advanced/slime-router.md)。
+
+## 自定义函数路径的测试
+
+slime 现在也提供了一组 CPU 契约测试，用于校验这些 customization 接口。测试会通过字符串形式的导入路径来动态加载组件，因此既能回归仓库内置 hook，也能验证用户通过和训练时完全相同的 CLI 参数传入的自定义实现。
+
+这些测试统一放在 `tests/plugin_contracts/` 目录下，并按 hook 形态归并成少数几个文件：
+
+- `tests/plugin_contracts/test_plugin_rollout_contracts.py`
+  覆盖 `--rollout-function-path`
+- `tests/plugin_contracts/test_plugin_generate_contracts.py`
+  覆盖 `--custom-generate-function-path`
+- `tests/plugin_contracts/test_plugin_path_loading_contracts.py`
+  覆盖 `--eval-function-path`、`--custom-rm-path`、`--dynamic-sampling-filter-path`、`--buffer-filter-path`、`--data-source-path`、`--rollout-sample-filter-path`、`--rollout-all-samples-process-path`
+- `tests/plugin_contracts/test_plugin_runtime_hook_contracts.py`
+  覆盖 `--custom-rollout-log-function-path`、`--custom-eval-rollout-log-function-path`、`--custom-reward-post-process-path`、`--custom-convert-samples-to-train-data-path`、`--rollout-data-postprocess-path`
+
+本地运行全部 customization 契约测试：
+
+```bash
+python -m pytest \
+  tests/plugin_contracts/test_plugin_rollout_contracts.py \
+  tests/plugin_contracts/test_plugin_generate_contracts.py \
+  tests/plugin_contracts/test_plugin_path_loading_contracts.py \
+  tests/plugin_contracts/test_plugin_runtime_hook_contracts.py
+```
+
+每个测试文件也支持直接通过 `python tests/plugin_contracts/<file>.py` 执行，这样可以和 `run-ci-changed` 保持兼容。
+
+CI 中也提供了独立的 `run-ci-plugin-contracts` label，给 PR 打上该标签后会并行运行上述全部四个契约测试（无需 GPU）。
+
+如果你要验证自己的自定义实现，可以直接设置环境变量，例如 `SLIME_CONTRACT_ROLLOUT_FUNCTION_PATH`、`SLIME_CONTRACT_CUSTOM_RM_PATH`，也可以在直接运行测试文件时传参，例如：
+
+```bash
+python tests/plugin_contracts/test_plugin_rollout_contracts.py \
+  --rollout-function-path my_project.custom_rollout.generate_rollout
+```
+
+验证时只需将插件路径替换成你的模块路径，断言逻辑（函数签名、返回结构、副作用）保持不变即可。

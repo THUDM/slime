@@ -54,7 +54,7 @@
     <link rel="prev" title="Multi-Agent RL" href="../_examples_synced/multi_agent/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Feb 28, 2026"/>
+    <meta name="docbuild:last-update" content="Mar 02, 2026"/>
   </head>
   
   
@@ -453,6 +453,7 @@ document.write(`
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#writing-a-new-test">Writing a New Test</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#workflow-generation">Workflow Generation</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#customization-contract-tests">Customization Contract Tests</a></li>
 </ul>
             </nav>
         </div>
@@ -474,7 +475,7 @@ document.write(`
 <li><p>Runs on a self-hosted GPU runner inside a Docker container (<code class="docutils literal notranslate"><span class="pre">slimerl/slime:latest</span></code>).</p></li>
 <li><p>Installs slime with <code class="docutils literal notranslate"><span class="pre">pip</span> <span class="pre">install</span> <span class="pre">-e</span> <span class="pre">.</span> <span class="pre">--no-deps</span></code>.</p></li>
 <li><p>Acquires the required GPUs via <code class="docutils literal notranslate"><span class="pre">tests/ci/gpu_lock_exec.py</span> <span class="pre">--count</span> <span class="pre">&lt;num_gpus&gt;</span></code>.</p></li>
-<li><p>Executes the test file: <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>.</p></li>
+<li><p>Executes the test file: <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">&lt;test_path&gt;.py</span></code> or <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/&lt;test_file&gt;.py</span></code>, depending on whether the test lives under <code class="docutils literal notranslate"><span class="pre">tests/</span></code> or a subdirectory such as <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/</span></code>.</p></li>
 </ol>
 <p>Each test file follows a standard pattern: a <code class="docutils literal notranslate"><span class="pre">prepare()</span></code> function downloads models/datasets, and an <code class="docutils literal notranslate"><span class="pre">execute()</span></code> function builds CLI arguments and calls <code class="docutils literal notranslate"><span class="pre">U.execute_train(...)</span></code>.</p>
 </section>
@@ -528,7 +529,7 @@ document.write(`
 <h3><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> — Run Only New or Modified Tests<a class="headerlink" href="#run-ci-changed-run-only-new-or-modified-tests" title="Link to this heading">#</a></h3>
 <p>This is the most useful label for development. When you add a new test file or modify an existing one, just add <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> to your PR and CI will:</p>
 <ol class="arabic simple">
-<li><p><strong>Detect</strong> which <code class="docutils literal notranslate"><span class="pre">tests/test_*.py</span></code> files are added or modified relative to <code class="docutils literal notranslate"><span class="pre">origin/main</span></code> (via <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">diff</span> <span class="pre">--diff-filter=AM</span></code>).</p></li>
+<li><p><strong>Detect</strong> which <code class="docutils literal notranslate"><span class="pre">tests/test_*.py</span></code> or <code class="docutils literal notranslate"><span class="pre">tests/plugin_contracts/test_*.py</span></code> files are added or modified relative to <code class="docutils literal notranslate"><span class="pre">origin/main</span></code> (via <code class="docutils literal notranslate"><span class="pre">git</span> <span class="pre">diff</span> <span class="pre">--diff-filter=AM</span></code>).</p></li>
 <li><p><strong>Extract</strong> the <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span></code> value from each detected test file automatically.</p></li>
 <li><p><strong>Build</strong> a dynamic GitHub Actions matrix and run each test in parallel.</p></li>
 </ol>
@@ -601,6 +602,18 @@ document.write(`
 <li><p>Commit both files.</p></li>
 </ol>
 </section>
+<section id="customization-contract-tests">
+<h2>Customization Contract Tests<a class="headerlink" href="#customization-contract-tests" title="Link to this heading">#</a></h2>
+<p>For CPU-only contract tests that validate hooks loaded from function paths, run:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_rollout_contracts.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_generate_contracts.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_path_loading_contracts.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>tests/plugin_contracts/test_plugin_runtime_hook_contracts.py
+</pre></div>
+</div>
+<p>These files also support direct execution as <code class="docutils literal notranslate"><span class="pre">python</span> <span class="pre">tests/plugin_contracts/&lt;file&gt;.py</span></code>. They declare <code class="docutils literal notranslate"><span class="pre">NUM_GPUS</span> <span class="pre">=</span> <span class="pre">0</span></code>, so <code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code> can pick them up without treating them as GPU-heavy end-to-end tests.</p>
+</section>
 </section>
 
 
@@ -658,6 +671,7 @@ document.write(`
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#writing-a-new-test">Writing a New Test</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#workflow-generation">Workflow Generation</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#customization-contract-tests">Customization Contract Tests</a></li>
 </ul>
   </nav></div>
 
@@ -691,7 +705,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Feb 28, 2026.
+  Last updated on Mar 02, 2026.
   <br/>
 </p>
   </div>
