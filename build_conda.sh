@@ -50,7 +50,7 @@ NVCC_APPEND_FLAGS="--threads 4" \
 
 pip install git+https://github.com/fzyzcjy/torch_memory_saver.git@dc6876905830430b5054325fa4211ff302169c6b --no-cache-dir --force-reinstall
 pip install git+https://github.com/fzyzcjy/Megatron-Bridge.git@dev_rl --no-build-isolation
-pip install nvidia-modelopt[torch]>=0.37.0 --no-build-isolation
+pip install "nvidia-modelopt[torch]>=0.37.0" --no-build-isolation
 
 # megatron
 cd $BASE_DIR
