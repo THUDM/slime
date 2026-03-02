@@ -110,13 +110,19 @@ async def _generate_rollout_async(args, data_source):
     semaphore = asyncio.Semaphore(max(getattr(args, "sglang_server_concurrency", 64), 1))
 
     async with aiohttp.ClientSession() as session:
-        generated_groups = await asyncio.gather(*(
-            asyncio.gather(*(_generate_sample(args, s, sampling_params, tokenizer, session, semaphore) for s in group))
-            for group in samples
-        ))
+        generated_groups = await asyncio.gather(
+            *(
+                asyncio.gather(
+                    *(_generate_sample(args, s, sampling_params, tokenizer, session, semaphore) for s in group)
+                )
+                for group in samples
+            )
+        )
 
     first = generated_groups[0][0]
-    logger.info(f"KD rollout: prompt={first.prompt[:80]!r}, response={first.response[:80]!r}, len={first.response_length}")
+    logger.info(
+        f"KD rollout: prompt={first.prompt[:80]!r}, response={first.response[:80]!r}, len={first.response_length}"
+    )
 
     token_count = sum(s.response_length for g in generated_groups for s in g)
     return RolloutFnTrainOutput(samples=generated_groups, metrics={"kd/token_count": token_count})
@@ -132,6 +138,7 @@ def generate_rollout(args, rollout_id, data_source, evaluation=False):
     # Store top-k data for loss function access
     if KD_TOP_K > 0:
         from examples.knowledge_distillation.kd_loss import store_topk_data
+
         store_topk_data(result.samples)
 
     if KD_SAVE_PATH:

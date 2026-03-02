@@ -19,14 +19,15 @@ def store_topk_data(samples):
 
 
 def _get_topk_data(tokens):
-    key = tuple(tokens[:20].tolist() if hasattr(tokens, 'tolist') else tokens[:20])
+    key = tuple(tokens[:20].tolist() if hasattr(tokens, "tolist") else tokens[:20])
     return _topk_data_store.get(key)
 
 
 def sampled_kl_loss(args, batch, logits, sum_of_sample_mean):
     """Forward KL on teacher-sampled tokens (KD_TOP_K=0)."""
     _, log_probs_result = get_log_probs_and_entropy(
-        logits, args=args,
+        logits,
+        args=args,
         unconcat_tokens=batch["unconcat_tokens"],
         total_lengths=batch["total_lengths"],
         response_lengths=batch["response_lengths"],
@@ -37,7 +38,7 @@ def sampled_kl_loss(args, batch, logits, sum_of_sample_mean):
     entropy = log_probs_result.get("entropy", [])
 
     kl_terms = []
-    for s_lp, t_lp in zip(student_lps, batch["teacher_log_probs"]):
+    for s_lp, t_lp in zip(student_lps, batch["teacher_log_probs"], strict=False):
         kl_terms.append(t_lp.to(s_lp) - s_lp)
 
     loss = sum_of_sample_mean(torch.cat(kl_terms))
@@ -66,11 +67,16 @@ def _extract_response_log_probs(logits, unconcat_tokens, total_lengths, response
 def topk_kl_loss(args, batch, logits, sum_of_sample_mean):
     """Forward KL on teacher's top-K tokens with temperature scaling."""
     student_full_lps = _extract_response_log_probs(
-        logits, batch["unconcat_tokens"], batch["total_lengths"], batch["response_lengths"],
+        logits,
+        batch["unconcat_tokens"],
+        batch["total_lengths"],
+        batch["response_lengths"],
     )
 
     topk_data_list = [_get_topk_data(tokens) for tokens in batch["unconcat_tokens"]]
-    valid_data = [(s_lp, data) for s_lp, data in zip(student_full_lps, topk_data_list) if data is not None]
+    valid_data = [
+        (s_lp, data) for s_lp, data in zip(student_full_lps, topk_data_list, strict=False) if data is not None
+    ]
 
     if not valid_data:
         return sampled_kl_loss(args, batch, logits, sum_of_sample_mean)
@@ -84,7 +90,7 @@ def topk_kl_loss(args, batch, logits, sum_of_sample_mean):
         s_topk = s_lp.gather(1, t_ids)
         t_renorm = torch.log_softmax(t_lps / tau, dim=-1)
         s_renorm = torch.log_softmax(s_topk / tau, dim=-1)
-        kl_terms.append((tau ** 2) * (t_renorm.exp() * (t_renorm - s_renorm)).sum(dim=-1))
+        kl_terms.append((tau**2) * (t_renorm.exp() * (t_renorm - s_renorm)).sum(dim=-1))
 
     loss = sum_of_sample_mean(torch.cat(kl_terms))
     return loss, {"kd/loss": loss.detach()}

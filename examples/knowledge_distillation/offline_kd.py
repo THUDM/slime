@@ -39,8 +39,12 @@ def _load_from_jsonl(load_path, rollout_id, batch_size, num_rollouts_per_prompt)
             )
 
             if "teacher_top_k_ids" in record and "teacher_top_k_logprobs" in record:
-                assert len(record["teacher_top_k_ids"]) == resp_len, f"Sample {len(samples)}: top_k_ids length mismatch"
-                assert len(record["teacher_top_k_logprobs"]) == resp_len, f"Sample {len(samples)}: top_k_logprobs length mismatch"
+                assert (
+                    len(record["teacher_top_k_ids"]) == resp_len
+                ), f"Sample {len(samples)}: top_k_ids length mismatch"
+                assert (
+                    len(record["teacher_top_k_logprobs"]) == resp_len
+                ), f"Sample {len(samples)}: top_k_logprobs length mismatch"
                 sample.train_metadata = {
                     "teacher_top_k_ids": record["teacher_top_k_ids"],
                     "teacher_top_k_logprobs": record["teacher_top_k_logprobs"],
@@ -80,10 +84,13 @@ def generate_rollout(args, rollout_id, data_source, evaluation=False):
     # Store top-k data for loss function access
     if KD_TOP_K > 0:
         from examples.knowledge_distillation.kd_loss import store_topk_data
+
         store_topk_data(samples)
 
     first = samples[0][0]
-    logger.info(f"Offline KD: prompt={first.prompt[:80]!r}, response={first.response[:80]!r}, len={first.response_length}")
+    logger.info(
+        f"Offline KD: prompt={first.prompt[:80]!r}, response={first.response[:80]!r}, len={first.response_length}"
+    )
 
     token_count = sum(s.response_length for g in samples for s in g)
     return RolloutFnTrainOutput(samples=samples, metrics={"kd/token_count": token_count})
