@@ -14,6 +14,7 @@ from megatron.core.models.gpt.gpt_layer_specs import (
     get_gpt_layer_with_transformer_engine_spec,
 )
 from megatron.core.transformer.spec_utils import import_module
+from megatron.core.process_groups_config import ProcessGroupCollection
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.training.arguments import core_transformer_config_from_args
 
@@ -62,15 +63,24 @@ def get_model_provider_func(
     if getattr(args, "custom_model_provider_path", None):
 
         def wrapped_model_provider(
-            pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None
+            pre_process: bool = True,
+            post_process: bool = True,
+            vp_stage: int | None = None,
+            config: TransformerConfig | None = None,
+            pg_collection: ProcessGroupCollection | None = None,
         ) -> GPTModel:
             custom_model_provider = load_function(args.custom_model_provider_path)
             # Check if the custom provider supports vp_stage parameter
-            has_vp_stage = "vp_stage" in inspect.signature(custom_model_provider).parameters
-            if has_vp_stage:
-                model = custom_model_provider(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
-            else:
-                model = custom_model_provider(pre_process=pre_process, post_process=post_process)
+            sig_params = inspect.signature(custom_model_provider).parameters
+            kwargs = {"pre_process": pre_process, "post_process": post_process}
+            if "vp_stage" in sig_params:
+                kwargs["vp_stage"] = vp_stage
+            if "pg_collection" in sig_params:
+                kwargs["pg_collection"] = pg_collection
+            if "config" in sig_params:
+                kwargs["config"] = config
+            
+            model = custom_model_provider(**kwargs)
             # Apply critic output layer if needed
             if post_process and role == "critic":
                 model.output_layer = LinearForLastLayer(
@@ -98,7 +108,13 @@ def get_model_provider_func(
         provider.finalize()
         return provider.provide
 
-    def model_provider(pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None) -> GPTModel:
+    def model_provider(
+        pre_process: bool = True,
+        post_process: bool = True,
+        vp_stage: int | None = None,
+        config: TransformerConfig | None = None,
+        pg_collection: ProcessGroupCollection | None = None,
+    ) -> GPTModel:
         """Builds the model.
 
         If you set the use_legacy_models to True, it will return the legacy GPT model and if not the mcore GPT model.
@@ -106,7 +122,11 @@ def get_model_provider_func(
         Args:
             pre_process (bool, optional): Set to true if you need to compute embedings. Defaults to True.
             post_process (bool, optional): Set to true if you need to want to compute output logits/loss. Defaults to True.
-
+            vp_stage (int | None, optional): Virtual pipeline stage index. Defaults to None.
+            config (TransformerConfig | None, optional): Transformer config passed by Megatron-LM's get_model().
+                Not used here since we build our own config from args. Defaults to None.
+            pg_collection (ProcessGroupCollection | None, optional): Process group collection passed by
+                Megatron-LM's get_model(). Not used here. Defaults to None.
 
         Returns:
             Union[GPTModel, megatron.legacy.model.GPTModel]: The returned model
@@ -184,6 +204,9 @@ def get_model_provider_func(
 
         if vp_stage is not None:
             kwargs["vp_stage"] = vp_stage
+
+        if pg_collection is not None:
+            kwargs["pg_collection"] = pg_collection
 
         if args.mtp_num_layers:
             from megatron.core.models.gpt.gpt_layer_specs import get_gpt_mtp_block_spec
