@@ -713,24 +713,36 @@ class RolloutManager:
 
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
         if (
-            self.args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
+            self.args.advantage_estimator in {"grpo", "gspo", "reinforce_plus_plus_baseline"}
             and self.args.rewards_normalization
         ):
             # group norm
             rewards = torch.tensor(raw_rewards, dtype=torch.float)
+            use_std = self.args.advantage_estimator in {"grpo", "gspo"} and self.args.grpo_std_normalization
+
             if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
                 rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
+                rewards = rewards - rewards.mean(dim=-1, keepdim=True)
+                if use_std:
+                    rewards = rewards / (rewards.std(dim=-1, keepdim=True) + 1e-6)
+                return raw_rewards, rewards.flatten().tolist()
             else:
-                # when samples count are not equal in each group
-                rewards = rewards.view(-1, rewards.shape[-1])
-            mean = rewards.mean(dim=-1, keepdim=True)
-            rewards = rewards - mean
+                # Normalize within each prompt group using sample.group_index
+                group_ids = torch.tensor([sample.group_index for sample in samples])
 
-            if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
-                std = rewards.std(dim=-1, keepdim=True)
-                rewards = rewards / (std + 1e-6)
+                # Compute group means via scatter
+                group_counts = torch.bincount(group_ids).float()
+                group_sums = torch.zeros_like(group_counts).scatter_add_(0, group_ids, rewards)
+                group_means = group_sums / group_counts
+                rewards = rewards - group_means[group_ids]
 
-            return raw_rewards, rewards.flatten().tolist()
+                if use_std:
+                    # Compute group stds
+                    group_sq_sums = torch.zeros_like(group_counts).scatter_add_(0, group_ids, rewards**2)
+                    group_stds = (group_sq_sums / group_counts).sqrt()
+                    rewards = rewards / (group_stds[group_ids] + 1e-6)
+
+                return raw_rewards, rewards.tolist()
 
         return raw_rewards, raw_rewards
 
