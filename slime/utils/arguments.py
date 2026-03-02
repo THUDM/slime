@@ -571,6 +571,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "When need to add tools during apply_chat_template, you should provide the key for the tools in the prompt dataset."
                 ),
             )
+            parser.add_argument(
+                "--data-loading-workers",
+                type=int,
+                default=1,
+                help="Number of parallel workers for data loading. Higher values speed up VLM data loading.",
+            )
 
             parser.add_argument(
                 "--start-rollout-id",
