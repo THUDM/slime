@@ -1623,9 +1623,10 @@ def slime_validate_args(args):
         assert not args.use_tis, "use_rollout_logprobs and use_tis cannot be set at the same time."
 
     if args.get_mismatch_metrics:
-        assert (
-            args.custom_tis_function_path is not None
-        ), "custom_tis_function_path must be set when get_mismatch_metrics is set"
+        if args.custom_tis_function_path is None:
+            logger.warning(
+                "get_mismatch_metrics is set but custom_tis_function_path is None. Using default vanilla_tis_function for metrics calculation."
+            )
 
         if args.use_rollout_logprobs:
             logger.info(
