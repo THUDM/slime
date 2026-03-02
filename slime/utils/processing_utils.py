@@ -3,10 +3,17 @@ import io
 import logging
 import os
 
+import torch
+import torchvision.transforms as T
 from PIL import Image
+from torchvision.transforms.functional import InterpolationMode
 from transformers import AutoProcessor, AutoTokenizer, PreTrainedTokenizerBase, ProcessorMixin
 
 logger = logging.getLogger(__name__)
+
+# InternVL image processing constants
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
 
 # Default image patch size for vision-language models
 # Note: Qwen3-VL uses 16, Qwen2.5-VL uses 14
@@ -14,10 +21,144 @@ logger = logging.getLogger(__name__)
 DEFAULT_PATCH_SIZE = 14
 
 
+# ============== InternVL Image Processing (from official example) ==============
+
+def _build_internvl_transform(input_size):
+    """Build transform for InternVL image processing."""
+    transform = T.Compose([
+        T.Lambda(lambda img: img.convert('RGB') if img.mode != 'RGB' else img),
+        T.Resize((input_size, input_size), interpolation=InterpolationMode.BICUBIC),
+        T.ToTensor(),
+        T.Normalize(mean=IMAGENET_MEAN, std=IMAGENET_STD)
+    ])
+    return transform
+
+
+def _find_closest_aspect_ratio(aspect_ratio, target_ratios, width, height, image_size):
+    """Find the closest aspect ratio for dynamic preprocessing."""
+    best_ratio_diff = float('inf')
+    best_ratio = (1, 1)
+    area = width * height
+    for ratio in target_ratios:
+        target_aspect_ratio = ratio[0] / ratio[1]
+        ratio_diff = abs(aspect_ratio - target_aspect_ratio)
+        if ratio_diff < best_ratio_diff:
+            best_ratio_diff = ratio_diff
+            best_ratio = ratio
+        elif ratio_diff == best_ratio_diff:
+            if area > 0.5 * image_size * image_size * ratio[0] * ratio[1]:
+                best_ratio = ratio
+    return best_ratio
+
+
+def _dynamic_preprocess(image, min_num=1, max_num=12, image_size=448, use_thumbnail=False):
+    """Dynamic preprocess for InternVL - split image into patches."""
+    orig_width, orig_height = image.size
+    aspect_ratio = orig_width / orig_height
+
+    target_ratios = set(
+        (i, j) for n in range(min_num, max_num + 1) for i in range(1, n + 1) for j in range(1, n + 1) if
+        i * j <= max_num and i * j >= min_num)
+    target_ratios = sorted(target_ratios, key=lambda x: x[0] * x[1])
+
+    target_aspect_ratio = _find_closest_aspect_ratio(
+        aspect_ratio, target_ratios, orig_width, orig_height, image_size)
+
+    target_width = image_size * target_aspect_ratio[0]
+    target_height = image_size * target_aspect_ratio[1]
+    blocks = target_aspect_ratio[0] * target_aspect_ratio[1]
+
+    resized_img = image.resize((target_width, target_height))
+    processed_images = []
+    for i in range(blocks):
+        box = (
+            (i % (target_width // image_size)) * image_size,
+            (i // (target_width // image_size)) * image_size,
+            ((i % (target_width // image_size)) + 1) * image_size,
+            ((i // (target_width // image_size)) + 1) * image_size
+        )
+        split_img = resized_img.crop(box)
+        processed_images.append(split_img)
+    assert len(processed_images) == blocks
+    if use_thumbnail and len(processed_images) != 1:
+        thumbnail_img = image.resize((image_size, image_size))
+        processed_images.append(thumbnail_img)
+    return processed_images
+
+
+def load_image_internvl(image_file, input_size=448, max_num=12):
+    """Load and preprocess image for InternVL model."""
+    if isinstance(image_file, Image.Image):
+        image = image_file.convert('RGB')
+    else:
+        image = Image.open(image_file).convert('RGB')
+    transform = _build_internvl_transform(input_size=input_size)
+    images = _dynamic_preprocess(image, image_size=input_size, use_thumbnail=True, max_num=max_num)
+    pixel_values = [transform(img) for img in images]
+    pixel_values = torch.stack(pixel_values)
+    return pixel_values
+
+
+class InternVLProcessorWrapper:
+    """
+    A simple processor wrapper for InternVL models.
+    Mimics the interface of HuggingFace processors but uses InternVL's native image processing.
+    """
+
+    def __init__(self, tokenizer, input_size=448, max_num=12):
+        self.tokenizer = tokenizer
+        self.input_size = input_size
+        self.max_num = max_num
+        # For compatibility checks
+        self._is_internvl = True
+
+    def __call__(self, text=None, images=None, **kwargs):
+        """Process text and images for InternVL."""
+        result = {}
+
+        # Process text
+        if text is not None:
+            text_inputs = self.tokenizer(text, **kwargs)
+            result.update(text_inputs)
+
+        # Process images
+        if images is not None:
+            if not isinstance(images, list):
+                images = [images]
+
+            all_pixel_values = []
+            num_patches_list = []
+
+            for img in images:
+                pixel_values = load_image_internvl(img, self.input_size, self.max_num)
+                num_patches_list.append(pixel_values.shape[0])
+                all_pixel_values.append(pixel_values)
+
+            if all_pixel_values:
+                result["pixel_values"] = torch.cat(all_pixel_values, dim=0)
+                result["num_patches_list"] = num_patches_list
+
+        return result
+
+    @property
+    def image_processor(self):
+        """Return self as image processor for compatibility."""
+        return self
+
+    def batch_decode(self, *args, **kwargs):
+        return self.tokenizer.batch_decode(*args, **kwargs)
+
+    def decode(self, *args, **kwargs):
+        return self.tokenizer.decode(*args, **kwargs)
+
+
 def is_internvl_model(processor) -> bool:
     """Check if the processor belongs to an InternVL model."""
     if processor is None:
         return False
+    # Check for our custom wrapper
+    if hasattr(processor, "_is_internvl") and processor._is_internvl:
+        return True
     # InternVL models use InternVLChatConfig which has specific attributes
     processor_class_name = processor.__class__.__name__
     return "InternVL" in processor_class_name or "InternLM" in processor_class_name
@@ -59,6 +200,11 @@ def build_processor_kwargs(multimodal_inputs: dict | None = None) -> dict:
     modality_forced = {"return_tensors": "pt"}
 
     result = dict(multimodal_inputs) if multimodal_inputs else {}
+
+    # Remove empty lists to avoid processor errors (e.g., empty videos list causes IndexError)
+    for key in ("images", "videos"):
+        if key in result and (result[key] is None or len(result[key]) == 0):
+            del result[key]
 
     result.update(forced)
 

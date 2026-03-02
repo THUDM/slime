@@ -94,6 +94,7 @@ class FSDPTrainRayActor(TrainRayActor):
                 self.args.hf_checkpoint,
                 trust_remote_code=True,
                 attn_implementation=self.args.attn_implementation,
+                torch_dtype=torch.bfloat16,
             )
 
         model.train()
@@ -795,6 +796,7 @@ class FSDPTrainRayActor(TrainRayActor):
                     ref_load_path,
                     trust_remote_code=True,
                     attn_implementation=self.args.attn_implementation,
+                    torch_dtype=torch.bfloat16,
                 )
 
             full_state = ref_model.state_dict()
@@ -970,7 +972,27 @@ def apply_fsdp2(model, mesh=None, cpu_offload=False, args=None):
     offload_policy = CPUOffloadPolicy() if cpu_offload else None
 
     layer_cls_to_wrap = model._no_split_modules
-    assert len(layer_cls_to_wrap) > 0 and layer_cls_to_wrap[0] is not None
+
+    # Fallback for models that don't define _no_split_modules (e.g., InternVL HF)
+    if not layer_cls_to_wrap:
+        model_type = getattr(model.config, "model_type", "").lower()
+        if "internvl" in model_type:
+            # InternVL: Qwen3DecoderLayer for LLM, InternVLVisionLayer for vision
+            layer_cls_to_wrap = ["Qwen3DecoderLayer", "InternVLVisionLayer"]
+            logger.info(f"Using fallback layer_cls_to_wrap for InternVL: {layer_cls_to_wrap}")
+        else:
+            # Try to auto-detect from model structure
+            layer_cls_to_wrap = []
+            for name, module in model.named_modules():
+                cls_name = module.__class__.__name__
+                if "DecoderLayer" in cls_name or "EncoderLayer" in cls_name or "VisionLayer" in cls_name:
+                    if cls_name not in layer_cls_to_wrap:
+                        layer_cls_to_wrap.append(cls_name)
+            if layer_cls_to_wrap:
+                logger.info(f"Auto-detected layer_cls_to_wrap: {layer_cls_to_wrap}")
+
+    assert len(layer_cls_to_wrap) > 0 and layer_cls_to_wrap[0] is not None, \
+        f"Cannot determine layers to wrap for FSDP. model._no_split_modules={model._no_split_modules}"
 
     modules = [
         module

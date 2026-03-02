@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 import pybase64
 import sglang_router
+import torch
 from packaging.version import parse
 from tqdm import tqdm
 
@@ -121,9 +122,16 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         processor_kwargs = build_processor_kwargs(sample.multimodal_inputs)
         processor_output = state.processor(text=sample.prompt, **processor_kwargs)
         prompt_ids = processor_output["input_ids"][0]
-        sample.multimodal_train_inputs = {
-            k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]
-        } or None
+        # Extract multimodal training inputs, converting list of tensors to stacked tensor
+        multimodal_train_inputs = {}
+        for k, v in processor_output.items():
+            if k in ["input_ids", "attention_mask"]:
+                continue
+            # Handle list of tensors (e.g., pixel_values when return_tensors=None)
+            if isinstance(v, list) and len(v) > 0 and isinstance(v[0], torch.Tensor):
+                v = torch.stack(v, dim=0)
+            multimodal_train_inputs[k] = v
+        sample.multimodal_train_inputs = multimodal_train_inputs or None
     else:
         prompt_ids = state.tokenizer.encode(sample.prompt, add_special_tokens=False)
 
