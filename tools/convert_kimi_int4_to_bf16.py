@@ -1,7 +1,7 @@
 """
 Usage:
 ------
-python convert_k2_thinking_int4_to_bf16.py [-h] --model-dir MODEL_DIR [--output-dir OUTPUT_DIR]
+python convert_kimi_int4_to_bf16.py [-h] --model-dir MODEL_DIR [--output-dir OUTPUT_DIR]
                            [--files FILE [FILE ...]] [--config-path CONFIG_PATH]
                            [--overwrite]
 options:
@@ -20,7 +20,8 @@ options:
 
 Example:
 --------
-python convert_k2_thinking_int4_to_bf16.py --model-dir /Kimi-K2-Thinking --output-dir /Kimi-K2-Thinking-bf16
+python convert_kimi_int4_to_bf16.py --model-dir /Kimi-K2-Thinking --output-dir /Kimi-K2-Thinking-bf16
+python convert_kimi_int4_to_bf16.py --model-dir /Kimi-K2.5 --output-dir /Kimi-K2.5-bf16
 """
 
 import argparse
@@ -40,10 +41,11 @@ def _load_config(model_dir: str, config_path: str | None) -> tuple[int, int, int
     cfg_path = config_path or os.path.join(model_dir, "config.json")
     with open(cfg_path) as f:
         cfg = json.load(f)
-    hidden_size = int(cfg.get("hidden_size"))
-    inter_size = int(cfg.get("moe_intermediate_size"))
+    loader = cfg.get("text_config", cfg)
+    hidden_size = int(loader.get("hidden_size"))
+    inter_size = int(loader.get("moe_intermediate_size"))
     group_size = int(
-        cfg.get("quantization_config", {})
+        loader.get("quantization_config", {})
         .get("config_groups", {})
         .get("group_0", {})
         .get("weights", {})
@@ -218,7 +220,13 @@ def main():
         dst_path = os.path.join(output_dir, fname)
         if fname == "model.safetensors.index.json":
             continue
-        if fname.endswith(".json") or fname.endswith(".py") or fname.startswith("tokenizer"):
+        if (
+            fname.endswith(".json")
+            or fname.endswith(".py")
+            or fname.startswith("tokenizer")
+            or fname.endswith(".jinja")
+            or fname.endswith(".model")
+        ):
             shutil.copy2(src_path, dst_path)
 
     # Generate new index
