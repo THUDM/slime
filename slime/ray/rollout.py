@@ -720,15 +720,27 @@ class RolloutManager:
             rewards = torch.tensor(raw_rewards, dtype=torch.float)
             if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
                 rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
-            else:
-                # when samples count are not equal in each group
-                rewards = rewards.view(-1, rewards.shape[-1])
-            mean = rewards.mean(dim=-1, keepdim=True)
-            rewards = rewards - mean
+                mean = rewards.mean(dim=-1, keepdim=True)
+                rewards = rewards - mean
 
-            if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
-                std = rewards.std(dim=-1, keepdim=True)
-                rewards = rewards / (std + 1e-6)
+                if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
+                    std = rewards.std(dim=-1, keepdim=True)
+                    rewards = rewards / (std + 1e-6)
+            else:
+                # when samples count are not equal in each group,
+                # use group_index to normalize per-group
+                group_ids = torch.tensor([s.group_index for s in samples], dtype=torch.long)
+                unique_groups = group_ids.unique()
+                for gid in unique_groups:
+                    mask = group_ids == gid
+                    group_rewards = rewards[mask]
+                    mean = group_rewards.mean()
+                    rewards[mask] = group_rewards - mean
+
+                    if self.args.advantage_estimator in ["grpo", "gspo"] and self.args.grpo_std_normalization:
+                        group_rewards = rewards[mask]
+                        std = group_rewards.std()
+                        rewards[mask] = group_rewards / (std + 1e-6)
 
             return raw_rewards, rewards.flatten().tolist()
 
