@@ -1,6 +1,7 @@
 from .deepseekv3 import convert_deepseekv3_to_hf
 from .glm4 import convert_glm4_to_hf
 from .glm4moe import convert_glm4moe_to_hf
+from .kimi_vl import convert_kimi_k25_to_hf, convert_kimivl_to_hf
 from .llama import convert_llama_to_hf
 from .mimo import convert_mimo_to_hf
 from .processors import quantize_params, remove_padding
@@ -53,6 +54,10 @@ def _convert_to_hf_core(args, model_name, name, param):
         converted_named_tensors = convert_llama_to_hf(args, name, param)
     elif "mimo" in model_name:
         converted_named_tensors = convert_mimo_to_hf(args, name, param)
+    elif "kimivl" in model_name:
+        converted_named_tensors = convert_kimivl_to_hf(args, name, param)
+    elif "kimi_k25" in model_name:
+        converted_named_tensors = convert_kimi_k25_to_hf(args, name, param)
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
