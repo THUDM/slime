@@ -301,7 +301,7 @@ index 00000000..13cf674a
 +
 +        return hf_name_param
 diff --git a/slime/backends/megatron_utils/model_provider.py b/slime/backends/megatron_utils/model_provider.py
-index 8174c7ac..cdd57524 100644
+index 8174c7ac..33fc9a99 100644
 --- a/slime/backends/megatron_utils/model_provider.py
 +++ b/slime/backends/megatron_utils/model_provider.py
 @@ -17,7 +17,7 @@ from megatron.core.transformer.transformer_config import TransformerConfig
@@ -331,15 +331,10 @@ index 8174c7ac..cdd57524 100644
      # Support custom model provider path (similar to --custom-rm-path for reward models)
      if getattr(args, "custom_model_provider_path", None):
  
-@@ -83,11 +85,14 @@ def get_model_provider_func(
-         bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
-         provider = bridge.to_megatron_provider(load_weights=False)
-         # TODO: we should not manually set this...
--        provider.tensor_model_parallel_size = args.tensor_model_parallel_size
--        provider.pipeline_model_parallel_size = args.pipeline_model_parallel_size
--        provider.expert_model_parallel_size = args.expert_model_parallel_size
--        provider.expert_tensor_parallel_size = args.expert_tensor_parallel_size
--        provider.sequence_parallel = args.sequence_parallel
+@@ -88,6 +90,14 @@ def get_model_provider_func(
+         provider.expert_model_parallel_size = args.expert_model_parallel_size
+         provider.expert_tensor_parallel_size = args.expert_tensor_parallel_size
+         provider.sequence_parallel = args.sequence_parallel
 +        provider.gradient_accumulation_fusion = args.gradient_accumulation_fusion
 +        provider.recompute_granularity = args.recompute_granularity
 +        provider.recompute_method = args.recompute_method
@@ -347,7 +342,7 @@ index 8174c7ac..cdd57524 100644
 +        for key, value in vars(args).items():
 +            if hasattr(provider, key):
 +                continue
-+            setattr(provider, key, value)    
++            setattr(provider, key, value)
          provider.finalize()
          return provider.provide
  
