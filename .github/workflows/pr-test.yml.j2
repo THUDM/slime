@@ -47,6 +47,17 @@
       ],
     },
 
+    'e2e-test-plugin-contracts': {
+      'label': 'run-ci-plugin-contracts',
+      'always': True,
+      'tests': [
+        {'test_file': 'plugin_contracts/test_plugin_rollout_contracts.py', 'num_gpus': 0},
+        {'test_file': 'plugin_contracts/test_plugin_runtime_hook_contracts.py', 'num_gpus': 0},
+        {'test_file': 'plugin_contracts/test_plugin_path_loading_contracts.py', 'num_gpus': 0},
+        {'test_file': 'plugin_contracts/test_plugin_generate_contracts.py', 'num_gpus': 0},
+      ],
+    },
+
     'e2e-test-image': {
       'label': 'run-ci-image',
       'image': 'slimerl/slime-test:latest',
@@ -93,7 +104,11 @@ concurrency:
 jobs:
 <% for job_name, config in jobs.items() %>
   << job_name >>:
+<% if config.get('always') %>
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+<% else %>
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, '<< config.label >>'))
+<% endif %>
     runs-on: self-hosted
     container:
       image: << config.image if config.image else 'slimerl/slime:latest' >>
@@ -137,7 +152,16 @@ jobs:
 
       - name: Execute
         shell: bash
-        run: python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python tests/${{ matrix.info.test_file }}
+        run: |
+          TEST_PATH="${{ matrix.info.test_file }}"
+          if [[ "$TEST_PATH" != tests/* ]]; then
+            TEST_PATH="tests/$TEST_PATH"
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+          fi
 <% endfor %>
 
   e2e-test-changed-detect:
@@ -166,7 +190,7 @@ jobs:
         id: detect
         shell: bash
         run: |
-          CHANGED=$(git diff --name-only --diff-filter=AM origin/main...HEAD -- 'tests/test_*.py' || true)
+          CHANGED=$(git diff --name-only --diff-filter=AM origin/main...HEAD -- 'tests/test_*.py' 'tests/plugin_contracts/test_*.py' || true)
           if [ -z "$CHANGED" ]; then
             echo "No new or modified test files found."
             echo "has_tests=false" >> $GITHUB_OUTPUT
@@ -177,12 +201,11 @@ jobs:
             MATRIX="["
             FIRST=true
             for filepath in $CHANGED; do
-              filename=$(basename "$filepath")
               # Extract NUM_GPUS from the test file, default to 8
               NGPU=$(grep -oP '^NUM_GPUS\s*=\s*\K\d+' "$filepath" | head -1)
               NGPU=${NGPU:-8}
               if [ "$FIRST" = true ]; then FIRST=false; else MATRIX+=","; fi
-              MATRIX+="{\"test_file\":\"$filename\",\"num_gpus\":$NGPU}"
+              MATRIX+="{\"test_file\":\"$filepath\",\"num_gpus\":$NGPU}"
             done
             MATRIX+="]"
             echo "has_tests=true" >> $GITHUB_OUTPUT
@@ -235,4 +258,13 @@ jobs:
 
       - name: Execute
         shell: bash
-        run: python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python tests/${{ matrix.info.test_file }}
+        run: |
+          TEST_PATH="${{ matrix.info.test_file }}"
+          if [[ "$TEST_PATH" != tests/* ]]; then
+            TEST_PATH="tests/$TEST_PATH"
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+          fi

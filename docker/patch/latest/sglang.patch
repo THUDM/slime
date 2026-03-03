@@ -855,6 +855,282 @@ index aff05bf42..130359232 100644
              else:
                  logits = torch.matmul(
                      hidden_states.to(lm_head.weight.dtype), lm_head.weight.T
+diff --git a/python/sglang/srt/layers/moe/ep_moe/deepep_bf16_kernels.py b/python/sglang/srt/layers/moe/ep_moe/deepep_bf16_kernels.py
+new file mode 100644
+index 000000000..7500a3b27
+--- /dev/null
++++ b/python/sglang/srt/layers/moe/ep_moe/deepep_bf16_kernels.py
+@@ -0,0 +1,150 @@
++"""Fused Triton kernels for DeepEP BF16 low-latency MoE decode.
++
++Replaces the naive activation + masking pipeline (5+ CUDA kernels for silu+mul
++and arange+comparison+masked_fill+copy) with a single Triton elementwise kernel,
++while keeping cuBLAS batched GEMM for the matrix multiplies.
++
++Pipeline: bmm → fused_act_mul_masked (in-place) → bmm(out=hidden)
++  (3 ops total: 2 cuBLAS + 1 Triton, vs original 7-8 separate CUDA kernels)
++"""
++
++import torch
++import triton
++import triton.language as tl
++
++
++@triton.jit
++def _silu_mul_masked_kernel(
++    gate_up_ptr,
++    masked_m_ptr,
++    M,
++    N,
++    stride_ge,
++    stride_gm,
++    stride_gn,
++    BLOCK: tl.constexpr,
++):
++    """Fused SiLU(gate) * up with per-expert masking, written in-place.
++
++    gate_up: [E, M, 2*N] — first N cols are gate, last N cols are up.
++    Writes SiLU(gate)*up to gate_up[:,:,:N] in-place.
++    Rows m >= masked_m[e] are zeroed.
++    """
++    expert_id = tl.program_id(1)
++    pid = tl.program_id(0)
++
++    expert_valid_m = tl.load(masked_m_ptr + expert_id)
++
++    offs = pid * BLOCK + tl.arange(0, BLOCK)
++    total = M * N
++    mask = offs < total
++
++    m = offs // N
++    n = offs % N
++
++    gate_base = gate_up_ptr + expert_id * stride_ge
++
++    gate_val = tl.load(
++        gate_base + m * stride_gm + n * stride_gn, mask=mask, other=0.0
++    )
++    up_val = tl.load(
++        gate_base + m * stride_gm + (n + N) * stride_gn, mask=mask, other=0.0
++    )
++
++    gate_f32 = gate_val.to(tl.float32)
++    result = (gate_f32 * tl.sigmoid(gate_f32)) * up_val.to(tl.float32)
++
++    # Zero invalid rows
++    valid = m < expert_valid_m
++    result = tl.where(valid, result, 0.0)
++
++    tl.store(
++        gate_base + m * stride_gm + n * stride_gn,
++        result.to(gate_up_ptr.dtype.element_ty),
++        mask=mask,
++    )
++
++
++@triton.jit
++def _gelu_mul_masked_kernel(
++    gate_up_ptr,
++    masked_m_ptr,
++    M,
++    N,
++    stride_ge,
++    stride_gm,
++    stride_gn,
++    BLOCK: tl.constexpr,
++):
++    """Fused GELU(gate) * up with per-expert masking, written in-place."""
++    expert_id = tl.program_id(1)
++    pid = tl.program_id(0)
++
++    expert_valid_m = tl.load(masked_m_ptr + expert_id)
++
++    offs = pid * BLOCK + tl.arange(0, BLOCK)
++    total = M * N
++    mask = offs < total
++
++    m = offs // N
++    n = offs % N
++
++    gate_base = gate_up_ptr + expert_id * stride_ge
++
++    gate_val = tl.load(
++        gate_base + m * stride_gm + n * stride_gn, mask=mask, other=0.0
++    )
++    up_val = tl.load(
++        gate_base + m * stride_gm + (n + N) * stride_gn, mask=mask, other=0.0
++    )
++
++    g = gate_val.to(tl.float32)
++    kAlpha = 0.7978845608028654
++    gate_act = 0.5 * g * (1.0 + tl.math.tanh(kAlpha * (g + 0.044715 * g * g * g)))
++    result = gate_act * up_val.to(tl.float32)
++
++    valid = m < expert_valid_m
++    result = tl.where(valid, result, 0.0)
++
++    tl.store(
++        gate_base + m * stride_gm + n * stride_gn,
++        result.to(gate_up_ptr.dtype.element_ty),
++        mask=mask,
++    )
++
++
++def fused_act_mul_masked_inplace(
++    gate_up: torch.Tensor,
++    intermediate_size: int,
++    masked_m: torch.Tensor,
++    use_gelu: bool = False,
++) -> None:
++    """Fused activation + multiply + masking, written in-place to gate_up[:,:,:I].
++
++    After this call, gate_up[:, :, :intermediate_size] contains the masked
++    activated intermediate, suitable for the down projection GEMM.
++
++    Args:
++        gate_up: [E, M, 2*I] output of bmm(tokens, w13.T), modified in-place
++        intermediate_size: I
++        masked_m: [E] per-expert valid token count
++        use_gelu: use GELU instead of SiLU
++    """
++    E, M, _ = gate_up.shape
++    N = intermediate_size
++
++    total = M * N
++    BLOCK = 1024
++    grid = (triton.cdiv(total, BLOCK), E)
++
++    kernel = _gelu_mul_masked_kernel if use_gelu else _silu_mul_masked_kernel
++    kernel[grid](
++        gate_up,
++        masked_m,
++        M,
++        N,
++        gate_up.stride(0),
++        gate_up.stride(1),
++        gate_up.stride(2),
++        BLOCK=BLOCK,
++    )
+diff --git a/python/sglang/srt/layers/moe/ep_moe/layer.py b/python/sglang/srt/layers/moe/ep_moe/layer.py
+index ebcc696ec..3b527021a 100644
+--- a/python/sglang/srt/layers/moe/ep_moe/layer.py
++++ b/python/sglang/srt/layers/moe/ep_moe/layer.py
+@@ -132,11 +132,12 @@ class DeepEPMoE(FusedMoE):
+             and not _is_npu
+             and not (
+                 get_moe_runner_backend().is_flashinfer_cutedsl()
++                and self.quant_config is not None
+                 and self.quant_config.get_name() == "modelopt_fp4"
+             )
++            and (self.use_fp8_w8a8 or self.use_w4afp8)
+         ):
+-            # NPU supports low_latency deepep without deepgemm
+-            # FP4 quantization with flashinfer_cutedsl also supports low_latency deepep without deepgemm
++            # BF16 models don't need deep_gemm; they use per-expert torch.mm
+             assert (
+                 deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM
+             ), f"DeepEP {self.deepep_mode} mode requires deep_gemm"
+@@ -154,6 +155,10 @@ class DeepEPMoE(FusedMoE):
+             # the last one is invalid rank_id
+             self.expert_mask[:-1] = 1
+ 
++        # Set bf16_weights flag on dispatcher so dispatch skips FP8 quantization
++        if not self.use_fp8_w8a8 and not self.use_w4afp8:
++            self.dispatcher.set_quant_config({"bf16_weights": True})
++
+     def forward(
+         self,
+         hidden_states: torch.Tensor,
+@@ -228,6 +233,8 @@ class DeepEPMoE(FusedMoE):
+         elif DispatchOutputChecker.format_is_deepep_normal(dispatch_output):
+             if self.use_w4afp8:
+                 output = self.forward_cutlass_w4afp8(dispatch_output)
++            elif not self.use_fp8_w8a8:
++                output = self.forward_bf16_normal(dispatch_output)
+             else:
+                 assert False, "forward_deepgemm_contiguous is deprecated"
+         elif DispatchOutputChecker.format_is_deepep_ll(dispatch_output):
+@@ -238,6 +245,8 @@ class DeepEPMoE(FusedMoE):
+                 output = self.forward_flashinfer_cutedsl(dispatch_output)
+             elif self.use_w4afp8:
+                 output = self.forward_cutlass_w4afp8_masked(dispatch_output)
++            elif not self.use_fp8_w8a8:
++                output = self.forward_bf16_ll(dispatch_output)
+             else:
+                 assert False, "forward_deepgemm_masked is deprecated"
+ 
+@@ -341,6 +350,71 @@ class DeepEPMoE(FusedMoE):
+             dispatch_output=dispatch_output,
+         )
+ 
++    def forward_bf16_normal(
++        self,
++        dispatch_output: DeepEPNormalDispatchOutput,
++    ) -> torch.Tensor:
++        from sglang.srt.layers.moe.fused_moe_triton.fused_moe import fused_experts
++
++        hidden_states = dispatch_output.hidden_states
++        topk_ids = dispatch_output.topk_ids
++        topk_weights = dispatch_output.topk_weights
++
++        if hidden_states.shape[0] == 0:
++            return hidden_states
++
++        # topk_ids uses local expert IDs (0..num_local_experts-1), -1 for remote.
++        # fused_experts handles -1 via moe_align_block_size filtering.
++        return fused_experts(
++            hidden_states=hidden_states,
++            w1=self.w13_weight,
++            w2=self.w2_weight,
++            topk_output=(topk_weights, topk_ids, None),
++            moe_runner_config=self.moe_runner_config,
++        )
++
++    def forward_bf16_ll(
++        self,
++        dispatch_output: DeepEPLLDispatchOutput,
++    ) -> torch.Tensor:
++        from sglang.srt.layers.moe.ep_moe.deepep_bf16_kernels import (
++            fused_act_mul_masked_inplace,
++        )
++
++        hidden_states = dispatch_output.hidden_states
++        masked_m = dispatch_output.masked_m
++        expected_m = dispatch_output.expected_m
++
++        _, max_tokens, _ = hidden_states.shape
++        if masked_m.numel() == 0 or max_tokens == 0:
++            return hidden_states
++
++        expected_m = min(expected_m, max_tokens)
++        if expected_m <= 0:
++            return hidden_states
++
++        tokens = hidden_states[:, :expected_m, :]
++
++        # 1. Gate+Up GEMM (cuBLAS batched GEMM)
++        gate_up = torch.bmm(tokens, self.w13_weight.transpose(1, 2))
++
++        # 2. Fused SiLU(gate)*up + masking in-place (1 Triton kernel replaces 6 ops)
++        fused_act_mul_masked_inplace(
++            gate_up,
++            self.intermediate_size_per_partition,
++            masked_m,
++            use_gelu=(self.moe_runner_config.activation == "gelu"),
++        )
++
++        # 3. Down GEMM into hidden_states (cuBLAS, non-contiguous input is OK)
++        torch.bmm(
++            gate_up[:, :, : self.intermediate_size_per_partition],
++            self.w2_weight.transpose(1, 2),
++            out=hidden_states[:, :expected_m, :],
++        )
++
++        return hidden_states
++
+     def forward_npu(
+         self,
+         dispatch_output: Union[DeepEPNormalDispatchOutput, DeepEPLLDispatchOutput],
 diff --git a/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py b/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py
 index ebdbb42c6..714ffbe0e 100644
 --- a/python/sglang/srt/layers/moe/fused_moe_triton/fused_moe.py
@@ -972,6 +1248,68 @@ index 00bd68755..5a3ca8a67 100644
          self.device_cache.capture_fwd_routed_experts(layer_id, topk_ids)
  
      def get_routed_experts(
+diff --git a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py b/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
+index 8539639d5..b1f614140 100644
+--- a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
++++ b/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
+@@ -388,6 +388,7 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
+             deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM
+             and not get_moe_runner_backend().is_cutlass()
+             and not envs.SGLANG_DEEPEP_BF16_DISPATCH.get()
++            and not self.quant_config.get("bf16_weights", False)
+         ):
+             # TODO hard code 128 block quant,use fp8 communication
+             hidden_states = sglang_per_token_group_quant_fp8(
+@@ -466,7 +467,10 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
+             previous_event=previous_event,
+             async_finish=self.async_finish,
+             allocate_on_comm_stream=(previous_event is not None) and self.async_finish,
+-            expert_alignment=128 if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM else 1,
++            expert_alignment=128
++            if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM
++            and not self.quant_config.get("bf16_weights", False)
++            else 1,
+             config=DeepEPConfig.get_instance().normal_dispatch_config,
+         )
+         get_global_expert_distribution_recorder().on_deepep_dispatch_normal(
+@@ -491,7 +495,7 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
+         topk_weights: torch.Tensor,
+     ):
+ 
+-        if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM or _use_aiter or _is_npu:
++        if deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM or _use_aiter or _is_npu or self.quant_config.get("bf16_weights", False):
+             output = hidden_states
+         else:
+             raise NotImplementedError()  # triton runner was supported but it's temporarily disabled
+@@ -551,10 +555,12 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
+         buffer = self._get_buffer()
+         topk_weights, topk_ids = topk_output.topk_weights, topk_output.topk_ids
+         topk_ids = topk_ids.to(torch.int64)
+-        expected_m = (
+-            hidden_states.shape[0] * buffer.group_size * topk_ids.shape[1]
+-            + self.num_experts
+-        ) // self.num_experts
++        # Use a correctness-preserving upper bound for per-expert token count.
++        # In the worst case, every rank routes all local tokens to the same expert.
++        expected_m = min(
++            hidden_states.shape[0] * buffer.group_size,
++            self.num_max_dispatch_tokens_per_rank * buffer.group_size,
++        )
+         hidden_states, masked_m, event, hook = self._dispatch_core(
+             hidden_states,
+             topk_ids,
+@@ -609,7 +615,10 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
+         input_global_scale = self.quant_config.get("input_global_scale", None)
+         if input_global_scale is not None:
+             use_nvfp4 = True
+-        elif not envs.SGLANG_DEEPEP_BF16_DISPATCH.get():
++        elif (
++            not envs.SGLANG_DEEPEP_BF16_DISPATCH.get()
++            and not self.quant_config.get("bf16_weights", False)
++        ):
+             use_fp8 = True
+ 
+         buffer = self._get_buffer()
 diff --git a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py b/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py
 index 4cbfed6f9..88b452744 100644
 --- a/python/sglang/srt/layers/quantization/compressed_tensors/compressed_tensors.py

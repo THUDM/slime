@@ -26,7 +26,9 @@ concurrency:
 jobs:
 
   e2e-test-short:
+
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-short'))
+
     runs-on: self-hosted
     container:
       image: slimerl/slime:latest
@@ -62,7 +64,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Install
         shell: bash
@@ -70,10 +72,21 @@ jobs:
 
       - name: Execute
         shell: bash
-        run: python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python tests/${{ matrix.info.test_file }}
+        run: |
+          TEST_PATH="${{ matrix.info.test_file }}"
+          if [[ "$TEST_PATH" != tests/* ]]; then
+            TEST_PATH="tests/$TEST_PATH"
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+          fi
 
   e2e-test-fsdp:
+
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-fsdp'))
+
     runs-on: self-hosted
     container:
       image: slimerl/slime:latest
@@ -109,7 +122,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Install
         shell: bash
@@ -117,10 +130,21 @@ jobs:
 
       - name: Execute
         shell: bash
-        run: python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python tests/${{ matrix.info.test_file }}
+        run: |
+          TEST_PATH="${{ matrix.info.test_file }}"
+          if [[ "$TEST_PATH" != tests/* ]]; then
+            TEST_PATH="tests/$TEST_PATH"
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+          fi
 
   e2e-test-megatron:
+
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-megatron'))
+
     runs-on: self-hosted
     container:
       image: slimerl/slime:latest
@@ -156,7 +180,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Install
         shell: bash
@@ -164,10 +188,21 @@ jobs:
 
       - name: Execute
         shell: bash
-        run: python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python tests/${{ matrix.info.test_file }}
+        run: |
+          TEST_PATH="${{ matrix.info.test_file }}"
+          if [[ "$TEST_PATH" != tests/* ]]; then
+            TEST_PATH="tests/$TEST_PATH"
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+          fi
 
   e2e-test-precision:
+
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-precision'))
+
     runs-on: self-hosted
     container:
       image: slimerl/slime:latest
@@ -203,7 +238,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Install
         shell: bash
@@ -211,10 +246,21 @@ jobs:
 
       - name: Execute
         shell: bash
-        run: python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python tests/${{ matrix.info.test_file }}
+        run: |
+          TEST_PATH="${{ matrix.info.test_file }}"
+          if [[ "$TEST_PATH" != tests/* ]]; then
+            TEST_PATH="tests/$TEST_PATH"
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+          fi
 
   e2e-test-ckpt:
+
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-ckpt'))
+
     runs-on: self-hosted
     container:
       image: slimerl/slime:latest
@@ -250,7 +296,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Install
         shell: bash
@@ -258,10 +304,79 @@ jobs:
 
       - name: Execute
         shell: bash
-        run: python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python tests/${{ matrix.info.test_file }}
+        run: |
+          TEST_PATH="${{ matrix.info.test_file }}"
+          if [[ "$TEST_PATH" != tests/* ]]; then
+            TEST_PATH="tests/$TEST_PATH"
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+          fi
+
+  e2e-test-plugin-contracts:
+
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch'
+
+    runs-on: self-hosted
+    container:
+      image: slimerl/slime:latest
+      options: >
+        --gpus all
+        --ipc=host
+        --shm-size=16g
+        --ulimit memlock=-1
+        --ulimit stack=67108864
+        --memory=0
+        --memory-swap=0
+        -e http_proxy=$http_proxy
+        -e https_proxy=$https_proxy
+        -e HTTP_PROXY=$HTTP_PROXY
+        -e HTTPS_PROXY=$HTTPS_PROXY
+        -v /mnt/nvme0n1/slime_ci:/data/slime_ci
+        -v /mnt/nvme0n1/slime_ci/models:/root/models
+        -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
+    strategy:
+      fail-fast: false
+      matrix:
+        info: [{"num_gpus": 0, "test_file": "plugin_contracts/test_plugin_rollout_contracts.py"}, {"num_gpus": 0, "test_file": "plugin_contracts/test_plugin_runtime_hook_contracts.py"}, {"num_gpus": 0, "test_file": "plugin_contracts/test_plugin_path_loading_contracts.py"}, {"num_gpus": 0, "test_file": "plugin_contracts/test_plugin_generate_contracts.py"}]
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    env:
+      GITHUB_COMMIT_NAME: ${{ github.sha }}_${{ github.event.pull_request.number || 'non-pr' }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      SLIME_TEST_ENABLE_INFINITE_RUN: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.infinite_run) || 'false' }}
+      SLIME_TEST_USE_DEEPEP: ${{ matrix.info.use_deepep || '0' }}
+      SLIME_TEST_USE_FP8_ROLLOUT: ${{ matrix.info.use_fp8_rollout || '0' }}
+      SLIME_TEST_ENABLE_EVAL: ${{ matrix.info.enable_eval || '1' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install
+        shell: bash
+        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
+
+      - name: Execute
+        shell: bash
+        run: |
+          TEST_PATH="${{ matrix.info.test_file }}"
+          if [[ "$TEST_PATH" != tests/* ]]; then
+            TEST_PATH="tests/$TEST_PATH"
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+          fi
 
   e2e-test-image:
+
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, 'run-ci-image'))
+
     runs-on: self-hosted
     container:
       image: slimerl/slime-test:latest
@@ -297,7 +412,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Install
         shell: bash
@@ -305,7 +420,16 @@ jobs:
 
       - name: Execute
         shell: bash
-        run: python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python tests/${{ matrix.info.test_file }}
+        run: |
+          TEST_PATH="${{ matrix.info.test_file }}"
+          if [[ "$TEST_PATH" != tests/* ]]; then
+            TEST_PATH="tests/$TEST_PATH"
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+          fi
 
 
   e2e-test-changed-detect:
@@ -334,7 +458,7 @@ jobs:
         id: detect
         shell: bash
         run: |
-          CHANGED=$(git diff --name-only --diff-filter=AM origin/main...HEAD -- 'tests/test_*.py' || true)
+          CHANGED=$(git diff --name-only --diff-filter=AM origin/main...HEAD -- 'tests/test_*.py' 'tests/plugin_contracts/test_*.py' || true)
           if [ -z "$CHANGED" ]; then
             echo "No new or modified test files found."
             echo "has_tests=false" >> $GITHUB_OUTPUT
@@ -345,12 +469,11 @@ jobs:
             MATRIX="["
             FIRST=true
             for filepath in $CHANGED; do
-              filename=$(basename "$filepath")
               # Extract NUM_GPUS from the test file, default to 8
               NGPU=$(grep -oP '^NUM_GPUS\s*=\s*\K\d+' "$filepath" | head -1)
               NGPU=${NGPU:-8}
               if [ "$FIRST" = true ]; then FIRST=false; else MATRIX+=","; fi
-              MATRIX+="{\"test_file\":\"$filename\",\"num_gpus\":$NGPU}"
+              MATRIX+="{\"test_file\":\"$filepath\",\"num_gpus\":$NGPU}"
             done
             MATRIX+="]"
             echo "has_tests=true" >> $GITHUB_OUTPUT
@@ -395,7 +518,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
       - name: Install
         shell: bash
@@ -403,4 +526,13 @@ jobs:
 
       - name: Execute
         shell: bash
-        run: python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python tests/${{ matrix.info.test_file }}
+        run: |
+          TEST_PATH="${{ matrix.info.test_file }}"
+          if [[ "$TEST_PATH" != tests/* ]]; then
+            TEST_PATH="tests/$TEST_PATH"
+          fi
+          if [ "${{ matrix.info.num_gpus }}" = "0" ]; then
+            python "$TEST_PATH"
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.info.num_gpus }} -- python "$TEST_PATH"
+          fi
