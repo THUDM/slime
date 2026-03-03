@@ -154,14 +154,24 @@ class FSDPTrainRayActor(TrainRayActor):
         return int(getattr(self.args, "start_rollout_id", 0))
 
     def get_model_cls(self):
+        # Check if model has custom auto_map (like InternVL)
+        # InternVL registers AutoModel and AutoModelForCausalLM but not AutoModelForImageTextToText
+        if hasattr(self.hf_config, "auto_map"):
+            auto_map = self.hf_config.auto_map
+            # Prefer AutoModelForCausalLM if registered (works for InternVL)
+            if "AutoModelForCausalLM" in auto_map:
+                from transformers import AutoModelForCausalLM
+                return AutoModelForCausalLM
+            elif "AutoModel" in auto_map:
+                from transformers import AutoModel
+                return AutoModel
+
         # Vision models have `vision_config` in the config
         if hasattr(self.hf_config, "vision_config"):
             from transformers import AutoModelForImageTextToText
-
             return AutoModelForImageTextToText
         else:
             from transformers import AutoModelForCausalLM
-
             return AutoModelForCausalLM
 
     def _enable_true_on_policy_optimizations(self, args):
@@ -808,7 +818,20 @@ class FSDPTrainRayActor(TrainRayActor):
             "attention_mask": None,
         }
         if packed_sequence.get("multimodal_train_inputs"):
-            model_args.update(packed_sequence["multimodal_train_inputs"])
+            mm_inputs = packed_sequence["multimodal_train_inputs"]
+            model_args.update(mm_inputs)
+
+            # InternVL requires image_flags to indicate which images are valid
+            # Generate image_flags if pixel_values is present but image_flags is not
+            if "pixel_values" in mm_inputs and "image_flags" not in mm_inputs:
+                pixel_values = mm_inputs["pixel_values"]
+                if pixel_values is not None and hasattr(self.hf_config, "llm_config"):
+                    # InternVL model detected - generate image_flags
+                    # image_flags should be 1 for each valid image patch
+                    num_images = pixel_values.shape[0] if pixel_values.dim() >= 1 else 1
+                    image_flags = torch.ones(num_images, 1, dtype=torch.long, device=pixel_values.device)
+                    model_args["image_flags"] = image_flags
+
         return model_args
 
 
