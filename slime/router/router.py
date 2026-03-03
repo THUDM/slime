@@ -67,6 +67,7 @@ class SlimeRouter:
         """Setup all the HTTP routes"""
         # sglang-router api
         self.app.post("/add_worker")(self.add_worker)
+        self.app.post("/remove_worker")(self.remove_worker)
         self.app.get("/list_workers")(self.list_workers)
         self.app.post("/retrieve_from_text")(self.retrieve_from_text)
         # Catch-all route for proxying to SGLang - must be registered LAST
@@ -195,6 +196,35 @@ class SlimeRouter:
                 print(f"[slime-router] Added new worker: {worker_url}")
 
         return {"status": "success", "worker_urls": self.worker_request_counts}
+
+    async def remove_worker(self, request: Request):
+        """Remove a worker from the router.
+        Supports providing the URL via query string or JSON body.
+        Examples:
+        - POST /remove_worker?url=http://127.0.0.1:10090
+        - POST /remove_worker  with body {"url": "http://127.0.0.1:10090"}
+        """
+        # 1) Prefer query param
+        worker_url = request.query_params.get("url") or request.query_params.get("worker_url")
+
+        # 2) Fallback to JSON body
+        if not worker_url:
+            body = await request.body()
+            payload = json.loads(body) if body else {}
+            worker_url = payload.get("url") or payload.get("worker_url")
+
+        if not worker_url:
+            return JSONResponse(
+                status_code=400, content={"error": "worker_url is required (use query ?url=... or JSON body)"}
+            )
+
+        if worker_url in self.worker_urls:
+            del self.worker_urls[worker_url]
+            if self.verbose:
+                print(f"[slime-router] Removed worker: {worker_url}")
+            return {"status": "success", "removed": worker_url, "worker_urls": list(self.worker_urls.keys())}
+        else:
+            return JSONResponse(status_code=404, content={"error": f"Worker {worker_url} not found"})
 
     async def list_workers(self, request: Request):
         """List all registered workers"""

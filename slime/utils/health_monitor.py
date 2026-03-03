@@ -1,10 +1,69 @@
 import logging
 import threading
+from urllib.parse import urlparse
 
 import ray
+import requests
+import sglang_router
+from packaging.version import parse
 
 
 logger = logging.getLogger(__name__)
+
+
+def get_active_seed_instance(args):
+    """Get an active seed instance from the router for fault tolerance restart.
+
+    When restarting failed engines, this function queries the router to find active workers
+    and returns the connection info for one of them to be used as a seed instance for
+    remote weight loading.
+
+    Args:
+        args: The global arguments containing router IP and port.
+
+    Returns:
+        A dict with 'ip' and 'port' keys for the seed instance, or None if no active
+        workers are found.
+    """
+    router_ip = args.sglang_router_ip
+    router_port = args.sglang_router_port
+
+    if not router_ip or not router_port:
+        logger.warning("Router IP or port not set, cannot get active seed instance.")
+        return None
+
+    try:
+        # Query the router to get active workers
+        if parse(sglang_router.__version__) <= parse("0.2.1") or args.use_slime_router:
+            response = requests.get(f"http://{router_ip}:{router_port}/list_workers", timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            worker_urls = data.get("urls", [])
+        else:
+            response = requests.get(f"http://{router_ip}:{router_port}/workers", timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            workers = data.get("workers", [])
+            worker_urls = [w["url"] for w in workers]
+
+        if not worker_urls:
+            logger.warning("No active workers found in router.")
+            return None
+
+        # Parse the first available worker's URL to get IP and port
+        seed_url = worker_urls[0]
+        parsed = urlparse(seed_url)
+
+        # Handle IPv6 addresses (may be wrapped in [])
+        host = parsed.hostname or parsed.netloc.rsplit(":", 1)[0]
+        port = parsed.port or 30000
+
+        logger.info(f"Found active seed instance for fault tolerance: {host}:{port}")
+        return {"ip": host, "port": port}
+
+    except Exception as e:
+        logger.warning(f"Failed to get active seed instance from router: {e}")
+        return None
 
 
 class RolloutHealthMonitor:
@@ -22,6 +81,7 @@ class RolloutHealthMonitor:
 
     def __init__(self, engine_group, args):
         self._engine_group = engine_group
+        self._args = args
 
         self._thread = None
         self._stop_event = None
@@ -151,21 +211,24 @@ class RolloutHealthMonitor:
             ray.get(engine.health_generate.remote(timeout=self._check_timeout))
         except Exception as e:
             logger.error(
-                f"Health check failed for rollout engine {rollout_engine_id} (ray timeout or error). Killing actor. Exception: {e}"
+                f"Health check failed for rollout engine {rollout_engine_id} (ray timeout or error). Killing and restarting actor. Exception: {e}"
             )
-            self._kill_engine(rollout_engine_id=rollout_engine_id)
-        else:
-            logger.debug(f"Health check passed for rollout engine {rollout_engine_id}")
+            self._kill_and_restart_engine(rollout_engine_id=rollout_engine_id)
 
-    def _kill_engine(self, rollout_engine_id: int):
-        logger.info(f"Killing engine group {rollout_engine_id}...")
+    def _kill_and_restart_engine(self, rollout_engine_id: int):
+        """Kill a failed engine and immediately restart it with remote weight loading."""
+        logger.info(f"Killing and restarting engine group {rollout_engine_id}...")
+
+        args = self._rollout_manager.args
+        nodes_per_engine = self._rollout_manager.nodes_per_engine
+
+        # Kill the failed engine(s)
         for i in range(
             rollout_engine_id * self._engine_group.nodes_per_engine,
             (rollout_engine_id + 1) * self._engine_group.nodes_per_engine,
         ):
             engine = self._engine_group.all_engines[i]
             if engine:
-                logger.info(f"Shutting down and killing engine at index {i}")
                 try:
                     ray.get(engine.shutdown.remote())
                     ray.kill(engine)
@@ -175,3 +238,12 @@ class RolloutHealthMonitor:
             else:
                 logger.info(f"Engine at index {i} is already None")
             self._engine_group.all_engines[i] = None
+
+
+        # Restart the engine(s)
+        try:
+            init_handles, _ = self._engine_group.start_engines()
+            ray.get(init_handles)
+            logger.info(f"Successfully restarted engine group {rollout_engine_id}")
+        except Exception as e:
+            logger.error(f"Failed to restart engine group {rollout_engine_id}: {e}")
