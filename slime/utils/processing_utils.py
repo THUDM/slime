@@ -201,6 +201,12 @@ def build_processor_kwargs(multimodal_inputs: dict | None = None) -> dict:
 
     result = dict(multimodal_inputs) if multimodal_inputs else {}
 
+    # Convert numpy arrays to lists (e.g., for InternVLProcessor)
+    import numpy as np
+    for key in ("images", "videos"):
+        if key in result and isinstance(result[key], np.ndarray):
+            result[key] = result[key].tolist()
+
     # Remove empty lists to avoid processor errors (e.g., empty videos list causes IndexError)
     for key in ("images", "videos"):
         if key in result and (result[key] is None or len(result[key]) == 0):
@@ -228,6 +234,19 @@ def load_processor(name_or_path: str, **kwargs):
     # If HF returned a tokenizer, discard it.
     if isinstance(proc, PreTrainedTokenizerBase) or not isinstance(proc, ProcessorMixin):
         proc = None
+
+    # For non-HF InternVL models, use InternVLProcessorWrapper
+    if proc is None:
+        try:
+            from transformers import AutoConfig
+            config = AutoConfig.from_pretrained(name_or_path, **kwargs)
+            # Check if this is a non-HF InternVL model (has llm_config or model_type is internvl_chat)
+            if hasattr(config, "llm_config") or getattr(config, "model_type", "") == "internvl_chat":
+                logger.info(f"Detected non-HF InternVL model, using InternVLProcessorWrapper")
+                tokenizer = load_tokenizer(name_or_path, **kwargs)
+                proc = InternVLProcessorWrapper(tokenizer)
+        except Exception as e:
+            logger.warning(f"Failed to create InternVLProcessorWrapper: {e}")
 
     return proc
 

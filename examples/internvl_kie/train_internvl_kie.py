@@ -8,7 +8,7 @@ import slime.utils.external_utils.command_utils as U
 
 # ============== 配置 ==============
 NUM_GPUS = 8
-MODEL_PATH = "/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/InternVL3_5-4B-HF"
+MODEL_PATH = "/mnt/cfs_bj_mt/experiments/zhengmingming/qfocr-annv9-30k-s4-qwen3-4b-v30-new-vocab-0303/iter_0004600_hf"
 
 # 数据路径（转换后的）
 TRAIN_DATA = "/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/slime/data/kie_train.parquet"
@@ -65,6 +65,7 @@ def execute():
         "--rollout-max-response-len 2048 "  # 最大响应长度
         "--rollout-temperature 0.7 "   # 采样温度
         "--global-batch-size 64 "      # 全局 batch size
+        "--rollout-stop-token-ids 151645 "  # <|im_end|> token id for InternVL
     )
 
     # 多模态配置
@@ -120,10 +121,18 @@ def execute():
     # 日志配置 - 从环境变量读取，如果没有则使用默认值
     wandb_project = os.environ.get("WANDB_PROJECT", "internvl-kie-grpo")
     wandb_name = os.environ.get("WANDB_NAME", "internvl3.5-4b-kie")
-    wandb_args = (
-        f"--wandb-project {wandb_project} "
-        f"--wandb-name {wandb_name} "
-    )
+    wandb_team = os.environ.get("WANDB_ENTITY", "")
+    wandb_host = os.environ.get("WANDB_BASE_URL", "")
+    wandb_key = os.environ.get("WANDB_API_KEY", "")
+
+    # 必须加 --use-wandb 才能启用 WandB
+    wandb_args = f"--use-wandb --wandb-project {wandb_project} --wandb-group {wandb_name} "
+    if wandb_team:
+        wandb_args += f"--wandb-team {wandb_team} "
+    if wandb_host:
+        wandb_args += f"--wandb-host {wandb_host} "
+    if wandb_key:
+        wandb_args += f"--wandb-key {wandb_key} "
 
     # GPU 配置
     misc_args = (

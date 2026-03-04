@@ -202,6 +202,51 @@ class Dataset:
     ):
         origin_samples = []
         for data in read_file(path):
+            # For InternVL with multimodal_keys, extract images directly from data
+            # and keep prompt as string (don't convert to conversation format)
+            if multimodal_keys and processor:
+                from slime.utils.processing_utils import is_internvl_model, load_image
+                if is_internvl_model(processor):
+                    # Keep prompt as string, extract images separately
+                    prompt = data.get(prompt_key)
+                    if isinstance(prompt, str):
+                        # Build multimodal_inputs from data
+                        multimodal_inputs = {}
+                        for type_name, data_key in multimodal_keys.items():
+                            if type_name == "image":
+                                image_paths = data.get(data_key)
+                                if image_paths is not None:
+                                    if isinstance(image_paths, np.ndarray):
+                                        image_paths = image_paths.tolist()
+                                    if not isinstance(image_paths, list):
+                                        image_paths = [image_paths]
+                                    # Load PIL Images
+                                    multimodal_inputs["images"] = [load_image(p) for p in image_paths]
+
+                        # Apply chat template to string prompt
+                        if apply_chat_template:
+                            messages = [{"role": "user", "content": prompt}]
+                            output_prompt = tokenizer.apply_chat_template(
+                                messages,
+                                tokenize=False,
+                                add_generation_prompt=True,
+                                **(apply_chat_template_kwargs or {}),
+                            )
+                        else:
+                            output_prompt = prompt
+
+                        metadata = data.get(metadata_key) or {}
+                        origin_samples.append(
+                            Sample(
+                                prompt=output_prompt,
+                                label=data[label_key] if label_key is not None else None,
+                                metadata=metadata,
+                                multimodal_inputs=multimodal_inputs,
+                            )
+                        )
+                        continue
+
+            # Original logic for non-InternVL models
             # Both chat templates and multimodal inputs require conversation format (list of message dicts)
             as_conversation = apply_chat_template or (multimodal_keys is not None)
             prompt = _build_messages(data, prompt_key, as_conversation, multimodal_keys)

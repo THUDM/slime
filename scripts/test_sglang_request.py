@@ -16,6 +16,8 @@ def main():
     parser = argparse.ArgumentParser(description="测试 SGLang 请求")
     parser.add_argument("--url", type=str, default="http://localhost:30000/generate",
                         help="SGLang 服务地址")
+    # parser.add_argument("--url", type=str, default="http://mingming-slime-dev-1h-b56d82-master-0:15012/generate", #http://mingming-slime-dev-1h-b56d82-master-0:15012
+    #                     help="SGLang 服务地址")
     parser.add_argument("--dump", type=str,
                         default="/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/slime/outputs/sglang_request_dump.json",
                         help="dump 文件路径")
