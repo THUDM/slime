@@ -11,6 +11,7 @@ from typing import Any
 import numpy as np
 import pybase64
 import sglang_router
+import torch
 from packaging.version import parse
 from tqdm import tqdm
 
@@ -121,9 +122,16 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         processor_kwargs = build_processor_kwargs(sample.multimodal_inputs)
         processor_output = state.processor(text=sample.prompt, **processor_kwargs)
         prompt_ids = processor_output["input_ids"][0]
-        sample.multimodal_train_inputs = {
-            k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]
-        } or None
+        # Extract multimodal training inputs, converting list of tensors to stacked tensor
+        multimodal_train_inputs = {}
+        for k, v in processor_output.items():
+            if k in ["input_ids", "attention_mask"]:
+                continue
+            # Handle list of tensors (e.g., pixel_values when return_tensors=None)
+            if isinstance(v, list) and len(v) > 0 and isinstance(v[0], torch.Tensor):
+                v = torch.stack(v, dim=0)
+            multimodal_train_inputs[k] = v
+        sample.multimodal_train_inputs = multimodal_train_inputs or None
     else:
         prompt_ids = state.tokenizer.encode(sample.prompt, add_special_tokens=False)
 
@@ -146,15 +154,35 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
 
-    if sample.multimodal_inputs and sample.multimodal_inputs["images"]:
+    # Check if this is a multimodal request with images
+    has_images = sample.multimodal_inputs and sample.multimodal_inputs.get("images")
+
+    # Debug: log multimodal_inputs status
+    logger.info(f"[multimodal] sample.multimodal_inputs: {sample.multimodal_inputs is not None}, "
+                f"has_images: {has_images}")
+
+    if has_images:
         image_data = sample.multimodal_inputs["images"]
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
+        logger.info(f"[multimodal] Sending {len(image_data)} images to SGLang, "
+                    f"first image type: {type(image_data[0])}")
 
     # Use existing tokens for multi-turn or tokenize the new prompt
     if len(sample.response) > 0:
         payload["input_ids"] = sample.tokens
     else:
-        payload["input_ids"] = prompt_ids
+        # For multimodal requests, send text instead of input_ids to let SGLang handle
+        # image placeholder expansion (e.g., InternVL needs to expand <IMG_CONTEXT> tokens)
+        if has_images:
+            # SGLang InternVL processor expects <image> placeholder for Qwen-based models,
+            # but HF InternVL chat template outputs <IMG_CONTEXT>. Convert back to <image>.
+            text = sample.prompt
+            text = text.replace("<IMG_CONTEXT>", "<image>")
+            payload["text"] = text
+            logger.info(f"[multimodal] Sending text with <image> placeholder, "
+                        f"<image> count: {text.count('<image>')}, text[:300]: {text[:300]}...")
+        else:
+            payload["input_ids"] = prompt_ids
         if not sample.tokens:  # Initialize sample.tokens for the first turn
             sample.tokens = prompt_ids
 
@@ -162,6 +190,21 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     headers = None
     if args.sglang_router_policy == "consistent_hashing" and sample.session_id:
         headers = {"X-SMG-Routing-Key": sample.session_id}
+
+    # Log payload keys for debugging
+    logger.info(f"[multimodal] Payload keys: {list(payload.keys())}, "
+                f"has text: {'text' in payload}, has input_ids: {'input_ids' in payload}, "
+                f"has image_data: {'image_data' in payload}")
+
+    # Dump first request for debugging
+    import os as _os
+    dump_path = "/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/slime/outputs/sglang_request_dump.json"
+    if not _os.path.exists(dump_path):
+        import json as _json
+        _os.makedirs(_os.path.dirname(dump_path), exist_ok=True)
+        with open(dump_path, "w") as f:
+            _json.dump(payload, f, indent=2, ensure_ascii=False)
+        logger.info(f"[multimodal] Dumped first request to {dump_path}")
 
     output = await post(url, payload, headers=headers)
 

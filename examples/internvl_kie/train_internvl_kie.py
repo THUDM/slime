@@ -8,7 +8,7 @@ import slime.utils.external_utils.command_utils as U
 
 # ============== 配置 ==============
 NUM_GPUS = 8
-MODEL_PATH = "/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/InternVL3_5-4B"
+MODEL_PATH = "/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/InternVL3_5-4B-HF"
 
 # 数据路径（转换后的）
 TRAIN_DATA = "/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/slime/data/kie_train.parquet"
@@ -117,10 +117,12 @@ def execute():
         "--save-interval 10 "          # 每 10 轮保存一次
     )
 
-    # 日志配置
+    # 日志配置 - 从环境变量读取，如果没有则使用默认值
+    wandb_project = os.environ.get("WANDB_PROJECT", "internvl-kie-grpo")
+    wandb_name = os.environ.get("WANDB_NAME", "internvl3.5-4b-kie")
     wandb_args = (
-        "--wandb-project internvl-kie-grpo "
-        "--wandb-name internvl3.5-4b-kie "
+        f"--wandb-project {wandb_project} "
+        f"--wandb-name {wandb_name} "
     )
 
     # GPU 配置
@@ -145,9 +147,15 @@ def execute():
         f"{misc_args} "
     )
 
+    # 传递 WandB 环境变量到 Ray job
     extra_env_vars = {
         "CUDA_DEVICE_MAX_CONNECTIONS": "1",
     }
+
+    # 从当前环境继承 WandB 相关变量
+    for key in ["WANDB_ENTITY", "WANDB_PROJECT", "WANDB_NAME", "WANDB_API_KEY", "WANDB_BASE_URL", "WANDB_MODE"]:
+        if key in os.environ:
+            extra_env_vars[key] = os.environ[key]
 
     U.execute_train(
         train_args=train_args,
