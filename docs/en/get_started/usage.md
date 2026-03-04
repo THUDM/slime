@@ -35,7 +35,6 @@ Additionally, slime supports Prefill and Decode disaggregation (PD Disaggregatio
 slime supports multiple training backends, which can be selected via the `--train-backend` parameter:
 
 - `megatron` (default): Uses Megatron-LM as the training backend, supporting efficient training of large-scale models.
-- `fsdp` (experimental): Uses PyTorch FSDP as the training backend, allowing direct loading of HuggingFace format weights without conversion.
 
 ### Loading Megatron
 

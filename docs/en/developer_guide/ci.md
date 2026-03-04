@@ -20,9 +20,8 @@ Add a label to your PR to trigger the corresponding test suite:
 | Label | Job | Description |
 |---|---|---|
 | `run-ci-short` | `e2e-test-short` | Lightweight smoke tests with Qwen2.5-0.5B (4 GPUs). Fast feedback loop. |
-| `run-ci-fsdp` | `e2e-test-fsdp` | FSDP backend tests (true on-policy, VL, megatron-fsdp alignment). |
 | `run-ci-megatron` | `e2e-test-megatron` | Core Megatron training tests covering dense, MoE, PPO, MTP, OPD, etc. |
-| `run-ci-precision` | `e2e-test-precision` | Numerical precision validation (parallel check, megatron-fsdp alignment). |
+| `run-ci-precision` | `e2e-test-precision` | Numerical precision validation (parallel check). |
 | `run-ci-ckpt` | `e2e-test-ckpt` | Checkpoint save/load correctness (sync and async-save). |
 | `run-ci-image` | `e2e-test-image` | Full test suite run on `slimerl/slime-test:latest` image (for image validation). |
 | `run-ci-changed` | `e2e-test-changed` | **Dynamically** detects new/modified test files in the PR and runs only those. |

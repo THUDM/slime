@@ -58,12 +58,7 @@ class TrainRayActor(RayActor):
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         torch.cuda.set_device(f"cuda:{local_rank}")
 
-        # Use hybrid backend when FSDP CPU offload is enabled with a CPU backend
         backend = args.distributed_backend
-        if getattr(args, "fsdp_cpu_offload", False) and getattr(args, "fsdp_cpu_backend", None):
-            cpu_backend = args.fsdp_cpu_backend
-            backend = f"cpu:{cpu_backend},cuda:{args.distributed_backend}"
-            logger.info(f"FSDP CPU offload enabled, using hybrid backend: {backend}")
 
         dist.init_process_group(
             backend=backend,

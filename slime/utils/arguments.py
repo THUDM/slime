@@ -1427,7 +1427,7 @@ def _pre_parse_mode():
     the final ``args`` after Phase 2 parsing.
     """
     temp_parser = argparse.ArgumentParser(add_help=False, allow_abbrev=False)
-    temp_parser.add_argument("--train-backend", type=str, choices=["megatron", "fsdp"], default="megatron")
+    temp_parser.add_argument("--train-backend", type=str, choices=["megatron"], default="megatron")
     temp_parser.add_argument("--debug-rollout-only", action="store_true", default=False)
     temp_parser.add_argument("--debug-train-only", action="store_true", default=False)
     temp_parser.add_argument("--load-debug-rollout-data", type=str, default=None)
@@ -1450,25 +1450,16 @@ def parse_args(add_custom_arguments=None):
     if not skip_sglang:
         sglang_ns = sglang_parse_args()
 
-    # Phase 2: Parse megatron/fsdp + slime args.
+    # Phase 2: Parse megatron + slime args.
     # Uses ignore_unknown_args=True so that --sglang-* and pre-parsed CLI flags
-    # are silently ignored by the megatron/fsdp parser.
-    if pre.train_backend == "megatron":
-        from slime.backends.megatron_utils.arguments import megatron_parse_args
-        from slime.backends.megatron_utils.arguments import validate_args as megatron_validate_args
+    # are silently ignored by the megatron parser.
+    from slime.backends.megatron_utils.arguments import megatron_parse_args
+    from slime.backends.megatron_utils.arguments import validate_args as megatron_validate_args
 
-        args = megatron_parse_args(
-            extra_args_provider=add_slime_arguments,
-            skip_hf_validate=pre.debug_rollout_only,
-        )
-    else:
-        logger.warning(
-            "🚧 🚧 🚧 FSDP backend is being rewritten, please use Megatron backend for better stability. 🚧 🚧 🚧"
-        )
-
-        from slime.backends.fsdp_utils.arguments import fsdp_parse_args
-
-        args = fsdp_parse_args(extra_args_provider=add_slime_arguments, ignore_unknown_args=True)
+    args = megatron_parse_args(
+        extra_args_provider=add_slime_arguments,
+        skip_hf_validate=pre.debug_rollout_only,
+    )
 
     # Merge pre-parsed args into the main namespace
     for key, value in vars(pre).items():
