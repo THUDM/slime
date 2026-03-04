@@ -538,11 +538,11 @@ class MegatronTrainRayActor(TrainRayActor):
 
         if self.args.use_fault_tolerance:
             if dist.get_rank() == 0:
-                ray.get(self.rollout_manager.recover_rollout_engines.remote())
+                ray.get(self.rollout_manager.recover_updatable_engines.remote())
             dist.barrier(group=get_gloo_group())
 
         rollout_engines, rollout_engine_lock, num_new_engines, engine_gpu_counts, engine_gpu_offsets = ray.get(
-            self.rollout_manager.get_rollout_engines_and_lock.remote()
+            self.rollout_manager.get_updatable_engines_and_lock.remote()
         )
 
         if self.args.offload_train:
@@ -557,7 +557,7 @@ class MegatronTrainRayActor(TrainRayActor):
             )
             dist.barrier(group=get_gloo_group())
             if dist.get_rank() == 0:
-                ray.get(self.rollout_manager.clear_num_new_engines.remote())
+                ray.get(self.rollout_manager.clear_updatable_num_new_engines.remote())
 
         with torch_memory_saver.disable() if self.args.offload_train else nullcontext():
             print_memory("before update_weights")

@@ -525,11 +525,6 @@ class RolloutManager:
             return None
         return next(iter(self.servers.values()))
 
-    def _get_server(self, model_name: str | None = None) -> RolloutServer | None:
-        if model_name is None:
-            return self.server
-        return self.servers.get(model_name)
-
     def _get_updatable_server(self) -> RolloutServer | None:
         """Return the server with ``update_weights=True``.
 
@@ -546,17 +541,14 @@ class RolloutManager:
         """All node-0 engines across all servers / models."""
         return [e for srv in self.servers.values() for e in srv.engines]
 
-    def get_rollout_engines_and_lock(self, model_name: str | None = None):
+    def get_updatable_engines_and_lock(self):
         """Return engines eligible for weight updates.
 
-        When *model_name* is ``None``, returns engines from the first
-        model that has ``update_weights=True``.  This means frozen models
-        (reference, reward, etc.) are automatically excluded.
+        Returns engines from the first model that has
+        ``update_weights=True``.  Frozen models (reference, reward,
+        etc.) are automatically excluded.
         """
-        if model_name is None:
-            srv = self._get_updatable_server()
-        else:
-            srv = self._get_server(model_name)
+        srv = self._get_updatable_server()
         engines = srv.engines if srv else []
         gpu_counts = srv.engine_gpu_counts if srv else []
         gpu_offsets = srv.engine_gpu_offsets if srv else []
@@ -614,17 +606,14 @@ class RolloutManager:
     def onload_kv(self):
         self.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH])
 
-    def recover_rollout_engines(self, model_name: str | None = None):
+    def recover_updatable_engines(self):
         """Restart any dead rollout engines and update num_new_engines for update_weights detection.
 
-        When *model_name* is ``None``, recovers the updatable model (the one
-        that receives weight updates from training).
+        Recovers the updatable model (the one that receives weight
+        updates from training).
         """
         self.health_monitoring_pause()
-        if model_name is None:
-            srv = self._get_updatable_server()
-        else:
-            srv = self._get_server(model_name)
+        srv = self._get_updatable_server()
         if self.rollout_id == -1 or srv is None:
             engines = srv.engines if srv else []
             gpu_counts = srv.engine_gpu_counts if srv else []
@@ -640,12 +629,9 @@ class RolloutManager:
             srv.engine_gpu_offsets,
         )
 
-    def clear_num_new_engines(self, model_name: str | None = None):
+    def clear_updatable_num_new_engines(self):
         # when fault tolerance is not enabled, we need to manually clear num_new_engines after update_weights
-        if model_name is None:
-            srv = self._get_updatable_server()
-        else:
-            srv = self._get_server(model_name)
+        srv = self._get_updatable_server()
         if srv:
             srv.num_new_engines = 0
 
