@@ -41,6 +41,7 @@
     'e2e-test-plugin-contracts': {
       'label': 'run-ci-plugin-contracts',
       'always': True,
+      'cpu': True,
       'tests': [
         {'test_file': 'plugin_contracts/test_plugin_rollout_contracts.py', 'num_gpus': 0},
         {'test_file': 'plugin_contracts/test_plugin_runtime_hook_contracts.py', 'num_gpus': 0},
@@ -97,6 +98,9 @@ jobs:
 <% else %>
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request && contains(github.event.pull_request.labels.*.name, '<< config.label >>'))
 <% endif %>
+<% if config.get('cpu') %>
+    runs-on: ubuntu-latest
+<% else %>
     runs-on: self-hosted
     container:
       image: << config.image if config.image else 'slimerl/slime:latest' >>
@@ -115,6 +119,7 @@ jobs:
         -v /mnt/nvme0n1/slime_ci:/data/slime_ci
         -v /mnt/nvme0n1/slime_ci/models:/root/models
         -v /mnt/nvme0n1/slime_ci/datasets:/root/datasets
+<% endif %>
     strategy:
       fail-fast: false
       matrix:
@@ -133,10 +138,29 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+<% if config.get('cpu') %>
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install dependencies
+        shell: bash
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install pytest numpy packaging pyyaml omegaconf tqdm httpx pybase64 pylatexenc sympy aiohttp
+
+      - name: Install
+        shell: bash
+        run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps
+<% else %>
 
       - name: Install
         shell: bash
         run: cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
+<% endif %>
 
       - name: Execute
         shell: bash
