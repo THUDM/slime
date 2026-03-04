@@ -73,12 +73,16 @@ class ModelConfig:
         num_gpus_per_engine: Default GPUs per engine for all groups in this
                              model.  Individual groups can override.
         engine_groups: Engine group configurations for this model.
+        update_weights: Whether this model receives weight updates from
+                        training.  Set to ``False`` for frozen models
+                        (reference, reward, etc.).  Defaults to ``True``.
     """
 
     name: str
     model_path: str | None = None
     num_gpus_per_engine: int | None = None
     engine_groups: list[EngineGroupConfig] = dataclasses.field(default_factory=list)
+    update_weights: bool = True
 
     def resolve(self, args) -> None:
         """Resolve per-group defaults from model-level then args-level values."""
@@ -111,6 +115,7 @@ class SglangConfig:
         sglang:
           - name: actor
             model_path: /path/to/actor
+            update_weights: true          # receives training weight updates (default)
             num_gpus_per_engine: 2
             engine_groups:
               - worker_type: prefill
@@ -119,8 +124,9 @@ class SglangConfig:
               - worker_type: decode
                 num_gpus: 8
                 num_gpus_per_engine: 4
-          - name: reward
-            model_path: /path/to/reward
+          - name: ref
+            model_path: /path/to/ref
+            update_weights: false          # frozen, no weight updates
             engine_groups:
               - worker_type: regular
                 num_gpus: 4
@@ -128,6 +134,9 @@ class SglangConfig:
     Each model gets its own router.  ``placeholder`` groups reserve GPU
     slots without creating engines.  ``overrides`` are ``ServerArgs``
     field names applied on top of the base ``--sglang-*`` CLI args.
+
+    Set ``update_weights: false`` for frozen models (reference, reward,
+    etc.) that should not receive weight updates from training.
     """
 
     models: list[ModelConfig]
@@ -150,6 +159,7 @@ class SglangConfig:
                     model_path=m.get("model_path"),
                     num_gpus_per_engine=m.get("num_gpus_per_engine"),
                     engine_groups=groups,
+                    update_weights=m.get("update_weights", True),
                 )
             )
         return SglangConfig(models=models)
@@ -346,6 +356,7 @@ class RolloutServer:
     router_ip: str | None = None
     router_port: int | None = None
     model_name: str = "default"
+    update_weights: bool = True
 
     @property
     def engines(self):
@@ -519,13 +530,33 @@ class RolloutManager:
             return self.server
         return self.servers.get(model_name)
 
+    def _get_updatable_server(self) -> RolloutServer | None:
+        """Return the server with ``update_weights=True``.
+
+        When multiple updatable servers exist, returns the first one
+        (multi-model weight update is not yet supported).
+        """
+        for srv in self.servers.values():
+            if srv.update_weights:
+                return srv
+        return None
+
     @property
     def rollout_engines(self):
         """All node-0 engines across all servers / models."""
         return [e for srv in self.servers.values() for e in srv.engines]
 
     def get_rollout_engines_and_lock(self, model_name: str | None = None):
-        srv = self._get_server(model_name)
+        """Return engines eligible for weight updates.
+
+        When *model_name* is ``None``, returns engines from the first
+        model that has ``update_weights=True``.  This means frozen models
+        (reference, reward, etc.) are automatically excluded.
+        """
+        if model_name is None:
+            srv = self._get_updatable_server()
+        else:
+            srv = self._get_server(model_name)
         engines = srv.engines if srv else []
         gpu_counts = srv.engine_gpu_counts if srv else []
         gpu_offsets = srv.engine_gpu_offsets if srv else []
@@ -584,9 +615,16 @@ class RolloutManager:
         self.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH])
 
     def recover_rollout_engines(self, model_name: str | None = None):
-        """Restart any dead rollout engines and update num_new_engines for update_weights detection."""
+        """Restart any dead rollout engines and update num_new_engines for update_weights detection.
+
+        When *model_name* is ``None``, recovers the updatable model (the one
+        that receives weight updates from training).
+        """
         self.health_monitoring_pause()
-        srv = self._get_server(model_name)
+        if model_name is None:
+            srv = self._get_updatable_server()
+        else:
+            srv = self._get_server(model_name)
         if self.rollout_id == -1 or srv is None:
             engines = srv.engines if srv else []
             gpu_counts = srv.engine_gpu_counts if srv else []
@@ -604,9 +642,19 @@ class RolloutManager:
 
     def clear_num_new_engines(self, model_name: str | None = None):
         # when fault tolerance is not enabled, we need to manually clear num_new_engines after update_weights
-        srv = self._get_server(model_name)
+        if model_name is None:
+            srv = self._get_updatable_server()
+        else:
+            srv = self._get_server(model_name)
         if srv:
             srv.num_new_engines = 0
+
+    def get_model_router_info(self, model_name: str) -> tuple[str, int] | None:
+        """Return ``(router_ip, router_port)`` for the given model name."""
+        srv = self.servers.get(model_name)
+        if srv is None:
+            return None
+        return srv.router_ip, srv.router_port
 
     def health_monitoring_pause(self) -> None:
         for monitor in self._health_monitors:
@@ -1087,7 +1135,11 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
             router_ip=router_ip,
             router_port=router_port,
             model_name=model_cfg.name,
+            update_weights=model_cfg.update_weights,
         )
+
+    # Expose per-model router info for custom rollout functions.
+    args.sglang_model_routers = {name: (srv.router_ip, srv.router_port) for name, srv in servers.items()}
 
     return servers
 
