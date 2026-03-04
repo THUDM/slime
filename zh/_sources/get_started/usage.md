@@ -37,8 +37,7 @@
 
 slime 支持多种训练后端，可以通过 `--train-backend` 参数进行选择：
 
-- `megatron`（默认）：使用 Megatron-LM 作为训练后端，支持大规模模型的高效训练；
-- `fsdp`（实验性）：使用 PyTorch FSDP 作为训练后端，可以直接加载 HuggingFace 格式权重，无需转换。
+- `megatron`（默认）：使用 Megatron-LM 作为训练后端，支持大规模模型的高效训练。
 
 ### 加载 megatron
 

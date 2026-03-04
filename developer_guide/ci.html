@@ -54,7 +54,7 @@
     <link rel="prev" title="Multi-Agent RL" href="../_examples_synced/multi_agent/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Mar 02, 2026"/>
+    <meta name="docbuild:last-update" content="Mar 04, 2026"/>
   </head>
   
   
@@ -494,27 +494,23 @@ document.write(`
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-short</span></code></p></td>
 <td><p>Lightweight smoke tests with Qwen2.5-0.5B (4 GPUs). Fast feedback loop.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-fsdp</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-fsdp</span></code></p></td>
-<td><p>FSDP backend tests (true on-policy, VL, megatron-fsdp alignment).</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-megatron</span></code></p></td>
 <td><p>Core Megatron training tests covering dense, MoE, PPO, MTP, OPD, etc.</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-precision</span></code></p></td>
-<td><p>Numerical precision validation (parallel check, megatron-fsdp alignment).</p></td>
+<td><p>Numerical precision validation (parallel check).</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-ckpt</span></code></p></td>
 <td><p>Checkpoint save/load correctness (sync and async-save).</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-image</span></code></p></td>
 <td><p>Full test suite run on <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code> image (for image validation).</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-changed</span></code></p></td>
 <td><p><strong>Dynamically</strong> detects new/modified test files in the PR and runs only those.</p></td>
 </tr>
@@ -705,7 +701,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Mar 02, 2026.
+  Last updated on Mar 04, 2026.
   <br/>
 </p>
   </div>

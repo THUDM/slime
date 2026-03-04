@@ -54,7 +54,7 @@
     <link rel="prev" title="Multi-Agent RL" href="../_examples_synced/multi_agent/README.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 03 月 02 日"/>
+    <meta name="docbuild:last-update" content="2026 年 03 月 04 日"/>
   </head>
   
   
@@ -490,27 +490,23 @@ document.write(`
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-short</span></code></p></td>
 <td><p>Qwen2.5-0.5B 轻量级冒烟测试（4 GPU），用于快速反馈。</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-fsdp</span></code></p></td>
-<td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-fsdp</span></code></p></td>
-<td><p>FSDP 后端测试（true on-policy、VL、megatron-fsdp 对齐）。</p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-megatron</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-megatron</span></code></p></td>
 <td><p>核心 Megatron 训练测试，覆盖 Dense、MoE、PPO、MTP、OPD 等。</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-precision</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-precision</span></code></p></td>
-<td><p>数值精度校验（并行一致性检查、megatron-fsdp 对齐）。</p></td>
+<td><p>数值精度校验（并行一致性检查）。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-ckpt</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-ckpt</span></code></p></td>
 <td><p>Checkpoint 保存/加载正确性（同步和异步保存）。</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-image</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-image</span></code></p></td>
 <td><p>在 <code class="docutils literal notranslate"><span class="pre">slimerl/slime-test:latest</span></code> 镜像上运行<strong>全部</strong>测试（用于镜像验证）。</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">run-ci-changed</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">e2e-test-changed</span></code></p></td>
 <td><p><strong>动态</strong>检测 PR 中新增或修改的测试文件，仅运行这些测试。</p></td>
 </tr>
@@ -701,7 +697,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 03 月 02 日.
+  最后更新于 2026 年 03 月 04 日.
   <br/>
 </p>
   </div>
