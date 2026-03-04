@@ -7,7 +7,7 @@ set -e
 export WANDB_ENTITY="Qianfan-VL"
 export WANDB_PROJECT="slime-dev"
 export WANDB_NAME="qianfanocr-kie-slime-test1"
-#export WANDB_MODE=offline
+export WANDB_MODE=offline  # 使用 offline 模式，训练完成后手动 sync
 export WANDB_API_KEY=285f5c49b9ab1d920af3d2e84df63461a74921ae
 export WANDB_BASE_URL=https://wandb.store
 export https_proxy=http://agent.baidu.com:8891
@@ -15,7 +15,7 @@ export http_proxy=http://agent.baidu.com:8891
 
 
 # ============== 配置 ==============
-MODEL_PATH="/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/InternVL3_5-4B-HF"
+MODEL_PATH="/mnt/cfs_bj_mt/experiments/zhengmingming/qfocr-annv9-30k-s4-qwen3-4b-v30-new-vocab-0303//iter_0004600_hf"
 DATA_PATH="/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/slime/data/kie_train.parquet"
 OUTPUT_DIR="/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/slime/outputs/internvl_kie"
 NUM_GPUS=8

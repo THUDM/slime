@@ -109,6 +109,22 @@ class FSDPTrainRayActor(TrainRayActor):
 
         self.model = model
 
+        # Set img_context_token_id for InternVL models (non-HF format)
+        # This is required for the model to correctly identify image placeholder tokens
+        if hasattr(self.hf_config, "llm_config"):
+            # Non-HF InternVL format detected
+            img_context_token = "<IMG_CONTEXT>"
+            img_context_token_id = self.tokenizer.convert_tokens_to_ids(img_context_token)
+            if img_context_token_id is not None:
+                # Set on the underlying model (handles FSDP wrapping)
+                if hasattr(self.model, "_fsdp_wrapped_module"):
+                    self.model._fsdp_wrapped_module.img_context_token_id = img_context_token_id
+                elif hasattr(self.model, "module"):
+                    self.model.module.img_context_token_id = img_context_token_id
+                else:
+                    self.model.img_context_token_id = img_context_token_id
+                logger.info(f"Set img_context_token_id={img_context_token_id} for InternVL model")
+
         if args.gradient_checkpointing:
             self.model.gradient_checkpointing_enable()
 

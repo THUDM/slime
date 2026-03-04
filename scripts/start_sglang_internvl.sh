@@ -5,7 +5,7 @@
 #   bash scripts/start_sglang_internvl.sh
 #   bash scripts/start_sglang_internvl.sh --port 30001
 #   bash scripts/start_sglang_internvl.sh --tp 2
-MODEL_PATH="/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/InternVL3_5-4B-HF"
+MODEL_PATH="/mnt/cfs_bj_mt/experiments/zhengmingming/qfocr-annv9-30k-s4-qwen3-4b-v30-new-vocab-0303//iter_0004600_hf"
 PORT=30000
 TP=1
 MEM_FRACTION=0.8

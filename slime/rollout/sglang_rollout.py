@@ -120,7 +120,16 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
     if state.processor:
         processor_kwargs = build_processor_kwargs(sample.multimodal_inputs)
-        processor_output = state.processor(text=sample.prompt, **processor_kwargs)
+
+        # For InternVL models, replace <image> with the correct image token
+        prompt_text = sample.prompt
+        if hasattr(state.processor, 'image_token'):
+            # Replace <image> with processor's expected image token (e.g., <IMG_CONTEXT>)
+            if '<image>' in prompt_text and state.processor.image_token != '<image>':
+                prompt_text = prompt_text.replace('<image>', state.processor.image_token)
+                logger.info(f"[multimodal] Replaced <image> with {state.processor.image_token}")
+
+        processor_output = state.processor(text=prompt_text, **processor_kwargs)
         prompt_ids = processor_output["input_ids"][0]
         # Extract multimodal training inputs, converting list of tensors to stacked tensor
         multimodal_train_inputs = {}
