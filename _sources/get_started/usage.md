@@ -365,6 +365,36 @@ After starting, all SGLang servers will register with the router via the `/add_w
 
 When you configure an external router using `--sglang-router-ip` and `--sglang-router-port`, slime will not start an internal router. Instead, it will register all its servers with this external router. You can then use this external router's address to implement more complex data generation workflows. Note that the router supports OpenAI-compatible APIs.
 
+### Advanced Engine Configuration (--sglang-config)
+
+For advanced deployments, you can use `--sglang-config` with a YAML file to configure engine groups, multi-model serving, and selective weight updates.
+
+**Multi-model deployment** allows serving multiple models simultaneously (e.g., an actor model that receives weight updates and a frozen reference/reward model):
+
+```yaml
+sglang:
+  - name: actor
+    update_weights: true          # receives weight updates from training (default)
+    engine_groups:
+      - worker_type: regular
+        num_gpus: 8
+        num_gpus_per_engine: 4
+  - name: ref
+    model_path: /path/to/ref_model
+    update_weights: false          # frozen, no weight updates
+    engine_groups:
+      - worker_type: regular
+        num_gpus: 4
+        num_gpus_per_engine: 2
+```
+
+Each model gets its own router. The per-model router info is accessible via `args.sglang_model_routers` (a dict mapping model name to `(ip, port)` tuples). Custom rollout functions can use `get_model_url(args, "ref")` from `slime.rollout.sglang_rollout` to route requests to a specific model.
+
+**Engine group features:**
+- `worker_type`: `regular`, `prefill`, `decode`, or `placeholder` (reserves GPU slots without creating engines)
+- `overrides`: Dict of SGLang `ServerArgs` field overrides applied on top of `--sglang-*` CLI args
+- `num_gpus_per_engine`: Per-group TP size override
+
 ## How to Use Megatron
 
 slime supports different and lightly modified versions of Megatron by reusing common functions from the `megatron.training` directory, such as `parse_args`, `save_checkpoint`, and `load_checkpoint`. Therefore, when using it, you must ensure that Megatron is accessible in the `PYTHONPATH`, for example, by adding `export PYTHONPATH=/root/Megatron-LM` at runtime.

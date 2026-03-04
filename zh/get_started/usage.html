@@ -461,6 +461,7 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">sglang 使用方法</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">参数配置</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#router">router 使用方法</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-config">高级引擎配置（--sglang-config）</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">megatron 使用方法</a><ul class="visible nav section-nav flex-column">
@@ -834,6 +835,34 @@ document.write(`
 <p>所有的 sglang server 在启动后，会通过 <code class="docutils literal notranslate"><span class="pre">/add_worker</span></code> 申请加入 router。在实际进行数据生成的时候，只需要向 router 发送 http 请求，router 会进行 load balancing 操作，将请求转发给 server 们。</p>
 <p>当通过 <code class="docutils literal notranslate"><span class="pre">--sglang-router-ip</span></code> 与 <code class="docutils literal notranslate"><span class="pre">--sglang-router-port</span></code> 来配置传入一个外部的 router，此时 slime 不再会在内部启动一个 router，而是会把所有的 server 都注册在这个外部 router 上。这时可以利用这个外部的 router 地址来实现更复杂的数据生成流程。注意 router 是支持 openai compatible api 的。</p>
 </section>
+<section id="sglang-config">
+<h3>高级引擎配置（--sglang-config）<a class="headerlink" href="#sglang-config" title="链接到此标题。">#</a></h3>
+<p>对于高级部署场景，可以使用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 指定一个 YAML 文件，来配置引擎组、多模型部署以及选择性权重更新。</p>
+<p><strong>多模型部署</strong>允许同时服务多个模型（例如一个接收权重更新的 actor 模型和一个冻结的 reference/reward 模型）：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">          </span><span class="c1"># 接收训练的权重更新（默认）</span>
+<span class="w">    </span><span class="nt">engine_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ref</span>
+<span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/path/to/ref_model</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">          </span><span class="c1"># 冻结，不更新权重</span>
+<span class="w">    </span><span class="nt">engine_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+</pre></div>
+</div>
+<p>每个模型都有自己独立的 router。每个模型的 router 信息可通过 <code class="docutils literal notranslate"><span class="pre">args.sglang_model_routers</span></code>（一个将模型名映射到 <code class="docutils literal notranslate"><span class="pre">(ip,</span> <span class="pre">port)</span></code> 元组的字典）访问。自定义 rollout 函数可以使用 <code class="docutils literal notranslate"><span class="pre">slime.rollout.sglang_rollout</span></code> 中的 <code class="docutils literal notranslate"><span class="pre">get_model_url(args,</span> <span class="pre">&quot;ref&quot;)</span></code> 来将请求路由到指定模型。</p>
+<p><strong>引擎组功能：</strong></p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">worker_type</span></code>：<code class="docutils literal notranslate"><span class="pre">regular</span></code>、<code class="docutils literal notranslate"><span class="pre">prefill</span></code>、<code class="docutils literal notranslate"><span class="pre">decode</span></code> 或 <code class="docutils literal notranslate"><span class="pre">placeholder</span></code>（预留 GPU 位置但不创建引擎）</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">overrides</span></code>：SGLang <code class="docutils literal notranslate"><span class="pre">ServerArgs</span></code> 字段覆盖字典，会叠加在 <code class="docutils literal notranslate"><span class="pre">--sglang-*</span></code> CLI 参数之上</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code>：每组的 TP 大小覆盖</p></li>
+</ul>
+</section>
 </section>
 <section id="id9">
 <h2>megatron 使用方法<a class="headerlink" href="#id9" title="链接到此标题。">#</a></h2>
@@ -930,6 +959,7 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">sglang 使用方法</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">参数配置</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#router">router 使用方法</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-config">高级引擎配置（--sglang-config）</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">megatron 使用方法</a><ul class="visible nav section-nav flex-column">

@@ -465,6 +465,7 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-sglang">How to Use SGLang</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parameter-configuration">Parameter Configuration</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-the-router">How to Use the Router</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#advanced-engine-configuration-sglang-config">Advanced Engine Configuration (–sglang-config)</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-megatron">How to Use Megatron</a><ul class="visible nav section-nav flex-column">
@@ -837,6 +838,34 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <p>After starting, all SGLang servers will register with the router via the <code class="docutils literal notranslate"><span class="pre">/add_worker</span></code> endpoint. When actually generating data, you only need to send HTTP requests to the router, which will perform load balancing and forward the requests to the servers.</p>
 <p>When you configure an external router using <code class="docutils literal notranslate"><span class="pre">--sglang-router-ip</span></code> and <code class="docutils literal notranslate"><span class="pre">--sglang-router-port</span></code>, slime will not start an internal router. Instead, it will register all its servers with this external router. You can then use this external router’s address to implement more complex data generation workflows. Note that the router supports OpenAI-compatible APIs.</p>
 </section>
+<section id="advanced-engine-configuration-sglang-config">
+<h3>Advanced Engine Configuration (–sglang-config)<a class="headerlink" href="#advanced-engine-configuration-sglang-config" title="Link to this heading">#</a></h3>
+<p>For advanced deployments, you can use <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> with a YAML file to configure engine groups, multi-model serving, and selective weight updates.</p>
+<p><strong>Multi-model deployment</strong> allows serving multiple models simultaneously (e.g., an actor model that receives weight updates and a frozen reference/reward model):</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">          </span><span class="c1"># receives weight updates from training (default)</span>
+<span class="w">    </span><span class="nt">engine_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ref</span>
+<span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/path/to/ref_model</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">          </span><span class="c1"># frozen, no weight updates</span>
+<span class="w">    </span><span class="nt">engine_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+</pre></div>
+</div>
+<p>Each model gets its own router. The per-model router info is accessible via <code class="docutils literal notranslate"><span class="pre">args.sglang_model_routers</span></code> (a dict mapping model name to <code class="docutils literal notranslate"><span class="pre">(ip,</span> <span class="pre">port)</span></code> tuples). Custom rollout functions can use <code class="docutils literal notranslate"><span class="pre">get_model_url(args,</span> <span class="pre">&quot;ref&quot;)</span></code> from <code class="docutils literal notranslate"><span class="pre">slime.rollout.sglang_rollout</span></code> to route requests to a specific model.</p>
+<p><strong>Engine group features:</strong></p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">worker_type</span></code>: <code class="docutils literal notranslate"><span class="pre">regular</span></code>, <code class="docutils literal notranslate"><span class="pre">prefill</span></code>, <code class="docutils literal notranslate"><span class="pre">decode</span></code>, or <code class="docutils literal notranslate"><span class="pre">placeholder</span></code> (reserves GPU slots without creating engines)</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">overrides</span></code>: Dict of SGLang <code class="docutils literal notranslate"><span class="pre">ServerArgs</span></code> field overrides applied on top of <code class="docutils literal notranslate"><span class="pre">--sglang-*</span></code> CLI args</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code>: Per-group TP size override</p></li>
+</ul>
+</section>
 </section>
 <section id="how-to-use-megatron">
 <h2>How to Use Megatron<a class="headerlink" href="#how-to-use-megatron" title="Link to this heading">#</a></h2>
@@ -933,6 +962,7 @@ Additionally, we provide a <code class="docutils literal notranslate"><span clas
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-sglang">How to Use SGLang</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parameter-configuration">Parameter Configuration</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-the-router">How to Use the Router</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#advanced-engine-configuration-sglang-config">Advanced Engine Configuration (–sglang-config)</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-use-megatron">How to Use Megatron</a><ul class="visible nav section-nav flex-column">

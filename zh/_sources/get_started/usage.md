@@ -367,6 +367,36 @@ slime 会用 [sglang-router](https://github.com/sgl-project/sglang/tree/main/sgl
 
 当通过 `--sglang-router-ip` 与 `--sglang-router-port` 来配置传入一个外部的 router，此时 slime 不再会在内部启动一个 router，而是会把所有的 server 都注册在这个外部 router 上。这时可以利用这个外部的 router 地址来实现更复杂的数据生成流程。注意 router 是支持 openai compatible api 的。
 
+### 高级引擎配置（--sglang-config）
+
+对于高级部署场景，可以使用 `--sglang-config` 指定一个 YAML 文件，来配置引擎组、多模型部署以及选择性权重更新。
+
+**多模型部署**允许同时服务多个模型（例如一个接收权重更新的 actor 模型和一个冻结的 reference/reward 模型）：
+
+```yaml
+sglang:
+  - name: actor
+    update_weights: true          # 接收训练的权重更新（默认）
+    engine_groups:
+      - worker_type: regular
+        num_gpus: 8
+        num_gpus_per_engine: 4
+  - name: ref
+    model_path: /path/to/ref_model
+    update_weights: false          # 冻结，不更新权重
+    engine_groups:
+      - worker_type: regular
+        num_gpus: 4
+        num_gpus_per_engine: 2
+```
+
+每个模型都有自己独立的 router。每个模型的 router 信息可通过 `args.sglang_model_routers`（一个将模型名映射到 `(ip, port)` 元组的字典）访问。自定义 rollout 函数可以使用 `slime.rollout.sglang_rollout` 中的 `get_model_url(args, "ref")` 来将请求路由到指定模型。
+
+**引擎组功能：**
+- `worker_type`：`regular`、`prefill`、`decode` 或 `placeholder`（预留 GPU 位置但不创建引擎）
+- `overrides`：SGLang `ServerArgs` 字段覆盖字典，会叠加在 `--sglang-*` CLI 参数之上
+- `num_gpus_per_engine`：每组的 TP 大小覆盖
+
 ## megatron 使用方法
 
 slime 通过复用 `megatron.training` 目录下的常规函数，如 `parse_args`， `save_checkpoint`，`load_checkpoint`，从而实现对不同版本以及轻度魔改的 megatron 的支持。所以在使用时，需要保证 `PYTHONPATH` 中能访问到 megatron，例如在运行时加入 `export PYTHONPATH=/root/Megatron-LM`。
