@@ -1,9 +1,12 @@
+import logging
 import ray
 
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
 from slime.utils.logging_utils import configure_logger, init_tracking
 from slime.utils.misc import should_run_periodic_action
+
+logger = logging.getLogger(__name__)
 
 
 def train(args):
@@ -59,6 +62,29 @@ def train(args):
             )
         if args.rollout_global_dataset:
             ray.get(rollout_manager.save.remote(rollout_id))
+
+        # Convert checkpoint to SGLang format if requested
+        if getattr(args, 'convert_to_sglang', False) and args.save:
+            try:
+                from slime.utils.model_converter import convert_hf_checkpoint_to_sglang
+                from pathlib import Path
+
+                step_id = rollout_id + 1
+                hf_ckpt_dir = Path(args.save) / f"iter_{step_id:07d}" / "model"
+                sglang_ckpt_dir = Path(args.save) / f"iter_{step_id:07d}" / "model_sglang"
+
+                if hf_ckpt_dir.exists():
+                    logger.info(f"Converting checkpoint to SGLang format: {hf_ckpt_dir} -> {sglang_ckpt_dir}")
+                    convert_hf_checkpoint_to_sglang(
+                        hf_checkpoint_dir=str(hf_ckpt_dir),
+                        sglang_save_dir=str(sglang_ckpt_dir),
+                        original_sglang_model_dir=getattr(args, 'sglang_model_path', None),
+                    )
+                    logger.info(f"SGLang checkpoint saved to: {sglang_ckpt_dir}")
+                else:
+                    logger.warning(f"HF checkpoint not found at {hf_ckpt_dir}, skipping conversion")
+            except Exception as e:
+                logger.error(f"Failed to convert checkpoint to SGLang format: {e}")
 
     # train loop.
     # note that for async training, one can change the position of the sync operation(ray.get).

@@ -751,6 +751,25 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                     "The model will be saved to `save_hf.format(rollout_id)`. "
                 ),
             )
+            parser.add_argument(
+                "--convert-to-sglang",
+                action="store_true",
+                default=False,
+                help=(
+                    "Convert checkpoints to SGLang format after saving. "
+                    "This is useful when training with HuggingFace format but inference with SGLang. "
+                    "Requires --sglang-model-path to be set."
+                ),
+            )
+            parser.add_argument(
+                "--sglang-model-path",
+                type=str,
+                default=None,
+                help=(
+                    "Path to original SGLang model directory (for config and tokenizer). "
+                    "Required when --convert-to-sglang is set."
+                ),
+            )
             reset_arg(parser, "--seed", type=int, default=1234)
             reset_arg(parser, "--clip-grad", type=float, default=1.0)
             reset_arg(parser, "--calculate-per-token-loss", action="store_true")
