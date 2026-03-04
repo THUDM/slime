@@ -75,14 +75,17 @@ class ModelConfig:
         engine_groups: Engine group configurations for this model.
         update_weights: Whether this model receives weight updates from
                         training.  Set to ``False`` for frozen models
-                        (reference, reward, etc.).  Defaults to ``True``.
+                        (reference, reward, etc.).  When ``None`` (default),
+                        automatically inferred in ``resolve()``: ``True`` if
+                        model_path matches ``args.hf_checkpoint``, ``False``
+                        otherwise.
     """
 
     name: str
     model_path: str | None = None
     num_gpus_per_engine: int | None = None
     engine_groups: list[EngineGroupConfig] = dataclasses.field(default_factory=list)
-    update_weights: bool = True
+    update_weights: bool | None = None
 
     def resolve(self, args) -> None:
         """Resolve per-group defaults from model-level then args-level values."""
@@ -94,6 +97,29 @@ class ModelConfig:
             # Inject model_path into overrides so _compute_server_args picks it up.
             if "model_path" not in g.overrides:
                 g.overrides["model_path"] = default_model_path
+
+        # Validate: all engine groups within a model must share the same model_path.
+        if self.engine_groups:
+            model_paths = {g.overrides["model_path"] for g in self.engine_groups}
+            assert len(model_paths) == 1, (
+                f"Model '{self.name}' has engine groups with different model_path values: "
+                f"{model_paths}. All engine groups within a model must use the same model_path."
+            )
+            effective_model_path = model_paths.pop()
+        else:
+            effective_model_path = default_model_path
+
+        # Auto-infer update_weights when not explicitly set.
+        if self.update_weights is None:
+            if effective_model_path != args.hf_checkpoint:
+                logger.warning(
+                    f"Model '{self.name}' uses model_path='{effective_model_path}' which differs "
+                    f"from hf_checkpoint='{args.hf_checkpoint}'. Defaulting update_weights to False. "
+                    f"Set update_weights explicitly in the config to suppress this warning."
+                )
+                self.update_weights = False
+            else:
+                self.update_weights = True
 
     @property
     def has_pd_disaggregation(self) -> bool:
@@ -159,7 +185,7 @@ class SglangConfig:
                     model_path=m.get("model_path"),
                     num_gpus_per_engine=m.get("num_gpus_per_engine"),
                     engine_groups=groups,
-                    update_weights=m.get("update_weights", True),
+                    update_weights=m.get("update_weights"),
                 )
             )
         return SglangConfig(models=models)
