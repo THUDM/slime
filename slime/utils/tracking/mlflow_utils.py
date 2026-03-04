@@ -10,10 +10,13 @@ MLflow docs for future reference:
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
+import tempfile
 from copy import deepcopy
+from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -118,6 +121,36 @@ def log_metrics(metrics: dict[str, Any], step: int | None = None) -> None:
 
     if sanitized:
         mlflow.log_metrics(sanitized, step=int(step) if step is not None else None)
+
+
+# ---------------------------------------------------------------------------
+# Artifact logging
+# ---------------------------------------------------------------------------
+
+def log_samples(samples: list, step: int | None = None) -> None:
+    import mlflow
+
+    if mlflow.active_run() is None:
+        return
+
+    row_data = []
+    for sample in samples:
+        prompt = sample.prompt
+        if isinstance(prompt, list):
+            prompt = json.dumps(prompt)
+        entry = {
+            "input": prompt,
+            "output": sample.response,
+            "score": sample.reward,
+        }
+        row_data.append(entry)
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        filename = f"rollout_step{step}.json" if step is not None else "rollout.json"
+        artifact_path = Path(tmp_dir) / filename
+        with open(artifact_path, "w") as f:
+            json.dump(row_data, f, indent=2)
+        mlflow.log_artifact(str(artifact_path), artifact_path="rollout_samples")
 
 
 # ---------------------------------------------------------------------------

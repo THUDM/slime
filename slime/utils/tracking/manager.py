@@ -32,6 +32,9 @@ class TrackingBackend(ABC):
     def log(self, metrics: dict[str, Any], step: int | None = None) -> None:
         ...
 
+    def log_samples(self, samples: list, step: int | None = None) -> None:
+        """Log individual rollout samples as artifacts. Optional — defaults to no-op."""
+
     @abstractmethod
     def finish(self) -> None:
         ...
@@ -95,6 +98,11 @@ class MlflowBackend(TrackingBackend):
 
         mlflow_utils.log_metrics(metrics, step=step)
 
+    def log_samples(self, samples: list, step: int | None = None) -> None:
+        from . import mlflow_utils
+
+        mlflow_utils.log_samples(samples, step=step)
+
     def finish(self) -> None:
         from . import mlflow_utils
 
@@ -127,6 +135,10 @@ class TrackingManager:
     def log(self, metrics: dict[str, Any], step: int | None = None) -> None:
         for backend in self._backends:
             backend.log(metrics, step=step)
+
+    def log_samples(self, samples: list, step: int | None = None) -> None:
+        for backend in self._backends:
+            backend.log_samples(samples, step=step)
 
     def finish(self) -> None:
         for backend in self._backends:

@@ -31,5 +31,9 @@ def log(args, metrics, step_key: str):
     _manager.log(metrics, step=step)
 
 
+def log_samples(samples, step=None):
+    _manager.log_samples(samples, step=step)
+
+
 def finish_tracking():
     _manager.finish()
