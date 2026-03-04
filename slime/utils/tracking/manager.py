@@ -35,6 +35,9 @@ class TrackingBackend(ABC):
     def log_samples(self, samples: list, step: int | None = None) -> None:
         """Log individual rollout samples as artifacts. Optional — defaults to no-op."""
 
+    def log_checkpoint(self, checkpoint_dir: str, metadata: dict | None = None) -> None:
+        """Log checkpoint metadata as artifacts. Optional — defaults to no-op."""
+
     @abstractmethod
     def finish(self) -> None:
         ...
@@ -103,6 +106,11 @@ class MlflowBackend(TrackingBackend):
 
         mlflow_utils.log_samples(samples, step=step)
 
+    def log_checkpoint(self, checkpoint_dir: str, metadata: dict | None = None) -> None:
+        from . import mlflow_utils
+
+        mlflow_utils.log_checkpoint(checkpoint_dir, metadata=metadata)
+
     def finish(self) -> None:
         from . import mlflow_utils
 
@@ -139,6 +147,10 @@ class TrackingManager:
     def log_samples(self, samples: list, step: int | None = None) -> None:
         for backend in self._backends:
             backend.log_samples(samples, step=step)
+
+    def log_checkpoint(self, checkpoint_dir: str, metadata: dict | None = None) -> None:
+        for backend in self._backends:
+            backend.log_checkpoint(checkpoint_dir, metadata=metadata)
 
     def finish(self) -> None:
         for backend in self._backends:

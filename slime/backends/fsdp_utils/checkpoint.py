@@ -247,4 +247,7 @@ def save(actor: Any, iteration: int) -> None:
         tracker_file.write_text(str(step_id))
         logger.info(f"[FSDP] Saved checkpoint to {checkpoint_dir}")
 
+        from slime.utils import logging_utils
+        logging_utils.log_checkpoint(str(checkpoint_dir), metadata=metadata)
+
     dist.barrier()

@@ -153,6 +153,30 @@ def log_samples(samples: list, step: int | None = None) -> None:
         mlflow.log_artifact(str(artifact_path), artifact_path="rollout_samples")
 
 
+def log_checkpoint(checkpoint_dir: str, metadata: dict | None = None) -> None:
+    import mlflow
+
+    if mlflow.active_run() is None:
+        return
+
+    checkpoint_path = Path(checkpoint_dir)
+    info = {"checkpoint_dir": str(checkpoint_path)}
+    if metadata:
+        info.update(metadata)
+
+    # Log metadata JSON as artifact so it's browsable in the UI
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        meta_file = Path(tmp_dir) / f"{checkpoint_path.name}.json"
+        with open(meta_file, "w") as f:
+            json.dump(info, f, indent=2)
+        mlflow.log_artifact(str(meta_file), artifact_path="checkpoints")
+
+    # Also log the checkpoint's own meta.json if it exists
+    meta_json = checkpoint_path / "meta.json"
+    if meta_json.exists():
+        mlflow.log_artifact(str(meta_json), artifact_path=f"checkpoints/{checkpoint_path.name}")
+
+
 # ---------------------------------------------------------------------------
 # Cleanup
 # ---------------------------------------------------------------------------

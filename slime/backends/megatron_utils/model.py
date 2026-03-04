@@ -711,6 +711,12 @@ def save(
         train_data_iterator=None,
         preprocess_common_state_dict_fn=None,
     )
+
+    if args.save and torch.distributed.get_rank() == 0:
+        from slime.utils import logging_utils
+        checkpoint_dir = str(Path(args.save) / f"iter_{iteration:07d}")
+        logging_utils.log_checkpoint(checkpoint_dir, metadata={"iteration": iteration})
+
     if should_disable_forward_pre_hook(args):
         enable_forward_pre_hook(model)
 

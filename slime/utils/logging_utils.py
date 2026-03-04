@@ -35,5 +35,9 @@ def log_samples(samples, step=None):
     _manager.log_samples(samples, step=step)
 
 
+def log_checkpoint(checkpoint_dir, metadata=None):
+    _manager.log_checkpoint(checkpoint_dir, metadata=metadata)
+
+
 def finish_tracking():
     _manager.finish()
