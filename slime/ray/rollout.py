@@ -296,16 +296,17 @@ class RolloutServer:
 
         if release_handles:
             ray.get(release_handles)
-            if updatable_new_engines:
+            # Resume GPU memory for all engines that need offload.
+            all_resume_engines = updatable_new_engines[:]
+            for _model_path, engines in non_updatable_groups_engines:
+                all_resume_engines.extend(engines)
+            if all_resume_engines:
                 ray.get(
                     [
                         engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS])
-                        for engine in updatable_new_engines
+                        for engine in all_resume_engines
                     ]
                 )
-            # Non-updatable engines: reload from disk to avoid CPU memory usage.
-            for model_path, engines in non_updatable_groups_engines:
-                ray.get([engine.update_weights_from_disk.remote(model_path) for engine in engines])
 
     def offload(self):
         """Release memory occupation across all groups (concurrent)."""
@@ -324,18 +325,16 @@ class RolloutServer:
     def onload_weights(self):
         """Restore weights for offloaded groups.
 
-        Updatable servers resume from CPU cache (weights will be overwritten
-        by ``update_weights`` shortly after).  Non-updatable servers reload
-        from disk to avoid holding a CPU copy of the weights.
+        All groups resume from CPU cache via ``resume_memory_occupation``.
+        For updatable servers, weights will be overwritten by
+        ``update_weights`` shortly after.  For non-updatable servers the
+        CPU backup already contains the correct (unchanged) weights.
         """
         handles = []
         for g in self.engine_groups:
             if not g.needs_offload:
                 continue
-            if self.update_weights:
-                handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
-            else:
-                handles.extend(g.onload_weights_from_disk())
+            handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
         return ray.get(handles) if handles else []
 
     def onload_kv(self):
