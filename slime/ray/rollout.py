@@ -11,10 +11,10 @@ from typing import Any
 import numpy as np
 import ray
 import torch
-import yaml
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
+from slime.backends.sglang_utils.sglang_config import EngineGroupConfig, ModelConfig, SglangConfig
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
@@ -33,153 +33,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 logger = logging.getLogger(__name__)
-
-
-@dataclasses.dataclass
-class EngineGroupConfig:
-    """Configuration for a single engine group.
-
-    Attributes:
-        worker_type: One of "regular", "prefill", "decode", or "placeholder".
-                     "placeholder" reserves GPU slots without creating engines.
-        num_gpus: Total number of GPUs for this group.
-        num_gpus_per_engine: GPUs per engine for this group.  Overrides the
-                             model-level or global ``--rollout-num-gpus-per-engine``.
-        overrides: Optional dict of SGLang ``ServerArgs`` field overrides.
-                   These are applied on top of the base CLI ``--sglang-*``
-                   arguments in ``_compute_server_args``.
-    """
-
-    worker_type: str
-    num_gpus: int
-    num_gpus_per_engine: int | None = None
-    overrides: dict = dataclasses.field(default_factory=dict)
-
-    def __post_init__(self):
-        valid_types = {"regular", "prefill", "decode", "placeholder"}
-        assert (
-            self.worker_type in valid_types
-        ), f"Invalid worker_type '{self.worker_type}', must be one of {valid_types}"
-        assert self.num_gpus > 0, f"num_gpus must be > 0, got {self.num_gpus}"
-
-
-@dataclasses.dataclass
-class ModelConfig:
-    """Configuration for a single model deployment.
-
-    Attributes:
-        name: Unique name for this model (e.g. "actor", "reward").
-        model_path: HF checkpoint path.  Falls back to ``args.hf_checkpoint``.
-        num_gpus_per_engine: Default GPUs per engine for all groups in this
-                             model.  Individual groups can override.
-        engine_groups: Engine group configurations for this model.
-    """
-
-    name: str
-    model_path: str | None = None
-    num_gpus_per_engine: int | None = None
-    engine_groups: list[EngineGroupConfig] = dataclasses.field(default_factory=list)
-
-    def resolve(self, args) -> None:
-        """Resolve per-group defaults from model-level then args-level values."""
-        default_gpus_per_engine = self.num_gpus_per_engine or args.rollout_num_gpus_per_engine
-        default_model_path = self.model_path or args.hf_checkpoint
-        for g in self.engine_groups:
-            if g.num_gpus_per_engine is None:
-                g.num_gpus_per_engine = default_gpus_per_engine
-            # Inject model_path into overrides so _compute_server_args picks it up.
-            if "model_path" not in g.overrides:
-                g.overrides["model_path"] = default_model_path
-
-    @property
-    def has_pd_disaggregation(self) -> bool:
-        return any(g.worker_type in ("prefill", "decode") for g in self.engine_groups)
-
-    @property
-    def total_num_gpus(self) -> int:
-        return sum(g.num_gpus for g in self.engine_groups)
-
-
-@dataclasses.dataclass
-class SglangConfig:
-    """Configuration for SGLang engine deployment.
-
-    Loaded from ``--sglang-config`` YAML file.
-
-    **Config format**::
-
-        sglang:
-          - name: actor
-            model_path: /path/to/actor
-            num_gpus_per_engine: 2
-            engine_groups:
-              - worker_type: prefill
-                num_gpus: 4
-                num_gpus_per_engine: 2
-              - worker_type: decode
-                num_gpus: 8
-                num_gpus_per_engine: 4
-          - name: reward
-            model_path: /path/to/reward
-            engine_groups:
-              - worker_type: regular
-                num_gpus: 4
-
-    Each model gets its own router.  ``placeholder`` groups reserve GPU
-    slots without creating engines.  ``overrides`` are ``ServerArgs``
-    field names applied on top of the base ``--sglang-*`` CLI args.
-    """
-
-    models: list[ModelConfig]
-
-    @staticmethod
-    def from_yaml(path: str) -> "SglangConfig":
-        with open(path) as f:
-            data = yaml.safe_load(f)
-
-        assert "sglang" in data, (
-            f"sglang config must have a 'sglang' key, got {list(data.keys())}. "
-            f"Wrap your engine_groups inside a model entry under 'sglang'."
-        )
-        models = []
-        for m in data["sglang"]:
-            groups = [EngineGroupConfig(**g) for g in m.get("engine_groups", [])]
-            models.append(
-                ModelConfig(
-                    name=m["name"],
-                    model_path=m.get("model_path"),
-                    num_gpus_per_engine=m.get("num_gpus_per_engine"),
-                    engine_groups=groups,
-                )
-            )
-        return SglangConfig(models=models)
-
-    @staticmethod
-    def from_prefill_num_servers(args) -> "SglangConfig":
-        """Build a config equivalent to the legacy --prefill-num-servers flag."""
-        total_gpus = args.rollout_num_gpus
-        prefill_gpus = args.prefill_num_servers * args.rollout_num_gpus_per_engine
-        decode_gpus = total_gpus - prefill_gpus
-        assert decode_gpus > 0, f"No decode GPUs: total {total_gpus}, prefill {prefill_gpus}"
-        return SglangConfig(
-            models=[
-                ModelConfig(
-                    name="default",
-                    engine_groups=[
-                        EngineGroupConfig(worker_type="prefill", num_gpus=prefill_gpus),
-                        EngineGroupConfig(worker_type="decode", num_gpus=decode_gpus),
-                    ],
-                )
-            ]
-        )
-
-    @property
-    def has_pd_disaggregation(self) -> bool:
-        return any(m.has_pd_disaggregation for m in self.models)
-
-    @property
-    def total_num_gpus(self) -> int:
-        return sum(m.total_num_gpus for m in self.models)
 
 
 @dataclasses.dataclass
@@ -346,6 +199,7 @@ class RolloutServer:
     router_ip: str | None = None
     router_port: int | None = None
     model_name: str = "default"
+    update_weights: bool = True
 
     @property
     def engines(self):
@@ -514,18 +368,30 @@ class RolloutManager:
             return None
         return next(iter(self.servers.values()))
 
-    def _get_server(self, model_name: str | None = None) -> RolloutServer | None:
-        if model_name is None:
-            return self.server
-        return self.servers.get(model_name)
+    def _get_updatable_server(self) -> RolloutServer | None:
+        """Return the server with ``update_weights=True``.
+
+        When multiple updatable servers exist, returns the first one
+        (multi-model weight update is not yet supported).
+        """
+        for srv in self.servers.values():
+            if srv.update_weights:
+                return srv
+        return None
 
     @property
     def rollout_engines(self):
         """All node-0 engines across all servers / models."""
         return [e for srv in self.servers.values() for e in srv.engines]
 
-    def get_rollout_engines_and_lock(self, model_name: str | None = None):
-        srv = self._get_server(model_name)
+    def get_updatable_engines_and_lock(self):
+        """Return engines eligible for weight updates.
+
+        Returns engines from the first model that has
+        ``update_weights=True``.  Frozen models (reference, reward,
+        etc.) are automatically excluded.
+        """
+        srv = self._get_updatable_server()
         engines = srv.engines if srv else []
         gpu_counts = srv.engine_gpu_counts if srv else []
         gpu_offsets = srv.engine_gpu_offsets if srv else []
@@ -583,10 +449,14 @@ class RolloutManager:
     def onload_kv(self):
         self.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH])
 
-    def recover_rollout_engines(self, model_name: str | None = None):
-        """Restart any dead rollout engines and update num_new_engines for update_weights detection."""
+    def recover_updatable_engines(self):
+        """Restart any dead rollout engines and update num_new_engines for update_weights detection.
+
+        Recovers the updatable model (the one that receives weight
+        updates from training).
+        """
         self.health_monitoring_pause()
-        srv = self._get_server(model_name)
+        srv = self._get_updatable_server()
         if self.rollout_id == -1 or srv is None:
             engines = srv.engines if srv else []
             gpu_counts = srv.engine_gpu_counts if srv else []
@@ -602,9 +472,9 @@ class RolloutManager:
             srv.engine_gpu_offsets,
         )
 
-    def clear_num_new_engines(self, model_name: str | None = None):
+    def clear_updatable_num_new_engines(self):
         # when fault tolerance is not enabled, we need to manually clear num_new_engines after update_weights
-        srv = self._get_server(model_name)
+        srv = self._get_updatable_server()
         if srv:
             srv.num_new_engines = 0
 
@@ -1087,7 +957,11 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
             router_ip=router_ip,
             router_port=router_port,
             model_name=model_cfg.name,
+            update_weights=model_cfg.update_weights,
         )
+
+    # Expose per-model router info for custom rollout functions.
+    args.sglang_model_routers = {name: (srv.router_ip, srv.router_port) for name, srv in servers.items()}
 
     return servers
 

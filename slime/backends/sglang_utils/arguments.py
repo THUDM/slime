@@ -181,7 +181,7 @@ def sglang_parse_args():
     """
     Parse sglang server arguments independently using a separate ArgumentParser.
     Uses parse_known_args() to only consume sglang-related arguments from sys.argv,
-    allowing the remaining arguments to be parsed by megatron/fsdp separately.
+    allowing the remaining arguments to be parsed by megatron separately.
 
     Returns:
         argparse.Namespace: Parsed sglang arguments (all attributes prefixed with sglang_).

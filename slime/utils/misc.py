@@ -119,7 +119,6 @@ def group_by(iterable, key=None):
     return dict(ret)
 
 
-# TODO fsdp can also use this
 def chunk_named_params_by_size(named_params: Iterable[tuple[str, torch.Tensor]], chunk_size: int):
     return _chunk_by_size(
         named_params,
