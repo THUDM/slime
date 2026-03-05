@@ -1,0 +1,93 @@
+diff --git a/src/megatron/bridge/models/conversion/param_mapping.py b/src/megatron/bridge/models/conversion/param_mapping.py
+index dc7d0be..8156826 100644
+--- a/src/megatron/bridge/models/conversion/param_mapping.py
++++ b/src/megatron/bridge/models/conversion/param_mapping.py
+@@ -1088,15 +1088,19 @@ class AutoMapping(MegatronParamMapping[torch.Tensor]):
+             "ColumnParallelLinear",
+             "TEColumnParallelLinear",
+             "TELayerNormColumnParallelLinear",
++            "MindSpeedTELayerNormColumnParallelLinear",
+             "TEColumnParallelGroupedLinear",
++            "MindSpeedTEColumnParallelGroupedLinear",
+             "VocabParallelEmbedding",
+             "DotProductAttention",  # for attention sink only
+             "TEDotProductAttention",  # for attention sink only
++            "MindSpeedTEDotProductAttention",
+         },
+         "row": {
+             "RowParallelLinear",
+             "TERowParallelLinear",
+             "TERowParallelGroupedLinear",
++            "MindSpeedTERowParallelGroupedLinear",
+         },
+         "replicated": {
+             # Normalization layers
+@@ -1164,7 +1168,7 @@ class AutoMapping(MegatronParamMapping[torch.Tensor]):
+         # Handle fused modules like TELayerNormColumnParallelLinear
+         # These modules have both column-parallel weights (weight, bias)
+         # and replicated layer norm weights (layer_norm_weight, layer_norm_bias)
+-        if module_type == "TELayerNormColumnParallelLinear":
++        if module_type == "TELayerNormColumnParallelLinear" or module_type == "MindSpeedTELayerNormColumnParallelLinear":
+             # Check the actual parameter name to determine the correct parallelism type
+             if self.megatron_param and (
+                 self.megatron_param.endswith("layer_norm_weight") or self.megatron_param.endswith("layer_norm_bias")
+@@ -1195,7 +1199,7 @@ class AutoMapping(MegatronParamMapping[torch.Tensor]):
+             return "replicated"
+ 
+         # Check parallel_mode for TELinear
+-        if module_type == "TELinear":
++        if module_type == "TELinear" or module_type == "MindSpeedTELinear":
+             if module.parallel_mode == "column":
+                 return "column"
+             elif module.parallel_mode == "row":
+diff --git a/src/megatron/bridge/models/qwen_vl/modelling_qwen3_vl/transformer_block.py b/src/megatron/bridge/models/qwen_vl/modelling_qwen3_vl/transformer_block.py
+index 3f64d8d..9dadc4b 100644
+--- a/src/megatron/bridge/models/qwen_vl/modelling_qwen3_vl/transformer_block.py
++++ b/src/megatron/bridge/models/qwen_vl/modelling_qwen3_vl/transformer_block.py
+@@ -71,8 +71,9 @@ class Qwen3VLTransformerBlock(TransformerBlock):
+                 context_mask,
+                 rotary_pos_emb,
+                 visual_pos_masks,
+-                deepstack_visual_embeds,
++                *deepstack_visual_embeds_args,
+             ):
++                deepstack_visual_embeds = list(deepstack_visual_embeds_args) if deepstack_visual_embeds_args else None
+                 for index in range(start, end):
+                     layer = self._get_layer(index)
+                     inner_fp8_context = (
+@@ -103,6 +104,8 @@ class Qwen3VLTransformerBlock(TransformerBlock):
+                 return hidden_states, context
+ 
+             return custom_forward
++        
++        deepstack_visual_embeds_tuple = tuple(deepstack_visual_embeds) if deepstack_visual_embeds else ()
+ 
+         def checkpoint_handler(forward_func):
+             """Determines whether to use the `te_checkpoint` or `tensor_parallel.checkpoint`"""
+@@ -118,7 +121,7 @@ class Qwen3VLTransformerBlock(TransformerBlock):
+                     context_mask,
+                     rotary_pos_emb,
+                     visual_pos_masks,
+-                    deepstack_visual_embeds,
++                    *deepstack_visual_embeds_tuple,
+                 )
+             else:
+                 return tensor_parallel.checkpoint(
+@@ -130,7 +133,7 @@ class Qwen3VLTransformerBlock(TransformerBlock):
+                     context_mask,
+                     rotary_pos_emb,
+                     visual_pos_masks,
+-                    deepstack_visual_embeds,
++                    *deepstack_visual_embeds_tuple,
+                 )
+ 
+         if self.config.recompute_method == "uniform":
+@@ -169,7 +172,7 @@ class Qwen3VLTransformerBlock(TransformerBlock):
+                         context_mask,
+                         rotary_pos_emb,
+                         visual_pos_masks,
+-                        deepstack_visual_embeds,
++                        *deepstack_visual_embeds_tuple,
+                     )
+         else:
+             raise ValueError("Invalid activation recompute method.")

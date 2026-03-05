@@ -1,0 +1,170 @@
+diff --git a/slime/backends/megatron_utils/model_provider.py b/slime/backends/megatron_utils/model_provider.py
+index 33fc9a99..5b128a68 100644
+--- a/slime/backends/megatron_utils/model_provider.py
++++ b/slime/backends/megatron_utils/model_provider.py
+@@ -98,6 +98,64 @@ def get_model_provider_func(
+             if hasattr(provider, key):
+                 continue
+             setattr(provider, key, value)
++
++        if role ==  'critic':
++            from megatron.bridge.models.conversion.model_bridge import MegatronModelBridge
++            from slime_plugins.patch.critic_patch import load_weights_hf_to_megatron_wrapper
++            _origin_load_weights_hf_to_megatron = MegatronModelBridge.load_weights_hf_to_megatron
++            MegatronModelBridge.load_weights_hf_to_megatron = load_weights_hf_to_megatron_wrapper
++
++            _original_provide = provider.provide
++
++            def provide_wrapper(pre_process=None, post_process=None, vp_stage=None):
++                """
++                Provide a Qwen3VL MoE model instance with vision and language components.
++                """
++                from megatron.bridge.models.qwen_vl.modelling_qwen3_vl.model import Qwen3VLModel
++                language_transformer_config = provider
++
++                # Create vision transformer config - placeholder for future use
++                # vision_transformer_config = deepcopy(self)
++                hf_config = provider.vision_config
++
++                language_transformer_layer_spec = get_gpt_layer_with_transformer_engine_spec(
++                    num_experts=provider.num_moe_experts,
++                    moe_grouped_gemm=True,
++                    qk_layernorm=provider.qk_layernorm,
++                    fp8=False,
++                    normalization="RMSNorm",
++                )
++
++                # reuse Qwen3VLModel for MoE model but replace the language model with MoE language model
++                model = Qwen3VLModel(
++                    language_transformer_config=language_transformer_config,
++                    language_transformer_layer_spec=language_transformer_layer_spec,
++                    vision_transformer_config=hf_config,
++                    pre_process=pre_process,
++                    post_process=post_process,
++                )
++
++                if role == "critic" and post_process:
++                    from slime.backends.megatron_utils.model_provider import LinearForLastLayer
++                    from megatron.core.utils import unwrap_model
++                    from megatron.core.transformer.transformer_config import TransformerConfig
++
++                    model.language_model.output_layer = LinearForLastLayer(input_size=provider.hidden_size, output_size=1, config=provider).to(
++                        device=model.language_model.output_layer.weight.device,
++                        dtype=model.language_model.output_layer.weight.dtype,
++                    )
++
++                # Apply freeze options if any are enabled for fine-tuning
++                if provider.freeze_language_model or provider.freeze_vision_model or provider.freeze_vision_projection:
++                    model.freeze(
++                        freeze_language_model=provider.freeze_language_model,
++                        freeze_vision_model=provider.freeze_vision_model,
++                        freeze_vision_projection=provider.freeze_vision_projection,
++                    )
++
++                return model
++            provider.provide = provide_wrapper
++            
+         provider.finalize()
+         return provider.provide
+ 
+diff --git a/slime_plugins/patch/critic_patch.py b/slime_plugins/patch/critic_patch.py
+new file mode 100644
+index 00000000..1f4e1bc6
+--- /dev/null
++++ b/slime_plugins/patch/critic_patch.py
+@@ -0,0 +1,94 @@
++import torch
++from typing import (
++    List,
++    Mapping,
++    TypeVar,
++    Union,
++)
++from megatron.core.transformer.module import MegatronModule
++HFPreTrained = TypeVar("HFPreTrained")
++MegatronModel = TypeVar("MegatronModel", bound=MegatronModule)
++
++
++def load_weights_hf_to_megatron_wrapper(
++        self, hf_pretrained: HFPreTrained, megatron_model: Union[MegatronModel, List[MegatronModel]]
++    ) -> List[MegatronModel]:
++        """Load HuggingFace weights into Megatron models.
++
++        This method orchestrates the complete weight loading process from HuggingFace
++        format to Megatron's distributed format. It builds a conversion task and
++        executes it with proper progress tracking and error handling.
++
++        The actual weight transformations and distribution are delegated to the
++        appropriate MegatronParamMapping instances based on the state mappings.
++
++        Args:
++            hf_pretrained (HFPreTrained): HuggingFace model or state source containing the
++                weights to load.
++            megatron_model (Union[MegatronModel, List[MegatronModel]]): Megatron model instance
++                or list of model instances (one per virtual pipeline stage).
++
++        Returns:
++            List[MegatronModel]: The input megatron_model as a list with loaded weights.
++
++        Process:
++        1. Build a task mapping each Megatron parameter to its source
++        2. For each parameter in the task:
++            - Fetch source weights from HuggingFace state
++            - Apply format transformation via the param mapping
++            - Distribute to appropriate TP/PP ranks
++            - Copy into the Megatron parameter
++
++        Example:
++            .. code-block:: python
++
++                hf_model = PreTrainedCausalLM.from_pretrained("gpt2")
++                megatron_model = create_megatron_model()  # Single model or list
++                bridge.load_weights_hf_to_megatron(hf_model, megatron_model)
++
++        Note:
++            Progress is shown only on rank 0 to avoid cluttered output in
++            distributed environments.
++
++        Raises:
++            ValueError: If hf_pretrained doesn't have state attribute or if weight shapes don't match.
++            AttributeError: If required HF weights are missing.
++        """
++        if not isinstance(megatron_model, list):
++            megatron_model = [megatron_model]
++
++        hf_to_megatron_tasks = self.build_conversion_tasks(hf_pretrained, megatron_model)
++        hf_state_dict: Mapping[str, torch.Tensor] = hf_pretrained.state if hasattr(hf_pretrained, "state") else {}
++
++        description = f"Loading from {hf_pretrained.model_name_or_path}"
++        for task in self._with_progress_tracking(hf_to_megatron_tasks, description):
++            # None means megatron module not on current rank, skip if this task is not going to happen
++            if task.megatron_module is None:
++                continue
++            # 1) Fetch source tensor(s) from HF state dict
++            hf_weights = self.maybe_modify_loaded_hf_weight(task.mapping.hf_param, hf_state_dict)
++
++            # 2) Delegate conversion & distribution to the bridge
++            converted_weights = task.mapping.hf_to_megatron(hf_weights, task.megatron_module)
++
++            # 3) Copy into Megatron param if this rank received a shard
++            if converted_weights is not None:
++                # Assert that param_weight is not None for HF->Megatron tasks
++                assert task.param_weight is not None, "param_weight is required for HF->Megatron conversion"
++
++                if converted_weights.shape != task.param_weight.shape and task.param_name == 'language_model.output_layer.weight':
++                    continue
++
++                # Check shape compatibility before copying
++                if converted_weights.shape != task.param_weight.shape:
++                    raise ValueError(
++                        f"Shape mismatch for megatron param {task.mapping.megatron_param}:\n"
++                        f"  Expected shape: {task.param_weight.shape}\n"
++                        f"  Got shape: {converted_weights.shape}\n"
++                        f"  Bridge type: {type(task.mapping).__name__}\n"
++                        f"  HF mapping: {task.mapping.hf_param}"
++                    )
++                task.param_weight.data.copy_(converted_weights)
++
++        self._broadcast_shared_embeddings(megatron_model)
++        return megatron_model
+\ No newline at end of file
