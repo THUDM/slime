@@ -52,7 +52,7 @@
     <link rel="search" title="搜索" href="../../search.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 03 月 04 日"/>
+    <meta name="docbuild:last-update" content="2026 年 03 月 07 日"/>
   </head>
   
   
@@ -442,7 +442,10 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#data-preparation-for-sft-training">Data Preparation (For SFT Training)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reproduce">Reproduce</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#supported-models">Supported Models</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#supported-models">Supported Models</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#qwen3-5-series">Qwen3.5 Series</a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#notes">Notes</a><ul class="visible nav section-nav flex-column">
@@ -468,10 +471,17 @@ document.write(`
 <p>Supported models:</p>
 <ul class="simple">
 <li><p>Qwen2.5-VL</p></li>
-<li><p>Qwen3-VL (Dense and Moe)</p></li>
+<li><p>Qwen3-VL (Dense and MoE)</p></li>
+<li><p>Qwen3.5 (Dense and MoE)</p></li>
 </ul>
 <p>Note: Please make sure the cudnn version in the environment is 9.16.0.29 to prevent severe performance regression in conv3d in torch 2.9 mentioned in https://github.com/pytorch/pytorch/issues/168167. Otherwise, you can reinstall cudnn with:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>nvidia-cudnn-cu12<span class="o">==</span><span class="m">9</span>.16.0.29
+</pre></div>
+</div>
+<p><strong>Important:</strong> We use <a class="reference external" href="https://github.com/NVIDIA-NeMo/Megatron-Bridge">Megatron Bridge</a> to support multimodal models. However, not all Megatron arguments are passed through to Megatron Bridge — you may need to set some manually <a class="reference external" href="https://github.com/THUDM/slime/blob/de84e10d468dcb726e1199fd6bd16aa9538aed09/slime/backends/megatron_utils/model_provider.py#L89">here</a> (currently only parallelization-related arguments are passed). For example, for Qwen3-VL-30B-A3B you may need to add:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="n">provider</span><span class="o">.</span><span class="n">moe_aux_loss_coeff</span> <span class="o">=</span> <span class="n">args</span><span class="o">.</span><span class="n">moe_aux_loss_coeff</span>
+<span class="n">provider</span><span class="o">.</span><span class="n">freeze_language_model</span> <span class="o">=</span> <span class="kc">False</span>
+<span class="n">provider</span><span class="o">.</span><span class="n">freeze_vision_model</span> <span class="o">=</span> <span class="kc">False</span>
 </pre></div>
 </div>
 <p align="center">
@@ -567,6 +577,11 @@ document.write(`
 <li><p><code class="docutils literal notranslate"><span class="pre">Qwen3-VL-30B-A3B-Thinking</span></code></p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">Qwen3-VL-235B-A22B-Thinking</span></code></p></li>
 </ul>
+<section id="qwen3-5-series">
+<h4>Qwen3.5 Series<a class="headerlink" href="#qwen3-5-series" title="链接到此标题。">#</a></h4>
+<p>We provide an <a class="reference internal" href="#./run_geo3k_qwen35.sh"><span class="xref myst">example</span></a> for Qwen3.5-35B-A3B. To support other Qwen3.5 models, add a model config file in <code class="docutils literal notranslate"><span class="pre">scripts/models/</span></code> and update the model name and config path in the script accordingly.</p>
+<p>Since Megatron does not currently support packing for GDN, you must set <code class="docutils literal notranslate"><span class="pre">--qkv-format</span> <span class="pre">bshd</span></code>, <code class="docutils literal notranslate"><span class="pre">--micro-batch-size</span> <span class="pre">1</span></code>, and remove <code class="docutils literal notranslate"><span class="pre">--use-dynamic-batch-size</span></code>.</p>
+</section>
 </section>
 </section>
 <section id="notes">
@@ -623,7 +638,10 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#data-preparation-for-sft-training">Data Preparation (For SFT Training)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#reproduce">Reproduce</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#supported-models">Supported Models</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#supported-models">Supported Models</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#qwen3-5-series">Qwen3.5 Series</a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#notes">Notes</a><ul class="visible nav section-nav flex-column">
@@ -665,7 +683,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 03 月 04 日.
+  最后更新于 2026 年 03 月 07 日.
   <br/>
 </p>
   </div>
