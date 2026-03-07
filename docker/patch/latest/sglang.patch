@@ -2489,6 +2489,19 @@ index d641826e3..3abc39ef3 100644
              hidden_states, residual = layer(
                  positions,
                  hidden_states,
+diff --git a/python/sglang/srt/multimodal/processors/qwen_vl.py b/python/sglang/srt/multimodal/processors/qwen_vl.py
+index 4395654e4..f9b5ea4ab 100644
+--- a/python/sglang/srt/multimodal/processors/qwen_vl.py
++++ b/python/sglang/srt/multimodal/processors/qwen_vl.py
+@@ -317,7 +317,7 @@ class QwenVLImageProcessor(SGLangBaseProcessor):
+         **kwargs,
+     ):
+         entry_time = time.perf_counter()
+-        base_output = self.load_mm_data(
++        base_output = self.legacy_load_mm_data(
+             prompt=input_text,
+             image_data=image_data,
+             video_data=request_obj.video_data,
 diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
 index b080aeb16..957a613fa 100644
 --- a/python/sglang/srt/server_args.py
