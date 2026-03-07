@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 
-from ..megatron_to_hf import convert_to_hf
+from ..megatron_to_hf import convert_to_hf, postprocess_hf_param
 from .common import all_gather_param, named_params_and_buffers
 
 
@@ -98,6 +98,28 @@ class UpdateWeightFromDistributed:
                 )
         dist.barrier(group=get_gloo_group())
 
+        if getattr(self.args, "megatron_to_hf_mode", "raw") == "bridge":
+            self._update_weights_with_bridge()
+        else:
+            self._update_weights_raw()
+
+        dist.barrier(group=get_gloo_group())
+        if dist.get_rank() == 0:
+            # int4/fp4 post_process
+            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
+                post_process_weights(
+                    restore_weights_before_load=False,
+                    post_process_quantization=True,
+                    rollout_engines=self.rollout_engines,
+                )
+            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
+        dist.barrier(group=get_gloo_group())
+
+    def _update_weights_raw(self) -> None:
+        """
+        manual TP gather + convert_to_hf.
+        Non-expert (TP) → expert (EP) separately.
+        """
         buffer_size = 0
         converted_named_tensors = []
         # non expert params
@@ -127,17 +149,49 @@ class UpdateWeightFromDistributed:
         if named_tensors:
             self._update_expert_bucket_weights_from_distributed(named_tensors, pbar=pbar)
 
-        dist.barrier(group=get_gloo_group())
-        if dist.get_rank() == 0:
-            # int4/fp4 post_process
-            if self.quantization_config and self.quantization_config["quant_method"] in ["compressed-tensors"]:
-                post_process_weights(
-                    restore_weights_before_load=False,
-                    post_process_quantization=True,
-                    rollout_engines=self.rollout_engines,
+    def _update_weights_with_bridge(self) -> None:
+        """
+        Bridge mode: let Bridge handle PP/TP/EP gather + conversion.
+        Only PP source rank (DP=TP=0) broadcasts to rollout engines.
+        """
+        from slime.utils import megatron_bridge_utils
+
+        pbar = tqdm(desc=f"[{self._group_name}] Update weights (bridge)") if self._is_pp_src_rank else None
+
+        buffer_size = 0
+        converted_named_tensors = []
+
+        bridge = megatron_bridge_utils.get_bridge(self.args.hf_checkpoint)
+        with megatron_bridge_utils.patch_megatron_model(self.model):
+            # Iterate through weights - all ranks participate in each iteration
+            for hf_name, tensor, megatron_name in bridge.export_hf_weights(
+                self.model,
+                cpu=False,
+                show_progress=False,
+            ):
+                # Only PP source rank accumulates and broadcasts
+                if not self._is_pp_src_rank:
+                    continue
+
+                tensor = postprocess_hf_param(
+                    args=self.args,
+                    megatron_param_name=megatron_name,
+                    hf_param_name=hf_name,
+                    param=tensor,
                 )
-            ray.get([engine.continue_generation.remote() for engine in self.rollout_engines])
-        dist.barrier(group=get_gloo_group())
+
+                tensor_size = tensor.numel() * tensor.element_size()
+
+                if buffer_size + tensor_size > self.args.update_weight_buffer_size and converted_named_tensors:
+                    self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
+                    converted_named_tensors = []
+                    buffer_size = 0
+
+                converted_named_tensors.append((hf_name, tensor))
+                buffer_size += tensor_size
+
+        if self._is_pp_src_rank and converted_named_tensors:
+            self._update_bucket_weights_from_distributed(converted_named_tensors, pbar=pbar)
 
     def _update_weight_from_distributed(
         self,
