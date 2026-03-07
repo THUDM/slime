@@ -11,19 +11,30 @@ index 6fbd1db82..f80ec11bb 100644
          ]:
              self.hf_config.architectures[0] = "DeepseekV3ForCausalLMNextN"
 diff --git a/python/sglang/srt/disaggregation/common/conn.py b/python/sglang/srt/disaggregation/common/conn.py
-index 67fe82ad6..67f564f04 100644
+index 67fe82ad6..2ef25c49b 100644
 --- a/python/sglang/srt/disaggregation/common/conn.py
 +++ b/python/sglang/srt/disaggregation/common/conn.py
-@@ -116,10 +116,18 @@ class CommonKVManager(BaseKVManager):
+@@ -24,6 +24,7 @@ from sglang.srt.disaggregation.base.conn import (
+ from sglang.srt.disaggregation.utils import DisaggregationMode
+ from sglang.srt.distributed import get_pp_group
+ from sglang.srt.layers.dp_attention import (
++    get_attention_cp_size,
+     get_attention_dp_rank,
+     get_attention_dp_size,
+     get_attention_tp_rank,
+@@ -116,10 +117,21 @@ class CommonKVManager(BaseKVManager):
  
          bootstrap_server_url = f"{host}:{self.bootstrap_port}"
          url = f"http://{bootstrap_server_url}/route"
 +        route_attn_tp_rank = self.attn_tp_rank
 +        # In prefill CP mode, attention TP rank is flattened to 0, but requests are
 +        # still routed by engine rank; register by engine rank to preserve all routes.
++        # Only apply this when actual CP is in use (cp_size > 1), not in pure DP
++        # attention mode (e.g. EP64) where each rank has its own dp_group already.
 +        if (
 +            self.disaggregation_mode == DisaggregationMode.PREFILL
 +            and self.attn_tp_size == 1
++            and get_attention_cp_size() > 1
 +        ):
 +            route_attn_tp_rank = self.kv_args.engine_rank
          payload = {
@@ -34,7 +45,7 @@ index 67fe82ad6..67f564f04 100644
              "attn_dp_size": self.attn_dp_size,
              "attn_dp_rank": self.attn_dp_rank,
              "pp_size": self.pp_size,
-@@ -333,6 +341,10 @@ class CommonKVReceiver(BaseKVReceiver):
+@@ -333,6 +345,10 @@ class CommonKVReceiver(BaseKVReceiver):
              self.required_dst_info_num = (
                  self.kv_mgr.attn_tp_size // self.prefill_attn_tp_size
              )
@@ -45,7 +56,7 @@ index 67fe82ad6..67f564f04 100644
              self.required_prefill_response_num = 1 * (
                  self.prefill_pp_size // self.kv_mgr.pp_size
              )
-@@ -357,6 +369,11 @@ class CommonKVReceiver(BaseKVReceiver):
+@@ -357,6 +373,11 @@ class CommonKVReceiver(BaseKVReceiver):
              # multiple connections in the connection pool and have to send dummy requests to other prefill ranks,
              # or the KVPoll will never be set correctly
              self.target_tp_rank = self.target_tp_ranks[0]
@@ -57,7 +68,15 @@ index 67fe82ad6..67f564f04 100644
              self.required_dst_info_num = 1
              if self.kv_mgr.is_mla_backend:
                  self.required_prefill_response_num = (
-@@ -610,8 +627,12 @@ class CommonKVBootstrapServer(BaseKVBootstrapServer):
+@@ -422,6 +443,7 @@ class CommonKVReceiver(BaseKVReceiver):
+                             f"Could not fetch bootstrap info for engine rank: {self.kv_mgr.kv_args.engine_rank} and target_dp_group: {self.target_dp_group} and target_pp_rank {target_pp_rank}",
+                         )
+                         self.kv_mgr.update_status(self.bootstrap_room, KVPoll.Failed)
++                        self.bootstrap_infos = None
+                         return
+ 
+             self.bootstrap_infos = bootstrap_infos
+@@ -610,8 +632,12 @@ class CommonKVBootstrapServer(BaseKVBootstrapServer):
              and int(target_dp_group) == -1
              and int(target_pp_rank) == -1
          ):
@@ -219,7 +238,7 @@ index 1d8baf002..1672de78d 100644
  
          if not hasattr(self, "polling_count"):
 diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
-index d0d4efd95..e5e5f1b5f 100644
+index d0d4efd95..fc4eef7b9 100644
 --- a/python/sglang/srt/disaggregation/mooncake/conn.py
 +++ b/python/sglang/srt/disaggregation/mooncake/conn.py
 @@ -260,6 +260,19 @@ class MooncakeKVManager(CommonKVManager):
@@ -357,6 +376,18 @@ index d0d4efd95..e5e5f1b5f 100644
                  elif status == KVPoll.Failed:
                      self.record_failure(
                          bootstrap_room,
+@@ -1266,7 +1329,10 @@ class MooncakeKVReceiver(CommonKVReceiver):
+         super().__init__(mgr, bootstrap_addr, bootstrap_room, prefill_dp_rank)
+ 
+         self.kv_mgr.addr_to_rooms_tracker[self.bootstrap_addr].add(self.bootstrap_room)
+-        self.kv_mgr.update_status(self.bootstrap_room, KVPoll.WaitingForInput)
++        # Only transition to WaitingForInput if bootstrap succeeded;
++        # if super().__init__() set status to Failed, do not override it.
++        if self.bootstrap_infos is not None:
++            self.kv_mgr.update_status(self.bootstrap_room, KVPoll.WaitingForInput)
+ 
+     def _register_kv_args(self):
+         for bootstrap_info in self.bootstrap_infos:
 diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
 index fbc801635..21fc1ce0d 100644
 --- a/python/sglang/srt/disaggregation/prefill.py
@@ -2082,7 +2113,7 @@ index fa08bb66a..fa539315c 100644
                  prefix_lens,
                  seq_lens,
 diff --git a/python/sglang/srt/mem_cache/hiradix_cache.py b/python/sglang/srt/mem_cache/hiradix_cache.py
-index d7cd472a9..1207ab199 100644
+index d7cd472a9..81fae740f 100644
 --- a/python/sglang/srt/mem_cache/hiradix_cache.py
 +++ b/python/sglang/srt/mem_cache/hiradix_cache.py
 @@ -76,6 +76,7 @@ class HiRadixCache(RadixCache):
@@ -2114,6 +2145,30 @@ index d7cd472a9..1207ab199 100644
              node = node.parent
          return delta
  
+@@ -827,6 +827,7 @@ class HiRadixCache(RadixCache):
+         self._update_host_leaf_status(node)
+         # update leaf status for the parent because the node is evicted
+         self._update_leaf_status(node.parent)
++        self._update_host_leaf_status(node.parent)
+         return num_evicted
+ 
+     def _evict_regular(self, node: TreeNode):
+@@ -1330,6 +1331,7 @@ class HiRadixCache(RadixCache):
+                     self._update_host_leaf_status(node)
+                     # update parent status as a new leaf is added into device
+                     self._update_leaf_status(node.parent)
++                    self._update_host_leaf_status(node.parent)
+                 else:
+                     self._inc_hit_count(node, chunked)
+                     total_prefix_length += prefix_len
+@@ -1345,6 +1347,7 @@ class HiRadixCache(RadixCache):
+                     self._update_host_leaf_status(new_node)
+                     # update parent status as a new leaf is added into device
+                     self._update_leaf_status(new_node.parent)
++                    self._update_host_leaf_status(new_node.parent)
+                 else:
+                     self._inc_hit_count(new_node, chunked)
+                     total_prefix_length += prefix_len
 diff --git a/python/sglang/srt/mem_cache/memory_pool.py b/python/sglang/srt/mem_cache/memory_pool.py
 index 1d917137c..669e5c518 100644
 --- a/python/sglang/srt/mem_cache/memory_pool.py
