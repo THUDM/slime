@@ -36,11 +36,7 @@ setup(
     packages=find_packages(include=["slime*", "slime_plugins*"]),
     include_package_data=True,
     install_requires=_fetch_requirements("requirements.txt"),
-    extras_require={
-        "fsdp": [
-            "torch>=2.0",
-        ]
-    },
+    extras_require={},
     python_requires=">=3.10",
     classifiers=[
         "Programming Language :: Python :: 3.10",

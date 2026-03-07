@@ -35,7 +35,7 @@ def train(args):
     if args.num_rollout == 0 and args.eval_interval is not None:
         ray.get(rollout_manager.eval.remote(rollout_id=0))
 
-    def offload_train():
+    def offload_train(rollout_id):
         if args.offload_train:
             if args.use_critic:
                 critic_model.offload()
@@ -82,7 +82,7 @@ def train(args):
         if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
             save(rollout_id)
 
-        offload_train()
+        offload_train(rollout_id)
         if args.offload_rollout:
             ray.get(rollout_manager.onload_weights.remote())
         actor_model.update_weights()

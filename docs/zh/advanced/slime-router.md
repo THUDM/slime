@@ -91,3 +91,48 @@ SGLang Model Gateway 是一个高性能 Rust router，面向大规模 inference 
 - 当你需要 R3 或 radix-tree cache 时，使用 SlimeRouter
 - 其他情况使用 SGLang Model Gateway（推荐默认选项）
 
+---
+
+## 4. 多轮 Agent 的会话亲和性路由
+
+当使用 SGLang Model Gateway 的一致性哈希路由策略时，slime 会自动为每个 rollout session 分配唯一的 session ID，并将其作为路由键来实现会话亲和性。
+
+### 什么是会话亲和性？
+
+会话亲和性（Session Affinity，也称为粘性会话）确保属于同一对话或 agent session 的所有请求都被路由到相同的后端 worker。这对以下场景有益：
+
+- **多轮对话**：保持相同 worker 可以提高前缀缓存命中率
+- **多 agent 系统**：确保 agent 状态一致性和更好的资源局部性
+- **调试**：更容易追踪和调试特定会话
+
+### 工作原理
+
+当 rollout 系统生成样本时，每个样本都会被分配一个唯一的 `session_id`。这个 ID 会：
+
+1. 使用 UUID 为每个样本自动生成
+2. 存储在 `sample.session_id` 字段中
+3. 当 router policy 为 `consistent_hashing` 时，作为 `X-SMG-Routing-Key` header 传递
+
+SGLang Model Gateway 的一致性哈希策略会使用这个路由键，确定性地为所有具有相同 session ID 的请求选择相同的 worker。
+
+### 配置方法
+
+启用会话亲和性路由只需在 slime 中配置 router policy 参数：
+
+```bash
+--sglang-router-policy consistent_hashing
+```
+
+Slime 会自动启动 SGLang Model Gateway 并使用一致性哈希策略。
+
+> **注意**：如果遇到 `consistent_hashing` policy 不可用的错误，请升级 sglang-router：
+> ```bash
+> pip install -U sglang-router
+> ```
+
+### 注意事项
+
+- 每个样本都有自己独立的 session ID
+- 同一 group 中的不同样本可能会被路由到不同的 worker
+- 同一样本的后续轮次会保持相同的 session ID
+- 目前该功能只适用于 SGLang Model Gateway

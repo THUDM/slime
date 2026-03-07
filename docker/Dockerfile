@@ -1,4 +1,4 @@
-ARG SGLANG_IMAGE_TAG=nightly-dev-20260107-dce8b060
+ARG SGLANG_IMAGE_TAG=v0.5.9
 FROM slimerl/sglang:${SGLANG_IMAGE_TAG} AS sglang
 
 # ======================================== Arguments =============================================
