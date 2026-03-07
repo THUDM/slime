@@ -48,6 +48,12 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
 
         token_ids, loss_mask = MASK_GENERATOR.get_loss_mask(messages, tools=tools)
 
+        max_len = getattr(args, "rollout_max_context_len", None)
+        if max_len is not None and len(token_ids) > max_len:
+            logger.warning(f"sft_rollout: truncating sequence from {len(token_ids)} to {max_len} tokens")
+            token_ids = token_ids[:max_len]
+            loss_mask = loss_mask[:max_len]
+
         response_length = MASK_GENERATOR.get_response_lengths([loss_mask])[0]
 
         sample.tokens = token_ids
