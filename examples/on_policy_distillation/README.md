@@ -28,7 +28,7 @@ This example shows how to run **on-policy distillation (OPD)** using slime. A sm
 
 ## Components
 
-- `on_policy_distillation.py` implements (for SGLang mode):
+- `slime/rollout/on_policy_distillation.py` implements (for SGLang mode):
   - `reward_func` calls the teacher server (via `args.rm_url`) with every sample to obtain token-level logprobs.
   - `post_process_rewards` trims the teacher logprobs to the generated response span and writes the tensors back to each `Sample` to compute advantages.
 - `run-qwen3-8B-opd.sh` launches an SGLang teacher server, then submits a Ray job that runs `train.py`.

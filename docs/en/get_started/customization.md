@@ -40,7 +40,7 @@ Below is a summary of all available customization interfaces and their purposes.
 
 **Signature**:
 ```python
-async def generate_rollout(args, rollout_id, *, evaluation=False) -> RolloutFnTrainOutput | RolloutFnEvalOutput
+def generate_rollout(args, rollout_id, data_source, evaluation=False) -> RolloutFnTrainOutput | RolloutFnEvalOutput
 ```
 
 **Use Cases**:
@@ -140,7 +140,7 @@ class DynamicFilterOutput:
 
 **Signature**:
 ```python
-def buffer_filter(samples: list[list[Sample]]) -> list[list[Sample]]
+def buffer_filter(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]
 ```
 
 **Use Cases**:
@@ -177,7 +177,7 @@ def filter_function(args, samples: list[Sample]) -> None
 
 **Signature**:
 ```python
-def process_function(args, samples: list[list[Sample]]) -> None
+def process_function(args, samples: list[list[Sample]], data_source) -> None
 ```
 
 **Use Cases**:
@@ -421,3 +421,41 @@ Stabilize MoE RL training by recording and replaying expert routing decisions to
 | `--use-rollout-routing-replay` | R3: Replay routing from rollout during training. **Requires `--use-slime-router`**. ([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
 
 For detailed explanation of R3 and SlimeRouter, see [Slime Router](../advanced/slime-router.md).
+
+## Testing Custom Function Paths
+
+slime also provides CPU-only contract tests for customization interfaces. These tests resolve components through import-path strings, so they can validate both built-in hooks and user-defined implementations passed through the same CLI arguments used by training.
+
+The tests live under `tests/plugin_contracts/` and are grouped by hook shape:
+
+- `tests/plugin_contracts/test_plugin_rollout_contracts.py`
+  Covers `--rollout-function-path`
+- `tests/plugin_contracts/test_plugin_generate_contracts.py`
+  Covers `--custom-generate-function-path`
+- `tests/plugin_contracts/test_plugin_path_loading_contracts.py`
+  Covers `--eval-function-path`, `--custom-rm-path`, `--dynamic-sampling-filter-path`, `--buffer-filter-path`, `--data-source-path`, `--rollout-sample-filter-path`, and `--rollout-all-samples-process-path`
+- `tests/plugin_contracts/test_plugin_runtime_hook_contracts.py`
+  Covers `--custom-rollout-log-function-path`, `--custom-eval-rollout-log-function-path`, `--custom-reward-post-process-path`, `--custom-convert-samples-to-train-data-path`, and `--rollout-data-postprocess-path`
+
+Run all customization contract tests locally:
+
+```bash
+python -m pytest \
+  tests/plugin_contracts/test_plugin_rollout_contracts.py \
+  tests/plugin_contracts/test_plugin_generate_contracts.py \
+  tests/plugin_contracts/test_plugin_path_loading_contracts.py \
+  tests/plugin_contracts/test_plugin_runtime_hook_contracts.py
+```
+
+Each test file can also be executed directly with `python tests/plugin_contracts/<file>.py`, which keeps them compatible with `run-ci-changed`.
+
+A dedicated `run-ci-plugin-contracts` CI label is also available. Adding it to a PR triggers all four contract test files in parallel (no GPU required).
+
+For user-defined implementations, you can either export environment variables such as `SLIME_CONTRACT_ROLLOUT_FUNCTION_PATH` and `SLIME_CONTRACT_CUSTOM_RM_PATH`, or pass overrides directly when running a test file, for example:
+
+```bash
+python tests/plugin_contracts/test_plugin_rollout_contracts.py \
+  --rollout-function-path my_project.custom_rollout.generate_rollout
+```
+
+To validate your own custom implementation, replace the plugin paths used in these tests with your module path and keep the same assertions on signatures, return structure, and side effects.

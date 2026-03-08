@@ -58,12 +58,7 @@ class TrainRayActor(RayActor):
         local_rank = int(os.environ.get("LOCAL_RANK", 0))
         torch.cuda.set_device(f"cuda:{local_rank}")
 
-        # Use hybrid backend when FSDP CPU offload is enabled with a CPU backend
         backend = args.distributed_backend
-        if getattr(args, "fsdp_cpu_offload", False) and getattr(args, "fsdp_cpu_backend", None):
-            cpu_backend = args.fsdp_cpu_backend
-            backend = f"cpu:{cpu_backend},cuda:{args.distributed_backend}"
-            logger.info(f"FSDP CPU offload enabled, using hybrid backend: {backend}")
 
         dist.init_process_group(
             backend=backend,
@@ -97,6 +92,8 @@ class TrainRayActor(RayActor):
             logger.info(f"Warning: Failed to set NUMA affinity: {e}")
 
     def clear_memory(self):
+        if self.args.debug_rollout_only:
+            return
         print_memory("before TrainRayActor.clear_memory")
         clear_memory()
         print_memory("after TrainRayActor.clear_memory")
@@ -131,5 +128,5 @@ class TrainRayActor(RayActor):
 
     def set_rollout_manager(self, rollout_manager):
         self.rollout_manager = rollout_manager
-        if self.args.rank == 0:
+        if not self.args.debug_rollout_only and self.args.rank == 0:
             ray.get(self.rollout_manager.set_train_parallel_config.remote(self.train_parallel_config))
