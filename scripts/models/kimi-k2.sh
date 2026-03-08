@@ -43,7 +43,7 @@ MODEL_ARGS=(
 
     # moe
     --num-experts 384
-    --moe-layer-freq $MOE_LAYER_FREQ
+    --moe-layer-freq "$MOE_LAYER_FREQ"
     --moe-ffn-hidden-size 2048
     --moe-router-topk 8
     --moe-shared-expert-intermediate-size 2048
