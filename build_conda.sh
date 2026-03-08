@@ -78,6 +78,6 @@ pip install "numpy<2"
 
 # apply patch
 cd $BASE_DIR/sglang
-git apply $SLIME_DIR/docker/patch/v0.5.7/sglang.patch
+git apply $SLIME_DIR/docker/patch/v0.5.9/sglang.patch
 cd $BASE_DIR/Megatron-LM
-git apply $SLIME_DIR/docker/patch/v0.5.7/megatron.patch
+git apply $SLIME_DIR/docker/patch/v0.5.9/megatron.patch
