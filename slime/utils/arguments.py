@@ -1521,6 +1521,15 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
 
+    if args.critic_train_only:
+        if not args.use_critic:
+            raise ValueError("--critic-train-only requires --use-critic (or --advantage-estimator ppo).")
+        if args.actor_num_nodes != 0 or args.actor_num_gpus_per_node != 0:
+            raise ValueError(
+                "--critic-train-only requires --actor-num-nodes 0 --actor-num-gpus-per-node 0, "
+                f"but got actor_num_nodes={args.actor_num_nodes}, actor_num_gpus_per_node={args.actor_num_gpus_per_node}."
+            )
+
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):
             raise FileNotFoundError(f"ref_load {args.ref_load} does not exist, please check the path.")

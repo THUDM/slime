@@ -53,6 +53,8 @@ class ServerGroup:
     rank_offset: int = 0  # cumulative engine count before this group
     gpu_offset: int = 0  # cumulative GPU count before this group
     sglang_overrides: dict = dataclasses.field(default_factory=dict)
+    needs_offload: bool = False  # True when this group's GPUs overlap with megatron
+    model_path: str | None = None  # checkpoint path for update_weights_from_disk
     router_ip: str | None = None
     router_port: int | None = None
 
@@ -174,16 +176,34 @@ class ServerGroup:
     def offload(self):
         """Fire release_memory_occupation on all engines (non-blocking).
 
-        Returns a list of Ray ObjectRefs.
+        Returns a list of Ray ObjectRefs.  Skipped for groups that do not
+        overlap with megatron GPUs (``needs_offload=False``).
         """
+        if not self.needs_offload:
+            return []
         return [engine.release_memory_occupation.remote() for engine in self.engines if engine is not None]
 
     def onload(self, tags: list[str] | None = None):
         """Fire resume_memory_occupation on all engines (non-blocking).
 
-        Returns a list of Ray ObjectRefs.
+        Returns a list of Ray ObjectRefs.  Skipped for groups that do not
+        overlap with megatron GPUs (``needs_offload=False``).
         """
+        if not self.needs_offload:
+            return []
         return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.engines if engine is not None]
+
+    def onload_weights_from_disk(self):
+        """Reload weights from ``model_path`` for non-updatable groups.
+
+        Used instead of ``resume_memory_occupation(tags=[WEIGHTS])`` so that
+        CPU memory is not consumed by offloaded weight copies.
+        """
+        if not self.needs_offload or not self.model_path:
+            return []
+        return [
+            engine.update_weights_from_disk.remote(self.model_path) for engine in self.engines if engine is not None
+        ]
 
 
 @dataclasses.dataclass
@@ -261,20 +281,32 @@ class RolloutServer:
 
         # Post-recovery: offload then onload weights for newly created engines.
         release_handles = []
-        new_engines_all = []
-        for g, dead_indices in zip(self.server_groups, dead_per_group, strict=True):
+        updatable_new_engines = []
+        non_updatable_groups_engines: list[tuple[str, list]] = []
+        for g, dead_indices in zip(self.engine_groups, dead_per_group, strict=True):
             logger.info(f"Recovered {g.num_new_engines} dead rollout engines (worker_type={g.worker_type})")
             assert g.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
-            if g.args.offload_rollout and dead_indices:
+            if g.needs_offload and dead_indices:
                 new_engines = [g.all_engines[i] for i in dead_indices]
                 release_handles.extend(engine.release_memory_occupation.remote() for engine in new_engines)
-                new_engines_all.extend(new_engines)
+                if self.update_weights:
+                    updatable_new_engines.extend(new_engines)
+                elif g.model_path:
+                    non_updatable_groups_engines.append((g.model_path, new_engines))
 
         if release_handles:
             ray.get(release_handles)
-            ray.get(
-                [engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]) for engine in new_engines_all]
-            )
+            # Resume GPU memory for all engines that need offload.
+            all_resume_engines = updatable_new_engines[:]
+            for _model_path, engines in non_updatable_groups_engines:
+                all_resume_engines.extend(engines)
+            if all_resume_engines:
+                ray.get(
+                    [
+                        engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS])
+                        for engine in all_resume_engines
+                    ]
+                )
 
     def offload(self):
         """Release memory occupation across all groups (concurrent)."""
@@ -288,6 +320,28 @@ class RolloutServer:
         handles = []
         for g in self.server_groups:
             handles.extend(g.onload(tags))
+        return ray.get(handles) if handles else []
+
+    def onload_weights(self):
+        """Restore weights for offloaded groups.
+
+        All groups resume from CPU cache via ``resume_memory_occupation``.
+        For updatable servers, weights will be overwritten by
+        ``update_weights`` shortly after.  For non-updatable servers the
+        CPU backup already contains the correct (unchanged) weights.
+        """
+        handles = []
+        for g in self.engine_groups:
+            if not g.needs_offload:
+                continue
+            handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
+        return ray.get(handles) if handles else []
+
+    def onload_kv(self):
+        """Resume KV cache and CUDA graphs for offloaded groups."""
+        handles = []
+        for g in self.engine_groups:
+            handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH]))
         return ray.get(handles) if handles else []
 
 
@@ -444,10 +498,12 @@ class RolloutManager:
             srv.onload(tags)
 
     def onload_weights(self):
-        self.onload(tags=[GPU_MEMORY_TYPE_WEIGHTS])
+        for srv in self.servers.values():
+            srv.onload_weights()
 
     def onload_kv(self):
-        self.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH])
+        for srv in self.servers.values():
+            srv.onload_kv()
 
     def recover_updatable_engines(self):
         """Restart any dead rollout engines and update num_new_engines for update_weights detection.
@@ -887,6 +943,30 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
     return router_ip, router_port
 
 
+def _compute_rollout_offset(args) -> int:
+    """Offset (in PG bundle slots) where rollout GPUs start."""
+    if args.debug_train_only or args.debug_rollout_only or args.colocate:
+        return 0
+    if args.critic_train_only:
+        return args.critic_num_nodes * args.critic_num_gpus_per_node
+    offset = args.actor_num_nodes * args.actor_num_gpus_per_node
+    if args.use_critic:
+        offset += args.critic_num_nodes * args.critic_num_gpus_per_node
+    return offset
+
+
+def _compute_megatron_num_gpus(args) -> int:
+    """Total number of megatron (actor + critic) GPU slots in the placement group."""
+    if args.debug_rollout_only:
+        return 0
+    if args.critic_train_only:
+        return args.critic_num_nodes * args.critic_num_gpus_per_node
+    num = args.actor_num_nodes * args.actor_num_gpus_per_node
+    if args.use_critic:
+        num += args.critic_num_nodes * args.critic_num_gpus_per_node
+    return num
+
+
 def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
     """Start rollout servers: one per model, each with its own router.
 
@@ -905,6 +985,10 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
     servers: dict[str, RolloutServer] = {}
     gpu_offset = 0
     engine_offset = 0
+
+    # Compute megatron GPU range for per-group offload decisions.
+    rollout_pg_offset = _compute_rollout_offset(args)
+    megatron_num_gpus = _compute_megatron_num_gpus(args)
 
     for model_idx, model_cfg in enumerate(config.models):
         model_cfg.resolve(args)
@@ -926,6 +1010,17 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
             num_gpu_per_engine_local = min(gpus_per_engine, args.num_gpus_per_node)
             num_engines = group_cfg.num_gpus // num_gpu_per_engine_local
 
+            # Only offload groups whose GPUs overlap with megatron.
+            group_abs_start = rollout_pg_offset + gpu_offset
+            needs_offload = args.offload_rollout and group_abs_start < megatron_num_gpus
+            overrides = dict(group_cfg.overrides)
+            if args.offload_rollout and not needs_offload:
+                overrides.setdefault("enable_memory_saver", False)
+            logger.info(
+                f"Engine group '{group_cfg.worker_type}' gpu_offset={gpu_offset} "
+                f"(abs={group_abs_start}): needs_offload={needs_offload}"
+            )
+
             group = ServerGroup(
                 args=args,
                 pg=pg,
@@ -935,7 +1030,9 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
                 worker_type=group_cfg.worker_type,
                 rank_offset=engine_offset,
                 gpu_offset=gpu_offset,
-                sglang_overrides=group_cfg.overrides,
+                sglang_overrides=overrides,
+                needs_offload=needs_offload,
+                model_path=overrides.get("model_path", args.hf_checkpoint),
                 router_ip=router_ip,
                 router_port=router_port,
             )
