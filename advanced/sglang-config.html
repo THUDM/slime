@@ -1,0 +1,1132 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>SGLang Config: Advanced Engine Deployment &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/bootstrap.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+
+  
+  <link href="../_static/vendor/fontawesome/6.5.2/css/all.min.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-solid-900.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-brands-400.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-regular-400.woff2" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+  
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b" />
+  <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+    <script src="../_static/documentation_options.js?v=e645c8fa"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/sglang-config';</script>
+    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+    <meta name="docbuild:last-update" content="Mar 08, 2026"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-primary-sidebar-checkbox"/>
+  <label class="overlay overlay-primary" for="pst-primary-sidebar-checkbox"></label>
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-secondary-sidebar-checkbox"/>
+  <label class="overlay overlay-secondary" for="pst-secondary-sidebar-checkbox"></label>
+  
+  <div class="search-button__wrapper">
+    <div class="search-button__overlay"></div>
+    <div class="search-button__search-container">
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         id="search-input"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form></div>
+  </div>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+        
+      
+      <div class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <script>document.write(`<img src="../_static/logo.jpg" class="logo__image only-dark" alt="slime - Home"/>`);</script>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">Search</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">Quick Start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">Usage Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">Customization Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">FAQ</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">Qwen3-4B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">GLM4-9B with 8xH100</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.5-355B-A32B.html">GLM-4.5 with 64xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="slime-router.html">slime router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">On-Policy Distillation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">Speculative Decoding</a></li>
+<li class="toctree-l1"><a class="reference internal" href="low-precision.html">Low Precision Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">Fault Tolerance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD Disaggregation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully Asynchronous Rollout Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI (Continuous Integration)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debugging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">Profiling</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: Redefining High-Performance RL Training Frameworks</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime: An SGLang-Native Post-Training Framework for RL Scaling</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+  
+  <div id="rtd-footer-container"></div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="Source repository"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/advanced/sglang-config.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/advanced/sglang-config.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fadvanced/sglang-config.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="Open an issue"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/advanced/sglang-config.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script>
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm pst-navbar-icon search-button search-button__button" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+  </button>
+`);
+</script>
+<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>SGLang Config: Advanced Engine Deployment</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#architecture-overview">Architecture Overview</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#config-format">Config Format</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#field-reference">Field Reference</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#model-level-fields">Model-Level Fields</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#server-group-fields">Server Group Fields</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#worker-types">Worker Types</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#usage-patterns">Usage Patterns</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#basic-single-model-deployment">1. Basic Single-Model Deployment</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd-disaggregation">2. PD Disaggregation</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#multi-model-serving">3. Multi-Model Serving</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#multi-model-with-pd-disaggregation">4. Multi-Model with PD Disaggregation</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#placeholder-groups-for-gpu-reservation">5. Placeholder Groups for GPU Reservation</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#per-group-serverargs-overrides">6. Per-Group ServerArgs Overrides</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#standalone-sglang-launcher">7. Standalone SGLang Launcher</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#router-configuration">Router Configuration</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#router-policies">Router Policies</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#session-affinity-routing-for-multi-turn-agents">Session-Affinity Routing for Multi-Turn Agents</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#resolution-rules">Resolution Rules</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mutual-exclusion">Mutual Exclusion</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#complete-example-multi-model-agentic-training">Complete Example: Multi-Model Agentic Training</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#faq">FAQ</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-can-i-mix-pd-and-regular-groups-in-the-same-model">Q: Can I mix PD and regular groups in the same model?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-what-happens-if-num-gpus-is-not-divisible-by-num-gpus-per-engine">Q: What happens if <code class="docutils literal notranslate"><span class="pre">num_gpus</span></code> is not divisible by <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code>?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-can-different-server-groups-within-a-model-use-different-model-paths">Q: Can different server groups within a model use different model paths?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-how-do-i-access-the-router-address-for-a-specific-model-at-runtime">Q: How do I access the router address for a specific model at runtime?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-can-i-use-sglang-config-without-training-inference-only">Q: Can I use <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> without training (inference only)?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-what-is-the-relationship-between-sglang-config-and-prefill-num-servers">Q: What is the relationship between <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> and <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code>?</a></li>
+</ul>
+</li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="sglang-config-advanced-engine-deployment">
+<h1>SGLang Config: Advanced Engine Deployment<a class="headerlink" href="#sglang-config-advanced-engine-deployment" title="Link to this heading">#</a></h1>
+<p><code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> is a YAML-based configuration system for fine-grained control over SGLang engine deployment in slime. It enables <strong>multi-model serving</strong>, <strong>Prefill-Decode (PD) disaggregation</strong>, <strong>heterogeneous server groups</strong>, and can even serve as a <strong>standalone SGLang launcher</strong> for complex inference topologies.</p>
+<hr class="docutils" />
+<section id="architecture-overview">
+<h2>Architecture Overview<a class="headerlink" href="#architecture-overview" title="Link to this heading">#</a></h2>
+<p>In the default setup (without <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code>), slime deploys a single model behind a single router with uniform server groups:</p>
+<p><img alt="architecture overview" src="../_images/arch.png" /></p>
+<p>With <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code>, the SGLang deployment expands into a multi-model, multi-router topology:</p>
+<p><img alt="sglang-config architecture" src="../_images/sglang_config.png" /></p>
+<p><strong>Key design principles:</strong></p>
+<ul class="simple">
+<li><p><strong>Each model gets its own router.</strong> Models are isolated at the routing layer, allowing independent load balancing and fault tolerance.</p></li>
+<li><p><strong>Server groups within a model can be heterogeneous.</strong> Different groups can have different TP sizes, worker types (prefill/decode/regular), and SGLang server argument overrides.</p></li>
+<li><p><strong>Weight sync is per-model.</strong> Only models with <code class="docutils literal notranslate"><span class="pre">update_weights:</span> <span class="pre">true</span></code> receive weight updates from training. Frozen models (reference, reward, etc.) are served as-is.</p></li>
+</ul>
+</section>
+<hr class="docutils" />
+<section id="config-format">
+<h2>Config Format<a class="headerlink" href="#config-format" title="Link to this heading">#</a></h2>
+<p>The config file is a YAML document with a top-level <code class="docutils literal notranslate"><span class="pre">sglang</span></code> key containing a list of model definitions:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;model_name&gt;</span><span class="w">              </span><span class="c1"># Required. Unique identifier for this model.</span>
+<span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;path&gt;</span><span class="w">              </span><span class="c1"># Optional. HF checkpoint path. Defaults to --hf-checkpoint.</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;bool&gt;</span><span class="w">          </span><span class="c1"># Optional. Whether to sync weights from training. Auto-inferred.</span>
+<span class="w">    </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;int&gt;</span><span class="w">      </span><span class="c1"># Optional. Default TP size for all groups in this model.</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span><span class="w">                  </span><span class="c1"># Required. List of server group configurations.</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;type&gt;</span><span class="w">         </span><span class="c1"># Required. One of: regular, prefill, decode, placeholder.</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;int&gt;</span><span class="w">             </span><span class="c1"># Required. Total GPUs allocated to this group.</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;int&gt;</span><span class="w">  </span><span class="c1"># Optional. TP size override for this group.</span>
+<span class="w">        </span><span class="nt">overrides</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;dict&gt;</span><span class="w">           </span><span class="c1"># Optional. SGLang ServerArgs field overrides.</span>
+</pre></div>
+</div>
+<section id="field-reference">
+<h3>Field Reference<a class="headerlink" href="#field-reference" title="Link to this heading">#</a></h3>
+<section id="model-level-fields">
+<h4>Model-Level Fields<a class="headerlink" href="#model-level-fields" title="Link to this heading">#</a></h4>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Field</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">name</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td><p><strong>Required</strong></p></td>
+<td><p>Unique name for this model (e.g., <code class="docutils literal notranslate"><span class="pre">&quot;actor&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;ref&quot;</span></code>, <code class="docutils literal notranslate"><span class="pre">&quot;reward&quot;</span></code>). Used as the key in <code class="docutils literal notranslate"><span class="pre">args.sglang_model_routers</span></code>.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">model_path</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">args.hf_checkpoint</span></code></p></td>
+<td><p>HuggingFace checkpoint path. All server groups within a model must use the same model path.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">update_weights</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
+<td><p>Auto</p></td>
+<td><p>Whether this model receives weight updates from training. When not set, automatically inferred: <code class="docutils literal notranslate"><span class="pre">true</span></code> if <code class="docutils literal notranslate"><span class="pre">model_path</span></code> matches <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code>, <code class="docutils literal notranslate"><span class="pre">false</span></code> otherwise.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">args.rollout_num_gpus_per_engine</span></code></p></td>
+<td><p>Default TP size for server groups in this model. Individual groups can override.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">server_groups</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">list</span></code></p></td>
+<td><p><strong>Required</strong></p></td>
+<td><p>List of <code class="docutils literal notranslate"><span class="pre">ServerGroupConfig</span></code> entries defining the engine topology. (<code class="docutils literal notranslate"><span class="pre">engine_groups</span></code> is accepted as a backward-compatible alias.)</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="server-group-fields">
+<h4>Server Group Fields<a class="headerlink" href="#server-group-fields" title="Link to this heading">#</a></h4>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Field</p></th>
+<th class="head"><p>Type</p></th>
+<th class="head"><p>Default</p></th>
+<th class="head"><p>Description</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">worker_type</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td><p><strong>Required</strong></p></td>
+<td><p>Engine type: <code class="docutils literal notranslate"><span class="pre">regular</span></code> (standard), <code class="docutils literal notranslate"><span class="pre">prefill</span></code> (PD prefill worker), <code class="docutils literal notranslate"><span class="pre">decode</span></code> (PD decode worker), or <code class="docutils literal notranslate"><span class="pre">placeholder</span></code> (reserve GPU slots without launching engines).</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">num_gpus</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td><p><strong>Required</strong></p></td>
+<td><p>Total number of GPUs for this group. Must be &gt; 0.</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td><p>Model’s <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code></p></td>
+<td><p>TP size override. Number of GPUs per engine instance.</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">overrides</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">dict</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{}</span></code></p></td>
+<td><p>SGLang <code class="docutils literal notranslate"><span class="pre">ServerArgs</span></code> field overrides. Applied on top of <code class="docutils literal notranslate"><span class="pre">--sglang-*</span></code> CLI args with highest priority.</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="worker-types">
+<h3>Worker Types<a class="headerlink" href="#worker-types" title="Link to this heading">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Type</p></th>
+<th class="head"><p>Description</p></th>
+<th class="head"><p>Use Case</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">regular</span></code></p></td>
+<td><p>Standard SGLang engine</p></td>
+<td><p>Default mode, handles both prefill and decode</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">prefill</span></code></p></td>
+<td><p>PD disaggregation prefill worker</p></td>
+<td><p>Dedicated to prompt processing; paired with <code class="docutils literal notranslate"><span class="pre">decode</span></code> workers</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">decode</span></code></p></td>
+<td><p>PD disaggregation decode worker</p></td>
+<td><p>Dedicated to token generation; paired with <code class="docutils literal notranslate"><span class="pre">prefill</span></code> workers</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">placeholder</span></code></p></td>
+<td><p>Reserves GPU slots, no engine created</p></td>
+<td><p>Reserve GPUs for training co-location or future use</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<hr class="docutils" />
+<section id="usage-patterns">
+<h2>Usage Patterns<a class="headerlink" href="#usage-patterns" title="Link to this heading">#</a></h2>
+<section id="basic-single-model-deployment">
+<h3>1. Basic Single-Model Deployment<a class="headerlink" href="#basic-single-model-deployment" title="Link to this heading">#</a></h3>
+<p>The simplest config replicates the default behavior:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># sglang_basic.yaml</span>
+<span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+</pre></div>
+</div>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sglang-config<span class="w"> </span>sglang_basic.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-num-gpus<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-num-gpus-per-engine<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<p>This creates 4 engines (8 GPUs ÷ 2 GPUs/engine) behind a single router.</p>
+</section>
+<section id="pd-disaggregation">
+<h3>2. PD Disaggregation<a class="headerlink" href="#pd-disaggregation" title="Link to this heading">#</a></h3>
+<p>Separate prefill and decode phases onto dedicated server groups for better throughput in multi-turn and agentic workloads:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># sglang_pd.yaml</span>
+<span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prefill</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span><span class="w">    </span><span class="c1"># 2 prefill engines, TP=2</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">decode</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">12</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span><span class="w">    </span><span class="c1"># 3 decode engines, TP=4</span>
+</pre></div>
+</div>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sglang-config<span class="w"> </span>sglang_pd.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-num-gpus<span class="w"> </span><span class="m">16</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<p><strong>Why PD disaggregation?</strong> In multi-turn scenarios, prefill and decode have different compute characteristics. Prefill is compute-bound (processes the entire prompt), while decode is memory-bandwidth-bound (generates tokens one-by-one). Disaggregating them allows:</p>
+<ul class="simple">
+<li><p>Using smaller TP for prefill (higher throughput per GPU)</p></li>
+<li><p>Using larger TP for decode (lower latency)</p></li>
+<li><p>Independent scaling of prefill vs. decode capacity</p></li>
+</ul>
+<blockquote>
+<div><p><strong>Note:</strong> PD disaggregation uses SGLang Model Gateway (sgl-router) with <code class="docutils literal notranslate"><span class="pre">pd_disaggregation=True</span></code>.</p>
+</div></blockquote>
+</section>
+<section id="multi-model-serving">
+<h3>3. Multi-Model Serving<a class="headerlink" href="#multi-model-serving" title="Link to this heading">#</a></h3>
+<p>Deploy multiple models simultaneously, each behind its own router:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># sglang_multi_model.yaml</span>
+<span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">              </span><span class="c1"># receives weight updates from training</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ref</span>
+<span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/path/to/ref_model</span><span class="w">    </span><span class="c1"># different model checkpoint</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">              </span><span class="c1"># frozen, no weight updates</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">reward</span>
+<span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/path/to/reward_model</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+</pre></div>
+</div>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sglang-config<span class="w"> </span>sglang_multi_model.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-num-gpus<span class="w"> </span><span class="m">16</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--hf-checkpoint<span class="w"> </span>/path/to/actor_model<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-function-path<span class="w"> </span>my_rollout.generate_rollout<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<p><strong>Accessing models in custom rollout functions:</strong></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.rollout.sglang_rollout</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_model_url</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.http_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">post</span>
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">my_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">):</span>
+    <span class="c1"># Route to the actor model (default)</span>
+    <span class="n">actor_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;actor&quot;</span><span class="p">,</span> <span class="s2">&quot;/generate&quot;</span><span class="p">)</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">actor_url</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="s2">&quot;sampling_params&quot;</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">})</span>
+    
+    <span class="c1"># Route to the reference model</span>
+    <span class="n">ref_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;ref&quot;</span><span class="p">,</span> <span class="s2">&quot;/generate&quot;</span><span class="p">)</span>
+    <span class="n">ref_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">ref_url</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="s2">&quot;sampling_params&quot;</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">})</span>
+    
+    <span class="c1"># Route to the reward model (e.g., OpenAI-compatible API)</span>
+    <span class="n">reward_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;reward&quot;</span><span class="p">,</span> <span class="s2">&quot;/v1/chat/completions&quot;</span><span class="p">)</span>
+    <span class="n">reward_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">reward_url</span><span class="p">,</span> <span class="p">{</span><span class="o">...</span><span class="p">})</span>
+    
+    <span class="o">...</span>
+</pre></div>
+</div>
+<p>The <code class="docutils literal notranslate"><span class="pre">get_model_url()</span></code> helper reads from <code class="docutils literal notranslate"><span class="pre">args.sglang_model_routers</span></code>, a dict mapping model names to <code class="docutils literal notranslate"><span class="pre">(ip,</span> <span class="pre">port)</span></code> tuples that is automatically populated after engine startup.</p>
+</section>
+<section id="multi-model-with-pd-disaggregation">
+<h3>4. Multi-Model with PD Disaggregation<a class="headerlink" href="#multi-model-with-pd-disaggregation" title="Link to this heading">#</a></h3>
+<p>Combine multi-model and PD disaggregation for maximum flexibility:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># sglang_full.yaml</span>
+<span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prefill</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">decode</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ref</span>
+<span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/path/to/ref_model</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+</pre></div>
+</div>
+</section>
+<section id="placeholder-groups-for-gpu-reservation">
+<h3>5. Placeholder Groups for GPU Reservation<a class="headerlink" href="#placeholder-groups-for-gpu-reservation" title="Link to this heading">#</a></h3>
+<p>Use <code class="docutils literal notranslate"><span class="pre">placeholder</span></code> groups to reserve GPU slots without creating engines. This is useful for co-located training where some GPUs need to be reserved for training:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">6</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">placeholder</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span><span class="w">                   </span><span class="c1"># reserve 2 GPUs (no engines created)</span>
+</pre></div>
+</div>
+</section>
+<section id="per-group-serverargs-overrides">
+<h3>6. Per-Group ServerArgs Overrides<a class="headerlink" href="#per-group-serverargs-overrides" title="Link to this heading">#</a></h3>
+<p>Use <code class="docutils literal notranslate"><span class="pre">overrides</span></code> to apply SGLang <code class="docutils literal notranslate"><span class="pre">ServerArgs</span></code> fields to specific server groups without affecting others:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">overrides</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">mem_fraction_static</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.85</span>
+<span class="w">          </span><span class="nt">context_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">32768</span>
+<span class="w">          </span><span class="nt">chunked_prefill_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4096</span>
+<span class="w">          </span><span class="nt">enable_torch_compile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</pre></div>
+</div>
+<p>Overrides take <strong>highest priority</strong>, overriding both the base <code class="docutils literal notranslate"><span class="pre">--sglang-*</span></code> CLI args and model-level defaults. This is especially useful for:</p>
+<ul class="simple">
+<li><p>Different memory configurations per group</p></li>
+<li><p>Different context lengths for prefill vs. decode</p></li>
+<li><p>Enabling experimental features on specific groups</p></li>
+</ul>
+</section>
+<section id="standalone-sglang-launcher">
+<h3>7. Standalone SGLang Launcher<a class="headerlink" href="#standalone-sglang-launcher" title="Link to this heading">#</a></h3>
+<p>While <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> is designed for slime’s training pipeline, it also works as a powerful launcher for pure inference scenarios using the <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code> pattern or by configuring slime to focus solely on serving.</p>
+<p><strong>Using external engines with a pre-launched topology:</strong></p>
+<p>For complex production deployments, you may want to pre-launch SGLang engines independently and connect them to slime:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Step 1: Launch SGLang engines externally</span>
+python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<span class="w"> </span>--model-path<span class="w"> </span>/path/to/model<span class="w"> </span>--port<span class="w"> </span><span class="m">10090</span><span class="w"> </span>...
+python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<span class="w"> </span>--model-path<span class="w"> </span>/path/to/model<span class="w"> </span>--port<span class="w"> </span><span class="m">10091</span><span class="w"> </span>...
+
+<span class="c1"># Step 2: Connect slime to external engines</span>
+python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-external<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-external-engine-addrs<span class="w"> </span>host1:10090<span class="w"> </span>host2:10091<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<blockquote>
+<div><p><strong>Note:</strong> <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> and <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code> are mutually exclusive. Use <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> when you want slime to manage the full engine lifecycle; use <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code> when engines are pre-deployed.</p>
+</div></blockquote>
+</section>
+</section>
+<hr class="docutils" />
+<section id="router-configuration">
+<h2>Router Configuration<a class="headerlink" href="#router-configuration" title="Link to this heading">#</a></h2>
+<p>Each model in the config gets its own independent router (SGLang Model Gateway by default).</p>
+<section id="router-policies">
+<h3>Router Policies<a class="headerlink" href="#router-policies" title="Link to this heading">#</a></h3>
+<p>You can configure the routing policy:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--router-policy<span class="w"> </span>round_robin<span class="w">        </span><span class="c1"># Simple round-robin</span>
+--router-policy<span class="w"> </span>consistent_hashing<span class="w">  </span><span class="c1"># Session affinity for multi-turn</span>
+--router-policy<span class="w"> </span>cache_aware<span class="w">         </span><span class="c1"># Cache-aware routing (default)</span>
+</pre></div>
+</div>
+</section>
+<section id="session-affinity-routing-for-multi-turn-agents">
+<h3>Session-Affinity Routing for Multi-Turn Agents<a class="headerlink" href="#session-affinity-routing-for-multi-turn-agents" title="Link to this heading">#</a></h3>
+<p>For multi-turn dialogues and agentic workloads, session affinity ensures that all requests belonging to the same conversation are routed to the same backend worker. This significantly improves prefix cache hit rates because the worker already has the conversation history cached.</p>
+<p>slime automatically assigns each sample a unique <code class="docutils literal notranslate"><span class="pre">session_id</span></code> (stored in <code class="docutils literal notranslate"><span class="pre">sample.session_id</span></code>). When the router policy is <code class="docutils literal notranslate"><span class="pre">consistent_hashing</span></code>, this ID is passed as the <code class="docutils literal notranslate"><span class="pre">X-SMG-Routing-Key</span></code> header, and SGLang Model Gateway uses it to deterministically route all turns of the same session to the same worker.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--router-policy<span class="w"> </span>consistent_hashing
+</pre></div>
+</div>
+<p><strong>How it works:</strong></p>
+<ol class="arabic simple">
+<li><p>Each sample is assigned a unique <code class="docutils literal notranslate"><span class="pre">session_id</span></code> via UUID</p></li>
+<li><p>On each request, slime passes <code class="docutils literal notranslate"><span class="pre">X-SMG-Routing-Key:</span> <span class="pre">&lt;session_id&gt;</span></code> in the HTTP header</p></li>
+<li><p>SGLang Model Gateway’s consistent hashing policy maps this key to a specific worker</p></li>
+<li><p>Subsequent turns reuse the same <code class="docutils literal notranslate"><span class="pre">session_id</span></code>, ensuring they hit the same worker</p></li>
+</ol>
+</section>
+</section>
+<hr class="docutils" />
+<section id="resolution-rules">
+<h2>Resolution Rules<a class="headerlink" href="#resolution-rules" title="Link to this heading">#</a></h2>
+<p>When the config is loaded, slime applies the following resolution cascade:</p>
+<ol class="arabic simple">
+<li><p><strong>GPU per engine fallback:</strong> Group <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code> → Model <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code> → <code class="docutils literal notranslate"><span class="pre">args.rollout_num_gpus_per_engine</span></code></p></li>
+<li><p><strong>Model path fallback:</strong> Group <code class="docutils literal notranslate"><span class="pre">overrides.model_path</span></code> → Model <code class="docutils literal notranslate"><span class="pre">model_path</span></code> → <code class="docutils literal notranslate"><span class="pre">args.hf_checkpoint</span></code></p></li>
+<li><p><strong>Weight update inference:</strong> If <code class="docutils literal notranslate"><span class="pre">update_weights</span></code> is not set:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">true</span></code> if the effective model path matches <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">false</span></code> otherwise (with a warning)</p></li>
+</ul>
+</li>
+<li><p><strong>Total GPU validation:</strong> The sum of all <code class="docutils literal notranslate"><span class="pre">num_gpus</span></code> across all groups across all models must equal <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code>.</p></li>
+</ol>
+</section>
+<hr class="docutils" />
+<section id="mutual-exclusion">
+<h2>Mutual Exclusion<a class="headerlink" href="#mutual-exclusion" title="Link to this heading">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> is mutually exclusive with:</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>Flag</p></th>
+<th class="head"><p>Conflict Reason</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code></p></td>
+<td><p>PD disaggregation is configured via <code class="docutils literal notranslate"><span class="pre">server_groups</span></code> in the YAML</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code></p></td>
+<td><p>External engines have their own topology; config manages the lifecycle internally</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<hr class="docutils" />
+<section id="complete-example-multi-model-agentic-training">
+<h2>Complete Example: Multi-Model Agentic Training<a class="headerlink" href="#complete-example-multi-model-agentic-training" title="Link to this heading">#</a></h2>
+<p>Below is a complete example showing a multi-model setup for agentic RL training with PD disaggregation on 32 GPUs:</p>
+<p><strong>Config file (<code class="docutils literal notranslate"><span class="pre">sglang_agent.yaml</span></code>):</strong></p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prefill</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="w">        </span><span class="nt">overrides</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">chunked_prefill_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8192</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">decode</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">12</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">overrides</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">mem_fraction_static</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.88</span>
+
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ref</span>
+<span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/data/models/Qwen3-32B</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">reward</span>
+<span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/data/models/reward-model</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+</pre></div>
+</div>
+<p><strong>Launch command:</strong></p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sglang-config<span class="w"> </span>sglang_agent.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--hf-checkpoint<span class="w"> </span>/data/models/Qwen3-8B<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-num-gpus<span class="w"> </span><span class="m">32</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-function-path<span class="w"> </span>my_agent.rollout.generate_rollout<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--custom-rm-path<span class="w"> </span>my_agent.reward.reward_func<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--advantage-estimator<span class="w"> </span>grpo<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--n-samples-per-prompt<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<p><strong>Custom rollout function (<code class="docutils literal notranslate"><span class="pre">my_agent/rollout.py</span></code>):</strong></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.rollout.sglang_rollout</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_model_url</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.http_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">post</span>
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_with_models</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Generate using actor, score with reward model, compare with reference.&quot;&quot;&quot;</span>
+    
+    <span class="c1"># Generate from actor</span>
+    <span class="n">actor_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;actor&quot;</span><span class="p">,</span> <span class="s2">&quot;/generate&quot;</span><span class="p">)</span>
+    <span class="n">actor_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">actor_url</span><span class="p">,</span> <span class="p">{</span>
+        <span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span>
+        <span class="s2">&quot;sampling_params&quot;</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">,</span>
+        <span class="s2">&quot;return_logprob&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="p">})</span>
+    
+    <span class="c1"># Get reference logprobs for KL penalty</span>
+    <span class="n">ref_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;ref&quot;</span><span class="p">,</span> <span class="s2">&quot;/generate&quot;</span><span class="p">)</span>
+    <span class="n">ref_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">ref_url</span><span class="p">,</span> <span class="p">{</span>
+        <span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span> <span class="o">+</span> <span class="n">actor_output</span><span class="p">[</span><span class="s2">&quot;text&quot;</span><span class="p">],</span>
+        <span class="s2">&quot;sampling_params&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;max_new_tokens&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;temperature&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">},</span>
+        <span class="s2">&quot;return_logprob&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="p">})</span>
+    
+    <span class="c1"># Score with reward model</span>
+    <span class="n">reward_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;reward&quot;</span><span class="p">,</span> <span class="s2">&quot;/v1/chat/completions&quot;</span><span class="p">)</span>
+    <span class="n">reward_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">reward_url</span><span class="p">,</span> <span class="p">{</span>
+        <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;reward&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;messages&quot;</span><span class="p">:</span> <span class="p">[{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span> <span class="o">+</span> <span class="n">actor_output</span><span class="p">[</span><span class="s2">&quot;text&quot;</span><span class="p">]}],</span>
+    <span class="p">})</span>
+    
+    <span class="c1"># ... process outputs and return Sample</span>
+</pre></div>
+</div>
+</section>
+<hr class="docutils" />
+<section id="faq">
+<h2>FAQ<a class="headerlink" href="#faq" title="Link to this heading">#</a></h2>
+<section id="q-can-i-mix-pd-and-regular-groups-in-the-same-model">
+<h3>Q: Can I mix PD and regular groups in the same model?<a class="headerlink" href="#q-can-i-mix-pd-and-regular-groups-in-the-same-model" title="Link to this heading">#</a></h3>
+<p>No. PD disaggregation requires that a model’s server groups are either all prefill/decode pairs or all regular. Mixing <code class="docutils literal notranslate"><span class="pre">regular</span></code> with <code class="docutils literal notranslate"><span class="pre">prefill</span></code>/<code class="docutils literal notranslate"><span class="pre">decode</span></code> in the same model is not supported.</p>
+</section>
+<section id="q-what-happens-if-num-gpus-is-not-divisible-by-num-gpus-per-engine">
+<h3>Q: What happens if <code class="docutils literal notranslate"><span class="pre">num_gpus</span></code> is not divisible by <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code>?<a class="headerlink" href="#q-what-happens-if-num-gpus-is-not-divisible-by-num-gpus-per-engine" title="Link to this heading">#</a></h3>
+<p>For multi-node engines (where <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span> <span class="pre">&gt;</span> <span class="pre">num_gpus_per_node</span></code>), the division is based on the local GPU count per node. For example, with 8 GPUs/node and <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine:</span> <span class="pre">16</span></code>, each engine spans 2 nodes.</p>
+</section>
+<section id="q-can-different-server-groups-within-a-model-use-different-model-paths">
+<h3>Q: Can different server groups within a model use different model paths?<a class="headerlink" href="#q-can-different-server-groups-within-a-model-use-different-model-paths" title="Link to this heading">#</a></h3>
+<p>No. All server groups within a model must share the same <code class="docutils literal notranslate"><span class="pre">model_path</span></code>. This is validated during <code class="docutils literal notranslate"><span class="pre">resolve()</span></code>. If you need different models, define them as separate model entries.</p>
+</section>
+<section id="q-how-do-i-access-the-router-address-for-a-specific-model-at-runtime">
+<h3>Q: How do I access the router address for a specific model at runtime?<a class="headerlink" href="#q-how-do-i-access-the-router-address-for-a-specific-model-at-runtime" title="Link to this heading">#</a></h3>
+<p>Use <code class="docutils literal notranslate"><span class="pre">get_model_url(args,</span> <span class="pre">&quot;model_name&quot;,</span> <span class="pre">&quot;/endpoint&quot;)</span></code> from <code class="docutils literal notranslate"><span class="pre">slime.rollout.sglang_rollout</span></code>. It reads from <code class="docutils literal notranslate"><span class="pre">args.sglang_model_routers</span></code>, which is a dict <code class="docutils literal notranslate"><span class="pre">{</span> <span class="pre">model_name:</span> <span class="pre">(ip,</span> <span class="pre">port)</span> <span class="pre">}</span></code> populated automatically.</p>
+</section>
+<section id="q-can-i-use-sglang-config-without-training-inference-only">
+<h3>Q: Can I use <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> without training (inference only)?<a class="headerlink" href="#q-can-i-use-sglang-config-without-training-inference-only" title="Link to this heading">#</a></h3>
+<p>While <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> is designed for slime’s training loop, you can effectively use it for inference-only scenarios by configuring a rollout-only run. For fully standalone SGLang serving, consider using SGLang’s native <code class="docutils literal notranslate"><span class="pre">launch_server</span></code> directly or the <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code> mode for connecting to pre-deployed engines.</p>
+</section>
+<section id="q-what-is-the-relationship-between-sglang-config-and-prefill-num-servers">
+<h3>Q: What is the relationship between <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> and <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code>?<a class="headerlink" href="#q-what-is-the-relationship-between-sglang-config-and-prefill-num-servers" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code> is the legacy way to enable PD disaggregation (it creates a single model with prefill + decode groups). <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> is the newer, more flexible approach. They are mutually exclusive. We recommend migrating to <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> for all new deployments.</p>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+  <div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav class="bd-toc-nav page-toc">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#architecture-overview">Architecture Overview</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#config-format">Config Format</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#field-reference">Field Reference</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#model-level-fields">Model-Level Fields</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#server-group-fields">Server Group Fields</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#worker-types">Worker Types</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#usage-patterns">Usage Patterns</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#basic-single-model-deployment">1. Basic Single-Model Deployment</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd-disaggregation">2. PD Disaggregation</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#multi-model-serving">3. Multi-Model Serving</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#multi-model-with-pd-disaggregation">4. Multi-Model with PD Disaggregation</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#placeholder-groups-for-gpu-reservation">5. Placeholder Groups for GPU Reservation</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#per-group-serverargs-overrides">6. Per-Group ServerArgs Overrides</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#standalone-sglang-launcher">7. Standalone SGLang Launcher</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#router-configuration">Router Configuration</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#router-policies">Router Policies</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#session-affinity-routing-for-multi-turn-agents">Session-Affinity Routing for Multi-Turn Agents</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#resolution-rules">Resolution Rules</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#mutual-exclusion">Mutual Exclusion</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#complete-example-multi-model-agentic-training">Complete Example: Multi-Model Agentic Training</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#faq">FAQ</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-can-i-mix-pd-and-regular-groups-in-the-same-model">Q: Can I mix PD and regular groups in the same model?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-what-happens-if-num-gpus-is-not-divisible-by-num-gpus-per-engine">Q: What happens if <code class="docutils literal notranslate"><span class="pre">num_gpus</span></code> is not divisible by <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code>?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-can-different-server-groups-within-a-model-use-different-model-paths">Q: Can different server groups within a model use different model paths?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-how-do-i-access-the-router-address-for-a-specific-model-at-runtime">Q: How do I access the router address for a specific model at runtime?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-can-i-use-sglang-config-without-training-inference-only">Q: Can I use <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> without training (inference only)?</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-what-is-the-relationship-between-sglang-config-and-prefill-num-servers">Q: What is the relationship between <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> and <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code>?</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  Last updated on Mar 08, 2026.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b"></script>
+<script src="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

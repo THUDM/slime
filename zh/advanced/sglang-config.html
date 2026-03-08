@@ -1,0 +1,1128 @@
+
+<!DOCTYPE html>
+
+
+<html lang="zh" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>SGLang Config：高级引擎部署 &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/bootstrap.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+
+  
+  <link href="../_static/vendor/fontawesome/6.5.2/css/all.min.css?digest=dfe6caa3a7d634c4db9b" rel="stylesheet" />
+  <link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-solid-900.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-brands-400.woff2" />
+<link rel="preload" as="font" type="font/woff2" crossorigin href="../_static/vendor/fontawesome/6.5.2/webfonts/fa-regular-400.woff2" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=eba8b062" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+  
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b" />
+  <script src="../_static/vendor/fontawesome/6.5.2/js/all.min.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+    <script src="../_static/documentation_options.js?v=30c3115b"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=887ef09a"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'advanced/sglang-config';</script>
+    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="zh"/>
+    <meta name="docbuild:last-update" content="2026 年 03 月 08 日"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-primary-sidebar-checkbox"/>
+  <label class="overlay overlay-primary" for="pst-primary-sidebar-checkbox"></label>
+  
+  <input type="checkbox"
+          class="sidebar-toggle"
+          id="pst-secondary-sidebar-checkbox"/>
+  <label class="overlay overlay-secondary" for="pst-secondary-sidebar-checkbox"></label>
+  
+  <div class="search-button__wrapper">
+    <div class="search-button__overlay"></div>
+    <div class="search-button__search-container">
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         id="search-input"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form></div>
+  </div>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+        
+      
+      <div class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <script>document.write(`<img src="../_static/logo.jpg" class="logo__image only-dark" alt="slime - Home"/>`);</script>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+ <script>
+ document.write(`
+   <button class="btn search-button-field search-button__button" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass"></i>
+    <span class="search-button__default-text">搜索</span>
+    <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+   </button>
+ `);
+ </script></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">快速使用</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">使用文档</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">自定义指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">常见 Q&amp;A</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.5-355B-A32B.html">64xH100 训练 GLM-4.5</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="slime-router.html">slime router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
+<li class="toctree-l1"><a class="reference internal" href="low-precision.html">低精度训练</a></li>
+<li class="toctree-l1"><a class="reference internal" href="reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l1"><a class="reference internal" href="fault-tolerance.html">容灾</a></li>
+<li class="toctree-l1"><a class="reference internal" href="pd-disaggregation.html">PD 分离</a></li>
+<li class="toctree-l1"><a class="reference internal" href="arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully Asynchronous Rollout Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI（持续集成）</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+  </div>
+  
+  <div id="rtd-footer-container"></div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="源码库"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/advanced/sglang-config.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/advanced/sglang-config.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fadvanced/sglang-config.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="创建议题"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="下载此页面">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/advanced/sglang-config.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="下载源文件"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="列印成 PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button"
+  title="全屏模式"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button" title="light/dark" aria-label="light/dark" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="theme-switch fa-solid fa-sun fa-lg" data-mode="light"></i>
+    <i class="theme-switch fa-solid fa-moon fa-lg" data-mode="dark"></i>
+    <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"></i>
+  </button>
+`);
+</script>
+
+
+<script>
+document.write(`
+  <button class="btn btn-sm pst-navbar-icon search-button search-button__button" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+  </button>
+`);
+</script>
+<button class="sidebar-toggle secondary-toggle btn btn-sm" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>SGLang Config：高级引擎部署</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> 目录 </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">架构概览</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">配置格式</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">字段参考</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">模型级字段</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">服务器组级字段</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#worker">Worker 类型</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">使用模式</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">1. 基本单模型部署</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd">2. PD 分离</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">3. 多模型服务</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">4. 多模型 + PD 分离</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#gpu">5. 占位组用于 GPU 预留</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#serverargs">6. 按组覆盖 ServerArgs</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang">7. 独立 SGLang 启动器</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#router">Router 配置</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">Router 策略</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#agent">多轮 Agent 的会话亲和路由</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">解析规则</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">互斥</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agentic">完整示例：多模型 Agentic 训练</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#faq">FAQ</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-pd-regular">Q: 同一模型内可以混用 PD 和 regular 组吗？</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-num-gpus-num-gpus-per-engine">Q: 如果 <code class="docutils literal notranslate"><span class="pre">num_gpus</span></code> 不能被 <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code> 整除怎么办？</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-model-path">Q: 同一模型内的不同服务器组可以使用不同的 model path 吗？</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-router">Q: 运行时如何获取特定模型的 router 地址？</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-sglang-config">Q: 可以不训练，只用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 做推理吗？</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-sglang-config-prefill-num-servers">Q: <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code> 是什么关系？</a></li>
+</ul>
+</li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="sglang-config">
+<h1>SGLang Config：高级引擎部署<a class="headerlink" href="#sglang-config" title="链接到此标题。">#</a></h1>
+<p><code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 是一个基于 YAML 的配置系统，用于在 slime 中精细控制 SGLang 引擎的部署。它支持<strong>多模型服务</strong>、<strong>Prefill-Decode (PD) 分离</strong>、<strong>异构服务器组</strong>，甚至可以作为复杂推理拓扑的<strong>独立 SGLang 启动器</strong>。</p>
+<hr class="docutils" />
+<section id="id1">
+<h2>架构概览<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
+<p>在默认配置（不使用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code>）下，slime 部署单个模型，放在单个 router 后面，使用统一的服务器组：</p>
+<p><img alt="架构概览" src="../_images/arch.png" /></p>
+<p>使用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 后，SGLang 部署扩展为多模型、多 router 拓扑：</p>
+<p><img alt="sglang-config 架构" src="../_images/sglang_config.png" /></p>
+<p><strong>核心设计原则：</strong></p>
+<ul class="simple">
+<li><p><strong>每个模型拥有独立的 router。</strong> 模型在路由层隔离，支持独立的负载均衡和容错。</p></li>
+<li><p><strong>同一模型内的服务器组可以异构。</strong> 不同组可以有不同的 TP 大小、worker 类型（prefill/decode/regular）和 SGLang server 参数覆盖。</p></li>
+<li><p><strong>权重同步按模型维度。</strong> 只有 <code class="docutils literal notranslate"><span class="pre">update_weights:</span> <span class="pre">true</span></code> 的模型会接收来自训练的权重更新。冻结的模型（reference、reward 等）保持原样。</p></li>
+</ul>
+</section>
+<hr class="docutils" />
+<section id="id2">
+<h2>配置格式<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
+<p>配置文件是一个 YAML 文档，顶层 <code class="docutils literal notranslate"><span class="pre">sglang</span></code> 键包含一个模型定义列表：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;model_name&gt;</span><span class="w">              </span><span class="c1"># 必填。模型的唯一标识符。</span>
+<span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;path&gt;</span><span class="w">              </span><span class="c1"># 可选。HF checkpoint 路径。默认使用 --hf-checkpoint。</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;bool&gt;</span><span class="w">          </span><span class="c1"># 可选。是否从训练同步权重。自动推断。</span>
+<span class="w">    </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;int&gt;</span><span class="w">      </span><span class="c1"># 可选。该模型所有组的默认 TP 大小。</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span><span class="w">                  </span><span class="c1"># 必填。服务器组配置列表。</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;type&gt;</span><span class="w">         </span><span class="c1"># 必填。可选：regular、prefill、decode、placeholder。</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;int&gt;</span><span class="w">             </span><span class="c1"># 必填。分配给该组的 GPU 总数。</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;int&gt;</span><span class="w">  </span><span class="c1"># 可选。该组的 TP 大小覆盖。</span>
+<span class="w">        </span><span class="nt">overrides</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;dict&gt;</span><span class="w">           </span><span class="c1"># 可选。SGLang ServerArgs 字段覆盖。</span>
+</pre></div>
+</div>
+<section id="id3">
+<h3>字段参考<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
+<section id="id4">
+<h4>模型级字段<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h4>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>字段</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">name</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td><p><strong>必填</strong></p></td>
+<td><p>模型唯一名称（如 <code class="docutils literal notranslate"><span class="pre">&quot;actor&quot;</span></code>、<code class="docutils literal notranslate"><span class="pre">&quot;ref&quot;</span></code>、<code class="docutils literal notranslate"><span class="pre">&quot;reward&quot;</span></code>）。用作 <code class="docutils literal notranslate"><span class="pre">args.sglang_model_routers</span></code> 的 key。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">model_path</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">args.hf_checkpoint</span></code></p></td>
+<td><p>HuggingFace checkpoint 路径。同一模型内的所有服务器组必须使用相同的 model path。</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">update_weights</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">bool</span></code></p></td>
+<td><p>自动推断</p></td>
+<td><p>该模型是否接收训练权重更新。未设置时自动推断：如果 <code class="docutils literal notranslate"><span class="pre">model_path</span></code> 与 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 匹配则为 <code class="docutils literal notranslate"><span class="pre">true</span></code>，否则为 <code class="docutils literal notranslate"><span class="pre">false</span></code>。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">args.rollout_num_gpus_per_engine</span></code></p></td>
+<td><p>该模型服务器组的默认 TP 大小。各组可单独覆盖。</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">server_groups</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">list</span></code></p></td>
+<td><p><strong>必填</strong></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">ServerGroupConfig</span></code> 条目列表，定义引擎拓扑。（<code class="docutils literal notranslate"><span class="pre">engine_groups</span></code> 作为向后兼容别名仍可使用。）</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="id5">
+<h4>服务器组级字段<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h4>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>字段</p></th>
+<th class="head"><p>类型</p></th>
+<th class="head"><p>默认值</p></th>
+<th class="head"><p>说明</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">worker_type</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">str</span></code></p></td>
+<td><p><strong>必填</strong></p></td>
+<td><p>引擎类型：<code class="docutils literal notranslate"><span class="pre">regular</span></code>（标准）、<code class="docutils literal notranslate"><span class="pre">prefill</span></code>（PD prefill worker）、<code class="docutils literal notranslate"><span class="pre">decode</span></code>（PD decode worker）或 <code class="docutils literal notranslate"><span class="pre">placeholder</span></code>（占位，不启动引擎）。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">num_gpus</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td><p><strong>必填</strong></p></td>
+<td><p>该组的 GPU 总数。必须 &gt; 0。</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">int</span></code></p></td>
+<td><p>模型的 <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code></p></td>
+<td><p>TP 大小覆盖。每个引擎实例的 GPU 数量。</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">overrides</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">dict</span></code></p></td>
+<td><p><code class="docutils literal notranslate"><span class="pre">{}</span></code></p></td>
+<td><p>SGLang <code class="docutils literal notranslate"><span class="pre">ServerArgs</span></code> 字段覆盖。优先级最高，覆盖 <code class="docutils literal notranslate"><span class="pre">--sglang-*</span></code> CLI 参数和模型级默认值。</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<section id="worker">
+<h3>Worker 类型<a class="headerlink" href="#worker" title="链接到此标题。">#</a></h3>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>类型</p></th>
+<th class="head"><p>说明</p></th>
+<th class="head"><p>使用场景</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">regular</span></code></p></td>
+<td><p>标准 SGLang 引擎</p></td>
+<td><p>默认模式，同时处理 prefill 和 decode</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">prefill</span></code></p></td>
+<td><p>PD 分离的 prefill worker</p></td>
+<td><p>专门处理 prompt；与 <code class="docutils literal notranslate"><span class="pre">decode</span></code> worker 配对</p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">decode</span></code></p></td>
+<td><p>PD 分离的 decode worker</p></td>
+<td><p>专门生成 token；与 <code class="docutils literal notranslate"><span class="pre">prefill</span></code> worker 配对</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">placeholder</span></code></p></td>
+<td><p>占位，不创建引擎</p></td>
+<td><p>为训练共置预留 GPU 或留作未来使用</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+</section>
+<hr class="docutils" />
+<section id="id6">
+<h2>使用模式<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h2>
+<section id="id7">
+<h3>1. 基本单模型部署<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h3>
+<p>最简单的配置，复现默认行为：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># sglang_basic.yaml</span>
+<span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+</pre></div>
+</div>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sglang-config<span class="w"> </span>sglang_basic.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-num-gpus<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-num-gpus-per-engine<span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<p>这将创建 4 个引擎（8 GPU ÷ 2 GPU/引擎），位于单个 router 之后。</p>
+</section>
+<section id="pd">
+<h3>2. PD 分离<a class="headerlink" href="#pd" title="链接到此标题。">#</a></h3>
+<p>将 prefill 和 decode 阶段分离到专用服务器组，以提升多轮和 agentic 场景的吞吐量：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># sglang_pd.yaml</span>
+<span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prefill</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span><span class="w">    </span><span class="c1"># 2 个 prefill 引擎，TP=2</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">decode</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">12</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span><span class="w">    </span><span class="c1"># 3 个 decode 引擎，TP=4</span>
+</pre></div>
+</div>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sglang-config<span class="w"> </span>sglang_pd.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-num-gpus<span class="w"> </span><span class="m">16</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<p><strong>为什么需要 PD 分离？</strong> 在多轮场景中，prefill 和 decode 具有不同的计算特性。Prefill 是计算密集型（处理整个 prompt），而 decode 是内存带宽密集型（逐 token 生成）。分离它们可以：</p>
+<ul class="simple">
+<li><p>为 prefill 使用更小的 TP（提高每 GPU 吞吐量）</p></li>
+<li><p>为 decode 使用更大的 TP（降低延迟）</p></li>
+<li><p>独立扩展 prefill 和 decode 的容量</p></li>
+</ul>
+<blockquote>
+<div><p><strong>注意：</strong> PD 分离使用 SGLang Model Gateway (sgl-router)，并设置 <code class="docutils literal notranslate"><span class="pre">pd_disaggregation=True</span></code>。</p>
+</div></blockquote>
+</section>
+<section id="id8">
+<h3>3. 多模型服务<a class="headerlink" href="#id8" title="链接到此标题。">#</a></h3>
+<p>同时部署多个模型，每个模型拥有独立的 router：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># sglang_multi_model.yaml</span>
+<span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">              </span><span class="c1"># 接收训练权重更新</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ref</span>
+<span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/path/to/ref_model</span><span class="w">    </span><span class="c1"># 不同的模型 checkpoint</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">              </span><span class="c1"># 冻结，不更新权重</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">reward</span>
+<span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/path/to/reward_model</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+</pre></div>
+</div>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sglang-config<span class="w"> </span>sglang_multi_model.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-num-gpus<span class="w"> </span><span class="m">16</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--hf-checkpoint<span class="w"> </span>/path/to/actor_model<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-function-path<span class="w"> </span>my_rollout.generate_rollout<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<p><strong>在自定义 rollout 函数中访问模型：</strong></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.rollout.sglang_rollout</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_model_url</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.http_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">post</span>
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">my_generate</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">):</span>
+    <span class="c1"># 路由到 actor 模型（默认）</span>
+    <span class="n">actor_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;actor&quot;</span><span class="p">,</span> <span class="s2">&quot;/generate&quot;</span><span class="p">)</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">actor_url</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="s2">&quot;sampling_params&quot;</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">})</span>
+    
+    <span class="c1"># 路由到 reference 模型</span>
+    <span class="n">ref_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;ref&quot;</span><span class="p">,</span> <span class="s2">&quot;/generate&quot;</span><span class="p">)</span>
+    <span class="n">ref_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">ref_url</span><span class="p">,</span> <span class="p">{</span><span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span> <span class="s2">&quot;sampling_params&quot;</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">})</span>
+    
+    <span class="c1"># 路由到 reward 模型（如 OpenAI 兼容 API）</span>
+    <span class="n">reward_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;reward&quot;</span><span class="p">,</span> <span class="s2">&quot;/v1/chat/completions&quot;</span><span class="p">)</span>
+    <span class="n">reward_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">reward_url</span><span class="p">,</span> <span class="p">{</span><span class="o">...</span><span class="p">})</span>
+    
+    <span class="o">...</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">get_model_url()</span></code> 从 <code class="docutils literal notranslate"><span class="pre">args.sglang_model_routers</span></code>（一个将模型名称映射到 <code class="docutils literal notranslate"><span class="pre">(ip,</span> <span class="pre">port)</span></code> 元组的字典）中读取，该字典在引擎启动后自动填充。</p>
+</section>
+<section id="id9">
+<h3>4. 多模型 + PD 分离<a class="headerlink" href="#id9" title="链接到此标题。">#</a></h3>
+<p>将多模型与 PD 分离结合，实现最大灵活性：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="c1"># sglang_full.yaml</span>
+<span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prefill</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">decode</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ref</span>
+<span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/path/to/ref_model</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+</pre></div>
+</div>
+</section>
+<section id="gpu">
+<h3>5. 占位组用于 GPU 预留<a class="headerlink" href="#gpu" title="链接到此标题。">#</a></h3>
+<p>使用 <code class="docutils literal notranslate"><span class="pre">placeholder</span></code> 组来预留 GPU 而不创建引擎。这在共置训练场景中很有用，部分 GPU 需要为训练预留：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">6</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">placeholder</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span><span class="w">                   </span><span class="c1"># 预留 2 个 GPU（不创建引擎）</span>
+</pre></div>
+</div>
+</section>
+<section id="serverargs">
+<h3>6. 按组覆盖 ServerArgs<a class="headerlink" href="#serverargs" title="链接到此标题。">#</a></h3>
+<p>使用 <code class="docutils literal notranslate"><span class="pre">overrides</span></code> 将 SGLang <code class="docutils literal notranslate"><span class="pre">ServerArgs</span></code> 字段应用到特定服务器组，而不影响其他组：</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">overrides</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">mem_fraction_static</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.85</span>
+<span class="w">          </span><span class="nt">context_length</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">32768</span>
+<span class="w">          </span><span class="nt">chunked_prefill_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4096</span>
+<span class="w">          </span><span class="nt">enable_torch_compile</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+</pre></div>
+</div>
+<p>覆盖具有<strong>最高优先级</strong>，会覆盖基础的 <code class="docutils literal notranslate"><span class="pre">--sglang-*</span></code> CLI 参数和模型级默认值。这对以下场景特别有用：</p>
+<ul class="simple">
+<li><p>不同组使用不同的内存配置</p></li>
+<li><p>prefill 和 decode 使用不同的 context length</p></li>
+<li><p>在特定组上启用实验性功能</p></li>
+</ul>
+</section>
+<section id="sglang">
+<h3>7. 独立 SGLang 启动器<a class="headerlink" href="#sglang" title="链接到此标题。">#</a></h3>
+<p>虽然 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 是为 slime 的训练流水线设计的，但它也可以作为纯推理场景的强大启动器，通过 <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code> 模式或配置 slime 仅关注推理服务。</p>
+<p><strong>使用预启动的外部引擎：</strong></p>
+<p>对于复杂的生产部署，你可能希望独立预启动 SGLang 引擎，然后将其连接到 slime：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 步骤 1：外部启动 SGLang 引擎</span>
+python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<span class="w"> </span>--model-path<span class="w"> </span>/path/to/model<span class="w"> </span>--port<span class="w"> </span><span class="m">10090</span><span class="w"> </span>...
+python<span class="w"> </span>-m<span class="w"> </span>sglang.launch_server<span class="w"> </span>--model-path<span class="w"> </span>/path/to/model<span class="w"> </span>--port<span class="w"> </span><span class="m">10091</span><span class="w"> </span>...
+
+<span class="c1"># 步骤 2：将 slime 连接到外部引擎</span>
+python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-external<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-external-engine-addrs<span class="w"> </span>host1:10090<span class="w"> </span>host2:10091<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<blockquote>
+<div><p><strong>注意：</strong> <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code> 互斥。当你希望 slime 管理完整的引擎生命周期时，使用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code>；当引擎已预部署时，使用 <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code>。</p>
+</div></blockquote>
+</section>
+</section>
+<hr class="docutils" />
+<section id="router">
+<h2>Router 配置<a class="headerlink" href="#router" title="链接到此标题。">#</a></h2>
+<p>每个模型都有独立的 router（默认使用 SGLang Model Gateway）。</p>
+<section id="id10">
+<h3>Router 策略<a class="headerlink" href="#id10" title="链接到此标题。">#</a></h3>
+<p>你可以配置路由策略：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--router-policy<span class="w"> </span>round_robin<span class="w">        </span><span class="c1"># 简单轮询</span>
+--router-policy<span class="w"> </span>consistent_hashing<span class="w">  </span><span class="c1"># 多轮会话亲和</span>
+--router-policy<span class="w"> </span>cache_aware<span class="w">         </span><span class="c1"># 缓存感知路由（默认）</span>
+</pre></div>
+</div>
+</section>
+<section id="agent">
+<h3>多轮 Agent 的会话亲和路由<a class="headerlink" href="#agent" title="链接到此标题。">#</a></h3>
+<p>对于多轮对话和 agentic 场景，会话亲和确保同一对话的所有请求路由到同一个 backend worker。这可以显著提升 prefix cache 命中率，因为 worker 已经缓存了对话历史。</p>
+<p>slime 自动为每个 sample 分配一个唯一的 <code class="docutils literal notranslate"><span class="pre">session_id</span></code>（存储在 <code class="docutils literal notranslate"><span class="pre">sample.session_id</span></code> 中）。当 router 策略为 <code class="docutils literal notranslate"><span class="pre">consistent_hashing</span></code> 时，该 ID 通过 <code class="docutils literal notranslate"><span class="pre">X-SMG-Routing-Key</span></code> header 传递，SGLang Model Gateway 使用它将同一会话的所有轮次确定性地路由到同一个 worker。</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--router-policy<span class="w"> </span>consistent_hashing
+</pre></div>
+</div>
+<p><strong>工作原理：</strong></p>
+<ol class="arabic simple">
+<li><p>每个 sample 通过 UUID 分配唯一的 <code class="docutils literal notranslate"><span class="pre">session_id</span></code></p></li>
+<li><p>每次请求时，slime 在 HTTP header 中传递 <code class="docutils literal notranslate"><span class="pre">X-SMG-Routing-Key:</span> <span class="pre">&lt;session_id&gt;</span></code></p></li>
+<li><p>SGLang Model Gateway 的 consistent hashing 策略将该 key 映射到特定的 worker</p></li>
+<li><p>后续轮次复用相同的 <code class="docutils literal notranslate"><span class="pre">session_id</span></code>，确保命中同一个 worker</p></li>
+</ol>
+</section>
+</section>
+<hr class="docutils" />
+<section id="id11">
+<h2>解析规则<a class="headerlink" href="#id11" title="链接到此标题。">#</a></h2>
+<p>加载配置时，slime 按以下优先级顺序解析：</p>
+<ol class="arabic simple">
+<li><p><strong>每引擎 GPU 数回退：</strong> 组 <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code> → 模型 <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code> → <code class="docutils literal notranslate"><span class="pre">args.rollout_num_gpus_per_engine</span></code></p></li>
+<li><p><strong>模型路径回退：</strong> 组 <code class="docutils literal notranslate"><span class="pre">overrides.model_path</span></code> → 模型 <code class="docutils literal notranslate"><span class="pre">model_path</span></code> → <code class="docutils literal notranslate"><span class="pre">args.hf_checkpoint</span></code></p></li>
+<li><p><strong>权重更新推断：</strong> 如果 <code class="docutils literal notranslate"><span class="pre">update_weights</span></code> 未设置：</p>
+<ul class="simple">
+<li><p>如果有效的 model path 与 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 匹配，则为 <code class="docutils literal notranslate"><span class="pre">true</span></code></p></li>
+<li><p>否则为 <code class="docutils literal notranslate"><span class="pre">false</span></code>（会有警告）</p></li>
+</ul>
+</li>
+<li><p><strong>GPU 总数校验：</strong> 所有模型所有组的 <code class="docutils literal notranslate"><span class="pre">num_gpus</span></code> 总和必须等于 <code class="docutils literal notranslate"><span class="pre">--rollout-num-gpus</span></code>。</p></li>
+</ol>
+</section>
+<hr class="docutils" />
+<section id="id12">
+<h2>互斥<a class="headerlink" href="#id12" title="链接到此标题。">#</a></h2>
+<p><code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 与以下选项互斥：</p>
+<div class="pst-scrollable-table-container"><table class="table">
+<thead>
+<tr class="row-odd"><th class="head"><p>选项</p></th>
+<th class="head"><p>冲突原因</p></th>
+</tr>
+</thead>
+<tbody>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code></p></td>
+<td><p>PD 分离通过 YAML 中的 <code class="docutils literal notranslate"><span class="pre">server_groups</span></code> 配置</p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code></p></td>
+<td><p>外部引擎有自己的拓扑；config 在内部管理生命周期</p></td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<hr class="docutils" />
+<section id="agentic">
+<h2>完整示例：多模型 Agentic 训练<a class="headerlink" href="#agentic" title="链接到此标题。">#</a></h2>
+<p>下面是一个完整的示例，展示在 32 个 GPU 上使用 PD 分离进行多模型 agentic RL 训练：</p>
+<p><strong>配置文件 (<code class="docutils literal notranslate"><span class="pre">sglang_agent.yaml</span></code>)：</strong></p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">prefill</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
+<span class="w">        </span><span class="nt">overrides</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">chunked_prefill_size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8192</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">decode</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">12</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+<span class="w">        </span><span class="nt">overrides</span><span class="p">:</span>
+<span class="w">          </span><span class="nt">mem_fraction_static</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">0.88</span>
+
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ref</span>
+<span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/data/models/Qwen3-32B</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">reward</span>
+<span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/data/models/reward-model</span>
+<span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
+<span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
+<span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
+</pre></div>
+</div>
+<p><strong>启动命令：</strong></p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--sglang-config<span class="w"> </span>sglang_agent.yaml<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--hf-checkpoint<span class="w"> </span>/data/models/Qwen3-8B<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-num-gpus<span class="w"> </span><span class="m">32</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--rollout-function-path<span class="w"> </span>my_agent.rollout.generate_rollout<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--custom-rm-path<span class="w"> </span>my_agent.reward.reward_func<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--advantage-estimator<span class="w"> </span>grpo<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--n-samples-per-prompt<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>...
+</pre></div>
+</div>
+<p><strong>自定义 rollout 函数 (<code class="docutils literal notranslate"><span class="pre">my_agent/rollout.py</span></code>)：</strong></p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.rollout.sglang_rollout</span><span class="w"> </span><span class="kn">import</span> <span class="n">get_model_url</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.http_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">post</span>
+
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_with_models</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;使用 actor 生成，用 reward 模型打分，与 reference 比较。&quot;&quot;&quot;</span>
+    
+    <span class="c1"># 从 actor 生成</span>
+    <span class="n">actor_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;actor&quot;</span><span class="p">,</span> <span class="s2">&quot;/generate&quot;</span><span class="p">)</span>
+    <span class="n">actor_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">actor_url</span><span class="p">,</span> <span class="p">{</span>
+        <span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span><span class="p">,</span>
+        <span class="s2">&quot;sampling_params&quot;</span><span class="p">:</span> <span class="n">sampling_params</span><span class="p">,</span>
+        <span class="s2">&quot;return_logprob&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="p">})</span>
+    
+    <span class="c1"># 获取 reference logprobs 用于 KL penalty</span>
+    <span class="n">ref_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;ref&quot;</span><span class="p">,</span> <span class="s2">&quot;/generate&quot;</span><span class="p">)</span>
+    <span class="n">ref_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">ref_url</span><span class="p">,</span> <span class="p">{</span>
+        <span class="s2">&quot;text&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span> <span class="o">+</span> <span class="n">actor_output</span><span class="p">[</span><span class="s2">&quot;text&quot;</span><span class="p">],</span>
+        <span class="s2">&quot;sampling_params&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;max_new_tokens&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">,</span> <span class="s2">&quot;temperature&quot;</span><span class="p">:</span> <span class="mi">0</span><span class="p">},</span>
+        <span class="s2">&quot;return_logprob&quot;</span><span class="p">:</span> <span class="kc">True</span><span class="p">,</span>
+    <span class="p">})</span>
+    
+    <span class="c1"># 用 reward 模型打分</span>
+    <span class="n">reward_url</span> <span class="o">=</span> <span class="n">get_model_url</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="s2">&quot;reward&quot;</span><span class="p">,</span> <span class="s2">&quot;/v1/chat/completions&quot;</span><span class="p">)</span>
+    <span class="n">reward_output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">reward_url</span><span class="p">,</span> <span class="p">{</span>
+        <span class="s2">&quot;model&quot;</span><span class="p">:</span> <span class="s2">&quot;reward&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;messages&quot;</span><span class="p">:</span> <span class="p">[{</span><span class="s2">&quot;role&quot;</span><span class="p">:</span> <span class="s2">&quot;user&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="n">sample</span><span class="o">.</span><span class="n">prompt</span> <span class="o">+</span> <span class="n">actor_output</span><span class="p">[</span><span class="s2">&quot;text&quot;</span><span class="p">]}],</span>
+    <span class="p">})</span>
+    
+    <span class="c1"># ... 处理输出并返回 Sample</span>
+</pre></div>
+</div>
+</section>
+<hr class="docutils" />
+<section id="faq">
+<h2>FAQ<a class="headerlink" href="#faq" title="链接到此标题。">#</a></h2>
+<section id="q-pd-regular">
+<h3>Q: 同一模型内可以混用 PD 和 regular 组吗？<a class="headerlink" href="#q-pd-regular" title="链接到此标题。">#</a></h3>
+<p>不可以。PD 分离要求一个模型的服务器组要么全部是 prefill/decode 对，要么全部是 regular。不支持在同一模型内混用 <code class="docutils literal notranslate"><span class="pre">regular</span></code> 与 <code class="docutils literal notranslate"><span class="pre">prefill</span></code>/<code class="docutils literal notranslate"><span class="pre">decode</span></code>。</p>
+</section>
+<section id="q-num-gpus-num-gpus-per-engine">
+<h3>Q: 如果 <code class="docutils literal notranslate"><span class="pre">num_gpus</span></code> 不能被 <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code> 整除怎么办？<a class="headerlink" href="#q-num-gpus-num-gpus-per-engine" title="链接到此标题。">#</a></h3>
+<p>对于跨节点引擎（<code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span> <span class="pre">&gt;</span> <span class="pre">num_gpus_per_node</span></code>），划分基于每节点的本地 GPU 数量。例如，每节点 8 个 GPU 且 <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine:</span> <span class="pre">16</span></code> 时，每个引擎横跨 2 个节点。</p>
+</section>
+<section id="q-model-path">
+<h3>Q: 同一模型内的不同服务器组可以使用不同的 model path 吗？<a class="headerlink" href="#q-model-path" title="链接到此标题。">#</a></h3>
+<p>不可以。同一模型内的所有服务器组必须共享相同的 <code class="docutils literal notranslate"><span class="pre">model_path</span></code>。这在 <code class="docutils literal notranslate"><span class="pre">resolve()</span></code> 时会被校验。如果需要不同的模型，请定义为独立的模型条目。</p>
+</section>
+<section id="q-router">
+<h3>Q: 运行时如何获取特定模型的 router 地址？<a class="headerlink" href="#q-router" title="链接到此标题。">#</a></h3>
+<p>使用 <code class="docutils literal notranslate"><span class="pre">slime.rollout.sglang_rollout</span></code> 中的 <code class="docutils literal notranslate"><span class="pre">get_model_url(args,</span> <span class="pre">&quot;model_name&quot;,</span> <span class="pre">&quot;/endpoint&quot;)</span></code>。它从 <code class="docutils literal notranslate"><span class="pre">args.sglang_model_routers</span></code>（一个 <code class="docutils literal notranslate"><span class="pre">{</span> <span class="pre">model_name:</span> <span class="pre">(ip,</span> <span class="pre">port)</span> <span class="pre">}</span></code> 字典）中读取，该字典在引擎启动后自动填充。</p>
+</section>
+<section id="q-sglang-config">
+<h3>Q: 可以不训练，只用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 做推理吗？<a class="headerlink" href="#q-sglang-config" title="链接到此标题。">#</a></h3>
+<p>虽然 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 是为 slime 的训练循环设计的，但你可以通过配置仅 rollout 的运行来实现纯推理场景。对于完全独立的 SGLang 推理服务，建议直接使用 SGLang 原生的 <code class="docutils literal notranslate"><span class="pre">launch_server</span></code>，或使用 <code class="docutils literal notranslate"><span class="pre">--rollout-external</span></code> 模式连接预部署的引擎。</p>
+</section>
+<section id="q-sglang-config-prefill-num-servers">
+<h3>Q: <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code> 是什么关系？<a class="headerlink" href="#q-sglang-config-prefill-num-servers" title="链接到此标题。">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code> 是启用 PD 分离的旧方式（它创建一个带有 prefill + decode 组的单模型）。<code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 是更新、更灵活的方式。两者互斥。我们推荐所有新部署迁移到 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code>。</p>
+</section>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <div class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item">
+  <div class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> 目录
+  </div>
+  <nav class="bd-toc-nav page-toc">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">架构概览</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">配置格式</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">字段参考</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">模型级字段</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">服务器组级字段</a></li>
+</ul>
+</li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#worker">Worker 类型</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">使用模式</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">1. 基本单模型部署</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd">2. PD 分离</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">3. 多模型服务</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">4. 多模型 + PD 分离</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#gpu">5. 占位组用于 GPU 预留</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#serverargs">6. 按组覆盖 ServerArgs</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang">7. 独立 SGLang 启动器</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#router">Router 配置</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id10">Router 策略</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#agent">多轮 Agent 的会话亲和路由</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id11">解析规则</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id12">互斥</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agentic">完整示例：多模型 Agentic 训练</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#faq">FAQ</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-pd-regular">Q: 同一模型内可以混用 PD 和 regular 组吗？</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-num-gpus-num-gpus-per-engine">Q: 如果 <code class="docutils literal notranslate"><span class="pre">num_gpus</span></code> 不能被 <code class="docutils literal notranslate"><span class="pre">num_gpus_per_engine</span></code> 整除怎么办？</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-model-path">Q: 同一模型内的不同服务器组可以使用不同的 model path 吗？</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-router">Q: 运行时如何获取特定模型的 router 地址？</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-sglang-config">Q: 可以不训练，只用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 做推理吗？</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#q-sglang-config-prefill-num-servers">Q: <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 和 <code class="docutils literal notranslate"><span class="pre">--prefill-num-servers</span></code> 是什么关系？</a></li>
+</ul>
+</li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+作者： slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  最后更新于 2026 年 03 月 08 日.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script src="../_static/scripts/bootstrap.js?digest=dfe6caa3a7d634c4db9b"></script>
+<script src="../_static/scripts/pydata-sphinx-theme.js?digest=dfe6caa3a7d634c4db9b"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

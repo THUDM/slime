@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Slime Router &#8212; slime</title>
+    <title>slime router &#8212; slime</title>
   
   
   
@@ -54,7 +54,7 @@
     <link rel="prev" title="128xH100 训练 DeepSeek R1" href="../examples/deepseek-r1.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 03 月 07 日"/>
+    <meta name="docbuild:last-update" content="2026 年 03 月 08 日"/>
   </head>
   
   
@@ -183,7 +183,7 @@
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
 <ul class="current nav bd-sidenav">
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Slime Router</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">slime router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">投机采样</a></li>
 <li class="toctree-l1"><a class="reference internal" href="low-precision.html">低精度训练</a></li>
@@ -429,7 +429,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>Slime Router</h1>
+    <h1>slime router</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -439,30 +439,23 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#slimerouter">1. 什么是 SlimeRouter？</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">启动方式</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">1. 什么是 slime router？</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">启动方式</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">2. 为什么需要 SlimeRouter</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">2. 为什么需要 slime router</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#radix-tree-cache-token">2.1 Radix-tree cache（透明的 token 管理）</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.2 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang">SGLang 端</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime">Slime 端</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">为什么需要 SlimeRouter</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime">slime 端</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">为什么需要 slime router</a></li>
 </ul>
 </li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-model-gateway">3. 与 SGLang Model Gateway 的区别</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">主要区别</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">如何选择</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agent">4. 多轮 Agent 的会话亲和性路由</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">什么是会话亲和性？</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">工作原理</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">配置方法</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">注意事项</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">主要区别</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">如何选择</a></li>
 </ul>
 </li>
 </ul>
@@ -477,12 +470,12 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="slime-router">
-<h1>Slime Router<a class="headerlink" href="#slime-router" title="链接到此标题。">#</a></h1>
-<p>Slime 提供一个可选的 SlimeRouter，用于 rollout / data generation 阶段。它是一个轻量级的 HTTP router/proxy，位于一个或多个 SGLang worker server 前，补齐一些 training-oriented 能力——这些并不是 serving-focused router 的主要目标。</p>
+<h1>slime router<a class="headerlink" href="#slime-router" title="链接到此标题。">#</a></h1>
+<p>slime 提供一个可选的 slime router，用于 rollout / data generation 阶段。它是一个轻量级的 HTTP router/proxy，位于一个或多个 SGLang worker server 前，补齐一些 training-oriented 能力——这些并不是 serving-focused router 的主要目标。</p>
 <hr class="docutils" />
-<section id="slimerouter">
-<h2>1. 什么是 SlimeRouter？<a class="headerlink" href="#slimerouter" title="链接到此标题。">#</a></h2>
-<p>SlimeRouter 是一个小型 FastAPI 服务，主要能力包括：</p>
+<section id="id1">
+<h2>1. 什么是 slime router？<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
+<p>slime router 是一个小型 FastAPI 服务，主要能力包括：</p>
 <ul class="simple">
 <li><p>注册 worker（SGLang HTTP server）到本地池</p></li>
 <li><p>路由请求到选定的 worker（简单的 least-inflight load balancing）</p></li>
@@ -491,19 +484,19 @@ document.write(`
 <li><p>支持 middleware plugins（通过 <code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>）实现 rollout 特定处理（例如 caching、request/response transform）</p></li>
 </ul>
 <p>在 slime 架构中，router 是 rollout 系统（&quot;SGLang + router&quot;）的一部分：负责生成样本并将其推入数据缓冲区。</p>
-<section id="id1">
-<h3>启动方式<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h3>
+<section id="id2">
+<h3>启动方式<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h3>
 <p>在分布式训练中，当未提供 <code class="docutils literal notranslate"><span class="pre">--sglang-router-ip</span></code> 时，slime 会自动启动一个 router：</p>
 <ul class="simple">
-<li><p>如果设置了 <code class="docutils literal notranslate"><span class="pre">--use-slime-router</span></code>，slime 启动 SlimeRouter</p></li>
+<li><p>如果设置了 <code class="docutils literal notranslate"><span class="pre">--use-slime-router</span></code>，slime 启动 slime router</p></li>
 <li><p>否则，slime 启动 SGLang Model Gateway</p></li>
 </ul>
 </section>
 </section>
 <hr class="docutils" />
-<section id="id2">
-<h2>2. 为什么需要 SlimeRouter<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
-<p>与 production inference 不同，RL rollout 往往需要捕获用于训练的额外 metadata：token-level logprobs、loss masks，以及（对 MoE 模型）expert routing decisions。SlimeRouter 通过 middleware system 和 passthrough proxy 设计提供这些能力。</p>
+<section id="id3">
+<h2>2. 为什么需要 slime router<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
+<p>与 production inference 不同，RL rollout 往往需要捕获用于训练的额外 metadata：token-level logprobs、loss masks，以及（对 MoE 模型）expert routing decisions。slime router 通过 middleware system 和 passthrough proxy 设计提供这些能力。</p>
 <section id="radix-tree-cache-token">
 <h3>2.1 Radix-tree cache（透明的 token 管理）<a class="headerlink" href="#radix-tree-cache-token" title="链接到此标题。">#</a></h3>
 <blockquote>
@@ -534,8 +527,8 @@ document.write(`
 </ul>
 </section>
 <section id="slime">
-<h4>Slime 端<a class="headerlink" href="#slime" title="链接到此标题。">#</a></h4>
-<p>Slime 侧消费路由数据，并在训练中完成 replay：</p>
+<h4>slime 端<a class="headerlink" href="#slime" title="链接到此标题。">#</a></h4>
+<p>slime 侧消费路由数据，并在训练中完成 replay：</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--use-slime-router</span> <span class="pre">--use-rollout-routing-replay</span></code>：启用 R3 需要同时设置这两个标志</p></li>
 <li><p>Rollout 发送 <code class="docutils literal notranslate"><span class="pre">return_routed_experts=True</span></code> 并将结果存储在 <code class="docutils literal notranslate"><span class="pre">sample.rollout_routed_experts</span></code> 中</p></li>
@@ -543,74 +536,27 @@ document.write(`
 <li><p>forward pass 期间，直接 replay 记录的 routing decisions，而不是重新计算</p></li>
 </ul>
 </section>
-<section id="id3">
-<h4>为什么需要 SlimeRouter<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h4>
-<p>我们需要 SlimeRouter，是因为当请求设置 <code class="docutils literal notranslate"><span class="pre">return_routed_experts=true</span></code> 时，SGLang worker 会在响应里返回路由信息（<code class="docutils literal notranslate"><span class="pre">meta_info.routed_experts</span></code>），而 SlimeRouter 会端到端保留这个字段。SGLang Model Gateway 会用固定 schema 重建响应，可能会丢掉这类额外 metadata（细节见第 3 节）。</p>
+<section id="id4">
+<h4>为什么需要 slime router<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h4>
+<p>我们需要 slime router，是因为当请求设置 <code class="docutils literal notranslate"><span class="pre">return_routed_experts=true</span></code> 时，SGLang worker 会在响应里返回路由信息（<code class="docutils literal notranslate"><span class="pre">meta_info.routed_experts</span></code>），而 slime router 会端到端保留这个字段。SGLang Model Gateway 会用固定 schema 重建响应，可能会丢掉这类额外 metadata（细节见第 3 节）。</p>
 </section>
 </section>
 </section>
 <hr class="docutils" />
 <section id="sglang-model-gateway">
 <h2>3. 与 SGLang Model Gateway 的区别<a class="headerlink" href="#sglang-model-gateway" title="链接到此标题。">#</a></h2>
-<p>SlimeRouter 与 SGLang Model Gateway 都能将请求路由到 worker，但它们面向的目标不同、优化方向也不同。</p>
-<section id="id4">
-<h3>主要区别<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h3>
-<p>SlimeRouter 是一个轻量级的 Python/FastAPI proxy，作为 SGLang worker 的 passthrough proxy。这种 passthrough 设计使得 RL 特定功能成为可能，例如 radix-tree trajectory caching 和 R3（需要保留原始 response metadata，如 <code class="docutils literal notranslate"><span class="pre">routed_experts</span></code>）。</p>
+<p>slime router 与 SGLang Model Gateway 都能将请求路由到 worker，但它们面向的目标不同、优化方向也不同。</p>
+<section id="id5">
+<h3>主要区别<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h3>
+<p>slime router 是一个轻量级的 Python/FastAPI proxy，作为 SGLang worker 的 passthrough proxy。这种 passthrough 设计使得 RL 特定功能成为可能，例如 radix-tree trajectory caching 和 R3（需要保留原始 response metadata，如 <code class="docutils literal notranslate"><span class="pre">routed_experts</span></code>）。</p>
 <p>SGLang Model Gateway 是一个高性能 Rust router，面向大规模 inference 优化：async non-blocking routing、高级 fault tolerance（retries、circuit breakers）、多种 load balancing policy（包括 cache-aware routing），以及 PD disaggregation 支持。但它会用固定 schema 重建响应，因此不保留 slime 的 R3 流程所需 metadata。</p>
 <p>更多关于 SGLang Model Gateway 的信息，请参阅<a class="reference external" href="https://docs.sglang.io/advanced_features/sgl_model_gateway.html">官方文档</a>。</p>
 </section>
-<section id="id5">
-<h3>如何选择<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h3>
+<section id="id6">
+<h3>如何选择<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
 <ul class="simple">
 <li><p>当你需要 R3 或 radix-tree cache 时，使用 SlimeRouter</p></li>
 <li><p>其他情况使用 SGLang Model Gateway（推荐默认选项）</p></li>
-</ul>
-</section>
-</section>
-<hr class="docutils" />
-<section id="agent">
-<h2>4. 多轮 Agent 的会话亲和性路由<a class="headerlink" href="#agent" title="链接到此标题。">#</a></h2>
-<p>当使用 SGLang Model Gateway 的一致性哈希路由策略时，slime 会自动为每个 rollout session 分配唯一的 session ID，并将其作为路由键来实现会话亲和性。</p>
-<section id="id6">
-<h3>什么是会话亲和性？<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
-<p>会话亲和性（Session Affinity，也称为粘性会话）确保属于同一对话或 agent session 的所有请求都被路由到相同的后端 worker。这对以下场景有益：</p>
-<ul class="simple">
-<li><p><strong>多轮对话</strong>：保持相同 worker 可以提高前缀缓存命中率</p></li>
-<li><p><strong>多 agent 系统</strong>：确保 agent 状态一致性和更好的资源局部性</p></li>
-<li><p><strong>调试</strong>：更容易追踪和调试特定会话</p></li>
-</ul>
-</section>
-<section id="id7">
-<h3>工作原理<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h3>
-<p>当 rollout 系统生成样本时，每个样本都会被分配一个唯一的 <code class="docutils literal notranslate"><span class="pre">session_id</span></code>。这个 ID 会：</p>
-<ol class="arabic simple">
-<li><p>使用 UUID 为每个样本自动生成</p></li>
-<li><p>存储在 <code class="docutils literal notranslate"><span class="pre">sample.session_id</span></code> 字段中</p></li>
-<li><p>当 router policy 为 <code class="docutils literal notranslate"><span class="pre">consistent_hashing</span></code> 时，作为 <code class="docutils literal notranslate"><span class="pre">X-SMG-Routing-Key</span></code> header 传递</p></li>
-</ol>
-<p>SGLang Model Gateway 的一致性哈希策略会使用这个路由键，确定性地为所有具有相同 session ID 的请求选择相同的 worker。</p>
-</section>
-<section id="id8">
-<h3>配置方法<a class="headerlink" href="#id8" title="链接到此标题。">#</a></h3>
-<p>启用会话亲和性路由只需在 slime 中配置 router policy 参数：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-router-policy<span class="w"> </span>consistent_hashing
-</pre></div>
-</div>
-<p>Slime 会自动启动 SGLang Model Gateway 并使用一致性哈希策略。</p>
-<blockquote>
-<div><p><strong>注意</strong>：如果遇到 <code class="docutils literal notranslate"><span class="pre">consistent_hashing</span></code> policy 不可用的错误，请升级 sglang-router：</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span>sglang-router
-</pre></div>
-</div>
-</div></blockquote>
-</section>
-<section id="id9">
-<h3>注意事项<a class="headerlink" href="#id9" title="链接到此标题。">#</a></h3>
-<ul class="simple">
-<li><p>每个样本都有自己独立的 session ID</p></li>
-<li><p>同一 group 中的不同样本可能会被路由到不同的 worker</p></li>
-<li><p>同一样本的后续轮次会保持相同的 session ID</p></li>
-<li><p>目前该功能只适用于 SGLang Model Gateway</p></li>
 </ul>
 </section>
 </section>
@@ -661,30 +607,23 @@ document.write(`
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#slimerouter">1. 什么是 SlimeRouter？</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">启动方式</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">1. 什么是 slime router？</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">启动方式</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">2. 为什么需要 SlimeRouter</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">2. 为什么需要 slime router</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#radix-tree-cache-token">2.1 Radix-tree cache（透明的 token 管理）</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.2 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang">SGLang 端</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime">Slime 端</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">为什么需要 SlimeRouter</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime">slime 端</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">为什么需要 slime router</a></li>
 </ul>
 </li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-model-gateway">3. 与 SGLang Model Gateway 的区别</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">主要区别</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">如何选择</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#agent">4. 多轮 Agent 的会话亲和性路由</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">什么是会话亲和性？</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">工作原理</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id8">配置方法</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id9">注意事项</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">主要区别</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">如何选择</a></li>
 </ul>
 </li>
 </ul>
@@ -720,7 +659,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 03 月 07 日.
+  最后更新于 2026 年 03 月 08 日.
   <br/>
 </p>
   </div>

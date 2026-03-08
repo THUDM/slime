@@ -54,7 +54,7 @@
     <link rel="prev" title="快速使用" href="quick_start.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
-    <meta name="docbuild:last-update" content="2026 年 03 月 07 日"/>
+    <meta name="docbuild:last-update" content="2026 年 03 月 08 日"/>
   </head>
   
   
@@ -183,7 +183,7 @@
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
 <ul class="nav bd-sidenav">
-<li class="toctree-l1"><a class="reference internal" href="../advanced/slime-router.html">Slime Router</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/slime-router.html">slime router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">投机采样</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">低精度训练</a></li>
@@ -669,7 +669,6 @@ document.write(`
 </li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>：slime 中默认的方案是 per sample loss，即 <code class="docutils literal notranslate"><span class="pre">mean(sum(sample_i)</span> <span class="pre">/</span> <span class="pre">len(sample_i))</span></code>，如果需要计算 per token loss，即 <code class="docutils literal notranslate"><span class="pre">sum(sum(sample_i))</span> <span class="pre">/</span> <span class="pre">sum(len(sample_i))</span></code>，可以开启 <code class="docutils literal notranslate"><span class="pre">--calculate-per-token-loss</span></code>；</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">--use-tis</span></code>：如果需要开启 tis（https://fengyao.notion.site/off-policy-rl），可以开启这一设置；</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">--true-on-policy-mode</span></code>：开启 True On-Policy 模式，即在训练过程中严格保证数据是当前策略生成的。</p></li>
 </ul>
 <section id="grpo">
 <h4>GRPO 算法<a class="headerlink" href="#grpo" title="链接到此标题。">#</a></h4>
@@ -837,26 +836,26 @@ document.write(`
 </section>
 <section id="sglang-config">
 <h3>高级引擎配置（--sglang-config）<a class="headerlink" href="#sglang-config" title="链接到此标题。">#</a></h3>
-<p>对于高级部署场景，可以使用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 指定一个 YAML 文件，来配置引擎组、多模型部署以及选择性权重更新。</p>
+<p>对于高级部署场景，可以使用 <code class="docutils literal notranslate"><span class="pre">--sglang-config</span></code> 指定一个 YAML 文件，来配置服务器组、多模型部署以及选择性权重更新。</p>
 <p><strong>多模型部署</strong>允许同时服务多个模型（例如一个接收权重更新的 actor 模型和一个冻结的 reference/reward 模型）：</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">sglang</span><span class="p">:</span>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">actor</span>
 <span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span><span class="w">          </span><span class="c1"># 接收训练的权重更新（默认）</span>
-<span class="w">    </span><span class="nt">engine_groups</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
 <span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">8</span>
 <span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
 <span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ref</span>
 <span class="w">    </span><span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">/path/to/ref_model</span>
 <span class="w">    </span><span class="nt">update_weights</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">          </span><span class="c1"># 冻结，不更新权重</span>
-<span class="w">    </span><span class="nt">engine_groups</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">server_groups</span><span class="p">:</span>
 <span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">worker_type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">regular</span>
 <span class="w">        </span><span class="nt">num_gpus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4</span>
 <span class="w">        </span><span class="nt">num_gpus_per_engine</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">2</span>
 </pre></div>
 </div>
 <p>每个模型都有自己独立的 router。每个模型的 router 信息可通过 <code class="docutils literal notranslate"><span class="pre">args.sglang_model_routers</span></code>（一个将模型名映射到 <code class="docutils literal notranslate"><span class="pre">(ip,</span> <span class="pre">port)</span></code> 元组的字典）访问。自定义 rollout 函数可以使用 <code class="docutils literal notranslate"><span class="pre">slime.rollout.sglang_rollout</span></code> 中的 <code class="docutils literal notranslate"><span class="pre">get_model_url(args,</span> <span class="pre">&quot;ref&quot;)</span></code> 来将请求路由到指定模型。</p>
-<p><strong>引擎组功能：</strong></p>
+<p><strong>服务器组功能：</strong></p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">worker_type</span></code>：<code class="docutils literal notranslate"><span class="pre">regular</span></code>、<code class="docutils literal notranslate"><span class="pre">prefill</span></code>、<code class="docutils literal notranslate"><span class="pre">decode</span></code> 或 <code class="docutils literal notranslate"><span class="pre">placeholder</span></code>（预留 GPU 位置但不创建引擎）</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">overrides</span></code>：SGLang <code class="docutils literal notranslate"><span class="pre">ServerArgs</span></code> 字段覆盖字典，会叠加在 <code class="docutils literal notranslate"><span class="pre">--sglang-*</span></code> CLI 参数之上</p></li>
@@ -1000,7 +999,7 @@ document.write(`
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 03 月 07 日.
+  最后更新于 2026 年 03 月 08 日.
   <br/>
 </p>
   </div>

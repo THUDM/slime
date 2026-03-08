@@ -8,7 +8,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
-    <title>Slime Router &#8212; slime</title>
+    <title>slime router &#8212; slime</title>
   
   
   
@@ -54,7 +54,7 @@
     <link rel="prev" title="DeepSeek R1 with 128xH100" href="../examples/deepseek-r1.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-    <meta name="docbuild:last-update" content="Mar 07, 2026"/>
+    <meta name="docbuild:last-update" content="Mar 08, 2026"/>
   </head>
   
   
@@ -183,7 +183,7 @@
 </ul>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
 <ul class="current nav bd-sidenav">
-<li class="toctree-l1 current active"><a class="current reference internal" href="#">Slime Router</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">slime router</a></li>
 <li class="toctree-l1"><a class="reference internal" href="on-policy-distillation.html">On-Policy Distillation</a></li>
 <li class="toctree-l1"><a class="reference internal" href="speculative-decoding.html">Speculative Decoding</a></li>
 <li class="toctree-l1"><a class="reference internal" href="low-precision.html">Low Precision Training</a></li>
@@ -433,7 +433,7 @@ document.write(`
               
 
 <div id="jb-print-docs-body" class="onlyprint">
-    <h1>Slime Router</h1>
+    <h1>slime router</h1>
     <!-- Table of contents -->
     <div id="print-main-content">
         <div id="jb-print-toc">
@@ -443,16 +443,16 @@ document.write(`
             </div>
             <nav aria-label="Page">
                 <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-slimerouter">1. What is SlimeRouter?</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-slime-router">1. What is slime router?</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-is-launched">How it is launched</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-we-need-slimerouter">2. Why we need SlimeRouter</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-we-need-slime-router">2. Why we need slime router</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#radix-tree-cache-transparent-token-management">2.1 Radix-tree cache (transparent token management)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.2 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-side">SGLang side</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-side">Slime side</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#why-slimerouter-is-needed">Why SlimeRouter is needed</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-side">slime side</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#why-slime-router-is-needed">Why slime router is needed</a></li>
 </ul>
 </li>
 </ul>
@@ -460,13 +460,6 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#differences-vs-sglang-model-gateway">3. Differences vs SGLang Model Gateway</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#key-differences">Key differences</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#when-to-use-which">When to use which</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#session-affinity-routing-for-multi-turn-agents">4. Session-Affinity Routing for Multi-Turn Agents</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-session-affinity">What is session affinity?</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works">How it works</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#notes">Notes</a></li>
 </ul>
 </li>
 </ul>
@@ -481,12 +474,12 @@ document.write(`
                 <article class="bd-article">
                   
   <section class="tex2jax_ignore mathjax_ignore" id="slime-router">
-<h1>Slime Router<a class="headerlink" href="#slime-router" title="Link to this heading">#</a></h1>
-<p>Slime includes an optional SlimeRouter used during rollout / data generation. It is a lightweight HTTP router/proxy that sits in front of one or more SGLang worker servers and adds training-oriented capabilities that are not the main goal of serving-focused routers.</p>
+<h1>slime router<a class="headerlink" href="#slime-router" title="Link to this heading">#</a></h1>
+<p>slime includes an optional slime router used during rollout / data generation. It is a lightweight HTTP router/proxy that sits in front of one or more SGLang worker servers and adds training-oriented capabilities that are not the main goal of serving-focused routers.</p>
 <hr class="docutils" />
-<section id="what-is-slimerouter">
-<h2>1. What is SlimeRouter?<a class="headerlink" href="#what-is-slimerouter" title="Link to this heading">#</a></h2>
-<p>SlimeRouter is a small FastAPI service that:</p>
+<section id="what-is-slime-router">
+<h2>1. What is slime router?<a class="headerlink" href="#what-is-slime-router" title="Link to this heading">#</a></h2>
+<p>slime router is a small FastAPI service that:</p>
 <ul class="simple">
 <li><p>Registers workers (SGLang HTTP servers) into a local pool</p></li>
 <li><p>Routes requests to a selected worker (simple least-inflight load balancing)</p></li>
@@ -499,15 +492,15 @@ document.write(`
 <h3>How it is launched<a class="headerlink" href="#how-it-is-launched" title="Link to this heading">#</a></h3>
 <p>In distributed training, slime will start a router automatically when <code class="docutils literal notranslate"><span class="pre">--sglang-router-ip</span></code> is not provided:</p>
 <ul class="simple">
-<li><p>If <code class="docutils literal notranslate"><span class="pre">--use-slime-router</span></code> is set, slime starts SlimeRouter</p></li>
+<li><p>If <code class="docutils literal notranslate"><span class="pre">--use-slime-router</span></code> is set, slime starts slime router</p></li>
 <li><p>Otherwise, slime starts SGLang Model Gateway</p></li>
 </ul>
 </section>
 </section>
 <hr class="docutils" />
-<section id="why-we-need-slimerouter">
-<h2>2. Why we need SlimeRouter<a class="headerlink" href="#why-we-need-slimerouter" title="Link to this heading">#</a></h2>
-<p>Unlike production inference, RL rollout needs to capture additional metadata for training: token-level logprobs, loss masks, and (for MoE models) expert routing decisions. SlimeRouter provides these capabilities through its middleware system and passthrough proxy design.</p>
+<section id="why-we-need-slime-router">
+<h2>2. Why we need slime router<a class="headerlink" href="#why-we-need-slime-router" title="Link to this heading">#</a></h2>
+<p>Unlike production inference, RL rollout needs to capture additional metadata for training: token-level logprobs, loss masks, and (for MoE models) expert routing decisions. slime router provides these capabilities through its middleware system and passthrough proxy design.</p>
 <section id="radix-tree-cache-transparent-token-management">
 <h3>2.1 Radix-tree cache (transparent token management)<a class="headerlink" href="#radix-tree-cache-transparent-token-management" title="Link to this heading">#</a></h3>
 <blockquote>
@@ -538,8 +531,8 @@ document.write(`
 </ul>
 </section>
 <section id="slime-side">
-<h4>Slime side<a class="headerlink" href="#slime-side" title="Link to this heading">#</a></h4>
-<p>Slime consumes the routing data and replays it during training:</p>
+<h4>slime side<a class="headerlink" href="#slime-side" title="Link to this heading">#</a></h4>
+<p>slime consumes the routing data and replays it during training:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">--use-slime-router</span> <span class="pre">--use-rollout-routing-replay</span></code>: both flags required to enable R3</p></li>
 <li><p>Rollout sends <code class="docutils literal notranslate"><span class="pre">return_routed_experts=True</span></code> and stores results in <code class="docutils literal notranslate"><span class="pre">sample.rollout_routed_experts</span></code></p></li>
@@ -547,74 +540,27 @@ document.write(`
 <li><p>During forward pass, recorded routing decisions are replayed instead of recomputed</p></li>
 </ul>
 </section>
-<section id="why-slimerouter-is-needed">
-<h4>Why SlimeRouter is needed<a class="headerlink" href="#why-slimerouter-is-needed" title="Link to this heading">#</a></h4>
-<p>We need SlimeRouter because the SGLang worker returns routed experts in the response (<code class="docutils literal notranslate"><span class="pre">meta_info.routed_experts</span></code>) when the request sets <code class="docutils literal notranslate"><span class="pre">return_routed_experts=true</span></code>, and SlimeRouter preserves this field end-to-end. SGLang Model Gateway may drop this extra metadata when it reconstructs responses with a fixed schema (see section 3).</p>
+<section id="why-slime-router-is-needed">
+<h4>Why slime router is needed<a class="headerlink" href="#why-slime-router-is-needed" title="Link to this heading">#</a></h4>
+<p>We need slime router because the SGLang worker returns routed experts in the response (<code class="docutils literal notranslate"><span class="pre">meta_info.routed_experts</span></code>) when the request sets <code class="docutils literal notranslate"><span class="pre">return_routed_experts=true</span></code>, and slime router preserves this field end-to-end. SGLang Model Gateway may drop this extra metadata when it reconstructs responses with a fixed schema (see section 3).</p>
 </section>
 </section>
 </section>
 <hr class="docutils" />
 <section id="differences-vs-sglang-model-gateway">
 <h2>3. Differences vs SGLang Model Gateway<a class="headerlink" href="#differences-vs-sglang-model-gateway" title="Link to this heading">#</a></h2>
-<p>SlimeRouter and SGLang Model Gateway can both route requests to workers, but they are optimized for different goals.</p>
+<p>slime router and SGLang Model Gateway can both route requests to workers, but they are optimized for different goals.</p>
 <section id="key-differences">
 <h3>Key differences<a class="headerlink" href="#key-differences" title="Link to this heading">#</a></h3>
-<p>SlimeRouter is a lightweight Python/FastAPI proxy that acts as a passthrough to SGLang workers. This passthrough design enables RL-specific features like radix-tree trajectory caching and R3 (which require preserving raw response metadata like <code class="docutils literal notranslate"><span class="pre">routed_experts</span></code>).</p>
+<p>slime router is a lightweight Python/FastAPI proxy that acts as a passthrough to SGLang workers. This passthrough design enables RL-specific features like radix-tree trajectory caching and R3 (which require preserving raw response metadata like <code class="docutils literal notranslate"><span class="pre">routed_experts</span></code>).</p>
 <p>SGLang Model Gateway is a high-performance Rust-based router optimized for large-scale inference: async non-blocking routing, advanced fault tolerance (retries, circuit breakers), multiple load balancing policies (including cache-aware routing), and PD disaggregation support. However, it reconstructs responses with a fixed schema, so it does not preserve the metadata needed for slime’s R3 flow.</p>
 <p>For more details on SGLang Model Gateway, see the <a class="reference external" href="https://docs.sglang.io/advanced_features/sgl_model_gateway.html">official documentation</a>.</p>
 </section>
 <section id="when-to-use-which">
 <h3>When to use which<a class="headerlink" href="#when-to-use-which" title="Link to this heading">#</a></h3>
 <ul class="simple">
-<li><p>Use SlimeRouter when you need R3 or radix-tree caching</p></li>
+<li><p>Use slime router when you need R3 or radix-tree caching</p></li>
 <li><p>Use SGLang Model Gateway for everything else (recommended default)</p></li>
-</ul>
-</section>
-</section>
-<hr class="docutils" />
-<section id="session-affinity-routing-for-multi-turn-agents">
-<h2>4. Session-Affinity Routing for Multi-Turn Agents<a class="headerlink" href="#session-affinity-routing-for-multi-turn-agents" title="Link to this heading">#</a></h2>
-<p>When using SGLang Model Gateway with consistent hashing routing policy, Slime automatically assigns each rollout session a unique session ID and uses it as the routing key to enable session affinity.</p>
-<section id="what-is-session-affinity">
-<h3>What is session affinity?<a class="headerlink" href="#what-is-session-affinity" title="Link to this heading">#</a></h3>
-<p>Session affinity (also called sticky sessions) ensures that all requests belonging to the same conversation or agent session are routed to the same backend worker. This is beneficial for:</p>
-<ul class="simple">
-<li><p><strong>Multi-turn dialogues</strong>: Keeping the same worker improves prefix cache hit rates</p></li>
-<li><p><strong>Multi-agent systems</strong>: Ensures agent state consistency and better resource locality</p></li>
-<li><p><strong>Debugging</strong>: Makes it easier to trace and debug specific sessions</p></li>
-</ul>
-</section>
-<section id="how-it-works">
-<h3>How it works<a class="headerlink" href="#how-it-works" title="Link to this heading">#</a></h3>
-<p>When the rollout system generates samples, each sample is assigned a unique <code class="docutils literal notranslate"><span class="pre">session_id</span></code>. This ID is:</p>
-<ol class="arabic simple">
-<li><p>Automatically generated using UUID for each sample</p></li>
-<li><p>Stored in <code class="docutils literal notranslate"><span class="pre">sample.session_id</span></code> field</p></li>
-<li><p>Passed as <code class="docutils literal notranslate"><span class="pre">X-SMG-Routing-Key</span></code> header when the router policy is <code class="docutils literal notranslate"><span class="pre">consistent_hashing</span></code></p></li>
-</ol>
-<p>The SGLang Model Gateway’s consistent hashing policy then uses this routing key to deterministically select the same worker for all requests with the same session ID.</p>
-</section>
-<section id="configuration">
-<h3>Configuration<a class="headerlink" href="#configuration" title="Link to this heading">#</a></h3>
-<p>To enable session-affinity routing, simply configure the router policy in Slime:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>--sglang-router-policy<span class="w"> </span>consistent_hashing
-</pre></div>
-</div>
-<p>Slime will automatically start SGLang Model Gateway with the consistent hashing policy.</p>
-<blockquote>
-<div><p><strong>Note</strong>: If you encounter an error about the <code class="docutils literal notranslate"><span class="pre">consistent_hashing</span></code> policy not being available, upgrade sglang-router:</p>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pip<span class="w"> </span>install<span class="w"> </span>-U<span class="w"> </span>sglang-router
-</pre></div>
-</div>
-</div></blockquote>
-</section>
-<section id="notes">
-<h3>Notes<a class="headerlink" href="#notes" title="Link to this heading">#</a></h3>
-<ul class="simple">
-<li><p>Each sample gets its own unique session ID</p></li>
-<li><p>Different samples in the same group may be routed to different workers</p></li>
-<li><p>The same sample’s subsequent turns will maintain the same session ID</p></li>
-<li><p>Currently, this feature is only available for SGLang Model Gateway</p></li>
 </ul>
 </section>
 </section>
@@ -665,16 +611,16 @@ document.write(`
   </div>
   <nav class="bd-toc-nav page-toc">
     <ul class="visible nav section-nav flex-column">
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-slimerouter">1. What is SlimeRouter?</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-slime-router">1. What is slime router?</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-is-launched">How it is launched</a></li>
 </ul>
 </li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-we-need-slimerouter">2. Why we need SlimeRouter</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-we-need-slime-router">2. Why we need slime router</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#radix-tree-cache-transparent-token-management">2.1 Radix-tree cache (transparent token management)</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.2 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-side">SGLang side</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-side">Slime side</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#why-slimerouter-is-needed">Why SlimeRouter is needed</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-side">slime side</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#why-slime-router-is-needed">Why slime router is needed</a></li>
 </ul>
 </li>
 </ul>
@@ -682,13 +628,6 @@ document.write(`
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#differences-vs-sglang-model-gateway">3. Differences vs SGLang Model Gateway</a><ul class="visible nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#key-differences">Key differences</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#when-to-use-which">When to use which</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#session-affinity-routing-for-multi-turn-agents">4. Session-Affinity Routing for Multi-Turn Agents</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#what-is-session-affinity">What is session affinity?</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#how-it-works">How it works</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#configuration">Configuration</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#notes">Notes</a></li>
 </ul>
 </li>
 </ul>
@@ -724,7 +663,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Mar 07, 2026.
+  Last updated on Mar 08, 2026.
   <br/>
 </p>
   </div>
