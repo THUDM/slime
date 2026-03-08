@@ -552,7 +552,7 @@ def _compute_server_args(
             kwargs[attr.name] = getattr(args, f"sglang_{attr.name}")
         unused_keys.discard(attr.name)
 
-    # Per-engine-group overrides from --sglang-config YAML.
+    # Per-server-group overrides from --sglang-config YAML.
     # Applied after base args so they take highest priority.
     if sglang_overrides:
         for key, value in sglang_overrides.items():

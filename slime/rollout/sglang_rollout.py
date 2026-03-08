@@ -179,7 +179,7 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
 
     # Use session_id for consistent hashing routing if router uses consistent_hashing policy
     headers = None
-    if args.sglang_router_policy == "consistent_hashing" and sample.session_id:
+    if getattr(args, "router_policy", None) == "consistent_hashing" and sample.session_id:
         headers = {"X-SMG-Routing-Key": sample.session_id}
 
     output = await post(url, payload, headers=headers)
