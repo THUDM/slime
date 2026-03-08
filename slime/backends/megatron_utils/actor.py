@@ -51,12 +51,12 @@ class MegatronTrainRayActor(TrainRayActor):
         with_ref: bool = False,
         with_opd_teacher: bool = False,
     ) -> int | None:
-        monkey_patch_torch_dist()
-
-        super().init(args, role, with_ref, with_opd_teacher)
-
         if args.debug_rollout_only:
+            self.args = args
             return 0
+
+        monkey_patch_torch_dist()
+        super().init(args, role, with_ref, with_opd_teacher)
 
         init(args)
 
