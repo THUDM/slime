@@ -283,7 +283,7 @@ class RolloutServer:
         release_handles = []
         updatable_new_engines = []
         non_updatable_groups_engines: list[tuple[str, list]] = []
-        for g, dead_indices in zip(self.engine_groups, dead_per_group, strict=True):
+        for g, dead_indices in zip(self.server_groups, dead_per_group, strict=True):
             logger.info(f"Recovered {g.num_new_engines} dead rollout engines (worker_type={g.worker_type})")
             assert g.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
             if g.needs_offload and dead_indices:
@@ -331,7 +331,7 @@ class RolloutServer:
         CPU backup already contains the correct (unchanged) weights.
         """
         handles = []
-        for g in self.engine_groups:
+        for g in self.server_groups:
             if not g.needs_offload:
                 continue
             handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
@@ -340,7 +340,7 @@ class RolloutServer:
     def onload_kv(self):
         """Resume KV cache and CUDA graphs for offloaded groups."""
         handles = []
-        for g in self.engine_groups:
+        for g in self.server_groups:
             handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH]))
         return ray.get(handles) if handles else []
 

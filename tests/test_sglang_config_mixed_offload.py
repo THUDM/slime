@@ -29,13 +29,13 @@ SGLANG_CONFIG_YAML = """\
 sglang:
   - name: actor
     update_weights: true
-    engine_groups:
+    server_groups:
       - worker_type: regular
         num_gpus: 4
         num_gpus_per_engine: 1
   - name: ref
     update_weights: false
-    engine_groups:
+    server_groups:
       - worker_type: regular
         num_gpus: 4
         num_gpus_per_engine: 1
