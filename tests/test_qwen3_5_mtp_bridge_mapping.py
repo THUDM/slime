@@ -4,6 +4,7 @@ import types
 from pathlib import Path
 
 import pytest
+import torch
 
 
 def install_bridge_stubs():
@@ -77,6 +78,16 @@ def install_bridge_stubs():
 
             return provider
 
+        def _weight_to_mcore_format(self, _mcore_weights_name, hf_weights):
+            assert len(hf_weights) == 1
+            return hf_weights[0]
+
+        def _weight_to_hf_format(self, mcore_weights_name, mcore_weights):
+            return [mcore_weights_name], [mcore_weights]
+
+        def _build_base_config(self, **kwargs):
+            return kwargs
+
     mbridge_core_mod.register_model = register_model
     mbridge_models_mod.Qwen2MoEBridge = Qwen2MoEBridge
 
@@ -94,6 +105,17 @@ def load_bridge_module():
     install_bridge_stubs()
     module_path = Path(__file__).resolve().parents[1] / "slime_plugins" / "mbridge" / "qwen3_5.py"
     module_name = "test_qwen3_5_bridge_module"
+    sys.modules.pop(module_name, None)
+    spec = importlib.util.spec_from_file_location(module_name, module_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_raw_export_module():
+    module_path = Path(__file__).resolve().parents[1] / "slime" / "backends" / "megatron_utils" / "megatron_to_hf" / "qwen3_5.py"
+    module_name = "test_qwen3_5_raw_export_module"
     sys.modules.pop(module_name, None)
     spec = importlib.util.spec_from_file_location(module_name, module_path)
     module = importlib.util.module_from_spec(spec)
@@ -141,3 +163,38 @@ def test_mtp_block_spec_uses_current_transformer_layer_spec():
 
     assert result["transformer_layer_spec"] == "REAL_LAYER_SPEC_VP3"
     assert result["mtp_block_spec"] == ("mtp-spec", "REAL_LAYER_SPEC_VP3")
+
+
+@pytest.mark.unit
+def test_eh_proj_keeps_column_order_when_loading_to_mcore():
+    module = load_bridge_module()
+    bridge = module.Qwen3_5Bridge.__new__(module.Qwen3_5Bridge)
+
+    weight = torch.arange(24, dtype=torch.float32).view(3, 8)
+    converted = bridge._weight_to_mcore_format("mtp.layers.0.eh_proj.weight", [weight])
+
+    assert torch.equal(converted, weight)
+
+
+@pytest.mark.unit
+def test_build_config_enables_gated_attention_for_qwen3_5():
+    module = load_bridge_module()
+    bridge = module.Qwen3_5Bridge.__new__(module.Qwen3_5Bridge)
+    bridge.hf_config = types.SimpleNamespace(text_config=types.SimpleNamespace(mtp_num_hidden_layers=1))
+
+    config = bridge._build_config()
+
+    assert config["mtp_num_layers"] == 1
+    assert config["use_gated_attention"] is True
+
+
+@pytest.mark.unit
+def test_raw_qwen3_5_mtp_export_keeps_eh_proj_column_order():
+    module = load_raw_export_module()
+
+    weight = torch.arange(24, dtype=torch.float32).view(3, 8)
+    converted = module.convert_qwen3_5_to_hf(
+        types.SimpleNamespace(), "module.module.mtp.layers.0.eh_proj.weight", weight
+    )
+
+    assert converted == [("mtp.fc.weight", weight)]

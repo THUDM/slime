@@ -262,18 +262,11 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
                 expert_w = w[expert_id]  # (out_features, in_features)
                 return expert_w.contiguous()
 
-        weight = super()._weight_to_mcore_format(mcore_weights_name, hf_weights)
-        if mcore_weights_name.endswith("eh_proj.weight"):
-            first_half, second_half = weight.chunk(2, dim=1)
-            weight = torch.cat([second_half, first_half], dim=1)
-        return weight
+        return super()._weight_to_mcore_format(mcore_weights_name, hf_weights)
 
     def _weight_to_hf_format(
         self, mcore_weights_name: str, mcore_weights: torch.Tensor
     ) -> tuple[list[str], list[torch.Tensor]]:
-        if mcore_weights_name.endswith("eh_proj.weight"):
-            first_half, second_half = mcore_weights.chunk(2, dim=1)
-            mcore_weights = torch.cat([second_half, first_half], dim=1)
         return super()._weight_to_hf_format(mcore_weights_name, mcore_weights)
 
     def _build_config(self):
@@ -294,6 +287,7 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
             moe_router_pre_softmax=False,
             qk_layernorm=True,
             attention_output_gate=True,
+            use_gated_attention=True,
             **mtp_args,
         )
 
