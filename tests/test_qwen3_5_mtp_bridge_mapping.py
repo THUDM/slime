@@ -177,15 +177,42 @@ def test_eh_proj_keeps_column_order_when_loading_to_mcore():
 
 
 @pytest.mark.unit
-def test_build_config_enables_gated_attention_for_qwen3_5():
+def test_build_config_enables_gated_attention_when_transformer_config_supports_it():
     module = load_bridge_module()
     bridge = module.Qwen3_5Bridge.__new__(module.Qwen3_5Bridge)
     bridge.hf_config = types.SimpleNamespace(text_config=types.SimpleNamespace(mtp_num_hidden_layers=1))
+    bridge.TransformerConfigClass = types.SimpleNamespace(
+        __dataclass_fields__={
+            "mtp_num_layers": None,
+            "attention_output_gate": None,
+            "use_gated_attention": None,
+        }
+    )
 
     config = bridge._build_config()
 
     assert config["mtp_num_layers"] == 1
+    assert config["attention_output_gate"] is True
     assert config["use_gated_attention"] is True
+
+
+@pytest.mark.unit
+def test_build_config_skips_gated_attention_when_transformer_config_does_not_support_it():
+    module = load_bridge_module()
+    bridge = module.Qwen3_5Bridge.__new__(module.Qwen3_5Bridge)
+    bridge.hf_config = types.SimpleNamespace(text_config=types.SimpleNamespace(mtp_num_hidden_layers=1))
+    bridge.TransformerConfigClass = types.SimpleNamespace(
+        __dataclass_fields__={
+            "mtp_num_layers": None,
+            "attention_output_gate": None,
+        }
+    )
+
+    config = bridge._build_config()
+
+    assert config["mtp_num_layers"] == 1
+    assert config["attention_output_gate"] is True
+    assert "use_gated_attention" not in config
 
 
 @pytest.mark.unit

@@ -1,3 +1,5 @@
+import inspect
+
 import torch
 from megatron.core.models.gpt.gpt_layer_specs import get_gpt_mtp_block_spec
 
@@ -114,6 +116,22 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
         if hasattr(self.hf_config, "text_config"):
             return self.hf_config.text_config
         return self.hf_config
+
+    def _supports_transformer_config_kwarg(self, kwarg_name: str) -> bool:
+        """Check whether the current TransformerConfig accepts a given kwarg."""
+        transformer_config_class = getattr(self, "TransformerConfigClass", None)
+        if transformer_config_class is None:
+            return True
+
+        dataclass_fields = getattr(transformer_config_class, "__dataclass_fields__", None)
+        if dataclass_fields is not None:
+            return kwarg_name in dataclass_fields
+
+        try:
+            signature = inspect.signature(transformer_config_class)
+        except (TypeError, ValueError):
+            return True
+        return kwarg_name in signature.parameters
 
     def _get_transformer_layer_spec(self, vp_stage=None):
         transformer_layer_spec = super()._get_transformer_layer_spec(vp_stage)
@@ -287,9 +305,11 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
             moe_router_pre_softmax=False,
             qk_layernorm=True,
             attention_output_gate=True,
-            use_gated_attention=True,
             **mtp_args,
         )
+
+        if self._supports_transformer_config_kwarg("use_gated_attention"):
+            base_kwargs["use_gated_attention"] = True
 
         # Handle MoE-specific config
         if hasattr(text_config, "num_experts"):
