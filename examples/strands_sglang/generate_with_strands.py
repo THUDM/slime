@@ -1,8 +1,9 @@
+# Updated with strands-sglang 0.3.2
 import logging
 
 from camel.interpreters import SubprocessInterpreter
 from strands import Agent, tool
-from strands_sglang import SGLangClient, SGLangModel, ToolLimiter
+from strands_sglang import SGLangModel, ToolLimiter, get_client_from_slime_args
 from strands_sglang.tool_parsers import HermesToolParser
 
 from slime.rollout.rm_hub.math_dapo_utils import compute_score as math_dapo_compute_score
@@ -22,17 +23,6 @@ Guidelines:
 
 MAX_TOOL_ITERS = 5
 MAX_TOOL_CALLS = None  # No limit
-
-_client_cache: dict[str, SGLangClient] = {}
-
-
-def get_client(args) -> SGLangClient:
-    """Get shared client for connection pooling."""
-    base_url = f"http://{args.sglang_router_ip}:{args.sglang_router_port}"
-    if base_url not in _client_cache:
-        _client_cache[base_url] = SGLangClient.from_slime_args(args, timeout=300.0)
-    return _client_cache[base_url]
-
 
 @tool
 def execute_python_code(code: str) -> str:
@@ -55,7 +45,7 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
     state = GenerateState(args)
     model = SGLangModel(
         tokenizer=state.tokenizer,
-        client=get_client(args),
+        client=get_client_from_slime_args(args, timeout=300.0),
         tool_parser=HermesToolParser(),  # tool parsing for wrapped JSON tool calls
         sampling_params=sampling_params,
     )
@@ -69,14 +59,14 @@ async def generate(args, sample: Sample, sampling_params) -> Sample:
         system_prompt=SYSTEM_PROMPT,
     )
 
+    # remember don't set --apply-chat-template in rollout args, it will make user prompt wrapped twice
     prompt = sample.prompt if isinstance(sample.prompt, str) else sample.prompt[0]["content"]
 
     try:
         await agent.invoke_async(prompt)
         sample.status = Sample.Status.COMPLETED
     except Exception as e:
-        # Always use TRUNCATED instead of ABORTED because slime doesn't properly
-        # handle ABORTED samples in reward processing. See: https://github.com/THUDM/slime/issues/200
+        # Default all failed rollouts to TRUNCATED; cutomize your logic here if needed
         sample.status = Sample.Status.TRUNCATED
         logger.warning(f"TRUNCATED: {type(e).__name__}: {e}")
 

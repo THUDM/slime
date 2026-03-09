@@ -92,6 +92,8 @@ class TrainRayActor(RayActor):
             logger.info(f"Warning: Failed to set NUMA affinity: {e}")
 
     def clear_memory(self):
+        if self.args.debug_rollout_only:
+            return
         print_memory("before TrainRayActor.clear_memory")
         clear_memory()
         print_memory("after TrainRayActor.clear_memory")

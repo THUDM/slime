@@ -28,6 +28,7 @@ def convert_checkpoint(
     hf_checkpoint: str | None = None,
 ):
     hf_checkpoint = hf_checkpoint or f"/root/models/{model_name}"
+    normalized_extra_args = f" {extra_args.strip()}" if extra_args.strip() else ""
 
     # TODO shall we make it in host-mapped folder and thus can cache it to speedup CI
     path_dst = f"{dir_dst}/{model_name}_torch_dist"
@@ -59,7 +60,7 @@ def convert_checkpoint(
         "${MODEL_ARGS[@]} "
         f"--hf-checkpoint {hf_checkpoint} "
         f"--save {path_dst}"
-        f"{extra_args}"
+        f"{normalized_extra_args}"
     )
 
 

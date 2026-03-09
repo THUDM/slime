@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass
-class EngineGroupConfig:
-    """Configuration for a single engine group.
+class ServerGroupConfig:
+    """Configuration for a single server group.
 
     Attributes:
         worker_type: One of "regular", "prefill", "decode", or "placeholder".
@@ -45,7 +45,7 @@ class ModelConfig:
         model_path: HF checkpoint path.  Falls back to ``args.hf_checkpoint``.
         num_gpus_per_engine: Default GPUs per engine for all groups in this
                              model.  Individual groups can override.
-        engine_groups: Engine group configurations for this model.
+        server_groups: Server group configurations for this model.
         update_weights: Whether this model receives weight updates from
                         training.  Set to ``False`` for frozen models
                         (reference, reward, etc.).  When ``None`` (default),
@@ -57,26 +57,26 @@ class ModelConfig:
     name: str
     model_path: str | None = None
     num_gpus_per_engine: int | None = None
-    engine_groups: list[EngineGroupConfig] = dataclasses.field(default_factory=list)
+    server_groups: list[ServerGroupConfig] = dataclasses.field(default_factory=list)
     update_weights: bool | None = None
 
     def resolve(self, args) -> None:
         """Resolve per-group defaults from model-level then args-level values."""
         default_gpus_per_engine = self.num_gpus_per_engine or args.rollout_num_gpus_per_engine
         default_model_path = self.model_path or args.hf_checkpoint
-        for g in self.engine_groups:
+        for g in self.server_groups:
             if g.num_gpus_per_engine is None:
                 g.num_gpus_per_engine = default_gpus_per_engine
             # Inject model_path into overrides so _compute_server_args picks it up.
             if "model_path" not in g.overrides:
                 g.overrides["model_path"] = default_model_path
 
-        # Validate: all engine groups within a model must share the same model_path.
-        if self.engine_groups:
-            model_paths = {g.overrides["model_path"] for g in self.engine_groups}
+        # Validate: all server groups within a model must share the same model_path.
+        if self.server_groups:
+            model_paths = {g.overrides["model_path"] for g in self.server_groups}
             assert len(model_paths) == 1, (
-                f"Model '{self.name}' has engine groups with different model_path values: "
-                f"{model_paths}. All engine groups within a model must use the same model_path."
+                f"Model '{self.name}' has server groups with different model_path values: "
+                f"{model_paths}. All server groups within a model must use the same model_path."
             )
             effective_model_path = model_paths.pop()
         else:
@@ -96,11 +96,11 @@ class ModelConfig:
 
     @property
     def has_pd_disaggregation(self) -> bool:
-        return any(g.worker_type in ("prefill", "decode") for g in self.engine_groups)
+        return any(g.worker_type in ("prefill", "decode") for g in self.server_groups)
 
     @property
     def total_num_gpus(self) -> int:
-        return sum(g.num_gpus for g in self.engine_groups)
+        return sum(g.num_gpus for g in self.server_groups)
 
 
 @dataclasses.dataclass
@@ -116,7 +116,7 @@ class SglangConfig:
             model_path: /path/to/actor
             update_weights: true          # receives training weight updates (default)
             num_gpus_per_engine: 2
-            engine_groups:
+            server_groups:
               - worker_type: prefill
                 num_gpus: 4
                 num_gpus_per_engine: 2
@@ -126,7 +126,7 @@ class SglangConfig:
           - name: ref
             model_path: /path/to/ref
             update_weights: false          # frozen, no weight updates
-            engine_groups:
+            server_groups:
               - worker_type: regular
                 num_gpus: 4
 
@@ -136,6 +136,11 @@ class SglangConfig:
 
     Set ``update_weights: false`` for frozen models (reference, reward,
     etc.) that should not receive weight updates from training.
+
+    .. note::
+
+       ``engine_groups`` is accepted as a backward-compatible alias for
+       ``server_groups`` in the YAML config.
     """
 
     models: list[ModelConfig]
@@ -147,17 +152,19 @@ class SglangConfig:
 
         assert "sglang" in data, (
             f"sglang config must have a 'sglang' key, got {list(data.keys())}. "
-            f"Wrap your engine_groups inside a model entry under 'sglang'."
+            f"Wrap your server_groups inside a model entry under 'sglang'."
         )
         models = []
         for m in data["sglang"]:
-            groups = [EngineGroupConfig(**g) for g in m.get("engine_groups", [])]
+            # Accept both "server_groups" and legacy "engine_groups".
+            raw_groups = m.get("server_groups") or m.get("engine_groups") or []
+            groups = [ServerGroupConfig(**g) for g in raw_groups]
             models.append(
                 ModelConfig(
                     name=m["name"],
                     model_path=m.get("model_path"),
                     num_gpus_per_engine=m.get("num_gpus_per_engine"),
-                    engine_groups=groups,
+                    server_groups=groups,
                     update_weights=m.get("update_weights"),
                 )
             )
@@ -174,9 +181,9 @@ class SglangConfig:
             models=[
                 ModelConfig(
                     name="default",
-                    engine_groups=[
-                        EngineGroupConfig(worker_type="prefill", num_gpus=prefill_gpus),
-                        EngineGroupConfig(worker_type="decode", num_gpus=decode_gpus),
+                    server_groups=[
+                        ServerGroupConfig(worker_type="prefill", num_gpus=prefill_gpus),
+                        ServerGroupConfig(worker_type="decode", num_gpus=decode_gpus),
                     ],
                 )
             ]

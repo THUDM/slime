@@ -90,21 +90,6 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
 
             time.sleep(2)
 
-        # use flush_cache to make sure the working queue is empty, so that we can do offload
-        while True:
-            try:
-                response = session.get(f"{base_url}/flush_cache", headers=headers)
-                if response.status_code == 200:
-                    break
-
-            except requests.RequestException:
-                pass
-
-            if not is_process_alive():
-                raise Exception("Server process terminated unexpectedly.")
-
-            time.sleep(2)
-
 
 class SGLangEngine(RayActor):
     def __init__(
@@ -370,6 +355,17 @@ class SGLangEngine(RayActor):
     def check_weights(self, action: str):
         return self._make_request("weights_checker", {"action": action})
 
+    def update_weights_from_disk(self, model_path: str, load_format: str | None = None):
+        """Reload weights from *model_path* without restarting the engine.
+
+        Used for non-updatable (frozen) models that overlap with megatron:
+        after offload, weights are restored from disk instead of CPU cache.
+        """
+        payload = {"model_path": model_path}
+        if load_format is not None:
+            payload["load_format"] = load_format
+        return self._make_request("update_weights_from_disk", payload)
+
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
         return self._make_request(
             "init_weights_update_group",
@@ -556,7 +552,7 @@ def _compute_server_args(
             kwargs[attr.name] = getattr(args, f"sglang_{attr.name}")
         unused_keys.discard(attr.name)
 
-    # Per-engine-group overrides from --sglang-config YAML.
+    # Per-server-group overrides from --sglang-config YAML.
     # Applied after base args so they take highest priority.
     if sglang_overrides:
         for key, value in sglang_overrides.items():

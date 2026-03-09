@@ -1,5 +1,4 @@
 import os
-import tempfile
 
 import slime.utils.external_utils.command_utils as U
 
@@ -7,65 +6,32 @@ TIGHT_DEVICE_MEMORY = U.get_bool_env_var("SLIME_TEST_TIGHT_DEVICE_MEMORY", "1")
 
 MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
-NUM_GPUS = 8
-
-# Inline sglang config: same model, 3 engine groups with different parallelism.
-# Group 1: 4 GPUs, 2 GPUs/engine (tp=2) → 2 engines
-# Group 2: 2 GPUs, 1 GPU/engine  (tp=1) → 2 engines
-# Group 3: 2 GPUs, placeholder   → reserves 2 GPU slots, no engine created
-SGLANG_CONFIG_YAML = """\
-sglang:
-  - name: default
-    server_groups:
-      - worker_type: regular
-        num_gpus: 4
-        num_gpus_per_engine: 2
-      - worker_type: regular
-        num_gpus: 2
-        num_gpus_per_engine: 1
-      - worker_type: placeholder
-        num_gpus: 2
-"""
+NUM_GPUS = 4
 
 
 def prepare():
     U.exec_command("mkdir -p /root/models /root/datasets")
     U.exec_command(f"huggingface-cli download Qwen/{MODEL_NAME} --local-dir /root/models/{MODEL_NAME}")
-    U.hf_download_dataset("zhuzilin/gsm8k")
+    U.hf_download_dataset("zhuzilin/dapo-math-17k")
 
 
 def execute():
-    # Write inline sglang config to a temp file
-    config_file = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", prefix="sglang_config_", delete=False)
-    config_file.write(SGLANG_CONFIG_YAML)
-    config_file.flush()
-    config_path = config_file.name
-
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ "
 
     rollout_args = (
-        "--prompt-data /root/datasets/gsm8k/train.parquet "
-        "--input-key messages "
+        "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
+        "--input-key prompt "
         "--label-key label "
         "--apply-chat-template "
         "--rollout-shuffle "
-        "--rm-type math "
+        "--rm-type deepscaler "
         "--num-rollout 3 "
         "--rollout-batch-size 8 "
         "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 1024 "
         "--rollout-temperature 0.8 "
-        "--over-sampling-batch-size 16 "
-        "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "
         "--global-batch-size 32 "
-    )
-
-    eval_args = (
-        "--eval-interval 20 "
-        "--eval-prompt-data gsm8k /root/datasets/gsm8k/test.parquet "
-        "--n-samples-per-eval-prompt 1 "
-        "--eval-max-response-len 1024 "
-        "--eval-top-k 1 "
+        "--balance-data "
     )
 
     perf_args = (
@@ -79,14 +45,16 @@ def execute():
         "--max-tokens-per-gpu 9216 "
     )
 
-    grpo_args = (
-        "--advantage-estimator grpo "
-        "--use-kl-loss "
+    ppo_args = (
+        "--advantage-estimator ppo "
         "--kl-loss-coef 0.00 "
-        "--kl-loss-type low_var_kl "
+        "--kl-loss-type k1 "
+        "--kl-coef 0.00 "
         "--entropy-coef 0.00 "
-        "--eps-clip 0.2 "
-        "--eps-clip-high 0.28 "
+        "--eps-clip 4e-4 "
+        "--critic-train-only "
+        "--normalize-advantages "
+        "--critic-lr 1e-5 "
     )
 
     optimizer_args = (
@@ -101,9 +69,8 @@ def execute():
     sglang_args = (
         "--rollout-num-gpus-per-engine 1 "
         f"--sglang-mem-fraction-static {0.6 if TIGHT_DEVICE_MEMORY else 0.7} "
-        "--sglang-enable-metrics "
         "--sglang-cuda-graph-max-bs 32 "
-        f"--sglang-config {config_path} "
+        "--sglang-enable-metrics "
     )
 
     ci_args = "--ci-test "
@@ -114,9 +81,10 @@ def execute():
         "--accumulate-allreduce-grads-in-fp32 "
         "--attention-softmax-in-fp32 "
         "--attention-backend flash "
-        "--actor-num-nodes 1 "
-        "--actor-num-gpus-per-node 8 "
-        "--colocate "
+        "--actor-num-nodes 0 "
+        "--actor-num-gpus-per-node 0 "
+        "--critic-num-nodes 1 "
+        "--critic-num-gpus-per-node 2 "
         "--megatron-to-hf-mode bridge "
     )
 
@@ -124,10 +92,9 @@ def execute():
         f"{ckpt_args} "
         f"{rollout_args} "
         f"{optimizer_args} "
-        f"{grpo_args} "
+        f"{ppo_args} "
         f"{U.get_default_wandb_args(__file__)} "
         f"{perf_args} "
-        f"{eval_args} "
         f"{sglang_args} "
         f"{ci_args} "
         f"{misc_args} "
@@ -142,8 +109,6 @@ def execute():
 
 if __name__ == "__main__":
     prepare()
-    os.environ.pop("http_proxy", None)
-    os.environ.pop("https_proxy", None)
-    os.environ.pop("HTTP_PROXY", None)
-    os.environ.pop("HTTPS_PROXY", None)
+    for proxy_var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
+        os.environ.pop(proxy_var, None)
     execute()

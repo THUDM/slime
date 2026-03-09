@@ -1,12 +1,12 @@
-# Slime Router
+# slime router
 
-Slime includes an optional SlimeRouter used during rollout / data generation. It is a lightweight HTTP router/proxy that sits in front of one or more SGLang worker servers and adds training-oriented capabilities that are not the main goal of serving-focused routers.
+slime includes an optional slime router used during rollout / data generation. It is a lightweight HTTP router/proxy that sits in front of one or more SGLang worker servers and adds training-oriented capabilities that are not the main goal of serving-focused routers.
 
 ---
 
-## 1. What is SlimeRouter?
+## 1. What is slime router?
 
-SlimeRouter is a small FastAPI service that:
+slime router is a small FastAPI service that:
 
 - Registers workers (SGLang HTTP servers) into a local pool
 - Routes requests to a selected worker (simple least-inflight load balancing)
@@ -20,14 +20,14 @@ In slime's architecture, the router is part of the rollout system ("SGLang + rou
 
 In distributed training, slime will start a router automatically when `--sglang-router-ip` is not provided:
 
-- If `--use-slime-router` is set, slime starts SlimeRouter
+- If `--use-slime-router` is set, slime starts slime router
 - Otherwise, slime starts SGLang Model Gateway
 
 ---
 
-## 2. Why we need SlimeRouter
+## 2. Why we need slime router
 
-Unlike production inference, RL rollout needs to capture additional metadata for training: token-level logprobs, loss masks, and (for MoE models) expert routing decisions. SlimeRouter provides these capabilities through its middleware system and passthrough proxy design.
+Unlike production inference, RL rollout needs to capture additional metadata for training: token-level logprobs, loss masks, and (for MoE models) expert routing decisions. slime router provides these capabilities through its middleware system and passthrough proxy design.
 
 ### 2.1 Radix-tree cache (transparent token management)
 
@@ -59,28 +59,28 @@ SGLang provides expert routing capture via:
 - `return_routed_experts`: request parameter to retrieve routing data
 - Returns `routed_experts` in response `meta_info` - a `[seq_len - 1, num_layers, top_k]` tensor of expert IDs
 
-#### Slime side
+#### slime side
 
-Slime consumes the routing data and replays it during training:
+slime consumes the routing data and replays it during training:
 
 - `--use-slime-router --use-rollout-routing-replay`: both flags required to enable R3
 - Rollout sends `return_routed_experts=True` and stores results in `sample.rollout_routed_experts`
 - Training calls `fill_routing_replay()` to load routing data into `RoutingReplay` objects
 - During forward pass, recorded routing decisions are replayed instead of recomputed
 
-#### Why SlimeRouter is needed
+#### Why slime router is needed
 
-We need SlimeRouter because the SGLang worker returns routed experts in the response (`meta_info.routed_experts`) when the request sets `return_routed_experts=true`, and SlimeRouter preserves this field end-to-end. SGLang Model Gateway may drop this extra metadata when it reconstructs responses with a fixed schema (see section 3).
+We need slime router because the SGLang worker returns routed experts in the response (`meta_info.routed_experts`) when the request sets `return_routed_experts=true`, and slime router preserves this field end-to-end. SGLang Model Gateway may drop this extra metadata when it reconstructs responses with a fixed schema (see section 3).
 
 ---
 
 ## 3. Differences vs SGLang Model Gateway
 
-SlimeRouter and SGLang Model Gateway can both route requests to workers, but they are optimized for different goals.
+slime router and SGLang Model Gateway can both route requests to workers, but they are optimized for different goals.
 
 ### Key differences
 
-SlimeRouter is a lightweight Python/FastAPI proxy that acts as a passthrough to SGLang workers. This passthrough design enables RL-specific features like radix-tree trajectory caching and R3 (which require preserving raw response metadata like `routed_experts`).
+slime router is a lightweight Python/FastAPI proxy that acts as a passthrough to SGLang workers. This passthrough design enables RL-specific features like radix-tree trajectory caching and R3 (which require preserving raw response metadata like `routed_experts`).
 
 SGLang Model Gateway is a high-performance Rust-based router optimized for large-scale inference: async non-blocking routing, advanced fault tolerance (retries, circuit breakers), multiple load balancing policies (including cache-aware routing), and PD disaggregation support. However, it reconstructs responses with a fixed schema, so it does not preserve the metadata needed for slime's R3 flow.
 
@@ -88,51 +88,5 @@ For more details on SGLang Model Gateway, see the [official documentation](https
 
 ### When to use which
 
-- Use SlimeRouter when you need R3 or radix-tree caching
+- Use slime router when you need R3 or radix-tree caching
 - Use SGLang Model Gateway for everything else (recommended default)
-
----
-
-## 4. Session-Affinity Routing for Multi-Turn Agents
-
-When using SGLang Model Gateway with consistent hashing routing policy, Slime automatically assigns each rollout session a unique session ID and uses it as the routing key to enable session affinity.
-
-### What is session affinity?
-
-Session affinity (also called sticky sessions) ensures that all requests belonging to the same conversation or agent session are routed to the same backend worker. This is beneficial for:
-
-- **Multi-turn dialogues**: Keeping the same worker improves prefix cache hit rates
-- **Multi-agent systems**: Ensures agent state consistency and better resource locality
-- **Debugging**: Makes it easier to trace and debug specific sessions
-
-### How it works
-
-When the rollout system generates samples, each sample is assigned a unique `session_id`. This ID is:
-
-1. Automatically generated using UUID for each sample
-2. Stored in `sample.session_id` field
-3. Passed as `X-SMG-Routing-Key` header when the router policy is `consistent_hashing`
-
-The SGLang Model Gateway's consistent hashing policy then uses this routing key to deterministically select the same worker for all requests with the same session ID.
-
-### Configuration
-
-To enable session-affinity routing, simply configure the router policy in Slime:
-
-```bash
---sglang-router-policy consistent_hashing
-```
-
-Slime will automatically start SGLang Model Gateway with the consistent hashing policy.
-
-> **Note**: If you encounter an error about the `consistent_hashing` policy not being available, upgrade sglang-router:
-> ```bash
-> pip install -U sglang-router
-> ```
-
-### Notes
-
-- Each sample gets its own unique session ID
-- Different samples in the same group may be routed to different workers
-- The same sample's subsequent turns will maintain the same session ID
-- Currently, this feature is only available for SGLang Model Gateway

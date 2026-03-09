@@ -118,12 +118,6 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="The qkv layout for Megatron backend.",
             )
             parser.add_argument(
-                "--true-on-policy-mode",
-                action="store_true",
-                default=False,
-                help="Whether to enable true-on-policy mode.",
-            )
-            parser.add_argument(
                 "--train-env-vars",
                 type=json.loads,
                 default="{}",
@@ -1646,6 +1640,14 @@ def slime_validate_args(args):
         args.debug_train_only = True
 
     args.use_critic = args.advantage_estimator == "ppo"
+    if args.critic_train_only:
+        if not args.use_critic:
+            raise ValueError("--critic-train-only requires --use-critic (or --advantage-estimator ppo).")
+        if args.actor_num_nodes != 0 or args.actor_num_gpus_per_node != 0:
+            raise ValueError(
+                "--critic-train-only requires --actor-num-nodes 0 --actor-num-gpus-per-node 0, "
+                f"but got actor_num_nodes={args.actor_num_nodes}, actor_num_gpus_per_node={args.actor_num_gpus_per_node}."
+            )
     if args.critic_num_gpus_per_node is None:
         args.critic_num_gpus_per_node = args.actor_num_gpus_per_node
     if args.critic_num_nodes is None:

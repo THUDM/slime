@@ -31,6 +31,16 @@ def init_tracking(args, primary: bool = True, **kwargs):
         wandb_utils.init_wandb_secondary(args, **kwargs)
 
 
+def finish_tracking(args):
+    if not args.use_wandb:
+        return
+    try:
+        if wandb.run is not None:
+            wandb.finish()
+    except Exception:
+        logging.getLogger(__name__).exception("Failed to finish wandb run")
+
+
 # TODO further refactor, e.g. put TensorBoard init to the "init" part
 def log(args, metrics, step_key: str):
     if args.use_wandb:

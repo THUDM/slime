@@ -148,6 +148,7 @@ class Qwen3NextGatedDeltaNet(nn.Module):
             initial_state=None,
             output_final_state=False,
             use_qk_l2norm_in_kernel=True,
+            cu_seqlens=cu_seqlens,
         )
 
         z_shape_og = z.shape

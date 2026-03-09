@@ -1,3 +1,18 @@
+"""E2E test: mixed offload with updatable + frozen models.
+
+Deploys two models via --sglang-config in colocate mode:
+  - "actor": update_weights=true, 4 GPUs → overlaps with megatron, gets offloaded
+    and weights updated from training.
+  - "ref":   update_weights=false, 4 GPUs → overlaps with megatron, gets offloaded
+    and weights restored from disk (update_weights_from_disk).
+
+Key coverage:
+  - Per-group needs_offload (both overlap with megatron in colocate mode)
+  - update_weights_from_disk for frozen model
+  - Selective flush_cache (only for offloaded / updatable engines)
+  - Offload/onload cycle completes without crash
+"""
+
 import os
 import tempfile
 
@@ -9,22 +24,21 @@ MODEL_NAME = "Qwen2.5-0.5B-Instruct"
 MODEL_TYPE = "qwen2.5-0.5B"
 NUM_GPUS = 8
 
-# Inline sglang config: same model, 3 engine groups with different parallelism.
-# Group 1: 4 GPUs, 2 GPUs/engine (tp=2) → 2 engines
-# Group 2: 2 GPUs, 1 GPU/engine  (tp=1) → 2 engines
-# Group 3: 2 GPUs, placeholder   → reserves 2 GPU slots, no engine created
+# Two models on 8 GPUs (colocate): actor gets weight updates, ref is frozen.
 SGLANG_CONFIG_YAML = """\
 sglang:
-  - name: default
+  - name: actor
+    update_weights: true
     server_groups:
       - worker_type: regular
         num_gpus: 4
-        num_gpus_per_engine: 2
-      - worker_type: regular
-        num_gpus: 2
         num_gpus_per_engine: 1
-      - worker_type: placeholder
-        num_gpus: 2
+  - name: ref
+    update_weights: false
+    server_groups:
+      - worker_type: regular
+        num_gpus: 4
+        num_gpus_per_engine: 1
 """
 
 
@@ -35,8 +49,7 @@ def prepare():
 
 
 def execute():
-    # Write inline sglang config to a temp file
-    config_file = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", prefix="sglang_config_", delete=False)
+    config_file = tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", prefix="sglang_mixed_offload_", delete=False)
     config_file.write(SGLANG_CONFIG_YAML)
     config_file.flush()
     config_path = config_file.name
@@ -53,10 +66,8 @@ def execute():
         "--num-rollout 3 "
         "--rollout-batch-size 8 "
         "--n-samples-per-prompt 4 "
-        "--rollout-max-response-len 1024 "
+        "--rollout-max-response-len 512 "
         "--rollout-temperature 0.8 "
-        "--over-sampling-batch-size 16 "
-        "--dynamic-sampling-filter-path slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std "
         "--global-batch-size 32 "
     )
 
@@ -64,7 +75,7 @@ def execute():
         "--eval-interval 20 "
         "--eval-prompt-data gsm8k /root/datasets/gsm8k/test.parquet "
         "--n-samples-per-eval-prompt 1 "
-        "--eval-max-response-len 1024 "
+        "--eval-max-response-len 512 "
         "--eval-top-k 1 "
     )
 
@@ -76,7 +87,7 @@ def execute():
         "--expert-model-parallel-size 1 "
         "--expert-tensor-parallel-size 1 "
         "--use-dynamic-batch-size "
-        "--max-tokens-per-gpu 9216 "
+        "--max-tokens-per-gpu 4096 "
     )
 
     grpo_args = (
@@ -86,7 +97,6 @@ def execute():
         "--kl-loss-type low_var_kl "
         "--entropy-coef 0.00 "
         "--eps-clip 0.2 "
-        "--eps-clip-high 0.28 "
     )
 
     optimizer_args = (
@@ -101,7 +111,6 @@ def execute():
     sglang_args = (
         "--rollout-num-gpus-per-engine 1 "
         f"--sglang-mem-fraction-static {0.6 if TIGHT_DEVICE_MEMORY else 0.7} "
-        "--sglang-enable-metrics "
         "--sglang-cuda-graph-max-bs 32 "
         f"--sglang-config {config_path} "
     )
