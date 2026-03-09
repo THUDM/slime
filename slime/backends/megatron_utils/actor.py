@@ -164,11 +164,15 @@ class MegatronTrainRayActor(TrainRayActor):
     def sleep(self) -> None:
         assert self.args.offload_train
 
-        clear_memory(clear_host_memory=True)
+        clear_memory(clear_host_memory=False)
         print_memory("before offload model")
-        destroy_process_groups()
 
+        # Pause before destroy_process_groups to prevent NCCL teardown from
+        # creating ghost allocations in torch_memory_saver's metadata,
+        # which would cause cudaErrorInvalidValue on the next pause().
         torch_memory_saver.pause()
+
+        destroy_process_groups()
 
         print_memory("after offload model")
 
@@ -509,27 +513,34 @@ class MegatronTrainRayActor(TrainRayActor):
         if self.args.debug_rollout_only:
             return
 
-        # torch dist may trigger nccl communication during saving.
-        if self.args.offload_train:
-            reload_process_groups()
+        # save_model may be called while torch_memory_saver is paused (after the
+        # previous offload). reload/destroy_process_groups trigger NCCL CUDA
+        # buffer alloc/free that get tracked by the LD_PRELOAD hook, corrupting
+        # allocation_metadata_ and causing cudaErrorInvalidValue on the next
+        # pause(). Wrapping with disable() prevents the hook from tracking
+        # these transient NCCL allocations.
+        with torch_memory_saver.disable() if self.args.offload_train else nullcontext():
+            # torch dist may trigger nccl communication during saving.
+            if self.args.offload_train:
+                reload_process_groups()
 
-        if self.args.async_save:
-            from megatron.training.async_utils import maybe_finalize_async_save
+            if self.args.async_save:
+                from megatron.training.async_utils import maybe_finalize_async_save
 
-            maybe_finalize_async_save(blocking=True)
+                maybe_finalize_async_save(blocking=True)
 
-        save(rollout_id, self.model, self.optimizer, self.opt_param_scheduler)
+            save(rollout_id, self.model, self.optimizer, self.opt_param_scheduler)
 
-        if force_sync and self.args.async_save:
-            maybe_finalize_async_save(blocking=True)
+            if force_sync and self.args.async_save:
+                maybe_finalize_async_save(blocking=True)
 
-        if self.args.save_hf is not None and self.role == "actor":
-            from slime.backends.megatron_utils.model import save_hf_model
+            if self.args.save_hf is not None and self.role == "actor":
+                from slime.backends.megatron_utils.model import save_hf_model
 
-            save_hf_model(self.args, rollout_id, self.model)
+                save_hf_model(self.args, rollout_id, self.model)
 
-        if self.args.offload_train:
-            destroy_process_groups()
+            if self.args.offload_train:
+                destroy_process_groups()
 
     @timer
     def update_weights(self) -> None:
