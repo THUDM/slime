@@ -435,6 +435,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Interval for updating the weights",
             )
             parser.add_argument(
+                "--keep-cache-on-weight-update",
+                action="store_true",
+                default=False,
+                help="If set, skip flushing the rollout engine cache during weight updates.",
+            )
+            parser.add_argument(
                 "--keep-old-actor",
                 action="store_true",
                 help="Whether to keep the rollout model on training process",
