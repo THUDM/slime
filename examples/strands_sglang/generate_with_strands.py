@@ -24,6 +24,7 @@ Guidelines:
 MAX_TOOL_ITERS = 5
 MAX_TOOL_CALLS = None  # No limit
 
+
 @tool
 def execute_python_code(code: str) -> str:
     """Execute Python code and return the output."""
