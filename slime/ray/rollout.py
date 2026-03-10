@@ -1003,18 +1003,22 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
             args.sglang_router_port = router_port
 
         server_groups: list[ServerGroup] = []
-        all_init_handles: list = []
         port_cursors: dict[int, int] = {}
 
-        for group_cfg in model_cfg.server_groups:
+        has_epd = model_cfg.has_encoder_disaggregation
+
+        def _make_group(group_cfg, overrides_extra=None):
+            nonlocal engine_offset, gpu_offset
             gpus_per_engine = group_cfg.num_gpus_per_engine
             num_gpu_per_engine_local = min(gpus_per_engine, args.num_gpus_per_node)
             num_engines = group_cfg.num_gpus // num_gpu_per_engine_local
 
-            # Only offload groups whose GPUs overlap with megatron.
             group_abs_start = rollout_pg_offset + gpu_offset
             needs_offload = args.offload_rollout and group_abs_start < megatron_num_gpus
             overrides = dict(group_cfg.overrides)
+            if overrides_extra:
+                for k, v in overrides_extra.items():
+                    overrides.setdefault(k, v)
             if args.offload_rollout and not needs_offload:
                 overrides.setdefault("enable_memory_saver", False)
             logger.info(
@@ -1037,15 +1041,53 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
                 router_ip=router_ip,
                 router_port=router_port,
             )
-            handles, port_cursors = group.start_engines(port_cursors)
-            all_init_handles.extend(handles)
-            server_groups.append(group)
-
             engine_offset += num_engines
             gpu_offset += group_cfg.num_gpus
+            return group
 
-        if all_init_handles:
-            ray.get(all_init_handles)
+        if has_epd:
+            # --- Phase 1: start encoder groups, wait, collect URLs ---
+            encoder_urls: list[str] = []
+            for group_cfg in model_cfg.server_groups:
+                if group_cfg.worker_type != "encoder":
+                    continue
+                group = _make_group(group_cfg)
+                handles, port_cursors = group.start_engines(port_cursors)
+                if handles:
+                    ray.get(handles)
+                urls = ray.get([e.get_url.remote() for e in group.engines])
+                encoder_urls.extend(u for u in urls if u is not None)
+                server_groups.append(group)
+
+            logger.info(f"EPD phase 1 done: collected {len(encoder_urls)} encoder URLs: {encoder_urls}")
+
+            # --- Phase 2: start non-encoder groups, injecting encoder URLs into prefill ---
+            non_encoder_handles: list = []
+            for group_cfg in model_cfg.server_groups:
+                if group_cfg.worker_type == "encoder":
+                    continue
+                overrides_extra = {}
+                if encoder_urls and group_cfg.worker_type == "prefill":
+                    overrides_extra["language_only"] = True
+                    overrides_extra["encoder_urls"] = encoder_urls
+                group = _make_group(group_cfg, overrides_extra=overrides_extra)
+                handles, port_cursors = group.start_engines(port_cursors)
+                non_encoder_handles.extend(handles)
+                server_groups.append(group)
+
+            if non_encoder_handles:
+                ray.get(non_encoder_handles)
+        else:
+            # No EPD — start all groups in one pass (original path).
+            all_init_handles: list = []
+            for group_cfg in model_cfg.server_groups:
+                group = _make_group(group_cfg)
+                handles, port_cursors = group.start_engines(port_cursors)
+                all_init_handles.extend(handles)
+                server_groups.append(group)
+
+            if all_init_handles:
+                ray.get(all_init_handles)
 
         servers[model_cfg.name] = RolloutServer(
             server_groups=server_groups,
