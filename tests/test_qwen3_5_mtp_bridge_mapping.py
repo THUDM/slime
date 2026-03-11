@@ -13,8 +13,9 @@ def install_bridge_stubs():
     models_mod = types.ModuleType("megatron.core.models")
     gpt_mod = types.ModuleType("megatron.core.models.gpt")
     gpt_layer_specs_mod = types.ModuleType("megatron.core.models.gpt.gpt_layer_specs")
-    gpt_layer_specs_mod.get_gpt_mtp_block_spec = (
-        lambda _config, transformer_layer_spec, **_kwargs: ("mtp-spec", transformer_layer_spec)
+    gpt_layer_specs_mod.get_gpt_mtp_block_spec = lambda _config, transformer_layer_spec, **_kwargs: (
+        "mtp-spec",
+        transformer_layer_spec,
     )
 
     mbridge_mod = types.ModuleType("mbridge")
@@ -114,7 +115,9 @@ def load_bridge_module():
 
 
 def load_raw_export_module():
-    module_path = Path(__file__).resolve().parents[1] / "slime" / "backends" / "megatron_utils" / "megatron_to_hf" / "qwen3_5.py"
+    module_path = (
+        Path(__file__).resolve().parents[1] / "slime" / "backends" / "megatron_utils" / "megatron_to_hf" / "qwen3_5.py"
+    )
     module_name = "test_qwen3_5_raw_export_module"
     sys.modules.pop(module_name, None)
     spec = importlib.util.spec_from_file_location(module_name, module_path)

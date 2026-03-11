@@ -180,7 +180,9 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
             if keyword in name:
                 if "{expert_id}" in mapping_names[0]:
                     expert_id = name.split("weight")[-1]
-                    convert_names.extend([x.format(layer_number=layer_number, expert_id=expert_id) for x in mapping_names])
+                    convert_names.extend(
+                        [x.format(layer_number=layer_number, expert_id=expert_id) for x in mapping_names]
+                    )
                 else:
                     convert_names.extend([x.format(layer_number=layer_number) for x in mapping_names])
                 break
