@@ -16,6 +16,7 @@ from transformers import AutoConfig, AutoTokenizer
 from slime.ray.train_actor import TrainRayActor
 from slime.utils import train_dump_utils
 from slime.utils.data import process_rollout_data
+from slime.utils.data_transfer import get_data_transfer_backend
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.logging_utils import init_tracking
 from slime.utils.memory_utils import clear_memory, print_memory
@@ -75,6 +76,9 @@ class MegatronTrainRayActor(TrainRayActor):
         self.train_parallel_config = {
             "dp_size": mpu.get_data_parallel_world_size(with_context_parallel=False),
         }
+
+        self.transfer_backend = get_data_transfer_backend(args)
+
         dist.barrier(group=get_gloo_group())
 
         if args.offload_train:
@@ -191,6 +195,7 @@ class MegatronTrainRayActor(TrainRayActor):
             rollout_data_ref,
             mpu.get_data_parallel_rank(with_context_parallel=False),
             mpu.get_data_parallel_world_size(with_context_parallel=False),
+            transfer_backend=self.transfer_backend,
         )
         # TODO: this is ugly, move to somewhere else?
         # move tokens to GPU in advance
