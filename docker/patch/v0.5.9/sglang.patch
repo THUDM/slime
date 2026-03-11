@@ -719,11 +719,7 @@ index ca54a931b..6c102a251 100644
              if enable_dual_stream:
                  current_stream = torch.cuda.current_stream()
 diff --git a/python/sglang/srt/layers/attention/nsa/utils.py b/python/sglang/srt/layers/attention/nsa/utils.py
-<<<<<<< release
-index 00ef96f9b..9885fcd0d 100644
-=======
 index 00ef96f9b..5adaec804 100644
->>>>>>> main
 --- a/python/sglang/srt/layers/attention/nsa/utils.py
 +++ b/python/sglang/srt/layers/attention/nsa/utils.py
 @@ -54,7 +54,12 @@ def can_nsa_prefill_cp_round_robin_split(forward_batch: "ForwardBatch"):
@@ -779,22 +775,6 @@ index 00ef96f9b..5adaec804 100644
      if can_nsa_prefill_cp_round_robin_split(forward_batch):
          tokens = ceil_div(tokens, attn_cp_size)
      return tokens
-<<<<<<< release
-@@ -152,10 +166,9 @@ class NSAContextParallelMetadata:
- 
- def can_cp_split(seq_len: int, cp_size: int, use_nsa: bool, forward_batch):
-     if is_nsa_prefill_cp_round_robin_split():
-+        if seq_len < cp_size or seq_len % cp_size != 0:
-+            return False
-         cur_cp_seq_len = seq_len // cp_size
--        assert (
--            seq_len % cp_size == 0
--        ), f"seq_len {seq_len} is not divisible by cp_size {cp_size} when nsa_prefill_cp_mode is round-robin-split"
-     else:
-         # TODO current just support prefill batch=1 and len(input_ids) > self.cp_size * 2
-         # Note: (self.cp_size * 2) To achieve load balancing for seq computation,
-@@ -175,10 +188,6 @@ def can_cp_split(seq_len: int, cp_size: int, use_nsa: bool, forward_batch):
-=======
 @@ -152,10 +166,20 @@ class NSAContextParallelMetadata:
  
  def can_cp_split(seq_len: int, cp_size: int, use_nsa: bool, forward_batch):
@@ -821,7 +801,6 @@ index 00ef96f9b..5adaec804 100644
          # TODO current just support prefill batch=1 and len(input_ids) > self.cp_size * 2
          # Note: (self.cp_size * 2) To achieve load balancing for seq computation,
 @@ -175,10 +199,6 @@ def can_cp_split(seq_len: int, cp_size: int, use_nsa: bool, forward_batch):
->>>>>>> main
  
  def cp_split_and_rebuild_data(forward_batch, input_: torch.Tensor):
      if is_nsa_prefill_cp_round_robin_split():
@@ -832,11 +811,7 @@ index 00ef96f9b..5adaec804 100644
          return nsa_cp_round_robin_split_data(input_)
  
      input_list = list(
-<<<<<<< release
-@@ -192,11 +201,6 @@ def cp_split_and_rebuild_data(forward_batch, input_: torch.Tensor):
-=======
 @@ -192,11 +212,6 @@ def cp_split_and_rebuild_data(forward_batch, input_: torch.Tensor):
->>>>>>> main
  
  def cp_split_and_rebuild_position(forward_batch, positions: torch.Tensor):
      if is_nsa_prefill_cp_round_robin_split():
@@ -2439,8 +2414,6 @@ index cc673a9ca..06c430d2c 100644
      if hasattr(backend, "use_mha") and backend.use_mha:
          return AttnForwardMethod.MHA_ONE_SHOT
      return AttnForwardMethod.MLA
-<<<<<<< release
-=======
 diff --git a/python/sglang/srt/models/deepseek_nextn.py b/python/sglang/srt/models/deepseek_nextn.py
 index cb13a7c67..d62111471 100644
 --- a/python/sglang/srt/models/deepseek_nextn.py
@@ -2557,7 +2530,6 @@ index 324de18b4..c99723f49 100644
                      if name not in params_dict:
                          continue
  
->>>>>>> main
 diff --git a/python/sglang/srt/models/gpt_oss.py b/python/sglang/srt/models/gpt_oss.py
 index 2cf813bce..1250c49e4 100644
 --- a/python/sglang/srt/models/gpt_oss.py
@@ -2672,8 +2644,6 @@ index 2cf813bce..1250c49e4 100644
  def _canonicalize_weights(config, weights_in: Iterable[Tuple[str, torch.Tensor]]):
      weights_out_dict = dict(weights_in)
  
-<<<<<<< release
-=======
 diff --git a/python/sglang/srt/models/qwen3_5.py b/python/sglang/srt/models/qwen3_5.py
 index f01225487..1dad8bb8e 100644
 --- a/python/sglang/srt/models/qwen3_5.py
@@ -2750,7 +2720,6 @@ index f01225487..1dad8bb8e 100644
  
          return hidden_states, residual
  
->>>>>>> main
 diff --git a/python/sglang/srt/models/qwen3_vl.py b/python/sglang/srt/models/qwen3_vl.py
 index d641826e3..3abc39ef3 100644
 --- a/python/sglang/srt/models/qwen3_vl.py
@@ -2779,8 +2748,6 @@ index d641826e3..3abc39ef3 100644
              hidden_states, residual = layer(
                  positions,
                  hidden_states,
-<<<<<<< release
-=======
 diff --git a/python/sglang/srt/multimodal/processors/glm4v.py b/python/sglang/srt/multimodal/processors/glm4v.py
 index 33cce6fe2..0970c4550 100644
 --- a/python/sglang/srt/multimodal/processors/glm4v.py
@@ -2841,7 +2808,6 @@ index 33cce6fe2..0970c4550 100644
      async def process_mm_data_async(
          self,
          image_data: List[Union[str, bytes]],
->>>>>>> main
 diff --git a/python/sglang/srt/multimodal/processors/qwen_vl.py b/python/sglang/srt/multimodal/processors/qwen_vl.py
 index 4395654e4..f9b5ea4ab 100644
 --- a/python/sglang/srt/multimodal/processors/qwen_vl.py
