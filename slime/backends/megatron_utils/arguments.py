@@ -40,6 +40,15 @@ def _hf_validate_args(args, hf_config):
     if hasattr(hf_config, "text_config"):
         hf_config = hf_config.text_config
 
+    # Some models store rope_theta inside rope_parameters dict rather than
+    # as a top-level attribute.  Prefer the dict value when available so
+    # the validation doesn't compare against a stale class default.
+    rope_params = getattr(hf_config, "rope_parameters", None)
+    if isinstance(rope_params, dict) and "rope_theta" in rope_params:
+        _hf_rope_theta = rope_params["rope_theta"]
+    else:
+        _hf_rope_theta = getattr(hf_config, "rope_theta", None)
+
     for hf_config_name, megatron_config_name, compare_fn in [
         ("hidden_size", "hidden_size", equal),
         ("num_attention_heads", "num_attention_heads", equal),
@@ -47,7 +56,6 @@ def _hf_validate_args(args, hf_config):
         ("intermediate_size", "ffn_hidden_size", equal),
         ("tie_word_embeddings", "untie_embeddings_and_output_weights", lambda x, y: not x == y),
         ("rms_norm_eps", "norm_epsilon", equal),
-        ("rope_theta", "rotary_base", equal),
     ]:
         if hasattr(hf_config, hf_config_name):
             if not compare_fn(getattr(hf_config, hf_config_name), getattr(args, megatron_config_name)):
@@ -55,6 +63,14 @@ def _hf_validate_args(args, hf_config):
                     f"{hf_config_name} in hf config {getattr(hf_config, hf_config_name)} is not equal to "
                     f"{megatron_config_name} {getattr(args, megatron_config_name)}, please check the config."
                 )
+
+    # Validate rope_theta separately using the resolved value
+    if _hf_rope_theta is not None:
+        if not equal(_hf_rope_theta, getattr(args, "rotary_base", None)):
+            errors.append(
+                f"rope_theta in hf config {_hf_rope_theta} is not equal to "
+                f"rotary_base {getattr(args, 'rotary_base', None)}, please check the config."
+            )
 
     if len(errors) > 0:
         raise AssertionError("hf_validate_args failed: " + "; ".join(errors))
