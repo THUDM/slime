@@ -96,6 +96,20 @@ def get_model_provider_func(
         if getattr(args, "decoder_last_pipeline_num_layers", None) is not None:
             provider.num_layers_in_last_pipeline_stage = args.decoder_last_pipeline_num_layers
         provider.finalize()
+
+        if role == "critic":
+            _original_provide = provider.provide
+
+            def _critic_provide(pre_process=True, post_process=True, vp_stage=None):
+                model = _original_provide(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
+                if post_process:
+                    model.output_layer = LinearForLastLayer(
+                        input_size=model.config.hidden_size, output_size=1, config=model.config
+                    )
+                return model
+
+            return _critic_provide
+
         return provider.provide
 
     def model_provider(pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None) -> GPTModel:

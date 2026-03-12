@@ -1,5 +1,4 @@
 import os
-
 import slime.utils.external_utils.command_utils as U
 
 TIGHT_DEVICE_MEMORY = U.get_bool_env_var("SLIME_TEST_TIGHT_DEVICE_MEMORY", "1")
@@ -16,7 +15,7 @@ def prepare():
 
 
 def execute():
-    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ "
+    ckpt_args = f"--hf-checkpoint /root/models/{MODEL_NAME}/ " f"--ref-load /root/models/{MODEL_NAME}/ "
 
     rollout_args = (
         "--prompt-data /root/datasets/dapo-math-17k/dapo-math-17k.jsonl "
@@ -28,7 +27,7 @@ def execute():
         "--num-rollout 3 "
         "--rollout-batch-size 8 "
         "--n-samples-per-prompt 4 "
-        "--rollout-max-response-len 1024 "
+        "--rollout-max-response-len 8192 "
         "--rollout-temperature 0.8 "
         "--global-batch-size 32 "
         "--balance-data "
@@ -45,16 +44,14 @@ def execute():
         "--max-tokens-per-gpu 9216 "
     )
 
-    ppo_args = (
-        "--advantage-estimator ppo "
+    grpo_args = (
+        "--advantage-estimator grpo "
+        "--use-kl-loss "
         "--kl-loss-coef 0.00 "
-        "--kl-loss-type k1 "
-        "--kl-coef 0.00 "
+        "--kl-loss-type low_var_kl "
         "--entropy-coef 0.00 "
-        "--eps-clip 4e-4 "
-        "--critic-train-only "
-        "--normalize-advantages "
-        "--critic-lr 1e-5 "
+        "--eps-clip 0.2 "
+        "--eps-clip-high 0.28 "
     )
 
     optimizer_args = (
@@ -68,13 +65,19 @@ def execute():
 
     sglang_args = (
         "--rollout-num-gpus-per-engine 1 "
-        "--rollout-num-gpus 2 "
-        f"--sglang-mem-fraction-static {0.6 if TIGHT_DEVICE_MEMORY else 0.7} "
+        f"--sglang-mem-fraction-static {0.55 if TIGHT_DEVICE_MEMORY else 0.65} "
         "--sglang-cuda-graph-max-bs 32 "
         "--sglang-enable-metrics "
     )
 
     ci_args = "--ci-test "
+
+    fault_tolerance_args = (
+        "--use-fault-tolerance "
+        "--rollout-health-check-interval 5 "
+        "--rollout-health-check-timeout 10 "
+        "--rollout-health-check-first-wait 0 "
+    )
 
     misc_args = (
         "--attention-dropout 0.0 "
@@ -82,10 +85,9 @@ def execute():
         "--accumulate-allreduce-grads-in-fp32 "
         "--attention-softmax-in-fp32 "
         "--attention-backend flash "
-        "--actor-num-nodes 0 "
-        "--actor-num-gpus-per-node 0 "
-        "--critic-num-nodes 1 "
-        "--critic-num-gpus-per-node 2 "
+        "--actor-num-nodes 1 "
+        "--actor-num-gpus-per-node 1 "
+        "--rollout-num-gpus 3 "
         "--megatron-to-hf-mode bridge "
     )
 
@@ -93,11 +95,12 @@ def execute():
         f"{ckpt_args} "
         f"{rollout_args} "
         f"{optimizer_args} "
-        f"{ppo_args} "
+        f"{grpo_args} "
         f"{U.get_default_wandb_args(__file__)} "
         f"{perf_args} "
         f"{sglang_args} "
         f"{ci_args} "
+        f"{fault_tolerance_args} "
         f"{misc_args} "
     )
 
@@ -105,11 +108,14 @@ def execute():
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=MODEL_TYPE,
+        train_script="train_async.py",
     )
 
 
 if __name__ == "__main__":
     prepare()
-    for proxy_var in ("http_proxy", "https_proxy", "HTTP_PROXY", "HTTPS_PROXY"):
-        os.environ.pop(proxy_var, None)
+    os.environ.pop("http_proxy")
+    os.environ.pop("https_proxy")
+    os.environ.pop("HTTP_PROXY")
+    os.environ.pop("HTTPS_PROXY")
     execute()

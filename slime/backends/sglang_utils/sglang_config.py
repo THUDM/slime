@@ -13,8 +13,13 @@ class ServerGroupConfig:
     """Configuration for a single server group.
 
     Attributes:
-        worker_type: One of "regular", "prefill", "decode", or "placeholder".
+        worker_type: One of "regular", "prefill", "decode", "placeholder",
+                     or "encoder".
                      "placeholder" reserves GPU slots without creating engines.
+                     "encoder" creates encoder-only engines for EPD
+                     (Encoder-Prefill-Decode) disaggregation; encoder engines
+                     are started first and their URLs are automatically
+                     injected into prefill groups as ``encoder_urls``.
         num_gpus: Total number of GPUs for this group.
         num_gpus_per_engine: GPUs per engine for this group.  Overrides the
                              model-level or global ``--rollout-num-gpus-per-engine``.
@@ -29,7 +34,7 @@ class ServerGroupConfig:
     overrides: dict = dataclasses.field(default_factory=dict)
 
     def __post_init__(self):
-        valid_types = {"regular", "prefill", "decode", "placeholder"}
+        valid_types = {"regular", "prefill", "decode", "placeholder", "encoder"}
         assert (
             self.worker_type in valid_types
         ), f"Invalid worker_type '{self.worker_type}', must be one of {valid_types}"
@@ -97,6 +102,10 @@ class ModelConfig:
     @property
     def has_pd_disaggregation(self) -> bool:
         return any(g.worker_type in ("prefill", "decode") for g in self.server_groups)
+
+    @property
+    def has_encoder_disaggregation(self) -> bool:
+        return any(g.worker_type == "encoder" for g in self.server_groups)
 
     @property
     def total_num_gpus(self) -> int:

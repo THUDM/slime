@@ -1,3 +1,5 @@
+import inspect
+
 import torch
 from megatron.core.models.gpt.gpt_layer_specs import get_gpt_mtp_block_spec
 
@@ -115,12 +117,35 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
             return self.hf_config.text_config
         return self.hf_config
 
+    def _supports_transformer_config_kwarg(self, kwarg_name: str) -> bool:
+        """Check whether the current TransformerConfig accepts a given kwarg."""
+        transformer_config_class = getattr(self, "TransformerConfigClass", None)
+        if transformer_config_class is None:
+            return True
+
+        dataclass_fields = getattr(transformer_config_class, "__dataclass_fields__", None)
+        if dataclass_fields is not None:
+            return kwarg_name in dataclass_fields
+
+        try:
+            signature = inspect.signature(transformer_config_class)
+        except (TypeError, ValueError):
+            return True
+        return kwarg_name in signature.parameters
+
+    def _get_transformer_layer_spec(self, vp_stage=None):
+        transformer_layer_spec = super()._get_transformer_layer_spec(vp_stage)
+        self._last_transformer_layer_spec = transformer_layer_spec
+        return transformer_layer_spec
+
     def _get_gptmodel_args(self) -> dict:
         """Override to add MTP block spec if needed."""
         ret = super()._get_gptmodel_args()
         text_config = self._get_text_config()
         if getattr(text_config, "mtp_num_hidden_layers", None) is not None:
-            transformer_layer_spec = self.config
+            transformer_layer_spec = getattr(self, "_last_transformer_layer_spec", None)
+            if transformer_layer_spec is None:
+                transformer_layer_spec = self._get_transformer_layer_spec()
             mtp_block_spec = get_gpt_mtp_block_spec(self.config, transformer_layer_spec, use_transformer_engine=True)
             ret["mtp_block_spec"] = mtp_block_spec
         return ret
@@ -133,6 +158,25 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
         layer_number = name.split(".")[2]
         convert_names = []
         for keyword, mapping_names in self._MLP_MAPPING.items():
+            if keyword in name:
+                if "{expert_id}" in mapping_names[0]:
+                    expert_id = name.split("weight")[-1]
+                    convert_names.extend(
+                        [x.format(layer_number=layer_number, expert_id=expert_id) for x in mapping_names]
+                    )
+                else:
+                    convert_names.extend([x.format(layer_number=layer_number) for x in mapping_names])
+                break
+        if len(convert_names) == 0:
+            raise NotImplementedError(f"Unsupported parameter name: {name}")
+        return convert_names
+
+    def _weight_name_mapping_mtp_mlp(self, name: str) -> list[str]:
+        """Handle MTP MLP mappings, keeping per-expert tensors unfused for MoE layers."""
+        layer_number = name.split(".")[2]
+        mapping = self._MTP_MLP_MAPPING if "mlp.experts.linear_fc" in name else self._MLP_MAPPING
+        convert_names = []
+        for keyword, mapping_names in mapping.items():
             if keyword in name:
                 if "{expert_id}" in mapping_names[0]:
                     expert_id = name.split("weight")[-1]
@@ -179,7 +223,7 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
             if "self_attention" in proxy_name or "input_layernorm.weight" in proxy_name:
                 convert_names = super()._weight_name_mapping_attention(proxy_name)
             elif "mlp" in proxy_name or "pre_mlp_layernorm" in proxy_name:
-                convert_names = super()._weight_name_mapping_mlp(proxy_name)
+                convert_names = self._weight_name_mapping_mtp_mlp(proxy_name)
             else:
                 raise NotImplementedError(f"Unsupported transformer component in MTP: {name}")
 
@@ -238,18 +282,11 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
                 expert_w = w[expert_id]  # (out_features, in_features)
                 return expert_w.contiguous()
 
-        weight = super()._weight_to_mcore_format(mcore_weights_name, hf_weights)
-        if mcore_weights_name.endswith("eh_proj.weight"):
-            first_half, second_half = weight.chunk(2, dim=1)
-            weight = torch.cat([second_half, first_half], dim=1)
-        return weight
+        return super()._weight_to_mcore_format(mcore_weights_name, hf_weights)
 
     def _weight_to_hf_format(
         self, mcore_weights_name: str, mcore_weights: torch.Tensor
     ) -> tuple[list[str], list[torch.Tensor]]:
-        if mcore_weights_name.endswith("eh_proj.weight"):
-            first_half, second_half = mcore_weights.chunk(2, dim=1)
-            mcore_weights = torch.cat([second_half, first_half], dim=1)
         return super()._weight_to_hf_format(mcore_weights_name, mcore_weights)
 
     def _build_config(self):
@@ -272,6 +309,9 @@ class Qwen3_5Bridge(Qwen2MoEBridge):
             attention_output_gate=True,
             **mtp_args,
         )
+
+        if self._supports_transformer_config_kwarg("use_gated_attention"):
+            base_kwargs["use_gated_attention"] = True
 
         # Handle MoE-specific config
         if hasattr(text_config, "num_experts"):
