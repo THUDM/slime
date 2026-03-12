@@ -38,7 +38,11 @@ class MultiTurnLossMaskGenerator:
         end_interval = len(chat_template_token_ids) - len(raw_token_ids) - idx_2
         gen_token_length = len(
             self.tokenizer.apply_chat_template(
-                test_messages, add_special_tokens=False, tokenize=True, add_generation_prompt=True
+                test_messages,
+                add_special_tokens=False,
+                tokenize=True,
+                add_generation_prompt=True,
+                return_dict=False,
             )
         ) - len(chat_template_token_ids)
 
@@ -53,9 +57,11 @@ class MultiTurnLossMaskGenerator:
 
         for i, message in enumerate(messages):
             if i == 0:
-                message_ids = self.tokenizer.apply_chat_template([message], tokenize=True, tools=tools)
+                message_ids = self.tokenizer.apply_chat_template(
+                    [message], tokenize=True, tools=tools, return_dict=False
+                )
             else:
-                message_ids = self.tokenizer.apply_chat_template([message], tokenize=True)
+                message_ids = self.tokenizer.apply_chat_template([message], tokenize=True, return_dict=False)
 
             if message["role"] != "system" and i > 0:
                 message_ids = message_ids[self.system_message_length :]
@@ -80,16 +86,23 @@ class MultiTurnLossMaskGenerator:
         all_token_ids = []
 
         prefix_message = {"role": "user", "content": "FOR CALCULATING LOSS MASK ONLY"}
-        prefix_token_ids = self.tokenizer.apply_chat_template([prefix_message], tokenize=True)
+        prefix_token_ids = self.tokenizer.apply_chat_template([prefix_message], tokenize=True, return_dict=False)
 
         for i, message in enumerate(messages):
             if i == 0:
                 tailed_message_ids = self.tokenizer.apply_chat_template(
-                    [message, prefix_message], tokenize=True, tools=tools
+                    [message, prefix_message],
+                    tokenize=True,
+                    tools=tools,
+                    return_dict=False,
                 )
                 message_ids = tailed_message_ids[: -len(prefix_token_ids)]
             else:
-                prefixed_message_ids = self.tokenizer.apply_chat_template([prefix_message, message], tokenize=True)
+                prefixed_message_ids = self.tokenizer.apply_chat_template(
+                    [prefix_message, message],
+                    tokenize=True,
+                    return_dict=False,
+                )
                 message_ids = prefixed_message_ids[len(prefix_token_ids) :]
 
             if message["role"] != "system" and i > 0:

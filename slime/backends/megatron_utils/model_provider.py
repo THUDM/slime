@@ -83,6 +83,8 @@ def get_model_provider_func(
     if args.megatron_to_hf_mode == "bridge":
         from megatron.bridge import AutoBridge
 
+        import slime_plugins.megatron_bridge  # noqa: F401  # register custom bridges
+
         bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
         provider = bridge.to_megatron_provider(load_weights=False)
         # TODO: we should not manually set this...
@@ -91,6 +93,8 @@ def get_model_provider_func(
         provider.expert_model_parallel_size = args.expert_model_parallel_size
         provider.expert_tensor_parallel_size = args.expert_tensor_parallel_size
         provider.sequence_parallel = args.sequence_parallel
+        provider.context_parallel_size = args.context_parallel_size
+        provider.variable_seq_lengths = args.variable_seq_lengths
         if getattr(args, "decoder_first_pipeline_num_layers", None) is not None:
             provider.num_layers_in_first_pipeline_stage = args.decoder_first_pipeline_num_layers
         if getattr(args, "decoder_last_pipeline_num_layers", None) is not None:
