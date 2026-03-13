@@ -323,6 +323,26 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help=("Whether to shuffle the prompts during rollout."),
             )
             parser.add_argument(
+                "--transfer-backend",
+                type=str,
+                choices=["ray", "mooncake", "mooncake_legacy"],
+                default="ray",
+                help=(
+                    "Backend for transferring rollout data from rollout workers to training actors. "
+                    "'ray' uses Ray Object Store (default). 'mooncake' uses Mooncake distributed store for disaggregated setups."
+                ),
+            )
+            parser.add_argument(
+                "--mooncake-mount-segment-size",
+                type=int,
+                default=None,
+                help=(
+                    "Mooncake segment size to mount (bytes). Default 1 GiB. "
+                    "Set to 0 to disable segment mounting. "
+                    "Also configurable via MOONCAKE_MOUNT_SEGMENT_SIZE or MOONCAKE_GLOBAL_SEGMENT_SIZE env."
+                ),
+            )
+            parser.add_argument(
                 "--rollout-seed",
                 type=int,
                 default=42,
