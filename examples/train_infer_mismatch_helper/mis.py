@@ -79,25 +79,28 @@ def metrics_append(metrics: dict[str, list[torch.Tensor]], key: str, value: torc
     metrics[key].append(value.clone().detach())
 
 
-def calculate_veto_mask(
+def calculate_trust_region_seq_mask(
     log_ratio: torch.Tensor,
     loss_mask: torch.Tensor,
-    veto_threshold: float | None,
+    trust_region: str,
+    threshold: float,
     metrics: dict[str, list[torch.Tensor]],
     *,
     metric_prefix: str = "",
 ) -> torch.Tensor:
-    if veto_threshold is None:
-        return torch.ones_like(log_ratio)
-    log_veto_threshold = torch.log(torch.tensor(veto_threshold, device=log_ratio.device))
-    # For each sequence, if it has any catastrophic tokens, return 0 for the sequence
-    catastrophic_tokens = (log_ratio < log_veto_threshold) & loss_mask.bool()
-    has_catastrophic = catastrophic_tokens.any()
-    veto_mask = (~has_catastrophic).float().expand_as(log_ratio)
+    if trust_region == "max":
+        kl = log_ratio**2 / 2.0  # k2 estimator
+        seq_metric = masked_max(kl, loss_mask, expand=True)
+    elif trust_region == "avg":
+        kl = log_ratio.exp() - 1 - log_ratio  # k3 estimator
+        seq_metric = masked_mean(kl, loss_mask, expand=True)
+    else:
+        raise ValueError(f"Unsupported rs_trust_region: {trust_region}")
 
-    metrics_append(metrics, f"{metric_prefix}catastrophic_token_fraction", catastrophic_tokens.int())
-    metrics_append(metrics, f"{metric_prefix}catastrophic_seq_fraction", has_catastrophic.int().expand_as(loss_mask))
-    return veto_mask
+    keep_seq = (seq_metric <= threshold).float()
+    metrics_append(metrics, f"{metric_prefix}trust_region_metric", seq_metric)
+    metrics_append(metrics, f"{metric_prefix}trust_region_reject_fraction", (1.0 - keep_seq).int())
+    return keep_seq
 
 
 def truncate(
@@ -165,7 +168,7 @@ def compute_mis_weights(
 
     Returns:
         weights: List of importance sampling weights (safety-bounded; zeroed at padding only). 1D tensor each.
-        modified_response_masks: List of rejection masks to apply in aggregation (mask mode + veto). 1D tensor each.
+        modified_response_masks: List of rejection masks to apply in aggregation. 1D tensor each.
         metrics: The metrics for the importance sampling weights, a dict of list[torch.Tensor]. 1D tensor each.
     """
 
@@ -174,6 +177,8 @@ def compute_mis_weights(
     tis_lower_bound = args.tis_lower_bound if args.tis_lower_bound is not None else 1.0 / args.tis_upper_bound
     rs_lower_bound = args.rs_lower_bound if args.rs_lower_bound is not None else tis_lower_bound
     rs_upper_bound = args.rs_upper_bound if args.rs_upper_bound is not None else args.tis_upper_bound
+    rs_trust_region = args.rs_trust_region
+    rs_tr_threshold = args.rs_tr_threshold
 
     # Validate input lists have same length and each sequence has matching shapes
     assert (
@@ -255,12 +260,13 @@ def compute_mis_weights(
                 rs_weights, modified_mask, metrics, rs_lower_bound, rs_upper_bound, metric_prefix="rs_"
             )
 
-            # Veto on raw per-token ratios (sequence-wise rejection)
-            if args.rs_veto_threshold is not None:
-                veto_mask = calculate_veto_mask(
-                    raw_log_ratio_diff, loss_mask, args.rs_veto_threshold, metrics, metric_prefix="rs_"
+            if rs_trust_region:
+                if rs_tr_threshold is None:
+                    raise ValueError("rs_tr_threshold is required when rs_trust_region is not 'none'")
+                tr_seq_mask = calculate_trust_region_seq_mask(
+                    raw_log_ratio_diff, loss_mask, rs_trust_region, rs_tr_threshold, metrics, metric_prefix="rs_"
                 )
-                modified_mask = modified_mask * veto_mask
+                modified_mask = modified_mask * tr_seq_mask
 
         metrics_append(metrics, "is_ratio_mean_after_tis_rs", weights)
 
