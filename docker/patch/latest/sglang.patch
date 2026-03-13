@@ -1,5 +1,5 @@
 diff --git a/python/sglang/srt/configs/model_config.py b/python/sglang/srt/configs/model_config.py
-index 6fbd1db82..f80ec11bb 100644
+index 6fbd1db82..4c681b58d 100644
 --- a/python/sglang/srt/configs/model_config.py
 +++ b/python/sglang/srt/configs/model_config.py
 @@ -274,6 +274,7 @@ class ModelConfig:
@@ -10,6 +10,20 @@ index 6fbd1db82..f80ec11bb 100644
              "GlmMoeDsaForCausalLM",
          ]:
              self.hf_config.architectures[0] = "DeepseekV3ForCausalLMNextN"
+@@ -1016,10 +1017,10 @@ class ModelConfig:
+ 
+         if tf_version < required_version:
+             if needs_tf_v5:
+-                raise ValueError(
+-                    f"Transformers version {tf_version_str} is not supported for model {self.model_path} "
++                logger.warning(
++                    f"Transformers version {tf_version_str} may not be fully supported for model {self.model_path} "
+                     f"or model type {self.hf_config.model_type}. "
+-                    "Please upgrade transformers to >= 5.0.0."
++                    "Recommended transformers >= 5.0.0, but proceeding with current version."
+                 )
+         elif not needs_tf_v5:
+             logger.warning(
 diff --git a/python/sglang/srt/disaggregation/common/conn.py b/python/sglang/srt/disaggregation/common/conn.py
 index 67fe82ad6..2ef25c49b 100644
 --- a/python/sglang/srt/disaggregation/common/conn.py
@@ -389,7 +403,7 @@ index d0d4efd95..fc4eef7b9 100644
      def _register_kv_args(self):
          for bootstrap_info in self.bootstrap_infos:
 diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
-index fbc801635..21fc1ce0d 100644
+index fbc801635..83d962736 100644
 --- a/python/sglang/srt/disaggregation/prefill.py
 +++ b/python/sglang/srt/disaggregation/prefill.py
 @@ -20,6 +20,7 @@ Life cycle of a request in the prefill server
@@ -457,21 +471,32 @@ index fbc801635..21fc1ce0d 100644
  
  class SchedulerDisaggregationPrefillMixin:
      """
-@@ -564,6 +601,13 @@ class SchedulerDisaggregationPrefillMixin:
-             self.attn_tp_cpu_group,
-         )
+@@ -559,10 +596,23 @@ class SchedulerDisaggregationPrefillMixin:
  
+         done_reqs = []
+ 
++        # When CP > 1, use the full TP gloo group so all CP ranks reach
++        # consensus; otherwise a subset may enter run_batch while others wait
++        # in recv_requests, causing a deadlock.
++        disagg_gloo_group = (
++            self.tp_cpu_group if self.attn_cp_size > 1 else self.attn_tp_cpu_group
++        )
+         polls = poll_and_all_reduce(
+             [req.disagg_kv_sender for req in self.disagg_prefill_inflight_queue],
+-            self.attn_tp_cpu_group,
++            disagg_gloo_group,
++        )
++
 +        # Transfer timeout: if a request has been in the inflight queue for too long
 +        # (e.g., stuck in WaitingForInput/Transferring), treat it as failed.
 +        transfer_timeout = float(
 +            os.environ.get("SGLANG_DISAGGREGATION_TRANSFER_TIMEOUT", "600")
-+        )
+         )
 +        now = time.perf_counter()
-+
+ 
          undone_reqs: List[Req] = []
          # Check .poll() for the reqs in disagg_prefill_inflight_queue. If Success, respond to the client and remove it from the queue
-         for req, poll in zip(self.disagg_prefill_inflight_queue, polls):
-@@ -573,10 +617,35 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -573,10 +623,35 @@ class SchedulerDisaggregationPrefillMixin:
                      undone_reqs.append(req)
                      continue
  
@@ -509,6 +534,20 @@ index fbc801635..21fc1ce0d 100644
              elif poll == KVPoll.Success:  # transfer done
                  release_kv_cache(req, self.tree_cache)  # unlock the tree
                  req.finished_reason = FINISH_LENGTH(length=0)
+@@ -628,9 +703,12 @@ class SchedulerDisaggregationPrefillMixin:
+         """
+         Used by PP, get the transferred rids but **do not pop**
+         """
++        disagg_gloo_group = (
++            self.tp_cpu_group if self.attn_cp_size > 1 else self.attn_tp_cpu_group
++        )
+         polls = poll_and_all_reduce(
+             [req.disagg_kv_sender for req in self.disagg_prefill_inflight_queue],
+-            self.attn_tp_cpu_group,
++            disagg_gloo_group,
+         )
+ 
+         transferred_rids: List[str] = []
 diff --git a/python/sglang/srt/distributed/parallel_state.py b/python/sglang/srt/distributed/parallel_state.py
 index 8f1069c00..e47589295 100644
 --- a/python/sglang/srt/distributed/parallel_state.py
@@ -1172,7 +1211,7 @@ index ebcc696ec..3b527021a 100644
          self,
          dispatch_output: Union[DeepEPNormalDispatchOutput, DeepEPLLDispatchOutput],
 diff --git a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
-index de8a07ab3..5c9f4813a 100644
+index de8a07ab3..952f8a67b 100644
 --- a/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
 +++ b/python/sglang/srt/layers/moe/fused_moe_triton/layer.py
 @@ -697,6 +697,7 @@ class FusedMoE(torch.nn.Module):
@@ -1183,7 +1222,31 @@ index de8a07ab3..5c9f4813a 100644
              else loaded_weight
          )
  
-@@ -916,6 +917,7 @@ class FusedMoE(torch.nn.Module):
+@@ -821,13 +822,16 @@ class FusedMoE(torch.nn.Module):
+                 FusedMoeWeightScaleSupported.GROUP.value,
+                 FusedMoeWeightScaleSupported.BLOCK.value,
+             ]:
+-                self._load_model_weight_or_group_weight_scale(
+-                    shard_id=shard_id,
+-                    shard_dim=shard_dim,
+-                    loaded_weight=loaded_weight,
+-                    expert_data=expert_data,
+-                    tp_rank=tp_rank,
+-                )
++                if getattr(param, "load_full_w2", False) and shard_id == "w2":
++                    expert_data.copy_(loaded_weight)
++                else:
++                    self._load_model_weight_or_group_weight_scale(
++                        shard_id=shard_id,
++                        shard_dim=shard_dim,
++                        loaded_weight=loaded_weight,
++                        expert_data=expert_data,
++                        tp_rank=tp_rank,
++                    )
+             elif quant_method == FusedMoeWeightScaleSupported.TENSOR.value:
+                 # INT4-FP8 (INT4 MoE Weight, FP8 Compute): Adjust FP8 per-tensor scaling number for e4m3fnuz (AMD)
+                 if _is_hip and get_bool_env_var("SGLANG_INT4_WEIGHT"):
+@@ -916,6 +920,7 @@ class FusedMoE(torch.nn.Module):
                      "CompressedTensorsWNA16TritonMoE",
                  ]
              )
@@ -1539,7 +1602,7 @@ index c07995798..dd8ca7167 100644
                  break
  
 diff --git a/python/sglang/srt/managers/scheduler.py b/python/sglang/srt/managers/scheduler.py
-index a9ff0ac94..a50dd5122 100644
+index a9ff0ac94..c124f43bc 100644
 --- a/python/sglang/srt/managers/scheduler.py
 +++ b/python/sglang/srt/managers/scheduler.py
 @@ -114,6 +114,7 @@ from sglang.srt.managers.io_struct import (
@@ -1550,7 +1613,28 @@ index a9ff0ac94..a50dd5122 100644
      ProfileReq,
      ReleaseMemoryOccupationReqInput,
      ResumeMemoryOccupationReqInput,
-@@ -1063,6 +1064,7 @@ class Scheduler(
+@@ -952,6 +953,11 @@ class Scheduler(
+                 custom_mem_pool=self.token_to_kv_pool_allocator.get_kvcache().maybe_get_custom_mem_pool(),
+             )
+ 
++            # When CP > 1, all CP ranks must agree on poll results so they
++            # enter run_batch together; use the full TP gloo group for consensus.
++            disagg_prefill_gloo_group = (
++                self.tp_cpu_group if self.attn_cp_size > 1 else self.attn_tp_cpu_group
++            )
+             self.disagg_prefill_bootstrap_queue = PrefillBootstrapQueue(
+                 token_to_kv_pool=self.token_to_kv_pool_allocator.get_kvcache(),
+                 draft_token_to_kv_pool=draft_token_to_kv_pool,
+@@ -961,7 +967,7 @@ class Scheduler(
+                 tp_size=self.tp_size,
+                 gpu_id=self.gpu_id,
+                 bootstrap_port=self.server_args.disaggregation_bootstrap_port,
+-                gloo_group=self.attn_tp_cpu_group,
++                gloo_group=disagg_prefill_gloo_group,
+                 max_total_num_tokens=self.max_total_num_tokens,
+                 decode_tp_size=self.server_args.disaggregation_decode_tp,
+                 decode_dp_size=self.server_args.disaggregation_decode_dp,
+@@ -1063,6 +1069,7 @@ class Scheduler(
                  ),
                  (UpdateWeightsFromTensorReqInput, self.update_weights_from_tensor),
                  (UpdateWeightsFromIPCReqInput, self.update_weights_from_ipc),
@@ -2434,8 +2518,28 @@ index cb13a7c67..d62111471 100644
          residual = None
          with get_global_expert_distribution_recorder().disable_this_region():
              hidden_states, residual = self.decoder(
+diff --git a/python/sglang/srt/models/glm4_moe.py b/python/sglang/srt/models/glm4_moe.py
+index db8c1c7ce..d30830f2e 100644
+--- a/python/sglang/srt/models/glm4_moe.py
++++ b/python/sglang/srt/models/glm4_moe.py
+@@ -678,8 +678,13 @@ class Glm4MoeDecoderLayer(nn.Module):
+         nn.Module.__init__(self)
+         self.hidden_size = config.hidden_size
+         self.config = config
+-        rope_theta = getattr(config, "rope_theta", 10000)
+-        rope_scaling = getattr(config, "rope_scaling", None)
++        # rope_theta may be stored in rope_parameters dict (e.g. GLM-4.6V)
++        _rope_params = getattr(config, "rope_parameters", None)
++        if isinstance(_rope_params, dict) and "rope_theta" in _rope_params:
++            rope_theta = _rope_params["rope_theta"]
++        else:
++            rope_theta = getattr(config, "rope_theta", 10000)
++        rope_scaling = getattr(config, "rope_scaling", None) or _rope_params
+         partial_rotary_factor = getattr(
+             getattr(config, "rope_parameters", None), "partial_rotary_factor", None
+         ) or getattr(config, "partial_rotary_factor", 0.5)
 diff --git a/python/sglang/srt/models/glm4v_moe.py b/python/sglang/srt/models/glm4v_moe.py
-index 324de18b4..c99723f49 100644
+index 324de18b4..fc72faa03 100644
 --- a/python/sglang/srt/models/glm4v_moe.py
 +++ b/python/sglang/srt/models/glm4v_moe.py
 @@ -52,11 +52,31 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
@@ -2475,7 +2579,7 @@ index 324de18b4..c99723f49 100644
          self.visual = Glm4vVisionModel(
              config.vision_config,
              quant_config=quant_config,
-@@ -64,21 +84,6 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
+@@ -64,24 +84,14 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
              use_data_parallel=self.use_data_parallel,
          )
  
@@ -2496,8 +2600,17 @@ index 324de18b4..c99723f49 100644
 -
          self.logits_processor = LogitsProcessor(config)
          self.pooler = Pooler(pooling_type=PoolingType.LAST, normalize=True)
-         self.is_mrope_enabled = "mrope_section" in self.config.rope_scaling
-@@ -219,6 +224,11 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
+-        self.is_mrope_enabled = "mrope_section" in self.config.rope_scaling
++        _rope_cfg = (
++            getattr(self.config, "rope_scaling", None)
++            or getattr(self.config, "rope_parameters", None)
++            or {}
++        )
++        self.is_mrope_enabled = "mrope_section" in _rope_cfg
+ 
+         # For EAGLE3 support
+         self.capture_aux_hidden_states = False
+@@ -219,6 +229,11 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
                  # Skip loading extra bias for GPTQ models.
                  if name.endswith(".bias") and name not in params_dict:
                      continue
@@ -2509,7 +2622,7 @@ index 324de18b4..c99723f49 100644
                  if name not in params_dict:
                      continue
  
-@@ -234,6 +244,8 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
+@@ -234,6 +249,8 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
                      param_name, weight_name, expert_id, shard_id = mapping
                      if weight_name not in name:
                          continue
@@ -2518,7 +2631,7 @@ index 324de18b4..c99723f49 100644
  
                      # Mark as expert weight regardless of whether we can process it
                      is_expert_weight = True
-@@ -265,6 +277,11 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
+@@ -265,6 +282,11 @@ class Glm4vMoeForConditionalGeneration(Glm4vForConditionalGeneration):
                      # Skip loading extra bias for GPTQ models.
                      if name.endswith(".bias") and name not in params_dict:
                          continue
@@ -2644,6 +2757,26 @@ index 2cf813bce..1250c49e4 100644
  def _canonicalize_weights(config, weights_in: Iterable[Tuple[str, torch.Tensor]]):
      weights_out_dict = dict(weights_in)
  
+diff --git a/python/sglang/srt/models/kimi_k25.py b/python/sglang/srt/models/kimi_k25.py
+index d8399a691..96929cacd 100644
+--- a/python/sglang/srt/models/kimi_k25.py
++++ b/python/sglang/srt/models/kimi_k25.py
+@@ -735,6 +735,15 @@ class KimiK25ForConditionalGeneration(nn.Module):
+ 
+         return hidden_states
+ 
++    def set_eagle3_layers_to_capture(self, layer_ids=None):
++        self.language_model.set_eagle3_layers_to_capture(layer_ids)
++
++    def get_embed_and_head(self):
++        return self.language_model.get_embed_and_head()
++
++    def set_embed_and_head(self, embed, head):
++        self.language_model.set_embed_and_head(embed, head)
++
+     def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
+         """Load weights for the model, separating vision and language weights"""
+         mapper = getattr(self, "hf_to_sglang_mapper", None)
 diff --git a/python/sglang/srt/models/qwen3_5.py b/python/sglang/srt/models/qwen3_5.py
 index f01225487..1dad8bb8e 100644
 --- a/python/sglang/srt/models/qwen3_5.py
