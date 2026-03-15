@@ -10,16 +10,11 @@ import slime.utils.external_utils.command_utils as U
 NUM_GPUS = 8
 MODEL_PATH = "/mnt/cfs_bj_mt/experiments/zhengmingming/qfocr-annv9-30k-s4-qwen3-4b-v30-new-vocab-0303/iter_0004600_hf"
 
-# 数据路径（转换后的）
-TRAIN_DATA = "/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/slime/data/kie_train.parquet"
+# 数据路径（转换后的）- 使用新拆分的 RL 数据
+TRAIN_DATA = "/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/slime/data/kie_rl_train.parquet"
 
-# 原始数据路径
-RAW_DATA_FILES = [
-    "/mnt/cfs_bj_mt/workspace/zhengmingming/qianfan_ocr/ocrbench/v2/sft_synthesized_v3/wildreceipt_synthesized_v3_json.jsonl",
-    "/mnt/cfs_bj_mt/workspace/zhengmingming/qianfan_ocr/ocrbench/ccocr/synthetic/SIBR_ccocr_synthesized_json.jsonl",
-    "/mnt/cfs_bj_mt/workspace/zhengmingming/qianfan_ocr/ocrbench/v2/M6Doc/m6doc_synthesized_json.jsonl",
-    "/mnt/cfs_bj_mt/workspace/zhengmingming/qianfan_ocr/ocrbench/v2/sft_synthesized/fund_synthesized_fixed_json_v2.jsonl",
-]
+# RL 数据列表文件（由 split_kie_dataset.py 生成）
+RL_DATA_LIST = "/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/slime/data/kie_split/rl_data_list.txt"
 
 
 def prepare_data():
