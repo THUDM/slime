@@ -1,0 +1,42 @@
+# ========================================================================
+# Slime KIE GRPO Multi-Node Training Job Configuration
+# ========================================================================
+# LTP 平台多机多卡 slime 训练配置
+
+# ------------------------------------------------------------------------
+# Job Basic Configuration
+# ------------------------------------------------------------------------
+jobargs:
+  job_name: "slime-kie-grpo-2node"
+  image: "iregistry.baidu-int.com/acg-agi/slime:latest"
+  num_workers: 1
+
+  # 路径配置
+  model_path: "/mnt/cfs_bj_mt/experiments/zhengmingming/qfocr-annv9-30k-s4-qwen3-4b-v30-new-vocab-0303/iter_0004600_hf"
+  train_data: "/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/slime/data/kie_rl_train_debug.parquet"
+  save_path: "/mnt/cfs_bj_mt/workspace/zhengmingming/rl_from_zero/slime/outputs/internvl_kie"
+
+# ------------------------------------------------------------------------
+# Model Configuration
+# ------------------------------------------------------------------------
+modelargs:
+  model_name: "internvl3.5-4b"
+  gpus_per_node: "8"
+
+# ------------------------------------------------------------------------
+# Training Configuration (精简版，其他用 run.sh 默认值)
+# ------------------------------------------------------------------------
+trainargs:
+  train_backend: "fsdp"
+  actor_num_nodes: "2"
+  actor_num_gpus_per_node: "8"
+  colocate: "true"
+  num_rollout: "100"
+  global_batch_size: "64"
+  lr: "5.0e-7"
+  custom_rm_path: "slime.rollout.rm_hub.kie_reward.kie_reward"
+  # WandB 配置 - offline 模式不需要网络
+  use_wandb: "true"
+  wandb_mode: "offline"
+  wandb_project: "internvl-kie-grpo"
+  wandb_group: "internvl3.5-4b-kie"

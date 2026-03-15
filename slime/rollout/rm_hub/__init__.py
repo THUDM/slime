@@ -12,6 +12,7 @@ from slime.utils.types import Sample
 from .deepscaler import get_deepscaler_rule_based_reward
 from .f1 import f1_score
 from .gpqa import compute_gpqa_reward
+from .kie_reward import kie_reward, kie_reward_strict, kie_reward_f1
 from .math_dapo_utils import compute_score as compute_score_dapo
 from .math_utils import extract_answer as extract_boxed_answer
 from .math_utils import grade_answer_verl
@@ -83,6 +84,12 @@ async def async_rm(args, sample: Sample, **kwargs):
         from .ifbench import compute_ifbench_reward
 
         return compute_ifbench_reward(response, label, metadata=metadata)
+    elif rm_type == "kie":
+        return await kie_reward(args, sample, **kwargs)
+    elif rm_type == "kie_strict":
+        return await kie_reward_strict(args, sample, **kwargs)
+    elif rm_type == "kie_f1":
+        return await kie_reward_f1(args, sample, **kwargs)
     elif rm_type == "random":
         return random.randint(0, 1)
     elif rm_type:

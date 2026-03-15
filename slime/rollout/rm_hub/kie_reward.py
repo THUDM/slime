@@ -223,11 +223,16 @@ async def kie_reward(args, sample: Sample, **kwargs) -> float:
     2. Key 完整性
     3. Value 准确性
 
+    支持的 GT 格式：
+    1. JSON Dict: {"key": "value"}
+    2. JSON 嵌套 List: {"items": [{"name": "...", "price": "..."}]}
+    3. 纯文本: "张三"
+
     Args:
         args: 训练参数
         sample: Sample 对象
             - sample.response: 模型生成的响应
-            - sample.label: 正确答案（JSON 字符串）
+            - sample.label: 正确答案（JSON 字符串或纯文本）
 
     Returns:
         float: 0-1 之间的奖励值
@@ -236,17 +241,40 @@ async def kie_reward(args, sample: Sample, **kwargs) -> float:
     label = sample.label
 
     # 解析真实答案
+    gt_dict = None
+    gt_is_plain_text = False
+
     if isinstance(label, str):
         try:
             gt_dict = json.loads(label)
         except json.JSONDecodeError:
-            logger.warning(f"Failed to parse label as JSON: {label[:100]}")
-            return 0.0
+            # 纯文本 GT，使用字符串相似度评估
+            gt_is_plain_text = True
     elif isinstance(label, dict):
         gt_dict = label
     else:
         logger.warning(f"Unexpected label type: {type(label)}")
         return 0.0
+
+    # 处理纯文本 GT
+    if gt_is_plain_text:
+        gt_text = normalize_text(label)
+        pred_text = normalize_text(response)
+
+        if not gt_text:
+            return 1.0 if not pred_text else 0.5
+
+        # 精确匹配
+        if pred_text.lower() == gt_text.lower():
+            return 1.0
+
+        # 包含关系
+        if gt_text.lower() in pred_text.lower():
+            return 0.9
+
+        # 字符串相似度
+        similarity = string_similarity(pred_text, gt_text)
+        return similarity
 
     # 解析模型响应
     pred_dict = extract_json_from_response(response)
@@ -278,18 +306,28 @@ async def kie_reward_strict(args, sample: Sample, **kwargs) -> float:
     严格版本的 KIE 奖励函数
 
     只有完全匹配才给分，适合简单任务或后期训练
+    支持纯文本 GT
     """
     response = sample.response
     label = sample.label
 
     # 解析
+    gt_dict = None
+    gt_is_plain_text = False
+
     if isinstance(label, str):
         try:
             gt_dict = json.loads(label)
         except json.JSONDecodeError:
-            return 0.0
+            gt_is_plain_text = True
     else:
         gt_dict = label
+
+    # 处理纯文本 GT
+    if gt_is_plain_text:
+        gt_text = normalize_text(label)
+        pred_text = normalize_text(response)
+        return 1.0 if pred_text.lower() == gt_text.lower() else 0.0
 
     pred_dict = extract_json_from_response(response)
 
@@ -314,18 +352,35 @@ async def kie_reward_f1(args, sample: Sample, **kwargs) -> float:
     基于 F1 分数的 KIE 奖励函数
 
     计算 key-value 对的 Precision, Recall, F1
+    支持纯文本 GT
     """
     response = sample.response
     label = sample.label
 
     # 解析
+    gt_dict = None
+    gt_is_plain_text = False
+
     if isinstance(label, str):
         try:
             gt_dict = json.loads(label)
         except json.JSONDecodeError:
-            return 0.0
+            gt_is_plain_text = True
     else:
         gt_dict = label
+
+    # 处理纯文本 GT - 使用字符串相似度作为 F1
+    if gt_is_plain_text:
+        gt_text = normalize_text(label)
+        pred_text = normalize_text(response)
+
+        if not gt_text:
+            return 1.0 if not pred_text else 0.0
+
+        if pred_text.lower() == gt_text.lower():
+            return 1.0
+
+        return string_similarity(pred_text, gt_text)
 
     pred_dict = extract_json_from_response(response)
 

@@ -26,14 +26,18 @@ def convert_conversation_to_slime(data: dict) -> dict | None:
         "conversations": [
             {"from": "human", "value": "<image>\n问题..."},
             {"from": "gpt", "value": "{\"key\": \"value\"}"}
-        ]
+        ],
+        "metadata": {
+            "rm_type": "kie"
+        }
     }
 
     输出格式:
     {
         "problem": "<image>\n问题...",
         "answer": "{\"key\": \"value\"}",
-        "images": ["/path/to/image.jpg"]
+        "images": ["/path/to/image.jpg"],
+        "rm_type": "kie"
     }
     """
     conversations = data.get("conversations", [])
@@ -73,6 +77,11 @@ def convert_conversation_to_slime(data: dict) -> dict | None:
         result["image_type"] = data["image_type"]
     if "language" in data:
         result["language"] = data["language"]
+
+    # 保留 metadata 中的 rm_type（用于指定 reward 函数）
+    metadata = data.get("metadata", {})
+    if isinstance(metadata, dict) and "rm_type" in metadata:
+        result["rm_type"] = metadata["rm_type"]
 
     return result
 
