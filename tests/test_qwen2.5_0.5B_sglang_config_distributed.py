@@ -10,7 +10,7 @@ MODEL_TYPE = "qwen2.5-0.5B"
 NUM_GPUS = 8
 
 # Inline sglang config: same model, 3 engine groups with different parallelism.
-# Non-colocated (训推分离): actor uses 4 GPUs, rollout uses 4 GPUs.
+# Non-colocated (decoupled training and rollout): actor uses 4 GPUs, rollout uses 4 GPUs.
 # Group 1: 2 GPUs, 2 GPUs/engine (tp=2) → 1 engine
 # Group 2: 1 GPU,  1 GPU/engine  (tp=1) → 1 engine
 # Group 3: 1 GPU,  placeholder   → reserves 1 GPU slot, no engine created
