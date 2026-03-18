@@ -912,9 +912,6 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
         router_args = copy.copy(args)
         router_args.sglang_router_ip = router_ip
         router_args.sglang_router_port = router_port
-        if has_pd_disaggregation:
-            router_args.slime_router_pd_disaggregation = True
-
     else:
         from sglang_router.launch_router import RouterArgs
 
