@@ -638,6 +638,21 @@ class RolloutManager:
         if self.custom_reward_post_process_func is not None:
             return self.custom_reward_post_process_func(self.args, samples)
 
+        if samples and isinstance(samples[0], list):
+            samples = list(itertools.chain.from_iterable(samples))
+
+        for sample in samples:
+            if sample.reward is None:
+                if sample.status in {Sample.Status.ABORTED, Sample.Status.FAILED}:
+                    sample.reward = 0.0
+                else:
+                    logger.warning(
+                        "Missing reward for sample index=%s status=%s; defaulting to 0.0",
+                        sample.index,
+                        sample.status,
+                    )
+                    sample.reward = 0.0
+
         raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
         if (
             self.args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
