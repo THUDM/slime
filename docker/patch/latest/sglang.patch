@@ -2518,7 +2518,7 @@ index cb13a7c67..29cd51d4a 100644
                  hidden_states,
                  forward_batch,
 diff --git a/python/sglang/srt/models/deepseek_v2.py b/python/sglang/srt/models/deepseek_v2.py
-index 1583dd788..432758732 100644
+index 1583dd788..08d59c883 100644
 --- a/python/sglang/srt/models/deepseek_v2.py
 +++ b/python/sglang/srt/models/deepseek_v2.py
 @@ -1085,6 +1085,7 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
@@ -2529,14 +2529,20 @@ index 1583dd788..432758732 100644
      ) -> None:
          super().__init__()
          self.layer_id = layer_id
-@@ -1174,6 +1175,34 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
+@@ -1154,6 +1155,8 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
+                 prefix=add_prefix("kv_a_proj_with_mqa", prefix),
+             )
+ 
++        self.skip_topk = False
++        self.next_skip_topk = False
+         if self.use_nsa:
+             is_neox_style = not getattr(config, "indexer_rope_interleave", False)
+             self.indexer = Indexer(
+@@ -1174,6 +1177,31 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
                  layer_id=layer_id,
                  alt_stream=alt_stream,
              )
-+            if is_nextn:
-+                self.skip_topk = False
-+                self.next_skip_topk = False
-+            else:
++            if not is_nextn:
 +                self.index_topk_freq = getattr(config, "index_topk_freq", 1)
 +                self.index_topk_pattern = getattr(config, "index_topk_pattern", None)
 +                self.index_skip_topk_offset = getattr(
@@ -2564,7 +2570,7 @@ index 1583dd788..432758732 100644
  
          self.kv_b_proj = ColumnParallelLinear(
              self.kv_lora_rank,
-@@ -1362,6 +1391,7 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
+@@ -1362,6 +1390,7 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
          forward_batch: ForwardBatch,
          zero_allocator: BumpAllocator,
          llama_4_scaling: Optional[torch.Tensor] = None,
@@ -2572,7 +2578,7 @@ index 1583dd788..432758732 100644
      ):
          s = self.forward_prepare(
              positions=positions,
-@@ -1369,6 +1399,7 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
+@@ -1369,6 +1398,7 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
              forward_batch=forward_batch,
              zero_allocator=zero_allocator,
              llama_4_scaling=llama_4_scaling,
@@ -2580,7 +2586,7 @@ index 1583dd788..432758732 100644
          )
          return self.forward_core(s)
  
-@@ -1379,6 +1410,7 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
+@@ -1379,6 +1409,7 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
          forward_batch: ForwardBatch,
          zero_allocator: BumpAllocator,
          llama_4_scaling: Optional[torch.Tensor] = None,
@@ -2588,7 +2594,7 @@ index 1583dd788..432758732 100644
      ):
          if self.attn_mha.kv_b_proj is None:
              self.attn_mha.kv_b_proj = self.kv_b_proj
-@@ -1418,7 +1450,12 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
+@@ -1418,7 +1449,12 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
              )
          elif attn_forward_method == AttnForwardMethod.MLA:
              inner_state = self.forward_absorb_prepare(
@@ -2602,7 +2608,7 @@ index 1583dd788..432758732 100644
              )
          elif attn_forward_method == AttnForwardMethod.MLA_FUSED_ROPE:
              inner_state = self.forward_absorb_fused_mla_rope_prepare(
-@@ -1529,6 +1566,7 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
+@@ -1529,6 +1565,7 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
          forward_batch: ForwardBatch,
          zero_allocator: BumpAllocator,
          llama_4_scaling: Optional[torch.Tensor] = None,
@@ -2610,7 +2616,7 @@ index 1583dd788..432758732 100644
      ):
          from sglang.srt.model_executor.cuda_graph_runner import get_is_capture_mode
  
-@@ -1620,18 +1658,7 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
+@@ -1620,18 +1657,7 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
                      q = self.q_b_proj(q)[0].view(
                          -1, self.num_local_heads, self.qk_head_dim
                      )
@@ -2630,7 +2636,7 @@ index 1583dd788..432758732 100644
                      topk_indices = self.indexer(
                          x=hidden_states,
                          q_lora=q_lora,
-@@ -1639,6 +1666,23 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
+@@ -1639,6 +1665,23 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
                          forward_batch=forward_batch,
                          layer_id=self.layer_id,
                      )
@@ -2654,7 +2660,7 @@ index 1583dd788..432758732 100644
          else:
              q = self.q_proj(hidden_states)[0].view(
                  -1, self.num_local_heads, self.qk_head_dim
-@@ -1929,8 +1973,10 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
+@@ -1929,8 +1972,10 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
                      ).transpose(0, 1),
                  )
          output, _ = self.o_proj(attn_bmm_output)
@@ -2667,7 +2673,7 @@ index 1583dd788..432758732 100644
  
      def forward_absorb_fused_mla_rope_prepare(
          self,
-@@ -2275,6 +2321,7 @@ class DeepseekV2DecoderLayer(nn.Module):
+@@ -2275,6 +2320,7 @@ class DeepseekV2DecoderLayer(nn.Module):
              reduce_results=False,
              prefix=add_prefix("self_attn", prefix),
              alt_stream=alt_stream,
@@ -2675,7 +2681,7 @@ index 1583dd788..432758732 100644
          )
  
          self.is_layer_sparse = self._is_layer_sparse(layer_id, is_nextn=is_nextn)
-@@ -2357,6 +2404,7 @@ class DeepseekV2DecoderLayer(nn.Module):
+@@ -2357,6 +2403,7 @@ class DeepseekV2DecoderLayer(nn.Module):
          zero_allocator: BumpAllocator,
          gemm_output_zero_allocator: BumpAllocator = None,
          llama_4_scaling: Optional[torch.Tensor] = None,
@@ -2683,7 +2689,7 @@ index 1583dd788..432758732 100644
      ) -> torch.Tensor:
          quant_format = (
              "mxfp4"
-@@ -2398,7 +2446,12 @@ class DeepseekV2DecoderLayer(nn.Module):
+@@ -2398,7 +2445,12 @@ class DeepseekV2DecoderLayer(nn.Module):
              forward_batch=forward_batch,
              zero_allocator=zero_allocator,
              llama_4_scaling=llama_4_scaling,
@@ -2696,7 +2702,7 @@ index 1583dd788..432758732 100644
  
          hidden_states, residual = self.layer_communicator.prepare_mlp(
              hidden_states, residual, forward_batch
-@@ -2434,7 +2487,7 @@ class DeepseekV2DecoderLayer(nn.Module):
+@@ -2434,7 +2486,7 @@ class DeepseekV2DecoderLayer(nn.Module):
                  hidden_states, residual, forward_batch
              )
  
@@ -2705,7 +2711,7 @@ index 1583dd788..432758732 100644
  
      def op_comm_prepare_attn(
          self,
-@@ -2710,6 +2763,7 @@ class DeepseekV2Model(nn.Module):
+@@ -2710,6 +2762,7 @@ class DeepseekV2Model(nn.Module):
              elif self.first_k_dense_replace < normal_start_layer:
                  normal_end_layer = normal_start_layer = 0
          aux_hidden_states = []
@@ -2713,7 +2719,7 @@ index 1583dd788..432758732 100644
          for i in range(normal_start_layer, normal_end_layer):
              # NOTE: torch dynamo does not support graph break in context manager
              ctx = (
-@@ -2727,7 +2781,7 @@ class DeepseekV2Model(nn.Module):
+@@ -2727,7 +2780,7 @@ class DeepseekV2Model(nn.Module):
                      else:
                          aux_hidden_states.append(hidden_states + residual)
                  layer = self.layers[i]
@@ -2722,7 +2728,7 @@ index 1583dd788..432758732 100644
                      positions,
                      hidden_states,
                      forward_batch,
-@@ -2735,6 +2789,7 @@ class DeepseekV2Model(nn.Module):
+@@ -2735,6 +2788,7 @@ class DeepseekV2Model(nn.Module):
                      zero_allocator,
                      gemm_output_zero_allocator,
                      llama_4_scaling,
