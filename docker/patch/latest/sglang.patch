@@ -252,7 +252,7 @@ index 1d8baf002..1672de78d 100644
  
          if not hasattr(self, "polling_count"):
 diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
-index d0d4efd95..fc4eef7b9 100644
+index d0d4efd95..960f585e2 100644
 --- a/python/sglang/srt/disaggregation/mooncake/conn.py
 +++ b/python/sglang/srt/disaggregation/mooncake/conn.py
 @@ -260,6 +260,19 @@ class MooncakeKVManager(CommonKVManager):
@@ -295,7 +295,20 @@ index d0d4efd95..fc4eef7b9 100644
              # Reuse _send_kvcache_generic interface to send extra pool data
              prefill_state_indices = np.array(prefill_state_indices, dtype=np.int32)
              dst_state_indices = np.array(req.dst_state_indices, dtype=np.int32)
-@@ -880,13 +893,43 @@ class MooncakeKVManager(CommonKVManager):
+@@ -858,12 +871,6 @@ class MooncakeKVManager(CommonKVManager):
+                         if ret != 0:
+                             with self.session_lock:
+                                 self.session_failures[req.mooncake_session_id] += 1
+-                                # Failures should never happen if the session is not dead, if the session fails once, mark it as failed
+-                                if self.session_failures[req.mooncake_session_id] >= 1:
+-                                    self.failed_sessions.add(req.mooncake_session_id)
+-                                    logger.error(
+-                                        f"Session {req.mooncake_session_id} failed."
+-                                    )
+                             self.record_failure(
+                                 kv_chunk.room,
+                                 f"Failed to send kv chunk of {kv_chunk.room} to {req.endpoint}:{req.dst_port}",
+@@ -880,13 +887,31 @@ class MooncakeKVManager(CommonKVManager):
  
                          if kv_chunk.is_last:
                              if kv_chunk.state_indices is not None:
@@ -312,18 +325,6 @@ index d0d4efd95..fc4eef7b9 100644
 +                                        self.session_failures[
 +                                            req.mooncake_session_id
 +                                        ] += 1
-+                                        if (
-+                                            self.session_failures[
-+                                                req.mooncake_session_id
-+                                            ]
-+                                            >= 1
-+                                        ):
-+                                            self.failed_sessions.add(
-+                                                req.mooncake_session_id
-+                                            )
-+                                            logger.error(
-+                                                f"Session {req.mooncake_session_id} failed."
-+                                            )
 +                                    self.record_failure(
 +                                        kv_chunk.room,
 +                                        f"Failed to send extra state chunk of {kv_chunk.room} to {req.endpoint}:{req.dst_port}",
@@ -340,7 +341,7 @@ index d0d4efd95..fc4eef7b9 100644
  
                              # Only the last chunk we need to send the aux data
                              ret = self.send_aux(
-@@ -895,6 +938,21 @@ class MooncakeKVManager(CommonKVManager):
+@@ -895,6 +920,11 @@ class MooncakeKVManager(CommonKVManager):
                                  target_rank_registration_info.dst_aux_ptrs,
                              )
                              polls.append(True if ret == 0 else False)
@@ -349,20 +350,10 @@ index d0d4efd95..fc4eef7b9 100644
 +                                # on subsequent batch_transfer_sync calls
 +                                with self.session_lock:
 +                                    self.session_failures[req.mooncake_session_id] += 1
-+                                    if (
-+                                        self.session_failures[req.mooncake_session_id]
-+                                        >= 1
-+                                    ):
-+                                        self.failed_sessions.add(
-+                                            req.mooncake_session_id
-+                                        )
-+                                        logger.error(
-+                                            f"Session {req.mooncake_session_id} failed (send_aux)."
-+                                        )
                              dst_ranks_infos.append(
                                  (req.endpoint, req.dst_port, req.room)
                              )
-@@ -977,15 +1035,20 @@ class MooncakeKVManager(CommonKVManager):
+@@ -977,15 +1007,20 @@ class MooncakeKVManager(CommonKVManager):
  
                  if status == KVPoll.Success:
                      if bootstrap_room in self.request_status:
@@ -371,11 +362,11 @@ index d0d4efd95..fc4eef7b9 100644
 +                        # between the request_status check and dict access here.
                          expected_response_num = (
 -                            self.required_prefill_response_num_table[bootstrap_room]
--                        )
--                        arrived_response_num = len(
--                            self.prefill_response_tracker[bootstrap_room]
 +                            self.required_prefill_response_num_table.get(bootstrap_room)
                          )
+-                        arrived_response_num = len(
+-                            self.prefill_response_tracker[bootstrap_room]
+-                        )
 -                        if arrived_response_num == expected_response_num:
 -                            self.update_status(bootstrap_room, KVPoll.Success)
 +                        if expected_response_num is not None:
@@ -390,7 +381,7 @@ index d0d4efd95..fc4eef7b9 100644
                  elif status == KVPoll.Failed:
                      self.record_failure(
                          bootstrap_room,
-@@ -1266,7 +1329,10 @@ class MooncakeKVReceiver(CommonKVReceiver):
+@@ -1266,7 +1301,10 @@ class MooncakeKVReceiver(CommonKVReceiver):
          super().__init__(mgr, bootstrap_addr, bootstrap_room, prefill_dp_rank)
  
          self.kv_mgr.addr_to_rooms_tracker[self.bootstrap_addr].add(self.bootstrap_room)
@@ -758,24 +749,10 @@ index ca54a931b..6c102a251 100644
              if enable_dual_stream:
                  current_stream = torch.cuda.current_stream()
 diff --git a/python/sglang/srt/layers/attention/nsa/utils.py b/python/sglang/srt/layers/attention/nsa/utils.py
-index 00ef96f9b..5adaec804 100644
+index 00ef96f9b..c2c2c78fe 100644
 --- a/python/sglang/srt/layers/attention/nsa/utils.py
 +++ b/python/sglang/srt/layers/attention/nsa/utils.py
-@@ -54,7 +54,12 @@ def can_nsa_prefill_cp_round_robin_split(forward_batch: "ForwardBatch"):
-         return False
-     cp_size = get_attention_cp_size()
-     seq_len = sum(forward_batch.extend_seq_lens_cpu)
--    return is_nsa_prefill_cp_round_robin_split() and seq_len > 0 and cp_size > 1
-+    return (
-+        is_nsa_prefill_cp_round_robin_split()
-+        and seq_len >= cp_size
-+        and seq_len % cp_size == 0
-+        and cp_size > 1
-+    )
- 
- 
- def nsa_cp_round_robin_split_data(input_: Union[torch.Tensor, List]):
-@@ -91,20 +96,29 @@ def nsa_cp_round_robin_split_data(input_: Union[torch.Tensor, List]):
+@@ -91,20 +91,29 @@ def nsa_cp_round_robin_split_data(input_: Union[torch.Tensor, List]):
  def cal_padded_tokens(forward_batch: "ForwardBatch"):
      # Consistent with the padding calculation logic in ForwardBatch.prepare_mlp_sync_batch,
      # calculate the actual token length after padding when attn_tp_size > 1 or in the MAX_LEN padding mode.
@@ -814,32 +791,7 @@ index 00ef96f9b..5adaec804 100644
      if can_nsa_prefill_cp_round_robin_split(forward_batch):
          tokens = ceil_div(tokens, attn_cp_size)
      return tokens
-@@ -152,10 +166,20 @@ class NSAContextParallelMetadata:
- 
- def can_cp_split(seq_len: int, cp_size: int, use_nsa: bool, forward_batch):
-     if is_nsa_prefill_cp_round_robin_split():
--        cur_cp_seq_len = seq_len // cp_size
--        assert (
--            seq_len % cp_size == 0
--        ), f"seq_len {seq_len} is not divisible by cp_size {cp_size} when nsa_prefill_cp_mode is round-robin-split"
-+        # Use actual extend sequence length instead of (possibly padded) input_ids
-+        # length to stay consistent with can_nsa_prefill_cp_round_robin_split(),
-+        # which also checks sum(extend_seq_lens_cpu).  When prepare_mlp_sync_batch
-+        # pads input_ids to ceil_align(n, attn_cp_size), len(input_ids) can become
-+        # divisible by cp_size even though the real extend length is not, causing
-+        # hidden_states to be CP-split while the attention metadata is not.
-+        actual_seq_len = (
-+            sum(forward_batch.extend_seq_lens_cpu)
-+            if forward_batch.extend_seq_lens_cpu is not None
-+            else seq_len
-+        )
-+        if actual_seq_len < cp_size or actual_seq_len % cp_size != 0:
-+            return False
-+        cur_cp_seq_len = actual_seq_len // cp_size
-     else:
-         # TODO current just support prefill batch=1 and len(input_ids) > self.cp_size * 2
-         # Note: (self.cp_size * 2) To achieve load balancing for seq computation,
-@@ -175,10 +199,6 @@ def can_cp_split(seq_len: int, cp_size: int, use_nsa: bool, forward_batch):
+@@ -175,10 +184,6 @@ def can_cp_split(seq_len: int, cp_size: int, use_nsa: bool, forward_batch):
  
  def cp_split_and_rebuild_data(forward_batch, input_: torch.Tensor):
      if is_nsa_prefill_cp_round_robin_split():
@@ -850,7 +802,7 @@ index 00ef96f9b..5adaec804 100644
          return nsa_cp_round_robin_split_data(input_)
  
      input_list = list(
-@@ -192,11 +212,6 @@ def cp_split_and_rebuild_data(forward_batch, input_: torch.Tensor):
+@@ -192,11 +197,6 @@ def cp_split_and_rebuild_data(forward_batch, input_: torch.Tensor):
  
  def cp_split_and_rebuild_position(forward_batch, positions: torch.Tensor):
      if is_nsa_prefill_cp_round_robin_split():
@@ -2383,8 +2335,41 @@ index 42b169728..8e799196a 100644
              node = node.parent
          return delta
  
+diff --git a/python/sglang/srt/model_executor/forward_batch_info.py b/python/sglang/srt/model_executor/forward_batch_info.py
+index 234523532..f5d479945 100644
+--- a/python/sglang/srt/model_executor/forward_batch_info.py
++++ b/python/sglang/srt/model_executor/forward_batch_info.py
+@@ -909,6 +909,28 @@ class ForwardBatch(ForwardBatchDeepSeekMHAMixin):
+         tokens_padded = (tokens + rank_size - 1) // rank_size * rank_size
+         self._pad_inputs_to_size(model_runner, tokens_padded, self.batch_size)
+ 
++    def prepare_cp_padding(self, model_runner: ModelRunner):
++        """Pad input_ids and extend_num_tokens to CP size multiples.
++
++        In the PP disagg prefill + CP path, MLP sync is skipped so
++        prepare_mlp_sync_batch never runs. This method performs the
++        subset of padding that CP collective communication requires:
++        input_ids (and related tensors) must be divisible by cp_size.
++        """
++        attn_cp_size = get_attention_cp_size()
++        if attn_cp_size <= 1:
++            return
++        if not self.forward_mode.is_extend():
++            return
++
++        tokens = self.input_ids.shape[0]
++        tokens_padded = ceil_align(tokens, attn_cp_size)
++        if tokens_padded == tokens:
++            return
++
++        self._pad_inputs_to_size(model_runner, tokens_padded, self.batch_size)
++        self.extend_num_tokens = tokens_padded
++
+     def post_forward_mlp_sync_batch(self, logits_output: LogitsProcessorOutput):
+ 
+         self.forward_mode = getattr(self, "_original_forward_mode", self.forward_mode)
 diff --git a/python/sglang/srt/model_executor/model_runner.py b/python/sglang/srt/model_executor/model_runner.py
-index 275775a73..e4e2fdc39 100644
+index 275775a73..f0bd3ebf8 100644
 --- a/python/sglang/srt/model_executor/model_runner.py
 +++ b/python/sglang/srt/model_executor/model_runner.py
 @@ -395,7 +395,12 @@ class ModelRunner(ModelRunnerKVCacheMixin):
@@ -2436,7 +2421,17 @@ index 275775a73..e4e2fdc39 100644
  
          if self.eplb_manager is not None:
              self.eplb_manager.on_forward_pass_end()
-@@ -2664,6 +2678,42 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+@@ -2472,6 +2486,9 @@ class ModelRunner(ModelRunnerKVCacheMixin):
+             forward_batch.prepare_mlp_sync_batch(self)
+         else:
+             forward_batch.prepare_attn_tp_scatter_input(self)
++            # In PP disagg prefill + CP, MLP sync is skipped so CP padding
++            # must be done separately to keep input_ids divisible by cp_size.
++            forward_batch.prepare_cp_padding(self)
+ 
+         # Normalize num_token_non_padded to be local to this attention TP rank if needed.
+         if (
+@@ -2664,6 +2681,42 @@ class ModelRunner(ModelRunnerKVCacheMixin):
                      device=self.device,
                  )
  
