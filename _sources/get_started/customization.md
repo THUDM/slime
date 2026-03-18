@@ -28,7 +28,6 @@ Below is a summary of all available customization interfaces and their purposes.
 | [`--custom-megatron-init-path`](#17-megatron-hooks) | Custom initialization after Megatron setup. |
 | [`--custom-megatron-before-log-prob-hook-path`](#17-megatron-hooks) | Custom logic before log probability computation. |
 | [`--custom-megatron-before-train-step-hook-path`](#17-megatron-hooks) | Custom logic before each training step. |
-| [`--slime-router-middleware-paths`](#18-slime-router-middleware---slime-router-middleware-paths) | Add custom middleware to slime router. |
 
 ## Detailed Interface Reference
 
@@ -400,18 +399,7 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 
 ---
 
-### 18. slime Router Middleware (`--slime-router-middleware-paths`)
-
-**Purpose**: Add custom middleware to the slime router for request processing.
-
-**Use Cases**:
-- Request/response transformation
-- Custom routing logic
-- Caching and optimization
-
----
-
-### 19. MoE Routing Replay
+### 18. MoE Routing Replay
 
 Stabilize MoE RL training by recording and replaying expert routing decisions to ensure consistency.
 

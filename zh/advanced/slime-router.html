@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 03 月 11 日"/>
+    <meta name="docbuild:last-update" content="2026 年 03 月 18 日"/>
   </head>
   
   
@@ -431,13 +431,13 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">2. 为什么需要 slime router</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#radix-tree-cache-token">2.1 Radix-tree cache（透明的 token 管理）</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.2 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.1 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang">SGLang 端</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime">slime 端</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">为什么需要 slime router</a></li>
 </ul>
 </li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd-prefill-decode">2.2 PD 分离（Prefill-Decode 分离）</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-model-gateway">3. 与 SGLang Model Gateway 的区别</a><ul class="visible nav section-nav flex-column">
@@ -464,11 +464,10 @@
 <h2>1. 什么是 slime router？<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
 <p>slime router 是一个小型 FastAPI 服务，主要能力包括：</p>
 <ul class="simple">
-<li><p>注册 worker（SGLang HTTP server）到本地池</p></li>
-<li><p>路由请求到选定的 worker（简单的 least-inflight load balancing）</p></li>
-<li><p>代理任意路径到选定的 worker（例如 <code class="docutils literal notranslate"><span class="pre">/generate</span></code>）</p></li>
+<li><p>注册 worker（SGLang HTTP server）到本地池，支持 <strong>prefill / decode / regular</strong> worker 类型</p></li>
+<li><p>路由请求到选定的 worker——支持 least-inflight 负载均衡和 <strong>PD 双发路由</strong></p></li>
+<li><p>流式代理请求到选定的 worker（例如 <code class="docutils literal notranslate"><span class="pre">/generate</span></code>），不缓冲完整 response body，提高高并发下的吞吐</p></li>
 <li><p>定期 health checks，并隔离不健康的 worker</p></li>
-<li><p>支持 middleware plugins（通过 <code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>）实现 rollout 特定处理（例如 caching、request/response transform）</p></li>
 </ul>
 <p>在 slime 架构中，router 是 rollout 系统（&quot;SGLang + router&quot;）的一部分：负责生成样本并将其推入数据缓冲区。</p>
 <section id="id2">
@@ -483,25 +482,9 @@
 <hr class="docutils" />
 <section id="id3">
 <h2>2. 为什么需要 slime router<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
-<p>与 production inference 不同，RL rollout 往往需要捕获用于训练的额外 metadata：token-level logprobs、loss masks，以及（对 MoE 模型）expert routing decisions。slime router 通过 middleware system 和 passthrough proxy 设计提供这些能力。</p>
-<section id="radix-tree-cache-token">
-<h3>2.1 Radix-tree cache（透明的 token 管理）<a class="headerlink" href="#radix-tree-cache-token" title="链接到此标题。">#</a></h3>
-<blockquote>
-<div><p>当你的 rollout 流程是 text-in/text-out、并且很难可靠地保存 token IDs 时，适合用 radix-tree cache；如果你已经能自己控制 token-in/token-out（例如 search r1、multiturn VLM 这些 example），通常不需要 radix-tree cache。</p>
-</div></blockquote>
-<p>text-in text-out 接口可能导致 token retokenization mismatches：训练阶段重新 tokenize 文本，得到的 token 序列可能与 rollout 阶段不同，从而破坏 PPO/GRPO 这类方法所需的 per-token alignment。</p>
-<p>radix-tree cache 可以透明地解决这个问题：它拦截 text-based request，对其进行 tokenize，并将 trajectory（text、token IDs、logprobs、loss masks）按文本前缀作为 key 存储。rollout 结束后，调用 <code class="docutils literal notranslate"><span class="pre">/retrieve_from_text</span></code> 就能取回与 rollout 完全一致的 token 序列及其对齐的 metadata，无需修改现有 rollout 代码。</p>
-<p>实现上，radix-tree cache 会做几件事：</p>
-<ul class="simple">
-<li><p>接收 text 以及 tokens/metadata，并写入 radix tree</p></li>
-<li><p>通过 longest-prefix matching 复用已缓存的 token 序列（使后续流程可以走 token-in/token-out）</p></li>
-<li><p>rollout 过程中持续插入新的 text continuation（同一 prompt 下可有多条 trajectory，例如 GRPO）</p></li>
-<li><p>定期清理 stale nodes，控制内存占用</p></li>
-</ul>
-<p>当你有 text-based rollout 代码、想获得 token-level 精度但又不想重写，或者在 GRPO 场景中多个 trajectory 共享相同 prompt 前缀时，建议使用 radix-tree cache。</p>
-</section>
+<p>与 production inference 不同，RL rollout 往往需要捕获用于训练的额外 metadata：token-level logprobs、loss masks，以及（对 MoE 模型）expert routing decisions。slime router 通过 passthrough proxy 设计提供这些能力。</p>
 <section id="rollout-routing-replay-r3-for-moe">
-<h3>2.2 Rollout routing replay (R3) for MoE<a class="headerlink" href="#rollout-routing-replay-r3-for-moe" title="链接到此标题。">#</a></h3>
+<h3>2.1 Rollout routing replay (R3) for MoE<a class="headerlink" href="#rollout-routing-replay-r3-for-moe" title="链接到此标题。">#</a></h3>
 <p>对 MoE 模型，slime 支持 rollout routing replay (R3)：在 rollout 期间记录 expert routing decisions，并在训练期间 replay，以提升训练稳定性。</p>
 <section id="sglang">
 <h4>SGLang 端<a class="headerlink" href="#sglang" title="链接到此标题。">#</a></h4>
@@ -528,6 +511,17 @@
 <p>我们需要 slime router，是因为当请求设置 <code class="docutils literal notranslate"><span class="pre">return_routed_experts=true</span></code> 时，SGLang worker 会在响应里返回路由信息（<code class="docutils literal notranslate"><span class="pre">meta_info.routed_experts</span></code>），而 slime router 会端到端保留这个字段。SGLang Model Gateway 会用固定 schema 重建响应，可能会丢掉这类额外 metadata（细节见第 3 节）。</p>
 </section>
 </section>
+<section id="pd-prefill-decode">
+<h3>2.2 PD 分离（Prefill-Decode 分离）<a class="headerlink" href="#pd-prefill-decode" title="链接到此标题。">#</a></h3>
+<p>slime router 支持 <strong>Prefill-Decode (PD) 分离</strong>。当 prefill 和 decode worker 注册后，router 会自动启用 PD 模式：</p>
+<ul class="simple">
+<li><p>Worker 注册时携带 <code class="docutils literal notranslate"><span class="pre">worker_type</span></code>（<code class="docutils literal notranslate"><span class="pre">prefill</span></code>、<code class="docutils literal notranslate"><span class="pre">decode</span></code> 或 <code class="docutils literal notranslate"><span class="pre">regular</span></code>），通过 <code class="docutils literal notranslate"><span class="pre">POST</span> <span class="pre">/workers</span></code> 端点。</p></li>
+<li><p>对每个请求，router 通过 least-inflight 负载均衡选择一对 (prefill, decode) worker，向请求体注入 bootstrap 信息（<code class="docutils literal notranslate"><span class="pre">bootstrap_host</span></code>、<code class="docutils literal notranslate"><span class="pre">bootstrap_port</span></code>、<code class="docutils literal notranslate"><span class="pre">bootstrap_room</span></code>），然后将同一个修改后的请求<strong>并发发送</strong>给两个 worker。</p></li>
+<li><p>Decode worker 的响应返回给调用方。实际的 KV-cache 传输由 worker 通过 bootstrap 连接内部协调完成。</p></li>
+<li><p>如果没有 prefill/decode worker 存在，router 回退到标准的单 worker 路由。</p></li>
+</ul>
+<p>这与 SGLang Model Gateway 的 PD router 所使用的双发方式一致。</p>
+</section>
 </section>
 <hr class="docutils" />
 <section id="sglang-model-gateway">
@@ -535,14 +529,14 @@
 <p>slime router 与 SGLang Model Gateway 都能将请求路由到 worker，但它们面向的目标不同、优化方向也不同。</p>
 <section id="id5">
 <h3>主要区别<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h3>
-<p>slime router 是一个轻量级的 Python/FastAPI proxy，作为 SGLang worker 的 passthrough proxy。这种 passthrough 设计使得 RL 特定功能成为可能，例如 radix-tree trajectory caching 和 R3（需要保留原始 response metadata，如 <code class="docutils literal notranslate"><span class="pre">routed_experts</span></code>）。</p>
+<p>slime router 是一个轻量级的 Python/FastAPI proxy，作为 SGLang worker 的 passthrough proxy。这种 passthrough 设计使得 RL 特定功能成为可能，例如 R3（需要保留原始 response metadata，如 <code class="docutils literal notranslate"><span class="pre">routed_experts</span></code>）。</p>
 <p>SGLang Model Gateway 是一个高性能 Rust router，面向大规模 inference 优化：async non-blocking routing、高级 fault tolerance（retries、circuit breakers）、多种 load balancing policy（包括 cache-aware routing），以及 PD disaggregation 支持。但它会用固定 schema 重建响应，因此不保留 slime 的 R3 流程所需 metadata。</p>
 <p>更多关于 SGLang Model Gateway 的信息，请参阅<a class="reference external" href="https://docs.sglang.io/advanced_features/sgl_model_gateway.html">官方文档</a>。</p>
 </section>
 <section id="id6">
 <h3>如何选择<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
 <ul class="simple">
-<li><p>当你需要 R3 或 radix-tree cache 时，使用 SlimeRouter</p></li>
+<li><p>当你需要 R3 或需要保留 metadata 的 PD 分离时，使用 SlimeRouter</p></li>
 <li><p>其他情况使用 SGLang Model Gateway（推荐默认选项）</p></li>
 </ul>
 </section>
@@ -601,13 +595,13 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">2. 为什么需要 slime router</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#radix-tree-cache-token">2.1 Radix-tree cache（透明的 token 管理）</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.2 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.1 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang">SGLang 端</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime">slime 端</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">为什么需要 slime router</a></li>
 </ul>
 </li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd-prefill-decode">2.2 PD 分离（Prefill-Decode 分离）</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-model-gateway">3. 与 SGLang Model Gateway 的区别</a><ul class="visible nav section-nav flex-column">
@@ -648,7 +642,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 03 月 11 日.
+  最后更新于 2026 年 03 月 18 日.
   <br/>
 </p>
   </div>

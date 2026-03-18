@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Mar 11, 2026"/>
+    <meta name="docbuild:last-update" content="Mar 18, 2026"/>
   </head>
   
   
@@ -435,13 +435,13 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-we-need-slime-router">2. Why we need slime router</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#radix-tree-cache-transparent-token-management">2.1 Radix-tree cache (transparent token management)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.2 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.1 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-side">SGLang side</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-side">slime side</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#why-slime-router-is-needed">Why slime router is needed</a></li>
 </ul>
 </li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd-disaggregation">2.2 PD disaggregation</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#differences-vs-sglang-model-gateway">3. Differences vs SGLang Model Gateway</a><ul class="visible nav section-nav flex-column">
@@ -468,11 +468,10 @@
 <h2>1. What is slime router?<a class="headerlink" href="#what-is-slime-router" title="Link to this heading">#</a></h2>
 <p>slime router is a small FastAPI service that:</p>
 <ul class="simple">
-<li><p>Registers workers (SGLang HTTP servers) into a local pool</p></li>
-<li><p>Routes requests to a selected worker (simple least-inflight load balancing)</p></li>
-<li><p>Proxies arbitrary paths to the selected worker (e.g. <code class="docutils literal notranslate"><span class="pre">/generate</span></code>)</p></li>
+<li><p>Registers workers (SGLang HTTP servers) into a local pool, with support for <strong>prefill / decode / regular</strong> worker types</p></li>
+<li><p>Routes requests to a selected worker via least-inflight load balancing or <strong>PD dual-dispatch routing</strong></p></li>
+<li><p>Streams proxied responses (e.g. <code class="docutils literal notranslate"><span class="pre">/generate</span></code>) without buffering the full body, improving throughput under high concurrency</p></li>
 <li><p>Runs periodic health checks and quarantines unhealthy workers</p></li>
-<li><p>Supports middleware plugins (via <code class="docutils literal notranslate"><span class="pre">--slime-router-middleware-paths</span></code>) to implement rollout-specific processing (e.g. caching, request/response transforms)</p></li>
 </ul>
 <p>In slime’s architecture, the router is part of the rollout system (“SGLang + router”) that generates samples and pushes them into the data buffer.</p>
 <section id="how-it-is-launched">
@@ -487,25 +486,9 @@
 <hr class="docutils" />
 <section id="why-we-need-slime-router">
 <h2>2. Why we need slime router<a class="headerlink" href="#why-we-need-slime-router" title="Link to this heading">#</a></h2>
-<p>Unlike production inference, RL rollout needs to capture additional metadata for training: token-level logprobs, loss masks, and (for MoE models) expert routing decisions. slime router provides these capabilities through its middleware system and passthrough proxy design.</p>
-<section id="radix-tree-cache-transparent-token-management">
-<h3>2.1 Radix-tree cache (transparent token management)<a class="headerlink" href="#radix-tree-cache-transparent-token-management" title="Link to this heading">#</a></h3>
-<blockquote>
-<div><p>Use this when your rollout pipeline is text-in/text-out and you cannot reliably persist token IDs; if you already control token-in/token-out (e.g. search r1, multiturn VLM examples), you likely don’t need the radix-tree cache.</p>
-</div></blockquote>
-<p>Text-in text-out interfaces can cause token retokenization mismatches - re-tokenizing text at training time may produce different token sequences than rollout, breaking per-token alignment needed for PPO/GRPO losses.</p>
-<p>The radix-tree cache solves this transparently: it intercepts text-based requests, tokenizes them, and stores trajectories (text, token IDs, logprobs, loss masks) keyed by the text prefix. After rollout finishes, calling <code class="docutils literal notranslate"><span class="pre">/retrieve_from_text</span></code> returns the exact token sequence with aligned metadata, without requiring any changes to your rollout code.</p>
-<p>Implementation-wise, the radix-tree cache:</p>
-<ul class="simple">
-<li><p>Accepts text plus tokens/metadata and stores them in a radix tree</p></li>
-<li><p>Uses longest-prefix matching to reuse cached token sequences (enabling token-in/token-out downstream)</p></li>
-<li><p>Allows insertion of new text continuations as rollout proceeds (multiple trajectories per prompt, e.g. GRPO)</p></li>
-<li><p>Periodically cleans up stale nodes to control memory usage</p></li>
-</ul>
-<p>Use the radix cache when you have text-based rollout code and want token-level precision without rewriting, or when running GRPO with multiple trajectories sharing the same prompt prefix.</p>
-</section>
+<p>Unlike production inference, RL rollout needs to capture additional metadata for training: token-level logprobs, loss masks, and (for MoE models) expert routing decisions. slime router provides these capabilities through its passthrough proxy design.</p>
 <section id="rollout-routing-replay-r3-for-moe">
-<h3>2.2 Rollout routing replay (R3) for MoE<a class="headerlink" href="#rollout-routing-replay-r3-for-moe" title="Link to this heading">#</a></h3>
+<h3>2.1 Rollout routing replay (R3) for MoE<a class="headerlink" href="#rollout-routing-replay-r3-for-moe" title="Link to this heading">#</a></h3>
 <p>For MoE models, slime supports rollout routing replay (R3): record expert routing decisions during rollout and replay them during training to improve stability.</p>
 <section id="sglang-side">
 <h4>SGLang side<a class="headerlink" href="#sglang-side" title="Link to this heading">#</a></h4>
@@ -532,6 +515,17 @@
 <p>We need slime router because the SGLang worker returns routed experts in the response (<code class="docutils literal notranslate"><span class="pre">meta_info.routed_experts</span></code>) when the request sets <code class="docutils literal notranslate"><span class="pre">return_routed_experts=true</span></code>, and slime router preserves this field end-to-end. SGLang Model Gateway may drop this extra metadata when it reconstructs responses with a fixed schema (see section 3).</p>
 </section>
 </section>
+<section id="pd-disaggregation">
+<h3>2.2 PD disaggregation<a class="headerlink" href="#pd-disaggregation" title="Link to this heading">#</a></h3>
+<p>slime router supports <strong>Prefill-Decode (PD) disaggregation</strong>. When prefill and decode workers are registered, the router automatically enables PD mode:</p>
+<ul class="simple">
+<li><p>Workers register themselves with a <code class="docutils literal notranslate"><span class="pre">worker_type</span></code> (<code class="docutils literal notranslate"><span class="pre">prefill</span></code>, <code class="docutils literal notranslate"><span class="pre">decode</span></code>, or <code class="docutils literal notranslate"><span class="pre">regular</span></code>) via the <code class="docutils literal notranslate"><span class="pre">POST</span> <span class="pre">/workers</span></code> endpoint.</p></li>
+<li><p>For each request, the router picks a (prefill, decode) worker pair via least-inflight load balancing, injects bootstrap information (<code class="docutils literal notranslate"><span class="pre">bootstrap_host</span></code>, <code class="docutils literal notranslate"><span class="pre">bootstrap_port</span></code>, <code class="docutils literal notranslate"><span class="pre">bootstrap_room</span></code>) into the request body, and sends the same modified request to <strong>both</strong> workers concurrently.</p></li>
+<li><p>The decode worker’s response is returned to the caller. The actual KV-cache transfer between workers is coordinated internally via the bootstrap connection.</p></li>
+<li><p>If no prefill/decode workers exist, the router falls back to standard single-worker routing.</p></li>
+</ul>
+<p>This mirrors the dual-dispatch approach used by SGLang Model Gateway’s PD router.</p>
+</section>
 </section>
 <hr class="docutils" />
 <section id="differences-vs-sglang-model-gateway">
@@ -539,14 +533,14 @@
 <p>slime router and SGLang Model Gateway can both route requests to workers, but they are optimized for different goals.</p>
 <section id="key-differences">
 <h3>Key differences<a class="headerlink" href="#key-differences" title="Link to this heading">#</a></h3>
-<p>slime router is a lightweight Python/FastAPI proxy that acts as a passthrough to SGLang workers. This passthrough design enables RL-specific features like radix-tree trajectory caching and R3 (which require preserving raw response metadata like <code class="docutils literal notranslate"><span class="pre">routed_experts</span></code>).</p>
+<p>slime router is a lightweight Python/FastAPI proxy that acts as a passthrough to SGLang workers. This passthrough design enables RL-specific features like R3 (which require preserving raw response metadata like <code class="docutils literal notranslate"><span class="pre">routed_experts</span></code>).</p>
 <p>SGLang Model Gateway is a high-performance Rust-based router optimized for large-scale inference: async non-blocking routing, advanced fault tolerance (retries, circuit breakers), multiple load balancing policies (including cache-aware routing), and PD disaggregation support. However, it reconstructs responses with a fixed schema, so it does not preserve the metadata needed for slime’s R3 flow.</p>
 <p>For more details on SGLang Model Gateway, see the <a class="reference external" href="https://docs.sglang.io/advanced_features/sgl_model_gateway.html">official documentation</a>.</p>
 </section>
 <section id="when-to-use-which">
 <h3>When to use which<a class="headerlink" href="#when-to-use-which" title="Link to this heading">#</a></h3>
 <ul class="simple">
-<li><p>Use slime router when you need R3 or radix-tree caching</p></li>
+<li><p>Use slime router when you need R3 or PD disaggregation with metadata preservation</p></li>
 <li><p>Use SGLang Model Gateway for everything else (recommended default)</p></li>
 </ul>
 </section>
@@ -605,13 +599,13 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-we-need-slime-router">2. Why we need slime router</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#radix-tree-cache-transparent-token-management">2.1 Radix-tree cache (transparent token management)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.2 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.1 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-side">SGLang side</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-side">slime side</a></li>
 <li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#why-slime-router-is-needed">Why slime router is needed</a></li>
 </ul>
 </li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd-disaggregation">2.2 PD disaggregation</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#differences-vs-sglang-model-gateway">3. Differences vs SGLang Model Gateway</a><ul class="visible nav section-nav flex-column">
@@ -652,7 +646,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Mar 11, 2026.
+  Last updated on Mar 18, 2026.
   <br/>
 </p>
   </div>
