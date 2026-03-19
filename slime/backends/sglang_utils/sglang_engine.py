@@ -51,7 +51,7 @@ def _to_local_gpu_id(physical_gpu_id: int) -> int:
 
 
 def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
-    if server_args.encoder_only:
+    if hasattr(server_args, "encoder_only") and server_args.encoder_only:
         from sglang.srt.disaggregation.encode_server import launch_server
     else:
         from sglang.srt.entrypoints.http_server import launch_server
