@@ -8,11 +8,10 @@ slime includes an optional slime router used during rollout / data generation. I
 
 slime router is a small FastAPI service that:
 
-- Registers workers (SGLang HTTP servers) into a local pool
-- Routes requests to a selected worker (simple least-inflight load balancing)
-- Proxies arbitrary paths to the selected worker (e.g. `/generate`)
+- Registers workers (SGLang HTTP servers) into a local pool, with support for **prefill / decode / regular** worker types
+- Routes requests to a selected worker via least-inflight load balancing or **PD dual-dispatch routing**
+- Streams proxied responses (e.g. `/generate`) without buffering the full body, improving throughput under high concurrency
 - Runs periodic health checks and quarantines unhealthy workers
-- Supports middleware plugins (via `--slime-router-middleware-paths`) to implement rollout-specific processing (e.g. caching, request/response transforms)
 
 In slime's architecture, the router is part of the rollout system ("SGLang + router") that generates samples and pushes them into the data buffer.
 
@@ -27,26 +26,9 @@ In distributed training, slime will start a router automatically when `--sglang-
 
 ## 2. Why we need slime router
 
-Unlike production inference, RL rollout needs to capture additional metadata for training: token-level logprobs, loss masks, and (for MoE models) expert routing decisions. slime router provides these capabilities through its middleware system and passthrough proxy design.
+Unlike production inference, RL rollout needs to capture additional metadata for training: token-level logprobs, loss masks, and (for MoE models) expert routing decisions. slime router provides these capabilities through its passthrough proxy design.
 
-### 2.1 Radix-tree cache (transparent token management)
-
-> Use this when your rollout pipeline is text-in/text-out and you cannot reliably persist token IDs; if you already control token-in/token-out (e.g. search r1, multiturn VLM examples), you likely don't need the radix-tree cache.
-
-Text-in text-out interfaces can cause token retokenization mismatches - re-tokenizing text at training time may produce different token sequences than rollout, breaking per-token alignment needed for PPO/GRPO losses.
-
-The radix-tree cache solves this transparently: it intercepts text-based requests, tokenizes them, and stores trajectories (text, token IDs, logprobs, loss masks) keyed by the text prefix. After rollout finishes, calling `/retrieve_from_text` returns the exact token sequence with aligned metadata, without requiring any changes to your rollout code.
-
-Implementation-wise, the radix-tree cache:
-
-- Accepts text plus tokens/metadata and stores them in a radix tree
-- Uses longest-prefix matching to reuse cached token sequences (enabling token-in/token-out downstream)
-- Allows insertion of new text continuations as rollout proceeds (multiple trajectories per prompt, e.g. GRPO)
-- Periodically cleans up stale nodes to control memory usage
-
-Use the radix cache when you have text-based rollout code and want token-level precision without rewriting, or when running GRPO with multiple trajectories sharing the same prompt prefix.
-
-### 2.2 Rollout routing replay (R3) for MoE
+### 2.1 Rollout routing replay (R3) for MoE
 
 For MoE models, slime supports rollout routing replay (R3): record expert routing decisions during rollout and replay them during training to improve stability.
 
@@ -72,6 +54,17 @@ slime consumes the routing data and replays it during training:
 
 We need slime router because the SGLang worker returns routed experts in the response (`meta_info.routed_experts`) when the request sets `return_routed_experts=true`, and slime router preserves this field end-to-end. SGLang Model Gateway may drop this extra metadata when it reconstructs responses with a fixed schema (see section 3).
 
+### 2.2 PD disaggregation
+
+slime router supports **Prefill-Decode (PD) disaggregation**. When prefill and decode workers are registered, the router automatically enables PD mode:
+
+- Workers register themselves with a `worker_type` (`prefill`, `decode`, or `regular`) via the `POST /workers` endpoint.
+- For each request, the router picks a (prefill, decode) worker pair via least-inflight load balancing, injects bootstrap information (`bootstrap_host`, `bootstrap_port`, `bootstrap_room`) into the request body, and sends the same modified request to **both** workers concurrently.
+- The decode worker's response is returned to the caller. The actual KV-cache transfer between workers is coordinated internally via the bootstrap connection.
+- If no prefill/decode workers exist, the router falls back to standard single-worker routing.
+
+This mirrors the dual-dispatch approach used by SGLang Model Gateway's PD router.
+
 ---
 
 ## 3. Differences vs SGLang Model Gateway
@@ -80,7 +73,7 @@ slime router and SGLang Model Gateway can both route requests to workers, but th
 
 ### Key differences
 
-slime router is a lightweight Python/FastAPI proxy that acts as a passthrough to SGLang workers. This passthrough design enables RL-specific features like radix-tree trajectory caching and R3 (which require preserving raw response metadata like `routed_experts`).
+slime router is a lightweight Python/FastAPI proxy that acts as a passthrough to SGLang workers. This passthrough design enables RL-specific features like R3 (which require preserving raw response metadata like `routed_experts`).
 
 SGLang Model Gateway is a high-performance Rust-based router optimized for large-scale inference: async non-blocking routing, advanced fault tolerance (retries, circuit breakers), multiple load balancing policies (including cache-aware routing), and PD disaggregation support. However, it reconstructs responses with a fixed schema, so it does not preserve the metadata needed for slime's R3 flow.
 
@@ -88,5 +81,5 @@ For more details on SGLang Model Gateway, see the [official documentation](https
 
 ### When to use which
 
-- Use slime router when you need R3 or radix-tree caching
+- Use slime router when you need R3 or PD disaggregation with metadata preservation
 - Use SGLang Model Gateway for everything else (recommended default)
