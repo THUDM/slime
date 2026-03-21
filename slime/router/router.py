@@ -20,6 +20,7 @@ class WorkerType(str, Enum):
     REGULAR = "regular"
     PREFILL = "prefill"
     DECODE = "decode"
+    PLACEHOLDER = "placeholder"
 
 
 class WorkerInfo:
