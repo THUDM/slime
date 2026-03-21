@@ -127,19 +127,14 @@ class MultiTurnLossMaskGenerator:
     def gen_multi_turn_loss_mask_qwen3_5(
         self, messages: list[dict], tools: list[dict] = None
     ) -> tuple[list[int], list[int]]:
-        rendered_text = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, tools=tools, return_dict=False
-        )
-        tokenized = self.tokenizer(
-            rendered_text, add_special_tokens=False, return_offsets_mapping=True
-        )
+        rendered_text = self.tokenizer.apply_chat_template(messages, tokenize=False, tools=tools, return_dict=False)
+        tokenized = self.tokenizer(rendered_text, add_special_tokens=False, return_offsets_mapping=True)
         token_ids = tokenized["input_ids"]
         offset_mapping = tokenized.get("offset_mapping")
 
         if offset_mapping is None:
             raise ValueError(
-                "Qwen3.5 loss mask generation requires a fast tokenizer "
-                "with `return_offsets_mapping` support."
+                "Qwen3.5 loss mask generation requires a fast tokenizer " "with `return_offsets_mapping` support."
             )
 
         expected_token_ids = self.tokenizer.apply_chat_template(
@@ -164,16 +159,12 @@ class MultiTurnLossMaskGenerator:
 
             header_pos = rendered_text.find(assistant_header, cursor)
             if header_pos < 0:
-                raise ValueError(
-                    "Failed to locate assistant message in rendered Qwen3.5 chat template output."
-                )
+                raise ValueError("Failed to locate assistant message in rendered Qwen3.5 chat template output.")
 
             content_start = header_pos + len(assistant_header)
             end_pos = rendered_text.find(end_marker, content_start)
             if end_pos < 0:
-                raise ValueError(
-                    "Failed to locate <|im_end|> for assistant message in rendered text."
-                )
+                raise ValueError("Failed to locate <|im_end|> for assistant message in rendered text.")
 
             span_end = end_pos + len(end_marker)
             if span_end < len(rendered_text) and rendered_text[span_end] == "\n":
@@ -200,9 +191,7 @@ class MultiTurnLossMaskGenerator:
             if end <= start:
                 loss_mask.append(0)
             else:
-                loss_mask.append(
-                    1 if char_mask_prefix_sum[end] - char_mask_prefix_sum[start] > 0 else 0
-                )
+                loss_mask.append(1 if char_mask_prefix_sum[end] - char_mask_prefix_sum[start] > 0 else 0)
 
         return token_ids, loss_mask
 
