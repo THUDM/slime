@@ -404,8 +404,6 @@ class RolloutManager:
         Note: the ``use_slime_router`` path does not expose ``/engine_metrics``;
         metrics forwarding to W&B requires the sglang_router gateway.
         """
-        if not getattr(self.args, "sglang_enable_metrics", False):
-            return None
         if getattr(self.args, "use_slime_router", False):
             logger.warning(
                 "SGLang metrics forwarding to W&B is not supported with --use-slime-router. "
