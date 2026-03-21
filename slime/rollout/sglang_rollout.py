@@ -165,13 +165,21 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
 
-    if sample.multimodal_inputs and sample.multimodal_inputs["images"]:
+    has_multimodal = sample.multimodal_inputs and sample.multimodal_inputs.get("images")
+    if has_multimodal:
         image_data = sample.multimodal_inputs["images"]
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
 
     # Use existing tokens for multi-turn or tokenize the new prompt
     if len(sample.response) > 0:
         payload["input_ids"] = sample.tokens
+    elif has_multimodal:
+        # For multimodal first-turn: send text so SGLang handles image token
+        # expansion internally (the processor-expanded input_ids have N patch
+        # tokens per image which would mismatch the image_data count).
+        payload["text"] = sample.prompt
+        if not sample.tokens:
+            sample.tokens = prompt_ids
     else:
         payload["input_ids"] = prompt_ids
         if not sample.tokens:  # Initialize sample.tokens for the first turn

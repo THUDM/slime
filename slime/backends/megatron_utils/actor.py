@@ -5,6 +5,7 @@ import socket
 from argparse import Namespace
 from contextlib import nullcontext
 
+import numpy as np
 import ray
 import torch
 import torch.distributed as dist
@@ -204,7 +205,14 @@ class MegatronTrainRayActor(TrainRayActor):
             # Move multimodal training tensors to GPU in advance
             rollout_data["multimodal_train_inputs"] = [
                 (
-                    {key: tensor.to(device=torch.cuda.current_device()) for key, tensor in mm_dict.items()}
+                    {
+                        key: (
+                            torch.from_numpy(v.copy()).to(device=torch.cuda.current_device())
+                            if isinstance(v, np.ndarray)
+                            else v.to(device=torch.cuda.current_device())
+                        )
+                        for key, v in mm_dict.items()
+                    }
                     if mm_dict is not None
                     else None
                 )
