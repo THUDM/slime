@@ -103,6 +103,70 @@ def _gather_input_ids_from_cp(
     return torch.cat(whole_list).unsqueeze(0)  # [1, T_global]
 
 
+def _select_local_image_embeds(
+    full_input_ids: torch.Tensor,
+    cu_seqlens: torch.Tensor,
+    image_token_id: int,
+    image_embeds: torch.Tensor,
+    cp_rank: int,
+    cp_size: int,
+) -> torch.Tensor:
+    """Select the subset of *image_embeds* that falls in this CP rank's chunk.
+
+    With zigzag CP, each rank holds specific chunks of each packed sequence.
+    The vision encoder produces embeddings for ALL image tokens (ordered by
+    position in the full sequence).  This function returns only the embeddings
+    whose positions land in the local chunk.
+
+    Args:
+        full_input_ids: Reconstructed full input_ids [1, T_global].
+        cu_seqlens: **Global** cumulative sequence lengths.
+        image_token_id: Token id for image placeholder tokens.
+        image_embeds: Vision embeddings [N_total, hidden] for all image tokens.
+        cp_rank: This rank's position in the CP group.
+        cp_size: Total number of CP ranks.
+
+    Returns:
+        Subset of image_embeds [N_local, hidden] for this rank's image tokens.
+    """
+    device = full_input_ids.device
+    full_flat = full_input_ids[0]  # [T_global]
+    full_mask = full_flat == image_token_id
+
+    # Build boolean mask over T_global marking this rank's positions
+    T_global = full_flat.shape[0]
+    rank_mask = torch.zeros(T_global, dtype=torch.bool, device=device)
+
+    num_seqs = len(cu_seqlens) - 1
+    for i in range(num_seqs):
+        seq_start = cu_seqlens[i].item()
+        seqlen = (cu_seqlens[i + 1] - cu_seqlens[i]).item()
+        chunk_size = seqlen // (2 * cp_size)
+
+        # First-half chunk for this rank
+        first_start = seq_start + cp_rank * chunk_size
+        rank_mask[first_start : first_start + chunk_size] = True
+
+        # Second-half chunk for this rank (reversed order)
+        second_end = seq_start + seqlen - cp_rank * chunk_size
+        rank_mask[second_end - chunk_size : second_end] = True
+
+    # Image tokens that belong to this rank
+    local_image_mask = full_mask & rank_mask
+    n_local = local_image_mask.sum().item()
+
+    if n_local == 0:
+        return image_embeds[:0]  # empty slice preserving hidden dim
+    if n_local == image_embeds.shape[0]:
+        return image_embeds  # all image tokens are on this rank
+
+    # Map positions to indices in image_embeds via cumulative sum
+    image_cumsum = full_mask.long().cumsum(0)  # 1-indexed
+    local_positions = local_image_mask.nonzero(as_tuple=True)[0]
+    embed_indices = image_cumsum[local_positions] - 1
+    return image_embeds[embed_indices]
+
+
 # ---------------------------------------------------------------------------
 # Megatron VL Model
 # ---------------------------------------------------------------------------
@@ -138,6 +202,9 @@ class Glm4vMoeVLModel(MegatronModule):
             from transformers.models.glm4v_moe.modeling_glm4v_moe import Glm4vMoeVisionModel
 
             self.vision_model = Glm4vMoeVisionModel._from_config(hf_vision_config)
+            # Freeze vision encoder — not trained during RL
+            self.vision_model.requires_grad_(False)
+            self.vision_model.eval()
             hook_hf_module_setattr_for_tp_grad_sync(self.vision_model)
             if torch.cuda.is_available():
                 self.vision_model = self.vision_model.to("cuda")
@@ -180,8 +247,8 @@ class Glm4vMoeVLModel(MegatronModule):
     def _get_image_features(self, pixel_values, image_grid_thw):
         """Run HF vision encoder and return flat image embeddings."""
         pixel_values = pixel_values.to(dtype=self.vision_model.dtype)
-        vision_out = self.vision_model(pixel_values, grid_thw=image_grid_thw, return_dict=True)
-        return vision_out.pooler_output  # [total_image_tokens, hidden]
+        with torch.no_grad():
+            return self.vision_model(pixel_values, grid_thw=image_grid_thw)
 
     # -- M-RoPE position IDs -----------------------------------------------
 
@@ -294,6 +361,17 @@ class Glm4vMoeVLModel(MegatronModule):
         assert pixel_values_videos is None, "Video not supported yet"
         assert inference_params is None, "Inference not supported"
 
+        # -- Extract cu_seqlens and CP info early (needed for both vision scatter and M-RoPE) --
+        cu_seqlens = None
+        if packed_seq_params is not None:
+            cu_seqlens = (
+                packed_seq_params.cu_seqlens_q_padded
+                if packed_seq_params.cu_seqlens_q_padded is not None
+                else packed_seq_params.cu_seqlens_q
+            )
+        cp_size = parallel_state.get_context_parallel_world_size()
+        full_input_ids = None  # cached for reuse between vision scatter and M-RoPE
+
         combined_embeddings = None
 
         if self.pre_process:
@@ -308,10 +386,26 @@ class Glm4vMoeVLModel(MegatronModule):
                 image_embeds = self._get_image_features(pixel_values, image_grid_thw)
                 image_embeds = image_embeds.to(combined_embeddings.device, combined_embeddings.dtype)
 
+                # With CP > 1, input_ids is a local chunk but pixel_values
+                # cover ALL images.  Select only the embeddings whose tokens
+                # land in this rank's zigzag portion.
+                if cp_size > 1 and cu_seqlens is not None:
+                    full_input_ids = _gather_input_ids_from_cp(input_ids, cu_seqlens)
+                    cp_rank = parallel_state.get_context_parallel_rank()
+                    image_embeds = _select_local_image_embeds(
+                        full_input_ids,
+                        cu_seqlens,
+                        self.image_token_id,
+                        image_embeds,
+                        cp_rank,
+                        cp_size,
+                    )
+
                 image_mask = (input_ids == self.image_token_id).contiguous()
                 # Scatter: [seq, bs, hidden] → [bs, seq, hidden]
                 combined_embeddings = combined_embeddings.transpose(0, 1).contiguous()
-                combined_embeddings[image_mask] = image_embeds
+                if image_mask.any():
+                    combined_embeddings[image_mask] = image_embeds
                 combined_embeddings = combined_embeddings.transpose(0, 1).contiguous()
 
             # Scatter to sequence-parallel region if needed
@@ -325,17 +419,6 @@ class Glm4vMoeVLModel(MegatronModule):
         pp_size = parallel_state.get_pipeline_model_parallel_world_size()
 
         if position_ids is None:
-            # Determine cu_seqlens for THD unpacking
-            cu_seqlens = None
-            if packed_seq_params is not None:
-                cu_seqlens = (
-                    packed_seq_params.cu_seqlens_q_padded
-                    if packed_seq_params.cu_seqlens_q_padded is not None
-                    else packed_seq_params.cu_seqlens_q
-                )
-
-            cp_size = parallel_state.get_context_parallel_world_size()
-
             if self.pre_process:
                 # First PP stage: compute position_ids from input_ids.
                 # With CP > 1, input_ids is a local chunk; reconstruct full
@@ -343,7 +426,8 @@ class Glm4vMoeVLModel(MegatronModule):
                 # (image token positions affect the M-RoPE IDs).
                 if cu_seqlens is not None:
                     if cp_size > 1:
-                        full_input_ids = _gather_input_ids_from_cp(input_ids, cu_seqlens)
+                        if full_input_ids is None:
+                            full_input_ids = _gather_input_ids_from_cp(input_ids, cu_seqlens)
                     else:
                         full_input_ids = input_ids
                     input_ids_bshd = _thd_to_bshd(full_input_ids, cu_seqlens)
