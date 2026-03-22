@@ -1,9 +1,13 @@
 import copy
 
 import torch
+import torch.distributed as dist
 import torch.nn as nn
 import torch.nn.functional as F
+from megatron.core import mpu, tensor_parallel
+from megatron.core.inference.contexts import BaseInferenceContext
 from megatron.core.models.gpt.gpt_layer_specs import get_gpt_decoder_block_spec
+from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.transformer.spec_utils import ModuleSpec
 from megatron.core.transformer.transformer_block import get_num_layers_to_build
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
@@ -23,6 +27,126 @@ def _get_text_config(hf_config):
     if hasattr(hf_config, "text_config"):
         return hf_config.text_config
     return hf_config
+
+
+# ---------------------------------------------------------------------------
+# Context-parallel helpers for linear attention
+# ---------------------------------------------------------------------------
+
+
+def _cp_all_gather_zigzag(local_tensor, cu_seqlens, cp_group, cp_size):
+    """All-gather from all CP ranks and reconstruct the full sequence in zigzag order.
+
+    Each CP rank holds two chunks per sequence arranged as [chunk_r, chunk_{2*cp-1-r}].
+    This function gathers all ranks' data and reassembles the original sequence order.
+
+    Args:
+        local_tensor: [local_total_seq, ...] - this rank's portion
+        cu_seqlens: [num_seqs + 1] - global cumulative sequence lengths
+        cp_group: the CP process group
+        cp_size: number of CP ranks
+
+    Returns:
+        full_tensor: [full_total_seq, ...] - reconstructed full sequence
+    """
+    gathered = [torch.empty_like(local_tensor) for _ in range(cp_size)]
+    dist.all_gather(gathered, local_tensor.contiguous(), group=cp_group)
+
+    local_cu_seqlens = cu_seqlens // cp_size
+    result = []
+    for i in range(len(cu_seqlens) - 1):
+        chunk_size = (cu_seqlens[i + 1] - cu_seqlens[i]) // 2 // cp_size
+        # First half: forward chunks from rank 0, 1, ..., cp_size-1
+        # Second half: backward chunks from rank cp_size-1, ..., 1, 0
+        result.extend(
+            [gathered[r][local_cu_seqlens[i] : local_cu_seqlens[i] + chunk_size] for r in range(cp_size)]
+            + [gathered[r][local_cu_seqlens[i] + chunk_size : local_cu_seqlens[i + 1]] for r in range(cp_size)][::-1]
+        )
+    return torch.cat(result, dim=0)
+
+
+def _cp_slice_zigzag(full_tensor, cu_seqlens, cp_rank, cp_size):
+    """Extract this CP rank's chunks from the full sequence in zigzag order.
+
+    Args:
+        full_tensor: [full_total_seq, ...] - full sequence
+        cu_seqlens: [num_seqs + 1] - global cumulative sequence lengths
+        cp_rank: this rank's position in the CP group
+        cp_size: number of CP ranks
+
+    Returns:
+        local_tensor: [local_total_seq, ...] - this rank's portion
+    """
+    chunks = []
+    for i in range(len(cu_seqlens) - 1):
+        seq = full_tensor[cu_seqlens[i] : cu_seqlens[i + 1]]
+        seq_chunks = torch.chunk(seq, 2 * cp_size, dim=0)
+        chunks.append(seq_chunks[cp_rank])
+        chunks.append(seq_chunks[2 * cp_size - 1 - cp_rank])
+    return torch.cat(chunks, dim=0)
+
+
+class CPLinearAttnFunction(torch.autograd.Function):
+    """Custom autograd function for context-parallel linear attention.
+
+    Forward: all-gather hidden_states -> compute on full sequence -> slice output.
+             Only local hidden_states are saved (full gathered tensor is freed).
+    Backward: re-all-gather hidden_states + grad_output -> recompute forward ->
+              backward -> slice gradient for this rank.
+
+    This fixes two issues with the previous dist.nn.all_gather approach:
+    1. The full all-gathered tensor is no longer kept in the autograd graph (memory savings).
+    2. Gradients (including dk, dv) are correctly handled via recomputation + slicing.
+    """
+
+    @staticmethod
+    def forward(ctx, hidden_states, cu_seqlens, module, packed_seq_params, cp_group, cp_size, cp_rank):
+        # All-gather and reconstruct full sequence
+        full_hidden = _cp_all_gather_zigzag(hidden_states, cu_seqlens, cp_group, cp_size)
+
+        # Forward without grad (will recompute in backward for activation savings)
+        with torch.no_grad():
+            full_bhd = full_hidden.permute(1, 0, 2)  # [seq, batch, hidden] -> [batch, seq, hidden]
+            output = module.hf_forward(full_bhd, packed_seq_params)
+            output_thd = output.permute(1, 0, 2)  # [batch, seq, hidden] -> [seq, batch, hidden]
+
+        # Slice output for this CP rank
+        local_output = _cp_slice_zigzag(output_thd, cu_seqlens, cp_rank, cp_size)
+
+        # Save only local data (full_hidden is freed after this scope)
+        ctx.save_for_backward(hidden_states, cu_seqlens)
+        ctx.module = module
+        ctx.packed_seq_params = packed_seq_params
+        ctx.cp_group = cp_group
+        ctx.cp_size = cp_size
+        ctx.cp_rank = cp_rank
+
+        return local_output
+
+    @staticmethod
+    def backward(ctx, d_local_output):
+        hidden_states, cu_seqlens = ctx.saved_tensors
+
+        # Re-gather hidden states for recomputation
+        full_hidden = _cp_all_gather_zigzag(hidden_states.detach(), cu_seqlens, ctx.cp_group, ctx.cp_size)
+        full_hidden = full_hidden.detach().requires_grad_(True)
+
+        # All-gather grad output from all CP ranks to reconstruct full gradient
+        d_full_output = _cp_all_gather_zigzag(d_local_output.contiguous(), cu_seqlens, ctx.cp_group, ctx.cp_size)
+
+        # Recompute forward with grad enabled (for parameter gradient computation)
+        with torch.enable_grad():
+            full_bhd = full_hidden.permute(1, 0, 2)
+            output = ctx.module.hf_forward(full_bhd, ctx.packed_seq_params)
+            output_thd = output.permute(1, 0, 2)
+
+        # Backward through recomputed graph (accumulates parameter gradients)
+        torch.autograd.backward(output_thd, d_full_output)
+
+        # Slice gradient for this CP rank (inverse of all-gather zigzag)
+        d_local_hidden = _cp_slice_zigzag(full_hidden.grad, cu_seqlens, ctx.cp_rank, ctx.cp_size)
+
+        return d_local_hidden, None, None, None, None, None, None
 
 
 # Adapted from Qwen3NextGatedDeltaNet but with separate in_proj_qkv and in_proj_z
@@ -181,6 +305,53 @@ class Attention(HuggingfaceAttention):
             cu_seqlens=packed_seq_params.cu_seqlens_q,
         )
         return hidden_states
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        attention_mask: torch.Tensor,
+        key_value_states: torch.Tensor | None = None,
+        inference_context: BaseInferenceContext | None = None,
+        rotary_pos_emb: torch.Tensor | tuple[torch.Tensor, torch.Tensor] | None = None,
+        rotary_pos_cos: torch.Tensor | None = None,
+        rotary_pos_sin: torch.Tensor | None = None,
+        rotary_pos_cos_sin: torch.Tensor | None = None,
+        attention_bias: torch.Tensor | None = None,
+        packed_seq_params: PackedSeqParams | None = None,
+        sequence_len_offset: int | None = None,
+        *,
+        inference_params: BaseInferenceContext | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        assert packed_seq_params is not None
+
+        if self.args.sequence_parallel:
+            hidden_states = tensor_parallel.gather_from_sequence_parallel_region(
+                hidden_states, group=mpu.get_tensor_model_parallel_group()
+            )
+
+        cp_size = mpu.get_context_parallel_world_size()
+
+        if cp_size > 1:
+            output = CPLinearAttnFunction.apply(
+                hidden_states,
+                packed_seq_params.cu_seqlens_q,
+                self,
+                packed_seq_params,
+                mpu.get_context_parallel_group(),
+                cp_size,
+                mpu.get_context_parallel_rank(),
+            )
+        else:
+            hidden_states = hidden_states.permute(1, 0, 2)  # [seq, batch, hidden] -> [batch, seq, hidden]
+            output = self.hf_forward(hidden_states, packed_seq_params)
+            output = output.permute(1, 0, 2)  # [batch, seq, hidden] -> [seq, batch, hidden]
+
+        if self.args.sequence_parallel:
+            output = tensor_parallel.scatter_to_sequence_parallel_region(
+                output, group=mpu.get_tensor_model_parallel_group()
+            )
+
+        return output, None
 
 
 def get_qwen3_5_spec(args, config, vp_stage):
