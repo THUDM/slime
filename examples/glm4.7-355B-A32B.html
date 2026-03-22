@@ -1,0 +1,765 @@
+
+<!DOCTYPE html>
+
+
+<html lang="en" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>GLM-4.7 with 64xH100 &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=3c74b3bc" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../_static/documentation_options.js?v=e645c8fa"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'examples/glm4.7-355B-A32B';</script>
+    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="Index" href="../genindex.html" />
+    <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="DeepSeek R1 with 128xH100" href="deepseek-r1.html" />
+    <link rel="prev" title="Qwen3-30B-A3B with 8xH100" href="qwen3-30B-A3B.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="en"/>
+  <meta name="docsearch:version" content="0.0.1" />
+    <meta name="docbuild:last-update" content="Mar 22, 2026"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">Skip to main content</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>Back to top</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="Version warning"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <img src="../_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">Search</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <p aria-level="2" class="caption" role="heading"><span class="caption-text">Get Started</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">Quick Start</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">Usage Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">Customization Guide</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">FAQ</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="qwen3-4B.html">Qwen3-4B with 8xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="glm4-9B.html">GLM4-9B with 8xH100</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="glm4.7-30B-A3B.html">GLM-4.7-Flash with 8×H100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="qwen3-30B-A3B.html">Qwen3-30B-A3B with 8xH100</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">GLM-4.7 with 64xH100</a></li>
+<li class="toctree-l1"><a class="reference internal" href="deepseek-r1.html">DeepSeek R1 with 128xH100</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Advanced Features</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../advanced/on-policy-distillation.html">On-Policy Distillation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">Speculative Decoding</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">Low Precision Training</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">Fault Tolerance</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD Disaggregation</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/sglang-config.html">SGLang Config: Advanced Engine Deployment</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">Supporting Model Architectures Beyond Megatron-LM</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/slime-router.html">slime router</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Other Usage</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully Asynchronous Rollout Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Developer Guide</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI (Continuous Integration)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debugging</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">Profiling</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Hardware Platforms</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../platform_support/amd_tutorial.html">AMD</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Blogs</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: Redefining High-Performance RL Training Frameworks</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime: An SGLang-Native Post-Training Framework for RL Scaling</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="Source repository"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/examples/glm4.7-355B-A32B.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/examples/glm4.7-355B-A32B.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fexamples/glm4.7-355B-A32B.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="Open an issue"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Download this page">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/examples/glm4.7-355B-A32B.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="Download source file"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="Print to PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
+  title="Fullscreen mode"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="Light"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="Dark"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="Search" aria-label="Search" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>GLM-4.7 with 64xH100</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> Contents </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#environment-preparation">Environment Preparation</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">Prerequisites</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#download-model">Download Model</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#convert-checkpoint">Convert Checkpoint</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#run-training">Run Training</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parameter-introduction">Parameter Introduction</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#moe-configuration">MoE Configuration</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#mtp-speculative-decoding-inference-acceleration">MTP Speculative Decoding (Inference Acceleration)</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#mtp-training">MTP Training</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#multi-node-support">Multi-Node Support</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fp8-rollout">FP8 Rollout</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="glm-4-7-with-64xh100">
+<h1>GLM-4.7 with 64xH100<a class="headerlink" href="#glm-4-7-with-64xh100" title="Link to this heading">#</a></h1>
+<section id="environment-preparation">
+<h2>Environment Preparation<a class="headerlink" href="#environment-preparation" title="Link to this heading">#</a></h2>
+<p>The environment setup and dataset download are the same as for the Qwen3-4B model. You can refer to <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">Example: Qwen3-4B Model</span></a>, replacing mentions of Qwen3-4B with GLM-4.7.</p>
+<section id="prerequisites">
+<h3>Prerequisites<a class="headerlink" href="#prerequisites" title="Link to this heading">#</a></h3>
+<p>GLM-4.7 follows the standard slime Docker environment. For multi-node launches, make sure all nodes can access the same <code class="docutils literal notranslate"><span class="pre">$BASE_DIR</span></code> path and unset proxy variables before starting Ray workers:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">unset</span><span class="w"> </span>http_proxy<span class="w"> </span>https_proxy<span class="w"> </span>HTTP_PROXY<span class="w"> </span>HTTPS_PROXY
+</pre></div>
+</div>
+</section>
+<section id="download-model">
+<h3>Download Model<a class="headerlink" href="#download-model" title="Link to this heading">#</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>zai-org/GLM-4.7<span class="w"> </span>--local-dir<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-4.7-355B-A32B
+</pre></div>
+</div>
+</section>
+<section id="convert-checkpoint">
+<h3>Convert Checkpoint<a class="headerlink" href="#convert-checkpoint" title="Link to this heading">#</a></h3>
+<p>To convert the Hugging Face checkpoint to torch_dist format, use 2 nodes x 8 GPUs:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
+<span class="nb">source</span><span class="w"> </span>scripts/models/glm4.5-355B-A32B.sh
+<span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM/<span class="w"> </span>torchrun<span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--nproc-per-node<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--master-addr<span class="w"> </span><span class="si">${</span><span class="nv">MASTER_ADDR</span><span class="si">}</span><span class="w"> </span>--master-port<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--nnodes<span class="o">=</span><span class="m">2</span><span class="w"> </span>--node-rank<span class="w"> </span><span class="si">${</span><span class="nv">NODE_RANK</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
+<span class="w">   </span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--hf-checkpoint<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-4.7-355B-A32B/<span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--save<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-4.7-355B-A32B_torch_dist/
+</pre></div>
+</div>
+<p>Here, <code class="docutils literal notranslate"><span class="pre">MASTER_ADDR</span></code> is the IP of node0, and <code class="docutils literal notranslate"><span class="pre">NODE_RANK</span></code> is the node index, configured just like a multi-node <code class="docutils literal notranslate"><span class="pre">torchrun</span></code> job.</p>
+</section>
+</section>
+<section id="run-training">
+<h2>Run Training<a class="headerlink" href="#run-training" title="Link to this heading">#</a></h2>
+<p>Execute the training script from node0:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
+<span class="nb">export</span><span class="w"> </span><span class="nv">BASE_DIR</span><span class="o">=</span>/shared/path<span class="w">  </span><span class="c1"># accessible by all nodes</span>
+bash<span class="w"> </span>scripts/run-glm4.7-355B-A32B.sh
+</pre></div>
+</div>
+<section id="parameter-introduction">
+<h3>Parameter Introduction<a class="headerlink" href="#parameter-introduction" title="Link to this heading">#</a></h3>
+<p>Here, we briefly introduce the key parts in the <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-355B-A32B.sh">run-glm4.7-355B-A32B.sh</a> script.</p>
+<section id="moe-configuration">
+<h4>MoE Configuration<a class="headerlink" href="#moe-configuration" title="Link to this heading">#</a></h4>
+<p>GLM-4.7 is a Mixture-of-Experts (MoE) model with 160 routed experts (top-8 activation) and shared experts. It has 92 layers: 3 dense layers + 89 MoE layers.</p>
+<ol class="arabic">
+<li><p>To support GLM-4.7 on 64xH100, we enable Megatron’s CPU Adam to save GPU memory:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">OPTIMIZER_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>...
+<span class="w">   </span>--optimizer-cpu-offload
+<span class="w">   </span>--overlap-cpu-optimizer-d2h-h2d
+<span class="w">   </span>--use-precision-aware-optimizer
+<span class="o">)</span>
+</pre></div>
+</div>
+</li>
+<li><p>Enable MoE optimization in Megatron. For the provided 64xH100 example, we use TP=8, PP=4, CP=2, and EP=16:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">PERF_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--tensor-model-parallel-size<span class="w"> </span><span class="m">8</span>
+<span class="w">   </span>--sequence-parallel
+<span class="w">   </span>--pipeline-model-parallel-size<span class="w"> </span><span class="m">4</span>
+<span class="w">   </span>--context-parallel-size<span class="w"> </span><span class="m">2</span>
+<span class="w">   </span>--expert-model-parallel-size<span class="w"> </span><span class="m">16</span>
+<span class="w">   </span>--expert-tensor-parallel-size<span class="w"> </span><span class="m">1</span>
+<span class="w">   </span>...
+<span class="w">   </span>--use-dynamic-batch-size
+<span class="w">   </span>--max-tokens-per-gpu<span class="w"> </span><span class="m">16384</span>
+<span class="o">)</span>
+</pre></div>
+</div>
+</li>
+<li><p>Enable MoE optimization in SGLang with DP attention:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SGLANG_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--rollout-num-gpus-per-engine<span class="w"> </span><span class="m">32</span>
+<span class="w">   </span>--sglang-mem-fraction-static<span class="w"> </span><span class="m">0</span>.7
+<span class="w">   </span>--sglang-enable-dp-attention
+<span class="w">   </span>--sglang-dp-size<span class="w"> </span><span class="m">4</span>
+<span class="w">   </span>--sglang-ep-size<span class="w"> </span><span class="m">32</span>
+<span class="w">   </span>--sglang-enable-dp-lm-head
+<span class="w">   </span>--sglang-moe-dense-tp-size<span class="w"> </span><span class="m">1</span>
+<span class="w">   </span>...
+<span class="o">)</span>
+</pre></div>
+</div>
+</li>
+</ol>
+</section>
+<section id="mtp-speculative-decoding-inference-acceleration">
+<h4>MTP Speculative Decoding (Inference Acceleration)<a class="headerlink" href="#mtp-speculative-decoding-inference-acceleration" title="Link to this heading">#</a></h4>
+<p>GLM-4.7 includes MTP (Multi-Token Prediction) layers that can be used for speculative decoding during inference to speed up rollout generation. To enable this, add the following to <code class="docutils literal notranslate"><span class="pre">SGLANG_ARGS</span></code>:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SGLANG_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>...
+<span class="w">   </span><span class="c1"># MTP speculative decoding (EAGLE)</span>
+<span class="w">   </span>--sglang-speculative-algorithm<span class="w"> </span>EAGLE
+<span class="w">   </span>--sglang-speculative-num-steps<span class="w"> </span><span class="m">3</span>
+<span class="w">   </span>--sglang-speculative-eagle-topk<span class="w"> </span><span class="m">1</span>
+<span class="w">   </span>--sglang-speculative-num-draft-tokens<span class="w"> </span><span class="m">4</span>
+<span class="o">)</span>
+</pre></div>
+</div>
+<p>This lets SGLang use the model’s MTP layer as the draft model for EAGLE-style speculative decoding.</p>
+<blockquote>
+<div><p>⚠️ <strong>Note</strong>: Speculative decoding requires additional GPU memory. If you encounter OOM issues, try reducing <code class="docutils literal notranslate"><span class="pre">--sglang-mem-fraction-static</span></code> or disabling speculative decoding.</p>
+</div></blockquote>
+</section>
+<section id="mtp-training">
+<h4>MTP Training<a class="headerlink" href="#mtp-training" title="Link to this heading">#</a></h4>
+<p>slime also supports training the MTP layers jointly with the main model for GLM-4.7. When enabled, the relevant arguments are:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># Add MTP layer count to model config</span>
+<span class="nv">MODEL_ARGS</span><span class="o">+=(</span>--mtp-num-layers<span class="w"> </span><span class="m">1</span><span class="o">)</span>
+
+<span class="c1"># Enable MTP training</span>
+<span class="nv">MTP_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--enable-mtp-training
+<span class="w">   </span>--mtp-loss-scaling-factor<span class="w"> </span><span class="m">0</span>.2
+<span class="o">)</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--mtp-num-layers</span> <span class="pre">1</span></code>: Tells Megatron to load the MTP layer from the checkpoint.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--enable-mtp-training</span></code>: Enables gradient computation for MTP layers. Without this flag, the MTP layer is loaded but frozen.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--mtp-loss-scaling-factor</span> <span class="pre">0.2</span></code>: Weight of the MTP loss relative to the main policy loss. Default is 0.2.</p></li>
+</ul>
+<blockquote>
+<div><p><strong>Note</strong>: MTP training for GLM-4.7 relies on <code class="docutils literal notranslate"><span class="pre">GLM4MoEBridge</span></code> (in <code class="docutils literal notranslate"><span class="pre">slime_plugins/mbridge/glm4moe.py</span></code>) to map regular and MTP weights between HuggingFace and Megatron formats.</p>
+</div></blockquote>
+</section>
+<section id="multi-node-support">
+<h4>Multi-Node Support<a class="headerlink" href="#multi-node-support" title="Link to this heading">#</a></h4>
+<p>This example already targets multi-node training. Before launching:</p>
+<ul class="simple">
+<li><p>Place the model checkpoints and datasets on a path accessible by all nodes.</p></li>
+<li><p>Set <code class="docutils literal notranslate"><span class="pre">MASTER_ADDR</span></code> to an address reachable by all nodes.</p></li>
+<li><p>Unset proxy variables before starting Ray workers.</p></li>
+<li><p>Provide a <code class="docutils literal notranslate"><span class="pre">HOSTFILE</span></code> listing worker IPs (one per line) and export <code class="docutils literal notranslate"><span class="pre">HOSTFILE=/path/to/hostfile</span></code> before launching.</p></li>
+<li><p>Adjust parallelism coherently. The default example uses TP=8, PP=4, EP=16, CP=2, while rollout uses 32 GPUs per engine with SGLang DP attention.</p></li>
+</ul>
+<p>If your rollout GPU count does not divide the expert count cleanly, you can use <code class="docutils literal notranslate"><span class="pre">--sglang-ep-num-redundant-experts</span></code> to add redundant experts.</p>
+</section>
+</section>
+</section>
+<section id="fp8-rollout">
+<h2>FP8 Rollout<a class="headerlink" href="#fp8-rollout" title="Link to this heading">#</a></h2>
+<p>The open-source FP8 checkpoint of GLM-4.7 uses per-channel quantization, which cannot currently enable DeepEP in SGLang. You can convert it to a 128x128 per-block FP8 checkpoint with the tool provided in slime:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
+python<span class="w"> </span>tools/convert_hf_to_fp8.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--model-dir<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-4.7-355B-A32B/<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--save-dir<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-4.7-355B-A32B-FP8/<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--strategy<span class="w"> </span>block<span class="w"> </span>--block-size<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--max-workers<span class="w"> </span><span class="m">4</span>
+</pre></div>
+</div>
+<p>Then switch <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> to <code class="docutils literal notranslate"><span class="pre">$BASE_DIR/GLM-4.7-355B-A32B-FP8/</span></code> to enable FP8 rollout.</p>
+<p>An example FP8 <code class="docutils literal notranslate"><span class="pre">SGLANG_ARGS</span></code> setup is:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SGLANG_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--rollout-num-gpus-per-engine<span class="w"> </span><span class="m">32</span>
+<span class="w">   </span>--sglang-mem-fraction-static<span class="w"> </span><span class="m">0</span>.7
+<span class="w">   </span>--sglang-enable-dp-attention
+<span class="w">   </span>--sglang-dp-size<span class="w"> </span><span class="m">32</span>
+<span class="w">   </span>--sglang-ep-size<span class="w"> </span><span class="m">32</span>
+<span class="w">   </span>--sglang-moe-dense-tp-size<span class="w"> </span><span class="m">1</span>
+<span class="w">   </span>--sglang-enable-dp-lm-head
+<span class="w">   </span>--sglang-cuda-graph-bs<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="k">$(</span>seq<span class="w"> </span><span class="m">16</span><span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="m">128</span><span class="k">)</span>
+
+<span class="w">   </span>--sglang-speculative-algorithm<span class="w"> </span>EAGLE
+<span class="w">   </span>--sglang-speculative-num-steps<span class="w"> </span><span class="m">3</span>
+<span class="w">   </span>--sglang-speculative-eagle-topk<span class="w"> </span><span class="m">1</span>
+<span class="w">   </span>--sglang-speculative-num-draft-tokens<span class="w"> </span><span class="m">4</span>
+
+<span class="w">   </span>--sglang-moe-a2a-backend<span class="w"> </span>deepep
+<span class="w">   </span>--sglang-deepep-mode<span class="w"> </span>auto
+<span class="o">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="qwen3-30B-A3B.html"
+       title="previous page">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">previous</p>
+        <p class="prev-next-title">Qwen3-30B-A3B with 8xH100</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="deepseek-r1.html"
+       title="next page">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">next</p>
+        <p class="prev-next-title">DeepSeek R1 with 128xH100</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> Contents
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#environment-preparation">Environment Preparation</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">Prerequisites</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#download-model">Download Model</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#convert-checkpoint">Convert Checkpoint</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#run-training">Run Training</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parameter-introduction">Parameter Introduction</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#moe-configuration">MoE Configuration</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#mtp-speculative-decoding-inference-acceleration">MTP Speculative Decoding (Inference Acceleration)</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#mtp-training">MTP Training</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#multi-node-support">Multi-Node Support</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fp8-rollout">FP8 Rollout</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+By slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  Last updated on Mar 22, 2026.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>

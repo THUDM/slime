@@ -1,0 +1,761 @@
+
+<!DOCTYPE html>
+
+
+<html lang="zh" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>64xH100 训练 GLM-4.7 &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=3c74b3bc" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../_static/documentation_options.js?v=30c3115b"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'examples/glm4.7-355B-A32B';</script>
+    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="next" title="128xH100 训练 DeepSeek R1" href="deepseek-r1.html" />
+    <link rel="prev" title="8xH100 训练 Qwen3-30B-A3B" href="qwen3-30B-A3B.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="zh"/>
+  <meta name="docsearch:version" content="0.0.1" />
+    <meta name="docbuild:last-update" content="2026 年 03 月 22 日"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">跳转至主要内容</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>回到顶部</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="版本警告"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <img src="../_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">快速使用</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">使用文档</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">自定义指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">常见 Q&amp;A</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
+<li class="toctree-l1"><a class="reference internal" href="qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">64xH100 训练 GLM-4.7</a></li>
+<li class="toctree-l1"><a class="reference internal" href="deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../advanced/on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">投机采样</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">低精度训练</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">容灾</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD 分离</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/sglang-config.html">SGLang Config：高级引擎部署</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/slime-router.html">slime router</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully Asynchronous Rollout Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/ci.html">CI（持续集成）</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/debug.html">Debug 指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_guide/profiling.html">性能分析 (Profiling)</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="源码库"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/examples/glm4.7-355B-A32B.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/examples/glm4.7-355B-A32B.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fexamples/glm4.7-355B-A32B.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="创建议题"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="下载此页面">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/examples/glm4.7-355B-A32B.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="下载源文件"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="列印成 PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
+  title="全屏模式"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="亮色"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="暗色"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>64xH100 训练 GLM-4.7</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> 目录 </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">环境准备</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">前置条件</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">下载模型</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#checkpoint">转换 Checkpoint</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">执行训练</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">参数简介</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#moe">MoE 配置</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#mtp">MTP 投机解码（推理加速）</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">MTP 训练</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">多机支持</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fp8-rollout">FP8 Rollout</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="xh100-glm-4-7">
+<h1>64xH100 训练 GLM-4.7<a class="headerlink" href="#xh100-glm-4-7" title="链接到此标题。">#</a></h1>
+<section id="id1">
+<h2>环境准备<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
+<p>搭建环境与下载数据的方法与 Qwen3-4B 模型相同，可以参考 <a class="reference internal" href="qwen3-4B.html"><span class="std std-doc">示例：Qwen3-4B</span></a>，将文中 Qwen3-4B 的部分替换为 GLM-4.7 即可。</p>
+<section id="id2">
+<h3>前置条件<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h3>
+<p>GLM-4.7 使用 slime 标准 Docker 环境即可。多机启动前，请确保所有机器都能访问同一个 <code class="docutils literal notranslate"><span class="pre">$BASE_DIR</span></code> 路径，并在启动 Ray worker 前先取消代理：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">unset</span><span class="w"> </span>http_proxy<span class="w"> </span>https_proxy<span class="w"> </span>HTTP_PROXY<span class="w"> </span>HTTPS_PROXY
+</pre></div>
+</div>
+</section>
+<section id="id3">
+<h3>下载模型<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h3>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>zai-org/GLM-4.7<span class="w"> </span>--local-dir<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-4.7-355B-A32B
+</pre></div>
+</div>
+</section>
+<section id="checkpoint">
+<h3>转换 Checkpoint<a class="headerlink" href="#checkpoint" title="链接到此标题。">#</a></h3>
+<p>可以用如下方法把 Hugging Face checkpoint 转换为 torch_dist 格式（2 机 x 8 卡）：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
+pip<span class="w"> </span>install<span class="w"> </span>-e<span class="w"> </span>.<span class="w"> </span>--no-deps
+<span class="nb">source</span><span class="w"> </span>scripts/models/glm4.5-355B-A32B.sh
+<span class="nv">PYTHONPATH</span><span class="o">=</span>/root/Megatron-LM/<span class="w"> </span>torchrun<span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--nproc-per-node<span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--master-addr<span class="w"> </span><span class="si">${</span><span class="nv">MASTER_ADDR</span><span class="si">}</span><span class="w"> </span>--master-port<span class="w"> </span><span class="m">12345</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--nnodes<span class="o">=</span><span class="m">2</span><span class="w"> </span>--node-rank<span class="w"> </span><span class="si">${</span><span class="nv">NODE_RANK</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>tools/convert_hf_to_torch_dist.py<span class="w"> </span><span class="se">\</span>
+<span class="w">   </span><span class="si">${</span><span class="nv">MODEL_ARGS</span><span class="p">[@]</span><span class="si">}</span><span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--hf-checkpoint<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-4.7-355B-A32B/<span class="w"> </span><span class="se">\</span>
+<span class="w">   </span>--save<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-4.7-355B-A32B_torch_dist/
+</pre></div>
+</div>
+<p>其中 <code class="docutils literal notranslate"><span class="pre">MASTER_ADDR</span></code> 是 node0 的 IP，<code class="docutils literal notranslate"><span class="pre">NODE_RANK</span></code> 表示当前机器的编号，配置方式与普通多机 <code class="docutils literal notranslate"><span class="pre">torchrun</span></code> 一致。</p>
+</section>
+</section>
+<section id="id4">
+<h2>执行训练<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
+<p>从 node0 执行训练脚本：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
+<span class="nb">export</span><span class="w"> </span><span class="nv">BASE_DIR</span><span class="o">=</span>/shared/path<span class="w">  </span><span class="c1"># 所有节点都能访问的共享路径</span>
+bash<span class="w"> </span>scripts/run-glm4.7-355B-A32B.sh
+</pre></div>
+</div>
+<section id="id5">
+<h3>参数简介<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h3>
+<p>这里我们简单介绍一下 <a class="reference external" href="https://github.com/THUDM/slime/blob/main/scripts/run-glm4.7-355B-A32B.sh">run-glm4.7-355B-A32B.sh</a> 中的关键部分。</p>
+<section id="moe">
+<h4>MoE 配置<a class="headerlink" href="#moe" title="链接到此标题。">#</a></h4>
+<p>GLM-4.7 是一个 MoE（混合专家）模型，包含 160 个路由专家（top-8 激活）和共享专家。模型共 92 层：3 层 dense + 89 层 MoE。</p>
+<ol class="arabic">
+<li><p>为了支持在 64xH100 环境中运行 GLM-4.7，我们开启 Megatron 的 CPU Adam 来节省显存：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">OPTIMIZER_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>...
+<span class="w">   </span>--optimizer-cpu-offload
+<span class="w">   </span>--overlap-cpu-optimizer-d2h-h2d
+<span class="w">   </span>--use-precision-aware-optimizer
+<span class="o">)</span>
+</pre></div>
+</div>
+</li>
+<li><p>在 Megatron 中开启 MoE 优化。当前 64xH100 示例使用 TP=8、PP=4、CP=2、EP=16：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">PERF_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--tensor-model-parallel-size<span class="w"> </span><span class="m">8</span>
+<span class="w">   </span>--sequence-parallel
+<span class="w">   </span>--pipeline-model-parallel-size<span class="w"> </span><span class="m">4</span>
+<span class="w">   </span>--context-parallel-size<span class="w"> </span><span class="m">2</span>
+<span class="w">   </span>--expert-model-parallel-size<span class="w"> </span><span class="m">16</span>
+<span class="w">   </span>--expert-tensor-parallel-size<span class="w"> </span><span class="m">1</span>
+<span class="w">   </span>...
+<span class="w">   </span>--use-dynamic-batch-size
+<span class="w">   </span>--max-tokens-per-gpu<span class="w"> </span><span class="m">16384</span>
+<span class="o">)</span>
+</pre></div>
+</div>
+</li>
+<li><p>在 SGLang 中开启带 DP attention 的 MoE 优化：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SGLANG_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--rollout-num-gpus-per-engine<span class="w"> </span><span class="m">32</span>
+<span class="w">   </span>--sglang-mem-fraction-static<span class="w"> </span><span class="m">0</span>.7
+<span class="w">   </span>--sglang-enable-dp-attention
+<span class="w">   </span>--sglang-dp-size<span class="w"> </span><span class="m">4</span>
+<span class="w">   </span>--sglang-ep-size<span class="w"> </span><span class="m">32</span>
+<span class="w">   </span>--sglang-enable-dp-lm-head
+<span class="w">   </span>--sglang-moe-dense-tp-size<span class="w"> </span><span class="m">1</span>
+<span class="w">   </span>...
+<span class="o">)</span>
+</pre></div>
+</div>
+</li>
+</ol>
+</section>
+<section id="mtp">
+<h4>MTP 投机解码（推理加速）<a class="headerlink" href="#mtp" title="链接到此标题。">#</a></h4>
+<p>GLM-4.7 包含 MTP（Multi-Token Prediction）层，可以在推理阶段用于投机解码，加速 rollout 生成。启用方法是在 <code class="docutils literal notranslate"><span class="pre">SGLANG_ARGS</span></code> 中加入：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SGLANG_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>...
+<span class="w">   </span><span class="c1"># MTP 投机解码 (EAGLE)</span>
+<span class="w">   </span>--sglang-speculative-algorithm<span class="w"> </span>EAGLE
+<span class="w">   </span>--sglang-speculative-num-steps<span class="w"> </span><span class="m">3</span>
+<span class="w">   </span>--sglang-speculative-eagle-topk<span class="w"> </span><span class="m">1</span>
+<span class="w">   </span>--sglang-speculative-num-draft-tokens<span class="w"> </span><span class="m">4</span>
+<span class="o">)</span>
+</pre></div>
+</div>
+<p>这样 SGLang 就会使用模型自带的 MTP 层作为 EAGLE 风格投机解码的 draft model。</p>
+<blockquote>
+<div><p>⚠️ <strong>注意</strong>：投机解码会额外占用 GPU 显存。如果遇到 OOM，可以尝试降低 <code class="docutils literal notranslate"><span class="pre">--sglang-mem-fraction-static</span></code> 或暂时关闭投机解码。</p>
+</div></blockquote>
+</section>
+<section id="id6">
+<h4>MTP 训练<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h4>
+<p>slime 也支持在 GLM-4.7 上将 MTP 层与主模型联合训练。启用时，相关参数如下：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># 在模型配置中添加 MTP 层数</span>
+<span class="nv">MODEL_ARGS</span><span class="o">+=(</span>--mtp-num-layers<span class="w"> </span><span class="m">1</span><span class="o">)</span>
+
+<span class="c1"># 启用 MTP 训练</span>
+<span class="nv">MTP_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--enable-mtp-training
+<span class="w">   </span>--mtp-loss-scaling-factor<span class="w"> </span><span class="m">0</span>.2
+<span class="o">)</span>
+</pre></div>
+</div>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">--mtp-num-layers</span> <span class="pre">1</span></code>：告知 Megatron 从 checkpoint 中加载 MTP 层。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--enable-mtp-training</span></code>：启用 MTP 层的梯度计算；不设置时 MTP 层会被加载但保持冻结。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">--mtp-loss-scaling-factor</span> <span class="pre">0.2</span></code>：MTP loss 相对主策略 loss 的权重，默认值为 0.2。</p></li>
+</ul>
+<blockquote>
+<div><p><strong>注意</strong>：GLM-4.7 的 MTP 训练依赖 <code class="docutils literal notranslate"><span class="pre">GLM4MoEBridge</span></code>（位于 <code class="docutils literal notranslate"><span class="pre">slime_plugins/mbridge/glm4moe.py</span></code>）在 HuggingFace 与 Megatron 格式之间正确映射普通层和 MTP 层权重。</p>
+</div></blockquote>
+</section>
+<section id="id7">
+<h4>多机支持<a class="headerlink" href="#id7" title="链接到此标题。">#</a></h4>
+<p>这个示例本身就是多机训练配置。启动前请确认：</p>
+<ul class="simple">
+<li><p>模型权重和数据集放在所有节点都能访问到的路径；</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">MASTER_ADDR</span></code> 设置为所有节点都能访问到的地址；</p></li>
+<li><p>在启动 Ray worker 前先取消代理；</p></li>
+<li><p>提供一个 <code class="docutils literal notranslate"><span class="pre">HOSTFILE</span></code> 列出 worker IP（每行一个），并在启动前 <code class="docutils literal notranslate"><span class="pre">export</span> <span class="pre">HOSTFILE=/path/to/hostfile</span></code>；</p></li>
+<li><p>并行度需要成套调整。默认示例使用 TP=8、PP=4、EP=16、CP=2，rollout 侧则使用 32 张卡 / engine + SGLang DP attention。</p></li>
+</ul>
+<p>如果 rollout GPU 数与 expert 数（160）之间不能整除，可以通过 <code class="docutils literal notranslate"><span class="pre">--sglang-ep-num-redundant-experts</span></code> 增加冗余 expert。</p>
+</section>
+</section>
+</section>
+<section id="fp8-rollout">
+<h2>FP8 Rollout<a class="headerlink" href="#fp8-rollout" title="链接到此标题。">#</a></h2>
+<p>开源版 GLM-4.7 的 FP8 checkpoint 使用的是 per-channel 量化，目前无法在 SGLang 中直接启用 DeepEP。可以利用 slime 自带工具将其转换为 128x128 的 per-block FP8 checkpoint：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>/root/slime
+python<span class="w"> </span>tools/convert_hf_to_fp8.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--model-dir<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-4.7-355B-A32B/<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--save-dir<span class="w"> </span><span class="nv">$BASE_DIR</span>/GLM-4.7-355B-A32B-FP8/<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--strategy<span class="w"> </span>block<span class="w"> </span>--block-size<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--max-workers<span class="w"> </span><span class="m">4</span>
+</pre></div>
+</div>
+<p>随后把 <code class="docutils literal notranslate"><span class="pre">--hf-checkpoint</span></code> 改成 <code class="docutils literal notranslate"><span class="pre">$BASE_DIR/GLM-4.7-355B-A32B-FP8/</span></code> 即可开启 FP8 rollout。</p>
+<p>一个可参考的 FP8 <code class="docutils literal notranslate"><span class="pre">SGLANG_ARGS</span></code> 配置如下：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nv">SGLANG_ARGS</span><span class="o">=(</span>
+<span class="w">   </span>--rollout-num-gpus-per-engine<span class="w"> </span><span class="m">32</span>
+<span class="w">   </span>--sglang-mem-fraction-static<span class="w"> </span><span class="m">0</span>.7
+<span class="w">   </span>--sglang-enable-dp-attention
+<span class="w">   </span>--sglang-dp-size<span class="w"> </span><span class="m">32</span>
+<span class="w">   </span>--sglang-ep-size<span class="w"> </span><span class="m">32</span>
+<span class="w">   </span>--sglang-moe-dense-tp-size<span class="w"> </span><span class="m">1</span>
+<span class="w">   </span>--sglang-enable-dp-lm-head
+<span class="w">   </span>--sglang-cuda-graph-bs<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">2</span><span class="w"> </span><span class="m">4</span><span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="k">$(</span>seq<span class="w"> </span><span class="m">16</span><span class="w"> </span><span class="m">8</span><span class="w"> </span><span class="m">128</span><span class="k">)</span>
+
+<span class="w">   </span>--sglang-speculative-algorithm<span class="w"> </span>EAGLE
+<span class="w">   </span>--sglang-speculative-num-steps<span class="w"> </span><span class="m">3</span>
+<span class="w">   </span>--sglang-speculative-eagle-topk<span class="w"> </span><span class="m">1</span>
+<span class="w">   </span>--sglang-speculative-num-draft-tokens<span class="w"> </span><span class="m">4</span>
+
+<span class="w">   </span>--sglang-moe-a2a-backend<span class="w"> </span>deepep
+<span class="w">   </span>--sglang-deepep-mode<span class="w"> </span>auto
+<span class="o">)</span>
+</pre></div>
+</div>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="qwen3-30B-A3B.html"
+       title="上一页">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">上一页</p>
+        <p class="prev-next-title">8xH100 训练 Qwen3-30B-A3B</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="deepseek-r1.html"
+       title="下一页">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">下一页</p>
+        <p class="prev-next-title">128xH100 训练 DeepSeek R1</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> 目录
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">环境准备</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">前置条件</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">下载模型</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#checkpoint">转换 Checkpoint</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">执行训练</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">参数简介</a><ul class="nav section-nav flex-column">
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#moe">MoE 配置</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#mtp">MTP 投机解码（推理加速）</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">MTP 训练</a></li>
+<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id7">多机支持</a></li>
+</ul>
+</li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fp8-rollout">FP8 Rollout</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+作者： slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  最后更新于 2026 年 03 月 22 日.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>
