@@ -2,7 +2,7 @@ import ray
 
 from slime.ray.placement_group import create_placement_groups, create_rollout_manager, create_training_models
 from slime.utils.arguments import parse_args
-from slime.utils.logging_utils import configure_logger, init_tracking
+from slime.utils.logging_utils import configure_logger, finish_tracking, init_tracking
 from slime.utils.misc import should_run_periodic_action
 
 
@@ -23,10 +23,11 @@ def train(args):
         ray.get(rollout_manager.onload_weights.remote())
 
     # always update weight first so that sglang has the loaded weights from training.
-    actor_model.update_weights()
+    if not args.critic_train_only:
+        actor_model.update_weights()
 
-    if args.check_weight_update_equal:
-        ray.get(rollout_manager.check_weights.remote(action="compare"))
+        if args.check_weight_update_equal:
+            ray.get(rollout_manager.check_weights.remote(action="compare"))
 
     if args.offload_rollout:
         ray.get(rollout_manager.onload_kv.remote())
@@ -35,19 +36,22 @@ def train(args):
     if args.num_rollout == 0 and args.eval_interval is not None:
         ray.get(rollout_manager.eval.remote(rollout_id=0))
 
-    def offload_train():
+    def offload_train(rollout_id):
         if args.offload_train:
             if args.use_critic:
                 critic_model.offload()
-                if rollout_id >= args.num_critic_only_steps:
+                if rollout_id >= args.num_critic_only_steps and not args.critic_train_only:
                     actor_model.offload()
             else:
                 actor_model.offload()
         else:
-            actor_model.clear_memory()
+            if args.critic_train_only:
+                critic_model.clear_memory()
+            else:
+                actor_model.clear_memory()
 
     def save(rollout_id):
-        if (not args.use_critic) or (rollout_id >= args.num_critic_only_steps):
+        if (not args.use_critic) or (rollout_id >= args.num_critic_only_steps and not args.critic_train_only):
             actor_model.save_model(
                 rollout_id,
                 force_sync=rollout_id == args.num_rollout - 1,
@@ -73,7 +77,7 @@ def train(args):
 
         if args.use_critic:
             critic_train_handle = critic_model.async_train(rollout_id, rollout_data_ref)
-            if rollout_id >= args.num_critic_only_steps:
+            if rollout_id >= args.num_critic_only_steps and not args.critic_train_only:
                 ray.get(actor_model.async_train(rollout_id, rollout_data_ref))
             ray.get(critic_train_handle)
         else:
@@ -82,10 +86,11 @@ def train(args):
         if should_run_periodic_action(rollout_id, args.save_interval, num_rollout_per_epoch, args.num_rollout):
             save(rollout_id)
 
-        offload_train()
+        offload_train(rollout_id)
         if args.offload_rollout:
             ray.get(rollout_manager.onload_weights.remote())
-        actor_model.update_weights()
+        if not args.critic_train_only:
+            actor_model.update_weights()
         if args.offload_rollout:
             ray.get(rollout_manager.onload_kv.remote())
 
@@ -93,6 +98,7 @@ def train(args):
             ray.get(rollout_manager.eval.remote(rollout_id))
 
     ray.get(rollout_manager.dispose.remote())
+    finish_tracking(args)
 
 
 if __name__ == "__main__":

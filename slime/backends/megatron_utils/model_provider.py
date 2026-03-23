@@ -83,6 +83,8 @@ def get_model_provider_func(
     if args.megatron_to_hf_mode == "bridge":
         from megatron.bridge import AutoBridge
 
+        import slime_plugins.megatron_bridge  # noqa: F401  # register custom bridges
+
         bridge = AutoBridge.from_hf_pretrained(args.hf_checkpoint, trust_remote_code=True)
         provider = bridge.to_megatron_provider(load_weights=False)
         # TODO: we should not manually set this...
@@ -91,11 +93,29 @@ def get_model_provider_func(
         provider.expert_model_parallel_size = args.expert_model_parallel_size
         provider.expert_tensor_parallel_size = args.expert_tensor_parallel_size
         provider.sequence_parallel = args.sequence_parallel
+        provider.context_parallel_size = args.context_parallel_size
+        provider.variable_seq_lengths = args.variable_seq_lengths
+        if hasattr(args, "moe_token_dispatcher_type"):
+            provider.moe_token_dispatcher_type = args.moe_token_dispatcher_type
         if getattr(args, "decoder_first_pipeline_num_layers", None) is not None:
             provider.num_layers_in_first_pipeline_stage = args.decoder_first_pipeline_num_layers
         if getattr(args, "decoder_last_pipeline_num_layers", None) is not None:
             provider.num_layers_in_last_pipeline_stage = args.decoder_last_pipeline_num_layers
         provider.finalize()
+
+        if role == "critic":
+            _original_provide = provider.provide
+
+            def _critic_provide(pre_process=True, post_process=True, vp_stage=None):
+                model = _original_provide(pre_process=pre_process, post_process=post_process, vp_stage=vp_stage)
+                if post_process:
+                    model.output_layer = LinearForLastLayer(
+                        input_size=model.config.hidden_size, output_size=1, config=model.config
+                    )
+                return model
+
+            return _critic_provide
+
         return provider.provide
 
     def model_provider(pre_process: bool = True, post_process: bool = True, vp_stage: int | None = None) -> GPTModel:

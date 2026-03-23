@@ -76,16 +76,9 @@ class RayTrainGroup:
         if self.args.use_routing_replay and self.role == "actor":
             env_vars["ENABLE_ROUTING_REPLAY"] = "1"
 
-        backend = self.args.train_backend
-        if backend == "megatron":
-            from slime.backends.megatron_utils.actor import MegatronTrainRayActor
+        from slime.backends.megatron_utils.actor import MegatronTrainRayActor
 
-            actor_impl = MegatronTrainRayActor
-
-        else:
-            from slime.backends.fsdp_utils import FSDPTrainRayActor
-
-            actor_impl = FSDPTrainRayActor
+        actor_impl = MegatronTrainRayActor
 
         TrainRayActor = ray.remote(num_gpus=1, runtime_env={"env_vars": env_vars})(actor_impl)
 
@@ -105,12 +98,15 @@ class RayTrainGroup:
                 master_addr, master_port = ray.get(actor.get_master_addr_and_port.remote())
             self._actor_handlers.append(actor)
 
-    def async_init(self, args, role, with_ref=False):
+    def async_init(self, args, role, with_ref=False, with_opd_teacher=False):
         """
         Allocate GPU resourced and initialize model, optimzier, local ckpt, etc.
         """
         self.args = args
-        return [actor.init.remote(args, role, with_ref=with_ref) for actor in self._actor_handlers]
+        return [
+            actor.init.remote(args, role, with_ref=with_ref, with_opd_teacher=with_opd_teacher)
+            for actor in self._actor_handlers
+        ]
 
     def async_train(self, rollout_id, rollout_data_ref):
         """Do one rollout training"""

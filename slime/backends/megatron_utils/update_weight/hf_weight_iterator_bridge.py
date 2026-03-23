@@ -1,11 +1,39 @@
 import dataclasses
 
+
 from slime.utils import megatron_bridge_utils
 from slime.utils.misc import chunk_named_params_by_size
 
 from ..megatron_to_hf import postprocess_hf_param
+from ..megatron_to_hf.processors import quantize_params
 from ..misc_utils import strip_param_name_prefix
 from .hf_weight_iterator_base import HfWeightIteratorBase
+
+
+def _patch_bridge_expert_cache_to_cpu():
+    """Monkey-patch GPTOSSBridge class to cache expert weights on CPU.
+
+    This avoids GPU OOM when torch.cat merges all experts, especially in
+    colocated mode where SGLang and Megatron share the same GPU.
+    """
+    try:
+        from megatron.bridge.models.gpt_oss.gpt_oss_bridge import GPTOSSBridge
+    except ImportError:
+        return
+
+    if getattr(GPTOSSBridge, "_cpu_cache_patched", False):
+        return
+
+    _orig = GPTOSSBridge.maybe_modify_converted_hf_weight
+
+    def _patched(self, task, converted_weights_dict):
+        cpu_dict = {k: v.cpu() for k, v in converted_weights_dict.items()}
+        result = _orig(self, task, cpu_dict)
+        # Move merged result back to GPU for CUDA IPC serialization
+        return {k: v.cuda() for k, v in result.items()} if result else result
+
+    GPTOSSBridge.maybe_modify_converted_hf_weight = _patched
+    GPTOSSBridge._cpu_cache_patched = True
 
 
 class HfWeightIteratorBridge(HfWeightIteratorBase):
@@ -17,6 +45,7 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
         import slime_plugins.megatron_bridge  # noqa: F401
 
         self._bridge = AutoBridge.from_hf_pretrained(self.args.hf_checkpoint, trust_remote_code=True)
+        _patch_bridge_expert_cache_to_cpu()
 
     def get_hf_weight_chunks(self, megatron_local_weights):
         # TODO support quantization (e.g. modify megatron-bridge to provide megatron param name)
@@ -27,24 +56,32 @@ class HfWeightIteratorBridge(HfWeightIteratorBase):
 
             named_weights = self._bridge.export_hf_weights(self.model, cpu=False, conversion_tasks=conversion_tasks)
 
-            named_weights = (
-                (
-                    hf_param_name,
-                    postprocess_hf_param(
+            def _streaming_quantized():
+                for hf_param_name, weight, megatron_param_name in named_weights:
+                    processed_weight = postprocess_hf_param(
                         args=self.args,
                         megatron_param_name=megatron_param_name,
                         hf_param_name=hf_param_name,
                         param=weight,
-                    ),
-                )
-                for hf_param_name, weight, megatron_param_name in named_weights
-            )
+                    )
+                    converted_named_params = [(hf_param_name, processed_weight)]
+                    quantized_batch = quantize_params(
+                        args=self.args,
+                        megatron_name=megatron_param_name,
+                        converted_named_params=converted_named_params,
+                        quantization_config=self.quantization_config,
+                    )
+                    yield from quantized_batch
 
-            yield from chunk_named_params_by_size(named_weights, chunk_size=self.args.update_weight_buffer_size)
+            yield from chunk_named_params_by_size(
+                _streaming_quantized(), chunk_size=self.args.update_weight_buffer_size
+            )
 
 
 def _process_conversion_tasks(vanilla_conversion_tasks, new_weight_dict):
     def _handle_one(task):
+        if task is None:
+            return None
         if task.param_weight is None:
             return task
 
