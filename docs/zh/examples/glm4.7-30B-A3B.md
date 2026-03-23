@@ -4,6 +4,14 @@
 
 搭建环境、数据与 ckpt 转换均与 Qwen3-4B 模型相同，可以参考 [示例：Qwen3-4B](qwen3-4B.md)，将文中 Qwen3-4B 的部分转换为 GLM-4.7-Flash 即可。
 
+### 前置条件
+
+GLM-4.7-Flash 需要 **transformers ≥ 5.0** 以支持 `Glm4MoeLiteForCausalLM` 架构。请安装或升级：
+
+```bash
+pip install "transformers>=5.0"
+```
+
 ### 下载模型
 
 ```bash
@@ -89,9 +97,9 @@ SGLANG_ARGS=(
    ...
    # MTP 投机解码 (EAGLE)
    --sglang-speculative-algorithm EAGLE
-   --sglang-speculative-num-steps 2
+   --sglang-speculative-num-steps 3
    --sglang-speculative-eagle-topk 1
-   --sglang-speculative-num-draft-tokens 3
+   --sglang-speculative-num-draft-tokens 4
 )
 ```
 
@@ -101,7 +109,7 @@ SGLANG_ARGS=(
 
 #### MTP 训练
 
-slime 也支持将 MTP 层与主模型联合训练，适用于已实现 MTP 权重转换的模型（如 MiMo、GLM-4.5）。启用时，相关参数如下：
+slime 也支持将 MTP 层与主模型联合训练，适用于已实现 MTP 权重转换的模型（如 MiMo、GLM-4.7）。启用时，相关参数如下：
 
 ```bash
 # 在模型配置中添加 MTP 层数
@@ -118,9 +126,9 @@ SPEC_ARGS=(
 - `--enable-mtp-training`：启用 MTP 层的梯度计算。不设置此标志时，MTP 层会被加载但冻结。
 - `--mtp-loss-scaling-factor 0.2`：MTP loss 相对于主策略 loss 的权重，默认为 0.2。
 
-> ⚠️ **注意**：GLM-4.7-Flash 的 MTP 训练目前尚不支持，因为 deepseek_v3 的 checkpoint bridge 尚未实现 MTP 权重转换（上游 mbridge 中标注为 `# TODO: mtp`）。但推理时的投机解码仍然可用 — SGLang 会内部处理 MTP 层。
+> **注意**：MTP 训练需要 MTP checkpoint bridge 正确转换 HuggingFace 和 Megatron 格式之间的权重。`GLM4MoELiteBridge`（位于 `slime_plugins/mbridge/glm4moe_lite.py`）扩展了 DeepSeek V3 bridge，实现了动态 MTP 层索引以支持 GLM-4.7-Flash 的 47 层架构。
 >
-> 对于完整支持 MTP 训练的模型（如 MiMo），可参考 `scripts/run-mimo-7B-rl-eagle.sh`。
+> 对于其他支持 MTP 训练的模型（如 MiMo），可参考 `scripts/run-mimo-7B-rl-eagle.sh`。
 
 ### 多机支持
 

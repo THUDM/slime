@@ -9,7 +9,8 @@ from ...sglang import quant_weight_ue8m0, should_deepgemm_weight_requant_ue8m0, 
 
 def quantize_params_fp8(args, megatron_name, converted_named_params, quantization_config):
     assert quantization_config["quant_method"] == "fp8"
-    assert quantization_config["fmt"] == "e4m3"
+    fmt = quantization_config.get("fmt", "e4m3")
+    assert fmt == "e4m3", f"Unsupported FP8 format: {fmt}"
     assert quantization_config["activation_scheme"] == "dynamic"
     weight_block_size = quantization_config.get("weight_block_size", None)
 
@@ -75,6 +76,10 @@ def quantize_params_fp8(args, megatron_name, converted_named_params, quantizatio
         # indexer
         "self_attention.wq_b.weight",
         "self_attention.wk.weight",
+        # linear attention
+        "self_attention.linear_attn.in_proj_qkv.weight",
+        "self_attention.linear_attn.in_proj_z.weight",
+        "self_attention.linear_attn.out_proj.weight",
     ]:
         quantize_named_params = []
         for converted_name, param in converted_named_params:

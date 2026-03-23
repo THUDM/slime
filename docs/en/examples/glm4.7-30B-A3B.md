@@ -5,6 +5,14 @@
 
 The environment setup, data, and checkpoint conversion are the same as for the Qwen3-4B model. You can refer to [Example: Qwen3-4B Model](qwen3-4B.md), replacing mentions of Qwen3-4B with GLM-4.7-Flash.
 
+### Prerequisites
+
+GLM-4.7-Flash requires **transformers ≥ 5.0** for the `Glm4MoeLiteForCausalLM` architecture. Install or upgrade:
+
+```bash
+pip install "transformers>=5.0"
+```
+
 ### Download Model
 
 ```bash
@@ -90,9 +98,9 @@ SGLANG_ARGS=(
    ...
    # MTP speculative decoding (EAGLE)
    --sglang-speculative-algorithm EAGLE
-   --sglang-speculative-num-steps 2
+   --sglang-speculative-num-steps 3
    --sglang-speculative-eagle-topk 1
-   --sglang-speculative-num-draft-tokens 3
+   --sglang-speculative-num-draft-tokens 4
 )
 ```
 
@@ -102,7 +110,7 @@ This enables SGLang to use the model's MTP layer as a draft model for EAGLE-styl
 
 #### MTP Training
 
-slime also supports training MTP layers jointly with the main model for models that have MTP weight conversion implemented (e.g., MiMo, GLM-4.5). When enabled, the relevant arguments are:
+slime also supports training MTP layers jointly with the main model for models that have MTP weight conversion implemented (e.g., MiMo, GLM-4.7). When enabled, the relevant arguments are:
 
 ```bash
 # Add MTP layer count to model config
@@ -119,9 +127,9 @@ SPEC_ARGS=(
 - `--enable-mtp-training`: Enables gradient computation for MTP layers. Without this flag, the MTP layer is loaded but frozen.
 - `--mtp-loss-scaling-factor 0.2`: Weight of the MTP loss relative to the main policy loss. Default is 0.2.
 
-> ⚠️ **Note**: MTP training for GLM-4.7-Flash is not yet supported because the deepseek_v3 checkpoint bridge does not include MTP weight conversion (`# TODO: mtp` in upstream mbridge). You can still use MTP for speculative decoding during inference — SGLang handles MTP layers internally.
+> **Note**: MTP training requires the MTP checkpoint bridge to properly convert weights between HuggingFace and Megatron formats. The `GLM4MoELiteBridge` (in `slime_plugins/mbridge/glm4moe_lite.py`) extends the DeepSeek V3 bridge with dynamic MTP layer indexing to support GLM-4.7-Flash's 47-layer architecture.
 >
-> For models with full MTP training support (e.g., MiMo), see `scripts/run-mimo-7B-rl-eagle.sh` as a reference.
+> For other models with MTP training support (e.g., MiMo), see `scripts/run-mimo-7B-rl-eagle.sh` as a reference.
 
 ### Multi-Node Support
 

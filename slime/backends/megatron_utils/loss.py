@@ -998,6 +998,14 @@ def loss_function(
     else:
         loss, log = func(args, batch, logits, sum_of_sample_mean)
 
+    # With allgather-CP, some CP ranks may have no loss-contributing tokens (e.g., all
+    # padding). Without this, gradient doesn't flow through their attention path, so
+    # the CP gather's backward (reduce-scatter) is not called, deadlocking other CP
+    # ranks that call it. Adding this zero loss forces autograd to traverse the full
+    # graph on every rank without changing gradient values.
+    if args.allgather_cp and mpu.get_context_parallel_world_size() > 1:
+        loss = loss + 0 * logits.sum()
+
     # Here we need to divide by cp_size because to cancel the multiply in Megatron.
     global_batch_size = batch.get("dynamic_global_batch_size", args.global_batch_size)
     if not args.calculate_per_token_loss:

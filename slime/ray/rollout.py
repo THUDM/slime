@@ -14,7 +14,7 @@ import torch
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
 from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
 
-from slime.backends.sglang_utils.sglang_config import EngineGroupConfig, ModelConfig, SglangConfig
+from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
@@ -36,11 +36,11 @@ logger = logging.getLogger(__name__)
 
 
 @dataclasses.dataclass
-class EngineGroup:
+class ServerGroup:
     """A group of homogeneous SGLang engines with the same configuration.
 
     All engines in a group share the same tp_size / nodes_per_engine / pg.
-    A RolloutServer may contain multiple EngineGroups (e.g. prefill vs decode
+    A RolloutServer may contain multiple ServerGroups (e.g. prefill vs decode
     in PD disaggregation).
     """
 
@@ -49,10 +49,12 @@ class EngineGroup:
     all_engines: list
     num_gpus_per_engine: int
     num_new_engines: int
-    worker_type: str = "regular"  # "regular", "prefill", or "decode"
+    worker_type: str = "regular"  # "regular", "prefill", "decode", or "placeholder"
     rank_offset: int = 0  # cumulative engine count before this group
     gpu_offset: int = 0  # cumulative GPU count before this group
     sglang_overrides: dict = dataclasses.field(default_factory=dict)
+    needs_offload: bool = False  # True when this group's GPUs overlap with megatron
+    model_path: str | None = None  # checkpoint path for update_weights_from_disk
     router_ip: str | None = None
     router_port: int | None = None
 
@@ -71,7 +73,7 @@ class EngineGroup:
         Returns ``(init_handles, port_cursors)`` where *init_handles* is a list
         of Ray ObjectRefs and *port_cursors* maps node index → next free port.
         The caller should ``ray.get()`` on the handles to block until the
-        engines are healthy, and pass *port_cursors* to the next engine group
+        engines are healthy, and pass *port_cursors* to the next server group
         so that different groups on the same node don't race for ports.
 
         Placeholder groups (worker_type="placeholder") skip engine creation entirely.
@@ -174,28 +176,46 @@ class EngineGroup:
     def offload(self):
         """Fire release_memory_occupation on all engines (non-blocking).
 
-        Returns a list of Ray ObjectRefs.
+        Returns a list of Ray ObjectRefs.  Skipped for groups that do not
+        overlap with megatron GPUs (``needs_offload=False``).
         """
+        if not self.needs_offload:
+            return []
         return [engine.release_memory_occupation.remote() for engine in self.engines if engine is not None]
 
     def onload(self, tags: list[str] | None = None):
         """Fire resume_memory_occupation on all engines (non-blocking).
 
-        Returns a list of Ray ObjectRefs.
+        Returns a list of Ray ObjectRefs.  Skipped for groups that do not
+        overlap with megatron GPUs (``needs_offload=False``).
         """
+        if not self.needs_offload:
+            return []
         return [engine.resume_memory_occupation.remote(tags=tags) for engine in self.engines if engine is not None]
+
+    def onload_weights_from_disk(self):
+        """Reload weights from ``model_path`` for non-updatable groups.
+
+        Used instead of ``resume_memory_occupation(tags=[WEIGHTS])`` so that
+        CPU memory is not consumed by offloaded weight copies.
+        """
+        if not self.needs_offload or not self.model_path:
+            return []
+        return [
+            engine.update_weights_from_disk.remote(self.model_path) for engine in self.engines if engine is not None
+        ]
 
 
 @dataclasses.dataclass
 class RolloutServer:
-    """A model served behind a shared router, with one or more engine groups.
+    """A model served behind a shared router, with one or more server groups.
 
     Each RolloutServer represents one model deployed behind a single router.
-    A server may contain multiple EngineGroups with different
+    A server may contain multiple ServerGroups with different
     ``num_gpus_per_engine`` (e.g. prefill TP=2, decode TP=4).
     """
 
-    engine_groups: list[EngineGroup]
+    server_groups: list[ServerGroup]
     router_ip: str | None = None
     router_port: int | None = None
     model_name: str = "default"
@@ -204,26 +224,26 @@ class RolloutServer:
     @property
     def engines(self):
         """All node-0 engines across all groups (placeholder groups contribute nothing)."""
-        return [e for g in self.engine_groups for e in g.engines]
+        return [e for g in self.server_groups for e in g.engines]
 
     @property
     def all_engines(self):
         """All engines (including non-node-0) across all groups."""
-        return [e for g in self.engine_groups for e in g.all_engines]
+        return [e for g in self.server_groups for e in g.all_engines]
 
     @property
     def num_new_engines(self):
-        return sum(g.num_new_engines for g in self.engine_groups)
+        return sum(g.num_new_engines for g in self.server_groups)
 
     @num_new_engines.setter
     def num_new_engines(self, value):
-        for g in self.engine_groups:
+        for g in self.server_groups:
             g.num_new_engines = value
 
     @property
     def engine_gpu_counts(self) -> list[int]:
         """Per-engine GPU count for all node-0 engines, parallel to ``engines``."""
-        return [g.num_gpus_per_engine for g in self.engine_groups for _ in g.engines]
+        return [g.num_gpus_per_engine for g in self.server_groups for _ in g.engines]
 
     @property
     def engine_gpu_offsets(self) -> list[int]:
@@ -232,7 +252,7 @@ class RolloutServer:
         Accounts for placeholder groups that occupy GPU slots without creating engines.
         """
         offsets = []
-        for g in self.engine_groups:
+        for g in self.server_groups:
             for j in range(len(g.engines)):
                 offsets.append(g.gpu_offset + j * g.num_gpus_per_engine)
         return offsets
@@ -240,7 +260,7 @@ class RolloutServer:
     @property
     def nodes_per_engine(self):
         """Nodes per engine.  Only valid when all active groups share the same value."""
-        values = {g.nodes_per_engine for g in self.engine_groups}
+        values = {g.nodes_per_engine for g in self.server_groups if g.worker_type != "placeholder"}
         if len(values) != 1:
             raise ValueError(f"Heterogeneous nodes_per_engine across groups: {values}")
         return values.pop()
@@ -248,12 +268,12 @@ class RolloutServer:
     def recover(self):
         """Recover dead engines across all active groups, overlapping init."""
         # Record dead indices per group before starting.
-        dead_per_group = [[i for i, engine in enumerate(g.all_engines) if engine is None] for g in self.engine_groups]
+        dead_per_group = [[i for i, engine in enumerate(g.all_engines) if engine is None] for g in self.server_groups]
 
         # Start all groups concurrently.
         all_handles = []
         port_cursors: dict[int, int] = {}
-        for g in self.engine_groups:
+        for g in self.server_groups:
             handles, port_cursors = g.start_engines(port_cursors)
             all_handles.extend(handles)
         if all_handles:
@@ -261,33 +281,67 @@ class RolloutServer:
 
         # Post-recovery: offload then onload weights for newly created engines.
         release_handles = []
-        new_engines_all = []
-        for g, dead_indices in zip(self.engine_groups, dead_per_group, strict=True):
+        updatable_new_engines = []
+        non_updatable_groups_engines: list[tuple[str, list]] = []
+        for g, dead_indices in zip(self.server_groups, dead_per_group, strict=True):
             logger.info(f"Recovered {g.num_new_engines} dead rollout engines (worker_type={g.worker_type})")
             assert g.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
-            if g.args.offload_rollout and dead_indices:
+            if g.needs_offload and dead_indices:
                 new_engines = [g.all_engines[i] for i in dead_indices]
                 release_handles.extend(engine.release_memory_occupation.remote() for engine in new_engines)
-                new_engines_all.extend(new_engines)
+                if self.update_weights:
+                    updatable_new_engines.extend(new_engines)
+                elif g.model_path:
+                    non_updatable_groups_engines.append((g.model_path, new_engines))
 
         if release_handles:
             ray.get(release_handles)
-            ray.get(
-                [engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS]) for engine in new_engines_all]
-            )
+            # Resume GPU memory for all engines that need offload.
+            all_resume_engines = updatable_new_engines[:]
+            for _model_path, engines in non_updatable_groups_engines:
+                all_resume_engines.extend(engines)
+            if all_resume_engines:
+                ray.get(
+                    [
+                        engine.resume_memory_occupation.remote(tags=[GPU_MEMORY_TYPE_WEIGHTS])
+                        for engine in all_resume_engines
+                    ]
+                )
 
     def offload(self):
         """Release memory occupation across all groups (concurrent)."""
         handles = []
-        for g in self.engine_groups:
+        for g in self.server_groups:
             handles.extend(g.offload())
         return ray.get(handles) if handles else []
 
     def onload(self, tags: list[str] | None = None):
         """Resume memory occupation across all groups (concurrent)."""
         handles = []
-        for g in self.engine_groups:
+        for g in self.server_groups:
             handles.extend(g.onload(tags))
+        return ray.get(handles) if handles else []
+
+    def onload_weights(self):
+        """Restore weights for offloaded groups.
+
+        All groups resume from CPU cache via ``resume_memory_occupation``.
+        For updatable servers, weights will be overwritten by
+        ``update_weights`` shortly after.  For non-updatable servers the
+        CPU backup already contains the correct (unchanged) weights.
+        """
+        handles = []
+        for g in self.server_groups:
+            if not g.needs_offload:
+                continue
+            handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_WEIGHTS]))
+        return ray.get(handles) if handles else []
+
+    def onload_kv(self):
+        """Resume KV cache and CUDA graphs for offloaded groups."""
+        handles = []
+        for g in self.server_groups:
+            handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH]))
         return ray.get(handles) if handles else []
 
 
@@ -300,8 +354,6 @@ class RolloutManager:
 
         self.pg = pg
         self.args = args
-
-        init_tracking(args, primary=False)
 
         data_source_cls = load_function(self.args.data_source_path)
         self.data_source = data_source_cls(args)
@@ -324,17 +376,44 @@ class RolloutManager:
         else:
             init_http_client(args)
             self.servers = start_rollout_servers(args, pg)
+
+        # Initialize W&B secondary *after* servers are launched so the router
+        # address is available for scraping SGLang Prometheus metrics.
+        router_addr = self._get_metrics_router_addr()
+        init_tracking(args, primary=False, router_addr=router_addr)
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
         self.rollout_id = -1
 
         self._health_monitors = []
         if not self.args.debug_train_only and self.args.use_fault_tolerance:
             for srv in self.servers.values():
-                for group in srv.engine_groups:
+                for group in srv.server_groups:
                     monitor = RolloutHealthMonitor(group, args)
                     monitor.start()
                     self._health_monitors.append(monitor)
             self._ci_fault_injection_pending = self.args.ci_test  # Flag for CI fault injection
+
+    def _get_metrics_router_addr(self) -> str | None:
+        """Return the router address for scraping SGLang engine metrics.
+
+        The sglang_router gateway exposes ``/engine_metrics`` on its main port,
+        which aggregates Prometheus metrics from all backend sglang servers.
+        Returns ``http://{ip}:{port}`` for the first server, or ``None`` when
+        metrics are disabled or no servers are running.
+
+        Note: the ``use_slime_router`` path does not expose ``/engine_metrics``;
+        metrics forwarding to W&B requires the sglang_router gateway.
+        """
+        if getattr(self.args, "use_slime_router", False):
+            logger.warning(
+                "SGLang metrics forwarding to W&B is not supported with --use-slime-router. "
+                "Use the default sglang_router gateway for /engine_metrics aggregation."
+            )
+            return None
+        srv = self.server
+        if srv is None or srv.router_ip is None:
+            return None
+        return f"http://{srv.router_ip}:{srv.router_port}"
 
     def _try_ci_fault_injection(self):
         """Try to inject fault during generate (when health monitor is running)."""
@@ -344,11 +423,11 @@ class RolloutManager:
         # Only inject fault once
         self._ci_fault_injection_pending = False
 
-        if self.server and self.server.engine_groups[0].all_engines and self.server.engine_groups[0].all_engines[0]:
+        if self.server and self.server.server_groups[0].all_engines and self.server.server_groups[0].all_engines[0]:
             logger.info("CI Fault Injection: Simulating crash on engine 0 during generate")
             try:
                 # This will cause the ray actor to exit
-                self.server.engine_groups[0].all_engines[0].simulate_crash.remote()
+                self.server.server_groups[0].all_engines[0].simulate_crash.remote()
                 # Wait for health monitor to detect the crash and mark engine as None
                 # health_check_interval + health_check_timeout + buffer
                 wait_time = self.args.rollout_health_check_interval + self.args.rollout_health_check_timeout + 5
@@ -360,6 +439,7 @@ class RolloutManager:
     def dispose(self):
         for monitor in self._health_monitors:
             monitor.stop()
+        logging_utils.finish_tracking(self.args)
 
     @property
     def server(self) -> RolloutServer | None:
@@ -444,10 +524,12 @@ class RolloutManager:
             srv.onload(tags)
 
     def onload_weights(self):
-        self.onload(tags=[GPU_MEMORY_TYPE_WEIGHTS])
+        for srv in self.servers.values():
+            srv.onload_weights()
 
     def onload_kv(self):
-        self.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH])
+        for srv in self.servers.values():
+            srv.onload_kv()
 
     def recover_updatable_engines(self):
         """Restart any dead rollout engines and update num_new_engines for update_weights detection.
@@ -759,7 +841,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(
     num_engines_per_node = max(1, args.num_gpus_per_node // _gpus_per_engine)
     addr_and_ports: dict[int, dict] = {}
 
-    # Track per-node port cursors so that different engine groups (called
+    # Track per-node port cursors so that different server groups (called
     # sequentially) never race for the same ports on a given node.
     node_port_cursor: dict[int, int] = {}
 
@@ -848,7 +930,6 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
             router_port = find_available_port(random.randint(3000, 4000))
 
     if args.use_slime_router:
-        assert not has_pd_disaggregation, "slime router does not support PD disaggregation."
         import copy
 
         from slime.router.router import run_router
@@ -856,7 +937,6 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
         router_args = copy.copy(args)
         router_args.sglang_router_ip = router_ip
         router_args.sglang_router_port = router_port
-
     else:
         from sglang_router.launch_router import RouterArgs
 
@@ -869,11 +949,15 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
         router_args.log_level = "warn"
         router_args.request_timeout_secs = args.sglang_router_request_timeout_secs
 
-        if hasattr(args, "sglang_router_policy") and args.sglang_router_policy:
-            router_args.policy = args.sglang_router_policy
-
         if has_pd_disaggregation:
             router_args.pd_disaggregation = True
+            # Disable circuit breaker to prevent RDMA transfer timeouts from
+            # marking decode workers as dead. Timeouts are transient (PCIe
+            # contention under high load) and do not indicate a dead server.
+            router_args.disable_circuit_breaker = True
+
+        # We will not use the health check from router.
+        router_args.disable_health_check = True
 
         logger.info(f"Launch router with args: {router_args}")
 
@@ -890,11 +974,35 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
     return router_ip, router_port
 
 
+def _compute_rollout_offset(args) -> int:
+    """Offset (in PG bundle slots) where rollout GPUs start."""
+    if args.debug_train_only or args.debug_rollout_only or args.colocate:
+        return 0
+    if args.critic_train_only:
+        return args.critic_num_nodes * args.critic_num_gpus_per_node
+    offset = args.actor_num_nodes * args.actor_num_gpus_per_node
+    if args.use_critic:
+        offset += args.critic_num_nodes * args.critic_num_gpus_per_node
+    return offset
+
+
+def _compute_megatron_num_gpus(args) -> int:
+    """Total number of megatron (actor + critic) GPU slots in the placement group."""
+    if args.debug_rollout_only:
+        return 0
+    if args.critic_train_only:
+        return args.critic_num_nodes * args.critic_num_gpus_per_node
+    num = args.actor_num_nodes * args.actor_num_gpus_per_node
+    if args.use_critic:
+        num += args.critic_num_nodes * args.critic_num_gpus_per_node
+    return num
+
+
 def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
     """Start rollout servers: one per model, each with its own router.
 
     Each model defined in the sglang config gets its own router and set
-    of engine groups.  Engine groups within a model may have different
+    of server groups.  Server groups within a model may have different
     ``num_gpus_per_engine`` (e.g. for PD disaggregation where prefill
     and decode use different TP sizes).
 
@@ -909,6 +1017,10 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
     gpu_offset = 0
     engine_offset = 0
 
+    # Compute megatron GPU range for per-group offload decisions.
+    rollout_pg_offset = _compute_rollout_offset(args)
+    megatron_num_gpus = _compute_megatron_num_gpus(args)
+
     for model_idx, model_cfg in enumerate(config.models):
         model_cfg.resolve(args)
 
@@ -920,16 +1032,31 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
             args.sglang_router_ip = router_ip
             args.sglang_router_port = router_port
 
-        engine_groups: list[EngineGroup] = []
-        all_init_handles: list = []
+        server_groups: list[ServerGroup] = []
         port_cursors: dict[int, int] = {}
 
-        for group_cfg in model_cfg.engine_groups:
+        has_epd = model_cfg.has_encoder_disaggregation
+
+        def _make_group(group_cfg, router_ip, router_port, overrides_extra=None):
+            nonlocal engine_offset, gpu_offset
             gpus_per_engine = group_cfg.num_gpus_per_engine
             num_gpu_per_engine_local = min(gpus_per_engine, args.num_gpus_per_node)
             num_engines = group_cfg.num_gpus // num_gpu_per_engine_local
 
-            group = EngineGroup(
+            group_abs_start = rollout_pg_offset + gpu_offset
+            needs_offload = args.offload_rollout and group_abs_start < megatron_num_gpus
+            overrides = dict(group_cfg.overrides)
+            if overrides_extra:
+                for k, v in overrides_extra.items():
+                    overrides.setdefault(k, v)
+            if args.offload_rollout and not needs_offload:
+                overrides.setdefault("enable_memory_saver", False)
+            logger.info(
+                f"Engine group '{group_cfg.worker_type}' gpu_offset={gpu_offset} "
+                f"(abs={group_abs_start}): needs_offload={needs_offload}"
+            )
+
+            group = ServerGroup(
                 args=args,
                 pg=pg,
                 all_engines=[None] * num_engines if group_cfg.worker_type != "placeholder" else [],
@@ -938,22 +1065,62 @@ def start_rollout_servers(args, pg) -> dict[str, RolloutServer]:
                 worker_type=group_cfg.worker_type,
                 rank_offset=engine_offset,
                 gpu_offset=gpu_offset,
-                sglang_overrides=group_cfg.overrides,
+                sglang_overrides=overrides,
+                needs_offload=needs_offload,
+                model_path=overrides.get("model_path", args.hf_checkpoint),
                 router_ip=router_ip,
                 router_port=router_port,
             )
-            handles, port_cursors = group.start_engines(port_cursors)
-            all_init_handles.extend(handles)
-            engine_groups.append(group)
-
             engine_offset += num_engines
             gpu_offset += group_cfg.num_gpus
+            return group
 
-        if all_init_handles:
-            ray.get(all_init_handles)
+        if has_epd:
+            # --- Phase 1: start encoder groups, wait, collect URLs ---
+            encoder_urls: list[str] = []
+            for group_cfg in model_cfg.server_groups:
+                if group_cfg.worker_type != "encoder":
+                    continue
+                group = _make_group(group_cfg, router_ip, router_port)
+                handles, port_cursors = group.start_engines(port_cursors)
+                if handles:
+                    ray.get(handles)
+                urls = ray.get([e.get_url.remote() for e in group.engines])
+                encoder_urls.extend(u for u in urls if u is not None)
+                server_groups.append(group)
+
+            logger.info(f"EPD phase 1 done: collected {len(encoder_urls)} encoder URLs: {encoder_urls}")
+
+            # --- Phase 2: start non-encoder groups, injecting encoder URLs into prefill ---
+            non_encoder_handles: list = []
+            for group_cfg in model_cfg.server_groups:
+                if group_cfg.worker_type == "encoder":
+                    continue
+                overrides_extra = {}
+                if encoder_urls and group_cfg.worker_type == "prefill":
+                    overrides_extra["language_only"] = True
+                    overrides_extra["encoder_urls"] = encoder_urls
+                group = _make_group(group_cfg, router_ip, router_port, overrides_extra=overrides_extra)
+                handles, port_cursors = group.start_engines(port_cursors)
+                non_encoder_handles.extend(handles)
+                server_groups.append(group)
+
+            if non_encoder_handles:
+                ray.get(non_encoder_handles)
+        else:
+            # No EPD — start all groups in one pass (original path).
+            all_init_handles: list = []
+            for group_cfg in model_cfg.server_groups:
+                group = _make_group(group_cfg, router_ip, router_port)
+                handles, port_cursors = group.start_engines(port_cursors)
+                all_init_handles.extend(handles)
+                server_groups.append(group)
+
+            if all_init_handles:
+                ray.get(all_init_handles)
 
         servers[model_cfg.name] = RolloutServer(
-            engine_groups=engine_groups,
+            server_groups=server_groups,
             router_ip=router_ip,
             router_port=router_port,
             model_name=model_cfg.name,
@@ -984,7 +1151,7 @@ def _resolve_sglang_config(args) -> SglangConfig:
         models=[
             ModelConfig(
                 name="default",
-                engine_groups=[EngineGroupConfig(worker_type="regular", num_gpus=args.rollout_num_gpus)],
+                server_groups=[ServerGroupConfig(worker_type="regular", num_gpus=args.rollout_num_gpus)],
             )
         ]
     )

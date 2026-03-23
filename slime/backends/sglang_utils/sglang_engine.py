@@ -51,7 +51,10 @@ def _to_local_gpu_id(physical_gpu_id: int) -> int:
 
 
 def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
-    from sglang.srt.entrypoints.http_server import launch_server
+    if server_args.encoder_only:
+        from sglang.srt.disaggregation.encode_server import launch_server
+    else:
+        from sglang.srt.entrypoints.http_server import launch_server
 
     multiprocessing.set_start_method("spawn", force=True)
     server_args.host = server_args.host.strip("[]")
@@ -82,21 +85,6 @@ def _wait_server_healthy(base_url, api_key, is_process_alive):
                 response = session.get(f"{base_url}/health_generate", headers=headers)
                 if response.status_code == 200:
                     break
-            except requests.RequestException:
-                pass
-
-            if not is_process_alive():
-                raise Exception("Server process terminated unexpectedly.")
-
-            time.sleep(2)
-
-        # use flush_cache to make sure the working queue is empty, so that we can do offload
-        while True:
-            try:
-                response = session.get(f"{base_url}/flush_cache", headers=headers)
-                if response.status_code == 200:
-                    break
-
             except requests.RequestException:
                 pass
 
@@ -203,11 +191,12 @@ class SGLangEngine(RayActor):
         logger.info(f"Launch HttpServerEngineAdapter at: {self.server_host}:{self.server_port}")
         self.process = launch_server_process(ServerArgs(**server_args_dict))
 
+        if self.worker_type == "encoder":
+            return
+
         if self.node_rank == 0 and self.router_ip and self.router_port:
-            if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
-                assert (
-                    self.worker_type == "regular"
-                ), "pd disaggregation is not supported in old router or slime router."
+            if not self.args.use_slime_router and parse(sglang_router.__version__) <= parse("0.2.1"):
+                assert self.worker_type == "regular", "pd disaggregation is not supported in old router."
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}"
                 )
@@ -261,12 +250,13 @@ class SGLangEngine(RayActor):
         if self.node_rank != 0:
             return True
 
-        response = requests.get(
-            f"http://{self.server_host}:{self.server_port}/health_generate",
-            timeout=timeout,
-        )
-        response.raise_for_status()
-        return True
+        url = f"http://{self.server_host}:{self.server_port}/health_generate"
+        try:
+            response = requests.get(url, timeout=timeout)
+            response.raise_for_status()
+            return True
+        except requests.RequestException:
+            raise
 
     def update_weights_from_tensor(
         self,
@@ -312,15 +302,20 @@ class SGLangEngine(RayActor):
         else:
             raise TimeoutError("Timeout while flushing cache.")
 
+    def get_url(self):
+        if self.node_rank != 0:
+            return None
+        return f"http://{self.server_host}:{self.server_port}"
+
     def shutdown(self):
         if self.args.rollout_external:
             return
 
         logger.info(f"Shutdown engine {self.server_host}:{self.server_port}...")
-        if self.node_rank == 0:
+        if self.worker_type != "encoder" and self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
             response = None
-            if parse(sglang_router.__version__) <= parse("0.2.1") or self.args.use_slime_router:
+            if self.args.use_slime_router or parse(sglang_router.__version__) <= parse("0.2.1"):
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
                 )
@@ -369,6 +364,17 @@ class SGLangEngine(RayActor):
 
     def check_weights(self, action: str):
         return self._make_request("weights_checker", {"action": action})
+
+    def update_weights_from_disk(self, model_path: str, load_format: str | None = None):
+        """Reload weights from *model_path* without restarting the engine.
+
+        Used for non-updatable (frozen) models that overlap with megatron:
+        after offload, weights are restored from disk instead of CPU cache.
+        """
+        payload = {"model_path": model_path}
+        if load_format is not None:
+            payload["load_format"] = load_format
+        return self._make_request("update_weights_from_disk", payload)
 
     def init_weights_update_group(self, master_address, master_port, rank_offset, world_size, group_name, backend):
         return self._make_request(
@@ -529,11 +535,14 @@ def _compute_server_args(
         "skip_server_warmup": True,
         # always enable draft weights cpu backup so that we run training without mtp weights.
         "enable_draft_weights_cpu_backup": True,
+        # Always enable Prometheus metrics so the /engine_metrics endpoint is
+        # available for W&B scraping (regardless of --sglang-enable-metrics).
+        "enable_metrics": True,
     }
 
     if worker_type == "prefill":
         kwargs["disaggregation_mode"] = "prefill"
-        kwargs["load_balance_method"] = "round_robin"
+        kwargs["load_balance_method"] = "follow_bootstrap_room"
         assert (
             disaggregation_bootstrap_port is not None
         ), "disaggregation_bootstrap_port must be set for prefill worker"
@@ -541,6 +550,8 @@ def _compute_server_args(
     elif worker_type == "decode":
         kwargs["disaggregation_mode"] = "decode"
         kwargs["prefill_round_robin_balance"] = True
+    elif worker_type == "encoder":
+        kwargs["encoder_only"] = True
 
     if args.use_rollout_routing_replay:
         kwargs["enable_return_routed_experts"] = True
@@ -548,22 +559,35 @@ def _compute_server_args(
         kwargs["dtype"] = "float16"
     external_engine_need_check_fields = [k for k in kwargs.keys() if k not in _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS]
 
+    server_arg_fields = dataclasses.fields(ServerArgs)
+    server_arg_field_names = {attr.name for attr in server_arg_fields}
     unused_keys = set(kwargs.keys())
-    for attr in dataclasses.fields(ServerArgs):
+    for attr in server_arg_fields:
         if worker_type == "decode" and attr.name == "enable_hierarchical_cache":
             continue
         if hasattr(args, f"sglang_{attr.name}") and attr.name not in kwargs:
             kwargs[attr.name] = getattr(args, f"sglang_{attr.name}")
         unused_keys.discard(attr.name)
 
-    # Per-engine-group overrides from --sglang-config YAML.
+    # Per-server-group overrides from --sglang-config YAML.
     # Applied after base args so they take highest priority.
     if sglang_overrides:
         for key, value in sglang_overrides.items():
-            if key in kwargs:
-                logger.info(f"sglang_overrides: overriding {key}={kwargs[key]} -> {value} (rank={rank})")
-            kwargs[key] = value
-            unused_keys.discard(key)
+            normalized_key = key.replace("-", "_")
+            if normalized_key != key:
+                logger.warning(
+                    f"sglang_overrides key '{key}' normalized to '{normalized_key}' (rank={rank}). "
+                    "Please use underscore style in YAML overrides."
+                )
+            if normalized_key in kwargs:
+                logger.info(
+                    f"sglang_overrides: overriding {normalized_key}={kwargs[normalized_key]} -> {value} (rank={rank})"
+                )
+            kwargs[normalized_key] = value
+            if normalized_key in server_arg_field_names:
+                unused_keys.discard(normalized_key)
+            else:
+                unused_keys.add(normalized_key)
 
     # for compatibility with old args
     if len(unused_keys) > 0:
@@ -582,5 +606,6 @@ _EXTERNAL_ENGINE_SKIP_CHECK_FIELDS = [
     "dist_init_addr",
     "skip_server_warmup",
     "enable_draft_weights_cpu_backup",
+    "enable_metrics",
     "mem_fraction_static",
 ]

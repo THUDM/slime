@@ -1,6 +1,4 @@
 import copy
-import json
-import os
 
 import torch
 import torch.nn as nn
@@ -11,32 +9,13 @@ from megatron.core.transformer.transformer_block import get_num_layers_to_build
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
 from transformers.activations import ACT2FN
 
-
-def _load_hf_config(checkpoint_path):
-    """Load HF config, handling cases where transformers doesn't know the model type."""
-    try:
-        from transformers import AutoConfig
-
-        return AutoConfig.from_pretrained(checkpoint_path, trust_remote_code=True)
-    except (ValueError, KeyError):
-        # Fallback: load config.json directly as a SimpleNamespace
-        config_path = os.path.join(checkpoint_path, "config.json")
-        with open(config_path) as f:
-            config_dict = json.load(f)
-        # If there's a text_config, also make it a namespace
-        ns = type("HFConfig", (), config_dict)()
-        if "text_config" in config_dict:
-            ns.text_config = type("TextConfig", (), config_dict["text_config"])()
-        return ns
-
-
 try:
     from fla.modules import FusedRMSNormGated, ShortConvolution
     from fla.ops.gated_delta_rule import chunk_gated_delta_rule
 except ImportError:
     pass
 
-from .hf_attention import HuggingfaceAttention
+from .hf_attention import HuggingfaceAttention, _load_hf_config
 
 
 def _get_text_config(hf_config):
@@ -148,6 +127,7 @@ class Qwen3_5GatedDeltaNet(nn.Module):
             initial_state=None,
             output_final_state=False,
             use_qk_l2norm_in_kernel=True,
+            cu_seqlens=cu_seqlens,
         )
 
         z_shape_og = z.shape
@@ -224,6 +204,14 @@ def get_qwen3_5_spec(args, config, vp_stage):
 
     hf_config = _load_hf_config(args.hf_checkpoint)
     text_config = _get_text_config(hf_config)
+
+    # Compute layer_types if the config class doesn't expose it
+    if not hasattr(text_config, "layer_types"):
+        interval = getattr(text_config, "full_attention_interval", 4)
+        n = text_config.num_hidden_layers
+        text_config.layer_types = [
+            "full_attention" if (i + 1) % interval == 0 else "linear_attention" for i in range(n)
+        ]
 
     for layer_id in range(num_layers_to_build):
         if text_config.layer_types[layer_id + offset] == "linear_attention":

@@ -70,12 +70,12 @@ class TestSglangConfigUpdateWeights:
                 "sglang": [
                     {
                         "name": "actor",
-                        "engine_groups": [{"worker_type": "regular", "num_gpus": 8}],
+                        "server_groups": [{"worker_type": "regular", "num_gpus": 8}],
                     },
                     {
                         "name": "ref",
                         "update_weights": False,
-                        "engine_groups": [{"worker_type": "regular", "num_gpus": 4}],
+                        "server_groups": [{"worker_type": "regular", "num_gpus": 4}],
                     },
                 ]
             }

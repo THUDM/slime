@@ -16,7 +16,7 @@ NUM_GPUS = 8
 SGLANG_CONFIG_YAML = """\
 sglang:
   - name: default
-    engine_groups:
+    server_groups:
       - worker_type: regular
         num_gpus: 4
         num_gpus_per_engine: 2
