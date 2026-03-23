@@ -134,6 +134,8 @@ def process_file(input_path, output_path, filename, strategy, block_size, result
             and "lm_head" not in key
             and "eh_proj" not in key
             and "weights_proj" not in key
+            and "vision_tower" not in key
+            and "mm_projector" not in key
         ):
             qw, s = quant_fp8(weights[key], strategy, block_size)
             q_weights[key] = qw
