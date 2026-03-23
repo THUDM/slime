@@ -2,9 +2,9 @@ import asyncio
 import copy
 import inspect
 import logging
+import uuid
 from argparse import Namespace
 from collections.abc import Callable
-from contextlib import contextmanager
 from typing import Any
 
 import numpy as np
@@ -20,14 +20,38 @@ from slime.utils.data import Dataset
 from slime.utils.eval_config import EvalDatasetConfig
 from slime.utils.http_utils import get, post
 from slime.utils.misc import SingletonMeta, load_function
-from slime.utils.processing_utils import encode_image_for_rollout_engine, load_processor, load_tokenizer
+from slime.utils.processing_utils import (
+    build_processor_kwargs,
+    encode_image_for_rollout_engine,
+    load_processor,
+    load_tokenizer,
+)
 from slime.utils.types import Sample
 
 from .rm_hub import async_rm, batched_async_rm
 
-__all__ = ["generate_rollout"]
+__all__ = ["generate_rollout", "get_model_url"]
 
 logger = logging.getLogger(__name__)
+
+
+def get_model_url(args: Namespace, model_name: str, endpoint: str = "/generate") -> str:
+    """Return the router URL for a named model.
+
+    Use this in custom rollout functions to route requests to a specific
+    model when multiple models are deployed via ``--sglang-config``::
+
+        url = get_model_url(args, "ref", "/generate")
+        resp = await post(url, json=payload)
+
+    Falls back to the default router if *model_name* is not found or
+    ``sglang_model_routers`` is not set.
+    """
+    routers = getattr(args, "sglang_model_routers", None)
+    if routers and model_name in routers:
+        ip, port = routers[model_name]
+        return f"http://{ip}:{port}{endpoint}"
+    return f"http://{args.sglang_router_ip}:{args.sglang_router_port}{endpoint}"
 
 
 class GenerateState(metaclass=SingletonMeta):
@@ -60,23 +84,7 @@ class GenerateState(metaclass=SingletonMeta):
             sampling_seed_base = args.rollout_seed
             self.group_sampling_seeds = [sampling_seed_base + i for i in range(args.n_samples_per_prompt)]
 
-        # dp rank balancing
-        self.dp_counts = [0] * (args.sglang_dp_size or 1)
-        self.dp_rank = 0
-
         self.reset()
-
-    @contextmanager
-    def dp_rank_context(self):
-        candidates = [i for i, count in enumerate(self.dp_counts) if count == min(self.dp_counts)]
-        dp_rank = int(np.random.choice(candidates))
-        self.dp_counts[dp_rank] += 1
-        self.dp_rank = dp_rank
-        try:
-            yield dp_rank
-        finally:
-            self.dp_counts[dp_rank] -= 1
-            assert self.dp_counts[dp_rank] >= 0
 
     def reset(self) -> None:
         self.remaining_batch_size = 0
@@ -111,8 +119,9 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
         sample.status == Sample.Status.PENDING or sample.status == Sample.Status.ABORTED
     ), f"Sample status is {sample.status}"
 
-    if state.processor:
-        processor_output = state.processor(text=sample.prompt, **sample.multimodal_inputs)
+    if state.processor and sample.multimodal_inputs and any(v is not None for v in sample.multimodal_inputs.values()):
+        processor_kwargs = build_processor_kwargs(sample.multimodal_inputs)
+        processor_output = state.processor(text=sample.prompt, **processor_kwargs)
         prompt_ids = processor_output["input_ids"][0]
         sample.multimodal_train_inputs = {
             k: v for k, v in processor_output.items() if k not in ["input_ids", "attention_mask"]
@@ -139,44 +148,53 @@ async def generate(args: Namespace, sample: Sample, sampling_params: dict[str, A
     if args.use_rollout_routing_replay:
         payload["return_routed_experts"] = True
 
-    if sample.multimodal_inputs and sample.multimodal_inputs["images"]:
+    has_multimodal = sample.multimodal_inputs and sample.multimodal_inputs.get("images")
+    if has_multimodal:
         image_data = sample.multimodal_inputs["images"]
         payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
 
     # Use existing tokens for multi-turn or tokenize the new prompt
     if len(sample.response) > 0:
         payload["input_ids"] = sample.tokens
+    elif has_multimodal:
+        # For multimodal first-turn: send text so SGLang handles image token
+        # expansion internally (the processor-expanded input_ids have N patch
+        # tokens per image which would mismatch the image_data count).
+        payload["text"] = sample.prompt
+        if not sample.tokens:
+            sample.tokens = prompt_ids
     else:
         payload["input_ids"] = prompt_ids
         if not sample.tokens:  # Initialize sample.tokens for the first turn
             sample.tokens = prompt_ids
 
-    output = await post(url, payload)
+    # Use session_id for consistent hashing routing (SGLang Model Gateway)
+    headers = None
+    if sample.session_id:
+        if getattr(args, "router_policy", None) == "consistent_hashing":
+            headers = {"X-SMG-Routing-Key": sample.session_id}
 
-    if args.use_slime_router and "RadixTreeMiddleware" in args.slime_router_middleware_paths:
-        from slime.router.middleware_hub.radix_tree_middleware import postprocess_sample_with_radix_tree
+    output = await post(url, payload, headers=headers)
 
-        sample = await postprocess_sample_with_radix_tree(args, sample, output)
+    if "output_token_logprobs" in output["meta_info"]:
+        new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
+        new_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
     else:
-        if "output_token_logprobs" in output["meta_info"]:
-            new_response_tokens = [item[1] for item in output["meta_info"]["output_token_logprobs"]]
-            new_response_log_probs = [item[0] for item in output["meta_info"]["output_token_logprobs"]]
-        else:
-            new_response_tokens, new_response_log_probs = [], []
+        new_response_tokens, new_response_log_probs = [], []
 
-        # Update sample with tokens directly - avoiding re-tokenization
-        sample.tokens = sample.tokens + new_response_tokens
-        sample.response_length += len(new_response_tokens)
-        sample.response += output["text"]
+    # Update sample with tokens directly - avoiding re-tokenization
+    sample.tokens = sample.tokens + new_response_tokens
+    sample.response_length += len(new_response_tokens)
+    sample.response += output["text"]
 
-        # When partial rollout and masking off policy is enabled, update the loss mask
-        if sample.loss_mask is not None:
-            assert args.partial_rollout and args.mask_offpolicy_in_partial_rollout
-            sample.loss_mask += [1] * len(new_response_tokens)
+    # When partial rollout and masking off policy is enabled, update the loss mask
+    if sample.loss_mask is not None:
+        assert args.partial_rollout and args.mask_offpolicy_in_partial_rollout
+        sample.loss_mask += [1] * len(new_response_tokens)
 
-        if sample.rollout_log_probs is None:
-            sample.rollout_log_probs = []
-        sample.rollout_log_probs += new_response_log_probs
+    if sample.rollout_log_probs is None:
+        sample.rollout_log_probs = []
+    sample.rollout_log_probs += new_response_log_probs
 
     if "routed_experts" in output["meta_info"]:
         sample.rollout_routed_experts = np.frombuffer(
@@ -218,19 +236,18 @@ async def generate_and_rm(
             sample.status = Sample.Status.ABORTED
             return sample
 
-        with state.dp_rank_context() as _:
-            # Check sample.generate_function_path for per-sample custom_generate_function_path (e.g., from eval dataset config)
-            custom_func_path = getattr(sample, "generate_function_path", None) or args.custom_generate_function_path
+        # Check sample.generate_function_path for per-sample custom_generate_function_path (e.g., from eval dataset config)
+        custom_func_path = getattr(sample, "generate_function_path", None) or args.custom_generate_function_path
 
-            if custom_func_path is not None:
-                custom_generate_func = load_function(custom_func_path)
-                # if signature has evaluation, pass evaluation
-                if "evaluation" in inspect.signature(custom_generate_func).parameters:
-                    sample = await custom_generate_func(args, sample, sampling_params, evaluation=evaluation)
-                else:
-                    sample = await custom_generate_func(args, sample, sampling_params)
+        if custom_func_path is not None:
+            custom_generate_func = load_function(custom_func_path)
+            # if signature has evaluation, pass evaluation
+            if "evaluation" in inspect.signature(custom_generate_func).parameters:
+                sample = await custom_generate_func(args, sample, sampling_params, evaluation=evaluation)
             else:
-                sample = await generate(args, sample, sampling_params)
+                sample = await custom_generate_func(args, sample, sampling_params)
+        else:
+            sample = await generate(args, sample, sampling_params)
 
     # for the rm that need the whole group, we will not do the rm here
     if args.group_rm:
@@ -265,6 +282,11 @@ async def generate_and_rm_group(
 
     if state.aborted:
         return group
+
+    # Generate a unique session_id for each sample in the group
+    for sample in group:
+        if sample.session_id is None:
+            sample.session_id = str(uuid.uuid4())
 
     tasks = []
     for idx, sample in enumerate(group):
@@ -302,7 +324,11 @@ async def abort(args: Namespace, rollout_id: int) -> list[list[Sample]]:
         urls = [worker["url"] for worker in response["workers"]]
 
     logger.info(f"Abort request for {urls}")
-    await asyncio.gather(*[post(f"{url}/abort_request", {"abort_all": True}) for url in urls])
+    abort_tasks = [post(f"{url}/abort_request", {"abort_all": True}) for url in urls]
+    abort_results = await asyncio.gather(*abort_tasks, return_exceptions=True)
+    for url, result in zip(urls, abort_results, strict=False):
+        if isinstance(result, Exception):
+            logger.warning(f"Failed to abort worker at {url}: {result}")
 
     # make sure all the pending tasks are finished
     count = 0
@@ -547,11 +573,11 @@ def generate_rollout(
     Args:
         args: the whole args
         rollout_id: int, the id of the rollout, used for deterministic data generation
-        data_buffer: the data buffer to store the generated samples
+        data_source: the data source to get and store samples
         evaluation: bool, whether the rollout is for evaluation or not
 
     Returns:
-        list[list[Sample]]: a list of list of samples generated by the rollout
+        RolloutFnTrainOutput | RolloutFnEvalOutput: the output of the rollout
     """
     assert args.rollout_global_dataset
     if evaluation:

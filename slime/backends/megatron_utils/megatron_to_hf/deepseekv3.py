@@ -66,6 +66,28 @@ def convert_deepseekv3_to_hf(args, name, param):
             return [(f"model.layers.{layer_idx}.self_attn.q_a_proj.weight", param)]
         elif rest == "self_attention.linear_q_up_proj.layer_norm_weight":
             return [(f"model.layers.{layer_idx}.self_attn.q_a_layernorm.weight", param)]
+
+        # indexer
+        elif rest == "self_attention.wq_b.weight":
+            wq_b = param
+            wq_b = wq_b.view(-1, 128, wq_b.shape[-1])  # hard code 128
+            wq_b = torch.cat([wq_b[:, 64:], wq_b[:, :64]], dim=1).view(-1, wq_b.shape[-1])
+            return [(f"model.layers.{layer_idx}.self_attn.indexer.wq_b.weight", wq_b)]
+        elif rest == "self_attention.wk.weight":
+            wk = param
+            wk = torch.cat([wk[64:], wk[:64]], dim=0).view(-1, wk.shape[-1])
+            return [(f"model.layers.{layer_idx}.self_attn.indexer.wk.weight", wk)]
+        elif rest == "self_attention.weights_proj.weight":
+            return [(f"model.layers.{layer_idx}.self_attn.indexer.weights_proj.weight", param)]
+        elif rest == "self_attention.k_norm.weight":
+            knorm_weight = param
+            knorm_weight = torch.cat([knorm_weight[64:], knorm_weight[:64]], dim=0)
+            return [(f"model.layers.{layer_idx}.self_attn.indexer.k_norm.weight", knorm_weight)]
+        elif rest == "self_attention.k_norm.bias":
+            knorm_bias = param
+            knorm_bias = torch.cat([knorm_bias[64:], knorm_bias[:64]], dim=0)
+            return [(f"model.layers.{layer_idx}.self_attn.indexer.k_norm.bias", knorm_bias)]
+
         elif rest == "self_attention.linear_q_up_proj.weight":
             return [(f"model.layers.{layer_idx}.self_attn.q_b_proj.weight", param)]
         elif rest == "self_attention.linear_qkv.bias":

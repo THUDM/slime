@@ -10,7 +10,7 @@
 1.  **High-Performance Training**: Supports efficient training in various modes by connecting Megatron with SGLang;
 2.  **Flexible Data Generation**: Enables arbitrary training data generation workflows through custom data generation interfaces and server-based engines.
 
-slime is the RL-framework behind [GLM-4.7](https://z.ai/blog/glm-4.7), [GLM-4.6](https://z.ai/blog/glm-4.6), [GLM-4.5](https://z.ai/blog/glm-4.5) and apart from models from Z.ai, we also supports the following models:
+slime is the RL-framework behind [GLM-5](https://z.ai/blog/glm-5), [GLM-4.7](https://z.ai/blog/glm-4.7), [GLM-4.6](https://z.ai/blog/glm-4.6), [GLM-4.5](https://z.ai/blog/glm-4.5) and apart from models from Z.ai, we also supports the following models:
 - Qwen3 series (Qwen3Next, Qwen3MoE, Qwen3), Qwen2.5 series;
 - DeepSeek V3 series (DeepSeek V3, V3.1, DeepSeek R1);
 - Llama 3.
@@ -50,6 +50,10 @@ We also provide examples for some use cases not covered in the quick start guide
 ## Projects Built upon slime
 
 slime has powered several novel research projects and production systems. Here are some notable examples:
+
+### 🦞 OpenClaw-RL: Train a Personalized Clawbot Simply by Talking to It
+
+[**OpenClaw-RL**](https://github.com/Gen-Verse/OpenClaw-RL) is an RL server for personalized OpenClaw agents. It hosts the OpenClaw model and improves it from prior conversations across deployments, while slime's asynchronous RL infrastructure prevents training from interfering with API serving. It supports two automatic optimization methods: GRPO with binary feedback inferred from subsequent states, and on-policy distillation that extracts hindsight hints from later feedback for the current policy.
 
 ### ⚛️ P1: Mastering Physics Olympiads with Reinforcement Learning
 

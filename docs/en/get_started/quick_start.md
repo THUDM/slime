@@ -71,7 +71,7 @@ hf download --repo-type dataset zhuzilin/aime-2024 \
 
 When using Megatron as the training backend, you need to first convert Hugging Face format model weights to Megatron `torch_dist` format.
 
-First, load the configuration file of the target model. The `slime/scripts/models` directory contains configuration files for supported models. You need to `source` the corresponding model script to load the configuration parameters into the current environment. Here we use GLM4-9B model as an example, and it's similar for Qwen3-4B, Qwen3-30B-A3B, etc.
+First, load the configuration file of the target model. The `slime/scripts/models` directory contains configuration files for supported models. You need to `source` the corresponding model script to load the configuration parameters into the current environment. Here we use GLM4-9B model as an example, and it's similar for Qwen3-4B, GLM-4.7-Flash, Qwen3-30B-A3B, etc.
 
 ```bash
 cd /root/slime
@@ -359,8 +359,12 @@ The filtering function `check_reward_nonzero_std` in the example will check whet
 
 ```python
 def check_reward_nonzero_std(args, samples: list[Sample], **kwargs):
-    rewards = [sample.reward for sample in samples]
-    return torch.tensor(rewards, dtype=torch.float).std() > 0.0
+    rewards = [sample.get_reward_value(args) for sample in samples]
+    keep = torch.tensor(rewards, dtype=torch.float).std() > 0.0
+    return DynamicFilterOutput(
+        keep=keep,
+        reason=None if keep else f"zero_std_{round(rewards[0], 1)}",
+    )
 ```
 
 If the filtering function is very strict, causing a large number of prompt groups to be discarded, the system will monitor the number of pending tasks in `remaining_batch_size`. Once the number of pending tasks drops below the target number (32) due to too many being discarded, the system will automatically trigger a new round of oversampling, requesting `over_sampling_batch_size` (64) new prompts again to repeat the above process.
@@ -576,6 +580,7 @@ export NVSHMEM_BOOTSTRAP_UID_SOCK_IFNAME=$(ip -o -4 addr show | awk '$4 ~ /^10\.
 
 slime has been deeply optimized for distributed training of large-scale Mixture of Experts (MoE) models. We provide some end-to-end training cases for reference:
 
-- [Example: 64xH100 Training GLM-4.5](../examples/glm4.5-355B-A32B.md)
+- [Example: 8xH100 Training GLM-4.7-Flash](../examples/glm4.7-30B-A3B.md)
+- [Example: 64xH100 Training GLM-4.7](../examples/glm4.7-355B-A32B.md)
 - [Example: 128xH100 Training DeepSeek-R1](../examples/deepseek-r1.md)
 - The scripts such as `scripts/run_qwen3_30b_a3b.py`, `scripts/run_glm45_355b_a32b.py` also support multi-node training, though there are little documentations about it currently.

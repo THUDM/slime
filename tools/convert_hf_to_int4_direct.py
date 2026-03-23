@@ -283,7 +283,7 @@ def parse_args():
     parser.add_argument("--model-dir", type=str, required=True, help="local BF16 path")
     parser.add_argument("--save-dir", type=str, required=True)
     parser.add_argument("--group-size", type=int, default=32, help="Group Size")
-    parser.add_argument("--is-symmetric", type=bool, default=True, help="Is Symmetric")
+    parser.add_argument("--is-symmetric", action="store_true", help="Whether to use symmetric quantization")
     parser.add_argument(
         "--ignore-rules",
         nargs="+",

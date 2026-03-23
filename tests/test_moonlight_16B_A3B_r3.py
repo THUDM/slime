@@ -32,7 +32,7 @@ def execute():
         "--rm-type math "
         "--num-rollout 3 "
         "--rollout-batch-size 8 "
-        "--n-samples-per-prompt 8 "
+        "--n-samples-per-prompt 4 "
         "--rollout-max-response-len 4096 "
         "--rollout-temperature 1 "
         "--global-batch-size 32 "
@@ -82,7 +82,10 @@ def execute():
     )
 
     sglang_args = (
-        "--rollout-num-gpus-per-engine 2 " "--sglang-mem-fraction-static 0.8 " "--sglang-max-running-requests 512 "
+        "--rollout-num-gpus-per-engine 2 "
+        "--sglang-mem-fraction-static 0.8 "
+        "--sglang-cuda-graph-max-bs 32 "
+        "--sglang-max-running-requests 512 "
     )
 
     ci_args = "--ci-test "

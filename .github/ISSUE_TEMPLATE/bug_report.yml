@@ -1,0 +1,102 @@
+name: Bug Report
+description: Report a bug to help us improve slime. Please check the docs and existing issues before submitting.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for taking the time to report a bug!
+
+        > **Note:** slime's open-source collaboration is currently focused on **bug fixes** and **general-purpose RL optimizations**.
+        > Feature requests are outside our current scope — please see [CONTRIBUTING.md](https://github.com/THUDM/slime/blob/main/CONTRIBUTING.md) for details.
+
+        Before submitting, please make sure you have:
+        - [ ] Read the [documentation](https://thudm.github.io/slime/) and [FAQ](https://thudm.github.io/slime/en/get_started/qa.html)
+        - [ ] Searched [existing issues](https://github.com/THUDM/slime/issues) to avoid duplicates
+        - [ ] Reproduced the issue with the latest version of slime
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: Describe the bug here...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to Reproduce
+      description: |
+        Please provide a minimal, reproducible example. Include the full command you used and any relevant configuration.
+        Issues without clear reproduction steps may be closed.
+      placeholder: |
+        1. Run the following command: `...`
+        2. With the following config: `...`
+        3. Observe the error...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened? Please include the **full error message and traceback** if applicable.
+    validations:
+      required: true
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: |
+        Please provide your environment details. You can run `pip show slime` and `python -c "import torch; print(torch.__version__)"` to get some of this info.
+      value: |
+        - slime version:
+        - Python version:
+        - PyTorch version:
+        - CUDA/ROCm version:
+        - GPU type and count:
+        - OS:
+        - SGLang version (if relevant):
+        - Megatron-LM version (if relevant):
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Please paste any relevant log output here. This will be automatically formatted into code, so no need for backticks.
+      render: shell
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add any other context, screenshots, or config files that might help us understand the issue.
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Pre-submission Checklist
+      options:
+        - label: I have read the [CONTRIBUTING.md](https://github.com/THUDM/slime/blob/main/CONTRIBUTING.md) and understand the collaboration scope.
+          required: true
+        - label: I have read the [documentation](https://thudm.github.io/slime/) and my issue is not addressed there.
+          required: true
+        - label: I have searched for [existing issues](https://github.com/THUDM/slime/issues) and this is not a duplicate.
+          required: true
+        - label: I have provided a minimal, reproducible example.
+          required: true

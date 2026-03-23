@@ -13,3 +13,6 @@ def quantize_params(args, megatron_name, converted_named_params, quantization_co
     elif quantization_config["quant_method"] == "compressed-tensors":
         # only int4 at the moment.
         return quantize_params_compressed_tensors(converted_named_params, quantization_config)
+    else:
+        # Unknown quant method (e.g. mxfp4) — pass through BF16 params as-is
+        return converted_named_params
