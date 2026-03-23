@@ -15,6 +15,8 @@ set -ex
 # will prevent ray from buffering stdout/stderr
 export PYTHONBUFFERED=16
 
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
+
 NVLINK_COUNT=$(nvidia-smi topo -m 2>/dev/null | grep -o 'NV[0-9][0-9]*' | wc -l)
 if [ "$NVLINK_COUNT" -gt 0 ]; then
     HAS_NVLINK=1
@@ -54,15 +56,15 @@ EVAL_ARGS=(
    --eval-interval 20
    --eval-prompt-data aime24 $BASE_DIR/rl_data/aime-2024.jsonl
    --n-samples-per-eval-prompt 2
-   --eval-max-response-len 16384
+   --eval-max-response-len 32768
    --eval-temperature 1.0
    --eval-top-p 0.95
 )
 
 PERF_ARGS=(
-   --tensor-model-parallel-size 4
+   --tensor-model-parallel-size 2
    --sequence-parallel
-   --pipeline-model-parallel-size 1
+   --pipeline-model-parallel-size 2
    --context-parallel-size 2
    --expert-model-parallel-size 8
    --expert-tensor-parallel-size 1
@@ -120,9 +122,9 @@ SGLANG_ARGS=(
 
    # mtp
    --sglang-speculative-algorithm EAGLE
-   --sglang-speculative-num-steps 2
+   --sglang-speculative-num-steps 3
    --sglang-speculative-eagle-topk 1
-   --sglang-speculative-num-draft-tokens 3
+   --sglang-speculative-num-draft-tokens 4
 
    --sglang-cuda-graph-max-bs 64
 

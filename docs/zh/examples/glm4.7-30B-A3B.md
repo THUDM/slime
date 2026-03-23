@@ -97,9 +97,9 @@ SGLANG_ARGS=(
    ...
    # MTP 投机解码 (EAGLE)
    --sglang-speculative-algorithm EAGLE
-   --sglang-speculative-num-steps 2
+   --sglang-speculative-num-steps 3
    --sglang-speculative-eagle-topk 1
-   --sglang-speculative-num-draft-tokens 3
+   --sglang-speculative-num-draft-tokens 4
 )
 ```
 
@@ -109,7 +109,7 @@ SGLANG_ARGS=(
 
 #### MTP 训练
 
-slime 也支持将 MTP 层与主模型联合训练，适用于已实现 MTP 权重转换的模型（如 MiMo、GLM-4.5）。启用时，相关参数如下：
+slime 也支持将 MTP 层与主模型联合训练，适用于已实现 MTP 权重转换的模型（如 MiMo、GLM-4.7）。启用时，相关参数如下：
 
 ```bash
 # 在模型配置中添加 MTP 层数

@@ -98,9 +98,9 @@ SGLANG_ARGS=(
    ...
    # MTP speculative decoding (EAGLE)
    --sglang-speculative-algorithm EAGLE
-   --sglang-speculative-num-steps 2
+   --sglang-speculative-num-steps 3
    --sglang-speculative-eagle-topk 1
-   --sglang-speculative-num-draft-tokens 3
+   --sglang-speculative-num-draft-tokens 4
 )
 ```
 
@@ -110,7 +110,7 @@ This enables SGLang to use the model's MTP layer as a draft model for EAGLE-styl
 
 #### MTP Training
 
-slime also supports training MTP layers jointly with the main model for models that have MTP weight conversion implemented (e.g., MiMo, GLM-4.5). When enabled, the relevant arguments are:
+slime also supports training MTP layers jointly with the main model for models that have MTP weight conversion implemented (e.g., MiMo, GLM-4.7). When enabled, the relevant arguments are:
 
 ```bash
 # Add MTP layer count to model config
