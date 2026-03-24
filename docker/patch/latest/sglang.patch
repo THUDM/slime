@@ -1,3 +1,12 @@
+diff --git a/.codespellrc b/.codespellrc
+index 808a344b4..a34624958 100644
+--- a/.codespellrc
++++ b/.codespellrc
+@@ -1,3 +1,3 @@
+ [codespell]
+-ignore-words-list = ans, als, hel, boostrap, childs, te, vas, hsa, ment, cann, thi, makro, wil, rouge, PRIS
++ignore-words-list = ans, als, hel, boostrap, childs, te, vas, hsa, ment, cann, thi, makro, wil, rouge, PRIS, medias
+ skip = *.json,*.jsonl,*.patch,*.txt
 diff --git a/python/sglang/srt/configs/model_config.py b/python/sglang/srt/configs/model_config.py
 index 6fbd1db82..4c681b58d 100644
 --- a/python/sglang/srt/configs/model_config.py
@@ -105,7 +114,7 @@ index 67fe82ad6..2ef25c49b 100644
                  "prefill_pp_size": self.pp_size,
                  "prefill_page_size": self.page_size,
 diff --git a/python/sglang/srt/disaggregation/decode.py b/python/sglang/srt/disaggregation/decode.py
-index 1d8baf002..1672de78d 100644
+index 1d8baf002..8f0a28741 100644
 --- a/python/sglang/srt/disaggregation/decode.py
 +++ b/python/sglang/srt/disaggregation/decode.py
 @@ -21,6 +21,7 @@ Life cycle of a request in the decode server
@@ -186,7 +195,7 @@ index 1d8baf002..1672de78d 100644
          transferred_reqs = []
          indices_to_remove = set()
          for i, (decode_req, poll) in enumerate(zip(self.queue, polls)):
-@@ -877,7 +920,31 @@ class DecodeTransferQueue:
+@@ -877,7 +920,20 @@ class DecodeTransferQueue:
                  KVPoll.WaitingForInput,
                  KVPoll.Transferring,
              ]:
@@ -204,22 +213,11 @@ index 1d8baf002..1672de78d 100644
 +                        f"{decode_req.req.rid=} {decode_req.req.bootstrap_room=}"
 +                    )
 +                    logger.error(error_message)
-+                    prepare_abort(
-+                        decode_req.req,
-+                        error_message,
-+                        status_code=HTTPStatus.GATEWAY_TIMEOUT,
-+                    )
-+                    self.scheduler.stream_output(
-+                        [decode_req.req], decode_req.req.return_logprob
-+                    )
-+                    release_kv_cache(decode_req.req, self.tree_cache, is_insert=False)
-+                    indices_to_remove.add(i)
-+                    if self.scheduler.enable_metrics:
-+                        self.scheduler.metrics_collector.increment_transfer_failed_reqs()
++                    decode_req.kv_receiver.abort()
              else:
                  raise ValueError(f"Unexpected poll case: {poll}")
  
-@@ -893,6 +960,14 @@ class DecodeTransferQueue:
+@@ -893,6 +949,14 @@ class DecodeTransferQueue:
  
          return transferred_reqs
  
@@ -234,7 +232,7 @@ index 1d8baf002..1672de78d 100644
  
  class SchedulerDisaggregationDecodeMixin:
  
-@@ -1072,7 +1147,15 @@ class SchedulerDisaggregationDecodeMixin:
+@@ -1072,7 +1136,15 @@ class SchedulerDisaggregationDecodeMixin:
          resumed_reqs = self.disagg_decode_prealloc_queue.resume_retracted_reqs()
          self.waiting_queue.extend(resumed_reqs)
          if len(self.disagg_decode_prealloc_queue.retracted_queue) > 0:
@@ -251,6 +249,47 @@ index 1d8baf002..1672de78d 100644
              return
  
          if not hasattr(self, "polling_count"):
+diff --git a/python/sglang/srt/disaggregation/encode_server.py b/python/sglang/srt/disaggregation/encode_server.py
+index a2d08e0e3..ed0790604 100644
+--- a/python/sglang/srt/disaggregation/encode_server.py
++++ b/python/sglang/srt/disaggregation/encode_server.py
+@@ -117,7 +117,7 @@ def _convert(data):
+         return data
+ 
+ 
+-_image_grid_attrs = ["image_grid_thw", "image_grid_hws"]
++_image_grid_attrs = ["image_grid_thw", "image_grid_hws", "grid_thws"]
+ 
+ 
+ def _get_image_grid_dim(images_input):
+@@ -320,7 +320,26 @@ class MMEncoder:
+ 
+         try:
+             kwargs = {"device": self.device} if self.use_image_processor_gpu else {}
+-            images_input = self.image_processor(images=images, **kwargs)
++            # Some processors (e.g., KimiK25VisionProcessor) expect MediaInput
++            # dicts rather than raw PIL Images. Wrap PIL images as needed.
++            from PIL import Image as PILImage
++
++            if (
++                isinstance(images, (list, tuple))
++                and images
++                and isinstance(images[0], PILImage.Image)
++            ):
++                import inspect
++
++                sig = inspect.signature(self.image_processor.preprocess)
++                first_param = list(sig.parameters.keys())[0]
++                if first_param == "medias":
++                    medias = [{"type": "image", "image": img} for img in images]
++                    images_input = self.image_processor.preprocess(medias, **kwargs)
++                else:
++                    images_input = self.image_processor(images=images, **kwargs)
++            else:
++                images_input = self.image_processor(images=images, **kwargs)
+             feature = images_input["pixel_values"]
+             mm_item = MultimodalDataItem.from_dict(
+                 {
 diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
 index d0d4efd95..960f585e2 100644
 --- a/python/sglang/srt/disaggregation/mooncake/conn.py
@@ -394,7 +433,7 @@ index d0d4efd95..960f585e2 100644
      def _register_kv_args(self):
          for bootstrap_info in self.bootstrap_infos:
 diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
-index fbc801635..83d962736 100644
+index fbc801635..ff1f52796 100644
 --- a/python/sglang/srt/disaggregation/prefill.py
 +++ b/python/sglang/srt/disaggregation/prefill.py
 @@ -20,6 +20,7 @@ Life cycle of a request in the prefill server
@@ -462,7 +501,26 @@ index fbc801635..83d962736 100644
  
  class SchedulerDisaggregationPrefillMixin:
      """
-@@ -559,10 +596,23 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -547,6 +584,18 @@ class SchedulerDisaggregationPrefillMixin:
+ 
+         self.maybe_send_health_check_signal()
+ 
++        if (
++            self.current_scheduler_metrics_enabled
++            and hasattr(batch, "prefill_stats")
++            and batch.prefill_stats is not None
++        ):
++            can_run_cuda_graph = getattr(result, "can_run_cuda_graph", False)
++            self.log_prefill_stats(
++                prefill_stats=batch.prefill_stats,
++                can_run_cuda_graph=can_run_cuda_graph,
++                dp_cooperation_info=getattr(batch, "dp_cooperation_info", None),
++            )
++
+     def process_disagg_prefill_inflight_queue(
+         self: Scheduler, rids_to_check: Optional[List[str]] = None
+     ) -> List[Req]:
+@@ -559,11 +608,24 @@ class SchedulerDisaggregationPrefillMixin:
  
          done_reqs = []
  
@@ -476,18 +534,19 @@ index fbc801635..83d962736 100644
              [req.disagg_kv_sender for req in self.disagg_prefill_inflight_queue],
 -            self.attn_tp_cpu_group,
 +            disagg_gloo_group,
-+        )
-+
+         )
+ 
 +        # Transfer timeout: if a request has been in the inflight queue for too long
 +        # (e.g., stuck in WaitingForInput/Transferring), treat it as failed.
 +        transfer_timeout = float(
 +            os.environ.get("SGLANG_DISAGGREGATION_TRANSFER_TIMEOUT", "600")
-         )
++        )
 +        now = time.perf_counter()
- 
++
          undone_reqs: List[Req] = []
          # Check .poll() for the reqs in disagg_prefill_inflight_queue. If Success, respond to the client and remove it from the queue
-@@ -573,10 +623,35 @@ class SchedulerDisaggregationPrefillMixin:
+         for req, poll in zip(self.disagg_prefill_inflight_queue, polls):
+@@ -573,10 +635,35 @@ class SchedulerDisaggregationPrefillMixin:
                      undone_reqs.append(req)
                      continue
  
@@ -525,7 +584,7 @@ index fbc801635..83d962736 100644
              elif poll == KVPoll.Success:  # transfer done
                  release_kv_cache(req, self.tree_cache)  # unlock the tree
                  req.finished_reason = FINISH_LENGTH(length=0)
-@@ -628,9 +703,12 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -628,9 +715,12 @@ class SchedulerDisaggregationPrefillMixin:
          """
          Used by PP, get the transferred rids but **do not pop**
          """
@@ -685,7 +744,7 @@ index 1cdf65b91..4783cd18f 100644
      buf_numel_per_page: tl.constexpr,
      index_head_dim: tl.constexpr,
 diff --git a/python/sglang/srt/layers/attention/nsa/nsa_indexer.py b/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
-index ca54a931b..6c102a251 100644
+index ca54a931b..3540f77ba 100644
 --- a/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
 +++ b/python/sglang/srt/layers/attention/nsa/nsa_indexer.py
 @@ -1,6 +1,7 @@
@@ -696,20 +755,41 @@ index ca54a931b..6c102a251 100644
  from abc import ABC, abstractmethod
  from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
  
-@@ -207,7 +208,11 @@ class Indexer(MultiPlatformOp):
+@@ -201,14 +202,31 @@ class Indexer(MultiPlatformOp):
+             prefix=add_prefix("weights_proj", prefix),
+         )
+         self.k_norm = LayerNorm(self.head_dim, dtype=torch.float32)
++        server_args = get_global_server_args()
++        disable_flag = server_args.disable_indexer_rope_neox_style
++        env_raw = os.environ.get("INDEXER_ROPE_NEOX_STYLE", None)
++        if env_raw is not None:
++            env_value = env_raw == "1"
++            if disable_flag and env_value:
++                raise ValueError(
++                    "Conflict: --disable-indexer-rope-neox-style is set but "
++                    "INDEXER_ROPE_NEOX_STYLE='1'. "
++                    "Please remove one or make them consistent."
++                )
++            resolved_neox_style = env_value
++        elif disable_flag:
++            resolved_neox_style = False
++        else:
++            resolved_neox_style = is_neox_style
++
+         self.rotary_emb = get_rope_wrapper(
+             rope_head_dim,
+             rotary_dim=rope_head_dim,
              max_position=max_position_embeddings,
              base=rope_theta,  # type: ignore
              rope_scaling=rope_scaling,
 -            is_neox_style=is_neox_style,
-+            is_neox_style=(
-+                os.environ.get("INDEXER_ROPE_NEOX_STYLE", "1") == "1"
-+                if os.environ.get("INDEXER_ROPE_NEOX_STYLE", None)
-+                else is_neox_style
-+            ),
-             device=get_global_server_args().device,
+-            device=get_global_server_args().device,
++            is_neox_style=resolved_neox_style,
++            device=server_args.device,
          )
          self.block_size = block_size
-@@ -244,6 +249,11 @@ class Indexer(MultiPlatformOp):
+         self.scale_fmt = scale_fmt
+@@ -244,6 +262,11 @@ class Indexer(MultiPlatformOp):
              x = x.to(self.weights_proj.weight.dtype)
          weights, _ = self.weights_proj(x)
          weights = weights.float()
@@ -721,7 +801,7 @@ index ca54a931b..6c102a251 100644
          weights = weights * self.n_heads**-0.5
          weights = weights.unsqueeze(-1) * q_scale * self.softmax_scale
          return weights
-@@ -982,15 +992,26 @@ class Indexer(MultiPlatformOp):
+@@ -982,15 +1005,26 @@ class Indexer(MultiPlatformOp):
              query, key = self._get_q_k_bf16(
                  q_lora, x, positions, enable_dual_stream, forward_batch=forward_batch
              )
@@ -2494,7 +2574,7 @@ index cc673a9ca..06c430d2c 100644
          return AttnForwardMethod.MHA_ONE_SHOT
      return AttnForwardMethod.MLA
 diff --git a/python/sglang/srt/models/deepseek_nextn.py b/python/sglang/srt/models/deepseek_nextn.py
-index cb13a7c67..29cd51d4a 100644
+index cb13a7c67..d9669ce08 100644
 --- a/python/sglang/srt/models/deepseek_nextn.py
 +++ b/python/sglang/srt/models/deepseek_nextn.py
 @@ -29,6 +29,7 @@ from sglang.srt.layers.attention.nsa.utils import (
@@ -2505,7 +2585,7 @@ index cb13a7c67..29cd51d4a 100644
      is_nsa_enable_prefill_cp,
      nsa_use_prefill_cp,
      prepare_input_dp_with_cp_dsa,
-@@ -160,9 +161,10 @@ class DeepseekModelNextN(nn.Module):
+@@ -160,15 +161,17 @@ class DeepseekModelNextN(nn.Module):
  
          if nsa_use_prefill_cp(forward_batch, self.nsa_enable_prefill_cp):
              hidden_states = cp_split_and_rebuild_data(forward_batch, hidden_states)
@@ -2513,12 +2593,19 @@ index cb13a7c67..29cd51d4a 100644
          residual = None
          with get_global_expert_distribution_recorder().disable_this_region():
 -            hidden_states, residual = self.decoder(
-+            hidden_states, residual, topk_indices = self.decoder(
++            hidden_states, residual, *rest = self.decoder(
                  positions,
                  hidden_states,
                  forward_batch,
+                 residual,
+                 zero_allocator,
+             )
++            topk_indices = rest[0] if rest else None
+ 
+         if not forward_batch.forward_mode.is_idle():
+             if residual is not None:
 diff --git a/python/sglang/srt/models/deepseek_v2.py b/python/sglang/srt/models/deepseek_v2.py
-index 1583dd788..08d59c883 100644
+index 1583dd788..a35c00f96 100644
 --- a/python/sglang/srt/models/deepseek_v2.py
 +++ b/python/sglang/srt/models/deepseek_v2.py
 @@ -1085,6 +1085,7 @@ class DeepseekV2AttentionMLA(nn.Module, DeepseekMHAForwardMixin):
@@ -2724,20 +2811,22 @@ index 1583dd788..08d59c883 100644
                          aux_hidden_states.append(hidden_states + residual)
                  layer = self.layers[i]
 -                hidden_states, residual = layer(
-+                hidden_states, residual, topk_indices = layer(
++                hidden_states, residual, *rest = layer(
                      positions,
                      hidden_states,
                      forward_batch,
-@@ -2735,6 +2788,7 @@ class DeepseekV2Model(nn.Module):
+@@ -2735,7 +2788,9 @@ class DeepseekV2Model(nn.Module):
                      zero_allocator,
                      gemm_output_zero_allocator,
                      llama_4_scaling,
 +                    prev_topk_indices=topk_indices,
                  )
++                topk_indices = rest[0] if rest else None
  
          if normal_end_layer != self.end_layer:
+             hidden_states, residual = model_forward_maybe_tbo(
 diff --git a/python/sglang/srt/models/glm4_moe.py b/python/sglang/srt/models/glm4_moe.py
-index db8c1c7ce..d30830f2e 100644
+index db8c1c7ce..53ffadf6d 100644
 --- a/python/sglang/srt/models/glm4_moe.py
 +++ b/python/sglang/srt/models/glm4_moe.py
 @@ -678,8 +678,13 @@ class Glm4MoeDecoderLayer(nn.Module):
@@ -2756,6 +2845,27 @@ index db8c1c7ce..d30830f2e 100644
          partial_rotary_factor = getattr(
              getattr(config, "rope_parameters", None), "partial_rotary_factor", None
          ) or getattr(config, "partial_rotary_factor", 0.5)
+@@ -773,6 +778,7 @@ class Glm4MoeDecoderLayer(nn.Module):
+         hidden_states: torch.Tensor,
+         forward_batch: ForwardBatch,
+         residual: Optional[torch.Tensor],
++        **kwargs,
+     ) -> torch.Tensor:
+ 
+         hidden_states, residual = self.layer_communicator.prepare_attn(
+diff --git a/python/sglang/srt/models/glm4_moe_nextn.py b/python/sglang/srt/models/glm4_moe_nextn.py
+index 1f6e75364..546cce4ab 100644
+--- a/python/sglang/srt/models/glm4_moe_nextn.py
++++ b/python/sglang/srt/models/glm4_moe_nextn.py
+@@ -103,7 +103,7 @@ class Glm4MoeModelNextN(nn.Module):
+ 
+         residual = None
+         with get_global_expert_distribution_recorder().disable_this_region():
+-            hidden_states, residual = self.decoder(
++            hidden_states, residual, *rest = self.decoder(
+                 positions, hidden_states, forward_batch, residual
+             )
+ 
 diff --git a/python/sglang/srt/models/glm4v_moe.py b/python/sglang/srt/models/glm4v_moe.py
 index 324de18b4..fc72faa03 100644
 --- a/python/sglang/srt/models/glm4v_moe.py
@@ -2976,10 +3086,56 @@ index 2cf813bce..1250c49e4 100644
      weights_out_dict = dict(weights_in)
  
 diff --git a/python/sglang/srt/models/kimi_k25.py b/python/sglang/srt/models/kimi_k25.py
-index d8399a691..96929cacd 100644
+index d8399a691..0277bc671 100644
 --- a/python/sglang/srt/models/kimi_k25.py
 +++ b/python/sglang/srt/models/kimi_k25.py
-@@ -735,6 +735,15 @@ class KimiK25ForConditionalGeneration(nn.Module):
+@@ -666,25 +666,30 @@ class KimiK25ForConditionalGeneration(nn.Module):
+         self.config = config
+         self.quant_config = quant_config
+         self.use_data_parallel = get_global_server_args().mm_enable_dp_encoder
+-        # Create vision tower
+-        self.vision_tower = MoonViT3dPretrainedModel(
+-            config.vision_config, use_data_parallel=self.use_data_parallel
+-        )
+-        # Create mm projector
+-        self.mm_projector = K2VLMultiModalProjector(config.vision_config)
+ 
+-        self.language_model = DeepseekV3ForCausalLM(config.text_config, quant_config)
++        # EPD: conditionally create components based on encoder_only / language_only
++        if not getattr(self.config, "language_only", False):
++            # Create vision tower and mm projector (needed for encoder_only and normal mode)
++            self.vision_tower = MoonViT3dPretrainedModel(
++                config.vision_config, use_data_parallel=self.use_data_parallel
++            )
++            self.mm_projector = K2VLMultiModalProjector(config.vision_config)
++
++        if not getattr(self.config, "encoder_only", False):
++            # Create language model (needed for language_only and normal mode)
++            self.language_model = DeepseekV3ForCausalLM(
++                config.text_config, quant_config
++            )
+ 
+-        # Ensure that the dtype of the vision_tower and mm_projector matches that of the language_model.
+-        # This solves the dtype mismatch issue when using device_map="auto" and torch_dtype.
+-        if hasattr(self.language_model, "dtype"):
+-            target_dtype = self.language_model.dtype
+-            self.vision_tower = self.vision_tower.to(dtype=target_dtype)
+-            self.mm_projector = self.mm_projector.to(dtype=target_dtype)
++            # Ensure dtype consistency between vision and language components
++            if hasattr(self, "vision_tower") and hasattr(self.language_model, "dtype"):
++                target_dtype = self.language_model.dtype
++                self.vision_tower = self.vision_tower.to(dtype=target_dtype)
++                self.mm_projector = self.mm_projector.to(dtype=target_dtype)
+ 
+     def get_image_feature(self, items: List[MultimodalDataItem]) -> torch.Tensor:
+-        pixel_values = torch.cat([item.feature for item in items], dim=0).type(
+-            self.vision_tower.dtype
++        pixel_values = torch.cat([item.feature for item in items], dim=0).to(
++            dtype=self.vision_tower.dtype, device=self.vision_tower.device
+         )
+         grid_thws = torch.concat([item.grid_thws for item in items], dim=0).to(
+             self.vision_tower.device
+@@ -735,41 +740,59 @@ class KimiK25ForConditionalGeneration(nn.Module):
  
          return hidden_states
  
@@ -2995,6 +3151,88 @@ index d8399a691..96929cacd 100644
      def load_weights(self, weights: Iterable[Tuple[str, torch.Tensor]]):
          """Load weights for the model, separating vision and language weights"""
          mapper = getattr(self, "hf_to_sglang_mapper", None)
+         if mapper is not None:
+             weights = mapper.apply(weights)
+ 
++        is_encoder_only = getattr(self.config, "encoder_only", False)
++        is_language_only = getattr(self.config, "language_only", False)
++
+         # Separate vision tower weights and language model weights
+         vision_weights = []
+         language_weights = []
+ 
+         for name, loaded_weight in weights:
+             if "vision_tower" in name or "mm_projector" in name:
++                # Skip vision weights in language_only mode
++                if is_language_only:
++                    continue
+                 name = name.replace(r"wqkv.", r"attn.qkv_proj.")
+                 name = name.replace(r"wo.", r"attn.proj.")
+                 name = name.replace("mm_projector.proj.0", "mm_projector.linear_1")
+                 name = name.replace("mm_projector.proj.2", "mm_projector.linear_2")
+                 vision_weights.append((name, loaded_weight))
+             else:
++                # Skip language weights in encoder_only mode
++                if is_encoder_only:
++                    continue
+                 name = name.replace("language_model.", "")
+                 # All other weights go to language model
+                 language_weights.append((name, loaded_weight))
+ 
+         # Load vision tower weights
+-        vision_state_dict = dict(vision_weights)
+-        params_dict = dict(self.named_parameters(remove_duplicate=False))
+-        for name, loaded_weight in vision_state_dict.items():
+-            if name not in params_dict:
+-                raise ValueError(f"Weight {name} not found in params_dict")
+-            param = params_dict[name]
+-            weight_loader = getattr(param, "weight_loader", default_weight_loader)
+-            # loaded_weight = self._pad_vit_attn_dummy_heads(name, loaded_weight)
+-            weight_loader(param, loaded_weight)
++        if not is_language_only:
++            vision_state_dict = dict(vision_weights)
++            params_dict = dict(self.named_parameters(remove_duplicate=False))
++            for name, loaded_weight in vision_state_dict.items():
++                if name not in params_dict:
++                    raise ValueError(f"Weight {name} not found in params_dict")
++                param = params_dict[name]
++                weight_loader = getattr(param, "weight_loader", default_weight_loader)
++                weight_loader(param, loaded_weight)
+ 
+         # Load language model weights
+-        if language_weights:
++        if not is_encoder_only and language_weights:
+             self.language_model.load_weights(language_weights)
+ 
+ 
+diff --git a/python/sglang/srt/models/llama_eagle3.py b/python/sglang/srt/models/llama_eagle3.py
+index 49f938a1c..8eea383bb 100644
+--- a/python/sglang/srt/models/llama_eagle3.py
++++ b/python/sglang/srt/models/llama_eagle3.py
+@@ -85,6 +85,11 @@ class LlamaDecoderLayer(LlamaDecoderLayer):
+         embeds = self.input_layernorm(embeds)
+         hidden_states = self.hidden_norm(hidden_states)
+ 
++        if embeds.dtype != hidden_states.dtype:
++            raise RuntimeError(
++                f"Eagle3 dtype mismatch: embeds.dtype={embeds.dtype}, "
++                f"hidden_states.dtype={hidden_states.dtype}"
++            )
+         hidden_states = torch.cat([embeds, hidden_states], dim=-1)
+         # Self Attention
+         hidden_states = self.self_attn(
+@@ -160,6 +165,11 @@ class LlamaModel(nn.Module):
+ 
+         hidden_states = forward_batch.spec_info.hidden_states
+         if hidden_states.shape[-1] != embeds.shape[-1]:
++            if hidden_states.dtype != self.fc.weight.dtype:
++                raise RuntimeError(
++                    f"Eagle3 dtype mismatch: hidden_states.dtype={hidden_states.dtype}, "
++                    f"fc.weight.dtype={self.fc.weight.dtype}"
++                )
+             hidden_states = self.fc(hidden_states)
+ 
+         # idle batch
 diff --git a/python/sglang/srt/models/qwen3_5.py b/python/sglang/srt/models/qwen3_5.py
 index f01225487..1dad8bb8e 100644
 --- a/python/sglang/srt/models/qwen3_5.py
@@ -3159,6 +3397,29 @@ index 33cce6fe2..0970c4550 100644
      async def process_mm_data_async(
          self,
          image_data: List[Union[str, bytes]],
+diff --git a/python/sglang/srt/multimodal/processors/kimi_k25.py b/python/sglang/srt/multimodal/processors/kimi_k25.py
+index d8bb9ceb3..9311a431b 100644
+--- a/python/sglang/srt/multimodal/processors/kimi_k25.py
++++ b/python/sglang/srt/multimodal/processors/kimi_k25.py
+@@ -25,6 +25,18 @@ class KimiK2_5VLImageProcessor(SGLangBaseProcessor):
+             image_token_id=hf_config.media_placeholder_token_id,
+             image_token_regex=re.compile(r"(?:<\|media_pad\|>)+"),
+         ).build(_processor)
++        # Required by base class get_mm_data / build_input_ids for EPD mode
++        self.IM_TOKEN_ID = hf_config.media_placeholder_token_id
++        self.IM_START_TOKEN_ID = None
++        self.IM_END_TOKEN_ID = None
++        merge_kernel = getattr(hf_config.vision_config, "merge_kernel_size", [2, 2])
++        self._spatial_merge_size = (
++            merge_kernel[0] if isinstance(merge_kernel, (list, tuple)) else merge_kernel
++        )
++
++    @property
++    def spatial_merge_size(self):
++        return self._spatial_merge_size
+ 
+     async def process_mm_data_async(
+         self,
 diff --git a/python/sglang/srt/multimodal/processors/qwen_vl.py b/python/sglang/srt/multimodal/processors/qwen_vl.py
 index 4395654e4..f9b5ea4ab 100644
 --- a/python/sglang/srt/multimodal/processors/qwen_vl.py
@@ -3173,7 +3434,7 @@ index 4395654e4..f9b5ea4ab 100644
              image_data=image_data,
              video_data=request_obj.video_data,
 diff --git a/python/sglang/srt/server_args.py b/python/sglang/srt/server_args.py
-index b080aeb16..957a613fa 100644
+index b080aeb16..b0322fef4 100644
 --- a/python/sglang/srt/server_args.py
 +++ b/python/sglang/srt/server_args.py
 @@ -580,6 +580,7 @@ class ServerArgs:
@@ -3184,7 +3445,15 @@ index b080aeb16..957a613fa 100644
      disable_cuda_graph_padding: bool = False
      enable_profile_cuda_graph: bool = False
      enable_cudagraph_gc: bool = False
-@@ -2089,7 +2090,16 @@ class ServerArgs:
+@@ -635,6 +636,7 @@ class ServerArgs:
+     # Context parallelism used in the long sequence prefill phase of DeepSeek v3.2
+     enable_nsa_prefill_context_parallel: bool = False
+     nsa_prefill_cp_mode: str = "round-robin-split"
++    disable_indexer_rope_neox_style: bool = False
+     enable_fused_qk_norm_rope: bool = False
+     enable_precise_embedding_interpolation: bool = False
+ 
+@@ -2089,7 +2091,16 @@ class ServerArgs:
              assert (
                  self.tp_size % (self.dp_size * self.attn_cp_size) == 0
              ), "tp_size must be divisible by dp_size * attn_cp_size"
@@ -3202,7 +3471,7 @@ index b080aeb16..957a613fa 100644
  
          if self.moe_dp_size > 1:
              # The tp_size is the world size, not the real tensor parallel size
-@@ -4491,6 +4501,11 @@ class ServerArgs:
+@@ -4491,6 +4502,11 @@ class ServerArgs:
              action="store_true",
              help="Disable cuda graph.",
          )
@@ -3214,7 +3483,20 @@ index b080aeb16..957a613fa 100644
          parser.add_argument(
              "--disable-cuda-graph-padding",
              action="store_true",
-@@ -5636,6 +5651,54 @@ class PortArgs:
+@@ -4781,6 +4797,12 @@ class ServerArgs:
+             help="Token splitting mode for the prefill phase of DeepSeek v3.2 under context parallelism. Optional values: 'round-robin-split'(default), 'in-seq-split'  "
+             "'round-robin-split' distributes tokens across ranks based on token_idx %% cp_size. It supports multi-batch prefill, fused MoE, and FP8 KV cache.",
+         )
++        parser.add_argument(
++            "--disable-indexer-rope-neox-style",
++            action="store_true",
++            help="Disable NSA indexer RoPE neox style (equivalent to INDEXER_ROPE_NEOX_STYLE=0). "
++            "If the environment variable INDEXER_ROPE_NEOX_STYLE is also set and conflicts, an error is raised.",
++        )
+         parser.add_argument(
+             "--enable-fused-qk-norm-rope",
+             action="store_true",
+@@ -5636,6 +5658,54 @@ class PortArgs:
              )
  
          if not server_args.enable_dp_attention:

@@ -49,7 +49,7 @@ class ServerGroup:
     all_engines: list
     num_gpus_per_engine: int
     num_new_engines: int
-    worker_type: str = "regular"  # "regular", "prefill", or "decode"
+    worker_type: str = "regular"  # "regular", "prefill", "decode", or "placeholder"
     rank_offset: int = 0  # cumulative engine count before this group
     gpu_offset: int = 0  # cumulative GPU count before this group
     sglang_overrides: dict = dataclasses.field(default_factory=dict)
@@ -260,7 +260,7 @@ class RolloutServer:
     @property
     def nodes_per_engine(self):
         """Nodes per engine.  Only valid when all active groups share the same value."""
-        values = {g.nodes_per_engine for g in self.server_groups}
+        values = {g.nodes_per_engine for g in self.server_groups if g.worker_type != "placeholder"}
         if len(values) != 1:
             raise ValueError(f"Heterogeneous nodes_per_engine across groups: {values}")
         return values.pop()
@@ -355,8 +355,6 @@ class RolloutManager:
         self.pg = pg
         self.args = args
 
-        init_tracking(args, primary=False)
-
         data_source_cls = load_function(self.args.data_source_path)
         self.data_source = data_source_cls(args)
 
@@ -378,6 +376,11 @@ class RolloutManager:
         else:
             init_http_client(args)
             self.servers = start_rollout_servers(args, pg)
+
+        # Initialize W&B secondary *after* servers are launched so the router
+        # address is available for scraping SGLang Prometheus metrics.
+        router_addr = self._get_metrics_router_addr()
+        init_tracking(args, primary=False, router_addr=router_addr)
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
         self.rollout_id = -1
 
@@ -389,6 +392,28 @@ class RolloutManager:
                     monitor.start()
                     self._health_monitors.append(monitor)
             self._ci_fault_injection_pending = self.args.ci_test  # Flag for CI fault injection
+
+    def _get_metrics_router_addr(self) -> str | None:
+        """Return the router address for scraping SGLang engine metrics.
+
+        The sglang_router gateway exposes ``/engine_metrics`` on its main port,
+        which aggregates Prometheus metrics from all backend sglang servers.
+        Returns ``http://{ip}:{port}`` for the first server, or ``None`` when
+        metrics are disabled or no servers are running.
+
+        Note: the ``use_slime_router`` path does not expose ``/engine_metrics``;
+        metrics forwarding to W&B requires the sglang_router gateway.
+        """
+        if getattr(self.args, "use_slime_router", False):
+            logger.warning(
+                "SGLang metrics forwarding to W&B is not supported with --use-slime-router. "
+                "Use the default sglang_router gateway for /engine_metrics aggregation."
+            )
+            return None
+        srv = self.server
+        if srv is None or srv.router_ip is None:
+            return None
+        return f"http://{srv.router_ip}:{srv.router_port}"
 
     def _try_ci_fault_injection(self):
         """Try to inject fault during generate (when health monitor is running)."""
@@ -930,6 +955,9 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
             # marking decode workers as dead. Timeouts are transient (PCIe
             # contention under high load) and do not indicate a dead server.
             router_args.disable_circuit_breaker = True
+
+        # We will not use the health check from router.
+        router_args.disable_health_check = True
 
         logger.info(f"Launch router with args: {router_args}")
 
