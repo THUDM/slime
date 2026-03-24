@@ -18,10 +18,9 @@ async def reward_func(args, sample, **kwargs):
         "logprob_start_len": 0,
     }
 
-    if sample.multimodal_inputs:
-        images = sample.multimodal_inputs.get("images")
-        if images:
-            payload["image_data"] = [encode_image_for_rollout_engine(img) for img in images]
+    if sample.multimodal_inputs and sample.multimodal_inputs.get("images"):
+        image_data = sample.multimodal_inputs["images"]
+        payload["image_data"] = [encode_image_for_rollout_engine(image) for image in image_data]
 
     session_kwargs = {}
     async with aiohttp.ClientSession(**session_kwargs) as session:
