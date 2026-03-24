@@ -108,23 +108,23 @@ def _batch_has_media_placeholders(
     return any((token_tensor == media_token_id).any().item() for token_tensor in tokens)
 
 
-def _expand_k25_multimodal_batch_in_place(
-    batch: dict[str, list[torch.Tensor] | list[int] | list[float] | list[str] | None],
+def expand_multimodal_rollout_data_in_place(
+    rollout_data: RolloutBatch,
     media_token_id: int = 163605,
     qkv_format: str = "thd",
 ) -> None:
-    multimodal_train_inputs = batch.get("multimodal_train_inputs", None)
+    multimodal_train_inputs = rollout_data.get("multimodal_train_inputs", None)
     mm_inputs_list = _collect_multimodal_grid_inputs(multimodal_train_inputs)
     if not mm_inputs_list or not any(mm is not None for mm in mm_inputs_list):
         return
 
-    tokens = batch["tokens"]
+    tokens = rollout_data["tokens"]
     if not _batch_has_media_placeholders(tokens, media_token_id=media_token_id):
         return
 
-    loss_masks = batch["loss_masks"]
-    old_total_lengths = list(batch["total_lengths"])
-    old_response_lengths = list(batch["response_lengths"])
+    loss_masks = rollout_data["loss_masks"]
+    old_total_lengths = list(rollout_data["total_lengths"])
+    old_response_lengths = list(rollout_data["response_lengths"])
 
     token_or_mask_changed = False
     expanded_tokens = []
@@ -153,10 +153,10 @@ def _expand_k25_multimodal_batch_in_place(
             expanded_total_lengths.append(old_total_lengths[i])
             expanded_response_lengths.append(old_response_lengths[i])
 
-    batch["tokens"] = expanded_tokens
-    batch["loss_masks"] = expanded_loss_masks
-    batch["total_lengths"] = expanded_total_lengths
-    batch["response_lengths"] = expanded_response_lengths
+    rollout_data["tokens"] = expanded_tokens
+    rollout_data["loss_masks"] = expanded_loss_masks
+    rollout_data["total_lengths"] = expanded_total_lengths
+    rollout_data["response_lengths"] = expanded_response_lengths
 
     metadata_changed = (expanded_total_lengths != old_total_lengths) or (
         expanded_response_lengths != old_response_lengths
@@ -165,10 +165,10 @@ def _expand_k25_multimodal_batch_in_place(
         cp_size = mpu.get_context_parallel_world_size()
         if cp_size > 1 and qkv_format == "thd":
             for key in ("rollout_log_probs", "teacher_log_probs"):
-                values = batch.get(key)
+                values = rollout_data.get(key)
                 if not values:
                     continue
-                batch[key] = [
+                rollout_data[key] = [
                     slice_log_prob_with_cp(
                         all_gather_with_cp(value, old_total_length, old_response_length),
                         new_total_length,
@@ -185,7 +185,7 @@ def _expand_k25_multimodal_batch_in_place(
                     )
                 ]
         logger.info(
-            "Adjusted K25 multimodal rollout metadata: "
+            "Adjusted multimodal rollout metadata for Kimi VL: "
             f"token_or_mask_changed={token_or_mask_changed}, "
             f"total_lengths_changed={expanded_total_lengths != old_total_lengths}, "
             f"response_lengths_changed={expanded_response_lengths != old_response_lengths}"
@@ -226,7 +226,9 @@ def get_batch(
     if "dynamic_global_batch_size" in data_iterator.rollout_data:
         batch["dynamic_global_batch_size"] = data_iterator.rollout_data["dynamic_global_batch_size"]
 
-    _expand_k25_multimodal_batch_in_place(batch, qkv_format=qkv_format)
+    # Keep a local normalization path here as a no-op safety net in case
+    # batches reach get_batch without the rollout-level preprocessing step.
+    expand_multimodal_rollout_data_in_place(batch, qkv_format=qkv_format)
 
     tokens = batch["tokens"]
     # use 0 as the pad token id should be fine?
@@ -482,6 +484,8 @@ def get_data_iterator(
     - `data_iterators`: list of `DataIterator`, one per VPP stage (size 1 if VPP disabled)
     - `num_microbatches`: list[int], one per local step in the rollout (length = steps)
     """
+    expand_multimodal_rollout_data_in_place(rollout_data, qkv_format=args.qkv_format)
+
     dp_size = mpu.get_data_parallel_world_size(with_context_parallel=False)
     dp_group = mpu.get_data_parallel_group()
     vpp_size = mpu.get_virtual_pipeline_model_parallel_world_size()
