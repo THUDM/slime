@@ -956,6 +956,9 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
             # contention under high load) and do not indicate a dead server.
             router_args.disable_circuit_breaker = True
 
+        # We will not use the health check from router.
+        router_args.disable_health_check = True
+
         logger.info(f"Launch router with args: {router_args}")
 
     process = multiprocessing.Process(
