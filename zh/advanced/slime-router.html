@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="zh"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="2026 年 03 月 22 日"/>
+    <meta name="docbuild:last-update" content="2026 年 03 月 26 日"/>
   </head>
   
   
@@ -431,18 +431,12 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">2. 为什么需要 slime router</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.1 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang">SGLang 端</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime">slime 端</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">为什么需要 slime router</a></li>
-</ul>
-</li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd-prefill-decode">2.2 PD 分离（Prefill-Decode 分离）</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd-prefill-decode">2.1 PD 分离（Prefill-Decode 分离）</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-model-gateway">3. 与 SGLang Model Gateway 的区别</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">主要区别</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">如何选择</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">主要区别</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">如何选择</a></li>
 </ul>
 </li>
 </ul>
@@ -482,37 +476,9 @@
 <hr class="docutils" />
 <section id="id3">
 <h2>2. 为什么需要 slime router<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
-<p>与 production inference 不同，RL rollout 往往需要捕获用于训练的额外 metadata：token-level logprobs、loss masks，以及（对 MoE 模型）expert routing decisions。slime router 通过 passthrough proxy 设计提供这些能力。</p>
-<section id="rollout-routing-replay-r3-for-moe">
-<h3>2.1 Rollout routing replay (R3) for MoE<a class="headerlink" href="#rollout-routing-replay-r3-for-moe" title="链接到此标题。">#</a></h3>
-<p>对 MoE 模型，slime 支持 rollout routing replay (R3)：在 rollout 期间记录 expert routing decisions，并在训练期间 replay，以提升训练稳定性。</p>
-<section id="sglang">
-<h4>SGLang 端<a class="headerlink" href="#sglang" title="链接到此标题。">#</a></h4>
-<p>SGLang 侧通过以下机制提供 expert routing capture：</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--enable-return-routed-experts</span></code>：启用路由捕获的服务器参数</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">RoutedExpertsCapturer</span></code>：在前向传播期间捕获每个 MoE 层的 <code class="docutils literal notranslate"><span class="pre">topk_ids</span></code>（选定的专家 ID）</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">return_routed_experts</span></code>：检索路由数据的请求参数</p></li>
-<li><p>在响应 <code class="docutils literal notranslate"><span class="pre">meta_info</span></code> 中返回 <code class="docutils literal notranslate"><span class="pre">routed_experts</span></code>：一个形状为 <code class="docutils literal notranslate"><span class="pre">[seq_len</span> <span class="pre">-</span> <span class="pre">1,</span> <span class="pre">num_layers,</span> <span class="pre">top_k]</span></code> 的 expert ID tensor</p></li>
-</ul>
-</section>
-<section id="slime">
-<h4>slime 端<a class="headerlink" href="#slime" title="链接到此标题。">#</a></h4>
-<p>slime 侧消费路由数据，并在训练中完成 replay：</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--use-slime-router</span> <span class="pre">--use-rollout-routing-replay</span></code>：启用 R3 需要同时设置这两个标志</p></li>
-<li><p>Rollout 发送 <code class="docutils literal notranslate"><span class="pre">return_routed_experts=True</span></code> 并将结果存储在 <code class="docutils literal notranslate"><span class="pre">sample.rollout_routed_experts</span></code> 中</p></li>
-<li><p>训练调用 <code class="docutils literal notranslate"><span class="pre">fill_routing_replay()</span></code> 将路由数据加载到 <code class="docutils literal notranslate"><span class="pre">RoutingReplay</span></code> 对象中</p></li>
-<li><p>forward pass 期间，直接 replay 记录的 routing decisions，而不是重新计算</p></li>
-</ul>
-</section>
-<section id="id4">
-<h4>为什么需要 slime router<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h4>
-<p>我们需要 slime router，是因为当请求设置 <code class="docutils literal notranslate"><span class="pre">return_routed_experts=true</span></code> 时，SGLang worker 会在响应里返回路由信息（<code class="docutils literal notranslate"><span class="pre">meta_info.routed_experts</span></code>），而 slime router 会端到端保留这个字段。SGLang Model Gateway 会用固定 schema 重建响应，可能会丢掉这类额外 metadata（细节见第 3 节）。</p>
-</section>
-</section>
+<p>与 production inference 不同，RL rollout 往往需要捕获用于训练的额外 metadata：token-level logprobs 和 loss masks。slime router 通过 passthrough proxy 设计提供这些能力。</p>
 <section id="pd-prefill-decode">
-<h3>2.2 PD 分离（Prefill-Decode 分离）<a class="headerlink" href="#pd-prefill-decode" title="链接到此标题。">#</a></h3>
+<h3>2.1 PD 分离（Prefill-Decode 分离）<a class="headerlink" href="#pd-prefill-decode" title="链接到此标题。">#</a></h3>
 <p>slime router 支持 <strong>Prefill-Decode (PD) 分离</strong>。当 prefill 和 decode worker 注册后，router 会自动启用 PD 模式：</p>
 <ul class="simple">
 <li><p>Worker 注册时携带 <code class="docutils literal notranslate"><span class="pre">worker_type</span></code>（<code class="docutils literal notranslate"><span class="pre">prefill</span></code>、<code class="docutils literal notranslate"><span class="pre">decode</span></code> 或 <code class="docutils literal notranslate"><span class="pre">regular</span></code>），通过 <code class="docutils literal notranslate"><span class="pre">POST</span> <span class="pre">/workers</span></code> 端点。</p></li>
@@ -527,16 +493,17 @@
 <section id="sglang-model-gateway">
 <h2>3. 与 SGLang Model Gateway 的区别<a class="headerlink" href="#sglang-model-gateway" title="链接到此标题。">#</a></h2>
 <p>slime router 与 SGLang Model Gateway 都能将请求路由到 worker，但它们面向的目标不同、优化方向也不同。</p>
-<section id="id5">
-<h3>主要区别<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h3>
-<p>slime router 是一个轻量级的 Python/FastAPI proxy，作为 SGLang worker 的 passthrough proxy。这种 passthrough 设计使得 RL 特定功能成为可能，例如 R3（需要保留原始 response metadata，如 <code class="docutils literal notranslate"><span class="pre">routed_experts</span></code>）。</p>
-<p>SGLang Model Gateway 是一个高性能 Rust router，面向大规模 inference 优化：async non-blocking routing、高级 fault tolerance（retries、circuit breakers）、多种 load balancing policy（包括 cache-aware routing），以及 PD disaggregation 支持。但它会用固定 schema 重建响应，因此不保留 slime 的 R3 流程所需 metadata。</p>
+<section id="id4">
+<h3>主要区别<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h3>
+<p>slime router 是一个轻量级的 Python/FastAPI proxy，作为 SGLang worker 的 passthrough proxy。</p>
+<p>SGLang Model Gateway 是一个高性能 Rust router，面向大规模 inference 优化：async non-blocking routing、高级 fault tolerance（retries、circuit breakers）、多种 load balancing policy（包括 cache-aware routing），以及 PD disaggregation 支持。</p>
+<p>两个 router 都支持 R3（rollout routing replay）用于 MoE 模型。</p>
 <p>更多关于 SGLang Model Gateway 的信息，请参阅<a class="reference external" href="https://docs.sglang.io/advanced_features/sgl_model_gateway.html">官方文档</a>。</p>
 </section>
-<section id="id6">
-<h3>如何选择<a class="headerlink" href="#id6" title="链接到此标题。">#</a></h3>
+<section id="id5">
+<h3>如何选择<a class="headerlink" href="#id5" title="链接到此标题。">#</a></h3>
 <ul class="simple">
-<li><p>当你需要 R3 或需要保留 metadata 的 PD 分离时，使用 SlimeRouter</p></li>
+<li><p>当你需要保留 metadata 的 PD 分离时，使用 slime router</p></li>
 <li><p>其他情况使用 SGLang Model Gateway（推荐默认选项）</p></li>
 </ul>
 </section>
@@ -595,18 +562,12 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">2. 为什么需要 slime router</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.1 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang">SGLang 端</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime">slime 端</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">为什么需要 slime router</a></li>
-</ul>
-</li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd-prefill-decode">2.2 PD 分离（Prefill-Decode 分离）</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd-prefill-decode">2.1 PD 分离（Prefill-Decode 分离）</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-model-gateway">3. 与 SGLang Model Gateway 的区别</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">主要区别</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id6">如何选择</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">主要区别</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#id5">如何选择</a></li>
 </ul>
 </li>
 </ul>
@@ -642,7 +603,7 @@
   
   <div class="footer-item">
     <p class="last-updated">
-  最后更新于 2026 年 03 月 22 日.
+  最后更新于 2026 年 03 月 26 日.
   <br/>
 </p>
   </div>

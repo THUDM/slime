@@ -58,7 +58,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.0.1" />
-    <meta name="docbuild:last-update" content="Mar 22, 2026"/>
+    <meta name="docbuild:last-update" content="Mar 26, 2026"/>
   </head>
   
   
@@ -435,13 +435,7 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-we-need-slime-router">2. Why we need slime router</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.1 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-side">SGLang side</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-side">slime side</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#why-slime-router-is-needed">Why slime router is needed</a></li>
-</ul>
-</li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd-disaggregation">2.2 PD disaggregation</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd-disaggregation">2.1 PD disaggregation</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#differences-vs-sglang-model-gateway">3. Differences vs SGLang Model Gateway</a><ul class="visible nav section-nav flex-column">
@@ -486,37 +480,9 @@
 <hr class="docutils" />
 <section id="why-we-need-slime-router">
 <h2>2. Why we need slime router<a class="headerlink" href="#why-we-need-slime-router" title="Link to this heading">#</a></h2>
-<p>Unlike production inference, RL rollout needs to capture additional metadata for training: token-level logprobs, loss masks, and (for MoE models) expert routing decisions. slime router provides these capabilities through its passthrough proxy design.</p>
-<section id="rollout-routing-replay-r3-for-moe">
-<h3>2.1 Rollout routing replay (R3) for MoE<a class="headerlink" href="#rollout-routing-replay-r3-for-moe" title="Link to this heading">#</a></h3>
-<p>For MoE models, slime supports rollout routing replay (R3): record expert routing decisions during rollout and replay them during training to improve stability.</p>
-<section id="sglang-side">
-<h4>SGLang side<a class="headerlink" href="#sglang-side" title="Link to this heading">#</a></h4>
-<p>SGLang provides expert routing capture via:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--enable-return-routed-experts</span></code>: server argument to enable routing capture</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">RoutedExpertsCapturer</span></code>: captures <code class="docutils literal notranslate"><span class="pre">topk_ids</span></code> (selected expert IDs) at each MoE layer during forward pass</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">return_routed_experts</span></code>: request parameter to retrieve routing data</p></li>
-<li><p>Returns <code class="docutils literal notranslate"><span class="pre">routed_experts</span></code> in response <code class="docutils literal notranslate"><span class="pre">meta_info</span></code> - a <code class="docutils literal notranslate"><span class="pre">[seq_len</span> <span class="pre">-</span> <span class="pre">1,</span> <span class="pre">num_layers,</span> <span class="pre">top_k]</span></code> tensor of expert IDs</p></li>
-</ul>
-</section>
-<section id="slime-side">
-<h4>slime side<a class="headerlink" href="#slime-side" title="Link to this heading">#</a></h4>
-<p>slime consumes the routing data and replays it during training:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">--use-slime-router</span> <span class="pre">--use-rollout-routing-replay</span></code>: both flags required to enable R3</p></li>
-<li><p>Rollout sends <code class="docutils literal notranslate"><span class="pre">return_routed_experts=True</span></code> and stores results in <code class="docutils literal notranslate"><span class="pre">sample.rollout_routed_experts</span></code></p></li>
-<li><p>Training calls <code class="docutils literal notranslate"><span class="pre">fill_routing_replay()</span></code> to load routing data into <code class="docutils literal notranslate"><span class="pre">RoutingReplay</span></code> objects</p></li>
-<li><p>During forward pass, recorded routing decisions are replayed instead of recomputed</p></li>
-</ul>
-</section>
-<section id="why-slime-router-is-needed">
-<h4>Why slime router is needed<a class="headerlink" href="#why-slime-router-is-needed" title="Link to this heading">#</a></h4>
-<p>We need slime router because the SGLang worker returns routed experts in the response (<code class="docutils literal notranslate"><span class="pre">meta_info.routed_experts</span></code>) when the request sets <code class="docutils literal notranslate"><span class="pre">return_routed_experts=true</span></code>, and slime router preserves this field end-to-end. SGLang Model Gateway may drop this extra metadata when it reconstructs responses with a fixed schema (see section 3).</p>
-</section>
-</section>
+<p>Unlike production inference, RL rollout needs to capture additional metadata for training: token-level logprobs and loss masks. slime router provides these capabilities through its passthrough proxy design.</p>
 <section id="pd-disaggregation">
-<h3>2.2 PD disaggregation<a class="headerlink" href="#pd-disaggregation" title="Link to this heading">#</a></h3>
+<h3>2.1 PD disaggregation<a class="headerlink" href="#pd-disaggregation" title="Link to this heading">#</a></h3>
 <p>slime router supports <strong>Prefill-Decode (PD) disaggregation</strong>. When prefill and decode workers are registered, the router automatically enables PD mode:</p>
 <ul class="simple">
 <li><p>Workers register themselves with a <code class="docutils literal notranslate"><span class="pre">worker_type</span></code> (<code class="docutils literal notranslate"><span class="pre">prefill</span></code>, <code class="docutils literal notranslate"><span class="pre">decode</span></code>, or <code class="docutils literal notranslate"><span class="pre">regular</span></code>) via the <code class="docutils literal notranslate"><span class="pre">POST</span> <span class="pre">/workers</span></code> endpoint.</p></li>
@@ -533,14 +499,14 @@
 <p>slime router and SGLang Model Gateway can both route requests to workers, but they are optimized for different goals.</p>
 <section id="key-differences">
 <h3>Key differences<a class="headerlink" href="#key-differences" title="Link to this heading">#</a></h3>
-<p>slime router is a lightweight Python/FastAPI proxy that acts as a passthrough to SGLang workers. This passthrough design enables RL-specific features like R3 (which require preserving raw response metadata like <code class="docutils literal notranslate"><span class="pre">routed_experts</span></code>).</p>
-<p>SGLang Model Gateway is a high-performance Rust-based router optimized for large-scale inference: async non-blocking routing, advanced fault tolerance (retries, circuit breakers), multiple load balancing policies (including cache-aware routing), and PD disaggregation support. However, it reconstructs responses with a fixed schema, so it does not preserve the metadata needed for slime’s R3 flow.</p>
+<p>slime router is a lightweight Python/FastAPI proxy that acts as a passthrough to SGLang workers.</p>
+<p>SGLang Model Gateway is a high-performance Rust-based router optimized for large-scale inference: async non-blocking routing, advanced fault tolerance (retries, circuit breakers), multiple load balancing policies (including cache-aware routing), and PD disaggregation support.</p>
 <p>For more details on SGLang Model Gateway, see the <a class="reference external" href="https://docs.sglang.io/advanced_features/sgl_model_gateway.html">official documentation</a>.</p>
 </section>
 <section id="when-to-use-which">
 <h3>When to use which<a class="headerlink" href="#when-to-use-which" title="Link to this heading">#</a></h3>
 <ul class="simple">
-<li><p>Use slime router when you need R3 or PD disaggregation with metadata preservation</p></li>
+<li><p>Use slime router when you need PD disaggregation with metadata preservation</p></li>
 <li><p>Use SGLang Model Gateway for everything else (recommended default)</p></li>
 </ul>
 </section>
@@ -599,13 +565,7 @@
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#why-we-need-slime-router">2. Why we need slime router</a><ul class="visible nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-routing-replay-r3-for-moe">2.1 Rollout routing replay (R3) for MoE</a><ul class="nav section-nav flex-column">
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#sglang-side">SGLang side</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#slime-side">slime side</a></li>
-<li class="toc-h4 nav-item toc-entry"><a class="reference internal nav-link" href="#why-slime-router-is-needed">Why slime router is needed</a></li>
-</ul>
-</li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd-disaggregation">2.2 PD disaggregation</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#pd-disaggregation">2.1 PD disaggregation</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#differences-vs-sglang-model-gateway">3. Differences vs SGLang Model Gateway</a><ul class="visible nav section-nav flex-column">
@@ -646,7 +606,7 @@ By slime Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Mar 22, 2026.
+  Last updated on Mar 26, 2026.
   <br/>
 </p>
   </div>
