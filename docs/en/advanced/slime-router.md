@@ -26,35 +26,9 @@ In distributed training, slime will start a router automatically when `--sglang-
 
 ## 2. Why we need slime router
 
-Unlike production inference, RL rollout needs to capture additional metadata for training: token-level logprobs, loss masks, and (for MoE models) expert routing decisions. slime router provides these capabilities through its passthrough proxy design.
+Unlike production inference, RL rollout needs to capture additional metadata for training: token-level logprobs and loss masks. slime router provides these capabilities through its passthrough proxy design.
 
-### 2.1 Rollout routing replay (R3) for MoE
-
-For MoE models, slime supports rollout routing replay (R3): record expert routing decisions during rollout and replay them during training to improve stability.
-
-#### SGLang side
-
-SGLang provides expert routing capture via:
-
-- `--enable-return-routed-experts`: server argument to enable routing capture
-- `RoutedExpertsCapturer`: captures `topk_ids` (selected expert IDs) at each MoE layer during forward pass
-- `return_routed_experts`: request parameter to retrieve routing data
-- Returns `routed_experts` in response `meta_info` - a `[seq_len - 1, num_layers, top_k]` tensor of expert IDs
-
-#### slime side
-
-slime consumes the routing data and replays it during training:
-
-- `--use-slime-router --use-rollout-routing-replay`: both flags required to enable R3
-- Rollout sends `return_routed_experts=True` and stores results in `sample.rollout_routed_experts`
-- Training calls `fill_routing_replay()` to load routing data into `RoutingReplay` objects
-- During forward pass, recorded routing decisions are replayed instead of recomputed
-
-#### Why slime router is needed
-
-We need slime router because the SGLang worker returns routed experts in the response (`meta_info.routed_experts`) when the request sets `return_routed_experts=true`, and slime router preserves this field end-to-end. SGLang Model Gateway may drop this extra metadata when it reconstructs responses with a fixed schema (see section 3).
-
-### 2.2 PD disaggregation
+### 2.1 PD disaggregation
 
 slime router supports **Prefill-Decode (PD) disaggregation**. When prefill and decode workers are registered, the router automatically enables PD mode:
 
@@ -73,13 +47,13 @@ slime router and SGLang Model Gateway can both route requests to workers, but th
 
 ### Key differences
 
-slime router is a lightweight Python/FastAPI proxy that acts as a passthrough to SGLang workers. This passthrough design enables RL-specific features like R3 (which require preserving raw response metadata like `routed_experts`).
+slime router is a lightweight Python/FastAPI proxy that acts as a passthrough to SGLang workers.
 
-SGLang Model Gateway is a high-performance Rust-based router optimized for large-scale inference: async non-blocking routing, advanced fault tolerance (retries, circuit breakers), multiple load balancing policies (including cache-aware routing), and PD disaggregation support. However, it reconstructs responses with a fixed schema, so it does not preserve the metadata needed for slime's R3 flow.
+SGLang Model Gateway is a high-performance Rust-based router optimized for large-scale inference: async non-blocking routing, advanced fault tolerance (retries, circuit breakers), multiple load balancing policies (including cache-aware routing), and PD disaggregation support.
 
 For more details on SGLang Model Gateway, see the [official documentation](https://docs.sglang.io/advanced_features/sgl_model_gateway.html).
 
 ### When to use which
 
-- Use slime router when you need R3 or PD disaggregation with metadata preservation
+- Use slime router when you need PD disaggregation with metadata preservation
 - Use SGLang Model Gateway for everything else (recommended default)

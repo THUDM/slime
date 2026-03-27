@@ -378,10 +378,7 @@ class RolloutManager:
             init_http_client(args)
             self.servers = start_rollout_servers(args, pg)
 
-        # Initialize W&B secondary *after* servers are launched so the router
-        # address is available for scraping SGLang Prometheus metrics.
-        router_addr = self._get_metrics_router_addr()
-        init_tracking(args, primary=False, router_addr=router_addr)
+        init_tracking(args, primary=False)
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
         self.rollout_id = -1
 
@@ -415,6 +412,10 @@ class RolloutManager:
         if srv is None or srv.router_ip is None:
             return None
         return f"http://{srv.router_ip}:{srv.router_port}"
+
+    def get_metrics_router_addr(self) -> str | None:
+        """Public wrapper for remote calls from the driver process."""
+        return self._get_metrics_router_addr()
 
     def _try_ci_fault_injection(self):
         """Try to inject fault during generate (when health monitor is running)."""
