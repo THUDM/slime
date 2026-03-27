@@ -15,13 +15,15 @@ conflict-resistant when syncing with upstream.
 
 `slime/hooks.py` provides:
 
-- **`Op` enum** -- names every hookable point in the training loop
+- **`Op` enum** -- names every hookable point in the training pipeline
 - **`hook(op, rollout_id)`** -- context manager that fires pre/post callbacks
 - **`on_pre(op, fn)` / `on_post(op, fn)`** -- callback registration
 
 When no callbacks are registered, `hook()` is a near-zero-cost no-op.
 
 ### Hooked operations
+
+#### Training loop (train.py / train_async.py)
 
 ```
 for rollout_id in range(...):
@@ -39,29 +41,47 @@ for rollout_id in range(...):
     +-- ASYNC_ROLLOUT_SYNC      # train_async.py only
 ```
 
-All hooks receive `rollout_id` as their single positional argument. Additional
-keyword arguments can be passed for specialized hooks.
+All training loop hooks receive `rollout_id` as their first argument.
 
-### Call-site example (train.py)
+#### Per-node lifecycle
+
+```
+NODE_INIT                       # fires once per Ray actor process during init
+```
+
+`NODE_INIT` fires in `TrainRayActor.init()` and `RolloutManager.__init__()`,
+ensuring every node in a multi-node run can start background tasks like
+hardware metrics collection.  It receives `node_name` (from `SLIME_NODE_NAME`
+env var) instead of `rollout_id`.
+
+Set `SLIME_NODE_NAME` in your launcher to a value that identifies the physical
+node (e.g. EC2 instance ID, k8s node name, hostname).
+
+### Call-site examples
 
 ```python
+# Training loop operation (train.py)
 from slime.hooks import Op, hook
 
 with hook(Op.GENERATE, rollout_id):
     rollout_data_ref = ray.get(rollout_manager.generate.remote(rollout_id))
 ```
 
+```python
+# Per-node lifecycle (slime/ray/train_actor.py)
+with hook(Op.NODE_INIT, node_name=os.environ.get("SLIME_NODE_NAME", "unknown")):
+    pass
+```
+
 ## Example: OpenTelemetry tracing
 
 This is how we use hooks in our fork to add OTel span tracing to training runs.
 No SLIME source code is modified beyond what's in this PR -- all OTel logic lives
-in our downstream `autonomy/` package.
+in our downstream package.
 
 ### Registering callbacks
 
 ```python
-# autonomy/telemetry/instrumentation.py
-
 from opentelemetry import context as context_api
 from opentelemetry import trace
 
@@ -71,6 +91,11 @@ from slime.hooks import Op, on_pre, on_post
 def register_otel_hooks():
     """Register OTel span callbacks for all hook operations."""
     for op in Op:
+        if op is Op.NODE_INIT:
+            # NODE_INIT starts metrics polling only, no span.
+            on_pre(op, lambda **_: start_metrics_collection())
+            continue
+
         span_name = op.value
 
         def on_start(**kwargs):
@@ -108,7 +133,7 @@ register_otel_hooks()
 
 ### What this produces
 
-With `SLIME_OTEL_ENABLED=1`, each training iteration produces a trace like:
+Each training iteration produces a trace like:
 
 ```
 iteration (rollout_id=0)                          102.90s
@@ -122,6 +147,15 @@ iteration (rollout_id=0)                          102.90s
 
 Spans nest automatically -- `generate` and `train` are children of `iteration`
 because OTel context propagates within the process.
+
+### Per-node metrics via NODE_INIT
+
+The `NODE_INIT` hook fires once per Ray actor process.  Downstream consumers
+use it to start background metric collectors (GPU utilization, memory, CPU)
+on every node without requiring any per-iteration overhead.
+
+Since `NODE_INIT` is not a training operation, it typically does not produce
+a span -- just a side effect like starting a polling thread.
 
 ### Pre-callback state injection
 
