@@ -135,7 +135,6 @@ SGLANG_ARGS=(
 
    # make every dp rank has 128 concurrency
    --sglang-server-concurrency 1024
-   --use-slime-router
 )
 
 

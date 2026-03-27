@@ -112,7 +112,8 @@ class ServerGroup:
             env_vars = {name: "1" for name in NOSET_VISIBLE_DEVICES_ENV_VARS_LIST} | {
                 key: os.environ.get(key, default_val)
                 for key, default_val in {
-                    "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "false",
+                    "SGLANG_JIT_DEEPGEMM_PRECOMPILE": "true",
+                    "SGLANG_JIT_DEEPGEMM_FAST_WARMUP": "true",
                     "SGL_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                     "SGLANG_DISABLE_TP_MEMORY_INBALANCE_CHECK": "true",
                     "SGLANG_MEMORY_SAVER_CUDA_GRAPH": "true",
@@ -377,10 +378,7 @@ class RolloutManager:
             init_http_client(args)
             self.servers = start_rollout_servers(args, pg)
 
-        # Initialize W&B secondary *after* servers are launched so the router
-        # address is available for scraping SGLang Prometheus metrics.
-        router_addr = self._get_metrics_router_addr()
-        init_tracking(args, primary=False, router_addr=router_addr)
+        init_tracking(args, primary=False)
         self.rollout_engine_lock = Lock.options(num_cpus=1, num_gpus=0).remote()
         self.rollout_id = -1
 
@@ -400,20 +398,15 @@ class RolloutManager:
         which aggregates Prometheus metrics from all backend sglang servers.
         Returns ``http://{ip}:{port}`` for the first server, or ``None`` when
         metrics are disabled or no servers are running.
-
-        Note: the ``use_slime_router`` path does not expose ``/engine_metrics``;
-        metrics forwarding to W&B requires the sglang_router gateway.
         """
-        if getattr(self.args, "use_slime_router", False):
-            logger.warning(
-                "SGLang metrics forwarding to W&B is not supported with --use-slime-router. "
-                "Use the default sglang_router gateway for /engine_metrics aggregation."
-            )
-            return None
         srv = self.server
         if srv is None or srv.router_ip is None:
             return None
         return f"http://{srv.router_ip}:{srv.router_port}"
+
+    def get_metrics_router_addr(self) -> str | None:
+        """Public wrapper for remote calls from the driver process."""
+        return self._get_metrics_router_addr()
 
     def _try_ci_fault_injection(self):
         """Try to inject fault during generate (when health monitor is running)."""
@@ -912,7 +905,7 @@ def _allocate_rollout_engine_addr_and_ports_normal(
 
 
 def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool = False) -> tuple[str, int]:
-    """Start sgl router or slime router and return (router_ip, router_port).
+    """Start sglang_router and return (router_ip, router_port).
 
     If ``args.sglang_router_ip`` is already set (e.g. by the user) and
     ``force_new`` is False, skip launching and return the existing values.
@@ -929,37 +922,28 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
         if router_port is None:
             router_port = find_available_port(random.randint(3000, 4000))
 
-    if args.use_slime_router:
-        import copy
+    from sglang_router.launch_router import RouterArgs
 
-        from slime.router.router import run_router
+    from slime.utils.http_utils import run_router
 
-        router_args = copy.copy(args)
-        router_args.sglang_router_ip = router_ip
-        router_args.sglang_router_port = router_port
-    else:
-        from sglang_router.launch_router import RouterArgs
+    router_args = RouterArgs.from_cli_args(args, use_router_prefix=True)
+    router_args.host = router_ip
+    router_args.port = router_port
+    router_args.prometheus_port = find_available_port(random.randint(4000, 5000))
+    router_args.log_level = "warn"
+    router_args.request_timeout_secs = args.sglang_router_request_timeout_secs
 
-        from slime.utils.http_utils import run_router
+    if has_pd_disaggregation:
+        router_args.pd_disaggregation = True
+        # Disable circuit breaker to prevent RDMA transfer timeouts from
+        # marking decode workers as dead. Timeouts are transient (PCIe
+        # contention under high load) and do not indicate a dead server.
+        router_args.disable_circuit_breaker = True
 
-        router_args = RouterArgs.from_cli_args(args, use_router_prefix=True)
-        router_args.host = router_ip
-        router_args.port = router_port
-        router_args.prometheus_port = find_available_port(random.randint(4000, 5000))
-        router_args.log_level = "warn"
-        router_args.request_timeout_secs = args.sglang_router_request_timeout_secs
+    # We will not use the health check from router.
+    router_args.disable_health_check = True
 
-        if has_pd_disaggregation:
-            router_args.pd_disaggregation = True
-            # Disable circuit breaker to prevent RDMA transfer timeouts from
-            # marking decode workers as dead. Timeouts are transient (PCIe
-            # contention under high load) and do not indicate a dead server.
-            router_args.disable_circuit_breaker = True
-
-        # We will not use the health check from router.
-        router_args.disable_health_check = True
-
-        logger.info(f"Launch router with args: {router_args}")
+    logger.info(f"Launch router with args: {router_args}")
 
     process = multiprocessing.Process(
         target=run_router,
@@ -970,7 +954,7 @@ def _start_router(args, *, has_pd_disaggregation: bool = False, force_new: bool 
     # Wait 3 seconds
     time.sleep(3)
     assert process.is_alive()
-    logger.info(f"Router launched at {router_ip}:{router_port}")
+    logger.info(f"Router launched at {router_ip}:{router_port}, Prometheus port: {router_args.prometheus_port}")
     return router_ip, router_port
 
 

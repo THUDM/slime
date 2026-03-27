@@ -31,6 +31,10 @@ def init_tracking(args, primary: bool = True, **kwargs):
         wandb_utils.init_wandb_secondary(args, **kwargs)
 
 
+def update_tracking_open_metrics(args, router_addr):
+    wandb_utils.reinit_wandb_primary_with_open_metrics(args, router_addr)
+
+
 def finish_tracking(args):
     if not args.use_wandb:
         return

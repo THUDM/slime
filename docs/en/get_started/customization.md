@@ -406,9 +406,7 @@ Stabilize MoE RL training by recording and replaying expert routing decisions to
 | Argument | Description |
 | --- | --- |
 | `--use-routing-replay` | Forward-backward routing consistency in training. ([arXiv:2507.18071](https://arxiv.org/abs/2507.18071)) |
-| `--use-rollout-routing-replay` | R3: Replay routing from rollout during training. **Requires `--use-slime-router`**. ([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
-
-For detailed explanation of R3 and SlimeRouter, see [Slime Router](../advanced/slime-router.md).
+| `--use-rollout-routing-replay` | R3: Replay routing from rollout during training. Supported by slime's default `sglang_router` path. ([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
 
 ## Testing Custom Function Paths
 
