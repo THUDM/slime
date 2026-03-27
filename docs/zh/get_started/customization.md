@@ -408,7 +408,7 @@ def custom_hook(args, rollout_id, step_id, model, optimizer, opt_param_scheduler
 | 参数 | 说明 |
 | --- | --- |
 | `--use-routing-replay` | 训练中前向-反向路由一致性。([arXiv:2507.18071](https://arxiv.org/abs/2507.18071)) |
-| `--use-rollout-routing-replay` | R3：在训练时重放 rollout 阶段的路由。slime router 和 SGLang Model Gateway 均支持。([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
+| `--use-rollout-routing-replay` | R3：在训练时重放 rollout 阶段的路由。slime 默认的 `sglang_router` 路径支持该功能。([arXiv:2510.11370](https://arxiv.org/abs/2510.11370)) |
 
 ## 自定义函数路径的测试
 

@@ -92,14 +92,6 @@ def reinit_wandb_primary_with_open_metrics(args, router_addr):
     if router_addr is None:
         return
 
-    import sglang_router
-
-    if "slime" not in sglang_router.__version__:
-        logger.warning(
-            "Only customized sglang_router from https://github.com/zhuzilin/sgl-router supports uploading metrics."
-        )
-        return
-
     logger.info(f"Re-initializing primary W&B with SGLang metrics at {router_addr}.")
 
     wandb.finish()
