@@ -7,8 +7,9 @@ from megatron.core.models.gpt.gpt_layer_specs import get_gpt_decoder_block_spec
 from megatron.core.transformer.spec_utils import ModuleSpec
 from megatron.core.transformer.transformer_block import get_num_layers_to_build
 from megatron.core.transformer.transformer_layer import get_transformer_layer_offset
-from .hf_attention import _load_hf_config
 from transformers.activations import ACT2FN
+
+from .hf_attention import _load_hf_config
 
 try:
     from fla.modules import FusedRMSNormGated, ShortConvolution
@@ -220,9 +221,7 @@ def get_qwen3_next_spec(args, config, vp_stage):
     if not hasattr(hf_config, "layer_types"):
         interval = getattr(hf_config, "full_attention_interval", 4)
         n = hf_config.num_hidden_layers
-        hf_config.layer_types = [
-            "full_attention" if (i + 1) % interval == 0 else "linear_attention" for i in range(n)
-        ]
+        hf_config.layer_types = ["full_attention" if (i + 1) % interval == 0 else "linear_attention" for i in range(n)]
 
     for layer_id in range(num_layers_to_build):
         if hf_config.layer_types[layer_id + offset] == "linear_attention":
