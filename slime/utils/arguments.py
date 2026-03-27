@@ -1001,6 +1001,12 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
             return parser
 
         def add_router_arguments(parser):
+            parser.add_argument(
+                "--use-slime-router",
+                action="store_true",
+                default=False,
+                help="Whether to use SlimeRouter for text-based routing instead of SGLang token-based routing",
+            )
             RouterArgs.add_cli_args(parser, use_router_prefix=True, exclude_host_port=True)
             return parser
 
@@ -1490,6 +1496,13 @@ def _resolve_eval_datasets(args) -> list[EvalDatasetConfig]:
 
 def slime_validate_args(args):
     args.eval_datasets = _resolve_eval_datasets(args)
+
+    if args.use_slime_router:
+        logger.warning(
+            "--use-slime-router is deprecated and ignored. slime now always uses sglang_router "
+            "built from https://github.com/zhuzilin/sgl-router."
+        )
+        args.use_slime_router = False
 
     if args.kl_coef != 0 or args.use_kl_loss:
         if not os.path.exists(args.ref_load):
