@@ -16,7 +16,6 @@ from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_
 
 from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
-from slime.hooks import Op, hook
 from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
 from slime.utils.health_monitor import RolloutHealthMonitor
@@ -356,9 +355,6 @@ class RolloutManager:
 
         self.pg = pg
         self.args = args
-
-        with hook(Op.NODE_INIT, node_name=os.environ.get("SLIME_NODE_NAME", "unknown")):
-            pass
 
         data_source_cls = load_function(self.args.data_source_path)
         self.data_source = data_source_cls(args)

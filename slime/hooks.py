@@ -30,9 +30,6 @@ Hooked operations in the training loop (train.py / train_async.py)::
         ├── EVAL                 # periodic eval
         └── ASYNC_ROLLOUT_SYNC   # train_async.py only: sync before weight update
 
-    NODE_INIT fires once per Ray actor process during init (not per iteration).
-    Used for per-node metrics collection (GPU/CPU utilization).
-
 Example — call-site in train.py::
 
     from slime.hooks import Op, hook
@@ -72,9 +69,6 @@ class Op(Enum):
     ONLOAD_ROLLOUT_WEIGHTS = "onload_rollout_weights"
     ONLOAD_ROLLOUT_KV = "onload_rollout_kv"
     ASYNC_ROLLOUT_SYNC = "async_rollout_sync"
-
-    # per-node lifecycle (fires once per Ray actor process during init)
-    NODE_INIT = "node_init"
 
 
 
@@ -122,7 +116,7 @@ def on_post(op: Op, fn: Callable[..., Any]) -> Callable[..., Any]:
 
 
 @contextmanager
-def hook(op: Op, rollout_id: int | None = None, **kwargs: Any) -> Generator[dict[str, Any], None, None]:
+def hook(op: Op, rollout_id: int, **kwargs: Any) -> Generator[dict[str, Any], None, None]:
     """Wrap an operation with registered pre/post callbacks.
 
     Yields a dict of state injected by pre callbacks.  Post callbacks fire
@@ -133,8 +127,8 @@ def hook(op: Op, rollout_id: int | None = None, **kwargs: Any) -> Generator[dict
 
     Args:
         op: The operation being performed.
-        rollout_id: Current training iteration index (None for lifecycle hooks like NODE_INIT).
-        **kwargs: Additional attributes forwarded to callbacks.
+        rollout_id: Current training iteration index.
+        **kwargs: Additional attributes forwarded to callbacks (e.g. rank, gpu).
 
     Yields:
         Dict of state injected by pre callbacks (empty if none registered).

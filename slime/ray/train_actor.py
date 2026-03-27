@@ -9,7 +9,6 @@ import torch
 import torch.distributed as dist
 
 import slime.utils.eval_config
-from slime.hooks import Op, hook
 from slime.ray.ray_actor import RayActor
 from slime.utils.distributed_utils import init_gloo_group
 from slime.utils.logging_utils import configure_logger
@@ -91,9 +90,6 @@ class TrainRayActor(RayActor):
             logger.info("Warning: pynvml not available, skipping NUMA affinity setup")
         except Exception as e:
             logger.info(f"Warning: Failed to set NUMA affinity: {e}")
-
-        with hook(Op.NODE_INIT, node_name=os.environ.get("SLIME_NODE_NAME", "unknown")):
-            pass
 
     def clear_memory(self):
         if self.args.debug_rollout_only:
