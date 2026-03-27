@@ -1164,7 +1164,7 @@ HTML_TEMPLATE = r"""<!doctype html>
       let hasPD = false;
       outer: for (const row of state.rows) {
         for (const item of rowAnalysisItems(row)) {
-          if (item.type === 'span' && pdPhases(item.attrs)) { hasPD = true; break outer; }
+          if (item.type === 'span' && pdPhases(spanFlatAttrs(item))) { hasPD = true; break outer; }
         }
       }
       let html = names.map((entry) => (
@@ -1367,6 +1367,15 @@ HTML_TEMPLATE = r"""<!doctype html>
       return (PD_COLORS[phase] || 'rgba(128,128,128,A)').replace(/A/g, alpha.toFixed(2));
     }
 
+    // For span items, attrs is {start_attrs, end_attrs}. Flatten into a single dict.
+    function spanFlatAttrs(item) {
+      const raw = item.attrs || {};
+      if (raw.start_attrs || raw.end_attrs) {
+        return Object.assign({}, raw.start_attrs || {}, raw.end_attrs || {});
+      }
+      return raw;
+    }
+
     // Build ordered PD phase segments from span attrs.
     // Returns [{phase, duration}] or null if no PD data.
     function pdPhases(attrs) {
@@ -1421,7 +1430,7 @@ HTML_TEMPLATE = r"""<!doctype html>
       }
 
       // Draw PD phase sub-bars when disaggregation data is available
-      const phases = pdPhases(item.attrs);
+      const phases = pdPhases(spanFlatAttrs(item));
       if (phases && spanWidth > 6) {
         const totalPhaseDuration = phases.reduce((s, p) => s + p.duration, 0);
         // Draw base bar at reduced opacity
@@ -1615,7 +1624,7 @@ HTML_TEMPLATE = r"""<!doctype html>
             if (showText && labelWidthAvailable > 40) {
               ctx.font = '10px IBM Plex Sans, sans-serif';
               const label = (() => {
-                const a = item.attrs || {};
+                const a = spanFlatAttrs(item);
                 const pdParts = [];
                 if (a.prompt_tokens != null) pdParts.push(`P:${a.prompt_tokens}`);
                 if (a.completion_tokens != null) pdParts.push(`D:${a.completion_tokens}`);
@@ -1691,7 +1700,7 @@ HTML_TEMPLATE = r"""<!doctype html>
         lines.push(`time: ${niceDuration((item.ts ?? 0) - state.globalStart)}`);
       }
       if (item.state === 'orphan_end') lines.push('warning: unmatched end event');
-      const attrs = item.attrs || {};
+      const attrs = spanFlatAttrs(item);
       // Collect and group PD disaggregation attrs for structured display
       const pdKeys = Object.keys(attrs).filter(k => k.startsWith('pd_'));
       const otherKeys = Object.keys(attrs).filter(k => !k.startsWith('pd_'));
