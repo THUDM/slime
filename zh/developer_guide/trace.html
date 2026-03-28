@@ -1,0 +1,618 @@
+
+<!DOCTYPE html>
+
+
+<html lang="zh" data-content_root="../" >
+
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="viewport" content="width=device-width, initial-scale=1" />
+
+    <title>Trace 可视化 &#8212; slime</title>
+  
+  
+  
+  <script data-cfasync="false">
+    document.documentElement.dataset.mode = localStorage.getItem("mode") || "";
+    document.documentElement.dataset.theme = localStorage.getItem("theme") || "";
+  </script>
+  <!--
+    this give us a css class that will be invisible only if js is disabled
+  -->
+  <noscript>
+    <style>
+      .pst-js-only { display: none !important; }
+
+    </style>
+  </noscript>
+  
+  <!-- Loaded before other Sphinx assets -->
+  <link href="../_static/styles/theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+<link href="../_static/styles/pydata-sphinx-theme.css?digest=8878045cc6db502f8baf" rel="stylesheet" />
+
+    <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=03e43079" />
+    <link rel="stylesheet" type="text/css" href="../_static/styles/sphinx-book-theme.css?v=3c74b3bc" />
+    <link rel="stylesheet" type="text/css" href="../_static/copybutton.css?v=76b2166b" />
+    <link rel="stylesheet" type="text/css" href="../_static/css/custom_log.css?v=ad20845f" />
+  
+  <!-- So that users can add custom icons -->
+  <script src="../_static/scripts/fontawesome.js?digest=8878045cc6db502f8baf"></script>
+  <!-- Pre-loaded scripts that we'll load fully later -->
+  <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf" />
+<link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf" />
+
+    <script src="../_static/documentation_options.js?v=30c3115b"></script>
+    <script src="../_static/doctools.js?v=fd6eb6e6"></script>
+    <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
+    <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
+    <script src="../_static/copybutton.js?v=ccdb6887"></script>
+    <script src="../_static/scripts/sphinx-book-theme.js?v=fab101a9"></script>
+    <script crossorigin="anonymous" integrity="sha256-Ae2Vz/4ePdIu6ZyI/5ZGsYnb+m0JlOmKPjt6XZ9JJkA=" src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.4/require.min.js"></script>
+    <script>DOCUMENTATION_OPTIONS.pagename = 'developer_guide/trace';</script>
+    <script src="../_static/js/lang-toggle.js?v=8d03b7be"></script>
+    <link rel="icon" href="../_static/logo.ico"/>
+    <link rel="index" title="索引" href="../genindex.html" />
+    <link rel="search" title="搜索" href="../search.html" />
+    <link rel="next" title="性能分析 (Profiling)" href="profiling.html" />
+    <link rel="prev" title="Debug 指南" href="debug.html" />
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="docsearch:language" content="zh"/>
+  <meta name="docsearch:version" content="0.0.1" />
+    <meta name="docbuild:last-update" content="2026 年 03 月 28 日"/>
+  </head>
+  
+  
+  <body data-bs-spy="scroll" data-bs-target=".bd-toc-nav" data-offset="180" data-bs-root-margin="0px 0px -60%" data-default-mode="">
+
+  
+  
+  <div id="pst-skip-link" class="skip-link d-print-none"><a href="#main-content">跳转至主要内容</a></div>
+  
+  <div id="pst-scroll-pixel-helper"></div>
+  
+  <button type="button" class="btn rounded-pill" id="pst-back-to-top">
+    <i class="fa-solid fa-arrow-up"></i>回到顶部</button>
+
+  
+  <dialog id="pst-search-dialog">
+    
+<form class="bd-search d-flex align-items-center"
+      action="../search.html"
+      method="get">
+  <i class="fa-solid fa-magnifying-glass"></i>
+  <input type="search"
+         class="form-control"
+         name="q"
+         placeholder="Search..."
+         aria-label="Search..."
+         autocomplete="off"
+         autocorrect="off"
+         autocapitalize="off"
+         spellcheck="false"/>
+  <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd>K</kbd></span>
+</form>
+  </dialog>
+
+  <div class="pst-async-banner-revealer d-none">
+  <aside id="bd-header-version-warning" class="d-none d-print-none" aria-label="版本警告"></aside>
+</div>
+
+  
+    <header class="bd-header navbar navbar-expand-lg bd-navbar d-print-none">
+    </header>
+  
+
+  <div class="bd-container">
+    <div class="bd-container__inner bd-page-width">
+      
+      
+      
+      <dialog id="pst-primary-sidebar-modal"></dialog>
+      <div id="pst-primary-sidebar" class="bd-sidebar-primary bd-sidebar">
+        
+
+  
+  <div class="sidebar-header-items sidebar-primary__section">
+    
+    
+    
+    
+  </div>
+  
+    <div class="sidebar-primary-items__start sidebar-primary__section">
+        <div class="sidebar-primary-item">
+
+  
+    
+  
+
+<a class="navbar-brand logo" href="../index.html">
+  
+  
+  
+  
+  
+    
+    
+      
+    
+    
+    <img src="../_static/logo.jpg" class="logo__image only-light" alt="slime - Home"/>
+    <img src="../_static/logo.jpg" class="logo__image only-dark pst-js-only" alt="slime - Home"/>
+  
+  
+</a></div>
+        <div class="sidebar-primary-item">
+
+<button class="btn search-button-field search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+ <i class="fa-solid fa-magnifying-glass"></i>
+ <span class="search-button__default-text">搜索</span>
+ <span class="search-button__kbd-shortcut"><kbd class="kbd-shortcut__modifier">Ctrl</kbd>+<kbd class="kbd-shortcut__modifier">K</kbd></span>
+</button></div>
+        <div class="sidebar-primary-item"><nav class="bd-links bd-docs-nav" aria-label="Main">
+    <div class="bd-toc-item navbar-nav active">
+        <p aria-level="2" class="caption" role="heading"><span class="caption-text">开始使用</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../get_started/quick_start.html">快速使用</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/usage.html">使用文档</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/customization.html">自定义指南</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../get_started/qa.html">常见 Q&amp;A</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">Dense</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4B.html">8xH100 训练 Qwen3-4B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4-9B.html">8xH100 训练 GLM4-9B</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">MoE</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-30B-A3B.html">8×H100 训练 GLM-4.7-Flash</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-30B-A3B.html">8xH100 训练 Qwen3-30B-A3B</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/glm4.7-355B-A32B.html">64xH100 训练 GLM-4.7</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../examples/deepseek-r1.html">128xH100 训练 DeepSeek R1</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">高级特性</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../advanced/on-policy-distillation.html">在策略蒸馏 (On-Policy Distillation)</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/speculative-decoding.html">投机采样</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/low-precision.html">低精度训练</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/reproducibility.html">Reproducibility</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/fault-tolerance.html">容灾</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/pd-disaggregation.html">PD 分离</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/sglang-config.html">SGLang Config：高级引擎部署</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../advanced/arch-support-beyond-megatron.html">在 Megatron-LM 中快速支持新模型架构</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">其他用法</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../examples/qwen3-4b-base-openhermes.html">SFT Qwen3-4B-Base</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/search-r1/README.html">Search-R1 lite</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/fully_async/README.html">Fully Asynchronous Rollout Example</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/retool/README.html">Retool: from SFT to RL</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../_examples_synced/multi_agent/README.html">Multi-Agent RL</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">开发指南</span></p>
+<ul class="current nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="ci.html">CI（持续集成）</a></li>
+<li class="toctree-l1"><a class="reference internal" href="debug.html">Debug 指南</a></li>
+<li class="toctree-l1 current active"><a class="current reference internal" href="#">Trace 可视化</a></li>
+<li class="toctree-l1"><a class="reference internal" href="profiling.html">性能分析 (Profiling)</a></li>
+</ul>
+<p aria-level="2" class="caption" role="heading"><span class="caption-text">博客</span></p>
+<ul class="nav bd-sidenav">
+<li class="toctree-l1"><a class="reference internal" href="../blogs/release_v0.1.0.html">v0.1.0: 重新定义高性能 RL 训练框架</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../blogs/introducing_slime.html">slime：为 RL Scaling 设计的 SGLang-Native 后训练框架</a></li>
+</ul>
+
+    </div>
+</nav></div>
+    </div>
+  
+  
+  <div class="sidebar-primary-items__end sidebar-primary__section">
+      <div class="sidebar-primary-item">
+<div id="ethical-ad-placement"
+      class="flat"
+      data-ea-publisher="readthedocs"
+      data-ea-type="readthedocs-sidebar"
+      data-ea-manual="true">
+</div></div>
+  </div>
+
+
+      </div>
+      
+      <main id="main-content" class="bd-main" role="main">
+        
+        
+
+<div class="sbt-scroll-pixel-helper"></div>
+
+          <div class="bd-content">
+            <div class="bd-article-container">
+              
+              <div class="bd-header-article d-print-none">
+<div class="header-article-items header-article__inner">
+  
+    <div class="header-article-items__start">
+      
+        <div class="header-article-item"><button class="sidebar-toggle primary-toggle btn btn-sm" title="Toggle primary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <span class="fa-solid fa-bars"></span>
+</button></div>
+      
+    </div>
+  
+  
+    <div class="header-article-items__end">
+      
+        <div class="header-article-item">
+
+<div class="article-header-buttons">
+
+
+
+
+
+<div class="dropdown dropdown-source-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="Source repositories">
+    <i class="fab fa-github"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime" target="_blank"
+   class="btn btn-sm btn-source-repository-button dropdown-item"
+   title="源码库"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fab fa-github"></i>
+  </span>
+<span class="btn__text-container">Repository</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/blob/main/developer_guide/trace.md?plain=1" target="_blank"
+   class="btn btn-sm btn-source-file-button dropdown-item"
+   title="Show source"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-code"></i>
+  </span>
+<span class="btn__text-container">Show source</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/edit/main/developer_guide/trace.md" target="_blank"
+   class="btn btn-sm btn-source-edit-button dropdown-item"
+   title="Suggest edit"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-pencil-alt"></i>
+  </span>
+<span class="btn__text-container">Suggest edit</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li><a href="https://github.com/THUDM/slime/issues/new?title=Issue%20on%20page%20%2Fdeveloper_guide/trace.html&body=Your%20issue%20content%20here." target="_blank"
+   class="btn btn-sm btn-source-issues-button dropdown-item"
+   title="创建议题"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-lightbulb"></i>
+  </span>
+<span class="btn__text-container">Open issue</span>
+</a>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+
+
+<div class="dropdown dropdown-download-buttons">
+  <button class="btn dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false" aria-label="下载此页面">
+    <i class="fas fa-download"></i>
+  </button>
+  <ul class="dropdown-menu">
+      
+      
+      
+      <li><a href="../_sources/developer_guide/trace.md" target="_blank"
+   class="btn btn-sm btn-download-source-button dropdown-item"
+   title="下载源文件"
+   data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file"></i>
+  </span>
+<span class="btn__text-container">.md</span>
+</a>
+</li>
+      
+      
+      
+      
+      <li>
+<button onclick="window.print()"
+  class="btn btn-sm btn-download-pdf-button dropdown-item"
+  title="列印成 PDF"
+  data-bs-placement="left" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-file-pdf"></i>
+  </span>
+<span class="btn__text-container">.pdf</span>
+</button>
+</li>
+      
+  </ul>
+</div>
+
+
+
+
+<button onclick="toggleFullScreen()"
+  class="btn btn-sm btn-fullscreen-button pst-navbar-icon"
+  title="全屏模式"
+  data-bs-placement="bottom" data-bs-toggle="tooltip"
+>
+  
+
+<span class="btn__icon-container">
+  <i class="fas fa-expand"></i>
+  </span>
+
+</button>
+
+
+
+<button class="btn btn-sm nav-link pst-navbar-icon theme-switch-button pst-js-only" aria-label="Color mode" data-bs-title="Color mode"  data-bs-placement="bottom" data-bs-toggle="tooltip">
+  <i class="theme-switch fa-solid fa-sun                fa-lg" data-mode="light" title="亮色"></i>
+  <i class="theme-switch fa-solid fa-moon               fa-lg" data-mode="dark"  title="暗色"></i>
+  <i class="theme-switch fa-solid fa-circle-half-stroke fa-lg" data-mode="auto"  title="System Settings"></i>
+</button>
+
+
+<button class="btn btn-sm pst-navbar-icon search-button search-button__button pst-js-only" title="搜索" aria-label="搜索" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <i class="fa-solid fa-magnifying-glass fa-lg"></i>
+</button>
+<button class="sidebar-toggle secondary-toggle btn btn-sm pst-navbar-icon" title="Toggle secondary sidebar" data-bs-placement="bottom" data-bs-toggle="tooltip">
+    <span class="fa-solid fa-list"></span>
+</button>
+</div></div>
+      
+    </div>
+  
+</div>
+</div>
+              
+              
+
+<div id="jb-print-docs-body" class="onlyprint">
+    <h1>Trace 可视化</h1>
+    <!-- Table of contents -->
+    <div id="print-main-content">
+        <div id="jb-print-toc">
+            
+            <div>
+                <h2> 目录 </h2>
+            </div>
+            <nav aria-label="Page">
+                <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-trace">保存 rollout trace 数据</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">打开时间线查看器</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">如何理解可视化结果</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">给自定义代码打点</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">使用建议</a></li>
+</ul>
+            </nav>
+        </div>
+    </div>
+</div>
+
+              
+                
+<div id="searchbox"></div>
+                <article class="bd-article">
+                  
+  <section class="tex2jax_ignore mathjax_ignore" id="trace">
+<h1>Trace 可视化<a class="headerlink" href="#trace" title="链接到此标题。">#</a></h1>
+<p>slime 可以为每条 rollout sample 挂上轻量级执行 trace。它会记录生成、奖励模型等 span 事件，并且可以在保存下来的 rollout debug dump 中离线查看。</p>
+<p><img alt="trace 时间线查看器" src="../_images/trace.png" /></p>
+<section id="rollout-trace">
+<h2>保存 rollout trace 数据<a class="headerlink" href="#rollout-trace" title="链接到此标题。">#</a></h2>
+<p>如果想在运行结束后查看 trace，可以在训练时打开 rollout debug dump：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>train.py<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>...<span class="w"> </span><span class="se">\</span>
+<span class="w">    </span>--save-debug-rollout-data<span class="w"> </span>/path/to/debug/rollout_<span class="o">{</span>rollout_id<span class="o">}</span>.pt
+</pre></div>
+</div>
+<p>每个保存出来的 <code class="docutils literal notranslate"><span class="pre">.pt</span></code> 文件都会包含 rollout samples，以及对应的 <code class="docutils literal notranslate"><span class="pre">trace</span></code> 数据。之后也可以通过 <code class="docutils literal notranslate"><span class="pre">--load-debug-rollout-data</span></code> 复用同一份 dump。</p>
+</section>
+<section id="id1">
+<h2>打开时间线查看器<a class="headerlink" href="#id1" title="链接到此标题。">#</a></h2>
+<p>对保存好的 rollout dump 运行：</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>python<span class="w"> </span>tools/trace_timeline_viewer.py<span class="w"> </span>/path/to/debug/rollout_0.pt
+</pre></div>
+</div>
+<p>脚本会生成：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">rollout_0.trace_timeline_cache.json</span></code></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">rollout_0.trace_timeline_viewer.html</span></code></p></li>
+</ul>
+<p>默认情况下，它还会启动一个本地静态文件服务，方便直接在浏览器里打开。如果只想生成文件，可以加 <code class="docutils literal notranslate"><span class="pre">--no-serve</span></code>。</p>
+</section>
+<section id="id2">
+<h2>如何理解可视化结果<a class="headerlink" href="#id2" title="链接到此标题。">#</a></h2>
+<ul class="simple">
+<li><p>每一行对应一条 sample。</p></li>
+<li><p>条形块表示 span，点表示瞬时事件。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code> 在开始和结束时记录的属性，都会显示在详情面板里。</p></li>
+<li><p>当 SGLang 返回 PD 分离相关时延时，viewer 会自动补出 <code class="docutils literal notranslate"><span class="pre">[P]</span></code> 和 <code class="docutils literal notranslate"><span class="pre">[D]</span></code> 两条虚拟 lane，用来拆开展示 prefill/decode。</p></li>
+<li><p>如果没有开启 PD，这两条虚拟 lane 不会出现，基础 trace 也仍然可以正常渲染。</p></li>
+</ul>
+</section>
+<section id="id3">
+<h2>给自定义代码打点<a class="headerlink" href="#id3" title="链接到此标题。">#</a></h2>
+<p>在自定义 rollout 或 reward 逻辑中，可以直接复用 <code class="docutils literal notranslate"><span class="pre">slime.utils.trace_utils</span></code> 里的工具：</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">trace_span(target,</span> <span class="pre">name,</span> <span class="pre">attrs=...)</span></code>：记录一段持续时间。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">trace_event(target,</span> <span class="pre">name,</span> <span class="pre">attrs=...)</span></code>：记录一个瞬时事件。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">bind_trace(sample)</span></code>：在 sample 被传递到其他 helper 或任务之前，确保它已经绑定好 trace carrier。</p></li>
+</ul>
+<p>如果想统一记录 SGLang 返回的 generation 元信息，可以复用 <code class="docutils literal notranslate"><span class="pre">build_sglang_meta_trace_attrs</span></code>：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.trace_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_sglang_meta_trace_attrs</span><span class="p">,</span> <span class="n">trace_span</span>
+
+<span class="k">with</span> <span class="n">trace_span</span><span class="p">(</span><span class="n">sample</span><span class="p">,</span> <span class="s2">&quot;sglang_generate&quot;</span><span class="p">)</span> <span class="k">as</span> <span class="n">span</span><span class="p">:</span>
+    <span class="n">output</span> <span class="o">=</span> <span class="k">await</span> <span class="n">post</span><span class="p">(</span><span class="n">url</span><span class="p">,</span> <span class="n">payload</span><span class="p">)</span>
+    <span class="n">span</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">build_sglang_meta_trace_attrs</span><span class="p">(</span><span class="n">output</span><span class="p">[</span><span class="s2">&quot;meta_info&quot;</span><span class="p">]))</span>
+</pre></div>
+</div>
+</section>
+<section id="id4">
+<h2>使用建议<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
+<ul class="simple">
+<li><p>先保存少量 rollout；单个 dump 的 sample 数量适中时，viewer 会更容易阅读。</p></li>
+<li><p>viewer 直接基于保存下来的 <code class="docutils literal notranslate"><span class="pre">.pt</span></code> dump 工作，因此可以把文件拷到别的机器离线分析。</p></li>
+<li><p>如果你想看的是 SGLang 自身的 GPU / kernel 级 profiling trace，请参考 <a class="reference internal" href="profiling.html"><span class="std std-doc">性能分析</span></a>。</p></li>
+</ul>
+</section>
+</section>
+
+
+                </article>
+              
+
+              
+              
+              
+              
+                <footer class="prev-next-footer d-print-none">
+                  
+<div class="prev-next-area">
+    <a class="left-prev"
+       href="debug.html"
+       title="上一页">
+      <i class="fa-solid fa-angle-left"></i>
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">上一页</p>
+        <p class="prev-next-title">Debug 指南</p>
+      </div>
+    </a>
+    <a class="right-next"
+       href="profiling.html"
+       title="下一页">
+      <div class="prev-next-info">
+        <p class="prev-next-subtitle">下一页</p>
+        <p class="prev-next-title">性能分析 (Profiling)</p>
+      </div>
+      <i class="fa-solid fa-angle-right"></i>
+    </a>
+</div>
+                </footer>
+              
+            </div>
+            
+            
+              
+                <dialog id="pst-secondary-sidebar-modal"></dialog>
+                <div id="pst-secondary-sidebar" class="bd-sidebar-secondary bd-toc"><div class="sidebar-secondary-items sidebar-secondary__inner">
+
+
+  <div class="sidebar-secondary-item"><div
+    id="pst-page-navigation-heading-2"
+    class="page-toc tocsection onthispage">
+    <i class="fa-solid fa-list"></i> 目录
+  </div>
+  <nav id="pst-page-toc-nav" class="page-toc" aria-labelledby="pst-page-navigation-heading-2">
+    <ul class="visible nav section-nav flex-column">
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-trace">保存 rollout trace 数据</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">打开时间线查看器</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">如何理解可视化结果</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">给自定义代码打点</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">使用建议</a></li>
+</ul>
+  </nav></div>
+
+</div></div>
+              
+            
+          </div>
+          <footer class="bd-footer-content">
+            
+<div class="bd-footer-content__inner container">
+  
+  <div class="footer-item">
+    
+<p class="component-author">
+作者： slime Team
+</p>
+
+  </div>
+  
+  <div class="footer-item">
+    
+
+  <p class="copyright">
+    
+      © Copyright 2025-2026, slime.
+      <br/>
+    
+  </p>
+
+  </div>
+  
+  <div class="footer-item">
+    <p class="last-updated">
+  最后更新于 2026 年 03 月 28 日.
+  <br/>
+</p>
+  </div>
+  
+  <div class="footer-item">
+    
+  </div>
+  
+</div>
+          </footer>
+        
+
+      </main>
+    </div>
+  </div>
+  
+  <!-- Scripts loaded after <body> so the DOM is not blocked -->
+  <script defer src="../_static/scripts/bootstrap.js?digest=8878045cc6db502f8baf"></script>
+<script defer src="../_static/scripts/pydata-sphinx-theme.js?digest=8878045cc6db502f8baf"></script>
+
+  <footer class="bd-footer">
+  </footer>
+  </body>
+</html>
