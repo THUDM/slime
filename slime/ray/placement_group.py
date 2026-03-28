@@ -125,7 +125,7 @@ def allocate_train_group(args, num_nodes, num_gpus_per_node, pg):
         num_nodes=num_nodes,
         num_gpus_per_node=num_gpus_per_node,
         pg=pg,
-        num_gpus_per_actor=0.4,
+        num_gpus_per_actor=args.train_ray_actor_num_gpus,
     )
 
 
