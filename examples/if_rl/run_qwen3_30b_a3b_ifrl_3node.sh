@@ -12,7 +12,7 @@ ROLLOUT_GPUS_TOTAL=${ROLLOUT_GPUS_TOTAL:-8}
 MODEL_DIR=${MODEL_DIR:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/models/Qwen3-30B-A3B}
 TORCH_DIST_DIR=${TORCH_DIST_DIR:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/models/Qwen3-30B-A3B_torch_dist}
 RAW_DATA=${RAW_DATA:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/data/raw_data/Nemotron-Cascade-2-RL-data/IF-RL/train.jsonl}
-WORK_ROOT=${WORK_ROOT:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/jy_workspace/slime_ifrl_qwen3_30b_a3b}
+WORK_ROOT=${WORK_ROOT:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/ifrl_qwen3_30b_a3b}
 
 SLIME_DIR=${SLIME_DIR:-/root/slime}
 MEGATRON_PATH=${MEGATRON_PATH:-/root/Megatron-LM}
