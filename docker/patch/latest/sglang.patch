@@ -33,6 +33,18 @@ index 6fbd1db82..4c681b58d 100644
                  )
          elif not needs_tf_v5:
              logger.warning(
+diff --git a/python/sglang/srt/disaggregation/base/conn.py b/python/sglang/srt/disaggregation/base/conn.py
+index da4629e52..c03f98231 100644
+--- a/python/sglang/srt/disaggregation/base/conn.py
++++ b/python/sglang/srt/disaggregation/base/conn.py
+@@ -17,6 +17,7 @@ class KVArgs:
+     kv_data_ptrs: List[int]
+     kv_data_lens: List[int]
+     kv_item_lens: List[int]
++    aux_buffer_names: List[str]
+     aux_data_ptrs: List[int]
+     aux_data_lens: List[int]
+     aux_item_lens: List[int]
 diff --git a/python/sglang/srt/disaggregation/common/conn.py b/python/sglang/srt/disaggregation/common/conn.py
 index 67fe82ad6..2ef25c49b 100644
 --- a/python/sglang/srt/disaggregation/common/conn.py
@@ -114,7 +126,7 @@ index 67fe82ad6..2ef25c49b 100644
                  "prefill_pp_size": self.pp_size,
                  "prefill_page_size": self.page_size,
 diff --git a/python/sglang/srt/disaggregation/decode.py b/python/sglang/srt/disaggregation/decode.py
-index 1d8baf002..8f0a28741 100644
+index 1d8baf002..1ebb95929 100644
 --- a/python/sglang/srt/disaggregation/decode.py
 +++ b/python/sglang/srt/disaggregation/decode.py
 @@ -21,6 +21,7 @@ Life cycle of a request in the decode server
@@ -125,7 +137,26 @@ index 1d8baf002..8f0a28741 100644
  import time
  from collections import deque
  from dataclasses import dataclass
-@@ -336,6 +337,16 @@ class DecodePreallocQueue:
+@@ -40,8 +41,10 @@ from sglang.srt.disaggregation.utils import (
+     MetadataBuffers,
+     ReqToMetadataIdxAllocator,
+     TransferBackend,
++    apply_prefill_timing_payload,
+     get_kv_class,
+     is_mla_backend,
++    is_slime_profiling_enabled,
+     kv_to_page_indices,
+     poll_and_all_reduce,
+     prepare_abort,
+@@ -295,6 +298,7 @@ class DecodePreallocQueue:
+         kv_args.aux_data_ptrs, kv_args.aux_data_lens, kv_args.aux_item_lens = (
+             self.metadata_buffers.get_buf_infos()
+         )
++        kv_args.aux_buffer_names = self.metadata_buffers.get_aux_buffer_names()
+ 
+         if hasattr(self.token_to_kv_pool, "get_state_buf_infos"):
+             state_data_ptrs, state_data_lens, state_item_lens = (
+@@ -336,6 +340,16 @@ class DecodePreallocQueue:
          )
          return kv_manager
  
@@ -142,7 +173,7 @@ index 1d8baf002..8f0a28741 100644
      def add(self, req: Req, is_retracted: bool = False) -> None:
          """Add a request to the pending queue."""
          if self._check_if_req_exceed_kv_capacity(req):
-@@ -440,12 +451,37 @@ class DecodePreallocQueue:
+@@ -440,12 +454,37 @@ class DecodePreallocQueue:
              [decode_req.kv_receiver for decode_req in self.queue], self.gloo_group
          )
  
@@ -181,7 +212,38 @@ index 1d8baf002..8f0a28741 100644
              elif poll == KVPoll.WaitingForInput:
                  decode_req.waiting_for_input = True
              elif poll == KVPoll.Failed:
-@@ -830,6 +866,13 @@ class DecodeTransferQueue:
+@@ -590,6 +629,7 @@ class DecodePreallocQueue:
+                 self.req_to_metadata_buffer_idx_allocator.alloc()
+             )
+             assert decode_req.metadata_buffer_index is not None
++            self.metadata_buffers.clear_profiling_buf(decode_req.metadata_buffer_index)
+             page_indices = kv_to_page_indices(kv_indices, page_size)
+             decode_req.kv_receiver.init(
+                 page_indices, decode_req.metadata_buffer_index, state_indices
+@@ -751,6 +791,7 @@ class DecodeTransferQueue:
+             output_topk_index,
+             output_hidden_states,
+             output_bootstrap_room,
++            output_prefill_timing,
+         ) = self.metadata_buffers.get_buf(idx)
+ 
+         # Validate bootstrap_room to detect context corruption
+@@ -813,6 +854,14 @@ class DecodeTransferQueue:
+                 output_top_logprobs_idx[: decode_req.req.top_logprobs_num].tolist()
+             )
+ 
++        # Inject prefill-side PD timing forwarded from the P instance.
++        # Layout: [bootstrap_queue, forward, transfer_queue, bootstrap,
++        #          alloc_waiting, transfer_speed, transfer_mb, retry_count]
++        if is_slime_profiling_enabled():
++            apply_prefill_timing_payload(
++                decode_req.req.time_stats, output_prefill_timing
++            )
++
+         decode_req.kv_receiver.clear()
+         decode_req.kv_receiver = None
+         trace_slice_end(
+@@ -830,6 +879,13 @@ class DecodeTransferQueue:
              [decode_req.kv_receiver for decode_req in self.queue], self.gloo_group
          )
  
@@ -195,7 +257,7 @@ index 1d8baf002..8f0a28741 100644
          transferred_reqs = []
          indices_to_remove = set()
          for i, (decode_req, poll) in enumerate(zip(self.queue, polls)):
-@@ -877,7 +920,20 @@ class DecodeTransferQueue:
+@@ -877,7 +933,20 @@ class DecodeTransferQueue:
                  KVPoll.WaitingForInput,
                  KVPoll.Transferring,
              ]:
@@ -217,7 +279,7 @@ index 1d8baf002..8f0a28741 100644
              else:
                  raise ValueError(f"Unexpected poll case: {poll}")
  
-@@ -893,6 +949,14 @@ class DecodeTransferQueue:
+@@ -893,6 +962,14 @@ class DecodeTransferQueue:
  
          return transferred_reqs
  
@@ -232,7 +294,7 @@ index 1d8baf002..8f0a28741 100644
  
  class SchedulerDisaggregationDecodeMixin:
  
-@@ -1072,7 +1136,15 @@ class SchedulerDisaggregationDecodeMixin:
+@@ -1072,7 +1149,15 @@ class SchedulerDisaggregationDecodeMixin:
          resumed_reqs = self.disagg_decode_prealloc_queue.resume_retracted_reqs()
          self.waiting_queue.extend(resumed_reqs)
          if len(self.disagg_decode_prealloc_queue.retracted_queue) > 0:
@@ -291,9 +353,18 @@ index a2d08e0e3..ed0790604 100644
              mm_item = MultimodalDataItem.from_dict(
                  {
 diff --git a/python/sglang/srt/disaggregation/mooncake/conn.py b/python/sglang/srt/disaggregation/mooncake/conn.py
-index d0d4efd95..960f585e2 100644
+index d0d4efd95..b3a207063 100644
 --- a/python/sglang/srt/disaggregation/mooncake/conn.py
 +++ b/python/sglang/srt/disaggregation/mooncake/conn.py
+@@ -30,7 +30,7 @@ from sglang.srt.disaggregation.common.utils import (
+ from sglang.srt.disaggregation.mooncake.utils import (
+     check_mooncake_custom_mem_pool_enabled,
+ )
+-from sglang.srt.disaggregation.utils import DisaggregationMode
++from sglang.srt.disaggregation.utils import DisaggregationMode, iter_aux_transfer_specs
+ from sglang.srt.distributed.parallel_state import get_mooncake_transfer_engine
+ from sglang.srt.environ import envs
+ from sglang.srt.server_args import ServerArgs
 @@ -260,6 +260,19 @@ class MooncakeKVManager(CommonKVManager):
                  self.kv_args.state_data_ptrs, self.kv_args.state_data_lens
              )
@@ -314,7 +385,44 @@ index d0d4efd95..960f585e2 100644
      def _transfer_data(self, mooncake_session_id, transfer_blocks):
          if not transfer_blocks:
              return 0
-@@ -643,13 +656,13 @@ class MooncakeKVManager(CommonKVManager):
+@@ -524,10 +537,14 @@ class MooncakeKVManager(CommonKVManager):
+         prefill_aux_ptrs = self.kv_args.aux_data_ptrs
+         prefill_aux_item_lens = self.kv_args.aux_item_lens
+ 
+-        for i, dst_aux_ptr in enumerate(dst_aux_ptrs):
+-            length = prefill_aux_item_lens[i]
+-            src_addr = prefill_aux_ptrs[i] + length * prefill_aux_index
+-            dst_addr = dst_aux_ptrs[i] + length * req.dst_aux_index
++        for _, src_addr, dst_addr, length in iter_aux_transfer_specs(
++            self.kv_args.aux_buffer_names,
++            prefill_aux_ptrs,
++            prefill_aux_item_lens,
++            dst_aux_ptrs,
++            prefill_aux_index,
++            req.dst_aux_index,
++        ):
+             transfer_blocks.append((src_addr, dst_addr, length))
+ 
+         return self._transfer_data(req.mooncake_session_id, transfer_blocks)
+@@ -541,9 +558,14 @@ class MooncakeKVManager(CommonKVManager):
+         prefill_aux_ptrs = self.kv_args.aux_data_ptrs
+         prefill_aux_item_lens = self.kv_args.aux_item_lens
+ 
+-        for i in range(len(prefill_aux_ptrs)):
+-            length = prefill_aux_item_lens[i]
+-            src_addr = prefill_aux_ptrs[i] + length * prefill_aux_index
++        for i, src_addr, _, length in iter_aux_transfer_specs(
++            self.kv_args.aux_buffer_names,
++            prefill_aux_ptrs,
++            prefill_aux_item_lens,
++            dst_aux_ptrs,
++            prefill_aux_index,
++            req.dst_aux_index,
++        ):
+             data = AuxDataCodec.serialize_data_from_buffer(src_addr, length)
+ 
+             self.send_aux_data_to_endpoint(
+@@ -643,13 +665,13 @@ class MooncakeKVManager(CommonKVManager):
                  raise RuntimeError(
                      f"PD Disaggregation does NOT support PD different TP sizes for non-MLA {state_type.upper()} hybrid models yet."
                  )
@@ -334,7 +442,7 @@ index d0d4efd95..960f585e2 100644
              # Reuse _send_kvcache_generic interface to send extra pool data
              prefill_state_indices = np.array(prefill_state_indices, dtype=np.int32)
              dst_state_indices = np.array(req.dst_state_indices, dtype=np.int32)
-@@ -858,12 +871,6 @@ class MooncakeKVManager(CommonKVManager):
+@@ -858,12 +880,6 @@ class MooncakeKVManager(CommonKVManager):
                          if ret != 0:
                              with self.session_lock:
                                  self.session_failures[req.mooncake_session_id] += 1
@@ -347,7 +455,7 @@ index d0d4efd95..960f585e2 100644
                              self.record_failure(
                                  kv_chunk.room,
                                  f"Failed to send kv chunk of {kv_chunk.room} to {req.endpoint}:{req.dst_port}",
-@@ -880,13 +887,31 @@ class MooncakeKVManager(CommonKVManager):
+@@ -880,13 +896,31 @@ class MooncakeKVManager(CommonKVManager):
  
                          if kv_chunk.is_last:
                              if kv_chunk.state_indices is not None:
@@ -380,7 +488,7 @@ index d0d4efd95..960f585e2 100644
  
                              # Only the last chunk we need to send the aux data
                              ret = self.send_aux(
-@@ -895,6 +920,11 @@ class MooncakeKVManager(CommonKVManager):
+@@ -895,6 +929,11 @@ class MooncakeKVManager(CommonKVManager):
                                  target_rank_registration_info.dst_aux_ptrs,
                              )
                              polls.append(True if ret == 0 else False)
@@ -392,7 +500,7 @@ index d0d4efd95..960f585e2 100644
                              dst_ranks_infos.append(
                                  (req.endpoint, req.dst_port, req.room)
                              )
-@@ -977,15 +1007,20 @@ class MooncakeKVManager(CommonKVManager):
+@@ -977,15 +1016,20 @@ class MooncakeKVManager(CommonKVManager):
  
                  if status == KVPoll.Success:
                      if bootstrap_room in self.request_status:
@@ -420,7 +528,7 @@ index d0d4efd95..960f585e2 100644
                  elif status == KVPoll.Failed:
                      self.record_failure(
                          bootstrap_room,
-@@ -1266,7 +1301,10 @@ class MooncakeKVReceiver(CommonKVReceiver):
+@@ -1266,7 +1310,10 @@ class MooncakeKVReceiver(CommonKVReceiver):
          super().__init__(mgr, bootstrap_addr, bootstrap_room, prefill_dp_rank)
  
          self.kv_mgr.addr_to_rooms_tracker[self.bootstrap_addr].add(self.bootstrap_room)
@@ -433,7 +541,7 @@ index d0d4efd95..960f585e2 100644
      def _register_kv_args(self):
          for bootstrap_info in self.bootstrap_infos:
 diff --git a/python/sglang/srt/disaggregation/prefill.py b/python/sglang/srt/disaggregation/prefill.py
-index fbc801635..ff1f52796 100644
+index fbc801635..ade111c9f 100644
 --- a/python/sglang/srt/disaggregation/prefill.py
 +++ b/python/sglang/srt/disaggregation/prefill.py
 @@ -20,6 +20,7 @@ Life cycle of a request in the prefill server
@@ -444,7 +552,15 @@ index fbc801635..ff1f52796 100644
  import time
  from collections import deque
  from http import HTTPStatus
-@@ -276,6 +277,12 @@ class PrefillBootstrapQueue:
+@@ -167,6 +168,7 @@ class PrefillBootstrapQueue:
+         kv_args.aux_data_ptrs, kv_args.aux_data_lens, kv_args.aux_item_lens = (
+             self.metadata_buffers.get_buf_infos()
+         )
++        kv_args.aux_buffer_names = self.metadata_buffers.get_aux_buffer_names()
+         kv_args.ib_device = self.scheduler.server_args.disaggregation_ib_device
+         kv_args.gpu_id = self.scheduler.gpu_id
+ 
+@@ -276,6 +278,12 @@ class PrefillBootstrapQueue:
              [req.disagg_kv_sender for req in self.queue], self.gloo_group
          )
  
@@ -457,7 +573,7 @@ index fbc801635..ff1f52796 100644
          for i, (req, poll) in enumerate(zip(self.queue, polls)):
              if rids_to_check is not None:
                  # if req not in reqs_info_to_check, skip
-@@ -283,6 +290,27 @@ class PrefillBootstrapQueue:
+@@ -283,6 +291,27 @@ class PrefillBootstrapQueue:
                      continue
  
              if poll == KVPoll.Bootstrapping:
@@ -485,7 +601,7 @@ index fbc801635..ff1f52796 100644
                  continue
              elif poll == KVPoll.Failed:
                  error_message = f"Prefill bootstrap failed for request rank={self.tp_rank} {req.rid=} {req.bootstrap_room=}"
-@@ -335,6 +363,15 @@ class PrefillBootstrapQueue:
+@@ -335,6 +364,15 @@ class PrefillBootstrapQueue:
          else:
              return bootstrapped_reqs, failed_reqs
  
@@ -501,7 +617,7 @@ index fbc801635..ff1f52796 100644
  
  class SchedulerDisaggregationPrefillMixin:
      """
-@@ -547,6 +584,18 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -547,6 +585,18 @@ class SchedulerDisaggregationPrefillMixin:
  
          self.maybe_send_health_check_signal()
  
@@ -520,7 +636,7 @@ index fbc801635..ff1f52796 100644
      def process_disagg_prefill_inflight_queue(
          self: Scheduler, rids_to_check: Optional[List[str]] = None
      ) -> List[Req]:
-@@ -559,11 +608,24 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -559,11 +609,24 @@ class SchedulerDisaggregationPrefillMixin:
  
          done_reqs = []
  
@@ -546,7 +662,7 @@ index fbc801635..ff1f52796 100644
          undone_reqs: List[Req] = []
          # Check .poll() for the reqs in disagg_prefill_inflight_queue. If Success, respond to the client and remove it from the queue
          for req, poll in zip(self.disagg_prefill_inflight_queue, polls):
-@@ -573,10 +635,35 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -573,10 +636,35 @@ class SchedulerDisaggregationPrefillMixin:
                      undone_reqs.append(req)
                      continue
  
@@ -584,7 +700,7 @@ index fbc801635..ff1f52796 100644
              elif poll == KVPoll.Success:  # transfer done
                  release_kv_cache(req, self.tree_cache)  # unlock the tree
                  req.finished_reason = FINISH_LENGTH(length=0)
-@@ -628,9 +715,12 @@ class SchedulerDisaggregationPrefillMixin:
+@@ -628,9 +716,12 @@ class SchedulerDisaggregationPrefillMixin:
          """
          Used by PP, get the transferred rids but **do not pop**
          """
@@ -598,6 +714,198 @@ index fbc801635..ff1f52796 100644
          )
  
          transferred_rids: List[str] = []
+diff --git a/python/sglang/srt/disaggregation/utils.py b/python/sglang/srt/disaggregation/utils.py
+index 6d58f415a..84723c342 100644
+--- a/python/sglang/srt/disaggregation/utils.py
++++ b/python/sglang/srt/disaggregation/utils.py
+@@ -21,6 +21,17 @@ if TYPE_CHECKING:
+ # Constants & Enums
+ #########################
+ FAKE_BOOTSTRAP_HOST = "2.2.2.2"
++PREFILL_TIMING_AUX_BUFFER_NAME = "prefill_timing"
++PREFILL_TIMING_DEST_ATTRS = (
++    ("fwd_prefill_bootstrap_queue_duration", float),
++    ("fwd_prefill_forward_duration", float),
++    ("fwd_prefill_transfer_queue_duration", float),
++    ("fwd_bootstrap_duration", float),
++    ("fwd_alloc_waiting_duration", float),
++    ("fwd_transfer_speed_gb_s", float),
++    ("fwd_transfer_total_mb", float),
++    ("fwd_prefill_retry_count", int),
++)
+ 
+ 
+ class DisaggregationMode(Enum):
+@@ -139,46 +150,35 @@ class MetadataBuffers:
+             self.bootstrap_room = torch.zeros(
+                 (size, 8), dtype=torch.uint64, device=device
+             )
++            # Prefill-side PD timing (8 floats, padded to 16 for RDMA alignment).
++            # Layout: [bootstrap_queue, forward, transfer_queue, bootstrap,
++            #          alloc_waiting, transfer_speed, transfer_mb, retry_count]
++            self.prefill_timing = torch.zeros(
++                (size, 16), dtype=torch.float32, device=device
++            )
++        self.aux_buffers = [
++            ("output_ids", self.output_ids),
++            ("cached_tokens", self.cached_tokens),
++            ("output_token_logprobs_val", self.output_token_logprobs_val),
++            ("output_token_logprobs_idx", self.output_token_logprobs_idx),
++            ("output_top_logprobs_val", self.output_top_logprobs_val),
++            ("output_top_logprobs_idx", self.output_top_logprobs_idx),
++            ("output_topk_p", self.output_topk_p),
++            ("output_topk_index", self.output_topk_index),
++            ("output_hidden_states", self.output_hidden_states),
++            ("bootstrap_room", self.bootstrap_room),
++            (PREFILL_TIMING_AUX_BUFFER_NAME, self.prefill_timing),
++        ]
+ 
+     def get_buf_infos(self):
+-        ptrs = [
+-            self.output_ids.data_ptr(),
+-            self.cached_tokens.data_ptr(),
+-            self.output_token_logprobs_val.data_ptr(),
+-            self.output_token_logprobs_idx.data_ptr(),
+-            self.output_top_logprobs_val.data_ptr(),
+-            self.output_top_logprobs_idx.data_ptr(),
+-            self.output_topk_p.data_ptr(),
+-            self.output_topk_index.data_ptr(),
+-            self.output_hidden_states.data_ptr(),
+-            self.bootstrap_room.data_ptr(),
+-        ]
+-        data_lens = [
+-            self.output_ids.nbytes,
+-            self.cached_tokens.nbytes,
+-            self.output_token_logprobs_val.nbytes,
+-            self.output_token_logprobs_idx.nbytes,
+-            self.output_top_logprobs_val.nbytes,
+-            self.output_top_logprobs_idx.nbytes,
+-            self.output_topk_p.nbytes,
+-            self.output_topk_index.nbytes,
+-            self.output_hidden_states.nbytes,
+-            self.bootstrap_room.nbytes,
+-        ]
+-        item_lens = [
+-            self.output_ids[0].nbytes,
+-            self.cached_tokens[0].nbytes,
+-            self.output_token_logprobs_val[0].nbytes,
+-            self.output_token_logprobs_idx[0].nbytes,
+-            self.output_top_logprobs_val[0].nbytes,
+-            self.output_top_logprobs_idx[0].nbytes,
+-            self.output_topk_p[0].nbytes,
+-            self.output_topk_index[0].nbytes,
+-            self.output_hidden_states[0].nbytes,
+-            self.bootstrap_room[0].nbytes,
+-        ]
++        ptrs = [buffer.data_ptr() for _, buffer in self.aux_buffers]
++        data_lens = [buffer.nbytes for _, buffer in self.aux_buffers]
++        item_lens = [buffer[0].nbytes for _, buffer in self.aux_buffers]
+         return ptrs, data_lens, item_lens
+ 
++    def get_aux_buffer_names(self):
++        return [name for name, _ in self.aux_buffers]
++
+     def get_buf(self, idx: int):
+         return (
+             self.output_ids[idx],
+@@ -191,8 +191,12 @@ class MetadataBuffers:
+             self.output_topk_index[idx],
+             self.output_hidden_states[idx],
+             self.bootstrap_room[idx],
++            self.prefill_timing[idx],
+         )
+ 
++    def clear_profiling_buf(self, idx: int):
++        self.prefill_timing[idx].zero_()
++
+     def set_buf(self, req: Req):
+ 
+         self.output_ids[req.metadata_buffer_index][0] = req.output_ids[0]
+@@ -237,6 +241,84 @@ class MetadataBuffers:
+         self.bootstrap_room[req.metadata_buffer_index, 0] = (
+             req.bootstrap_room if req.bootstrap_room is not None else 0
+         )
++        # Pack prefill-side PD timing durations for transfer to decode instance.
++        # Note: set_buf is called at the START of the last KV chunk send, so
++        # completion_time and prefill_transfer_queue_entry_time are not yet set.
++        # We use time.perf_counter() as the "forward just completed" timestamp.
++        import time
++
++        ts = req.time_stats
++        timing = self.prefill_timing[req.metadata_buffer_index]
++        self.clear_profiling_buf(req.metadata_buffer_index)
++        if not is_slime_profiling_enabled():
++            return
++        for idx, value in enumerate(
++            build_prefill_timing_payload(ts, now=time.perf_counter())
++        ):
++            if value > 0:
++                timing[idx] = value
++
++
++def is_slime_profiling_enabled() -> bool:
++    return envs.SLIME_ENABLE_PROFILING.get()
++
++
++def build_prefill_timing_payload(time_stats, now: float) -> tuple[float, ...]:
++    bootstrap_queue_duration = 0.0
++    if (
++        time_stats.prefill_bootstrap_queue_entry_time > 0
++        and time_stats.wait_queue_entry_time > 0
++    ):
++        bootstrap_queue_duration = (
++            time_stats.wait_queue_entry_time
++            - time_stats.prefill_bootstrap_queue_entry_time
++        )
++
++    prefill_forward_duration = (
++        now - time_stats.forward_entry_time
++        if time_stats.forward_entry_time > 0
++        else 0.0
++    )
++
++    return (
++        bootstrap_queue_duration,
++        prefill_forward_duration,
++        0.0,
++        max(0.0, time_stats.bootstrap_duration),
++        max(0.0, time_stats.alloc_waiting_duration),
++        max(0.0, time_stats.transfer_speed_gb_s),
++        max(0.0, time_stats.transfer_total_mb),
++        float(max(0, time_stats.prefill_retry_count)),
++    )
++
++
++def apply_prefill_timing_payload(time_stats, timing) -> None:
++    for value, (attr_name, caster) in zip(
++        timing[: len(PREFILL_TIMING_DEST_ATTRS)].tolist(),
++        PREFILL_TIMING_DEST_ATTRS,
++    ):
++        if value > 0:
++            setattr(time_stats, attr_name, caster(value))
++
++
++def iter_aux_transfer_specs(
++    aux_buffer_names: list[str],
++    prefill_aux_ptrs: list[int],
++    prefill_aux_item_lens: list[int],
++    dst_aux_ptrs: list[int],
++    prefill_aux_index: int,
++    dst_aux_index: int,
++):
++    profiling_enabled = is_slime_profiling_enabled()
++    for i, (buffer_name, dst_aux_ptr) in enumerate(zip(aux_buffer_names, dst_aux_ptrs)):
++        if not profiling_enabled and buffer_name == PREFILL_TIMING_AUX_BUFFER_NAME:
++            continue
++        length = prefill_aux_item_lens[i]
++        if length <= 0:
++            continue
++        src_addr = prefill_aux_ptrs[i] + length * prefill_aux_index
++        dst_addr = dst_aux_ptr + length * dst_aux_index
++        yield i, src_addr, dst_addr, length
+ 
+ 
+ #########################
 diff --git a/python/sglang/srt/distributed/parallel_state.py b/python/sglang/srt/distributed/parallel_state.py
 index 8f1069c00..e47589295 100644
 --- a/python/sglang/srt/distributed/parallel_state.py
@@ -723,6 +1031,18 @@ index 1d6816c01..402b42e05 100644
  @app.post("/update_weight_version")
  @auth_level(AuthLevel.ADMIN_OPTIONAL)
  async def update_weight_version(obj: UpdateWeightVersionReqInput, request: Request):
+diff --git a/python/sglang/srt/environ.py b/python/sglang/srt/environ.py
+index 8293796a2..bff34e422 100644
+--- a/python/sglang/srt/environ.py
++++ b/python/sglang/srt/environ.py
+@@ -244,6 +244,7 @@ class Envs:
+     SGLANG_DISAGGREGATION_HEARTBEAT_MAX_FAILURE = EnvInt(2)
+     SGLANG_DISAGGREGATION_WAITING_TIMEOUT = EnvInt(300)
+     SGLANG_DISAGGREGATION_NIXL_BACKEND = EnvStr("UCX")
++    SLIME_ENABLE_PROFILING = EnvBool(False)
+ 
+     # Scheduler: others:
+     SGLANG_EMPTY_CACHE_INTERVAL = EnvFloat(-1)  # in seconds. Set if you observe high memory accumulation over a long serving period.
 diff --git a/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py b/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py
 index 1cdf65b91..4783cd18f 100644
 --- a/python/sglang/srt/layers/attention/nsa/index_buf_accessor.py
@@ -1348,7 +1668,7 @@ index 00bd68755..12d5577af 100644
  
      def get_routed_experts(
 diff --git a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py b/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
-index 8539639d5..e7f5d1565 100644
+index 8539639d5..d44496c2f 100644
 --- a/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
 +++ b/python/sglang/srt/layers/moe/token_dispatcher/deepep.py
 @@ -388,6 +388,7 @@ class _DeepEPDispatcherImplNormal(_DeepEPDispatcherImplBase):
@@ -1387,7 +1707,7 @@ index 8539639d5..e7f5d1565 100644
              output = hidden_states
          else:
              raise NotImplementedError()  # triton runner was supported but it's temporarily disabled
-@@ -551,10 +562,12 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
+@@ -551,10 +562,18 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
          buffer = self._get_buffer()
          topk_weights, topk_ids = topk_output.topk_weights, topk_output.topk_ids
          topk_ids = topk_ids.to(torch.int64)
@@ -1395,16 +1715,22 @@ index 8539639d5..e7f5d1565 100644
 -            hidden_states.shape[0] * buffer.group_size * topk_ids.shape[1]
 -            + self.num_experts
 -        ) // self.num_experts
-+        # Use a correctness-preserving upper bound for per-expert token count.
-+        # In the worst case, every rank routes all local tokens to the same expert.
-+        expected_m = min(
-+            hidden_states.shape[0] * buffer.group_size,
-+            self.num_max_dispatch_tokens_per_rank * buffer.group_size,
-+        )
++        if self.quant_config.get("bf16_weights", False):
++            # BF16 low-latency path slices hidden_states[:, :expected_m, :], so
++            # expected_m must remain a correctness-preserving upper bound.
++            expected_m = min(
++                hidden_states.shape[0] * buffer.group_size,
++                self.num_max_dispatch_tokens_per_rank * buffer.group_size,
++            )
++        else:
++            expected_m = (
++                hidden_states.shape[0] * buffer.group_size * topk_ids.shape[1]
++                + self.num_experts
++            ) // self.num_experts
          hidden_states, masked_m, event, hook = self._dispatch_core(
              hidden_states,
              topk_ids,
-@@ -609,7 +622,9 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
+@@ -609,7 +628,9 @@ class _DeepEPDispatcherImplLowLatency(_DeepEPDispatcherImplBase):
          input_global_scale = self.quant_config.get("input_global_scale", None)
          if input_global_scale is not None:
              use_nvfp4 = True
@@ -1581,11 +1907,76 @@ index ae0614635..3b6a8d254 100644
          # TODO: remove this when npu_mrope supports QNumHeads * QHeadSize > 4096
          assert (
              fused_set_kv_buffer_arg is None
+diff --git a/python/sglang/srt/managers/detokenizer_manager.py b/python/sglang/srt/managers/detokenizer_manager.py
+index 652227860..7d3a5d0c4 100644
+--- a/python/sglang/srt/managers/detokenizer_manager.py
++++ b/python/sglang/srt/managers/detokenizer_manager.py
+@@ -405,6 +405,17 @@ class DetokenizerManager(MultiHttpWorkerDetokenizerMixin):
+             prefill_launch_delay=recv_obj.prefill_launch_delay,
+             prefill_launch_latency=recv_obj.prefill_launch_latency,
+             prefill_finished_ts=recv_obj.prefill_finished_ts,
++            pd_prefill_bootstrap_queue_duration=recv_obj.pd_prefill_bootstrap_queue_duration,
++            pd_prefill_forward_duration=recv_obj.pd_prefill_forward_duration,
++            pd_prefill_transfer_queue_duration=recv_obj.pd_prefill_transfer_queue_duration,
++            pd_decode_prealloc_duration=recv_obj.pd_decode_prealloc_duration,
++            pd_decode_transfer_duration=recv_obj.pd_decode_transfer_duration,
++            pd_decode_forward_duration=recv_obj.pd_decode_forward_duration,
++            pd_bootstrap_duration=recv_obj.pd_bootstrap_duration,
++            pd_alloc_waiting_duration=recv_obj.pd_alloc_waiting_duration,
++            pd_transfer_speed_gb_s=recv_obj.pd_transfer_speed_gb_s,
++            pd_transfer_total_mb=recv_obj.pd_transfer_total_mb,
++            pd_prefill_retry_count=recv_obj.pd_prefill_retry_count,
+         )
+ 
+     def handle_multimodal_decode_req(self, recv_obj: BatchMultimodalDecodeReq):
 diff --git a/python/sglang/srt/managers/io_struct.py b/python/sglang/srt/managers/io_struct.py
-index ff1774567..42d27a82a 100644
+index ff1774567..f947e71d7 100644
 --- a/python/sglang/srt/managers/io_struct.py
 +++ b/python/sglang/srt/managers/io_struct.py
-@@ -1403,6 +1403,20 @@ class UpdateWeightsFromIPCReqOutput(BaseReq):
+@@ -101,6 +101,42 @@ class RequestTimingMetricsMixin:
+     # This marks when the prefill computation finishes.
+     prefill_finished_ts: Optional[List[Optional[float]]]
+ 
++    # --- PD disaggregation timing fields ---
++    # All fields are None when profiling is disabled or not in PD disaggregation mode.
++
++    # P instance: duration spent in bootstrap queue before entering the wait queue.
++    pd_prefill_bootstrap_queue_duration: Optional[List[Optional[float]]]
++
++    # P instance: duration for the actual prefill forward computation.
++    pd_prefill_forward_duration: Optional[List[Optional[float]]]
++
++    # P instance: duration spent in the KV transfer queue.
++    pd_prefill_transfer_queue_duration: Optional[List[Optional[float]]]
++
++    # D instance: duration waiting for KV cache slot pre-allocation.
++    pd_decode_prealloc_duration: Optional[List[Optional[float]]]
++
++    # D instance: duration waiting for the KV cache transfer to complete.
++    pd_decode_transfer_duration: Optional[List[Optional[float]]]
++
++    # D instance: duration for the actual decode forward computation.
++    pd_decode_forward_duration: Optional[List[Optional[float]]]
++
++    # Bootstrap handshake duration (P and D instances).
++    pd_bootstrap_duration: Optional[List[Optional[float]]]
++
++    # KV cache allocation waiting duration (P and D instances).
++    pd_alloc_waiting_duration: Optional[List[Optional[float]]]
++
++    # KV cache transfer speed in GB/s.
++    pd_transfer_speed_gb_s: Optional[List[Optional[float]]]
++
++    # Total KV cache transferred in MB.
++    pd_transfer_total_mb: Optional[List[Optional[float]]]
++
++    # Number of prefill retries (P instance only).
++    pd_prefill_retry_count: Optional[List[Optional[int]]]
++
+ 
+ @dataclass
+ class SpeculativeDecodingMetricsMixin:
+@@ -1403,6 +1439,20 @@ class UpdateWeightsFromIPCReqOutput(BaseReq):
      message: str
  
  
@@ -1606,7 +1997,7 @@ index ff1774567..42d27a82a 100644
  @dataclass
  class InitWeightsSendGroupForRemoteInstanceReqOutput(BaseReq):
      success: bool
-@@ -1802,6 +1816,10 @@ class GetLoadReqOutput(BaseReq):
+@@ -1802,6 +1852,10 @@ class GetLoadReqOutput(BaseReq):
      num_waiting_reqs: int
      num_tokens: int
      ts_tic: float
@@ -1617,6 +2008,202 @@ index ff1774567..42d27a82a 100644
  
  
  @dataclass
+diff --git a/python/sglang/srt/managers/multi_tokenizer_mixin.py b/python/sglang/srt/managers/multi_tokenizer_mixin.py
+index e1236aa0f..daa598a1f 100644
+--- a/python/sglang/srt/managers/multi_tokenizer_mixin.py
++++ b/python/sglang/srt/managers/multi_tokenizer_mixin.py
+@@ -142,6 +142,39 @@ def _handle_output_by_index(output, i):
+             prefill_finished_ts=_extract_field_by_index(
+                 output, "prefill_finished_ts", i
+             ),
++            pd_prefill_bootstrap_queue_duration=_extract_field_by_index(
++                output, "pd_prefill_bootstrap_queue_duration", i
++            ),
++            pd_prefill_forward_duration=_extract_field_by_index(
++                output, "pd_prefill_forward_duration", i
++            ),
++            pd_prefill_transfer_queue_duration=_extract_field_by_index(
++                output, "pd_prefill_transfer_queue_duration", i
++            ),
++            pd_decode_prealloc_duration=_extract_field_by_index(
++                output, "pd_decode_prealloc_duration", i
++            ),
++            pd_decode_transfer_duration=_extract_field_by_index(
++                output, "pd_decode_transfer_duration", i
++            ),
++            pd_decode_forward_duration=_extract_field_by_index(
++                output, "pd_decode_forward_duration", i
++            ),
++            pd_bootstrap_duration=_extract_field_by_index(
++                output, "pd_bootstrap_duration", i
++            ),
++            pd_alloc_waiting_duration=_extract_field_by_index(
++                output, "pd_alloc_waiting_duration", i
++            ),
++            pd_transfer_speed_gb_s=_extract_field_by_index(
++                output, "pd_transfer_speed_gb_s", i
++            ),
++            pd_transfer_total_mb=_extract_field_by_index(
++                output, "pd_transfer_total_mb", i
++            ),
++            pd_prefill_retry_count=_extract_field_by_index(
++                output, "pd_prefill_retry_count", i
++            ),
+             finished_reasons=_extract_field_by_index(output, "finished_reasons", i),
+             decoded_texts=_extract_field_by_index(output, "decoded_texts", i),
+             decode_ids=_extract_field_by_index(output, "decode_ids", i),
+@@ -211,6 +244,50 @@ def _handle_output_by_index(output, i):
+     elif isinstance(output, BatchEmbeddingOutput):
+         new_output = BatchEmbeddingOutput(
+             rids=[output.rids[i]],
++            queue_time=_extract_field_by_index(output, "queue_time", i),
++            forward_entry_time=_extract_field_by_index(output, "forward_entry_time", i),
++            prefill_launch_delay=_extract_field_by_index(
++                output, "prefill_launch_delay", i
++            ),
++            prefill_launch_latency=_extract_field_by_index(
++                output, "prefill_launch_latency", i
++            ),
++            prefill_finished_ts=_extract_field_by_index(
++                output, "prefill_finished_ts", i
++            ),
++            pd_prefill_bootstrap_queue_duration=_extract_field_by_index(
++                output, "pd_prefill_bootstrap_queue_duration", i
++            ),
++            pd_prefill_forward_duration=_extract_field_by_index(
++                output, "pd_prefill_forward_duration", i
++            ),
++            pd_prefill_transfer_queue_duration=_extract_field_by_index(
++                output, "pd_prefill_transfer_queue_duration", i
++            ),
++            pd_decode_prealloc_duration=_extract_field_by_index(
++                output, "pd_decode_prealloc_duration", i
++            ),
++            pd_decode_transfer_duration=_extract_field_by_index(
++                output, "pd_decode_transfer_duration", i
++            ),
++            pd_decode_forward_duration=_extract_field_by_index(
++                output, "pd_decode_forward_duration", i
++            ),
++            pd_bootstrap_duration=_extract_field_by_index(
++                output, "pd_bootstrap_duration", i
++            ),
++            pd_alloc_waiting_duration=_extract_field_by_index(
++                output, "pd_alloc_waiting_duration", i
++            ),
++            pd_transfer_speed_gb_s=_extract_field_by_index(
++                output, "pd_transfer_speed_gb_s", i
++            ),
++            pd_transfer_total_mb=_extract_field_by_index(
++                output, "pd_transfer_total_mb", i
++            ),
++            pd_prefill_retry_count=_extract_field_by_index(
++                output, "pd_prefill_retry_count", i
++            ),
+             finished_reasons=_extract_field_by_index(output, "finished_reasons", i),
+             embeddings=_extract_field_by_index(output, "embeddings", i),
+             prompt_tokens=_extract_field_by_index(output, "prompt_tokens", i),
+@@ -239,6 +316,39 @@ def _handle_output_by_index(output, i):
+             prefill_finished_ts=_extract_field_by_index(
+                 output, "prefill_finished_ts", i
+             ),
++            pd_prefill_bootstrap_queue_duration=_extract_field_by_index(
++                output, "pd_prefill_bootstrap_queue_duration", i
++            ),
++            pd_prefill_forward_duration=_extract_field_by_index(
++                output, "pd_prefill_forward_duration", i
++            ),
++            pd_prefill_transfer_queue_duration=_extract_field_by_index(
++                output, "pd_prefill_transfer_queue_duration", i
++            ),
++            pd_decode_prealloc_duration=_extract_field_by_index(
++                output, "pd_decode_prealloc_duration", i
++            ),
++            pd_decode_transfer_duration=_extract_field_by_index(
++                output, "pd_decode_transfer_duration", i
++            ),
++            pd_decode_forward_duration=_extract_field_by_index(
++                output, "pd_decode_forward_duration", i
++            ),
++            pd_bootstrap_duration=_extract_field_by_index(
++                output, "pd_bootstrap_duration", i
++            ),
++            pd_alloc_waiting_duration=_extract_field_by_index(
++                output, "pd_alloc_waiting_duration", i
++            ),
++            pd_transfer_speed_gb_s=_extract_field_by_index(
++                output, "pd_transfer_speed_gb_s", i
++            ),
++            pd_transfer_total_mb=_extract_field_by_index(
++                output, "pd_transfer_total_mb", i
++            ),
++            pd_prefill_retry_count=_extract_field_by_index(
++                output, "pd_prefill_retry_count", i
++            ),
+             finished_reasons=_extract_field_by_index(output, "finished_reasons", i),
+             output_strs=_extract_field_by_index(output, "output_strs", i),
+             output_ids=_extract_field_by_index(output, "output_ids", i),
+@@ -524,6 +634,60 @@ def monkey_patch_uvicorn_multiprocessing(timeout: float = 10):
+             "uvicorn.supervisors.multiprocess not found, skipping monkey patch"
+         )
+ 
++    # Fix stdin fd issue when running under Ray (or other managed
++    # environments where stdin may not be a real terminal):
++    #
++    # Uvicorn's get_subprocess() captures sys.stdin.fileno() in the parent
++    # and passes it to spawn'd children, which call os.fdopen(stdin_fileno)
++    # to re-attach stdin.  This is intended for interactive debugging (e.g.
++    # pdb attach to a child worker).
++    #
++    # In Ray Actors, sys.stdin.fileno() succeeds in the parent (returns a
++    # valid fd number), but the fd is not inheritable across spawn.  The
++    # child's os.fdopen() then crashes with OSError: [Errno 9] Bad file
++    # descriptor, killing every tokenizer worker.
++    #
++    # Instead of unconditionally disabling stdin passthrough, we probe
++    # whether the fd is truly usable by dup'ing it.  If os.dup() fails,
++    # the fd won't survive spawn either, so we fall back to None.  In a
++    # normal terminal environment os.dup() succeeds and debugging ability
++    # is preserved.
++    try:
++        import uvicorn._subprocess as _uv_sub
++        import uvicorn.supervisors.multiprocess as _uv_mp
++
++        def _safe_get_stdin_fileno():
++            """Return stdin fileno only if it is genuinely usable."""
++            try:
++                fileno = sys.stdin.fileno()
++                # Verify the fd is valid and duplicable — if it isn't,
++                # spawn'd children won't be able to reopen it either.
++                dup_fd = os.dup(fileno)
++                os.close(dup_fd)
++                return fileno
++            except (AttributeError, OSError):
++                return None
++
++        def _patched_get_subprocess(config, target, sockets):
++            stdin_fileno = _safe_get_stdin_fileno()
++            kwargs = {
++                "config": config,
++                "target": target,
++                "sockets": sockets,
++                "stdin_fileno": stdin_fileno,
++            }
++            return _uv_sub.spawn.Process(
++                target=_uv_sub.subprocess_started, kwargs=kwargs
++            )
++
++        # Must patch both: the supervisor module caches its own reference
++        # to get_subprocess at import time via
++        # ``from uvicorn._subprocess import get_subprocess``.
++        _uv_sub.get_subprocess = _patched_get_subprocess
++        _uv_mp.get_subprocess = _patched_get_subprocess
++    except Exception:
++        pass
++
+ 
+ class SenderWrapper:
+     def __init__(self, port_args: PortArgs, send_to_scheduler: zmq.Socket):
 diff --git a/python/sglang/srt/managers/schedule_batch.py b/python/sglang/srt/managers/schedule_batch.py
 index c07995798..dd8ca7167 100644
 --- a/python/sglang/srt/managers/schedule_batch.py
@@ -1734,10 +2321,70 @@ index 30b2732b9..68090b161 100644
  
      def get_loads(self: Scheduler, req: GetLoadsReqInput = None) -> GetLoadsReqOutput:
 diff --git a/python/sglang/srt/managers/scheduler_output_processor_mixin.py b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
-index 482bc6ca6..857cfa6a3 100644
+index 482bc6ca6..fbc486417 100644
 --- a/python/sglang/srt/managers/scheduler_output_processor_mixin.py
 +++ b/python/sglang/srt/managers/scheduler_output_processor_mixin.py
-@@ -1134,7 +1134,7 @@ class SchedulerOutputProcessorMixin:
+@@ -922,6 +922,18 @@ class SchedulerOutputProcessorMixin:
+         prefill_launch_delays = []
+         prefill_launch_latencies = []
+         prefill_finished_timestamps = []
++        profiling_enabled = envs.SLIME_ENABLE_PROFILING.get()
++        pd_prefill_bootstrap_queue_durations = [] if profiling_enabled else None
++        pd_prefill_forward_durations = [] if profiling_enabled else None
++        pd_prefill_transfer_queue_durations = [] if profiling_enabled else None
++        pd_decode_prealloc_durations = [] if profiling_enabled else None
++        pd_decode_transfer_durations = [] if profiling_enabled else None
++        pd_decode_forward_durations = [] if profiling_enabled else None
++        pd_bootstrap_durations = [] if profiling_enabled else None
++        pd_alloc_waiting_durations = [] if profiling_enabled else None
++        pd_transfer_speeds_gb_s = [] if profiling_enabled else None
++        pd_transfer_totals_mb = [] if profiling_enabled else None
++        pd_prefill_retry_counts = [] if profiling_enabled else None
+ 
+         if return_logprob:
+             input_token_logprobs_val = []
+@@ -1037,6 +1049,40 @@ class SchedulerOutputProcessorMixin:
+                 prefill_finished_timestamps.append(
+                     req.time_stats.get_prefill_finished_ts()
+                 )
++                if profiling_enabled:
++                    pd_prefill_bootstrap_queue_durations.append(
++                        req.time_stats.get_pd_prefill_bootstrap_queue_duration()
++                    )
++                    pd_prefill_forward_durations.append(
++                        req.time_stats.get_pd_prefill_forward_duration()
++                    )
++                    pd_prefill_transfer_queue_durations.append(
++                        req.time_stats.get_pd_prefill_transfer_queue_duration()
++                    )
++                    pd_decode_prealloc_durations.append(
++                        req.time_stats.get_pd_decode_prealloc_duration()
++                    )
++                    pd_decode_transfer_durations.append(
++                        req.time_stats.get_pd_decode_transfer_duration()
++                    )
++                    pd_decode_forward_durations.append(
++                        req.time_stats.get_pd_decode_forward_duration()
++                    )
++                    pd_bootstrap_durations.append(
++                        req.time_stats.get_pd_bootstrap_duration()
++                    )
++                    pd_alloc_waiting_durations.append(
++                        req.time_stats.get_pd_alloc_waiting_duration()
++                    )
++                    pd_transfer_speeds_gb_s.append(
++                        req.time_stats.get_pd_transfer_speed_gb_s()
++                    )
++                    pd_transfer_totals_mb.append(
++                        req.time_stats.get_pd_transfer_total_mb()
++                    )
++                    pd_prefill_retry_counts.append(
++                        req.time_stats.get_pd_prefill_retry_count()
++                    )
+ 
+                 if not self.spec_algorithm.is_none():
+                     spec_verify_ct.append(req.spec_verify_ct)
+@@ -1134,7 +1180,7 @@ class SchedulerOutputProcessorMixin:
                  req.log_time_stats()
  
          # Send to detokenizer
@@ -1746,6 +2393,102 @@ index 482bc6ca6..857cfa6a3 100644
              if self.model_config.is_multimodal_gen:
                  return
              self.send_to_detokenizer.send_output(
+@@ -1149,6 +1195,17 @@ class SchedulerOutputProcessorMixin:
+                     prefill_launch_delay=prefill_launch_delays,
+                     prefill_launch_latency=prefill_launch_latencies,
+                     prefill_finished_ts=prefill_finished_timestamps,
++                    pd_prefill_bootstrap_queue_duration=pd_prefill_bootstrap_queue_durations,
++                    pd_prefill_forward_duration=pd_prefill_forward_durations,
++                    pd_prefill_transfer_queue_duration=pd_prefill_transfer_queue_durations,
++                    pd_decode_prealloc_duration=pd_decode_prealloc_durations,
++                    pd_decode_transfer_duration=pd_decode_transfer_durations,
++                    pd_decode_forward_duration=pd_decode_forward_durations,
++                    pd_bootstrap_duration=pd_bootstrap_durations,
++                    pd_alloc_waiting_duration=pd_alloc_waiting_durations,
++                    pd_transfer_speed_gb_s=pd_transfer_speeds_gb_s,
++                    pd_transfer_total_mb=pd_transfer_totals_mb,
++                    pd_prefill_retry_count=pd_prefill_retry_counts,
+                     finished_reasons=finished_reasons,
+                     decoded_texts=decoded_texts,
+                     decode_ids=decode_ids_list,
+@@ -1198,6 +1255,18 @@ class SchedulerOutputProcessorMixin:
+         prefill_launch_delays = []
+         prefill_launch_latencies = []
+         prefill_finished_timestamps = []
++        profiling_enabled = envs.SLIME_ENABLE_PROFILING.get()
++        pd_prefill_bootstrap_queue_durations = [] if profiling_enabled else None
++        pd_prefill_forward_durations = [] if profiling_enabled else None
++        pd_prefill_transfer_queue_durations = [] if profiling_enabled else None
++        pd_decode_prealloc_durations = [] if profiling_enabled else None
++        pd_decode_transfer_durations = [] if profiling_enabled else None
++        pd_decode_forward_durations = [] if profiling_enabled else None
++        pd_bootstrap_durations = [] if profiling_enabled else None
++        pd_alloc_waiting_durations = [] if profiling_enabled else None
++        pd_transfer_speeds_gb_s = [] if profiling_enabled else None
++        pd_transfer_totals_mb = [] if profiling_enabled else None
++        pd_prefill_retry_counts = [] if profiling_enabled else None
+         retraction_counts = []
+         for req in reqs:
+             if req.finished():
+@@ -1221,6 +1290,40 @@ class SchedulerOutputProcessorMixin:
+                 prefill_finished_timestamps.append(
+                     req.time_stats.get_prefill_finished_ts()
+                 )
++                if profiling_enabled:
++                    pd_prefill_bootstrap_queue_durations.append(
++                        req.time_stats.get_pd_prefill_bootstrap_queue_duration()
++                    )
++                    pd_prefill_forward_durations.append(
++                        req.time_stats.get_pd_prefill_forward_duration()
++                    )
++                    pd_prefill_transfer_queue_durations.append(
++                        req.time_stats.get_pd_prefill_transfer_queue_duration()
++                    )
++                    pd_decode_prealloc_durations.append(
++                        req.time_stats.get_pd_decode_prealloc_duration()
++                    )
++                    pd_decode_transfer_durations.append(
++                        req.time_stats.get_pd_decode_transfer_duration()
++                    )
++                    pd_decode_forward_durations.append(
++                        req.time_stats.get_pd_decode_forward_duration()
++                    )
++                    pd_bootstrap_durations.append(
++                        req.time_stats.get_pd_bootstrap_duration()
++                    )
++                    pd_alloc_waiting_durations.append(
++                        req.time_stats.get_pd_alloc_waiting_duration()
++                    )
++                    pd_transfer_speeds_gb_s.append(
++                        req.time_stats.get_pd_transfer_speed_gb_s()
++                    )
++                    pd_transfer_totals_mb.append(
++                        req.time_stats.get_pd_transfer_total_mb()
++                    )
++                    pd_prefill_retry_counts.append(
++                        req.time_stats.get_pd_prefill_retry_count()
++                    )
+                 retraction_counts.append(req.retraction_count)
+         self.send_to_detokenizer.send_output(
+             BatchEmbeddingOutput(
+@@ -1231,6 +1334,17 @@ class SchedulerOutputProcessorMixin:
+                 prefill_launch_delay=prefill_launch_delays,
+                 prefill_launch_latency=prefill_launch_latencies,
+                 prefill_finished_ts=prefill_finished_timestamps,
++                pd_prefill_bootstrap_queue_duration=pd_prefill_bootstrap_queue_durations,
++                pd_prefill_forward_duration=pd_prefill_forward_durations,
++                pd_prefill_transfer_queue_duration=pd_prefill_transfer_queue_durations,
++                pd_decode_prealloc_duration=pd_decode_prealloc_durations,
++                pd_decode_transfer_duration=pd_decode_transfer_durations,
++                pd_decode_forward_duration=pd_decode_forward_durations,
++                pd_bootstrap_duration=pd_bootstrap_durations,
++                pd_alloc_waiting_duration=pd_alloc_waiting_durations,
++                pd_transfer_speed_gb_s=pd_transfer_speeds_gb_s,
++                pd_transfer_total_mb=pd_transfer_totals_mb,
++                pd_prefill_retry_count=pd_prefill_retry_counts,
+                 finished_reasons=finished_reasons,
+                 embeddings=embeddings,
+                 prompt_tokens=prompt_tokens,
 diff --git a/python/sglang/srt/managers/scheduler_pp_mixin.py b/python/sglang/srt/managers/scheduler_pp_mixin.py
 index 1a65a3c3d..f76606469 100644
 --- a/python/sglang/srt/managers/scheduler_pp_mixin.py
@@ -2074,7 +2817,7 @@ index f2ffa9909..6e4d1d460 100644
          self,
          obj: InitWeightsSendGroupForRemoteInstanceReqInput,
 diff --git a/python/sglang/srt/managers/tokenizer_manager.py b/python/sglang/srt/managers/tokenizer_manager.py
-index 0914a5230..cce2d8a2b 100644
+index 0914a5230..33bb3844a 100644
 --- a/python/sglang/srt/managers/tokenizer_manager.py
 +++ b/python/sglang/srt/managers/tokenizer_manager.py
 @@ -324,8 +324,12 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
@@ -2109,6 +2852,82 @@ index 0914a5230..cce2d8a2b 100644
              self.is_pause_cond.notify_all()
  
      async def update_weights_from_disk(
+@@ -1510,6 +1514,40 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
+                 self._add_metric_if_present(
+                     recv_obj, "prefill_finished_ts", meta_info, i
+                 )
++                # PD disaggregation timing
++                self._add_metric_if_present(
++                    recv_obj, "pd_prefill_bootstrap_queue_duration", meta_info, i
++                )
++                self._add_metric_if_present(
++                    recv_obj, "pd_prefill_forward_duration", meta_info, i
++                )
++                self._add_metric_if_present(
++                    recv_obj, "pd_prefill_transfer_queue_duration", meta_info, i
++                )
++                self._add_metric_if_present(
++                    recv_obj, "pd_decode_prealloc_duration", meta_info, i
++                )
++                self._add_metric_if_present(
++                    recv_obj, "pd_decode_transfer_duration", meta_info, i
++                )
++                self._add_metric_if_present(
++                    recv_obj, "pd_decode_forward_duration", meta_info, i
++                )
++                self._add_metric_if_present(
++                    recv_obj, "pd_bootstrap_duration", meta_info, i
++                )
++                self._add_metric_if_present(
++                    recv_obj, "pd_alloc_waiting_duration", meta_info, i
++                )
++                self._add_metric_if_present(
++                    recv_obj, "pd_transfer_speed_gb_s", meta_info, i
++                )
++                self._add_metric_if_present(
++                    recv_obj, "pd_transfer_total_mb", meta_info, i
++                )
++                self._add_metric_if_present(
++                    recv_obj, "pd_prefill_retry_count", meta_info, i
++                )
+ 
+             if getattr(state.obj, "return_logprob", False):
+                 self.convert_logprob_style(
+@@ -1955,19 +1993,17 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
+             if custom_labels
+             else self.metrics_collector.labels
+         )
+-        if (
+-            state.first_token_time == 0.0
+-            and self.disaggregation_mode != DisaggregationMode.PREFILL
+-        ):
++        if state.first_token_time == 0.0:
+             state.first_token_time = state.last_time = time.time()
+             state.first_token_time_perf = time.perf_counter()
+             state.last_completion_tokens = completion_tokens
+-            self.metrics_collector.observe_time_to_first_token(
+-                labels, state.first_token_time - state.created_time
+-            )
++            if self.disaggregation_mode != DisaggregationMode.PREFILL:
++                self.metrics_collector.observe_time_to_first_token(
++                    labels, state.first_token_time - state.created_time
++                )
+         else:
+             num_new_tokens = completion_tokens - state.last_completion_tokens
+-            if num_new_tokens:
++            if num_new_tokens > 0:
+                 new_time = time.time()
+                 interval = new_time - state.last_time
+                 self.metrics_collector.observe_inter_token_latency(
+@@ -1976,7 +2012,7 @@ class TokenizerManager(TokenizerCommunicatorMixin, TokenizerManagerMultiItemMixi
+                     num_new_tokens,
+                 )
+                 state.last_time = new_time
+-                state.last_completion_tokens = completion_tokens
++            state.last_completion_tokens = completion_tokens
+ 
+         if state.finished:
+             retraction_count = (
 diff --git a/python/sglang/srt/managers/tp_worker.py b/python/sglang/srt/managers/tp_worker.py
 index 86b009df4..16ebd52ae 100644
 --- a/python/sglang/srt/managers/tp_worker.py
@@ -2415,6 +3234,189 @@ index 42b169728..8e799196a 100644
              node = node.parent
          return delta
  
+diff --git a/python/sglang/srt/metrics/collector.py b/python/sglang/srt/metrics/collector.py
+index 255d41ccc..f93bedb4d 100644
+--- a/python/sglang/srt/metrics/collector.py
++++ b/python/sglang/srt/metrics/collector.py
+@@ -20,7 +20,10 @@ import time
+ from dataclasses import dataclass, field
+ from typing import Any, Dict, List, Optional, Union
+ 
+-from sglang.srt.disaggregation.utils import DisaggregationMode
++from sglang.srt.disaggregation.utils import (
++    DisaggregationMode,
++    is_slime_profiling_enabled,
++)
+ from sglang.srt.environ import envs
+ from sglang.srt.metrics.utils import exponential_buckets, generate_buckets
+ from sglang.srt.model_executor.forward_batch_info import ForwardMode
+@@ -77,6 +80,17 @@ class TimeStats:
+     # Number of prefill retries for this request
+     prefill_retry_count: int = 0
+ 
++    # Prefill-side durations forwarded via metadata transfer from P to D instance.
++    # Set on the decode instance after KV cache transfer completes.
++    fwd_prefill_bootstrap_queue_duration: Optional[float] = None
++    fwd_prefill_forward_duration: Optional[float] = None
++    fwd_prefill_transfer_queue_duration: Optional[float] = None
++    fwd_bootstrap_duration: Optional[float] = None
++    fwd_alloc_waiting_duration: Optional[float] = None
++    fwd_transfer_speed_gb_s: Optional[float] = None
++    fwd_transfer_total_mb: Optional[float] = None
++    fwd_prefill_retry_count: Optional[int] = None
++
+     # Timestamp when prefill phase finishes, obtained from `time.time()`.
+     # Note that this differs from the other `_time` fields tracked by the
+     # `TimeStats` class, which are obtained from `time.perf_counter()`.
+@@ -102,6 +116,148 @@ class TimeStats:
+             return self.prefill_finished_ts
+         return None
+ 
++    # --- PD disaggregation timing getters ---
++
++    def get_pd_prefill_bootstrap_queue_duration(self) -> Optional[float]:
++        """P instance: time spent in bootstrap queue before entering the wait queue."""
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_prefill_bootstrap_queue_duration is not None:
++            return self.fwd_prefill_bootstrap_queue_duration
++        if (
++            self.disagg_mode == DisaggregationMode.PREFILL
++            and self.prefill_bootstrap_queue_entry_time > 0.0
++            and self.wait_queue_entry_time > 0.0
++        ):
++            return self.wait_queue_entry_time - self.prefill_bootstrap_queue_entry_time
++        return None
++
++    def get_pd_prefill_forward_duration(self) -> Optional[float]:
++        """P instance: time for the actual prefill forward computation."""
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_prefill_forward_duration is not None:
++            return self.fwd_prefill_forward_duration
++        if (
++            self.disagg_mode == DisaggregationMode.PREFILL
++            and self.forward_entry_time > 0.0
++            and self.completion_time > 0.0
++        ):
++            return self.completion_time - self.forward_entry_time
++        return None
++
++    def get_pd_prefill_transfer_queue_duration(self) -> Optional[float]:
++        """P instance: time spent in the transfer queue (KV cache send)."""
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_prefill_transfer_queue_duration is not None:
++            return self.fwd_prefill_transfer_queue_duration
++        if (
++            self.disagg_mode == DisaggregationMode.PREFILL
++            and self.prefill_transfer_queue_entry_time > 0.0
++            and self.completion_time > 0.0
++        ):
++            return self.completion_time - self.prefill_transfer_queue_entry_time
++        return None
++
++    def get_pd_decode_prealloc_duration(self) -> Optional[float]:
++        """D instance: time spent in the pre-alloc queue (waiting for KV cache slot allocation)."""
++        if not is_slime_profiling_enabled():
++            return None
++        if (
++            self.disagg_mode == DisaggregationMode.DECODE
++            and self.decode_prealloc_queue_entry_time > 0.0
++            and self.decode_transfer_queue_entry_time > 0.0
++        ):
++            return (
++                self.decode_transfer_queue_entry_time
++                - self.decode_prealloc_queue_entry_time
++            )
++        return None
++
++    def get_pd_decode_transfer_duration(self) -> Optional[float]:
++        """D instance: time spent waiting for KV cache transfer to complete."""
++        if not is_slime_profiling_enabled():
++            return None
++        if (
++            self.disagg_mode == DisaggregationMode.DECODE
++            and self.decode_transfer_queue_entry_time > 0.0
++            and self.wait_queue_entry_time > 0.0
++        ):
++            return self.wait_queue_entry_time - self.decode_transfer_queue_entry_time
++        return None
++
++    def get_pd_decode_forward_duration(self) -> Optional[float]:
++        """D instance: time for the actual decode forward computation."""
++        if not is_slime_profiling_enabled():
++            return None
++        if (
++            self.disagg_mode == DisaggregationMode.DECODE
++            and self.forward_entry_time > 0.0
++            and self.completion_time > 0.0
++        ):
++            return self.completion_time - self.forward_entry_time
++        return None
++
++    def get_pd_bootstrap_duration(self) -> Optional[float]:
++        """Bootstrap handshake duration (both P and D instances)."""
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_bootstrap_duration is not None:
++            return self.fwd_bootstrap_duration
++        if (
++            self.disagg_mode != DisaggregationMode.NULL
++            and self.bootstrap_duration > 0.0
++        ):
++            return self.bootstrap_duration
++        return None
++
++    def get_pd_alloc_waiting_duration(self) -> Optional[float]:
++        """KV cache allocation waiting duration (both P and D instances)."""
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_alloc_waiting_duration is not None:
++            return self.fwd_alloc_waiting_duration
++        if (
++            self.disagg_mode != DisaggregationMode.NULL
++            and self.alloc_waiting_duration > 0.0
++        ):
++            return self.alloc_waiting_duration
++        return None
++
++    def get_pd_transfer_speed_gb_s(self) -> Optional[float]:
++        """KV cache transfer speed in GB/s."""
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_transfer_speed_gb_s is not None:
++            return self.fwd_transfer_speed_gb_s
++        if (
++            self.disagg_mode != DisaggregationMode.NULL
++            and self.transfer_speed_gb_s > 0.0
++        ):
++            return self.transfer_speed_gb_s
++        return None
++
++    def get_pd_transfer_total_mb(self) -> Optional[float]:
++        """Total KV cache transferred in MB."""
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_transfer_total_mb is not None:
++            return self.fwd_transfer_total_mb
++        if self.disagg_mode != DisaggregationMode.NULL and self.transfer_total_mb > 0.0:
++            return self.transfer_total_mb
++        return None
++
++    def get_pd_prefill_retry_count(self) -> Optional[int]:
++        """Number of prefill retries for this request."""
++        if not is_slime_profiling_enabled():
++            return None
++        if self.fwd_prefill_retry_count is not None:
++            return self.fwd_prefill_retry_count
++        if self.disagg_mode == DisaggregationMode.PREFILL:
++            return self.prefill_retry_count
++        return None
++
+     def convert_to_duration(self) -> str:
+         if self.disagg_mode == DisaggregationMode.NULL:
+             queue_duration = self.forward_entry_time - self.wait_queue_entry_time
 diff --git a/python/sglang/srt/model_executor/forward_batch_info.py b/python/sglang/srt/model_executor/forward_batch_info.py
 index 234523532..f5d479945 100644
 --- a/python/sglang/srt/model_executor/forward_batch_info.py
