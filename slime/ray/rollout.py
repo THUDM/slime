@@ -12,7 +12,12 @@ import numpy as np
 import ray
 import torch
 from ray.util.scheduling_strategies import PlacementGroupSchedulingStrategy
-from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
+from sglang.srt.constants import GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_WEIGHTS
+# GPU_MEMORY_TYPE_CUDA_GRAPH was added in newer sglang builds.
+try:
+    from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH
+except ImportError:
+    GPU_MEMORY_TYPE_CUDA_GRAPH = None
 
 from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
@@ -344,7 +349,10 @@ class RolloutServer:
         """Resume KV cache and CUDA graphs for offloaded groups."""
         handles = []
         for g in self.server_groups:
-            handles.extend(g.onload(tags=[GPU_MEMORY_TYPE_KV_CACHE, GPU_MEMORY_TYPE_CUDA_GRAPH]))
+            tags = [GPU_MEMORY_TYPE_KV_CACHE]
+            if GPU_MEMORY_TYPE_CUDA_GRAPH is not None:
+                tags.append(GPU_MEMORY_TYPE_CUDA_GRAPH)
+            handles.extend(g.onload(tags=tags))
         return ray.get(handles) if handles else []
 
 
