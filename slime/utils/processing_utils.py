@@ -1,4 +1,5 @@
 import base64
+import inspect
 import io
 import json
 import logging
@@ -34,6 +35,30 @@ def build_processor_kwargs(multimodal_inputs: dict | None = None) -> dict:
             result[key] = modality_forced.copy()
 
     return result
+
+
+def processor_requires_medias(processor) -> bool:
+    try:
+        params = inspect.signature(processor.__call__).parameters
+        return "medias" in params and "text" in params
+    except (TypeError, ValueError):
+        return hasattr(processor, "media_processor")
+
+
+def call_processor(processor, text, multimodal_inputs: dict | None = None):
+    multimodal_inputs = multimodal_inputs or {}
+
+    # for kimi-vl & kimi-2.5
+    if processor_requires_medias(processor):
+        medias = []
+        if images := multimodal_inputs.get("images"):
+            medias.extend({"type": "image", "image": image} for image in images)
+        if videos := multimodal_inputs.get("videos"):
+            medias.extend({"type": "video", "video": video} for video in videos)
+        return processor(text=text, medias=medias)
+
+    kwargs = build_processor_kwargs(multimodal_inputs)
+    return processor(text=text, **kwargs)
 
 
 def _try_load_glm4v_processor(name_or_path: str, **kwargs):
