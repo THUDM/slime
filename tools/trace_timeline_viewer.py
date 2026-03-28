@@ -23,7 +23,6 @@ from typing import Any
 
 import torch
 
-
 CACHE_VERSION = 1
 
 
@@ -448,6 +447,68 @@ def _build_items_from_trace(sample: dict[str, Any], sample_idx: int) -> dict[str
                 "attrs": _json_safe(item.get("attrs") or {}),
             }
         )
+
+    pd_lane_specs = [
+        (
+            "prefill",
+            "P",
+            [
+                "pd_prefill_bootstrap_queue_duration",
+                "pd_bootstrap_duration",
+                "pd_alloc_waiting_duration",
+                "pd_prefill_forward_duration",
+                "pd_prefill_transfer_queue_duration",
+            ],
+        ),
+        (
+            "decode",
+            "D",
+            [
+                "pd_decode_prealloc_duration",
+                "pd_decode_transfer_duration",
+                "pd_decode_forward_duration",
+            ],
+        ),
+    ]
+    next_virtual_lane = max((item["lane"] for item in all_items), default=-1)
+    for span in all_spans:
+        if span["state"] != "closed_span" or span.get("end_ts") is None:
+            continue
+        end_attrs = span.get("end_attrs") or {}
+        for role, suffix, keys in pd_lane_specs:
+            role_attrs = {
+                key: value for key in keys if isinstance((value := end_attrs.get(key)), (int, float)) and value > 0
+            }
+            if not role_attrs:
+                continue
+            next_virtual_lane += 1
+            role_attrs.update(
+                {
+                    "timeline_pd_virtual_role": role,
+                    "timeline_pd_parent_name": span["name"],
+                    "timeline_pd_parent_duration": _round_float(_safe_duration(span["start_ts"], span["end_ts"])),
+                }
+            )
+            all_items.append(
+                {
+                    "type": "span",
+                    "state": "closed_span",
+                    "name": f'{span["name"]} [{suffix}]',
+                    "start_ts": _round_float(span["start_ts"]),
+                    "end_ts": _round_float(span["end_ts"]),
+                    "display_end_ts": _round_float(span["display_end_ts"]),
+                    "attempt": span["attempt"],
+                    "span_id": f'{span.get("span_id") or span["name"]}:pd:{role}',
+                    "parent_span_id": span.get("span_id"),
+                    "parent_span_name": span["name"],
+                    "lane": next_virtual_lane,
+                    "depth": next_virtual_lane,
+                    "attrs": {
+                        "start_attrs": {},
+                        "end_attrs": _json_safe(role_attrs),
+                    },
+                }
+            )
 
     all_items.sort(
         key=lambda item: (
@@ -1047,6 +1108,8 @@ HTML_TEMPLATE = r"""<!doctype html>
       const showOpenSpans = document.getElementById('showOpenSpans').checked;
       const showOrphans = document.getElementById('showOrphans').checked;
       return row.items.filter(item => {
+        const attrs = item.type === 'span' ? spanFlatAttrs(item) : (item.attrs || {});
+        if (attrs.timeline_pd_virtual_role && !rowExpanded(row)) return false;
         if (item.state === 'point_event') return showEvents;
         if (item.state === 'open_span') return showOpenSpans;
         if (item.state === 'orphan_end') return showOrphans;
@@ -1141,6 +1204,7 @@ HTML_TEMPLATE = r"""<!doctype html>
       for (const row of state.rows) {
         for (const item of rowAnalysisItems(row)) {
           if (item.type !== 'span') continue;
+          if (spanFlatAttrs(item).timeline_pd_virtual_role) continue;
           const name = `${item.name ?? 'event'}`;
           const current = counts.get(name) ?? { name, count: 0 };
           current.count += 1;
@@ -1175,16 +1239,16 @@ HTML_TEMPLATE = r"""<!doctype html>
       )).join('');
       if (hasPD) {
         const pdLegend = [
-          ['prefill_forward', 'prefill fwd'],
-          ['decode_forward', 'decode fwd'],
-          ['prefill_transfer_queue', 'transfer'],
-          ['prefill_bootstrap_queue', 'bootstrap queue'],
-          ['decode_prealloc', 'prealloc'],
-          ['decode_transfer', 'kv transfer'],
-          ['bootstrap', 'bootstrap'],
-          ['alloc_waiting', 'alloc wait'],
+          ['prefill_forward', '[P] prefill fwd'],
+          ['prefill_bootstrap_queue', '[P] bootstrap queue'],
+          ['prefill_transfer_queue', '[P] transfer'],
+          ['bootstrap', '[P] bootstrap'],
+          ['alloc_waiting', '[P] alloc wait'],
+          ['decode_forward', '[D] decode fwd'],
+          ['decode_transfer', '[D] kv transfer'],
+          ['decode_prealloc', '[D] prealloc'],
         ];
-        html += '<span style="color:var(--muted);margin-left:8px;font-size:11px">PD:</span>';
+        html += '<span style="color:var(--muted);margin-left:8px;font-size:11px">PD (collapsed: P over D; expanded: separate P/D lanes):</span>';
         for (const [phase, label] of pdLegend) {
           html += `<span class="chip" style="font-size:11px">` +
             `<span class="bar" style="background:${pdPhaseColor(phase, 0.85)}"></span>` +
@@ -1398,11 +1462,84 @@ HTML_TEMPLATE = r"""<!doctype html>
       return segs.length > 0 ? segs : null;
     }
 
-    function drawSpan(item, x1, x2, y, h) {
+    function splitPDPhases(phases) {
+      if (!phases) {
+        return {
+          pPhases: [],
+          dPhases: [],
+          pTotal: 0,
+          dTotal: 0,
+          totalDuration: 0,
+        };
+      }
+      const pPhases = phases.filter((p) =>
+        p.phase.startsWith('prefill_') || p.phase === 'bootstrap' || p.phase === 'alloc_waiting');
+      const dPhases = phases.filter((p) => p.phase.startsWith('decode_'));
+      const pTotal = pPhases.reduce((sum, p) => sum + p.duration, 0);
+      const dTotal = dPhases.reduce((sum, p) => sum + p.duration, 0);
+      return {
+        pPhases,
+        dPhases,
+        pTotal,
+        dTotal,
+        totalDuration: pTotal + dTotal,
+      };
+    }
+
+    function pdRenderInfo(item, expanded) {
+      const attrs = spanFlatAttrs(item);
+      const pdVirtualRole = attrs.timeline_pd_virtual_role || null;
+      const phases = pdPhases(attrs);
+      if (!phases || (expanded && !pdVirtualRole)) return null;
+      const {
+        pPhases,
+        dPhases,
+        pTotal,
+        dTotal,
+        totalDuration,
+      } = splitPDPhases(phases);
+      const itemDuration = Math.max(0, itemDisplayEnd(item) - itemStart(item));
+      const scaleDuration = Math.max(totalDuration, itemDuration, 1e-9);
+      let filledDuration = totalDuration;
+      if (expanded && pdVirtualRole === 'prefill') filledDuration = pTotal;
+      if (expanded && pdVirtualRole === 'decode') filledDuration = dTotal;
+      return {
+        attrs,
+        pdVirtualRole,
+        phases,
+        pPhases,
+        dPhases,
+        pTotal,
+        dTotal,
+        totalDuration,
+        scaleDuration,
+        filledDuration,
+      };
+    }
+
+    function drawPDPhaseRow(segs, scaleDuration, x1, spanWidth, ry, rh, alpha) {
+      if (!segs.length || scaleDuration <= 0) return;
+      let cx = x1;
+      for (const seg of segs) {
+        const w = Math.max(1, (seg.duration / scaleDuration) * spanWidth);
+        ctx.fillStyle = pdPhaseColor(seg.phase, 0.85 * alpha);
+        ctx.fillRect(cx, ry, w, rh);
+        if (cx > x1) {
+          ctx.fillStyle = 'rgba(0,0,0,0.25)';
+          ctx.fillRect(cx, ry, 0.5, rh);
+        }
+        cx += w;
+      }
+    }
+
+    function drawSpan(item, x1, x2, y, h, expanded) {
+      const attrs = spanFlatAttrs(item);
+      const colorKey = attrs.timeline_pd_parent_name || item.name;
       const alpha = itemVisualAlpha(item);
-      const color = hashColor(item.name, item.state === 'open_span' ? 0.25 * alpha : 0.9 * alpha);
-      const border = hashColor(item.name, Math.max(0.22, alpha));
+      const color = hashColor(colorKey, item.state === 'open_span' ? 0.25 * alpha : 0.9 * alpha);
+      const border = hashColor(colorKey, Math.max(0.22, alpha));
       const spanWidth = Math.max(1.5, x2 - x1);
+      const pdVirtualRole = attrs.timeline_pd_virtual_role || null;
 
       if (item.state === 'open_span') {
         ctx.save();
@@ -1415,8 +1552,8 @@ HTML_TEMPLATE = r"""<!doctype html>
         ctx.restore();
         const fadeWidth = Math.min(18, Math.max(6, x2 - x1));
         const gradient = ctx.createLinearGradient(x2 - fadeWidth, 0, x2, 0);
-        gradient.addColorStop(0, hashColor(item.name, 0));
-        gradient.addColorStop(1, hashColor(item.name, Math.max(0.22, alpha)));
+        gradient.addColorStop(0, hashColor(colorKey, 0));
+        gradient.addColorStop(1, hashColor(colorKey, Math.max(0.22, alpha)));
         ctx.fillStyle = gradient;
         ctx.fillRect(Math.max(x1, x2 - fadeWidth), y, fadeWidth, h);
         if (itemIsFocusedAttempt(item)) {
@@ -1430,27 +1567,36 @@ HTML_TEMPLATE = r"""<!doctype html>
       }
 
       // Draw PD phase sub-bars when disaggregation data is available
-      const phases = pdPhases(spanFlatAttrs(item));
-      if (phases && spanWidth > 6) {
-        const totalPhaseDuration = phases.reduce((s, p) => s + p.duration, 0);
-        // Draw base bar at reduced opacity
+      const pdInfo = pdRenderInfo(item, expanded);
+      if (pdInfo && spanWidth > 6) {
+        const {
+          pPhases,
+          dPhases,
+          totalDuration,
+          scaleDuration,
+        } = pdInfo;
+        const hasP = pPhases.length > 0;
+        const hasD = dPhases.length > 0;
+
+        // Base bar at reduced opacity
         ctx.fillStyle = hashColor(item.name, 0.15 * alpha);
         ctx.fillRect(x1, y, spanWidth, h);
 
-        // Draw each phase as a sub-segment
-        const subH = Math.max(4, h - 4);
-        const subY = y + 2;
-        let cx = x1;
-        for (const seg of phases) {
-          const w = Math.max(1, (seg.duration / totalPhaseDuration) * spanWidth);
-          ctx.fillStyle = pdPhaseColor(seg.phase, 0.85 * alpha);
-          ctx.fillRect(cx, subY, w, subH);
-          // thin separator
-          if (cx > x1) {
-            ctx.fillStyle = 'rgba(0,0,0,0.25)';
-            ctx.fillRect(cx, subY, 0.5, subH);
+        if (!expanded) {
+          // Collapsed: keep a single row, with P painted over D so short prefill
+          // timings remain visible instead of being hidden by longer decode phases.
+          const subY = y + 2;
+          const subH = Math.max(4, h - 4);
+          if (hasD) drawPDPhaseRow(dPhases, scaleDuration, x1, spanWidth, subY, subH, 0.62 * alpha);
+          if (hasP) drawPDPhaseRow(pPhases, scaleDuration, x1, spanWidth, subY, subH, alpha);
+        } else {
+          const subY = y + 2;
+          const subH = Math.max(4, h - 4);
+          if (pdVirtualRole === 'prefill' && hasP) {
+            drawPDPhaseRow(pPhases, scaleDuration, x1, spanWidth, subY, subH, alpha);
+          } else if (pdVirtualRole === 'decode' && hasD) {
+            drawPDPhaseRow(dPhases, scaleDuration, x1, spanWidth, subY, subH, 0.9 * alpha);
           }
-          cx += w;
         }
 
         // Border around the full span
@@ -1608,7 +1754,7 @@ HTML_TEMPLATE = r"""<!doctype html>
           if (item.type === 'span') {
             const x1 = Math.max(LABEL_WIDTH, timeToX(start));
             const x2 = Math.min(width, timeToX(end));
-            drawSpan(item, x1, x2, y, h);
+            drawSpan(item, x1, x2, y, h, rowExpanded(row));
             if (state.selectedItem?.item === item) {
               ctx.save();
               ctx.strokeStyle = '#b5502a';
@@ -1616,7 +1762,8 @@ HTML_TEMPLATE = r"""<!doctype html>
               ctx.strokeRect(x1 + 0.5, y + 0.5, Math.max(1, x2 - x1 - 1), Math.max(1, h - 1));
               ctx.restore();
             }
-            const labelEnd = !rowExpanded(row)
+            const expanded = rowExpanded(row);
+            const labelEnd = !expanded
               ? Math.min(end, collapsedTextSafeEnd(row, item))
               : end;
             const labelX2 = Math.min(width, timeToX(labelEnd));
@@ -1632,19 +1779,39 @@ HTML_TEMPLATE = r"""<!doctype html>
                 if (a.pd_prefill_forward_duration != null) pdParts.push(`pf:${(a.pd_prefill_forward_duration*1000).toFixed(0)}ms`);
                 if (a.pd_decode_forward_duration != null) pdParts.push(`df:${(a.pd_decode_forward_duration*1000).toFixed(0)}ms`);
                 if (a.pd_transfer_speed_gb_s != null) pdParts.push(`${a.pd_transfer_speed_gb_s.toFixed(1)}GB/s`);
-                const pdSuffix = pdParts.length > 0 ? ` | ${pdParts.join(' ')}` : '';
-                return `${item.name} | attempt=${item.attempt}${pdSuffix}`;
-              })();
+                  const pdSuffix = pdParts.length > 0 ? ` | ${pdParts.join(' ')}` : '';
+                  return `${item.name} | attempt=${item.attempt}${pdSuffix}`;
+                })();
               const labelWidth = ctx.measureText(label).width;
-              if (labelWidth + 12 <= labelWidthAvailable) {
+              let clipX = x1;
+              let clipWidth = labelWidthAvailable;
+              let textX = x1 + 4;
+              const pdInfo = pdRenderInfo(item, expanded);
+              if (pdInfo) {
+                const spanWidth = Math.max(1.5, x2 - x1);
+                const filledWidth = Math.min(
+                  spanWidth,
+                  (pdInfo.filledDuration / pdInfo.scaleDuration) * spanWidth,
+                );
+                const safeX = Math.min(labelX2 - 8, x1 + filledWidth + 6);
+                const safeWidth = labelX2 - safeX;
+                if (labelWidth + 12 <= safeWidth) {
+                  clipX = safeX;
+                  clipWidth = safeWidth;
+                  textX = safeX + 4;
+                } else if (filledWidth > 12) {
+                  clipWidth = 0;
+                }
+              }
+              if (clipWidth > 0 && labelWidth + 12 <= clipWidth) {
                 ctx.fillStyle = itemVisualAlpha(item) < 1 ? 'rgba(255,255,255,0.45)' : 'rgba(255,255,255,0.86)';
                 ctx.font = '10px IBM Plex Sans, sans-serif';
                 ctx.save();
                 ctx.beginPath();
-                ctx.rect(x1, y, labelWidthAvailable, h);
+                ctx.rect(clipX, y, clipWidth, h);
                 ctx.clip();
                 ctx.textBaseline = 'middle';
-                ctx.fillText(label, x1 + 4, y + h / 2 + 0.5);
+                ctx.fillText(label, textX, y + h / 2 + 0.5);
                 ctx.restore();
               }
             }
@@ -1703,7 +1870,7 @@ HTML_TEMPLATE = r"""<!doctype html>
       const attrs = spanFlatAttrs(item);
       // Collect and group PD disaggregation attrs for structured display
       const pdKeys = Object.keys(attrs).filter(k => k.startsWith('pd_'));
-      const otherKeys = Object.keys(attrs).filter(k => !k.startsWith('pd_'));
+      const otherKeys = Object.keys(attrs).filter(k => !k.startsWith('pd_') && !k.startsWith('timeline_'));
       for (const key of otherKeys) {
         const value = attrs[key];
         lines.push(`${key}: ${typeof value === 'object' ? JSON.stringify(value) : value}`);
