@@ -782,6 +782,7 @@ def initialize_model_and_optimizer(
     )
     clear_memory()
 
-    opt_param_scheduler.step(increment=iteration * args.global_batch_size)
+    # `load_checkpoint()` already restores scheduler state when optimizer state is resumed.
+    # Keep a fresh schedule when `--no-load-optim` is set instead of fast-forwarding here.
 
     return model, optimizer, opt_param_scheduler, iteration
