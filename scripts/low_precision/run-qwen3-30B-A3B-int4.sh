@@ -114,7 +114,6 @@ SGLANG_ARGS=(
    --rollout-num-gpus-per-engine 1
    --sglang-mem-fraction-static 0.7
    --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
-   --use-slime-router
 )
 
 MISC_ARGS=(

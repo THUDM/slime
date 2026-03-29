@@ -127,7 +127,6 @@ SGLANG_ARGS=(
    --sglang-mem-fraction-static 0.6
    --sglang-cuda-graph-bs 1 2 4 8 $(seq 16 8 256)
    --sglang-expert-parallel-size 8
-   --use-slime-router
    # --use-rollout-routing-replay
 )
 

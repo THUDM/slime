@@ -164,18 +164,14 @@ def get_batch(
     multimodal_train_inputs = batch.get("multimodal_train_inputs", None)
     if multimodal_train_inputs is not None:
         multimodal_data = {}  # key -> concatenated tensor
-        multimodal_num_items = {}  # key -> list of item counts per sequence
         for mm_input_dict in multimodal_train_inputs:
             if mm_input_dict is not None:
                 for key, mm_tensor in mm_input_dict.items():
                     if key not in multimodal_data:
                         multimodal_data[key] = mm_tensor
-                        multimodal_num_items[key] = [mm_tensor.size(0)]
                     else:
                         multimodal_data[key] = torch.cat([multimodal_data[key], mm_tensor], dim=0)
-                        multimodal_num_items[key].append(mm_tensor.size(0))
         batch["multimodal_train_inputs"] = multimodal_data
-        batch["multimodal_num_items"] = multimodal_num_items
 
     return batch
 
