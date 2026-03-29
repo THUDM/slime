@@ -51,7 +51,7 @@ def _to_local_gpu_id(physical_gpu_id: int) -> int:
 
 
 def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
-    if server_args.encoder_only:
+    if hasattr(server_args, "encoder_only") and server_args.encoder_only:
         from sglang.srt.disaggregation.encode_server import launch_server
     else:
         from sglang.srt.entrypoints.http_server import launch_server
@@ -195,7 +195,7 @@ class SGLangEngine(RayActor):
             return
 
         if self.node_rank == 0 and self.router_ip and self.router_port:
-            if not self.args.use_slime_router and parse(sglang_router.__version__) <= parse("0.2.1"):
+            if parse(sglang_router.__version__) <= parse("0.2.1"):
                 assert self.worker_type == "regular", "pd disaggregation is not supported in old router."
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/add_worker?url=http://{self.server_host}:{self.server_port}"
@@ -315,7 +315,7 @@ class SGLangEngine(RayActor):
         if self.worker_type != "encoder" and self.node_rank == 0:
             worker_url = f"http://{self.server_host}:{self.server_port}"
             response = None
-            if self.args.use_slime_router or parse(sglang_router.__version__) <= parse("0.2.1"):
+            if parse(sglang_router.__version__) <= parse("0.2.1"):
                 response = requests.post(
                     f"http://{self.router_ip}:{self.router_port}/remove_worker?url=http://{self.server_host}:{self.server_port}"
                 )
