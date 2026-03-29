@@ -51,7 +51,7 @@ def _to_local_gpu_id(physical_gpu_id: int) -> int:
 
 
 def launch_server_process(server_args: ServerArgs) -> multiprocessing.Process:
-    if hasattr(server_args, "encoder_only") and server_args.encoder_only:
+    if getattr(server_args, "encoder_only", False):
         from sglang.srt.disaggregation.encode_server import launch_server
     else:
         from sglang.srt.entrypoints.http_server import launch_server
@@ -250,13 +250,12 @@ class SGLangEngine(RayActor):
         if self.node_rank != 0:
             return True
 
-        url = f"http://{self.server_host}:{self.server_port}/health_generate"
-        try:
-            response = requests.get(url, timeout=timeout)
-            response.raise_for_status()
-            return True
-        except requests.RequestException:
-            raise
+        response = requests.get(
+            f"http://{self.server_host}:{self.server_port}/health_generate",
+            timeout=timeout,
+        )
+        response.raise_for_status()
+        return True
 
     def update_weights_from_tensor(
         self,
