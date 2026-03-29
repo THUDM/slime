@@ -26,7 +26,11 @@ def build_processor_kwargs(multimodal_inputs: dict | None = None) -> dict:
     result = dict(multimodal_inputs) if multimodal_inputs else {}
 
     # return_tensors=None for text (input_ids as lists), "pt" for modality-specific outputs
-    result["text_kwargs"] = {**result.get("text_kwargs", {}), "return_tensors": None}
+    result["text_kwargs"] = {
+        **result.get("text_kwargs", {}),
+        "return_tensors": None,
+        "return_mm_token_type_ids": False,
+    }
     for key in ("audio_kwargs", "images_kwargs", "videos_kwargs"):
         if key in result:
             result[key] = {**result[key], **modality_forced}
