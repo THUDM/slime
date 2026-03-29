@@ -120,7 +120,6 @@ class ServerGroup:
                     "SGLANG_BATCH_INVARIANT_OPS_ENABLE_MM_FALLBACK_VARIANT": "true",
                     "SGLANG_ENABLE_HEALTH_ENDPOINT_GENERATION": "false",
                     "SGLANG_ENABLE_STRICT_MEM_CHECK_DURING_IDLE": "false",
-                    "SGLANG_TRANSFER_PROFILING_INFO": "true",
                     "SLIME_ENABLE_PROFILING": "true",
                 }.items()
             }
