@@ -45,7 +45,61 @@ python tools/trace_timeline_viewer.py /path/to/debug/rollout_0.pt
 
 - `trace_span(target, name, attrs=...)`：记录一段持续时间。
 - `trace_event(target, name, attrs=...)`：记录一个瞬时事件。
+- `trace_function(name, ...)`：用 decorator 把整个同步/异步函数包成一个 span。
 - `bind_trace(sample)`：在 sample 被传递到其他 helper 或任务之前，确保它已经绑定好 trace carrier。
+
+### `trace_span` 和 `trace_function` 的区别
+
+如果你只想给函数内部的一小段逻辑打点，或者需要在代码块执行过程中补充 span 结束属性，就用 `trace_span(...)`。
+
+如果整个函数调用都应该对应一个 span，就用 `trace_function(...)`。它本质上会先解析 trace target，然后在函数调用外层自动套一层 `trace_span(...)`，因此同步函数和异步函数都能直接用。
+
+slime 主 rollout 流程里就是这样用的。例如 `generate_and_rm(...)` 按 sample 打点，而 `generate_and_rm_group(...)` 按 group 打点：
+
+```python
+from slime.utils.trace_utils import trace_function
+
+
+@trace_function("generate_and_rm", target="sample")
+async def generate_and_rm(args, sample, sampling_params, evaluation=False):
+    ...
+
+
+@trace_function(
+    "generate_and_rm_group",
+    target="group",
+    attrs_getter=lambda args, group, sampling_params, evaluation=False: {"group_size": len(group)},
+)
+async def generate_and_rm_group(args, group, sampling_params, evaluation=False):
+    ...
+```
+
+### 如何选择 target
+
+`trace_function(...)` 需要一个 trace target，通常是 `Sample`、`TraceHandle` 或它们的列表。
+
+- 如果 target 本来就是函数参数，优先写成 `target="sample"` 或 `target="group"`。
+- 如果 target 需要从参数里推导出来，就用 `target_getter=...`。
+- 不建议默认依赖自动推断。实现里确实可以从参数或当前 trace 上下文里推断 target，但显式写出来更稳定，也更不容易出现歧义。
+
+### 给 decorator span 增加属性
+
+如果想在 span 开始时附带属性，可以用 `attrs_getter=...`：
+
+```python
+@trace_function(
+    "custom_rollout_batch",
+    target="samples",
+    attrs_getter=lambda samples, **_: {"batch_size": len(samples)},
+)
+async def custom_rollout_batch(samples, **kwargs):
+    ...
+```
+
+如果你需要在函数执行到一半之后再补充属性，那么不要只靠 decorator，应该在函数内部再嵌一层 `trace_span(...)`。一个比较常见的模式是：
+
+- 外层用 `trace_function(...)` 表示整个函数生命周期
+- 内层用 `trace_span(...)` 标记 generation、RM、filter、post-process 等关键子步骤
 
 如果想统一记录 SGLang 返回的 generation 元信息，可以复用 `build_sglang_meta_trace_attrs`：
 

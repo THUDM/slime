@@ -433,7 +433,12 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#save-rollout-trace-data">Save rollout trace data</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#open-the-timeline-viewer">Open the timeline viewer</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-read-the-viewer">How to read the viewer</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#instrument-custom-code">Instrument custom code</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#instrument-custom-code">Instrument custom code</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#trace-span-vs-trace-function"><code class="docutils literal notranslate"><span class="pre">trace_span</span></code> vs <code class="docutils literal notranslate"><span class="pre">trace_function</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#choosing-a-target">Choosing a target</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#recording-attrs-on-decorated-functions">Recording attrs on decorated functions</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tips">Tips</a></li>
 </ul>
             </nav>
@@ -489,7 +494,57 @@
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">trace_span(target,</span> <span class="pre">name,</span> <span class="pre">attrs=...)</span></code>: record a duration span.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">trace_event(target,</span> <span class="pre">name,</span> <span class="pre">attrs=...)</span></code>: record an instant event.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">trace_function(name,</span> <span class="pre">...)</span></code>: wrap a whole sync/async function in a span.</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">bind_trace(sample)</span></code>: ensure a sample already has a trace carrier before passing it across helpers or tasks.</p></li>
+</ul>
+<section id="trace-span-vs-trace-function">
+<h3><code class="docutils literal notranslate"><span class="pre">trace_span</span></code> vs <code class="docutils literal notranslate"><span class="pre">trace_function</span></code><a class="headerlink" href="#trace-span-vs-trace-function" title="Link to this heading">#</a></h3>
+<p>Use <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code> when you only want to trace part of a function body, or when you need to update end-of-span attrs from inside the block.</p>
+<p>Use <code class="docutils literal notranslate"><span class="pre">trace_function(...)</span></code> when the whole function should be represented as one span. Internally it resolves the trace target and then opens a <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code> around the function call, so it works for both sync and async functions.</p>
+<p>The decorator is what slime uses for the main rollout pipeline. For example, <code class="docutils literal notranslate"><span class="pre">generate_and_rm(...)</span></code> is traced per sample and <code class="docutils literal notranslate"><span class="pre">generate_and_rm_group(...)</span></code> is traced per sample group:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.trace_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">trace_function</span>
+
+
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;generate_and_rm&quot;</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="s2">&quot;sample&quot;</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_and_rm</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="o">...</span>
+
+
+<span class="nd">@trace_function</span><span class="p">(</span>
+    <span class="s2">&quot;generate_and_rm_group&quot;</span><span class="p">,</span>
+    <span class="n">target</span><span class="o">=</span><span class="s2">&quot;group&quot;</span><span class="p">,</span>
+    <span class="n">attrs_getter</span><span class="o">=</span><span class="k">lambda</span> <span class="n">args</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;group_size&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">group</span><span class="p">)},</span>
+<span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_and_rm_group</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="o">...</span>
+</pre></div>
+</div>
+</section>
+<section id="choosing-a-target">
+<h3>Choosing a target<a class="headerlink" href="#choosing-a-target" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">trace_function(...)</span></code> needs a trace target, usually a <code class="docutils literal notranslate"><span class="pre">Sample</span></code>, <code class="docutils literal notranslate"><span class="pre">TraceHandle</span></code>, or a list of them.</p>
+<ul class="simple">
+<li><p>Prefer <code class="docutils literal notranslate"><span class="pre">target=&quot;sample&quot;</span></code> or <code class="docutils literal notranslate"><span class="pre">target=&quot;group&quot;</span></code> when the target is already one of the function arguments.</p></li>
+<li><p>Use <code class="docutils literal notranslate"><span class="pre">target_getter=...</span></code> when the trace target has to be derived from arguments.</p></li>
+<li><p>Avoid relying on automatic inference unless the function signature is simple. The implementation can infer a target from arguments or the current trace context, but explicit targets are more stable and avoid ambiguous traces.</p></li>
+</ul>
+</section>
+<section id="recording-attrs-on-decorated-functions">
+<h3>Recording attrs on decorated functions<a class="headerlink" href="#recording-attrs-on-decorated-functions" title="Link to this heading">#</a></h3>
+<p>If you want to attach attributes at span start, use <code class="docutils literal notranslate"><span class="pre">attrs_getter=...</span></code>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@trace_function</span><span class="p">(</span>
+    <span class="s2">&quot;custom_rollout_batch&quot;</span><span class="p">,</span>
+    <span class="n">target</span><span class="o">=</span><span class="s2">&quot;samples&quot;</span><span class="p">,</span>
+    <span class="n">attrs_getter</span><span class="o">=</span><span class="k">lambda</span> <span class="n">samples</span><span class="p">,</span> <span class="o">**</span><span class="n">_</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;batch_size&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">samples</span><span class="p">)},</span>
+<span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">custom_rollout_batch</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="o">...</span>
+</pre></div>
+</div>
+<p>If you need to add attrs after part of the function has executed, use an inner <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code> instead of only relying on the decorator. A common pattern is:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">trace_function(...)</span></code> for the outer function-level lifecycle span</p></li>
+<li><p>nested <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code> for important sub-steps such as generation, RM, filtering, or post-processing</p></li>
 </ul>
 <p>If you want to record SGLang generation metadata in a consistent way, reuse <code class="docutils literal notranslate"><span class="pre">build_sglang_meta_trace_attrs</span></code>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.trace_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_sglang_meta_trace_attrs</span><span class="p">,</span> <span class="n">trace_span</span>
@@ -499,6 +554,7 @@
     <span class="n">span</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">build_sglang_meta_trace_attrs</span><span class="p">(</span><span class="n">output</span><span class="p">[</span><span class="s2">&quot;meta_info&quot;</span><span class="p">]))</span>
 </pre></div>
 </div>
+</section>
 </section>
 <section id="tips">
 <h2>Tips<a class="headerlink" href="#tips" title="Link to this heading">#</a></h2>
@@ -560,7 +616,12 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#save-rollout-trace-data">Save rollout trace data</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#open-the-timeline-viewer">Open the timeline viewer</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#how-to-read-the-viewer">How to read the viewer</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#instrument-custom-code">Instrument custom code</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#instrument-custom-code">Instrument custom code</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#trace-span-vs-trace-function"><code class="docutils literal notranslate"><span class="pre">trace_span</span></code> vs <code class="docutils literal notranslate"><span class="pre">trace_function</span></code></a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#choosing-a-target">Choosing a target</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#recording-attrs-on-decorated-functions">Recording attrs on decorated functions</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tips">Tips</a></li>
 </ul>
   </nav></div>

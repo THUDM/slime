@@ -429,7 +429,12 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-trace">保存 rollout trace 数据</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">打开时间线查看器</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">如何理解可视化结果</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">给自定义代码打点</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">给自定义代码打点</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#trace-span-trace-function"><code class="docutils literal notranslate"><span class="pre">trace_span</span></code> 和 <code class="docutils literal notranslate"><span class="pre">trace_function</span></code> 的区别</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#target">如何选择 target</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#decorator-span">给 decorator span 增加属性</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">使用建议</a></li>
 </ul>
             </nav>
@@ -485,7 +490,57 @@
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">trace_span(target,</span> <span class="pre">name,</span> <span class="pre">attrs=...)</span></code>：记录一段持续时间。</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">trace_event(target,</span> <span class="pre">name,</span> <span class="pre">attrs=...)</span></code>：记录一个瞬时事件。</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">trace_function(name,</span> <span class="pre">...)</span></code>：用 decorator 把整个同步/异步函数包成一个 span。</p></li>
 <li><p><code class="docutils literal notranslate"><span class="pre">bind_trace(sample)</span></code>：在 sample 被传递到其他 helper 或任务之前，确保它已经绑定好 trace carrier。</p></li>
+</ul>
+<section id="trace-span-trace-function">
+<h3><code class="docutils literal notranslate"><span class="pre">trace_span</span></code> 和 <code class="docutils literal notranslate"><span class="pre">trace_function</span></code> 的区别<a class="headerlink" href="#trace-span-trace-function" title="链接到此标题。">#</a></h3>
+<p>如果你只想给函数内部的一小段逻辑打点，或者需要在代码块执行过程中补充 span 结束属性，就用 <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code>。</p>
+<p>如果整个函数调用都应该对应一个 span，就用 <code class="docutils literal notranslate"><span class="pre">trace_function(...)</span></code>。它本质上会先解析 trace target，然后在函数调用外层自动套一层 <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code>，因此同步函数和异步函数都能直接用。</p>
+<p>slime 主 rollout 流程里就是这样用的。例如 <code class="docutils literal notranslate"><span class="pre">generate_and_rm(...)</span></code> 按 sample 打点，而 <code class="docutils literal notranslate"><span class="pre">generate_and_rm_group(...)</span></code> 按 group 打点：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.trace_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">trace_function</span>
+
+
+<span class="nd">@trace_function</span><span class="p">(</span><span class="s2">&quot;generate_and_rm&quot;</span><span class="p">,</span> <span class="n">target</span><span class="o">=</span><span class="s2">&quot;sample&quot;</span><span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_and_rm</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">sample</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="o">...</span>
+
+
+<span class="nd">@trace_function</span><span class="p">(</span>
+    <span class="s2">&quot;generate_and_rm_group&quot;</span><span class="p">,</span>
+    <span class="n">target</span><span class="o">=</span><span class="s2">&quot;group&quot;</span><span class="p">,</span>
+    <span class="n">attrs_getter</span><span class="o">=</span><span class="k">lambda</span> <span class="n">args</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;group_size&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">group</span><span class="p">)},</span>
+<span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">generate_and_rm_group</span><span class="p">(</span><span class="n">args</span><span class="p">,</span> <span class="n">group</span><span class="p">,</span> <span class="n">sampling_params</span><span class="p">,</span> <span class="n">evaluation</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+    <span class="o">...</span>
+</pre></div>
+</div>
+</section>
+<section id="target">
+<h3>如何选择 target<a class="headerlink" href="#target" title="链接到此标题。">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">trace_function(...)</span></code> 需要一个 trace target，通常是 <code class="docutils literal notranslate"><span class="pre">Sample</span></code>、<code class="docutils literal notranslate"><span class="pre">TraceHandle</span></code> 或它们的列表。</p>
+<ul class="simple">
+<li><p>如果 target 本来就是函数参数，优先写成 <code class="docutils literal notranslate"><span class="pre">target=&quot;sample&quot;</span></code> 或 <code class="docutils literal notranslate"><span class="pre">target=&quot;group&quot;</span></code>。</p></li>
+<li><p>如果 target 需要从参数里推导出来，就用 <code class="docutils literal notranslate"><span class="pre">target_getter=...</span></code>。</p></li>
+<li><p>不建议默认依赖自动推断。实现里确实可以从参数或当前 trace 上下文里推断 target，但显式写出来更稳定，也更不容易出现歧义。</p></li>
+</ul>
+</section>
+<section id="decorator-span">
+<h3>给 decorator span 增加属性<a class="headerlink" href="#decorator-span" title="链接到此标题。">#</a></h3>
+<p>如果想在 span 开始时附带属性，可以用 <code class="docutils literal notranslate"><span class="pre">attrs_getter=...</span></code>：</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="nd">@trace_function</span><span class="p">(</span>
+    <span class="s2">&quot;custom_rollout_batch&quot;</span><span class="p">,</span>
+    <span class="n">target</span><span class="o">=</span><span class="s2">&quot;samples&quot;</span><span class="p">,</span>
+    <span class="n">attrs_getter</span><span class="o">=</span><span class="k">lambda</span> <span class="n">samples</span><span class="p">,</span> <span class="o">**</span><span class="n">_</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;batch_size&quot;</span><span class="p">:</span> <span class="nb">len</span><span class="p">(</span><span class="n">samples</span><span class="p">)},</span>
+<span class="p">)</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">custom_rollout_batch</span><span class="p">(</span><span class="n">samples</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+    <span class="o">...</span>
+</pre></div>
+</div>
+<p>如果你需要在函数执行到一半之后再补充属性，那么不要只靠 decorator，应该在函数内部再嵌一层 <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code>。一个比较常见的模式是：</p>
+<ul class="simple">
+<li><p>外层用 <code class="docutils literal notranslate"><span class="pre">trace_function(...)</span></code> 表示整个函数生命周期</p></li>
+<li><p>内层用 <code class="docutils literal notranslate"><span class="pre">trace_span(...)</span></code> 标记 generation、RM、filter、post-process 等关键子步骤</p></li>
 </ul>
 <p>如果想统一记录 SGLang 返回的 generation 元信息，可以复用 <code class="docutils literal notranslate"><span class="pre">build_sglang_meta_trace_attrs</span></code>：</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">slime.utils.trace_utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">build_sglang_meta_trace_attrs</span><span class="p">,</span> <span class="n">trace_span</span>
@@ -495,6 +550,7 @@
     <span class="n">span</span><span class="o">.</span><span class="n">update</span><span class="p">(</span><span class="n">build_sglang_meta_trace_attrs</span><span class="p">(</span><span class="n">output</span><span class="p">[</span><span class="s2">&quot;meta_info&quot;</span><span class="p">]))</span>
 </pre></div>
 </div>
+</section>
 </section>
 <section id="id4">
 <h2>使用建议<a class="headerlink" href="#id4" title="链接到此标题。">#</a></h2>
@@ -556,7 +612,12 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rollout-trace">保存 rollout trace 数据</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id1">打开时间线查看器</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id2">如何理解可视化结果</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">给自定义代码打点</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id3">给自定义代码打点</a><ul class="visible nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#trace-span-trace-function"><code class="docutils literal notranslate"><span class="pre">trace_span</span></code> 和 <code class="docutils literal notranslate"><span class="pre">trace_function</span></code> 的区别</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#target">如何选择 target</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#decorator-span">给 decorator span 增加属性</a></li>
+</ul>
+</li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#id4">使用建议</a></li>
 </ul>
   </nav></div>
