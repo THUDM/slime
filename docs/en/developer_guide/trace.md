@@ -45,7 +45,61 @@ For custom rollout or reward code, reuse helpers from `slime.utils.trace_utils`:
 
 - `trace_span(target, name, attrs=...)`: record a duration span.
 - `trace_event(target, name, attrs=...)`: record an instant event.
+- `trace_function(name, ...)`: wrap a whole sync/async function in a span.
 - `bind_trace(sample)`: ensure a sample already has a trace carrier before passing it across helpers or tasks.
+
+### `trace_span` vs `trace_function`
+
+Use `trace_span(...)` when you only want to trace part of a function body, or when you need to update end-of-span attrs from inside the block.
+
+Use `trace_function(...)` when the whole function should be represented as one span. Internally it resolves the trace target and then opens a `trace_span(...)` around the function call, so it works for both sync and async functions.
+
+The decorator is what slime uses for the main rollout pipeline. For example, `generate_and_rm(...)` is traced per sample and `generate_and_rm_group(...)` is traced per sample group:
+
+```python
+from slime.utils.trace_utils import trace_function
+
+
+@trace_function("generate_and_rm", target="sample")
+async def generate_and_rm(args, sample, sampling_params, evaluation=False):
+    ...
+
+
+@trace_function(
+    "generate_and_rm_group",
+    target="group",
+    attrs_getter=lambda args, group, sampling_params, evaluation=False: {"group_size": len(group)},
+)
+async def generate_and_rm_group(args, group, sampling_params, evaluation=False):
+    ...
+```
+
+### Choosing a target
+
+`trace_function(...)` needs a trace target, usually a `Sample`, `TraceHandle`, or a list of them.
+
+- Prefer `target="sample"` or `target="group"` when the target is already one of the function arguments.
+- Use `target_getter=...` when the trace target has to be derived from arguments.
+- Avoid relying on automatic inference unless the function signature is simple. The implementation can infer a target from arguments or the current trace context, but explicit targets are more stable and avoid ambiguous traces.
+
+### Recording attrs on decorated functions
+
+If you want to attach attributes at span start, use `attrs_getter=...`:
+
+```python
+@trace_function(
+    "custom_rollout_batch",
+    target="samples",
+    attrs_getter=lambda samples, **_: {"batch_size": len(samples)},
+)
+async def custom_rollout_batch(samples, **kwargs):
+    ...
+```
+
+If you need to add attrs after part of the function has executed, use an inner `trace_span(...)` instead of only relying on the decorator. A common pattern is:
+
+- `trace_function(...)` for the outer function-level lifecycle span
+- nested `trace_span(...)` for important sub-steps such as generation, RM, filtering, or post-processing
 
 If you want to record SGLang generation metadata in a consistent way, reuse `build_sglang_meta_trace_attrs`:
 
