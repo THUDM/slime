@@ -783,6 +783,4 @@ def initialize_model_and_optimizer(
     )
     clear_memory()
 
-    opt_param_scheduler.step(increment=iteration * args.global_batch_size)
-
     return model, optimizer, opt_param_scheduler, iteration

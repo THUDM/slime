@@ -66,6 +66,7 @@ slime is the RL-framework behind GLM-4.7, GLM-4.6 and GLM-4.5. Apart from models
 
    developer_guide/ci.md
    developer_guide/debug.md
+   developer_guide/trace.md
    developer_guide/profiling.md
 
 .. toctree::
