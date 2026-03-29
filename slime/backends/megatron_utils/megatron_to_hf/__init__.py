@@ -2,6 +2,7 @@ from .deepseekv3 import convert_deepseekv3_to_hf
 from .glm4 import convert_glm4_to_hf
 from .glm4moe import convert_glm4moe_to_hf
 from .gpt_oss import convert_gpt_oss_to_hf
+from .kimi_vl import convert_kimi_k25_to_hf, convert_kimivl_to_hf
 from .llama import convert_llama_to_hf
 from .mimo import convert_mimo_to_hf
 from .processors import quantize_params, remove_padding
@@ -32,6 +33,40 @@ def convert_to_hf(args, model_name, name, param, quantization_config=None):
 _cached_tensors = {}
 
 
+def postprocess_q_lora_converted_tensors(args, converted_named_tensors, cached_tensors):
+    # Keep q_a_proj and kv_a_proj_with_mqa paired before quantization so
+    # the bridge update path matches the direct convert_to_hf behavior.
+    if args.q_lora_rank is None:
+        return converted_named_tensors
+
+    processed_named_tensors = []
+    for converted_name, converted_param in converted_named_tensors:
+        if "q_a_proj" in converted_name:
+            pair_name = converted_name.replace("q_a_proj", "kv_a_proj_with_mqa")
+            if pair_name in cached_tensors:
+                processed_named_tensors += [
+                    (converted_name, converted_param),
+                    (pair_name, cached_tensors[pair_name]),
+                ]
+                del cached_tensors[pair_name]
+            else:
+                cached_tensors[converted_name] = converted_param
+        elif "kv_a_proj_with_mqa" in converted_name:
+            pair_name = converted_name.replace("kv_a_proj_with_mqa", "q_a_proj")
+            if pair_name in cached_tensors:
+                processed_named_tensors += [
+                    (converted_name, converted_param),
+                    (pair_name, cached_tensors[pair_name]),
+                ]
+                del cached_tensors[pair_name]
+            else:
+                cached_tensors[converted_name] = converted_param
+        else:
+            processed_named_tensors.append((converted_name, converted_param))
+
+    return processed_named_tensors
+
+
 # TODO optimize code details
 def _convert_to_hf_core(args, model_name, name, param):
     if "glm4moelite" in model_name or "deepseekv3" in model_name:
@@ -59,31 +94,4 @@ def _convert_to_hf_core(args, model_name, name, param):
     else:
         raise ValueError(f"Unsupported model: {model_name}")
 
-    # to compatible with sglang implementation
-    if args.q_lora_rank is not None:
-        old_converted_named_tensors = converted_named_tensors
-        converted_named_tensors = []
-        for converted_name, converted_param in old_converted_named_tensors:
-            if "q_a_proj" in converted_name:
-                pair_name = converted_name.replace("q_a_proj", "kv_a_proj_with_mqa")
-                if pair_name in _cached_tensors:
-                    converted_named_tensors += [
-                        (converted_name, converted_param),
-                        (pair_name, _cached_tensors[pair_name]),
-                    ]
-                    del _cached_tensors[pair_name]
-                else:
-                    _cached_tensors[converted_name] = converted_param
-            elif "kv_a_proj_with_mqa" in converted_name:
-                pair_name = converted_name.replace("kv_a_proj_with_mqa", "q_a_proj")
-                if pair_name in _cached_tensors:
-                    converted_named_tensors += [
-                        (converted_name, converted_param),
-                        (pair_name, _cached_tensors[pair_name]),
-                    ]
-                    del _cached_tensors[pair_name]
-                else:
-                    _cached_tensors[converted_name] = converted_param
-            else:
-                converted_named_tensors.append((converted_name, converted_param))
-    return converted_named_tensors
+    return postprocess_q_lora_converted_tensors(args, converted_named_tensors, _cached_tensors)
