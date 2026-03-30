@@ -24,7 +24,7 @@ NUM_GPUS = 0
 DEFAULT_ROLLOUT_FUNCTION_PATH = "slime.rollout.sglang_rollout.generate_rollout"
 REFERENCE_ROLLOUT_FUNCTION_PATH = "plugin_contracts.test_plugin_rollout_contracts.valid_rollout_function"
 
-from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput, call_rollout_fn
+from slime.rollout.base_types import RolloutFnEvalOutput, RolloutFnTrainOutput
 from slime.rollout.sglang_rollout import generate_rollout as default_generate_rollout
 from slime.utils.misc import load_function
 from slime.utils.types import Sample
@@ -49,17 +49,21 @@ def make_sample(index: int, reward: float = 1.0) -> Sample:
 
 
 class ContractDataSource:
+    """Dict-based data source matching the new DataSource interface."""
+
     def __init__(self, n_samples_per_prompt: int = 2):
         self.n_samples_per_prompt = n_samples_per_prompt
         self.next_index = 0
 
-    def get_samples(self, num_samples: int) -> list[list[Sample]]:
-        groups = []
-        for _ in range(num_samples):
-            group = [make_sample(self.next_index + i, reward=0.0) for i in range(self.n_samples_per_prompt)]
-            self.next_index += self.n_samples_per_prompt
-            groups.append(group)
-        return groups
+    def get_examples(self, num_prompts: int) -> list[dict]:
+        examples = []
+        for i in range(num_prompts):
+            examples.append({"prompt": f"prompt-{self.next_index + i}", "label": None})
+        self.next_index += num_prompts
+        return examples
+
+    def add_examples(self, examples: list[dict]):
+        pass
 
 
 def valid_rollout_function(args, rollout_id, data_source, evaluation=False):
@@ -70,28 +74,24 @@ def valid_rollout_function(args, rollout_id, data_source, evaluation=False):
             metrics={"source": "contract"},
         )
 
-    groups = data_source.get_samples(2)
-    for group_index, group in enumerate(groups):
-        for sample_index, sample in enumerate(group):
+    examples = data_source.get_examples(2)
+    samples = []
+    for group_index, example in enumerate(examples):
+        for sample_index in range(data_source.n_samples_per_prompt):
+            sample = Sample.from_example(example)
             sample.tokens = [group_index, sample_index, rollout_id]
             sample.response = f"group-{group_index}-sample-{sample_index}"
             sample.response_length = len(sample.tokens)
             sample.reward = float(group_index + sample_index)
             sample.status = Sample.Status.COMPLETED
-    return RolloutFnTrainOutput(samples=groups, metrics={"source": "contract"})
+            samples.append(sample)
+    return RolloutFnTrainOutput(samples=samples, metrics={"source": "contract"})
 
 
 def invalid_rollout_function(args, rollout_id, data_source, evaluation=False):
     sample = make_sample(0)
     sample.reward = None
-    return RolloutFnTrainOutput(samples=[[sample]])
-
-
-def legacy_rollout_function(args, rollout_id, data_source, evaluation=False):
-    if evaluation:
-        sample = make_sample(1, reward=0.5)
-        return {"legacy_eval": {"rewards": [sample.reward], "truncated": [False], "samples": [sample]}}
-    return [[make_sample(1)]]
+    return RolloutFnTrainOutput(samples=[sample])
 
 
 def assert_sample_contract(sample: Sample) -> None:
@@ -104,13 +104,11 @@ def assert_sample_contract(sample: Sample) -> None:
     assert isinstance(sample.status, Sample.Status)
 
 
-def assert_train_rollout_contract(output: RolloutFnTrainOutput, n_samples_per_prompt: int) -> None:
+def assert_train_rollout_contract(output: RolloutFnTrainOutput) -> None:
     assert isinstance(output, RolloutFnTrainOutput)
     assert output.samples
-    for group in output.samples:
-        assert len(group) == n_samples_per_prompt
-        for sample in group:
-            assert_sample_contract(sample)
+    for sample in output.samples:
+        assert_sample_contract(sample)
 
 
 def assert_eval_rollout_contract(output: RolloutFnEvalOutput) -> None:
@@ -139,10 +137,10 @@ def assert_rollout_function_matches_default_contract(fn) -> None:
     assert_rollout_function_signature_matches_default(fn)
 
     data_source = ContractDataSource()
-    train_output = call_rollout_fn(fn, None, 2, data_source, evaluation=False)
-    eval_output = call_rollout_fn(fn, None, 2, data_source, evaluation=True)
+    train_output = fn(None, 2, data_source, evaluation=False)
+    eval_output = fn(None, 2, data_source, evaluation=True)
 
-    assert_train_rollout_contract(train_output, n_samples_per_prompt=2)
+    assert_train_rollout_contract(train_output)
     assert_eval_rollout_contract(eval_output)
 
 
@@ -166,14 +164,6 @@ def test_default_rollout_signature_is_stable():
     default_sig = inspect.signature(default_generate_rollout)
     assert tuple(default_sig.parameters) == ("args", "rollout_id", "data_source", "evaluation")
     assert default_sig.parameters["evaluation"].default is False
-
-
-def test_default_rollout_compat_wrapper_stability():
-    data_source = ContractDataSource(n_samples_per_prompt=1)
-    train_output = call_rollout_fn(legacy_rollout_function, None, 1, data_source, evaluation=False)
-    eval_output = call_rollout_fn(legacy_rollout_function, None, 1, data_source, evaluation=True)
-    assert_train_rollout_contract(train_output, n_samples_per_prompt=1)
-    assert_eval_rollout_contract(eval_output)
 
 
 def test_local_rollout_plugin_aligns_with_default_input_output_format():

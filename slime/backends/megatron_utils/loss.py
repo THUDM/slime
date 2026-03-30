@@ -653,7 +653,7 @@ def policy_loss_function(
         unconcat_tokens=batch["unconcat_tokens"],
         total_lengths=total_lengths,
         response_lengths=response_lengths,
-        with_entropy=True,
+        with_entropy=args.entropy_coef != 0.0,
         max_seq_lens=max_seq_lens,
     )
 
@@ -766,11 +766,14 @@ def policy_loss_function(
     ppo_kl = sum_of_sample_mean(ppo_kl)
 
     # entropy loss
-    entropy = log_probs_and_entropy["entropy"]
-    entropy = torch.cat(entropy, dim=0)
-    entropy_loss = sum_of_sample_mean(entropy)
-
-    loss = pg_loss - args.entropy_coef * entropy_loss
+    if args.entropy_coef != 0.0:
+        entropy = log_probs_and_entropy["entropy"]
+        entropy = torch.cat(entropy, dim=0)
+        entropy_loss = sum_of_sample_mean(entropy)
+        loss = pg_loss - args.entropy_coef * entropy_loss
+    else:
+        entropy_loss = torch.zeros((), dtype=pg_loss.dtype, device=pg_loss.device)
+        loss = pg_loss
 
     if args.use_kl_loss:
         ref_log_probs = batch["ref_log_probs"]

@@ -39,10 +39,14 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
     if MASK_GENERATOR is None:
         MASK_GENERATOR = MultiTurnLossMaskGenerator(TOKENIZER, tokenizer_type=args.loss_mask_type)
 
-    samples = data_buffer.get_samples(args.rollout_batch_size)
+    from slime.rollout.base_types import RolloutFnTrainOutput
+    from slime.utils.types import Sample
 
-    for i, sample in enumerate(samples):
-        (sample,) = sample
+    examples = data_buffer.get_examples(args.rollout_batch_size)
+    samples = []
+
+    for i, example in enumerate(examples):
+        sample = Sample.from_example(example)
         messages = sample.prompt
         tools = sample.metadata.get("tools", None)
 
@@ -65,4 +69,6 @@ def generate_rollout(args, rollout_id, data_buffer, evaluation=False):
             )
             SAMPLE_PRINTED = True
 
-    return samples
+        samples.append(sample)
+
+    return RolloutFnTrainOutput(samples=samples)
