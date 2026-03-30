@@ -569,9 +569,7 @@ class AsyncRolloutWorker:
         return {
             "fully_async/window/completed_store_size": len(records),
             "fully_async/window/eligible_samples": eligible_samples,
-            "fully_async/window/version_span": (
-                max(policy_versions) - min(policy_versions) if policy_versions else 0
-            ),
+            "fully_async/window/version_span": (max(policy_versions) - min(policy_versions) if policy_versions else 0),
         }
 
     def _reset_interval_metrics_locked(self) -> None:
@@ -822,11 +820,7 @@ class AsyncRolloutWorker:
         print("Stopped async worker thread")
 
     def _needs_weight_update_sync(self) -> bool:
-        return (
-            self.max_stale_samples is not None
-            or self.args.partial_rollout
-            or self._uses_window_evict_policy()
-        )
+        return self.max_stale_samples is not None or self.args.partial_rollout or self._uses_window_evict_policy()
 
     def before_weight_update(self, policy_version: int):
         if not self._needs_weight_update_sync():
@@ -942,10 +936,7 @@ async def generate_rollout_async(args, rollout_id: int, data_buffer) -> RolloutF
     do_print = True
 
     print(f"Starting async rollout generation for {target_sample_count} samples")
-    print(
-        "Global worker queue size: "
-        f"{worker.get_queue_size()}, stale_samples={worker.get_stale_sample_count()}"
-    )
+    print("Global worker queue size: " f"{worker.get_queue_size()}, stale_samples={worker.get_stale_sample_count()}")
 
     start_time = time.time()
     last_progress_time = start_time
@@ -1056,9 +1047,7 @@ def generate_rollout_fully_async(args, rollout_id, data_buffer, evaluation=False
         if worker is not None and worker.loop is not None:
             worker._set_pause_requested(True)
             try:
-                future = asyncio.run_coroutine_threadsafe(
-                    worker.run_eval(args, rollout_id), worker.loop
-                )
+                future = asyncio.run_coroutine_threadsafe(worker.run_eval(args, rollout_id), worker.loop)
                 output = future.result()
             finally:
                 worker._set_pause_requested(False)

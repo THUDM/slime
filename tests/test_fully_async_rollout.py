@@ -167,10 +167,16 @@ def test_completed_samples_do_not_refund_staleness_budget():
 
     worker._set_stale_sample_ids([10, 11])
     worker.output_queue.put(
-        (10, [Sample(group_index=10, index=10, metadata={"fully_async_sample_id": 10}, status=sample_status.COMPLETED)])
+        (
+            10,
+            [Sample(group_index=10, index=10, metadata={"fully_async_sample_id": 10}, status=sample_status.COMPLETED)],
+        )
     )
     worker.output_queue.put(
-        (11, [Sample(group_index=11, index=11, metadata={"fully_async_sample_id": 11}, status=sample_status.COMPLETED)])
+        (
+            11,
+            [Sample(group_index=11, index=11, metadata={"fully_async_sample_id": 11}, status=sample_status.COMPLETED)],
+        )
     )
 
     completed = worker.get_completed_samples()
@@ -360,14 +366,16 @@ def test_record_processed_samples_aligns_weight_version_fallback_to_policy_versi
     worker = module.AsyncRolloutWorker(make_args(staleness_threshold=0.0, current_policy_version=1), data_buffer=None)
 
     worker.record_processed_samples(
-        [[
-            Sample(
-                group_index=150,
-                metadata={"fully_async_sample_id": 150},
-                weight_versions=["2"],
-                status=sample_status.COMPLETED,
-            )
-        ]]
+        [
+            [
+                Sample(
+                    group_index=150,
+                    metadata={"fully_async_sample_id": 150},
+                    weight_versions=["2"],
+                    status=sample_status.COMPLETED,
+                )
+            ]
+        ]
     )
     metrics = worker._snapshot_processed_metrics()
 
@@ -380,14 +388,16 @@ def test_after_weight_update_resets_partial_window_metrics():
     worker = module.AsyncRolloutWorker(make_args(staleness_threshold=0.0, current_policy_version=2), data_buffer=None)
 
     worker.record_processed_samples(
-        [[
-            Sample(
-                group_index=200,
-                metadata={"fully_async_sample_id": 200, "fully_async_schedule_versions": [1, 2]},
-                weight_versions=["1", "2"],
-                status=sample_status.COMPLETED,
-            )
-        ]]
+        [
+            [
+                Sample(
+                    group_index=200,
+                    metadata={"fully_async_sample_id": 200, "fully_async_schedule_versions": [1, 2]},
+                    weight_versions=["1", "2"],
+                    status=sample_status.COMPLETED,
+                )
+            ]
+        ]
     )
 
     after = worker.after_weight_update(policy_version=3)
@@ -397,14 +407,16 @@ def test_after_weight_update_resets_partial_window_metrics():
     assert after["fully_async/partial/max_partial_span"] == 1
 
     worker.record_processed_samples(
-        [[
-            Sample(
-                group_index=201,
-                metadata={"fully_async_sample_id": 201, "fully_async_schedule_versions": [3]},
-                weight_versions=["3"],
-                status=sample_status.COMPLETED,
-            )
-        ]]
+        [
+            [
+                Sample(
+                    group_index=201,
+                    metadata={"fully_async_sample_id": 201, "fully_async_schedule_versions": [3]},
+                    weight_versions=["3"],
+                    status=sample_status.COMPLETED,
+                )
+            ]
+        ]
     )
     fresh_metrics = worker._snapshot_processed_metrics()
     assert fresh_metrics["fully_async/partial/total_partial_num"] == 0
@@ -417,14 +429,16 @@ def test_flush_metrics_returns_metrics_only_when_window_has_data():
     worker = module.AsyncRolloutWorker(make_args(staleness_threshold=0.0, current_policy_version=2), data_buffer=None)
 
     worker.record_processed_samples(
-        [[
-            Sample(
-                group_index=250,
-                metadata={"fully_async_sample_id": 250, "fully_async_schedule_versions": [1, 2]},
-                weight_versions=["1", "2"],
-                status=sample_status.COMPLETED,
-            )
-        ]]
+        [
+            [
+                Sample(
+                    group_index=250,
+                    metadata={"fully_async_sample_id": 250, "fully_async_schedule_versions": [1, 2]},
+                    weight_versions=["1", "2"],
+                    status=sample_status.COMPLETED,
+                )
+            ]
+        ]
     )
     worker.worker_thread = SimpleNamespace(is_alive=lambda: True)
 
@@ -628,7 +642,9 @@ def test_generate_rollout_async_only_drains_needed_completed_groups():
     saved_global_worker = module._global_worker
     module._global_worker = worker
     try:
-        output = asyncio.run(module.generate_rollout_async(make_args(rollout_batch_size=2), rollout_id=0, data_buffer=None))
+        output = asyncio.run(
+            module.generate_rollout_async(make_args(rollout_batch_size=2), rollout_id=0, data_buffer=None)
+        )
     finally:
         module._global_worker = saved_global_worker
 
@@ -661,7 +677,9 @@ def test_generate_rollout_async_consumed_samples_refund_staleness_budget():
     saved_global_worker = module._global_worker
     module._global_worker = worker
     try:
-        output = asyncio.run(module.generate_rollout_async(make_args(rollout_batch_size=2), rollout_id=0, data_buffer=None))
+        output = asyncio.run(
+            module.generate_rollout_async(make_args(rollout_batch_size=2), rollout_id=0, data_buffer=None)
+        )
     finally:
         module._global_worker = saved_global_worker
 
@@ -732,7 +750,9 @@ def test_generate_rollout_async_recycled_samples_stay_in_staleness_budget():
             self.samples.extend(samples)
 
     data_buffer = FakeDataBuffer()
-    worker = module.AsyncRolloutWorker(make_args(staleness_threshold=0.0, rollout_batch_size=1), data_buffer=data_buffer)
+    worker = module.AsyncRolloutWorker(
+        make_args(staleness_threshold=0.0, rollout_batch_size=1), data_buffer=data_buffer
+    )
     worker.worker_thread = SimpleNamespace(is_alive=lambda: True)
 
     worker.output_queue.put(
@@ -768,7 +788,9 @@ def test_generate_rollout_async_recycled_samples_stay_in_staleness_budget():
     saved_global_worker = module._global_worker
     module._global_worker = worker
     try:
-        output = asyncio.run(module.generate_rollout_async(make_args(rollout_batch_size=1), rollout_id=0, data_buffer=data_buffer))
+        output = asyncio.run(
+            module.generate_rollout_async(make_args(rollout_batch_size=1), rollout_id=0, data_buffer=data_buffer)
+        )
     finally:
         module._global_worker = saved_global_worker
 
