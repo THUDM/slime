@@ -435,6 +435,66 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Interval for updating the weights",
             )
             parser.add_argument(
+                "--staleness-threshold",
+                type=float,
+                default=None,
+                help=(
+                    "Maximum stale backlog ratio for fully async rollout. "
+                    "When set, fully async rollout workers will pause scheduling new samples once the "
+                    "number of stale samples reaches approximately "
+                    "`rollout_batch_size * update_weights_interval * (1 + staleness_threshold)`."
+                ),
+            )
+            parser.add_argument(
+                "--fully-async-debug-version-tracking",
+                action="store_true",
+                default=False,
+                help=(
+                    "Print per-batch version summaries for fully async rollout consumption. "
+                    "Useful for debugging why stale backlog exists while stale processed counters stay at zero."
+                ),
+            )
+            parser.add_argument(
+                "--fully-async-buffer-policy",
+                type=str,
+                choices=["legacy_backpressure", "window_evict"],
+                default="legacy_backpressure",
+                help=(
+                    "Completed-sample buffering policy for fully async rollout. "
+                    "`legacy_backpressure` keeps the current stale-budget pause behavior, while "
+                    "`window_evict` keeps rollout scheduling active and evicts completed samples that fall "
+                    "outside the configured version window."
+                ),
+            )
+            parser.add_argument(
+                "--fully-async-version-window",
+                type=int,
+                default=1,
+                help=(
+                    "Maximum policy-version distance allowed in the completed-sample window when "
+                    "`--fully-async-buffer-policy=window_evict`."
+                ),
+            )
+            parser.add_argument(
+                "--fully-async-max-completed-samples",
+                type=int,
+                default=None,
+                help=(
+                    "Hard cap on completed fully async samples kept in memory. Defaults to the legacy queue sizing "
+                    "heuristic when unset."
+                ),
+            )
+            parser.add_argument(
+                "--fully-async-eviction-policy",
+                type=str,
+                choices=["drop_oldest_version", "drop_oldest_fifo"],
+                default="drop_oldest_version",
+                help=(
+                    "Overflow eviction policy for fully async completed samples when "
+                    "`--fully-async-buffer-policy=window_evict`."
+                ),
+            )
+            parser.add_argument(
                 "--keep-old-actor",
                 action="store_true",
                 help="Whether to keep the rollout model on training process",
