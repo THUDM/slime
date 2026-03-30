@@ -63,6 +63,24 @@ def get_slime_extra_args_provider(add_custom_arguments=None):
                 help="Number of GPUs per inference engine, just like the tp_size in sglang.",
             )
             parser.add_argument(
+                "--rollout-ray-actor-num-gpus",
+                type=float,
+                default=0.2,
+                help=(
+                    "GPU fraction reserved for each rollout Ray actor (engine process). "
+                    "Use < 1.0 to share a GPU among multiple engines."
+                ),
+            )
+            parser.add_argument(
+                "--train-ray-actor-num-gpus",
+                type=float,
+                default=0.4,
+                help=(
+                    "GPU fraction reserved for each training Ray actor. "
+                    "Use < 1.0 to share a GPU among multiple actors."
+                ),
+            )
+            parser.add_argument(
                 "--num-gpus-per-node",
                 type=int,
                 default=8,
