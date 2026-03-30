@@ -1,5 +1,4 @@
 import dataclasses
-import itertools
 import logging
 import multiprocessing
 import os
@@ -16,13 +15,12 @@ from sglang.srt.constants import GPU_MEMORY_TYPE_CUDA_GRAPH, GPU_MEMORY_TYPE_KV_
 
 from slime.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
 from slime.backends.sglang_utils.sglang_engine import SGLangEngine
-from slime.rollout.base_types import call_rollout_fn
 from slime.utils import logging_utils
 from slime.utils.health_monitor import RolloutHealthMonitor
 from slime.utils.http_utils import _wrap_ipv6, find_available_port, get_host_info, init_http_client
 from slime.utils.logging_utils import configure_logger, init_tracking
 from slime.utils.metric_utils import compute_pass_rate, compute_rollout_step, compute_statistics, dict_add_prefix
-from slime.utils.misc import Box, group_by, load_function
+from slime.utils.misc import group_by, load_function
 from slime.utils.seqlen_balancing import get_seqlen_balanced_partitions
 from slime.utils.types import Sample
 
@@ -365,11 +363,6 @@ class RolloutManager:
         self.custom_reward_post_process_func = None
         if self.args.custom_reward_post_process_path is not None:
             self.custom_reward_post_process_func = load_function(self.args.custom_reward_post_process_path)
-        self.custom_convert_samples_to_train_data_func = None
-        if self.args.custom_convert_samples_to_train_data_path is not None:
-            self.custom_convert_samples_to_train_data_func = load_function(
-                self.args.custom_convert_samples_to_train_data_path
-            )
         logger.info(f"import {self.args.rollout_function_path} as generate_rollout function.")
         logger.info(f"import {self.args.eval_function_path} as eval_generate_rollout function.")
 
@@ -482,22 +475,21 @@ class RolloutManager:
         self.health_monitoring_resume()
         if self.args.ci_test and self.args.use_fault_tolerance and rollout_id >= 2:
             self._try_ci_fault_injection()
-        data, metrics = self._get_rollout_data(rollout_id=rollout_id)
-        self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=False)
-        _log_rollout_data(rollout_id, self.args, data, metrics, time.time() - start_time)
+        samples, metrics = self._get_rollout_samples(rollout_id=rollout_id)
+        self._save_debug_rollout_data(samples, rollout_id=rollout_id, evaluation=False)
+        _log_rollout_data(rollout_id, self.args, samples, metrics, time.time() - start_time)
         if self.args.debug_rollout_only:
-            # if debug rollout only, we don't convert samples to train data and directly return
             return
-        data = self._convert_samples_to_train_data(data)
-        return self._split_train_data_by_dp(data, self.train_parallel_config["dp_size"])
+        self._normalize_rewards(samples)
+        self._apply_loss_masks(samples)
+        return self._split_samples_by_dp(samples, self.train_parallel_config["dp_size"])
 
-    def eval(self, rollout_id):
+    def eval(self, rollout_id):  # noqa: A003
         if self.args.debug_train_only:
-            # if debug train only, we don't generate evaluation data
             return
         self.health_monitoring_resume()
 
-        result = call_rollout_fn(self.eval_generate_rollout, self.args, rollout_id, self.data_source, evaluation=True)
+        result = self.eval_generate_rollout(self.args, rollout_id, self.data_source, evaluation=True)
         data = result.data
         self._save_debug_rollout_data(data, rollout_id=rollout_id, evaluation=True)
         _log_eval_rollout_data(rollout_id, self.args, data, result.metrics)
@@ -565,47 +557,47 @@ class RolloutManager:
     def check_weights(self, action: str):
         return ray.get([engine.check_weights.remote(action=action) for engine in self.rollout_engines])
 
-    def _get_rollout_data(self, rollout_id):
+    def _get_rollout_samples(self, rollout_id) -> tuple[list[Sample], dict | None]:
         if self.args.load_debug_rollout_data:
             data = torch.load(
                 self.args.load_debug_rollout_data.format(rollout_id=rollout_id),
                 weights_only=False,
             )["samples"]
-            data = [Sample.from_dict(sample) for sample in data]
+            samples = [Sample.from_dict(sample) for sample in data]
             if (ratio := self.args.load_debug_rollout_data_subsample) is not None:
-                original_num_rows = len(data)
+                original_num_rows = len(samples)
                 rough_subsample_num_rows = int(original_num_rows * ratio)
-                data = data[: rough_subsample_num_rows // 2] + data[-rough_subsample_num_rows // 2 :]
+                samples = samples[: rough_subsample_num_rows // 2] + samples[-rough_subsample_num_rows // 2 :]
                 logger.info(
-                    f"Subsample loaded debug rollout data using {ratio=} and change num rows {original_num_rows} -> {len(data)}"
+                    f"Subsample loaded debug rollout data using {ratio=} and change num rows {original_num_rows} -> {len(samples)}"
                 )
             metrics = None
         else:
-            data = call_rollout_fn(self.generate_rollout, self.args, rollout_id, self.data_source, evaluation=False)
-            metrics = data.metrics
-            data = data.samples
-            # flatten the data if it is a list of lists
-            while isinstance(data[0], list):
-                data = list(itertools.chain.from_iterable(data))
+            result = self.generate_rollout(self.args, rollout_id, self.data_source, evaluation=False)
+            metrics = result.metrics
+            samples = result.samples
 
             if not self.args.disable_rollout_trim_samples and not self.args.debug_rollout_only:
                 global_batch_size = self.args.global_batch_size
                 if self.args.use_dynamic_global_batch_size:
-                    logger.info(f"Collected {len(data)} samples from rollout to train with dynamic global batch size")
-                    # TODO: this is a temporary solution, we should directly save dynamic_global_batch_size to rollout data
-                    self._dynamic_global_batch_size = self._compute_dynamic_global_batch_size(len(data))
+                    logger.info(
+                        f"Collected {len(samples)} samples from rollout to train with dynamic global batch size"
+                    )
+                    self._dynamic_global_batch_size = self._compute_dynamic_global_batch_size(len(samples))
                     global_batch_size = self._dynamic_global_batch_size
 
-                if len(data) % global_batch_size != 0:
-                    trim_len = (len(data) // global_batch_size) * global_batch_size
+                if len(samples) % global_batch_size != 0:
+                    trim_len = (len(samples) // global_batch_size) * global_batch_size
                     if trim_len == 0:
-                        raise ValueError(f"Not enough samples {len(data)} for global_batch_size {global_batch_size}")
-                    origin_data_length = len(data)
-                    data = data[:trim_len]
-                    logger.info(f"trim number of samples from {origin_data_length} to {trim_len}")
-                logger.info(f"Final collected {len(data)} samples from rollout to train")
+                        raise ValueError(
+                            f"Not enough samples {len(samples)} for global_batch_size {global_batch_size}"
+                        )
+                    origin_len = len(samples)
+                    samples = samples[:trim_len]
+                    logger.info(f"trim number of samples from {origin_len} to {trim_len}")
+                logger.info(f"Final collected {len(samples)} samples from rollout to train")
 
-        return data, metrics
+        return samples, metrics
 
     def _compute_dynamic_global_batch_size(self, num_samples: int) -> int:
         """Calculate dynamic global_batch_size to ensure only one training step.
@@ -653,22 +645,18 @@ class RolloutManager:
 
             torch.save(dict(rollout_id=rollout_id, **dump_data), path)
 
-    def _post_process_rewards(self, samples: list[Sample] | list[list[Sample]]):
+    def _normalize_rewards(self, samples: list[Sample]):
+        """Normalize rewards in-place (e.g. GRPO group normalization)."""
         if self.custom_reward_post_process_func is not None:
-            return self.custom_reward_post_process_func(self.args, samples)
+            self.custom_reward_post_process_func(self.args, samples)
+            return
 
-        raw_rewards = [sample.get_reward_value(self.args) for sample in samples]
         if (
             self.args.advantage_estimator in ["grpo", "gspo", "reinforce_plus_plus_baseline"]
             and self.args.rewards_normalization
         ):
-            # group norm
-            rewards = torch.tensor(raw_rewards, dtype=torch.float)
-            if rewards.shape[-1] == self.args.n_samples_per_prompt * self.args.rollout_batch_size:
-                rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
-            else:
-                # when samples count are not equal in each group
-                rewards = rewards.view(-1, rewards.shape[-1])
+            rewards = torch.tensor([s.get_reward_value(self.args) for s in samples], dtype=torch.float)
+            rewards = rewards.reshape(-1, self.args.n_samples_per_prompt)
             mean = rewards.mean(dim=-1, keepdim=True)
             rewards = rewards - mean
 
@@ -676,130 +664,33 @@ class RolloutManager:
                 std = rewards.std(dim=-1, keepdim=True)
                 rewards = rewards / (std + 1e-6)
 
-            return raw_rewards, rewards.flatten().tolist()
+            for s, r in zip(samples, rewards.flatten().tolist(), strict=True):
+                s.raw_reward = s.reward
+                s.reward = r
 
-        return raw_rewards, raw_rewards
-
-    def _convert_samples_to_train_data(self, samples: list[Sample] | list[list[Sample]]):
-        """
-        Convert inference generated samples to training data.
-        """
-        if self.custom_convert_samples_to_train_data_func is not None:
-            return self.custom_convert_samples_to_train_data_func(self.args, samples)
-
-        raw_rewards, rewards = self._post_process_rewards(samples)
-
-        assert len(raw_rewards) == len(samples)
-        assert len(rewards) == len(samples)
-
-        train_data = {
-            "tokens": [sample.tokens for sample in samples],
-            "response_lengths": [sample.response_length for sample in samples],
-            # some reward model, e.g. remote rm, may return multiple rewards,
-            # we could use key to select the reward.
-            "rewards": rewards,
-            "raw_reward": raw_rewards,
-            "truncated": [1 if sample.status == Sample.Status.TRUNCATED else 0 for sample in samples],
-            "sample_indices": [sample.index for sample in samples],
-        }
-
-        # loss mask
-        # TODO: compress the loss mask
-        loss_masks = []
-        for sample in samples:
-            # always instantiate loss_mask if not provided
-            if sample.loss_mask is None:
-                sample.loss_mask = [1] * sample.response_length
-
-            assert (
-                len(sample.loss_mask) == sample.response_length
-            ), f"loss mask length {len(sample.loss_mask)} != response length {sample.response_length}"
-            if sample.remove_sample:
-                sample.loss_mask = [0] * sample.response_length
-            loss_masks.append(sample.loss_mask)
-        train_data["loss_masks"] = loss_masks
-
-        # overwriting the raw reward
-        if samples[0].metadata and "raw_reward" in samples[0].metadata:
-            train_data["raw_reward"] = [sample.metadata["raw_reward"] for sample in samples]
-
-        # For rollout buffer
-        if samples[0].metadata and "round_number" in samples[0].metadata:
-            train_data["round_number"] = [sample.metadata["round_number"] for sample in samples]
-
-        # Add rollout log probabilities for off-policy correction
-        if samples[0].rollout_log_probs is not None:
-            train_data["rollout_log_probs"] = [sample.rollout_log_probs for sample in samples]
-
-        if samples[0].rollout_routed_experts is not None:
-            train_data["rollout_routed_experts"] = [sample.rollout_routed_experts for sample in samples]
-
-        if samples[0].train_metadata is not None:
-            train_data["metadata"] = [sample.train_metadata for sample in samples]
-
-        if any(sample.multimodal_train_inputs is not None for sample in samples):
-            train_data["multimodal_train_inputs"] = [sample.multimodal_train_inputs for sample in samples]
-
-        if samples[0].teacher_log_probs is not None:
-            train_data["teacher_log_probs"] = [sample.teacher_log_probs for sample in samples]
-
-        return train_data
+    def _apply_loss_masks(self, samples: list[Sample]):
+        """Materialize loss_mask: None -> all-ones via edge alignment."""
+        for s in samples:
+            s.ensure_edge_alignment()
 
     def set_train_parallel_config(self, config: dict):
         self.train_parallel_config = config
 
-    def _split_train_data_by_dp(self, data, dp_size):
-        """Split the train data by data parallel size."""
-        rollout_data = {}
-
-        if "prompt" in data:
-            rollout_data["prompt"] = data["prompt"]
-
-        total_lengths = [len(t) for t in data["tokens"]]
-        data["total_lengths"] = total_lengths
+    def _split_samples_by_dp(self, samples: list[Sample], dp_size: int) -> list:
+        """Split samples across DP ranks, returning list of ray ObjectRefs."""
+        total_lengths = [len(s.tokens) for s in samples]
 
         if self.args.balance_data:
             partitions = get_seqlen_balanced_partitions(total_lengths, dp_size, equal_size=True)
         else:
             partitions = [range(i, len(total_lengths), dp_size) for i in range(dp_size)]
 
-        rollout_data_refs = []
-
+        refs = []
         for i in range(dp_size):
-            rollout_data = {}
             partition = partitions[i]
-            rollout_data["partition"] = partition
-            for key in [
-                "tokens",
-                "multimodal_train_inputs",
-                "response_lengths",
-                "rewards",
-                "truncated",
-                "loss_masks",
-                "round_number",
-                "sample_indices",
-                "rollout_log_probs",
-                "rollout_routed_experts",
-                "prompt",
-                "teacher_log_probs",
-            ]:
-                if key not in data:
-                    continue
-                val = [data[key][j] for j in partition]
-                rollout_data[key] = val
-            # keys that need to be splited at train side
-            for key in [
-                "raw_reward",
-                "total_lengths",
-            ]:
-                if key not in data:
-                    continue
-                rollout_data[key] = data[key]
-            # Pass dynamic global_batch_size to training side
-            if hasattr(self, "_dynamic_global_batch_size"):
-                rollout_data["dynamic_global_batch_size"] = self._dynamic_global_batch_size
-            rollout_data_refs.append(Box(ray.put(rollout_data)))
-        return rollout_data_refs
+            partition_samples = [samples[j] for j in partition]
+            refs.append(ray.put(partition_samples))
+        return refs
 
 
 def _allocate_rollout_engine_addr_and_ports_external(args, rollout_engines):

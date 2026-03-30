@@ -32,7 +32,7 @@ install_stubs(with_sglang_router=True, with_transformers=True)
 
 NUM_GPUS = 0
 
-from slime.rollout.base_types import RolloutFnEvalOutput, call_rollout_fn
+from slime.rollout.base_types import RolloutFnEvalOutput
 from slime.rollout.data_source import RolloutDataSourceWithBuffer
 from slime.rollout.filter_hub.base_types import DynamicFilterOutput, call_dynamic_filter
 from slime.rollout.rm_hub import async_rm, batched_async_rm
@@ -95,15 +95,15 @@ def make_args(**overrides):
 class ReferenceDataSource:
     def __init__(self, args):
         self.args = args
-        self._groups = [[Sample(index=0), Sample(index=1)], [Sample(index=2), Sample(index=3)]]
+        self._examples = [{"prompt": f"prompt-{i}"} for i in range(4)]
 
-    def get_samples(self, num_samples: int) -> list[list[Sample]]:
-        selected = self._groups[:num_samples]
-        self._groups = self._groups[num_samples:]
+    def get_examples(self, num_prompts: int) -> list[dict]:
+        selected = self._examples[:num_prompts]
+        self._examples = self._examples[num_prompts:]
         return selected
 
-    def add_samples(self, samples: list[list[Sample]]):
-        self._groups.extend(samples)
+    def add_examples(self, examples: list[dict]):
+        self._examples.extend(examples)
 
     def save(self, rollout_id):
         self.last_saved_rollout_id = rollout_id
@@ -120,9 +120,9 @@ def reference_dynamic_filter(args, samples: list[Sample], **kwargs):
     return DynamicFilterOutput(keep=keep, reason=None if keep else "drop-flag")
 
 
-def reference_buffer_filter(args, rollout_id, buffer: list[list[Sample]], num_samples: int) -> list[list[Sample]]:
-    selected = list(reversed(buffer[-num_samples:]))
-    del buffer[-num_samples:]
+def reference_buffer_filter(args, rollout_id, buffer: list[dict], num_prompts: int) -> list[dict]:
+    selected = list(reversed(buffer[-num_prompts:]))
+    del buffer[-num_prompts:]
     return selected
 
 
@@ -154,8 +154,11 @@ def valid_eval_function(args, rollout_id, data_source, evaluation=False):
 
 
 class ContractEvalDataSource:
-    def get_samples(self, num_samples: int) -> list[list[Sample]]:
-        return [[Sample(index=index, prompt=f"prompt-{index}")] for index in range(num_samples)]
+    def get_examples(self, num_prompts: int) -> list[dict]:
+        return [{"prompt": f"prompt-{i}"} for i in range(num_prompts)]
+
+    def add_examples(self, examples: list[dict]):
+        pass
 
 
 @dataclass(frozen=True)
@@ -179,7 +182,7 @@ def check_eval_function_path(path: str) -> None:
     candidate_sig = inspect.signature(fn)
     assert tuple(candidate_sig.parameters) == tuple(default_sig.parameters)
     if path != "slime.rollout.sglang_rollout.generate_rollout":
-        output = call_rollout_fn(fn, None, 5, ContractEvalDataSource(), evaluation=True)
+        output = fn(None, 5, ContractEvalDataSource(), evaluation=True)
         assert isinstance(output, RolloutFnEvalOutput)
         assert output.data
 
@@ -200,14 +203,14 @@ def check_dynamic_filter_path(path: str) -> None:
 
 def check_buffer_filter_default() -> None:
     fn = load_function("slime.rollout.data_source.pop_first")
-    assert tuple(inspect.signature(fn).parameters)[:4] == ("args", "rollout_id", "buffer", "num_samples")
+    assert tuple(inspect.signature(fn).parameters)[:4] == ("args", "rollout_id", "buffer", "num_prompts")
 
 
 def check_buffer_filter_path(path: str) -> None:
     fn = load_function(path)
-    assert tuple(inspect.signature(fn).parameters)[:4] == ("args", "rollout_id", "buffer", "num_samples")
+    assert tuple(inspect.signature(fn).parameters)[:4] == ("args", "rollout_id", "buffer", "num_prompts")
     data_source = RolloutDataSourceWithBuffer(make_args())
-    data_source.add_samples([[Sample(index=0), Sample(index=1)], [Sample(index=2), Sample(index=3)]])
+    data_source.add_examples([{"prompt": "p0"}, {"prompt": "p1"}])
     assert isinstance(fn(make_args(buffer_filter_path=path), None, data_source.buffer, 1), list)
 
 
@@ -219,8 +222,8 @@ def check_data_source_default() -> None:
 def check_data_source_path(path: str) -> None:
     cls = load_function(path)
     assert tuple(inspect.signature(cls.__init__).parameters)[:2] == ("self", "args")
-    groups = cls(make_args()).get_samples(1)
-    assert isinstance(groups, list)
+    examples = cls(make_args()).get_examples(1)
+    assert isinstance(examples, list)
 
 
 def check_rollout_sample_filter_default() -> None:

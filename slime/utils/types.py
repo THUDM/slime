@@ -143,6 +143,59 @@ class Sample:
 
         return sample
 
+    # --- Lifecycle methods (lazy data loading) ---
+
+    @classmethod
+    def from_example(cls, example: dict) -> "Sample":
+        """Create a Sample from a raw HF dataset row."""
+        if "prompt" not in example and "text" not in example:
+            raise KeyError("Dataset example must contain a 'prompt' or 'text' field.")
+
+        metadata = example.get("metadata") or {}
+
+        multimodal_inputs = example.get("multimodal_inputs")
+        if multimodal_inputs is None:
+            multimodal_inputs = {}
+            for key in ("images", "videos", "audios"):
+                if key in example and example[key] is not None:
+                    multimodal_inputs[key] = example[key]
+            multimodal_inputs = multimodal_inputs or None
+
+        return cls(
+            prompt=example.get("prompt") or example.get("text", ""),
+            label=example.get("label"),
+            metadata=dict(metadata),
+            multimodal_inputs=multimodal_inputs,
+        )
+
+    @property
+    def has_multimodal(self) -> bool:
+        return bool(self.multimodal_inputs and any(v is not None for v in self.multimodal_inputs.values()))
+
+    @property
+    def num_edges(self) -> int:
+        return max(len(self.tokens) - 1, 0)
+
+    def ensure_edge_alignment(self) -> None:
+        """Validate/materialize loss_mask to edge-aligned length."""
+        edge_len = self.num_edges
+        if self.loss_mask is None:
+            self.loss_mask = [1] * edge_len
+        if len(self.loss_mask) != edge_len:
+            raise ValueError(f"loss_mask length {len(self.loss_mask)} != num_edges {edge_len}")
+        if self.rollout_log_probs is not None and len(self.rollout_log_probs) != edge_len:
+            raise ValueError(f"rollout_log_probs length {len(self.rollout_log_probs)} != num_edges {edge_len}")
+
+    def freeze(self) -> None:
+        """Convert list fields to tensors. Call once after generation + RM."""
+        self.tokens = torch.tensor(self.tokens, dtype=torch.long)
+        if self.loss_mask is not None:
+            self.loss_mask = torch.tensor(self.loss_mask, dtype=torch.int)
+        if self.rollout_log_probs is not None:
+            self.rollout_log_probs = torch.tensor(self.rollout_log_probs, dtype=torch.float32)
+
+    # --- Existing methods ---
+
     def get_reward_value(self, args) -> float:
         return self.reward if not args.reward_key else self.reward[args.reward_key]
 

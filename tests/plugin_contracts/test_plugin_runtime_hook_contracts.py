@@ -157,15 +157,6 @@ HOOK_CASES = [
         invoke_reward_post_process,
     ),
     HookCase(
-        "custom_convert_samples_to_train_data",
-        "CUSTOM_CONVERT_SAMPLES_TO_TRAIN_DATA_PATH",
-        "plugin_contracts.test_plugin_runtime_hook_contracts.reference_convert_samples_to_train_data",
-        "slime/ray/rollout.py",
-        "self.custom_convert_samples_to_train_data_func(self.args, samples)",
-        ("args", "samples"),
-        invoke_convert_samples_to_train_data,
-    ),
-    HookCase(
         "rollout_data_postprocess",
         "ROLLOUT_DATA_POSTPROCESS_PATH",
         "plugin_contracts.test_plugin_runtime_hook_contracts.reference_rollout_data_postprocess",

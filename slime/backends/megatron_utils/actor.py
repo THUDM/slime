@@ -20,7 +20,6 @@ from slime.utils.data import process_rollout_data
 from slime.utils.distributed_utils import get_gloo_group, init_process_group
 from slime.utils.logging_utils import init_tracking
 from slime.utils.memory_utils import clear_memory, print_memory
-from slime.utils.misc import Box
 from slime.utils.reloadable_process_group import destroy_process_groups, monkey_patch_torch_dist, reload_process_groups
 from slime.utils.routing_replay import RoutingReplay
 from slime.utils.timer import Timer, inverse_timer, timer, with_defer
@@ -184,79 +183,73 @@ class MegatronTrainRayActor(TrainRayActor):
         reload_process_groups()
         print_memory("after wake_up model")
 
-    def _get_rollout_data(self, rollout_data_ref: Box) -> RolloutBatch:
-        # Fetch data through ray on CPU, not sure if this will be performance bottleneck.
-        # Both first pp stage and the last pp stage will receive the data.
-        rollout_data = process_rollout_data(
+    def _get_rollout_data(self, rollout_data_ref) -> RolloutBatch:
+        # Fetch list[Sample] (frozen tensors) through ray on CPU
+        samples = process_rollout_data(
             self.args,
             rollout_data_ref,
             mpu.get_data_parallel_rank(with_context_parallel=False),
             mpu.get_data_parallel_world_size(with_context_parallel=False),
         )
-        # TODO: this is ugly, move to somewhere else?
-        # move tokens to GPU in advance
-        rollout_data["tokens"] = [
-            torch.tensor(t, dtype=torch.long, device=torch.cuda.current_device()) for t in rollout_data["tokens"]
-        ]
-        rollout_data["loss_masks"] = [
-            torch.tensor(t, dtype=torch.int, device=torch.cuda.current_device()) for t in rollout_data["loss_masks"]
-        ]
-        if "multimodal_train_inputs" in rollout_data:
-            # Move multimodal training tensors to GPU in advance
+        cuda = torch.cuda.current_device()
+
+        # Convert list[Sample] to dict-based RolloutBatch for DataIterator
+        rollout_data = {
+            "tokens": [s.tokens.to(device=cuda) for s in samples],
+            "loss_masks": [s.loss_mask.to(device=cuda) for s in samples],
+            "total_lengths": [len(s.tokens) for s in samples],
+            "response_lengths": [s.response_length for s in samples],
+            "rewards": [s.reward for s in samples],
+            "raw_reward": [s.get_reward_value(self.args) for s in samples],
+        }
+
+        if any(s.multimodal_train_inputs is not None for s in samples):
             rollout_data["multimodal_train_inputs"] = [
                 (
                     {
                         key: (
-                            torch.from_numpy(v.copy()).to(device=torch.cuda.current_device())
+                            torch.from_numpy(v.copy()).to(device=cuda)
                             if isinstance(v, np.ndarray)
-                            else v.to(device=torch.cuda.current_device())
+                            else v.to(device=cuda)
                         )
-                        for key, v in mm_dict.items()
+                        for key, v in s.multimodal_train_inputs.items()
                     }
-                    if mm_dict is not None
+                    if s.multimodal_train_inputs is not None
                     else None
                 )
-                for mm_dict in rollout_data["multimodal_train_inputs"]
+                for s in samples
             ]
 
         if self.args.qkv_format == "bshd":
-            # TODO: micro-batch wise dynamic, possibly move to @data.py:get_data_iterator
             max_seq_len = max(rollout_data["total_lengths"])
-
-            # pad to reduce memory fragmentation and maybe make the computation faster
             pad_size = mpu.get_tensor_model_parallel_world_size() * self.args.data_pad_size_multiplier
             max_seq_len = (max_seq_len + pad_size - 1) // pad_size * pad_size
+            rollout_data["max_seq_lens"] = [max_seq_len] * len(samples)
 
-            rollout_data["max_seq_lens"] = [max_seq_len] * len(rollout_data["tokens"])
-
-        for key in ["rollout_log_probs", "teacher_log_probs"]:
-            if key not in rollout_data:
+        for attr_name in ["rollout_log_probs", "teacher_log_probs"]:
+            vals = [getattr(s, attr_name) for s in samples]
+            if vals[0] is None:
                 continue
-            rollout_data[key] = [
+            rollout_data[attr_name] = [
                 torch.tensor(
                     slice_log_prob_with_cp(
-                        log_prob,
+                        v.tolist(),
                         total_length,
                         response_length,
                         self.args.qkv_format,
                         rollout_data["max_seq_lens"][i] if self.args.qkv_format == "bshd" else None,
                     ),
-                    device=torch.cuda.current_device(),
+                    device=cuda,
                     dtype=torch.float32,
                 )
-                for i, (log_prob, total_length, response_length) in enumerate(
-                    zip(
-                        rollout_data[key],
-                        rollout_data["total_lengths"],
-                        rollout_data["response_lengths"],
-                        strict=False,
-                    )
+                for i, (v, total_length, response_length) in enumerate(
+                    zip(vals, rollout_data["total_lengths"], rollout_data["response_lengths"], strict=False)
                 )
             ]
-        if "rollout_routed_experts" in rollout_data:
-            rollout_data["rollout_routed_experts"] = [
-                torch.from_numpy(r) for r in rollout_data["rollout_routed_experts"]
-            ]
+
+        if samples[0].rollout_routed_experts is not None:
+            rollout_data["rollout_routed_experts"] = [s.rollout_routed_experts for s in samples]
+
         return rollout_data
 
     def _switch_model(self, target_tag: str) -> None:
@@ -360,7 +353,7 @@ class MegatronTrainRayActor(TrainRayActor):
                 store_prefix=store_prefix,
             )
 
-    def train(self, rollout_id: int, rollout_data_ref: Box) -> None:
+    def train(self, rollout_id: int, rollout_data_ref) -> None:
         if self.args.debug_rollout_only:
             return
 
