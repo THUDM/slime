@@ -89,7 +89,12 @@ def reinit_wandb_primary_with_open_metrics(args, router_addr):
     """
     if not args.use_wandb or _is_offline_mode(args):
         return
+    if getattr(args, "wandb_mode", None) == "disabled":
+        return
     if router_addr is None:
+        return
+    wandb_run_id = getattr(args, "wandb_run_id", None)
+    if wandb_run_id is None:
         return
 
     import sglang_router
@@ -105,7 +110,7 @@ def reinit_wandb_primary_with_open_metrics(args, router_addr):
     wandb.finish()
 
     init_kwargs = {
-        "id": args.wandb_run_id,
+        "id": wandb_run_id,
         "entity": args.wandb_team,
         "project": args.wandb_project,
         "resume": "allow",
@@ -123,6 +128,7 @@ def reinit_wandb_primary_with_open_metrics(args, router_addr):
     }
 
     if args.wandb_dir:
+        os.makedirs(args.wandb_dir, exist_ok=True)
         init_kwargs["dir"] = args.wandb_dir
 
     wandb.init(**init_kwargs)

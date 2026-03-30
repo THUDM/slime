@@ -122,6 +122,8 @@ class EvalDatasetConfig:
     # If set, eval will use ServerGenerationProxy to generate through AppServer
     app_service: str | None = None
 
+    eval_task_timeout: int | None = None
+
     metadata_overrides: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
