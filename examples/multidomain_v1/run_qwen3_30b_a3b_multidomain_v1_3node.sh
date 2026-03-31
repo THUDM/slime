@@ -22,6 +22,7 @@ MODEL_DIR=${MODEL_DIR:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/pu
 TORCH_DIST_DIR=${TORCH_DIST_DIR:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/ifrl_qwen3_30b_a3b/checkpoints}
 WORK_ROOT=${WORK_ROOT:-${AVALANCHE_ROOT}/experiments/multidomain_v1_3node}
 TRAIN_POOL_ROOT=${TRAIN_POOL_ROOT:-}
+TRAIN_POOL_DATASETS=${TRAIN_POOL_DATASETS:-}
 TRAIN_DATA_BASENAME=${TRAIN_DATA_BASENAME:-multidomain_v1_train.normalized.jsonl}
 
 TRAIN_TOOL_AGENT_202510=${TRAIN_TOOL_AGENT_202510:-${AVALANCHE_ROOT}/data/open_data/tool_call/agent_function_calling_open_dataset/deepnlp_agent_function_call_202510.json}
@@ -122,6 +123,8 @@ TOOLCALL_RESUME_FINETUNE=${TOOLCALL_RESUME_FINETUNE:-1}
 TOOL_CALL_LOAD_DIR=${TOOL_CALL_LOAD_DIR:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/ifrl_qwen3_30b_a3b/checkpoints}
 TOOL_CALL_WANDB_PROJECT=${TOOL_CALL_WANDB_PROJECT:-slime-multidomain-v1}
 TOOL_CALL_WANDB_GROUP=${TOOL_CALL_WANDB_GROUP:-${JOB_NAME:-qwen3-30b-a3b-mdv1-3node}}
+RAY_CLUSTER_WAIT_MAX_ATTEMPTS=${RAY_CLUSTER_WAIT_MAX_ATTEMPTS:-60}
+RAY_CLUSTER_WAIT_SLEEP_SECONDS=${RAY_CLUSTER_WAIT_SLEEP_SECONDS:-10}
 RAY_HEAD_ADDR_FILE="${WORK_ROOT}/ray_head_addr.txt"
 RAY_HEAD_LOCK_DIR="${WORK_ROOT}/ray_head_lock"
 
@@ -146,6 +149,23 @@ append_source_spec() {
     return 0
   fi
   target_array+=(--source "${source_path}" --dataset-format "${dataset_format}" --source-ratio "${ratio}")
+}
+
+normalize_wandb_group_name() {
+  local candidate="$1"
+  local suffix
+  if (( ${#candidate} <= 128 )); then
+    printf '%s\n' "${candidate}"
+    return 0
+  fi
+  suffix=$(python3 - "$candidate" <<'PY'
+import hashlib
+import sys
+
+print(hashlib.sha1(sys.argv[1].encode("utf-8")).hexdigest()[:8])
+PY
+)
+  printf '%.119s-%s\n' "$candidate" "$suffix"
 }
 
 resolve_hostname_to_ip() {
@@ -232,7 +252,7 @@ wait_for_full_ray_cluster() {
   local expected_nodes=${NUM_NODES}
   local attempt
 
-  for attempt in $(seq 1 30); do
+  for attempt in $(seq 1 "${RAY_CLUSTER_WAIT_MAX_ATTEMPTS}"); do
     if python3 - <<PY
 import json
 import sys
@@ -261,8 +281,8 @@ PY
       echo "Ray cluster is ready with ${expected_nodes} nodes and ${expected_gpus} GPUs."
       return 0
     fi
-    echo "Waiting for Ray workers to join (${attempt}/30)..."
-    sleep 10
+    echo "Waiting for Ray workers to join (${attempt}/${RAY_CLUSTER_WAIT_MAX_ATTEMPTS})..."
+    sleep "${RAY_CLUSTER_WAIT_SLEEP_SECONDS}"
   done
 
   echo "Ray workers did not join the cluster in time." >&2
@@ -445,8 +465,18 @@ prepare_training_data() {
     reused_prepared_data_cache=1
   else
     if [[ -n "${TRAIN_POOL_ROOT}" ]]; then
+      TRAIN_POOL_PREP_ARGS=(--pool-root "${TRAIN_POOL_ROOT}")
+      if [[ -n "${TRAIN_POOL_DATASETS}" ]]; then
+        IFS=',' read -r -a TRAIN_POOL_DATASET_ARRAY <<< "${TRAIN_POOL_DATASETS}"
+        for dataset_name in "${TRAIN_POOL_DATASET_ARRAY[@]}"; do
+          dataset_name="${dataset_name//[[:space:]]/}"
+          if [[ -n "${dataset_name}" ]]; then
+            TRAIN_POOL_PREP_ARGS+=(--dataset "${dataset_name}")
+          fi
+        done
+      fi
       python3 "${SCRIPT_DIR}/../multidomain_v2/prepare_multidomain_v2_data.py" \
-        --pool-root "${TRAIN_POOL_ROOT}" \
+        "${TRAIN_POOL_PREP_ARGS[@]}" \
         --dest "${NORMALIZED_TRAIN}"
     else
       TRAIN_PREP_ARGS=()
@@ -749,11 +779,12 @@ submit_ray_job() {
 
   WANDB_ARGS=()
   if [[ -n "${WANDB_API_KEY:-}" ]]; then
+    WANDB_GROUP_NAME="$(normalize_wandb_group_name "${TOOL_CALL_WANDB_GROUP}")"
     WANDB_ARGS+=(
       --use-wandb
       --wandb-host "${WANDB_BASE_URL:-https://wandb.ai}"
       --wandb-project "${TOOL_CALL_WANDB_PROJECT}"
-      --wandb-group "${TOOL_CALL_WANDB_GROUP}"
+      --wandb-group "${WANDB_GROUP_NAME}"
       --wandb-key "${WANDB_API_KEY}"
       --disable-wandb-random-suffix
     )
