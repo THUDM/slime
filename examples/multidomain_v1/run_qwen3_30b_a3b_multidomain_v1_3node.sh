@@ -136,10 +136,6 @@ append_source_spec() {
   target_array+=(--source "${source_path}" --dataset-format "${dataset_format}" --source-ratio "${ratio}")
 }
 
-get_local_ip() {
-  hostname -I 2>/dev/null | awk '{print $1}' || hostname
-}
-
 resolve_hostname_to_ip() {
   local host="$1"
   python3 - "$host" <<'PY'
@@ -331,7 +327,6 @@ start_ray_worker_with_retry() {
     ray start \
       --address="${MASTER_ADDR}:${MASTER_PORT}" \
       --num-gpus "${NUM_GPUS_PER_NODE}" \
-      --node-ip-address "${NODE_IP}" \
       --node-name "${node_name}" \
       --dashboard-port="${DASHBOARD_PORT}" \
       --disable-usage-stats
@@ -349,6 +344,75 @@ start_ray_worker_with_retry() {
   done
 
   echo "Ray worker failed to join cluster after retries." >&2
+  return 1
+}
+
+start_ray_head_and_persist_addr() {
+  local node_name="${WORKER_ID:-${HOSTNAME:-head-0}}"
+  local output
+  local rc
+  local detected_addr
+
+  set +e
+  output="$(
+    ray start --head \
+      --port="${MASTER_PORT}" \
+      --node-name "${node_name}" \
+      --num-gpus "${NUM_GPUS_PER_NODE}" \
+      --disable-usage-stats \
+      --dashboard-host=0.0.0.0 \
+      --dashboard-port="${DASHBOARD_PORT}" 2>&1
+  )"
+  rc=$?
+  set -e
+
+  printf '%s\n' "${output}"
+  if [[ "${rc}" -ne 0 ]]; then
+    return "${rc}"
+  fi
+
+  detected_addr="$(
+    printf '%s\n' "${output}" | python3 - <<'PY'
+import re
+import sys
+
+text = sys.stdin.read()
+# Prefer the address Ray explicitly tells workers to use. On this platform,
+# "Local node IP" can resolve to a host-only interface that other workers
+# cannot reach, while the advertised ray start address is the routable one.
+patterns = [
+    r"--address='([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):[0-9]+'",
+    r"ray\.init\(_node_ip_address='([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)'\)",
+    r"http://([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+):8265",
+    r"Local node IP.*?([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)",
+]
+for pattern in patterns:
+    match = re.search(pattern, text)
+    if match:
+        print(match.group(1))
+        raise SystemExit(0)
+raise SystemExit(1)
+PY
+  )" || true
+
+  if [[ -z "${detected_addr}" ]]; then
+    echo "Failed to determine Ray head IP from ray start output." >&2
+    return 1
+  fi
+
+  MASTER_ADDR="${detected_addr}"
+  printf '%s\n' "${MASTER_ADDR}" > "${RAY_HEAD_ADDR_FILE}"
+  echo "Persisted Ray head address: ${MASTER_ADDR}"
+
+  local attempt
+  for attempt in $(seq 1 10); do
+    if ray status --address="${MASTER_ADDR}:${MASTER_PORT}" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  echo "Ray head address ${MASTER_ADDR}:${MASTER_PORT} was not reachable after startup." >&2
   return 1
 }
 
@@ -669,14 +733,12 @@ submit_ray_job() {
 }
 
 NODE_RANK=${NODE_RANK:-${RANK:-${MLP_ROLE_INDEX:-0}}}
-MASTER_ADDR="${MASTER_ADDR:-${MLP_WORKER_0_HOST:-$(get_local_ip)}}"
+MASTER_ADDR="${MASTER_ADDR:-${MLP_WORKER_0_HOST:-}}"
 MASTER_PORT=${MASTER_PORT:-6379}
 DASHBOARD_PORT=${DASHBOARD_PORT:-8265}
-NODE_IP="$(get_local_ip)"
 
 if [[ "${NODE_RANK}" -eq 0 ]]; then
-  MASTER_ADDR="${NODE_IP}"
-  printf '%s\n' "${MASTER_ADDR}" > "${RAY_HEAD_ADDR_FILE}"
+  rm -f "${RAY_HEAD_ADDR_FILE}"
 else
   MASTER_ADDR="$(normalize_master_addr "${MASTER_ADDR}" 2>/dev/null || true)"
   if [[ -z "${MASTER_ADDR}" ]]; then
@@ -694,14 +756,7 @@ export no_proxy="127.0.0.1,${MASTER_ADDR}"
 cleanup_local_processes
 
 if [[ "${NODE_RANK}" -eq 0 ]]; then
-  ray start --head \
-    --port="${MASTER_PORT}" \
-    --node-ip-address "${MASTER_ADDR}" \
-    --node-name "${WORKER_ID:-${HOSTNAME:-head-0}}" \
-    --num-gpus "${NUM_GPUS_PER_NODE}" \
-    --disable-usage-stats \
-    --dashboard-host=0.0.0.0 \
-    --dashboard-port="${DASHBOARD_PORT}"
+  start_ray_head_and_persist_addr
   prepare_training_data
   ensure_torch_dist_checkpoint
   wait_for_full_ray_cluster
