@@ -412,6 +412,10 @@ def get_log_probs_and_entropy(
         assert max_seq_lens is not None
         logits = logits.view(-1, logits.size(-1))
 
+    # Apply rollout temperature scaling to logits to match rollout-time log-probs.
+    rollout_temperature = getattr(args, "rollout_temperature", 1.0)
+    if rollout_temperature != 1.0:
+        logits = logits / rollout_temperature
     logits = logits.contiguous()
     T = logits.size(0)
     device = logits.device
