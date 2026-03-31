@@ -5,13 +5,22 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Iterable, Iterator, Sequence
+from typing import Any, Iterator, Sequence
+
+
+POOL_SUBDIRS = ("structured", "stem", "tool")
 
 
 def discover_sources(pool_root: Path) -> list[Path]:
     if not pool_root.exists():
         raise FileNotFoundError(f"Pool root does not exist: {pool_root}")
-    return sorted(path for path in pool_root.rglob("*.jsonl") if path.is_file())
+    sources: list[Path] = []
+    for subdir in POOL_SUBDIRS:
+        candidate = pool_root / subdir
+        if not candidate.is_dir():
+            continue
+        sources.extend(path for path in candidate.rglob("*.jsonl") if path.is_file())
+    return sorted(sources)
 
 
 def iter_rows(path: Path) -> Iterator[dict]:
@@ -24,6 +33,12 @@ def iter_rows(path: Path) -> Iterator[dict]:
             if not isinstance(payload, dict):
                 raise ValueError(f"{path}:{line_number} is not a JSON object")
             yield payload
+
+
+def align_row_to_v1_normalized_shape(row: dict[str, Any]) -> dict[str, Any]:
+    aligned = dict(row)
+    aligned["tools"] = list(row.get("tools") or [])
+    return aligned
 
 
 def iter_selected_rows(
@@ -54,6 +69,7 @@ def write_dataset(
     written = 0
     with dest.open("w", encoding="utf-8") as handle:
         for row in iter_selected_rows(sources, skip_samples=skip_samples, max_samples=max_samples):
+            row = align_row_to_v1_normalized_shape(row)
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
             written += 1
     return written
