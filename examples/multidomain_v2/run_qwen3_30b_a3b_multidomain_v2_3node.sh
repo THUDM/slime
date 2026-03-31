@@ -6,6 +6,7 @@ PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 AVALANCHE_ROOT="$(cd -- "${PROJECT_ROOT}/.." && pwd)"
 
 export TRAIN_POOL_ROOT="${TRAIN_POOL_ROOT:-${AVALANCHE_ROOT}/data/pool}"
+export TRAIN_POOL_DATASETS="${TRAIN_POOL_DATASETS:-toolbench_v1,apibench,apigen,agent,jsonschemabench,nemotron_structured_outputs}"
 export WORK_ROOT="${WORK_ROOT:-${AVALANCHE_ROOT}/experiments/multidomain_v2_3node}"
 export TRAIN_DATA_BASENAME="${TRAIN_DATA_BASENAME:-multidomain_v2_train.normalized.jsonl}"
 export TOOL_CALL_WANDB_PROJECT="${TOOL_CALL_WANDB_PROJECT:-slime-multidomain-v2}"
