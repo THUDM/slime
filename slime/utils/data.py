@@ -22,13 +22,8 @@ __all__ = ["Dataset"]
 logger = logging.getLogger(__name__)
 
 
-def read_file(path):
-    path, row_slice = _parse_generalized_path(path)
-    reader = None
-
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Prompt dataset path '{path}' does not exist.")
-
+def _read_single_file(path):
+    """Yield records from a single .jsonl or .parquet file."""
     if path.endswith(".jsonl"):
 
         def jsonl_reader(p):
@@ -38,12 +33,12 @@ def read_file(path):
                     if not line:
                         continue
                     try:
-                        yield json.loads(line)
+                        yield json.loads(line, strict=False)
                     except json.JSONDecodeError as e:
                         print(f"JSON decode error at line {line_num}: {e}")
                         continue
 
-        reader = jsonl_reader(path)
+        yield from jsonl_reader(path)
 
     elif path.endswith(".parquet"):
         if pq is None:
@@ -55,10 +50,37 @@ def read_file(path):
             for batch in pf.iter_batches():
                 yield from batch.to_pylist()
 
-        reader = parquet_reader(path)
+        yield from parquet_reader(path)
 
     else:
         raise ValueError(f"Unsupported file format: {path}. Supported formats are .jsonl and .parquet.")
+
+
+def read_file(path):
+    path, row_slice = _parse_generalized_path(path)
+    reader = None
+
+    if not os.path.exists(path):
+        raise FileNotFoundError(f"Prompt dataset path '{path}' does not exist.")
+
+    if os.path.isdir(path):
+        files = sorted(
+            f
+            for f in (os.path.join(path, name) for name in os.listdir(path))
+            if os.path.isfile(f) and (f.endswith(".jsonl") or f.endswith(".parquet"))
+        )
+        if not files:
+            raise ValueError(f"No .jsonl or .parquet files found in directory: {path}")
+        logger.info("read_file: found %d files in directory %s", len(files), path)
+
+        def dir_reader(file_list):
+            for fi, fp in enumerate(file_list):
+                logger.info("read_file: reading file %d/%d: %s", fi + 1, len(file_list), fp)
+                yield from _read_single_file(fp)
+
+        reader = dir_reader(files)
+    else:
+        reader = _read_single_file(path)
 
     if row_slice is not None:
 
@@ -210,6 +232,7 @@ class Dataset:
         apply_chat_template_kwargs=None,
     ):
         origin_samples = []
+        sample_count = 0
         for data in read_file(path):
             # Both chat templates and multimodal inputs require conversation format (list of message dicts)
             as_conversation = apply_chat_template or (multimodal_keys is not None)
@@ -255,6 +278,11 @@ class Dataset:
                     multimodal_inputs=multimodal_inputs,
                 )
             )
+            sample_count += 1
+            if sample_count % 50000 == 0:
+                logger.info("Dataset: loaded %d samples so far...", sample_count)
+
+        logger.info("Dataset: finished loading %d samples from %s", len(origin_samples), path)
 
         if max_length is not None:
             self.origin_samples = filter_long_prompt(origin_samples, tokenizer, processor, max_length)

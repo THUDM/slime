@@ -29,6 +29,11 @@ def validate_args(args):
             "pipeline_model_parallel_size is 1."
         )
 
+    # Muon optimizer checks
+    if 'muon' in getattr(args, 'optimizer', 'adam'):
+        assert not args.use_distributed_optimizer, "Muon does not support distributed optimizer."
+        assert not getattr(args, 'fp16', False), "Muon does not support fp16, use bf16 instead."
+
 
 def _hf_validate_args(args, hf_config):
     def equal(x, y):
@@ -77,8 +82,11 @@ def _hf_validate_args(args, hf_config):
 
 
 def _set_default_megatron_args(args):
-    # always use zero optimizer
-    args.use_distributed_optimizer = True
+    # Muon does not support distributed optimizer; for all other optimizers use ZeRO.
+    if 'muon' in getattr(args, 'optimizer', 'adam'):
+        args.use_distributed_optimizer = False
+    else:
+        args.use_distributed_optimizer = True
     # TODO: maybe change this after megatron has good fp8 support
     args.bf16 = not args.fp16
     # placeholders

@@ -16,6 +16,13 @@ from megatron.core.enums import ModelType
 from megatron.core.models.gpt import GPTModel
 from megatron.core.optimizer import OptimizerConfig, get_megatron_optimizer
 from megatron.core.optimizer.optimizer import MegatronOptimizer
+
+try:
+    from megatron.core.optimizer.muon import get_megatron_muon_optimizer
+
+    HAVE_MUON = True
+except ImportError:
+    HAVE_MUON = False
 from megatron.core.optimizer_param_scheduler import OptimizerParamScheduler
 from megatron.core.pipeline_parallel import get_forward_backward_func
 from megatron.core.utils import get_model_config
@@ -117,11 +124,23 @@ def setup_model_and_optimizer(
     config = OptimizerConfig(**kwargs)
     config.timers = None
 
-    optimizer = get_megatron_optimizer(
-        config=config,
-        model_chunks=model,
-        use_gloo_process_groups=args.enable_gloo_process_groups,
-    )
+    if 'muon' not in config.optimizer:
+        optimizer = get_megatron_optimizer(
+            config=config,
+            model_chunks=model,
+            use_gloo_process_groups=args.enable_gloo_process_groups,
+        )
+    else:
+        assert HAVE_MUON, (
+            "Muon optimizer requires 'emerging_optimizers' package. "
+            "Install from: https://github.com/NVIDIA-NeMo/Emerging-Optimizers.git@v0.1.0"
+        )
+        optimizer = get_megatron_muon_optimizer(
+            config=config,
+            model_chunks=model,
+            use_gloo_process_groups=args.enable_gloo_process_groups,
+            layer_wise_distributed_optimizer='dist' in config.optimizer,
+        )
     opt_param_scheduler = get_optimizer_param_scheduler(args, optimizer)
     return model, optimizer, opt_param_scheduler
 
