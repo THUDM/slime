@@ -1,8 +1,185 @@
 from __future__ import annotations
 
 import ast
+import json
 import re
+from typing import Any
 
+
+def _clean_response(text: str) -> str:
+    text = text or ""
+    marker = "</think>"
+    idx = text.rfind(marker)
+    if idx >= 0:
+        text = text[idx + len(marker) :]
+    return text.strip().replace("<|endoftext|>", "").replace("<pad>", "").replace("<|im_end|>", "").strip()
+
+
+def _extract_json_payload(text: str) -> str:
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL)
+    if fenced:
+        return fenced.group(1).strip()
+    return text.strip()
+
+
+def _maybe_parse_json(value: Any) -> Any:
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return ""
+        if text[0] in "[{":
+            try:
+                return json.loads(text)
+            except json.JSONDecodeError:
+                return text
+        return text
+    return value
+
+
+def _canonicalize(value: Any) -> Any:
+    value = _maybe_parse_json(value)
+    if isinstance(value, dict):
+        return {str(key): _canonicalize(value[key]) for key in sorted(value)}
+    if isinstance(value, list):
+        return [_canonicalize(item) for item in value]
+    return value
+
+
+def normalize_ground_truth_calls(raw_calls: Any) -> list[dict[str, Any]]:
+    if not isinstance(raw_calls, list):
+        return []
+
+    normalized: list[dict[str, Any]] = []
+    for call in raw_calls:
+        if not isinstance(call, dict):
+            continue
+        normalized.append(
+            {
+                "name": str(call.get("name", "")),
+                "arguments": _canonicalize(call.get("arguments", call.get("parameters", {}))),
+            }
+        )
+    return normalized
+
+
+def calls_match_ground_truth(predicted_calls: list[dict[str, Any]], expected_calls: list[dict[str, Any]]) -> bool:
+    return normalize_ground_truth_calls(predicted_calls) == normalize_ground_truth_calls(expected_calls)
+
+
+def _parse_tool_calls_from_xml(response: str) -> list[dict[str, Any]]:
+    parsed_calls: list[dict[str, Any]] = []
+    for block in re.findall(r"<tool_call>\s*(.*?)\s*</tool_call>", response, flags=re.DOTALL):
+        try:
+            payload = json.loads(block)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            parsed_calls.append(payload)
+    return parsed_calls
+
+
+def _parse_tool_calls(response: str, tools: list[dict[str, Any]], parser_type: str) -> list[dict[str, Any]]:
+    xml_calls = _parse_tool_calls_from_xml(response)
+    if xml_calls:
+        return xml_calls
+
+    try:
+        from sglang.srt.function_call.function_call_parser import FunctionCallParser
+        from sglang.srt.managers.io_struct import Function, Tool
+    except Exception:
+        return []
+
+    parser = FunctionCallParser(
+        tools=[
+            Tool(
+                function=Function(
+                    name=tool["function"]["name"],
+                    description=tool["function"].get("description", ""),
+                    parameters=tool["function"].get("parameters") or {"type": "object", "properties": {}},
+                ),
+                type=tool.get("type", "function"),
+            )
+            for tool in tools
+        ],
+        tool_call_parser=parser_type,
+    )
+    _, calls = parser.parse_non_stream(response)
+    return [call.model_dump() for call in calls]
+
+
+def _extract_mcqa_answer(response: str) -> str:
+    match = re.search(r"Answer:\s*([A-Z])\b", response, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+    match = re.search(r"<answer>\s*([A-Z])\s*</answer>", response, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+    stripped = response.strip().splitlines()
+    if stripped:
+        last = stripped[-1].strip().upper()
+        if re.fullmatch(r"[A-Z]", last):
+            return last
+    return ""
+
+
+def _check_python_type(value: Any, expected_type: str) -> bool:
+    if expected_type == "object":
+        return isinstance(value, dict)
+    if expected_type == "array":
+        return isinstance(value, list)
+    if expected_type == "string":
+        return isinstance(value, str)
+    if expected_type == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if expected_type == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if expected_type == "boolean":
+        return isinstance(value, bool)
+    if expected_type == "null":
+        return value is None
+    return True
+
+
+def _validate_json_schema(data: Any, schema: Any) -> bool:
+    if isinstance(schema, bool):
+        return schema
+    if not isinstance(schema, dict):
+        return True
+
+    expected_type = schema.get("type")
+    if isinstance(expected_type, str) and not _check_python_type(data, expected_type):
+        return False
+
+    enum_values = schema.get("enum")
+    if isinstance(enum_values, list) and data not in enum_values:
+        return False
+
+    if expected_type == "object":
+        if not isinstance(data, dict):
+            return False
+        required_raw = schema.get("required")
+        required = [str(key) for key in required_raw] if isinstance(required_raw, list) else []
+        if any(key not in data for key in required):
+            return False
+        properties = schema.get("properties") or {}
+        if schema.get("additionalProperties") is False:
+            for key in data:
+                if key not in properties:
+                    return False
+        for key, value in data.items():
+            if key in properties and not _validate_json_schema(value, properties[key]):
+                return False
+        return True
+
+    if expected_type == "array":
+        if not isinstance(data, list):
+            return False
+        item_schema = schema.get("items")
+        if isinstance(item_schema, (dict, bool)):
+            return all(_validate_json_schema(item, item_schema) for item in data)
+        return True
+
+    return True
 
 
 def _normalize_instruction_ids(raw_ids):
@@ -28,15 +205,6 @@ def _normalize_kwargs(raw_kwargs, n):
         items = items[:n]
 
     return [{k: v for k, v in item.items() if v is not None} for item in items]
-
-
-def _clean_response(text: str) -> str:
-    text = text or ""
-    marker = "</think>"
-    idx = text.rfind(marker)
-    if idx >= 0:
-        text = text[idx + len(marker) :]
-    return text.strip().replace("<|endoftext|>", "").replace("<pad>", "").replace("<|im_end|>", "").strip()
 
 
 def _word_tokens(text: str) -> list[str]:
@@ -89,13 +257,6 @@ def _first_word(text: str) -> str:
 def _last_word(text: str) -> str:
     words = _word_tokens(text)
     return words[-1].lower() if words else ""
-
-
-def _extract_json_payload(text: str) -> str:
-    fenced = re.search(r"```(?:json)?\s*(.*?)```", text, flags=re.IGNORECASE | re.DOTALL)
-    if fenced:
-        return fenced.group(1).strip()
-    return text.strip()
 
 
 def _expected_paragraphs_from_prompt(prompt: str) -> int | None:
@@ -194,17 +355,11 @@ def _validate_sections(text: str, n: int, section_splitter: str) -> bool:
 
 
 def _validate_json_format(text: str) -> bool:
-    import json
-
     try:
         json.loads(_extract_json_payload(text))
         return True
     except Exception:
         return False
-
-
-def _validate_repeat_prompt(text: str, prompt: str) -> bool:
-    return text.strip().startswith(prompt.strip())
 
 
 def _validate_two_responses(text: str) -> bool:
@@ -353,7 +508,10 @@ def _validate_counting_composition(text: str, prompt: str, n_sent: int, n_words:
 
 
 def _validate_response_language(text: str, language: str) -> bool:
-    from langdetect import detect
+    try:
+        from langdetect import detect
+    except Exception:
+        return False
 
     try:
         return detect(text) == language
@@ -373,12 +531,7 @@ def _check_instruction(instruction_id: str, rule_kwargs: dict, prompt: str, resp
     if instruction_id == "detectable_format:bigram_wrapping":
         return _validate_bigram_wrapping(response)
     if instruction_id == "keywords:letter_frequency":
-        return _verify_letter_frequency(
-            response,
-            rule_kwargs.get("letter", ""),
-            int(rule_kwargs.get("let_frequency", 0)),
-            rule_kwargs.get("let_relation", "exactly"),
-        )
+        return _verify_letter_frequency(response, rule_kwargs.get("letter", ""), int(rule_kwargs.get("let_frequency", 0)), rule_kwargs.get("let_relation", "exactly"))
     if instruction_id == "punctuation:punctuation_exclamation":
         return _validate_no_char(response, "!")
     if instruction_id == "last_word:last_word_answer":
@@ -386,11 +539,7 @@ def _check_instruction(instruction_id: str, rule_kwargs: dict, prompt: str, resp
     if instruction_id == "count:lowercase_counting":
         return _verify_lowercase_word_count(response, int(rule_kwargs.get("N", 0)))
     if instruction_id in {"keywords:word_count_different_numbers", "keywords:frequency"}:
-        return _relation_ok(
-            _count_keyword(response, rule_kwargs.get("keyword", "")),
-            int(rule_kwargs.get("frequency", 0)),
-            rule_kwargs.get("relation", "exactly"),
-        )
+        return _relation_ok(_count_keyword(response, rule_kwargs.get("keyword", "")), int(rule_kwargs.get("frequency", 0)), rule_kwargs.get("relation", "exactly"))
     if instruction_id == "startend:end_checker":
         return _validate_end(response, rule_kwargs.get("end_phrase", ""))
     if instruction_id == "punctuation:punctuation_dot":
@@ -404,25 +553,11 @@ def _check_instruction(instruction_id: str, rule_kwargs: dict, prompt: str, resp
     if instruction_id == "detectable_format:number_bullet_lists":
         return _verify_bullet_points(response, int(rule_kwargs.get("num_bullets", 0)))
     if instruction_id == "letters:letter_counting2":
-        return _verify_letter_frequency(
-            response,
-            rule_kwargs.get("letter", ""),
-            int(rule_kwargs.get("let_frequency", 0)),
-            rule_kwargs.get("let_relation", "exactly"),
-        )
+        return _verify_letter_frequency(response, rule_kwargs.get("letter", ""), int(rule_kwargs.get("let_frequency", 0)), rule_kwargs.get("let_relation", "exactly"))
     if instruction_id == "keywords:keyword_specific_position":
-        return _validate_keyword_specific_position(
-            response,
-            rule_kwargs.get("keyword", ""),
-            int(rule_kwargs.get("n", 0)),
-            int(rule_kwargs.get("m", 0)),
-        )
+        return _validate_keyword_specific_position(response, rule_kwargs.get("keyword", ""), int(rule_kwargs.get("n", 0)), int(rule_kwargs.get("m", 0)))
     if instruction_id == "length_constraints:number_words":
-        return _validate_word_constraint(
-            response,
-            int(rule_kwargs.get("num_words", 0)),
-            rule_kwargs.get("relation", "exactly"),
-        )
+        return _validate_word_constraint(response, int(rule_kwargs.get("num_words", 0)), rule_kwargs.get("relation", "exactly"))
     if instruction_id == "keywords:start_end":
         return _validate_same_start_end_word(response)
     if instruction_id == "detectable_format:square_brackets":
@@ -432,11 +567,7 @@ def _check_instruction(instruction_id: str, rule_kwargs: dict, prompt: str, resp
     if instruction_id == "detectable_content:number_placeholders":
         return _validate_placeholders(response, int(rule_kwargs.get("num_placeholders", 0)))
     if instruction_id == "copy:repeat_phrase":
-        return _validate_repeat_phrase(
-            response,
-            rule_kwargs.get("phrase", ""),
-            int(rule_kwargs.get("small_n", 0)),
-        )
+        return _validate_repeat_phrase(response, rule_kwargs.get("phrase", ""), int(rule_kwargs.get("small_n", 0)))
     if instruction_id == "startend:quotation":
         return _validate_quotation(response)
     if instruction_id == "first_word:first_word_answer":
@@ -448,33 +579,17 @@ def _check_instruction(instruction_id: str, rule_kwargs: dict, prompt: str, resp
     if instruction_id == "keywords:no_adjacent_consecutive":
         return _validate_no_adjacent_consecutive(response)
     if instruction_id == "count:count_increment_word":
-        return (
-            _count_keyword(response, rule_kwargs.get("keyword1", "")) == 1
-            and _count_keyword(response, rule_kwargs.get("keyword2", "")) == 2
-        )
+        return _count_keyword(response, rule_kwargs.get("keyword1", "")) == 1 and _count_keyword(response, rule_kwargs.get("keyword2", "")) == 2
     if instruction_id == "letters:letter_counting":
-        return _verify_total_letter_count(
-            response,
-            int(rule_kwargs.get("N", 0)),
-            rule_kwargs.get("relation", "exactly"),
-        )
+        return _verify_total_letter_count(response, int(rule_kwargs.get("N", 0)), rule_kwargs.get("relation", "exactly"))
     if instruction_id == "length_constraints:number_paragraphs":
         return _verify_paragraph_count(response, int(rule_kwargs.get("num_paragraphs", 0)))
     if instruction_id == "length_constraints:number_sentences":
-        return _verify_sentence_constraint(
-            response,
-            int(rule_kwargs.get("num_sentences", 0)),
-            rule_kwargs.get("relation", "exactly"),
-        )
+        return _verify_sentence_constraint(response, int(rule_kwargs.get("num_sentences", 0)), rule_kwargs.get("relation", "exactly"))
     if instruction_id == "change_case:english_capital":
         return _validate_uppercase(response)
     if instruction_id == "length_constraints:nth_paragraph_first_word":
-        return _validate_paragraphs(
-            response,
-            int(rule_kwargs.get("num_paragraphs", 0)),
-            rule_kwargs.get("first_word", ""),
-            int(rule_kwargs.get("nth_paragraph", 0)),
-        )
+        return _validate_paragraphs(response, int(rule_kwargs.get("num_paragraphs", 0)), rule_kwargs.get("first_word", ""), int(rule_kwargs.get("nth_paragraph", 0)))
     if instruction_id == "change_case:english_lowercase":
         return _validate_lowercase(response)
     if instruction_id == "first_word:first_word_sent":
@@ -482,29 +597,16 @@ def _check_instruction(instruction_id: str, rule_kwargs: dict, prompt: str, resp
     if instruction_id == "last_word:last_word_sent":
         return _validate_last_word_each_sentence(response, rule_kwargs.get("last_word", ""))
     if instruction_id == "detectable_format:multiple_sections":
-        return _validate_sections(
-            response,
-            int(rule_kwargs.get("num_sections", 0)),
-            rule_kwargs.get("section_spliter", rule_kwargs.get("section_splitter", "")),
-        )
+        return _validate_sections(response, int(rule_kwargs.get("num_sections", 0)), rule_kwargs.get("section_spliter", rule_kwargs.get("section_splitter", "")))
     if instruction_id == "count:count_unique":
         return _validate_unique_words(response)
     if instruction_id in {"paragraphs:paragraphs", "paragraphs:paragraphs2"}:
         expected = _expected_paragraphs_from_prompt(prompt)
         return _verify_paragraph_count(response, expected) if expected is not None else False
     if instruction_id == "change_case:capital_word_frequency":
-        return _validate_frequency_capital_words(
-            response,
-            int(rule_kwargs.get("capital_frequency", 0)),
-            rule_kwargs.get("capital_relation", "exactly"),
-        )
+        return _validate_frequency_capital_words(response, int(rule_kwargs.get("capital_frequency", 0)), rule_kwargs.get("capital_relation", "exactly"))
     if instruction_id == "count:counting_composition":
-        return _validate_counting_composition(
-            response,
-            prompt,
-            int(rule_kwargs.get("n_sent", 0)),
-            int(rule_kwargs.get("n_words", 0)),
-        )
+        return _validate_counting_composition(response, prompt, int(rule_kwargs.get("n_sent", 0)), int(rule_kwargs.get("n_words", 0)))
     if instruction_id == "combination:two_responses":
         return _validate_two_responses(response)
     if instruction_id == "detectable_format:json_format":
@@ -519,22 +621,53 @@ async def reward_func(args, sample, **kwargs):
         return 0.0
 
     metadata = sample.metadata if isinstance(sample.metadata, dict) else {}
-    instruction_ids = _normalize_instruction_ids(metadata.get("instruction_id_list"))
-    if not instruction_ids:
-        return 0.0
-
-    prompt_text = metadata.get("prompt_text") or sample.prompt or ""
-    prompt_text = prompt_text if isinstance(prompt_text, str) else str(prompt_text)
-    kwargs_list = _normalize_kwargs(metadata.get("kwargs"), len(instruction_ids))
+    reward_type = str(metadata.get("reward_type", ""))
     response = _clean_response(sample.response or "")
     if not response:
         return 0.0
 
-    passed = []
-    for instruction_id, rule_kwargs in zip(instruction_ids, kwargs_list):
-        try:
-            passed.append(1.0 if _check_instruction(instruction_id, rule_kwargs, prompt_text, response) else 0.0)
-        except Exception:
-            passed.append(0.0)
+    if reward_type == "stem_mcqa":
+        return 1.0 if _extract_mcqa_answer(response) == str(metadata.get("answer", "")).strip().upper() else 0.0
 
-    return 1.0 if all(passed) else 0.0
+    if reward_type == "tool_call":
+        tools = metadata.get("tools") or []
+        expected_calls = metadata.get("ground_truth") or []
+        if not tools or not expected_calls:
+            return 0.0
+        try:
+            parsed_calls = _parse_tool_calls(response, tools=tools, parser_type=str(metadata.get("parser_type", "qwen25")))
+        except Exception:
+            return 0.0
+        predicted_calls = [
+            {
+                "name": call.get("name", ""),
+                "arguments": call.get("parameters", call.get("arguments", {})),
+            }
+            for call in parsed_calls
+        ]
+        return 1.0 if calls_match_ground_truth(predicted_calls, expected_calls) else 0.0
+
+    if reward_type == "structured_json_schema":
+        try:
+            payload = json.loads(_extract_json_payload(response))
+        except Exception:
+            return 0.0
+        schema = metadata.get("schema") if isinstance(metadata.get("schema"), dict) else {}
+        return 1.0 if _validate_json_schema(payload, schema) else 0.0
+
+    if reward_type == "ifeval":
+        instruction_ids = _normalize_instruction_ids(metadata.get("instruction_id_list"))
+        if not instruction_ids:
+            return 0.0
+        prompt_text = metadata.get("prompt_text") or sample.prompt or ""
+        prompt_text = prompt_text if isinstance(prompt_text, str) else str(prompt_text)
+        kwargs_list = _normalize_kwargs(metadata.get("kwargs"), len(instruction_ids))
+        passed = []
+        for instruction_id, rule_kwargs in zip(instruction_ids, kwargs_list):
+            try:
+                passed.append(1.0 if _check_instruction(instruction_id, rule_kwargs, prompt_text, response) else 0.0)
+            except Exception:
+                passed.append(0.0)
+        return 1.0 if all(passed) else 0.0
+
+    return 0.0
