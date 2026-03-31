@@ -34,6 +34,7 @@ def test_discover_sources_returns_sorted_jsonl_files(tmp_path: Path):
     _write_jsonl(pool_root / "structured" / "zeta.jsonl", [{"prompt": [], "label": "3", "metadata": {}}])
     _write_jsonl(pool_root / "tool" / "alpha.jsonl", [{"prompt": [], "label": "1", "metadata": {}}])
     _write_jsonl(pool_root / "math" / "ignored.jsonl", [{"question": "q-ignored", "label": "0"}])
+    (pool_root / "code").mkdir(parents=True, exist_ok=True)
     (pool_root / "code" / "ignore.txt").write_text("ignored\n", encoding="utf-8")
 
     discovered = prepare_multidomain_v2.discover_sources(pool_root)
