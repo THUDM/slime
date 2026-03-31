@@ -23,6 +23,34 @@ LOG_DIR="${WORK_ROOT}/logs"
 SAVE_DIR="${WORK_ROOT}/checkpoints"
 NORMALIZED_DATA="${DATA_CACHE_DIR}/ifrl_train.normalized.jsonl"
 
+# Stable defaults for this workspace. These match the successful 3-node run
+# envelope that we can rerun without overloading SGLang workers.
+#
+# Author / paper reference (Nemotron-Cascade 2 IF-RL, Table 8 / §4.2.2):
+#   IFRL_ROLLOUT_BATCH_SIZE=128
+#   IFRL_SAMPLES_PER_PROMPT=16
+#   IFRL_GLOBAL_BATCH_SIZE=2048
+#   IFRL_MAX_CONTEXT_LEN=65536
+#   IFRL_MAX_RESPONSE_LEN=49152   # paper reports 49K response length
+#   IFRL_LR=2e-6
+#   IFRL_ADAM_BETA2=0.95
+#   IFRL_DYNAMIC_FILTER=slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std
+IFRL_ROLLOUT_BATCH_SIZE=${IFRL_ROLLOUT_BATCH_SIZE:-32}
+IFRL_SAMPLES_PER_PROMPT=${IFRL_SAMPLES_PER_PROMPT:-8}
+IFRL_GLOBAL_BATCH_SIZE=${IFRL_GLOBAL_BATCH_SIZE:-256}
+IFRL_STEPS_PER_ROLLOUT=${IFRL_STEPS_PER_ROLLOUT:-1}
+IFRL_MAX_CONTEXT_LEN=${IFRL_MAX_CONTEXT_LEN:-4096}
+IFRL_MAX_RESPONSE_LEN=${IFRL_MAX_RESPONSE_LEN:-1024}
+IFRL_LR=${IFRL_LR:-1e-6}
+IFRL_ADAM_BETA2=${IFRL_ADAM_BETA2:-0.98}
+IFRL_DYNAMIC_FILTER=${IFRL_DYNAMIC_FILTER:-slime.rollout.filter_hub.dynamic_sampling_filters.check_reward_nonzero_std}
+IFRL_LOAD_DIR=${IFRL_LOAD_DIR:-}
+IFRL_LOAD_NO_OPTIM=${IFRL_LOAD_NO_OPTIM:-0}
+IFRL_LOAD_NO_RNG=${IFRL_LOAD_NO_RNG:-0}
+IFRL_LOAD_FINETUNE=${IFRL_LOAD_FINETUNE:-0}
+IFRL_WANDB_PROJECT=${IFRL_WANDB_PROJECT:-slime-ifrl}
+IFRL_WANDB_GROUP=${IFRL_WANDB_GROUP:-qwen3-30b-a3b-ifrl-3node}
+
 mkdir -p "${DATA_CACHE_DIR}" "${LOG_DIR}" "${SAVE_DIR}"
 
 cleanup_local_processes() {
@@ -125,12 +153,15 @@ ROLLOUT_ARGS=(
   --apply-chat-template
   --rollout-shuffle
   --num-epoch 1
-  --rollout-batch-size 32
-  --n-samples-per-prompt 8
-  --rollout-max-context-len 4096
-  --rollout-max-response-len 1024
+  --rollout-batch-size "${IFRL_ROLLOUT_BATCH_SIZE}"
+  --n-samples-per-prompt "${IFRL_SAMPLES_PER_PROMPT}"
+  --rollout-max-context-len "${IFRL_MAX_CONTEXT_LEN}"
+  --rollout-max-response-len "${IFRL_MAX_RESPONSE_LEN}"
   --rollout-temperature 1.0
-  --global-batch-size 256
+  --rollout-top-p 1.0
+  --global-batch-size "${IFRL_GLOBAL_BATCH_SIZE}"
+  --num-steps-per-rollout "${IFRL_STEPS_PER_ROLLOUT}"
+  --dynamic-sampling-filter-path "${IFRL_DYNAMIC_FILTER}"
   --balance-data
 )
 
@@ -160,11 +191,11 @@ GRPO_ARGS=(
 
 OPTIMIZER_ARGS=(
   --optimizer adam
-  --lr 1e-6
+  --lr "${IFRL_LR}"
   --lr-decay-style constant
   --weight-decay 0.1
   --adam-beta1 0.9
-  --adam-beta2 0.98
+  --adam-beta2 "${IFRL_ADAM_BETA2}"
 )
 
 SGLANG_ARGS=(
@@ -185,6 +216,18 @@ MISC_ARGS=(
 CUSTOM_ARGS=(
   --custom-rm-path reward_ifrl.reward_func
 )
+
+WANDB_ARGS=()
+if [[ -n "${WANDB_API_KEY:-}" ]]; then
+  WANDB_ARGS+=(
+    --use-wandb
+    --wandb-host "${WANDB_BASE_URL:-https://wandb.ai}"
+    --wandb-project "${IFRL_WANDB_PROJECT}"
+    --wandb-group "${IFRL_WANDB_GROUP}"
+    --wandb-key "${WANDB_API_KEY}"
+    --disable-wandb-random-suffix
+  )
+fi
 
 prepare_data() {
   python3 "${SCRIPT_DIR}/prepare_ifrl_data.py" \
@@ -214,12 +257,28 @@ submit_ray_job() {
   # shellcheck disable=SC1091
   source "${SLIME_DIR}/scripts/models/qwen3-30B-A3B.sh"
 
+  LOAD_ARGS=()
+  if [[ -n "${IFRL_LOAD_DIR}" ]]; then
+    LOAD_ARGS+=(--load "${IFRL_LOAD_DIR}")
+    if [[ "${IFRL_LOAD_NO_OPTIM}" == "1" ]]; then
+      LOAD_ARGS+=(--no-load-optim)
+    fi
+    if [[ "${IFRL_LOAD_NO_RNG}" == "1" ]]; then
+      LOAD_ARGS+=(--no-load-rng)
+    fi
+    if [[ "${IFRL_LOAD_FINETUNE}" == "1" ]]; then
+      LOAD_ARGS+=(--finetune)
+    fi
+  fi
+
   RUNTIME_ENV_JSON="{
     \"env_vars\": {
       \"PYTHONPATH\": \"${SCRIPT_DIR}:${SCRIPT_DIR}/offline_ifbench:${MEGATRON_PATH}:${SLIME_DIR}\",
       \"CUDA_DEVICE_MAX_CONNECTIONS\": \"1\",
       \"NCCL_NVLS_ENABLE\": \"${HAS_NVLINK}\",
-      \"MASTER_ADDR\": \"${MASTER_ADDR}\"
+      \"MASTER_ADDR\": \"${MASTER_ADDR}\",
+      \"WANDB_API_KEY\": \"${WANDB_API_KEY:-}\",
+      \"WANDB_BASE_URL\": \"${WANDB_BASE_URL:-}\"
     }
   }"
 
@@ -232,11 +291,13 @@ submit_ray_job() {
     "${MODEL_ARGS[@]}" \
     --hf-checkpoint "${MODEL_DIR}" \
     --ref-load "${TORCH_DIST_DIR}" \
+    "${LOAD_ARGS[@]}" \
     --save "${SAVE_DIR}" \
     --save-interval 50 \
     "${ROLLOUT_ARGS[@]}" \
     "${OPTIMIZER_ARGS[@]}" \
     "${GRPO_ARGS[@]}" \
+    "${WANDB_ARGS[@]}" \
     "${PERF_ARGS[@]}" \
     "${SGLANG_ARGS[@]}" \
     "${MISC_ARGS[@]}" \
