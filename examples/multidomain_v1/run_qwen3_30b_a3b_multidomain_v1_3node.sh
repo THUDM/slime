@@ -7,6 +7,11 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" &>/dev/null && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
 AVALANCHE_ROOT="$(cd -- "${PROJECT_ROOT}/.." && pwd)"
 
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/ray_bootstrap_utils.sh"
+# shellcheck source=/dev/null
+source "${SCRIPT_DIR}/data_cache_reuse_utils.sh"
+
 NUM_NODES=${NUM_NODES:-3}
 NUM_GPUS_PER_NODE=${NUM_GPUS_PER_NODE:-8}
 ACTOR_NUM_NODES=${ACTOR_NUM_NODES:-2}
@@ -16,6 +21,8 @@ ROLLOUT_GPUS_TOTAL=${ROLLOUT_GPUS_TOTAL:-8}
 MODEL_DIR=${MODEL_DIR:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/ifrl_qwen3_30b_a3b/checkpoints/iter_0001432_hf}
 TORCH_DIST_DIR=${TORCH_DIST_DIR:-/inspire/qb-ilm/project/cq-scientific-cooperation-zone/public/avalanche/experiments/ifrl_qwen3_30b_a3b/checkpoints}
 WORK_ROOT=${WORK_ROOT:-${AVALANCHE_ROOT}/experiments/multidomain_v1_3node}
+TRAIN_POOL_ROOT=${TRAIN_POOL_ROOT:-}
+TRAIN_DATA_BASENAME=${TRAIN_DATA_BASENAME:-multidomain_v1_train.normalized.jsonl}
 
 TRAIN_TOOL_AGENT_202510=${TRAIN_TOOL_AGENT_202510:-${AVALANCHE_ROOT}/data/open_data/tool_call/agent_function_calling_open_dataset/deepnlp_agent_function_call_202510.json}
 TRAIN_TOOL_AGENT_202601=${TRAIN_TOOL_AGENT_202601:-${AVALANCHE_ROOT}/data/open_data/tool_call/agent_function_calling_open_dataset/deepnlp_agent_function_call_202601.json}
@@ -70,7 +77,7 @@ TRAIN_STEM_OPENBOOKQA_RATIO=${TRAIN_STEM_OPENBOOKQA_RATIO:-0}
 TRAIN_STEM_SCIQ_RATIO=${TRAIN_STEM_SCIQ_RATIO:-0}
 TRAIN_STEM_MEDMCQA_RATIO=${TRAIN_STEM_MEDMCQA_RATIO:-0}
 
-SLIME_DIR=${SLIME_DIR:-/root/slime}
+SLIME_DIR=${SLIME_DIR:-${PROJECT_ROOT}/slime}
 MEGATRON_PATH=${MEGATRON_PATH:-/root/Megatron-LM}
 EVAL_BFCL_V3_SAMPLES=${EVAL_BFCL_V3_SAMPLES:-4441}
 EVAL_BFCL_MULTI_TURN_SAMPLES=${EVAL_BFCL_MULTI_TURN_SAMPLES:-200}
@@ -83,7 +90,7 @@ EVAL_GPQA_MAIN_SAMPLES=${EVAL_GPQA_MAIN_SAMPLES:-448}
 DATA_CACHE_DIR="${WORK_ROOT}/data_cache"
 LOG_DIR="${WORK_ROOT}/logs"
 SAVE_DIR="${WORK_ROOT}/checkpoints"
-NORMALIZED_TRAIN="${DATA_CACHE_DIR}/multidomain_v1_train.normalized.jsonl"
+NORMALIZED_TRAIN="${DATA_CACHE_DIR}/${TRAIN_DATA_BASENAME}"
 BFCL_V3_EVAL="${DATA_CACHE_DIR}/bfcl_v3_eval.normalized.jsonl"
 BFCL_MULTI_TURN_EVAL="${DATA_CACHE_DIR}/bfcl_multi_turn_eval.normalized.jsonl"
 TOOLBENCH_BENCHMARK_EVAL="${DATA_CACHE_DIR}/toolbench_benchmark_eval.normalized.jsonl"
@@ -116,8 +123,13 @@ TOOL_CALL_LOAD_DIR=${TOOL_CALL_LOAD_DIR:-/inspire/qb-ilm/project/cq-scientific-c
 TOOL_CALL_WANDB_PROJECT=${TOOL_CALL_WANDB_PROJECT:-slime-multidomain-v1}
 TOOL_CALL_WANDB_GROUP=${TOOL_CALL_WANDB_GROUP:-${JOB_NAME:-qwen3-30b-a3b-mdv1-3node}}
 RAY_HEAD_ADDR_FILE="${WORK_ROOT}/ray_head_addr.txt"
+RAY_HEAD_LOCK_DIR="${WORK_ROOT}/ray_head_lock"
 
 mkdir -p "${DATA_CACHE_DIR}" "${LOG_DIR}" "${SAVE_DIR}" "${TRACE_DIR}"
+
+BOOTSTRAP_NODE_ID="${WORKER_ID:-${HOSTNAME:-node-${NODE_RANK:-unknown}}}"
+BOOTSTRAP_LOG_FILE="${LOG_DIR}/bootstrap_${BOOTSTRAP_NODE_ID}.log"
+exec > >(tee -a "${BOOTSTRAP_LOG_FILE}") 2>&1
 
 cleanup_local_processes() {
   pkill -9 sglang 2>/dev/null || true
@@ -179,7 +191,7 @@ normalize_master_addr() {
 wait_for_master_addr_file() {
   local path="$1"
   local attempt
-  for attempt in $(seq 1 60); do
+  for attempt in $(seq 1 180); do
     if [[ -s "${path}" ]]; then
       cat "${path}"
       return 0
@@ -187,6 +199,17 @@ wait_for_master_addr_file() {
     sleep 2
   done
   return 1
+}
+
+elect_ray_head_role() {
+  if mkdir "${RAY_HEAD_LOCK_DIR}" 2>/dev/null; then
+    IS_RAY_HEAD=1
+    printf '%s\n' "${WORKER_ID:-${HOSTNAME:-node-${NODE_RANK}}}" > "${RAY_HEAD_LOCK_DIR}/owner"
+    echo "Elected this node as Ray head via shared lock."
+  else
+    IS_RAY_HEAD=0
+    echo "This node will join as Ray worker."
+  fi
 }
 
 ensure_nonempty_jsonl() {
@@ -372,11 +395,11 @@ start_ray_head_and_persist_addr() {
   fi
 
   detected_addr="$(
-    printf '%s\n' "${output}" | python3 - <<'PY'
+    RAY_START_OUTPUT="${output}" python3 - <<'PY'
+import os
 import re
-import sys
 
-text = sys.stdin.read()
+text = os.environ["RAY_START_OUTPUT"]
 # Prefer the address Ray explicitly tells workers to use. On this platform,
 # "Local node IP" can resolve to a host-only interface that other workers
 # cannot reach, while the advertised ray start address is the routable one.
@@ -417,115 +440,142 @@ PY
 }
 
 prepare_training_data() {
-  TRAIN_PREP_ARGS=()
-  append_source_spec "${TRAIN_TOOL_AGENT_202510}" agent_function_calling_open_dataset "${TRAIN_TOOL_AGENT_202510_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_TOOL_AGENT_202601}" agent_function_calling_open_dataset "${TRAIN_TOOL_AGENT_202601_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_TOOL_APIGEN}" apigen_mt_5k "${TRAIN_TOOL_APIGEN_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_TOOL_XLAM}" xlam_function_calling_60k "${TRAIN_TOOL_XLAM_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_TOOL_APIBENCH_HF}" apibench "${TRAIN_TOOL_APIBENCH_HF_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_TOOL_APIBENCH_TF}" apibench "${TRAIN_TOOL_APIBENCH_TF_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_TOOL_APIBENCH_TORCHHUB}" apibench "${TRAIN_TOOL_APIBENCH_TORCHHUB_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_TOOL_TOOLBENCH_0}" toolbench_v1 "${TRAIN_TOOL_TOOLBENCH_0_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_TOOL_TOOLBENCH_1}" toolbench_v1 "${TRAIN_TOOL_TOOLBENCH_1_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_TOOL_TOOLBENCH_2}" toolbench_v1 "${TRAIN_TOOL_TOOLBENCH_2_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_TOOL_TOOLBENCH_3}" toolbench_v1 "${TRAIN_TOOL_TOOLBENCH_3_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_STRUCTURED_NEMOTRON}" nemotron_structured_outputs "${TRAIN_STRUCTURED_NEMOTRON_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_STRUCTURED_JSONSCHEMABENCH}" jsonschemabench "${TRAIN_STRUCTURED_JSONSCHEMABENCH_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_STEM_NEMOTRON_KNOWLEDGE}" nemotron_knowledge_mcqa "${TRAIN_STEM_NEMOTRON_KNOWLEDGE_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_STEM_AI2_ARC}" ai2_arc "${TRAIN_STEM_AI2_ARC_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_STEM_SCIENCEQA}" scienceqa "${TRAIN_STEM_SCIENCEQA_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_STEM_OPENBOOKQA}" openbookqa "${TRAIN_STEM_OPENBOOKQA_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_STEM_SCIQ}" sciq "${TRAIN_STEM_SCIQ_RATIO}" TRAIN_PREP_ARGS
-  append_source_spec "${TRAIN_STEM_MEDMCQA}" medmcqa "${TRAIN_STEM_MEDMCQA_RATIO}" TRAIN_PREP_ARGS
+  local reused_prepared_data_cache=0
+  if reuse_resume_data_cache_if_available; then
+    reused_prepared_data_cache=1
+  else
+    if [[ -n "${TRAIN_POOL_ROOT}" ]]; then
+      python3 "${SCRIPT_DIR}/../multidomain_v2/prepare_multidomain_v2_data.py" \
+        --pool-root "${TRAIN_POOL_ROOT}" \
+        --dest "${NORMALIZED_TRAIN}"
+    else
+      TRAIN_PREP_ARGS=()
+      append_source_spec "${TRAIN_TOOL_AGENT_202510}" agent_function_calling_open_dataset "${TRAIN_TOOL_AGENT_202510_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_TOOL_AGENT_202601}" agent_function_calling_open_dataset "${TRAIN_TOOL_AGENT_202601_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_TOOL_APIGEN}" apigen_mt_5k "${TRAIN_TOOL_APIGEN_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_TOOL_XLAM}" xlam_function_calling_60k "${TRAIN_TOOL_XLAM_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_TOOL_APIBENCH_HF}" apibench "${TRAIN_TOOL_APIBENCH_HF_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_TOOL_APIBENCH_TF}" apibench "${TRAIN_TOOL_APIBENCH_TF_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_TOOL_APIBENCH_TORCHHUB}" apibench "${TRAIN_TOOL_APIBENCH_TORCHHUB_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_TOOL_TOOLBENCH_0}" toolbench_v1 "${TRAIN_TOOL_TOOLBENCH_0_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_TOOL_TOOLBENCH_1}" toolbench_v1 "${TRAIN_TOOL_TOOLBENCH_1_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_TOOL_TOOLBENCH_2}" toolbench_v1 "${TRAIN_TOOL_TOOLBENCH_2_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_TOOL_TOOLBENCH_3}" toolbench_v1 "${TRAIN_TOOL_TOOLBENCH_3_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_STRUCTURED_NEMOTRON}" nemotron_structured_outputs "${TRAIN_STRUCTURED_NEMOTRON_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_STRUCTURED_JSONSCHEMABENCH}" jsonschemabench "${TRAIN_STRUCTURED_JSONSCHEMABENCH_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_STEM_NEMOTRON_KNOWLEDGE}" nemotron_knowledge_mcqa "${TRAIN_STEM_NEMOTRON_KNOWLEDGE_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_STEM_AI2_ARC}" ai2_arc "${TRAIN_STEM_AI2_ARC_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_STEM_SCIENCEQA}" scienceqa "${TRAIN_STEM_SCIENCEQA_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_STEM_OPENBOOKQA}" openbookqa "${TRAIN_STEM_OPENBOOKQA_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_STEM_SCIQ}" sciq "${TRAIN_STEM_SCIQ_RATIO}" TRAIN_PREP_ARGS
+      append_source_spec "${TRAIN_STEM_MEDMCQA}" medmcqa "${TRAIN_STEM_MEDMCQA_RATIO}" TRAIN_PREP_ARGS
 
-  if [[ "${#TRAIN_PREP_ARGS[@]}" -eq 0 ]]; then
-    echo "No training sources are enabled. Set at least one TRAIN_*_RATIO to a positive value." >&2
-    return 1
+      if [[ "${#TRAIN_PREP_ARGS[@]}" -eq 0 ]]; then
+        echo "No training sources are enabled. Set TRAIN_POOL_ROOT or enable at least one TRAIN_*_RATIO." >&2
+        return 1
+      fi
+
+      python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
+        "${TRAIN_PREP_ARGS[@]}" \
+        --dest "${NORMALIZED_TRAIN}" \
+        --parser-type "${TOOLCALL_PARSER_TYPE}"
+    fi
   fi
-
-  python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
-    "${TRAIN_PREP_ARGS[@]}" \
-    --dest "${NORMALIZED_TRAIN}" \
-    --parser-type "${TOOLCALL_PARSER_TYPE}"
   ensure_nonempty_jsonl "${NORMALIZED_TRAIN}" "Training dataset"
   filter_jsonl_by_prompt_budget "${NORMALIZED_TRAIN}" train
 
   if (( EVAL_BFCL_V3_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_TOOL_BFCL_V3}" --dataset-format bfcl_v3 --source-ratio 1 \
-      --dest "${BFCL_V3_EVAL}" \
-      --max-samples "${EVAL_BFCL_V3_SAMPLES}" \
-      --reward-type-override tool_call_strict \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
+    if (( reused_prepared_data_cache == 0 )); then
+      python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
+        --source "${EVAL_TOOL_BFCL_V3}" --dataset-format bfcl_v3 --source-ratio 1 \
+        --dest "${BFCL_V3_EVAL}" \
+        --max-samples "${EVAL_BFCL_V3_SAMPLES}" \
+        --reward-type-override tool_call_strict \
+        --parser-type "${TOOLCALL_PARSER_TYPE}"
+    fi
     filter_jsonl_by_prompt_budget "${BFCL_V3_EVAL}" bfcl_v3_eval
   fi
 
   if (( EVAL_BFCL_MULTI_TURN_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_TOOL_BFCL_MULTI_TURN}" --dataset-format bfcl_v3_multi_turn_base --source-ratio 1 \
-      --dest "${BFCL_MULTI_TURN_EVAL}" \
-      --max-samples "${EVAL_BFCL_MULTI_TURN_SAMPLES}" \
-      --reward-type-override tool_call_strict \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
+    if (( reused_prepared_data_cache == 0 )); then
+      python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
+        --source "${EVAL_TOOL_BFCL_MULTI_TURN}" --dataset-format bfcl_v3_multi_turn_base --source-ratio 1 \
+        --dest "${BFCL_MULTI_TURN_EVAL}" \
+        --max-samples "${EVAL_BFCL_MULTI_TURN_SAMPLES}" \
+        --reward-type-override tool_call_strict \
+        --parser-type "${TOOLCALL_PARSER_TYPE}"
+    fi
     filter_jsonl_by_prompt_budget "${BFCL_MULTI_TURN_EVAL}" bfcl_multi_turn_eval
   fi
 
   if (( EVAL_TOOLBENCH_BENCHMARK_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_TOOL}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
-      --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_CATEGORY}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
-      --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_INSTRUCTION}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
-      --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G2_CATEGORY}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
-      --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G2_INSTRUCTION}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
-      --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G3_INSTRUCTION}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
-      --dest "${TOOLBENCH_BENCHMARK_EVAL}" \
-      --max-samples "${EVAL_TOOLBENCH_BENCHMARK_SAMPLES}" \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
+    if (( reused_prepared_data_cache == 0 )); then
+      python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
+        --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_TOOL}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
+        --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_CATEGORY}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
+        --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G1_INSTRUCTION}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
+        --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G2_CATEGORY}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
+        --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G2_INSTRUCTION}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
+        --source "${EVAL_TOOL_TOOLBENCH_BENCHMARK_G3_INSTRUCTION}" --dataset-format toolbench_v1_benchmark --source-ratio 1 \
+        --dest "${TOOLBENCH_BENCHMARK_EVAL}" \
+        --max-samples "${EVAL_TOOLBENCH_BENCHMARK_SAMPLES}" \
+        --parser-type "${TOOLCALL_PARSER_TYPE}"
+    fi
     filter_jsonl_by_prompt_budget "${TOOLBENCH_BENCHMARK_EVAL}" toolbench_benchmark_eval
   fi
 
   if (( EVAL_IFEVAL_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_STRUCTURED_IFEVAL}" --dataset-format ifeval --source-ratio 1 \
-      --dest "${IFEVAL_EVAL}" \
-      --max-samples "${EVAL_IFEVAL_SAMPLES}" \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
+    if (( reused_prepared_data_cache == 0 )); then
+      python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
+        --source "${EVAL_STRUCTURED_IFEVAL}" --dataset-format ifeval --source-ratio 1 \
+        --dest "${IFEVAL_EVAL}" \
+        --max-samples "${EVAL_IFEVAL_SAMPLES}" \
+        --parser-type "${TOOLCALL_PARSER_TYPE}"
+    fi
     filter_jsonl_by_prompt_budget "${IFEVAL_EVAL}" ifeval_eval
   fi
 
   if (( EVAL_JSONSCHEMABENCH_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_STRUCTURED_JSONSCHEMABENCH}" --dataset-format jsonschemabench --source-ratio 1 \
-      --dest "${JSONSCHEMABENCH_EVAL}" \
-      --max-samples "${EVAL_JSONSCHEMABENCH_SAMPLES}" \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
+    if (( reused_prepared_data_cache == 0 )); then
+      python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
+        --source "${EVAL_STRUCTURED_JSONSCHEMABENCH}" --dataset-format jsonschemabench --source-ratio 1 \
+        --dest "${JSONSCHEMABENCH_EVAL}" \
+        --max-samples "${EVAL_JSONSCHEMABENCH_SAMPLES}" \
+        --parser-type "${TOOLCALL_PARSER_TYPE}"
+    fi
     filter_jsonl_by_prompt_budget "${JSONSCHEMABENCH_EVAL}" jsonschemabench_eval
   fi
 
   if (( EVAL_IFBENCH_TEST_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_STRUCTURED_IFBENCH_TEST}" --dataset-format ifbench_test --source-ratio 1 \
-      --dest "${IFBENCH_TEST_EVAL}" \
-      --max-samples "${EVAL_IFBENCH_TEST_SAMPLES}" \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
+    if (( reused_prepared_data_cache == 0 )); then
+      python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
+        --source "${EVAL_STRUCTURED_IFBENCH_TEST}" --dataset-format ifbench_test --source-ratio 1 \
+        --dest "${IFBENCH_TEST_EVAL}" \
+        --max-samples "${EVAL_IFBENCH_TEST_SAMPLES}" \
+        --parser-type "${TOOLCALL_PARSER_TYPE}"
+    fi
     filter_jsonl_by_prompt_budget "${IFBENCH_TEST_EVAL}" ifbench_test_eval
   fi
 
   if (( EVAL_MMLU_PRO_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_STEM_MMLU_PRO}" --dataset-format mmlu_pro --source-ratio 1 \
-      --dest "${MMLU_PRO_EVAL}" \
-      --max-samples "${EVAL_MMLU_PRO_SAMPLES}" \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
+    if (( reused_prepared_data_cache == 0 )); then
+      python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
+        --source "${EVAL_STEM_MMLU_PRO}" --dataset-format mmlu_pro --source-ratio 1 \
+        --dest "${MMLU_PRO_EVAL}" \
+        --max-samples "${EVAL_MMLU_PRO_SAMPLES}" \
+        --parser-type "${TOOLCALL_PARSER_TYPE}"
+    fi
     filter_jsonl_by_prompt_budget "${MMLU_PRO_EVAL}" mmlu_pro_eval
   fi
 
   if (( EVAL_GPQA_MAIN_SAMPLES > 0 )); then
-    python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
-      --source "${EVAL_STEM_GPQA_MAIN}" --dataset-format gpqa --source-ratio 1 \
-      --dest "${GPQA_MAIN_EVAL}" \
-      --max-samples "${EVAL_GPQA_MAIN_SAMPLES}" \
-      --parser-type "${TOOLCALL_PARSER_TYPE}"
+    if (( reused_prepared_data_cache == 0 )); then
+      python3 "${SCRIPT_DIR}/prepare_multidomain_v1_data.py" \
+        --source "${EVAL_STEM_GPQA_MAIN}" --dataset-format gpqa --source-ratio 1 \
+        --dest "${GPQA_MAIN_EVAL}" \
+        --max-samples "${EVAL_GPQA_MAIN_SAMPLES}" \
+        --parser-type "${TOOLCALL_PARSER_TYPE}"
+    fi
     filter_jsonl_by_prompt_budget "${GPQA_MAIN_EVAL}" gpqa_main_eval
   fi
 }
@@ -563,7 +613,17 @@ submit_ray_job() {
 
   LOAD_ARGS=()
   if [[ "${TOOLCALL_RESUME_TRAINING}" == "1" ]] && [[ -n "${TOOL_CALL_LOAD_DIR}" ]]; then
-    LOAD_ARGS+=(--load "${TOOL_CALL_LOAD_DIR}")
+    if [[ "${TOOL_CALL_LOAD_DIR}" == */checkpoints/iter_* ]]; then
+      local resume_load_dir
+      local resume_ckpt_step
+      resume_load_dir="$(dirname "${TOOL_CALL_LOAD_DIR}")"
+      resume_ckpt_step="${TOOL_CALL_LOAD_DIR##*/}"
+      resume_ckpt_step="${resume_ckpt_step#iter_}"
+      resume_ckpt_step=$((10#${resume_ckpt_step}))
+      LOAD_ARGS+=(--load "${resume_load_dir}" --ckpt-step "${resume_ckpt_step}")
+    else
+      LOAD_ARGS+=(--load "${TOOL_CALL_LOAD_DIR}")
+    fi
     if [[ "${TOOLCALL_RESUME_NO_OPTIM}" == "1" ]]; then
       LOAD_ARGS+=(--no-load-optim)
     fi
@@ -733,17 +793,17 @@ submit_ray_job() {
 }
 
 NODE_RANK=${NODE_RANK:-${RANK:-${MLP_ROLE_INDEX:-0}}}
-MASTER_ADDR="${MASTER_ADDR:-${MLP_WORKER_0_HOST:-}}"
+MASTER_ADDR="${MASTER_ADDR:-}"
 MASTER_PORT=${MASTER_PORT:-6379}
 DASHBOARD_PORT=${DASHBOARD_PORT:-8265}
+IS_RAY_HEAD=0
 
-if [[ "${NODE_RANK}" -eq 0 ]]; then
+elect_ray_head_role
+
+if [[ "${IS_RAY_HEAD}" -eq 1 ]]; then
   rm -f "${RAY_HEAD_ADDR_FILE}"
 else
-  MASTER_ADDR="$(normalize_master_addr "${MASTER_ADDR}" 2>/dev/null || true)"
-  if [[ -z "${MASTER_ADDR}" ]]; then
-    MASTER_ADDR="$(wait_for_master_addr_file "${RAY_HEAD_ADDR_FILE}" 2>/dev/null || true)"
-  fi
+  MASTER_ADDR="$(resolve_worker_master_addr "${MASTER_ADDR}" "${RAY_HEAD_ADDR_FILE}" 2>/dev/null || true)"
   if [[ -z "${MASTER_ADDR}" ]]; then
     echo "Failed to determine Ray head address for worker rank ${NODE_RANK}." >&2
     exit 1
@@ -755,7 +815,7 @@ export no_proxy="127.0.0.1,${MASTER_ADDR}"
 
 cleanup_local_processes
 
-if [[ "${NODE_RANK}" -eq 0 ]]; then
+if [[ "${IS_RAY_HEAD}" -eq 1 ]]; then
   start_ray_head_and_persist_addr
   prepare_training_data
   ensure_torch_dist_checkpoint
