@@ -8,6 +8,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 V0_SCRIPT = ROOT / "multidomain_v0" / "reward_mixed_domain.py"
+IFBENCH_DIR = ROOT / "if_rl" / "offline_ifbench"
 
 
 def _load_v0_module():
@@ -20,6 +21,43 @@ def _load_v0_module():
 
 
 _v0 = _load_v0_module()
+
+_IFBENCH_REGISTRY: dict | None = None
+
+
+def _load_ifbench_registry() -> dict:
+    global _IFBENCH_REGISTRY
+    if _IFBENCH_REGISTRY is not None:
+        return _IFBENCH_REGISTRY
+    if not IFBENCH_DIR.is_dir():
+        _IFBENCH_REGISTRY = {}
+        return _IFBENCH_REGISTRY
+    try:
+        for mod_name in ("instructions_util", "instructions", "instructions_registry", "evaluation_lib"):
+            mod_path = IFBENCH_DIR / f"{mod_name}.py"
+            spec = importlib.util.spec_from_file_location(mod_name, mod_path)
+            mod = importlib.util.module_from_spec(spec)
+            assert spec and spec.loader
+            sys.modules[mod_name] = mod
+            spec.loader.exec_module(mod)
+        _IFBENCH_REGISTRY = sys.modules["instructions_registry"].INSTRUCTION_DICT
+    except Exception:
+        _IFBENCH_REGISTRY = {}
+    return _IFBENCH_REGISTRY
+
+
+def _check_ifbench_instruction(instruction_id: str, rule_kwargs: dict, prompt: str, response: str) -> bool:
+    registry = _load_ifbench_registry()
+    if not registry or instruction_id not in registry:
+        return False
+    instruction_cls = registry[instruction_id]
+    instruction = instruction_cls(instruction_id)
+    filtered_kwargs = {k: v for k, v in rule_kwargs.items() if v is not None}
+    instruction.build_description(**filtered_kwargs)
+    args = instruction.get_instruction_args()
+    if args and "prompt" in args:
+        instruction.build_description(prompt=prompt)
+    return bool(response and response.strip() and instruction.check_following(response))
 
 
 def _tool_schema_map(tools: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
@@ -36,13 +74,61 @@ def _tool_schema_map(tools: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return schema_map
 
 
+def _bfcl_value_matches(predicted_value: Any, gt_value: Any) -> bool:
+    """Check if predicted value matches a BFCL v3 ground truth value.
+
+    BFCL v3 wraps each argument value in a list of acceptable alternatives,
+    e.g. {"user_id": [7890]} means 7890 is the acceptable value.
+    """
+    canon_pred = _v0._canonicalize(predicted_value)
+    canon_gt = _v0._canonicalize(gt_value)
+    if canon_pred == canon_gt:
+        return True
+    # BFCL v3: gt_value is a list of acceptable alternatives
+    if isinstance(canon_gt, list):
+        return any(_v0._canonicalize(alt) == canon_pred for alt in canon_gt)
+    return False
+
+
+def _unwrap_bfcl_args(arguments: dict[str, Any]) -> dict[str, Any]:
+    """Unwrap BFCL v3 list-wrapped argument values for normalization."""
+    unwrapped = {}
+    for key, value in arguments.items():
+        if isinstance(value, list) and len(value) == 1:
+            unwrapped[key] = value[0]
+        else:
+            unwrapped[key] = value
+    return unwrapped
+
+
+def _calls_match_ground_truth_bfcl(predicted_calls: list[dict[str, Any]], expected_calls: list[dict[str, Any]]) -> bool:
+    """BFCL-aware version of calls_match_ground_truth."""
+    pred = _v0.normalize_ground_truth_calls(predicted_calls)
+    exp = _v0.normalize_ground_truth_calls(expected_calls)
+    if len(pred) != len(exp):
+        return False
+    for p, e in zip(pred, exp):
+        if p["name"] != e["name"]:
+            return False
+        p_args = p.get("arguments", {})
+        e_args = e.get("arguments", {})
+        if not isinstance(p_args, dict) or not isinstance(e_args, dict):
+            if _v0._canonicalize(p_args) != _v0._canonicalize(e_args):
+                return False
+            continue
+        e_unwrapped = _unwrap_bfcl_args(e_args)
+        if _v0._canonicalize(p_args) != _v0._canonicalize(e_unwrapped):
+            return False
+    return True
+
+
 def _exact_match_fraction(predicted: dict[str, Any], expected: list[str], expected_values: dict[str, Any]) -> float:
     if not expected:
         return 1.0
     matched = 0
     for key in expected:
         value = expected_values[key]
-        if key in predicted and _v0._canonicalize(predicted[key]) == _v0._canonicalize(value):
+        if key in predicted and _bfcl_value_matches(predicted[key], value):
             matched += 1
     return matched / len(expected)
 
@@ -154,13 +240,69 @@ def _instruction_rule_scores(metadata: dict[str, Any], sample) -> list[float]:
     prompt_text = metadata.get("prompt_text") or sample.prompt or ""
     prompt_text = prompt_text if isinstance(prompt_text, str) else str(prompt_text)
     kwargs_list = _v0._normalize_kwargs(metadata.get("kwargs"), len(instruction_ids))
+    ifbench_registry = _load_ifbench_registry()
     passed: list[float] = []
     for instruction_id, rule_kwargs in zip(instruction_ids, kwargs_list):
         try:
-            passed.append(1.0 if _v0._check_instruction(instruction_id, rule_kwargs, prompt_text, sample.response or "") else 0.0)
+            if ifbench_registry and instruction_id in ifbench_registry:
+                result = _check_ifbench_instruction(instruction_id, rule_kwargs, prompt_text, sample.response or "")
+            else:
+                result = _v0._check_instruction(instruction_id, rule_kwargs, prompt_text, sample.response or "")
+            passed.append(1.0 if result else 0.0)
         except Exception:
             passed.append(0.0)
     return passed
+
+
+def _ifbench_rule_scores(metadata: dict[str, Any], sample, *, strict: bool) -> list[float] | None:
+    instruction_ids = _v0._normalize_instruction_ids(metadata.get("instruction_id_list"))
+    if not instruction_ids:
+        return []
+
+    _load_ifbench_registry()  # ensures evaluation_lib is in sys.modules
+    try:
+        evaluation_lib = sys.modules["evaluation_lib"]
+    except KeyError:
+        return None
+
+    prompt_text = metadata.get("prompt_text") or sample.prompt or ""
+    prompt_text = prompt_text if isinstance(prompt_text, str) else str(prompt_text)
+
+    kwargs_list = _v0._normalize_kwargs(metadata.get("kwargs"), len(instruction_ids))
+    sanitized_kwargs: list[dict[str, Any]] = []
+    for entry in kwargs_list:
+        if isinstance(entry, dict):
+            sanitized_kwargs.append({k: v for k, v in entry.items() if v is not None})
+        else:
+            sanitized_kwargs.append({})
+
+    raw_key = metadata.get("record_id", metadata.get("key", 0))
+    try:
+        key = int(raw_key)
+    except (TypeError, ValueError):
+        key = hash(str(raw_key)) % (10**9)
+
+    try:
+        input_example = evaluation_lib.InputExample(
+            key=key,
+            instruction_id_list=instruction_ids,
+            prompt=prompt_text,
+            kwargs=sanitized_kwargs,
+        )
+        prompt_to_response = {prompt_text: sample.response or ""}
+        verifier = (
+            evaluation_lib.test_instruction_following_strict
+            if strict
+            else evaluation_lib.test_instruction_following_loose
+        )
+        result = verifier(input_example, prompt_to_response)
+    except Exception:
+        return None
+
+    follow_list = getattr(result, "follow_instruction_list", None)
+    if not isinstance(follow_list, list):
+        return None
+    return [1.0 if bool(item) else 0.0 for item in follow_list]
 
 
 async def reward_func(args, sample, **kwargs):
@@ -194,7 +336,7 @@ async def reward_func(args, sample, **kwargs):
             return _tool_selection_strict_score(predicted_calls, allowed_tool_names)
         if reward_type == "tool_call_soft":
             return _tool_call_soft_score(predicted_calls, expected_calls, tools)
-        return 1.0 if _v0.calls_match_ground_truth(predicted_calls, expected_calls) else 0.0
+        return 1.0 if _calls_match_ground_truth_bfcl(predicted_calls, expected_calls) else 0.0
 
     if reward_type == "structured_json_schema":
         try:
@@ -205,7 +347,13 @@ async def reward_func(args, sample, **kwargs):
         return 1.0 if _v0._validate_json_schema(payload, schema) else 0.0
 
     if reward_type in {"instruction_following_soft", "instruction_following_strict", "ifeval"}:
-        scores = _instruction_rule_scores(metadata, sample)
+        dataset_name = str(metadata.get("dataset_name", "")).strip().lower()
+        if dataset_name == "ifbench_test":
+            scores = _ifbench_rule_scores(metadata, sample, strict=reward_type != "instruction_following_soft")
+            if scores is None:
+                scores = _instruction_rule_scores(metadata, sample)
+        else:
+            scores = _instruction_rule_scores(metadata, sample)
         if not scores:
             return 0.0
         if reward_type == "instruction_following_soft":
