@@ -1,0 +1,47 @@
+# Multi-model SGLang layout for on-policy distillation (OPD) with multiple teacher servers.
+#
+# Order matters:
+#   - Index 0 must be the student: rollout generation + receives weight updates from training.
+#   - Following entries are teachers (inference-only): used for teacher log-probs / routing.
+#
+# Teacher `name` values must match sample.metadata["domain"] when using
+# `slime.rollout.on_policy_distillation.reward_func_route_by_domain`
+# (e.g. multidomain data from examples/multidomain_v1/prepare_multidomain_v1_data.py).
+#
+# GPU hint: teachers only run forward for log-probs (max_new_tokens=0). Prefer the minimum
+# `num_gpus` per teacher (often 1). Give the student enough GPUs for your generation load.
+#
+# Constraint: sum of all `num_gpus` across every `server_groups` entry below must equal
+# `train.py` / `train_async.py` flag `--rollout-num-gpus`.
+
+sglang:
+  - name: student
+    update_weights: true
+    server_groups:
+      - worker_type: regular
+        num_gpus: 2
+        num_gpus_per_engine: 1
+
+  - name: stem
+    model_path: /path/to/teacher/hf-or-served-checkpoint
+    update_weights: false
+    server_groups:
+      - worker_type: regular
+        num_gpus: 1
+        num_gpus_per_engine: 1
+
+  - name: tool
+    model_path: /path/to/teacher/hf-or-served-checkpoint
+    update_weights: false
+    server_groups:
+      - worker_type: regular
+        num_gpus: 1
+        num_gpus_per_engine: 1
+
+  - name: structured
+    model_path: /path/to/teacher/hf-or-served-checkpoint
+    update_weights: false
+    server_groups:
+      - worker_type: regular
+        num_gpus: 1
+        num_gpus_per_engine: 1
