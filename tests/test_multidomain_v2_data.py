@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import sys
+import types
 
 
 def _load_prepare_module():
@@ -15,6 +17,28 @@ def _load_prepare_module():
 
 
 prepare_multidomain_v2 = _load_prepare_module()
+
+
+def _load_data_module():
+    original_ray = sys.modules.get("ray")
+    repo_root = str(Path(__file__).resolve().parents[1])
+    had_repo_root = repo_root in sys.path
+    if not had_repo_root:
+        sys.path.insert(0, repo_root)
+    sys.modules["ray"] = types.SimpleNamespace(get=lambda value: value)
+    try:
+        module = importlib.import_module("slime.utils.data")
+    finally:
+        if not had_repo_root:
+            sys.path.remove(repo_root)
+        if original_ray is None:
+            sys.modules.pop("ray", None)
+        else:
+            sys.modules["ray"] = original_ray
+    return module
+
+
+slime_utils_data = _load_data_module()
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:
@@ -45,7 +69,7 @@ def test_discover_sources_returns_sorted_jsonl_files(tmp_path: Path):
     ]
 
 
-def test_write_dataset_preserves_rows_without_rewriting_fields(tmp_path: Path):
+def test_write_dataset_preserves_normalized_rows_without_rewriting_fields(tmp_path: Path):
     pool_root = tmp_path / "pool"
     source_a = pool_root / "tool" / "a.jsonl"
     source_b = pool_root / "structured" / "b.jsonl"
@@ -86,10 +110,11 @@ def test_write_dataset_preserves_rows_without_rewriting_fields(tmp_path: Path):
         "prompt": [{"role": "user", "content": "prompt-b"}],
         "label": "label-b",
         "metadata": {"reward_type": "structured_json_schema"},
+        "tools": [],
     }
 
 
-def test_write_dataset_keeps_missing_tools_unchanged(tmp_path: Path):
+def test_write_dataset_aligns_missing_tools_to_v1_shape(tmp_path: Path):
     pool_root = tmp_path / "pool"
     source = pool_root / "stem" / "stem.jsonl"
     _write_jsonl(
@@ -113,6 +138,7 @@ def test_write_dataset_keeps_missing_tools_unchanged(tmp_path: Path):
             "prompt": [{"role": "user", "content": "prompt-stem"}],
             "label": "A",
             "metadata": {"reward_type": "stem_mcqa"},
+            "tools": [],
         }
     ]
 
@@ -158,3 +184,45 @@ def test_resolve_nemotron_knowledge_mcqa_expands_all_train_shards(tmp_path: Path
     resolved = prepare_multidomain_v2.resolve_named_datasets(pool_root, ["nemotron_knowledge_mcqa"])
 
     assert [path.relative_to(pool_root).as_posix() for path in resolved] == expected_relpaths
+
+
+def test_read_file_accepts_manifest_of_pool_sources(tmp_path: Path):
+    source_a = tmp_path / "tool" / "a.jsonl"
+    source_b = tmp_path / "structured" / "b.jsonl"
+    _write_jsonl(source_a, [{"prompt": [{"role": "user", "content": "a"}], "label": "A", "metadata": {}}])
+    _write_jsonl(source_b, [{"prompt": [{"role": "user", "content": "b"}], "label": "B", "metadata": {}}])
+
+    manifest = tmp_path / "train_pool_sources.list"
+    manifest.write_text(f"{source_a}\n{source_b}\n", encoding="utf-8")
+
+    rows = list(slime_utils_data.read_file(str(manifest)))
+
+    assert rows == [
+        {"prompt": [{"role": "user", "content": "a"}], "label": "A", "metadata": {}},
+        {"prompt": [{"role": "user", "content": "b"}], "label": "B", "metadata": {}},
+    ]
+
+
+def test_v2_run_script_is_not_a_v1_wrapper_anymore():
+    script_path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "multidomain_v2"
+        / "run_qwen3_30b_a3b_multidomain_v2_3node.sh"
+    )
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert "../multidomain_v1/run_qwen3_30b_a3b_multidomain_v1_3node.sh" not in script_text
+    assert "TRAIN_DATA_BASENAME" not in script_text
+
+
+def test_v2_run_script_keeps_bfcl_eval_on_soft_reward():
+    script_path = (
+        Path(__file__).resolve().parents[1]
+        / "examples"
+        / "multidomain_v2"
+        / "run_qwen3_30b_a3b_multidomain_v2_3node.sh"
+    )
+    script_text = script_path.read_text(encoding="utf-8")
+
+    assert "--reward-type-override tool_call_strict" not in script_text
